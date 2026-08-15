@@ -16,6 +16,7 @@ use crate::acp::custom_registry::{
     derive_command_name, CustomAgentDef, CustomAgentSpec, CustomDistributionKind,
 };
 use crate::acp::error::AcpError;
+use crate::acp::family_isolator;
 use crate::acp::remote_registry::{self, RegistryCatalogAgent};
 use crate::acp::{custom_registry, registry};
 use crate::commands::acp::emit_acp_agents_updated;
@@ -574,6 +575,81 @@ pub async fn acp_save_custom_agent_params_core(
     acp_save_custom_agent_core(def, db, emitter).await
 }
 
+/// Result of extra-slot official login. `launched` is true only when a
+/// desktop terminal was actually opened. Headless / web returns the same
+/// command so the UI can show a copyable line.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraSlotLoginResult {
+    pub family: String,
+    pub isolator_key: String,
+    pub home: String,
+    pub command: String,
+    pub launched: bool,
+}
+
+/// Resolve the official family login for a custom extra slot. Never reads or
+/// writes `auth.json` / `.credentials.json`.
+pub async fn acp_login_extra_agent_core(
+    registry_id: &str,
+    db: &AppDatabase,
+) -> Result<ExtraSlotLoginResult, AcpError> {
+    let row = custom_agent_service::get(&db.conn, registry_id)
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?
+        .ok_or_else(|| AcpError::protocol(format!("custom agent not found: {registry_id}")))?;
+    let def = custom_agent_service::def_from_model(&row).ok_or_else(|| {
+        AcpError::protocol(format!("custom agent spec is unreadable: {registry_id}"))
+    })?;
+    let plan = family_isolator::login_plan_from_def(&def).ok_or_else(|| {
+        AcpError::protocol(
+            "this custom agent has no isolated family home (set CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME, GEMINI_CONFIG_DIR, or OPENCODE_CONFIG_DIR)",
+        )
+    })?;
+    std::fs::create_dir_all(&plan.home).map_err(|e| {
+        AcpError::protocol(format!(
+            "failed to create isolated home {}: {e}",
+            plan.home.display()
+        ))
+    })?;
+    let command = family_isolator::shell_export_and_login(&plan)
+        .map_err(AcpError::protocol)?;
+    let launched = launch_extra_slot_login(&command, &plan.home);
+    Ok(ExtraSlotLoginResult {
+        family: plan.family.as_str().to_string(),
+        isolator_key: plan.isolator_key.to_string(),
+        home: plan.home.display().to_string(),
+        command,
+        launched,
+    })
+}
+
+fn launch_extra_slot_login(command: &str, home: &std::path::Path) -> bool {
+    if cfg!(test) {
+        let _ = (command, home);
+        return false;
+    }
+    #[cfg(feature = "tauri-runtime")]
+    {
+        let home_str = home.to_string_lossy();
+        crate::commands::acp::open_external_terminal_impl(command, Some(home_str.as_ref())).is_ok()
+    }
+    #[cfg(not(feature = "tauri-runtime"))]
+    {
+        let _ = (command, home);
+        false
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_login_extra_agent(
+    registry_id: String,
+    db: State<'_, AppDatabase>,
+) -> Result<ExtraSlotLoginResult, AcpError> {
+    acp_login_extra_agent_core(&registry_id, &db).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn acp_list_custom_agents(
@@ -684,6 +760,46 @@ mod tests {
             supports_mcp: None,
         };
         assert_eq!(params.into_def().unwrap().registry_id, "goose");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn extra_slot_login_uses_isolator_and_does_not_copy_auth() {
+        let _guard = custom_registry::hydrate_test_guard();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let emitter = EventEmitter::Noop;
+        let extra = tempfile::tempdir().expect("extra home");
+        let other = tempfile::tempdir().expect("other home");
+        let extra_auth = extra.path().join("auth.json");
+        let other_auth = other.path().join(".credentials.json");
+        std::fs::write(&extra_auth, b"slot-2\n").unwrap();
+        std::fs::write(&other_auth, b"slot-1\n").unwrap();
+
+        let mut params = npx_params("codex-2");
+        params.spec.npx.as_mut().unwrap().env.insert(
+            "CODEX_HOME".into(),
+            extra.path().to_string_lossy().into_owned(),
+        );
+        acp_save_custom_agent_params_core(params, &db, &emitter)
+            .await
+            .expect("saves extra slot");
+
+        let result = acp_login_extra_agent_core("codex-2", &db)
+            .await
+            .expect("login plan");
+        assert_eq!(result.family, "codex");
+        assert_eq!(result.isolator_key, "CODEX_HOME");
+        assert_eq!(result.home, extra.path().display().to_string());
+        assert!(result.command.contains("codex login"));
+        assert!(result.command.contains("CODEX_HOME"));
+        assert!(!result.launched, "unit tests must not spawn a terminal");
+        assert_eq!(std::fs::read(&extra_auth).unwrap(), b"slot-2\n");
+        assert_eq!(std::fs::read(&other_auth).unwrap(), b"slot-1\n");
+
+        let missing = acp_login_extra_agent_core("goose", &db).await;
+        assert!(missing.is_err());
+
+        custom_registry::hydrate(&[]);
     }
 
     fn npx_params(id: &str) -> SaveCustomAgentParams {

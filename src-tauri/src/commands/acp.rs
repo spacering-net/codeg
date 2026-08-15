@@ -12944,7 +12944,7 @@ pub async fn acp_open_hermes_setup_terminal(kind: String) -> Result<(), AcpError
 }
 
 #[cfg(feature = "tauri-runtime")]
-fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), AcpError> {
+pub(crate) fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), AcpError> {
     use std::process::Command;
     // Reject control characters: a newline breaks out of the macOS AppleScript
     // string literal (and would corrupt the cmd/shell line elsewhere), turning a

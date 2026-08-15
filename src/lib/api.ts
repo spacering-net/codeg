@@ -1286,6 +1286,20 @@ export async function acpListCustomAgents(): Promise<CustomAgentInfo[]> {
   return getTransport().call("acp_list_custom_agents", {})
 }
 
+export interface ExtraSlotLoginResult {
+  family: string
+  isolatorKey: string
+  home: string
+  command: string
+  launched: boolean
+}
+
+export async function acpLoginExtraAgent(
+  registryId: string
+): Promise<ExtraSlotLoginResult> {
+  return getTransport().call("acp_login_extra_agent", { registryId })
+}
+
 export async function acpSaveCustomAgent(params: {
   registryId: string
   name: string

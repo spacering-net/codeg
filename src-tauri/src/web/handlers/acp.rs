@@ -1403,6 +1403,22 @@ pub async fn acp_list_custom_agents(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpLoginExtraAgentParams {
+    pub registry_id: String,
+}
+
+pub async fn acp_login_extra_agent(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpLoginExtraAgentParams>,
+) -> Result<Json<custom_agent_commands::ExtraSlotLoginResult>, AppCommandError> {
+    let result = custom_agent_commands::acp_login_extra_agent_core(&params.registry_id, &state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
 /// Wrapper matching the Tauri command's single `params` argument — the shared
 /// frontend client sends the same body to both runtimes.
 #[derive(Deserialize)]

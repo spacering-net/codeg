@@ -2012,6 +2012,7 @@ mod tauri_app {
                 acp_commands::acp_reveal_hermes_home,
                 acp_commands::acp_reorder_agents,
                 crate::commands::custom_agents::acp_list_custom_agents,
+                crate::commands::custom_agents::acp_login_extra_agent,
                 crate::commands::custom_agents::acp_save_custom_agent,
                 crate::commands::custom_agents::acp_delete_custom_agent,
                 crate::commands::custom_agents::acp_fetch_registry_catalog,

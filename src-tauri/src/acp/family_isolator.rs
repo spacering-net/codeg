@@ -27,6 +27,16 @@ pub enum IsolatorFamily {
 }
 
 impl IsolatorFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Grok => "grok",
+            Self::Gemini => "gemini",
+            Self::OpenCode => "opencode",
+        }
+    }
+
     pub fn isolator_key(self) -> &'static str {
         match self {
             Self::Claude => "CLAUDE_CONFIG_DIR",
