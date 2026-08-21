@@ -1829,6 +1829,8 @@
       "cacheRead": "Cache gelesen",
       "contextWindow": "Kontextfenster",
       "duration": "Dauer",
+      "outputSpeed": "Mittl. Ausgabegeschwindigkeit",
+      "outputSpeedTooltip": "Durchschnitt, während das Modell schreibt. Wartezeit auf Tools zählt nicht.",
       "loadingStats": "Token-Nutzung wird geladen…",
       "loadFailed": "Token-Nutzung konnte nicht geladen werden",
       "noStats": "Keine Nutzung erfasst",
@@ -1924,7 +1926,9 @@
         "output": "Ausgabe",
         "cacheRead": "Cache lesen",
         "cacheWrite": "Cache schreiben",
-        "total": "Gesamt"
+        "total": "Gesamt",
+        "outputSpeed": "Ausgabegeschwindigkeit",
+        "outputSpeedTooltip": "Durchschnitt, während das Modell schreibt. Wartezeit auf Tools zählt nicht."
       },
       "quickActions": {
         "title": "Schnellaktionen",
@@ -3101,8 +3105,8 @@
         "elapsedHours": "{value} Std",
         "elapsedMinutes": "{value} Min",
         "elapsedSeconds": "{value} Sek",
-        "outputSpeedAria": "Geschätzte Ausgabegeschwindigkeit",
-        "outputSpeedTooltip": "Geschätzte Ausgabegeschwindigkeit (Text + Denken)"
+        "outputSpeedAria": "Ausgabegeschwindigkeit",
+        "outputSpeedTooltip": "Während das Modell schreibt. Wartezeit auf Tools zählt nicht."
       },
       "jsonTree": {
         "viewRaw": "Rohes JSON anzeigen",

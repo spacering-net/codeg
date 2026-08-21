@@ -21,6 +21,8 @@ import {
 import { getFolderConversation } from "@/lib/api"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { pickModelFromTurns } from "./active-session-details"
+import { useSessionOutputSpeed } from "@/hooks/use-session-output-speed"
+import { formatTokPerSec } from "@/lib/token-speed"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "./conversation-status-dot"
 
@@ -141,15 +143,17 @@ export function InfoItem({
   children,
   className,
   valueClassName,
+  title,
 }: {
   /** Usually plain text; a node so a caller can hang a badge off the label. */
   label: ReactNode
   children: ReactNode
   className?: string
   valueClassName?: string
+  title?: string
 }) {
   return (
-    <div className={cn("min-w-0 space-y-0.5", className)}>
+    <div className={cn("min-w-0 space-y-0.5", className)} title={title}>
       <dt className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         {label}
       </dt>
@@ -312,6 +316,7 @@ export function SessionDetailsContent({
     ctxMax
   )
   const durationMs = resolveSessionDurationMs(summary, stats)
+  const outputSpeed = useSessionOutputSpeed(summary.id)
   // Never coerce an unknown `used` to 0 — some parsers infer the model's
   // context cap without any usage figure, so render "— / max" rather than a
   // bogus "0 / max".
@@ -324,11 +329,12 @@ export function SessionDetailsContent({
         ? formatTokenCount(ctxUsed)
         : null
   const hasTokenInfo =
-    stats != null &&
-    (totalTokens != null ||
-      usage != null ||
-      contextWindowValue != null ||
-      durationMs > 0)
+    outputSpeed != null ||
+    (stats != null &&
+      (totalTokens != null ||
+        usage != null ||
+        contextWindowValue != null ||
+        durationMs > 0))
 
   const numeric = "font-mono tabular-nums"
 
@@ -432,6 +438,15 @@ export function SessionDetailsContent({
             {durationMs > 0 && (
               <InfoItem label={t("duration")} valueClassName={numeric}>
                 {formatDuration(durationMs)}
+              </InfoItem>
+            )}
+            {outputSpeed != null && (
+              <InfoItem
+                label={t("outputSpeed")}
+                valueClassName={numeric}
+                title={t("outputSpeedTooltip")}
+              >
+                {formatTokPerSec(outputSpeed.averageTps)}
               </InfoItem>
             )}
           </dl>

@@ -16,11 +16,13 @@ import { FilePenLine, Plane, Timer } from "lucide-react"
 import type { AgentType } from "@/lib/types"
 import { AgentIcon } from "@/components/agent-icon"
 import { useTokenOutputSpeed } from "@/hooks/use-token-output-speed"
+import { formatTokPerSec } from "@/lib/token-speed"
 
 interface LiveTurnStatsProps {
   message: LiveMessage
   agentType: AgentType
   isStreaming?: boolean
+  conversationId?: number | null
 }
 
 interface LineChangeStats {
@@ -311,12 +313,13 @@ export function LiveTurnStats({
   message,
   agentType,
   isStreaming = true,
+  conversationId = null,
 }: LiveTurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.liveTurnStats")
   const [elapsed, setElapsed] = useState(() => Date.now() - message.startedAt)
   const editStats = useMemo(() => extractLiveEditStats(message), [message])
-  const tps = useTokenOutputSpeed(message)
+  const tps = useTokenOutputSpeed(message, { conversationId })
   const compactNumberFormatter = useMemo(
     () =>
       new Intl.NumberFormat(locale, {
@@ -392,7 +395,7 @@ export function LiveTurnStats({
                 aria-label={t("outputSpeedAria")}
                 className="h-3 w-3 shrink-0"
               />
-              {tps.toFixed(1)} tok/s
+              {formatTokPerSec(tps)}
             </span>
           </>
         )}

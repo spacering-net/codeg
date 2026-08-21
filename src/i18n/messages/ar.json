@@ -1829,6 +1829,8 @@
       "cacheRead": "قراءة الذاكرة",
       "contextWindow": "نافذة السياق",
       "duration": "المدة",
+      "outputSpeed": "متوسط سرعة الإخراج",
+      "outputSpeedTooltip": "المتوسط أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب.",
       "loadingStats": "جارٍ تحميل استخدام الرموز…",
       "loadFailed": "فشل تحميل استخدام الرموز",
       "noStats": "لا يوجد استخدام مسجّل",
@@ -1924,7 +1926,9 @@
         "output": "إخراج",
         "cacheRead": "قراءة الكاش",
         "cacheWrite": "كتابة الكاش",
-        "total": "الإجمالي"
+        "total": "الإجمالي",
+        "outputSpeed": "سرعة الإخراج",
+        "outputSpeedTooltip": "المتوسط أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب."
       },
       "quickActions": {
         "title": "إجراءات سريعة",
@@ -3101,8 +3105,8 @@
         "elapsedHours": "{value}س",
         "elapsedMinutes": "{value}د",
         "elapsedSeconds": "{value}ث",
-        "outputSpeedAria": "السرعة التقديرية للإخراج",
-        "outputSpeedTooltip": "السرعة التقديرية للإخراج (نص + تفكير)"
+        "outputSpeedAria": "سرعة الإخراج",
+        "outputSpeedTooltip": "أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب."
       },
       "jsonTree": {
         "viewRaw": "عرض JSON الخام",

@@ -1829,6 +1829,8 @@
       "cacheRead": "缓存读取",
       "contextWindow": "上下文窗口",
       "duration": "时长",
+      "outputSpeed": "平均输出速度",
+      "outputSpeedTooltip": "模型正在写时的平均速度。等待工具完成的时间不计入。",
       "loadingStats": "正在加载 Token 用量…",
       "loadFailed": "加载 Token 用量失败",
       "noStats": "暂无用量记录",
@@ -1924,7 +1926,9 @@
         "output": "输出",
         "cacheRead": "缓存读取",
         "cacheWrite": "缓存写入",
-        "total": "总计"
+        "total": "总计",
+        "outputSpeed": "输出速度",
+        "outputSpeedTooltip": "模型正在写时的平均速度。等待工具完成的时间不计入。"
       },
       "quickActions": {
         "title": "快捷操作",
@@ -3101,8 +3105,8 @@
         "elapsedHours": "{value} 小时",
         "elapsedMinutes": "{value} 分钟",
         "elapsedSeconds": "{value} 秒",
-        "outputSpeedAria": "估算输出速度",
-        "outputSpeedTooltip": "估算输出速度（正文 + 思考）"
+        "outputSpeedAria": "输出速度",
+        "outputSpeedTooltip": "模型正在写时的速度。等待工具完成的时间不计入。"
       },
       "jsonTree": {
         "viewRaw": "查看原始 JSON",

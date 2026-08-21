@@ -6,35 +6,57 @@ import type {
   LiveContentBlock,
   LiveMessage,
 } from "@/contexts/acp-connections-context"
+import {
+  getSessionOutputSpeed,
+  resetSessionOutputSpeedForTests,
+} from "@/lib/session-output-speed"
 
 function msg(blocks: LiveContentBlock[], id = "live-1"): LiveMessage {
   return { id, role: "assistant", content: blocks, startedAt: 0 }
 }
 
-/** A completed tool call — content the turn carries but never scores. */
-const TOOL_BLOCK: LiveContentBlock = {
-  type: "tool_call",
-  info: {
-    tool_call_id: "tc-1",
-    title: "tool",
-    kind: "tool",
-    status: "completed",
-    content: null,
-    raw_input: null,
-    raw_output_chunks: [],
-    raw_output_total_bytes: 0,
-    locations: null,
-    meta: null,
-    images: [],
-  },
+function toolBlock(
+  status: "pending" | "in_progress" | "completed"
+): LiveContentBlock {
+  return {
+    type: "tool_call",
+    info: {
+      tool_call_id: "tc-1",
+      title: "tool",
+      kind: "tool",
+      status,
+      content: null,
+      raw_input: null,
+      raw_output_chunks: [],
+      raw_output_total_bytes: 0,
+      locations: null,
+      meta: null,
+      images: [],
+    },
+  }
 }
+
+/** A completed tool call — content the turn carries but never scores. */
+const TOOL_BLOCK: LiveContentBlock = toolBlock("completed")
+const RUNNING_TOOL: LiveContentBlock = toolBlock("in_progress")
 
 let fakeNow = 0
 
-function mount(message: LiveMessage) {
+function mount(
+  message: LiveMessage,
+  options: { conversationId?: number; waiting?: boolean } = {}
+) {
   return renderHook(
-    ({ message }: { message: LiveMessage }) => useTokenOutputSpeed(message),
-    { initialProps: { message } }
+    ({
+      message,
+      conversationId,
+      waiting,
+    }: {
+      message: LiveMessage
+      conversationId?: number
+      waiting?: boolean
+    }) => useTokenOutputSpeed(message, { conversationId, waiting }),
+    { initialProps: { message, ...options } }
   )
 }
 
@@ -55,6 +77,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.useRealTimers()
+  resetSessionOutputSpeedForTests()
 })
 
 describe("useTokenOutputSpeed", () => {
@@ -152,9 +175,9 @@ describe("useTokenOutputSpeed", () => {
     expect(result.current).toBeCloseTo(200)
   })
 
-  it("decays through a silent gap instead of freezing the reading", () => {
-    // No new content at all — a quiet long-running tool, a retry backoff, or a
-    // permission prompt blocking the turn. The reading has to fall.
+  it("decays through a silent generating gap instead of freezing the reading", () => {
+    // No new content and no in-flight tool — a slow decode, not a wait. The
+    // reading has to fall so a genuinely slow stream is not reported as fast.
     const { result, rerender } = mount(
       msg([{ type: "text", text: "a".repeat(80) }])
     )
@@ -165,6 +188,55 @@ describe("useTokenOutputSpeed", () => {
 
     for (let i = 0; i < 20; i++) tick()
     expect(result.current as number).toBeLessThan(5)
+  })
+
+  it("holds the reading while a tool is running", () => {
+    const { result, rerender } = mount(
+      msg([{ type: "text", text: "a".repeat(80) }])
+    )
+    rerender({
+      message: msg([{ type: "text", text: "a".repeat(280) }]),
+    })
+    tick()
+    expect(result.current).toBeCloseTo(100)
+
+    rerender({
+      message: msg([{ type: "text", text: "a".repeat(280) }, RUNNING_TOOL]),
+    })
+    for (let i = 0; i < 20; i++) tick()
+    expect(result.current).toBeCloseTo(100)
+  })
+
+  it("does not fold a tool wait into the next generating sample", () => {
+    const { result, rerender } = mount(
+      msg([{ type: "text", text: "a".repeat(80) }]),
+      { conversationId: 9 }
+    )
+    rerender({
+      message: msg([{ type: "text", text: "a".repeat(280) }]),
+      conversationId: 9,
+    })
+    tick()
+    expect(result.current).toBeCloseTo(100)
+
+    rerender({
+      message: msg([{ type: "text", text: "a".repeat(280) }, RUNNING_TOOL]),
+      conversationId: 9,
+    })
+    for (let i = 0; i < 20; i++) tick()
+
+    // 200 new chars = 50 tokens in the 500ms sample after the wait.
+    rerender({
+      message: msg([{ type: "text", text: "a".repeat(480) }]),
+      conversationId: 9,
+    })
+    tick()
+    expect(result.current as number).toBeGreaterThan(50)
+    const session = getSessionOutputSpeed(9)
+    expect(session).not.toBeNull()
+    // Generating time is the two 500ms windows, not the 10s wait.
+    expect(session!.generatingMs).toBeLessThan(2000)
+    expect(session!.averageTps).toBeGreaterThan(50)
   })
 
   it("repaints on its own cadence, not on every delta", () => {

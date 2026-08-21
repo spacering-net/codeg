@@ -1829,6 +1829,8 @@
       "cacheRead": "キャッシュ読取",
       "contextWindow": "コンテキストウィンドウ",
       "duration": "所要時間",
+      "outputSpeed": "平均出力速度",
+      "outputSpeedTooltip": "モデルが書いている間の平均速度。ツール待ち時間は含めません。",
       "loadingStats": "トークン使用量を読み込み中…",
       "loadFailed": "トークン使用量の読み込みに失敗しました",
       "noStats": "使用量の記録なし",
@@ -1924,7 +1926,9 @@
         "output": "出力",
         "cacheRead": "キャッシュ読み取り",
         "cacheWrite": "キャッシュ書き込み",
-        "total": "合計"
+        "total": "合計",
+        "outputSpeed": "出力速度",
+        "outputSpeedTooltip": "モデルが書いている間の平均速度。ツール待ち時間は含めません。"
       },
       "quickActions": {
         "title": "クイック操作",
@@ -3101,8 +3105,8 @@
         "elapsedHours": "{value}時間",
         "elapsedMinutes": "{value}分",
         "elapsedSeconds": "{value}秒",
-        "outputSpeedAria": "推定出力速度",
-        "outputSpeedTooltip": "推定出力速度（テキスト + 思考）"
+        "outputSpeedAria": "出力速度",
+        "outputSpeedTooltip": "モデルが書いている間の速度。ツール待ち時間は含めません。"
       },
       "jsonTree": {
         "viewRaw": "生の JSON を表示",
