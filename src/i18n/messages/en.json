@@ -1926,9 +1926,7 @@
         "output": "Output",
         "cacheRead": "Cache Read",
         "cacheWrite": "Cache Write",
-        "total": "Total",
-        "outputSpeed": "Output speed",
-        "outputSpeedTooltip": "Average while the model is writing. Time spent waiting on tools is not counted."
+        "total": "Total"
       },
       "quickActions": {
         "title": "Quick actions",
@@ -5095,6 +5093,8 @@
     "tileTurns": "Turns",
     "tileActiveDays": "Active days",
     "tileGenTime": "Generation time",
+    "avgOutputSpeed": "Avg. {speed}",
+    "outputSpeedTooltip": "Average while the model is writing. Time spent waiting on tools is not counted.",
     "vsPrevious": "vs. previous period",
     "deltaNew": "new",
     "trendTitle": "Usage over time",

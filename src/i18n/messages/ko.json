@@ -1926,9 +1926,7 @@
         "output": "출력",
         "cacheRead": "캐시 읽기",
         "cacheWrite": "캐시 쓰기",
-        "total": "합계",
-        "outputSpeed": "출력 속도",
-        "outputSpeedTooltip": "모델이 쓰는 동안의 평균 속도. 도구 대기 시간은 포함하지 않습니다."
+        "total": "합계"
       },
       "quickActions": {
         "title": "빠른 작업",
@@ -5095,6 +5093,8 @@
     "tileTurns": "대화 턴",
     "tileActiveDays": "활동 일수",
     "tileGenTime": "생성 시간",
+    "avgOutputSpeed": "평균 {speed}",
+    "outputSpeedTooltip": "모델이 쓰는 동안의 평균 속도. 도구 대기 시간은 포함하지 않습니다.",
     "vsPrevious": "이전 기간 대비",
     "deltaNew": "신규",
     "trendTitle": "사용량 추이",

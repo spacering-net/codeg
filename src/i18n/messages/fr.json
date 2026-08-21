@@ -1926,9 +1926,7 @@
         "output": "Sortie",
         "cacheRead": "Lecture cache",
         "cacheWrite": "Écriture cache",
-        "total": "Total des tokens",
-        "outputSpeed": "Vitesse de sortie",
-        "outputSpeedTooltip": "Moyenne pendant que le modèle écrit. L'attente des outils n'est pas comptée."
+        "total": "Total des tokens"
       },
       "quickActions": {
         "title": "Actions rapides",
@@ -5095,6 +5093,8 @@
     "tileTurns": "Tours",
     "tileActiveDays": "Jours actifs",
     "tileGenTime": "Temps de génération",
+    "avgOutputSpeed": "Moy. {speed}",
+    "outputSpeedTooltip": "Moyenne pendant que le modèle écrit. L'attente des outils n'est pas comptée.",
     "vsPrevious": "vs période précédente",
     "deltaNew": "nouveau",
     "trendTitle": "Consommation dans le temps",

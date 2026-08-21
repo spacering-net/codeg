@@ -1,13 +1,10 @@
 "use client"
 
-import { ChartNoAxesColumn, MonitorCloud, Plane } from "lucide-react"
+import { ChartNoAxesColumn, MonitorCloud } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useRemoteConnection } from "@/contexts/remote-connection-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
-import { useTabStore } from "@/stores/tab-store"
-import { useSessionOutputSpeed } from "@/hooks/use-session-output-speed"
-import { formatTokPerSec } from "@/lib/token-speed"
 import { cn } from "@/lib/utils"
 
 /**
@@ -30,15 +27,8 @@ export function StatusBarStats() {
   // codeg-server); local windows have no RemoteConnection in context.
   const remoteConnection = useRemoteConnection()?.connection ?? null
   const { routeId, setRoute } = useWorkbenchRoute()
-  const speedConversationId = useTabStore((s) => {
-    const tab = s.tabs.find((item) => item.id === s.activeTabId)
-    if (!tab || tab.kind !== "conversation") return null
-    return tab.runtimeConversationId ?? tab.conversationId ?? null
-  })
-  const outputSpeed = useSessionOutputSpeed(speedConversationId)
-  const tSpeed = useTranslations("Folder.statusBar.tokens")
 
-  if (!remoteConnection && !stats && outputSpeed == null) return null
+  if (!remoteConnection && !stats) return null
 
   return (
     <div className="flex items-center gap-3">
@@ -68,15 +58,6 @@ export function StatusBarStats() {
             {t("conversations", { count: stats.total_conversations })}
           </span>
         </button>
-      )}
-      {outputSpeed != null && (
-        <span
-          className="flex items-center gap-1.5 tabular-nums"
-          title={tSpeed("outputSpeedTooltip")}
-        >
-          <Plane className="h-3 w-3 shrink-0" aria-hidden="true" />
-          {formatTokPerSec(outputSpeed.averageTps)}
-        </span>
       )}
     </div>
   )

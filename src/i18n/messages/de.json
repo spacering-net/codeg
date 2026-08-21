@@ -1926,9 +1926,7 @@
         "output": "Ausgabe",
         "cacheRead": "Cache lesen",
         "cacheWrite": "Cache schreiben",
-        "total": "Gesamt",
-        "outputSpeed": "Ausgabegeschwindigkeit",
-        "outputSpeedTooltip": "Durchschnitt, während das Modell schreibt. Wartezeit auf Tools zählt nicht."
+        "total": "Gesamt"
       },
       "quickActions": {
         "title": "Schnellaktionen",
@@ -5095,6 +5093,8 @@
     "tileTurns": "Turns",
     "tileActiveDays": "Aktive Tage",
     "tileGenTime": "Generierungszeit",
+    "avgOutputSpeed": "Ø {speed}",
+    "outputSpeedTooltip": "Durchschnitt, während das Modell schreibt. Wartezeit auf Tools zählt nicht.",
     "vsPrevious": "ggü. Vorperiode",
     "deltaNew": "neu",
     "trendTitle": "Verbrauch im Zeitverlauf",

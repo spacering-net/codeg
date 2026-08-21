@@ -22,7 +22,7 @@ import { getFolderConversation } from "@/lib/api"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { pickModelFromTurns } from "./active-session-details"
 import { useSessionOutputSpeed } from "@/hooks/use-session-output-speed"
-import { formatTokPerSec } from "@/lib/token-speed"
+import { averageOutputTps, formatTokPerSec } from "@/lib/token-speed"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "./conversation-status-dot"
 
@@ -316,7 +316,12 @@ export function SessionDetailsContent({
     ctxMax
   )
   const durationMs = resolveSessionDurationMs(summary, stats)
-  const outputSpeed = useSessionOutputSpeed(summary.id)
+  const liveOutputSpeed = useSessionOutputSpeed(summary.id)
+  const recordedOutputTps = averageOutputTps(
+    usage?.output_tokens ?? 0,
+    stats?.total_duration_ms ?? 0
+  )
+  const outputTps = liveOutputSpeed?.averageTps ?? recordedOutputTps
   // Never coerce an unknown `used` to 0 — some parsers infer the model's
   // context cap without any usage figure, so render "— / max" rather than a
   // bogus "0 / max".
@@ -329,7 +334,7 @@ export function SessionDetailsContent({
         ? formatTokenCount(ctxUsed)
         : null
   const hasTokenInfo =
-    outputSpeed != null ||
+    outputTps != null ||
     (stats != null &&
       (totalTokens != null ||
         usage != null ||
@@ -440,13 +445,13 @@ export function SessionDetailsContent({
                 {formatDuration(durationMs)}
               </InfoItem>
             )}
-            {outputSpeed != null && (
+            {outputTps != null && (
               <InfoItem
                 label={t("outputSpeed")}
                 valueClassName={numeric}
                 title={t("outputSpeedTooltip")}
               >
-                {formatTokPerSec(outputSpeed.averageTps)}
+                {formatTokPerSec(outputTps)}
               </InfoItem>
             )}
           </dl>

@@ -303,3 +303,16 @@ export class TokenSpeedTracker {
 export function formatTokPerSec(tps: number): string {
   return `${tps.toFixed(1)} tok/s`
 }
+
+/**
+ * Session/dashboard average: output tokens over recorded generation time.
+ * `null` until both sides are meaningful, so a 0ms or 0-output row does not
+ * render as `0.0 tok/s`.
+ */
+export function averageOutputTps(
+  outputTokens: number,
+  durationMs: number
+): number | null {
+  if (!(outputTokens > 0) || durationMs < 300) return null
+  return outputTokens / (durationMs / 1000)
+}

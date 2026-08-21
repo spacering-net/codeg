@@ -1926,9 +1926,7 @@
         "output": "出力",
         "cacheRead": "キャッシュ読み取り",
         "cacheWrite": "キャッシュ書き込み",
-        "total": "合計",
-        "outputSpeed": "出力速度",
-        "outputSpeedTooltip": "モデルが書いている間の平均速度。ツール待ち時間は含めません。"
+        "total": "合計"
       },
       "quickActions": {
         "title": "クイック操作",
@@ -5095,6 +5093,8 @@
     "tileTurns": "ターン数",
     "tileActiveDays": "稼働日数",
     "tileGenTime": "生成時間",
+    "avgOutputSpeed": "平均 {speed}",
+    "outputSpeedTooltip": "モデルが書いている間の平均速度。ツール待ち時間は含めません。",
     "vsPrevious": "前期間との比較",
     "deltaNew": "新規",
     "trendTitle": "使用量の推移",

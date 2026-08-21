@@ -1926,9 +1926,7 @@
         "output": "输出",
         "cacheRead": "缓存读取",
         "cacheWrite": "缓存写入",
-        "total": "总计",
-        "outputSpeed": "输出速度",
-        "outputSpeedTooltip": "模型正在写时的平均速度。等待工具完成的时间不计入。"
+        "total": "总计"
       },
       "quickActions": {
         "title": "快捷操作",
@@ -5095,6 +5093,8 @@
     "tileTurns": "对话轮次",
     "tileActiveDays": "活跃天数",
     "tileGenTime": "生成时长",
+    "avgOutputSpeed": "平均 {speed}",
+    "outputSpeedTooltip": "模型正在写时的平均速度。等待工具完成的时间不计入。",
     "vsPrevious": "对比上一周期",
     "deltaNew": "新增",
     "trendTitle": "用量趋势",

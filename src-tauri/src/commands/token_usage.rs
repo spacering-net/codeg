@@ -323,6 +323,14 @@ fn bucket_key(date: NaiveDate, bucket: TokenUsageBucket) -> String {
 
 // ─── Aggregation ────────────────────────────────────────────────────────
 
+/// Per-conversation running sums, keyed by conversation id:
+/// `(total_tokens, output_tokens, duration_ms, turns, last_activity, agent, folder_id)`.
+type ConversationAcc = (u64, u64, u64, u64, DateTime<Utc>, String, i32);
+
+/// [`ConversationAcc`] with the conversation id folded in as the first element,
+/// so the top-conversations list can be sorted as one flat tuple.
+type ConversationTotals = (i32, u64, u64, u64, u64, DateTime<Utc>, String, i32);
+
 /// Running sums for one group (a bucket, or one slice of a breakdown).
 #[derive(Debug, Default, Clone)]
 struct Acc {
@@ -416,7 +424,7 @@ pub(crate) fn aggregate_report(
     let mut by_agent: HashMap<String, Acc> = HashMap::new();
     let mut by_model: HashMap<String, Acc> = HashMap::new();
     let mut heat: HashMap<(u8, u8), (u64, u64)> = HashMap::new();
-    let mut per_conversation: HashMap<i32, (u64, u64, DateTime<Utc>, String, i32)> = HashMap::new();
+    let mut per_conversation: HashMap<i32, ConversationAcc> = HashMap::new();
     let mut active_dates: HashSet<NaiveDate> = HashSet::new();
     let mut first_activity: Option<DateTime<Utc>> = None;
     let mut last_activity: Option<DateTime<Utc>> = None;
@@ -454,14 +462,18 @@ pub(crate) fn aggregate_report(
         let entry = per_conversation.entry(row.conversation_id).or_insert((
             0,
             0,
+            0,
+            0,
             row.occurred_at,
             row.agent_type.clone(),
             row.folder_id,
         ));
         entry.0 += row.total_tokens.max(0) as u64;
-        entry.1 += 1;
-        if row.occurred_at > entry.2 {
-            entry.2 = row.occurred_at;
+        entry.1 += row.output_tokens.max(0) as u64;
+        entry.2 += row.duration_ms.max(0) as u64;
+        entry.3 += 1;
+        if row.occurred_at > entry.4 {
+            entry.4 = row.occurred_at;
         }
 
         active_dates.insert(date);
@@ -518,10 +530,10 @@ pub(crate) fn aggregate_report(
         .collect();
     heatmap.sort_by_key(|a| (a.weekday, a.hour));
 
-    let mut top: Vec<(i32, u64, u64, DateTime<Utc>, String, i32)> = per_conversation
+    let mut top: Vec<ConversationTotals> = per_conversation
         .into_iter()
-        .map(|(id, (tokens, turns, last, agent, folder_id))| {
-            (id, tokens, turns, last, agent, folder_id)
+        .map(|(id, (tokens, output, duration_ms, turns, last, agent, folder_id))| {
+            (id, tokens, output, duration_ms, turns, last, agent, folder_id)
         })
         .collect();
     // Ties broken by id so the list is stable across identical requests.
@@ -530,15 +542,19 @@ pub(crate) fn aggregate_report(
     let top_conversations: Vec<TokenUsageConversationItem> = top
         .into_iter()
         .map(
-            |(id, tokens, turns, last, agent, folder_id)| TokenUsageConversationItem {
-                conversation_id: id,
-                // Filled by the command layer, which owns the DB handle.
-                title: None,
-                agent_type: agent,
-                folder_label: opts.folder_labels.get(&folder_id).cloned(),
-                total_tokens: tokens,
-                turn_count: turns,
-                last_activity_at: last,
+            |(id, tokens, output, duration_ms, turns, last, agent, folder_id)| {
+                TokenUsageConversationItem {
+                    conversation_id: id,
+                    // Filled by the command layer, which owns the DB handle.
+                    title: None,
+                    agent_type: agent,
+                    folder_label: opts.folder_labels.get(&folder_id).cloned(),
+                    total_tokens: tokens,
+                    output_tokens: output,
+                    turn_count: turns,
+                    duration_ms,
+                    last_activity_at: last,
+                }
             },
         )
         .collect();
@@ -1623,6 +1639,30 @@ mod tests {
         assert_eq!(report.by_agent[0].key, "codex");
         // A turn with no model still counts, under the explicit sentinel.
         assert_eq!(report.by_model[0].key, UNKNOWN_MODEL);
+    }
+
+    #[test]
+    fn top_conversations_carry_output_tokens_and_duration() {
+        let labels = HashMap::new();
+        let mut heavy = row("2026-08-01T10:00:00Z", 100);
+        heavy.output_tokens = 40;
+        heavy.duration_ms = 2000;
+        let mut light = row("2026-08-01T11:00:00Z", 10);
+        light.conversation_id = 2;
+        light.output_tokens = 5;
+        light.duration_ms = 500;
+
+        let report = aggregate_report(
+            &[heavy, light],
+            &[],
+            &opts(&labels, TokenUsageBucket::Day, 0, None, None),
+        );
+        assert_eq!(report.top_conversations[0].conversation_id, 1);
+        assert_eq!(report.top_conversations[0].output_tokens, 40);
+        assert_eq!(report.top_conversations[0].duration_ms, 2000);
+        assert_eq!(report.top_conversations[1].conversation_id, 2);
+        assert_eq!(report.top_conversations[1].output_tokens, 5);
+        assert_eq!(report.top_conversations[1].duration_ms, 500);
     }
 
     #[test]

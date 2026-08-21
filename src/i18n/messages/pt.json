@@ -1926,9 +1926,7 @@
         "output": "Saída",
         "cacheRead": "Leitura de cache",
         "cacheWrite": "Gravação de cache",
-        "total": "Total de tokens",
-        "outputSpeed": "Velocidade de saída",
-        "outputSpeedTooltip": "Média enquanto o modelo escreve. A espera por ferramentas não conta."
+        "total": "Total de tokens"
       },
       "quickActions": {
         "title": "Ações rápidas",
@@ -5095,6 +5093,8 @@
     "tileTurns": "Turnos",
     "tileActiveDays": "Dias ativos",
     "tileGenTime": "Tempo de geração",
+    "avgOutputSpeed": "Média {speed}",
+    "outputSpeedTooltip": "Média enquanto o modelo escreve. A espera por ferramentas não conta.",
     "vsPrevious": "vs. período anterior",
     "deltaNew": "novo",
     "trendTitle": "Uso ao longo do tempo",

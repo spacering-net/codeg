@@ -54,6 +54,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { subscribe } from "@/lib/platform"
 import { formatTokenCount } from "@/lib/token-format"
+import { averageOutputTps, formatTokPerSec } from "@/lib/token-speed"
 import {
   averagePerActiveDay,
   averagePerConversation,
@@ -561,6 +562,9 @@ export function TokenUsagePage() {
 
   const totals = report?.totals
   const cache = totals ? cacheHitRate(totals) : null
+  const averageTps = totals
+    ? averageOutputTps(totals.output_tokens, totals.duration_ms)
+    : null
   const heat = useMemo(
     () => buildHeatMatrix(report?.heatmap ?? []),
     [report?.heatmap]
@@ -1204,9 +1208,15 @@ export function TokenUsagePage() {
                           className="border-s border-t lg:border-t-0"
                           label={t("tileGenTime")}
                           value={formatDuration(totals.duration_ms)}
-                          hint={`${t("avgPerActiveDay")} ${formatTokenCount(
-                            Math.round(averagePerActiveDay(totals))
-                          )}`}
+                          hint={
+                            averageTps != null
+                              ? t("avgOutputSpeed", {
+                                  speed: formatTokPerSec(averageTps),
+                                })
+                              : `${t("avgPerActiveDay")} ${formatTokenCount(
+                                  Math.round(averagePerActiveDay(totals))
+                                )}`
+                          }
                         />
                       </section>
 
@@ -1384,31 +1394,45 @@ export function TokenUsagePage() {
                           </p>
                         ) : (
                           <ol className="divide-y divide-border">
-                            {report.top_conversations.map((c, i) => (
-                              <li
-                                key={c.conversation_id}
-                                className="flex items-center gap-3 py-2 first:pt-0 last:pb-0"
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className="w-5 shrink-0 font-mono text-[0.625rem] tabular-nums text-muted-foreground/70"
+                            {report.top_conversations.map((c, i) => {
+                              const sessionTps = averageOutputTps(
+                                c.output_tokens,
+                                c.duration_ms
+                              )
+                              return (
+                                <li
+                                  key={c.conversation_id}
+                                  className="flex items-center gap-3 py-2 first:pt-0 last:pb-0"
                                 >
-                                  {String(i + 1).padStart(2, "0")}
-                                </span>
-                                <span className="min-w-0 flex-1 truncate text-[0.8125rem]">
-                                  {c.title || t("untitledSession")}
-                                </span>
-                                <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:block sm:max-w-[10rem]">
-                                  {c.folder_label}
-                                </span>
-                                <span className="shrink-0 text-xs text-muted-foreground">
-                                  {getAgentLabel(c.agent_type as AgentType)}
-                                </span>
-                                <span className="shrink-0 font-mono text-xs tabular-nums">
-                                  {formatTokenCount(c.total_tokens)}
-                                </span>
-                              </li>
-                            ))}
+                                  <span
+                                    aria-hidden="true"
+                                    className="w-5 shrink-0 font-mono text-[0.625rem] tabular-nums text-muted-foreground/70"
+                                  >
+                                    {String(i + 1).padStart(2, "0")}
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate text-[0.8125rem]">
+                                    {c.title || t("untitledSession")}
+                                  </span>
+                                  <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:block sm:max-w-[10rem]">
+                                    {c.folder_label}
+                                  </span>
+                                  <span className="shrink-0 text-xs text-muted-foreground">
+                                    {getAgentLabel(c.agent_type as AgentType)}
+                                  </span>
+                                  <span className="shrink-0 font-mono text-xs tabular-nums">
+                                    {formatTokenCount(c.total_tokens)}
+                                  </span>
+                                  {sessionTps != null && (
+                                    <span
+                                      className="hidden shrink-0 font-mono text-xs tabular-nums text-muted-foreground sm:block"
+                                      title={t("outputSpeedTooltip")}
+                                    >
+                                      {formatTokPerSec(sessionTps)}
+                                    </span>
+                                  )}
+                                </li>
+                              )
+                            })}
                           </ol>
                         )}
                       </Panel>

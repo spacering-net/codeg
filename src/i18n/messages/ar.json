@@ -1926,9 +1926,7 @@
         "output": "إخراج",
         "cacheRead": "قراءة الكاش",
         "cacheWrite": "كتابة الكاش",
-        "total": "الإجمالي",
-        "outputSpeed": "سرعة الإخراج",
-        "outputSpeedTooltip": "المتوسط أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب."
+        "total": "الإجمالي"
       },
       "quickActions": {
         "title": "إجراءات سريعة",
@@ -5095,6 +5093,8 @@
     "tileTurns": "الأدوار",
     "tileActiveDays": "الأيام النشطة",
     "tileGenTime": "زمن التوليد",
+    "avgOutputSpeed": "متوسط {speed}",
+    "outputSpeedTooltip": "المتوسط أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب.",
     "vsPrevious": "مقارنة بالفترة السابقة",
     "deltaNew": "جديد",
     "trendTitle": "الاستهلاك عبر الزمن",

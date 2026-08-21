@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  averageOutputTps,
   countChars,
   estimateTokens,
   formatTokPerSec,
@@ -11,6 +12,18 @@ describe("formatTokPerSec", () => {
   it("matches the live-turn one-decimal tok/s label", () => {
     expect(formatTokPerSec(47.23)).toBe("47.2 tok/s")
     expect(formatTokPerSec(0)).toBe("0.0 tok/s")
+  })
+})
+
+describe("averageOutputTps", () => {
+  it("divides output tokens by recorded generation seconds", () => {
+    expect(averageOutputTps(100, 1000)).toBeCloseTo(100)
+  })
+
+  it("returns null until both sides are meaningful", () => {
+    expect(averageOutputTps(0, 1000)).toBeNull()
+    expect(averageOutputTps(100, 0)).toBeNull()
+    expect(averageOutputTps(100, 200)).toBeNull()
   })
 })
 

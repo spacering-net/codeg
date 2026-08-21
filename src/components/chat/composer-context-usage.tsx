@@ -8,8 +8,6 @@ import { useTabStore } from "@/contexts/tab-context"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import { formatTokenCount } from "@/lib/token-format"
 import { formatContextWindowPercent } from "@/lib/context-window"
-import { useSessionOutputSpeed } from "@/hooks/use-session-output-speed"
-import { formatTokPerSec } from "@/lib/token-speed"
 import {
   Popover,
   PopoverContent,
@@ -48,7 +46,6 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
       : null
   )
   const usage = sessionStats?.total_usage
-  const outputSpeed = useSessionOutputSpeed(runtimeConversationId)
 
   const subscribeConn = useCallback(
     (cb: () => void) => {
@@ -120,9 +117,8 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
   }
 
   const hasTokenSection = rows.length > 0
-  const hasOutputSpeed = outputSpeed != null
 
-  if (!hasContext && !hasTokenSection && !hasOutputSpeed) return null
+  if (!hasContext && !hasTokenSection) return null
 
   // Native hover hint mirroring the popover's headline (the popover stays for
   // the full breakdown on click).
@@ -234,21 +230,6 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
               ))}
             </div>
           </>
-        ) : null}
-        {hasOutputSpeed ? (
-          <div
-            className={`flex items-center justify-between py-0.5 text-xs leading-none ${
-              hasContext || hasTokenSection
-                ? "mt-0.5 border-t border-border pt-0.5"
-                : ""
-            }`}
-            title={t("outputSpeedTooltip")}
-          >
-            <span>{t("outputSpeed")}</span>
-            <span className="tabular-nums">
-              {formatTokPerSec(outputSpeed.averageTps)}
-            </span>
-          </div>
         ) : null}
       </PopoverContent>
     </Popover>

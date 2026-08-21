@@ -154,7 +154,10 @@ pub struct TokenUsageConversationItem {
     pub agent_type: String,
     pub folder_label: Option<String>,
     pub total_tokens: u64,
+    pub output_tokens: u64,
     pub turn_count: u64,
+    /// Summed recorded generation time of the counted turns.
+    pub duration_ms: u64,
     pub last_activity_at: DateTime<Utc>,
 }
 

@@ -2042,7 +2042,10 @@ export interface TokenUsageConversationItem {
   agent_type: string
   folder_label: string | null
   total_tokens: number
+  output_tokens: number
   turn_count: number
+  /** Summed recorded generation time of the counted turns. */
+  duration_ms: number
   last_activity_at: string
 }
 
