@@ -308,3 +308,108 @@ describe("CommandDropdown", () => {
     expect(await screen.findByText("addCommand")).toBeInTheDocument()
   })
 })
+
+describe("CommandDropdown menu item press handling", () => {
+  beforeEach(() => {
+    h.stop.mockClear()
+    h.kill.mockClear()
+    h.create.mockClear()
+    h.create.mockImplementation(async () => "launched-terminal")
+    h.runLocal.mockClear()
+    h.toastError.mockClear()
+    h.desktop = true
+    h.remote = true
+    h.baseUrl = "https://devbox.example:3080"
+    h.folder = { id: 1, path: "/repo" }
+    h.command = "pnpm dev"
+    h.isLocal = false
+    h.hostCommands = null
+    h.tabs = []
+    useCommandTerminalLinkStore.setState({ links: {} })
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function menuCommands(): FolderCommand[] {
+    return [
+      {
+        id: 5,
+        folder_id: 1,
+        name: "dev",
+        command: "pnpm dev",
+        sort_order: 0,
+        run_local: false,
+        created_at: "",
+        updated_at: "",
+      },
+      {
+        id: 6,
+        folder_id: 1,
+        name: "build",
+        command: "npm run build",
+        sort_order: 1,
+        run_local: false,
+        created_at: "",
+        updated_at: "",
+      },
+    ]
+  }
+
+  // jsdom has no PointerEvent constructor, so fireEvent.pointerDown degrades
+  // to a propertyless Event whose `button` is undefined — which Radix's
+  // `event.button === 0` gate rejects. Build MouseEvents directly, the same
+  // way use-long-press-action.test.tsx does.
+  function firePointer(
+    target: Element,
+    type: "pointerdown" | "pointermove" | "pointerup"
+  ) {
+    act(() => {
+      target.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 })
+      )
+    })
+  }
+
+  // Radix dropdowns open on the trigger's pointerdown (not click), and jsdom
+  // synthesizes no pointer stream from fireEvent.click — so open the menu the
+  // way a real press does.
+  async function openMenu() {
+    h.hostCommands = menuCommands()
+    render(<CommandDropdown />)
+    await act(async () => {}) // flush the initial commands load
+    firePointer(screen.getByRole("button", { name: "dev" }), "pointerdown")
+    await act(async () => {})
+    return screen.getByRole("menuitem", { name: /build/ })
+  }
+
+  it("a short press keeps selecting the command without running it", async () => {
+    const item = await openMenu()
+    firePointer(item, "pointerdown")
+    firePointer(item, "pointerup")
+    fireEvent.click(item)
+    await act(async () => {}) // flush the menu close
+
+    expect(h.create).not.toHaveBeenCalled()
+    // The pill now shows the freshly selected command.
+    expect(screen.getByRole("button", { name: "build" })).toBeInTheDocument()
+    expect(localStorage.getItem("lastCmd:1")).toBe("6")
+  })
+
+  it("a long press runs the command directly and closes the menu", async () => {
+    vi.useFakeTimers()
+    const item = await openMenu()
+    firePointer(item, "pointerdown")
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    await act(async () => {}) // let runCommand's await settle
+
+    expect(h.create).toHaveBeenCalledWith("build", "npm run build", 6)
+    expect(screen.queryByRole("menuitem", { name: /build/ })).toBeNull()
+    // Running also selects, so the pill follows the launched command.
+    expect(localStorage.getItem("lastCmd:1")).toBe("6")
+  })
+})
