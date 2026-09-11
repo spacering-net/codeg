@@ -85,9 +85,7 @@ describe("FileTree row chrome", () => {
     renderTree(false)
     const [, fileItem] = screen.getAllByRole("treeitem")
 
-    expect(
-      fileItem.firstElementChild?.querySelector(".lucide-file")
-    ).not.toBeNull()
+    expect(fileItem.firstElementChild?.querySelector("svg")).not.toBeNull()
   })
 
   it("indents one glyph width (1rem) per nesting level", () => {

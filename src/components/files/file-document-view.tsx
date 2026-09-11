@@ -10,6 +10,7 @@ import { ImagePreview } from "@/components/files/image-preview"
 import { MarkdownDocumentPreview } from "@/components/files/markdown-document-preview"
 import { OfficePreview } from "@/components/files/office-preview"
 import { PdfPreview } from "@/components/files/pdf-preview"
+import { OpenFileViewerPreview } from "@/components/files/open-file-viewer-preview"
 import type { FileWorkspaceTab } from "@/contexts/workspace-context"
 import { isHtmlPreviewable } from "@/lib/language-detect"
 
@@ -24,6 +25,7 @@ import { isHtmlPreviewable } from "@/lib/language-detect"
  *   language "image"  → ImagePreview      (content is a data: URL)
  *   language "pdf"    → PdfPreview        (content is a data: URL)
  *   language "office" → OfficePreview     (an officecli watch, no bytes here)
+ *   language "ofv"    → OpenFileViewerPreview (data: URL bytes, client-side)
  *   HTML + preview on → HtmlPreview
  *   markdown + preview on → MarkdownDocumentPreview
  *   everything else   → shiki-highlighted source
@@ -122,9 +124,9 @@ export function FileDocumentView({
   // whatever the tab holds. A load failure surfaces as its own message in the
   // document body, which is exactly where the column shows it.
   //
-  // The synthetic "image" / "pdf" / "office" languages are stamped onto the
-  // tab by whoever seeded it — branch on those, exactly as the file column
-  // does.
+  // The synthetic "image" / "pdf" / "office" / "ofv" languages are stamped
+  // onto the tab by whoever seeded it — branch on those, exactly as the file
+  // column does.
   if (tab.language === "image") {
     return <ImagePreview key={tab.id} tab={tab} />
   }
@@ -139,6 +141,9 @@ export function FileDocumentView({
         relPath={io?.ioPath ?? null}
       />
     )
+  }
+  if (tab.language === "ofv") {
+    return <OpenFileViewerPreview key={tab.id} tab={tab} />
   }
   if (isPreview && isHtmlPreviewable(tab.path)) {
     return <HtmlPreview key={tab.id} tab={tab} rootPath={previewRoot} />
