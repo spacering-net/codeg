@@ -2405,6 +2405,7 @@
       "newConversation": "新建会话",
       "maximize": "最大化",
       "restore": "还原",
+      "atToNewConversation": "At 添加到新会话",
       "attachToCurrentSession": "添加到会话",
       "rename": "重命名",
       "status": "状态",

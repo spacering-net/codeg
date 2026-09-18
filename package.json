@@ -14,6 +14,8 @@
     "test:coverage": "vitest run --coverage",
     "server:build": "cd src-tauri && cargo build --release --bin codeg-server --no-default-features --features server-bin",
     "server:dev": "cd src-tauri && cargo run --bin codeg-server --no-default-features --features server-bin",
+    "server:buildall": "cd src-tauri && cargo build --release --no-default-features --features server-bin,mcp-bin --bin codeg-server --bin codeg-mcp",
+    "buildall": "next build && cd src-tauri && cargo build --release --no-default-features --features server-bin,mcp-bin --bin codeg-server --bin codeg-mcp",
     "browser:agent": "node scripts/build-browser-agent.mjs",
     "browser:agent:check": "node scripts/build-browser-agent.mjs --check",
     "browser:agent:types": "tsc -p browser-agent/tsconfig.json",

@@ -2405,6 +2405,7 @@
       "newConversation": "새 대화",
       "maximize": "최대화",
       "restore": "복원",
+      "atToNewConversation": "새 대화에 At 추가",
       "attachToCurrentSession": "세션에 추가",
       "rename": "이름 변경",
       "status": "상태",

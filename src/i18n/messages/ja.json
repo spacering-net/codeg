@@ -2405,6 +2405,7 @@
       "newConversation": "新しい会話",
       "maximize": "最大化",
       "restore": "元に戻す",
+      "atToNewConversation": "新規会話に At を追加",
       "attachToCurrentSession": "セッションに追加",
       "rename": "名前を変更",
       "status": "ステータス",
