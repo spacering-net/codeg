@@ -8,9 +8,13 @@ import {
   Coins,
   CopyIcon,
   ListTodo,
+  Loader2,
   Split,
+  Square,
+  Volume2,
 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
+import { toast } from "sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -20,6 +24,9 @@ import {
 import { useMessageScroll } from "@/components/message/message-scroll-context"
 import { useModelLabel } from "@/components/message/model-label-context"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
+import { resolveSpeechLanguage } from "@/lib/speech-capabilities"
+import { speak, stopSpeech, useSpeechPlayer } from "@/lib/speech-player"
+import { useSpeechPrefs } from "@/lib/speech-prefs"
 import { formatTokenCount } from "@/lib/token-format"
 import { cn, copyTextToClipboard } from "@/lib/utils"
 import type { TurnUsage } from "@/lib/types"
@@ -46,6 +53,8 @@ interface TurnStatsProps {
    * name the backend can resolve yet (`unnamed` — the post-turn reparse fills
    * it in a moment later). Only read while `forkDisabled`. */
   forkDisabledReason?: "busy" | "unnamed"
+  /** Stable id of this reply; enables the read-aloud action when set. */
+  speechId?: string
 }
 
 const iconButtonClass =
@@ -63,6 +72,7 @@ export function TurnStats({
   onForkFromHere,
   forkDisabled = false,
   forkDisabledReason = "busy",
+  speechId,
 }: TurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.messageList")
@@ -110,6 +120,16 @@ export function TurnStats({
     (id) => modelLabel(id) ?? id
   )
   const hasCopy = copyText.trim().length > 0
+  const speechPrefs = useSpeechPrefs()
+  const readAloudEnabled = speechPrefs.output.enabled
+  const player = useSpeechPlayer()
+  const hasReadAloud = readAloudEnabled && hasCopy && Boolean(speechId)
+  const isThisSpeaking = hasReadAloud && player.playingId === speechId
+  const readAloudLabel = isThisSpeaking
+    ? player.status === "loading"
+      ? t("readAloudLoading")
+      : t("stopReading")
+    : t("readAloud")
   const hasUsage = Boolean(usage)
   // An all-zero usage means "nobody said", not "nothing was spent": a reply
   // that exists cannot have cost zero tokens. Qoder zeroes every counter for
@@ -157,6 +177,24 @@ export function TurnStats({
     timeoutRef.current = window.setTimeout(() => setIsCopied(false), 2000)
   }, [copyText, hasCopy, isCopied])
 
+  const handleReadAloud = useCallback(() => {
+    if (!speechId) return
+    if (isThisSpeaking) {
+      stopSpeech()
+      return
+    }
+    speak(speechId, copyText, {
+      language: resolveSpeechLanguage(speechPrefs.input, locale),
+      labels: {
+        codeOmitted: t("speechCodeOmitted"),
+        tableOmitted: t("speechTableOmitted"),
+      },
+      onError: () => {
+        toast.error(t("readAloudFailed"))
+      },
+    })
+  }, [copyText, isThisSpeaking, locale, speechId, speechPrefs.input, t])
+
   useEffect(
     () => () => {
       window.clearTimeout(timeoutRef.current)
@@ -192,6 +230,31 @@ export function TurnStats({
             <TooltipContent side="top">
               {isCopied ? t("copied") : t("copyMessage")}
             </TooltipContent>
+          </Tooltip>
+        )}
+        {hasReadAloud && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleReadAloud}
+                className={iconButtonClass}
+                aria-label={readAloudLabel}
+                aria-pressed={isThisSpeaking}
+              >
+                {!isThisSpeaking ? (
+                  <Volume2 aria-hidden="true" className="h-3.5 w-3.5" />
+                ) : player.status === "loading" ? (
+                  <Loader2
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 animate-spin"
+                  />
+                ) : (
+                  <Square aria-hidden="true" className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{readAloudLabel}</TooltipContent>
           </Tooltip>
         )}
         {hasCopy && (

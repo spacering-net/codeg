@@ -9,7 +9,7 @@ import {
   useRef,
   type ReactNode,
 } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { subscribe, getEventStream } from "@/lib/platform"
 import type {
   AttachHandlers,
@@ -103,6 +103,10 @@ import {
 import { dismissNotification, notify, type NotifyAction } from "@/lib/notify"
 import type { SnapshotPatch } from "@/lib/snapshot-denormalize"
 import { getAgentLabel } from "@/lib/custom-agents"
+import { resolveSpeechLanguage } from "@/lib/speech-capabilities"
+import { maybeAutoRead, stopReadAloud } from "@/lib/speech-player"
+import { getSpeechPrefs } from "@/lib/speech-prefs"
+import { useTabStore } from "@/stores/tab-store"
 import {
   localizeConfigOptionLabel,
   localizeConfigValueLabel,
@@ -3302,6 +3306,20 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     folderNameRef.current = folder?.name
   }, [folder?.name])
+  const locale = useLocale()
+  const localeRef = useRef(locale)
+  useEffect(() => {
+    localeRef.current = locale
+  }, [locale])
+  // Read-aloud belongs to the tab it was started in; leaving the tab ends it.
+  // Voice-mode speech streams are workspace-wide and keep playing.
+  useEffect(
+    () =>
+      useTabStore.subscribe((state, prev) => {
+        if (state.activeTabId !== prev.activeTabId) stopReadAloud()
+      }),
+    []
+  )
   // Depth > 0 while REPLAYED envelopes are being applied (see `onReplay`):
   // `handleMappedEvent` then treats them like echoes and skips the one-shot
   // effects — toasts, sounds, OS notifications — while the store catches up.
@@ -5197,6 +5215,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           // Detect pending question from tool calls in the completed turn
           const turnConn = storeRef.current.connections.get(contextKey)
+          // The reply as the user read it, for auto-read below; subagent text
+          // (parented blocks) is not part of it.
+          const replyText = (turnConn?.liveMessage?.content ?? [])
+            .flatMap((block) =>
+              block.type === "text" && !block.parentToolUseId
+                ? [block.text]
+                : []
+            )
+            .join("\n")
           if (turnConn?.liveMessage) {
             const blocks = turnConn.liveMessage.content
             for (let i = blocks.length - 1; i >= 0; i--) {
@@ -5261,6 +5288,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                   title,
                   body: t("notificationTurnComplete", { agent: agentLabel }),
                 })
+                maybeAutoRead(
+                  {
+                    contextKey,
+                    activeId: useTabStore.getState().activeTabId,
+                    visibility: document.visibilityState,
+                  },
+                  replyText,
+                  {
+                    language: resolveSpeechLanguage(
+                      getSpeechPrefs().input,
+                      localeRef.current
+                    ),
+                    labels: {
+                      codeOmitted: tChat("messageList.speechCodeOmitted"),
+                      tableOmitted: tChat("messageList.speechTableOmitted"),
+                    },
+                  }
+                )
               }
             }
           }
@@ -5914,6 +5959,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     const timer = setInterval(() => {
       const currentActiveKey = storeRef.current.activeKey
       const currentOpenTabKeys = heldOpenKeys()
+      const surfaceKeys = new Set(
+        [...extraLiveKeysRef.current.values()].flatMap((keys) => [...keys])
+      )
       const seen = new Set<string>()
       const toTouch: { contextKey: string; connectionId: string }[] = []
       const consider = (contextKey: string) => {
@@ -5924,8 +5972,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         if (conn.status === "disconnected" || conn.status === "error") return
         // Broker-owned children come and go on the parent's schedule and are
         // released by `detachDelegationChild`; settling one here would fight
-        // that lifecycle.
-        if (conn.isDelegationChild) return
+        // that lifecycle. A child a live surface holds (the voice-mode
+        // assistant) is still touched, or the backend sweep reaps it.
+        if (conn.isDelegationChild && !surfaceKeys.has(contextKey)) return
         toTouch.push({ contextKey, connectionId: conn.connectionId })
       }
       if (currentActiveKey) consider(currentActiveKey)

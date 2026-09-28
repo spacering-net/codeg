@@ -392,6 +392,20 @@ async fn async_main() -> ExitCode {
             // "browser tab" is an iframe their own browser renders, which
             // nothing here can reach.
             Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs),
+            Arc::new(
+                codeg_lib::commands::assistant_tools::DbAssistantToolAccess {
+                    manager: Arc::new(state.connection_manager.clone_ref()),
+                    db: Arc::new(codeg_lib::db::AppDatabase {
+                        conn: state.db.conn.clone(),
+                    }),
+                    emitter: Arc::new(state.emitter.clone()),
+                    questions: Arc::new(
+                        codeg_lib::commands::assistant_tools::ManagerQuestions(
+                            Arc::new(state.connection_manager.clone_ref()),
+                        ),
+                    ),
+                },
+            ),
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
@@ -484,6 +498,16 @@ async fn async_main() -> ExitCode {
         state.event_broadcaster.clone(),
         state.emitter.clone(),
         pet_state_handle,
+    ));
+
+    // Active-session aggregator (`pet://sessions`). Server mode has no pet
+    // window, but voice mode's workspace announcements read the same payload.
+    tokio::spawn(codeg_lib::pet_sessions::pet_sessions_subscriber_task(
+        state.acp_event_bus.clone(),
+        state.event_broadcaster.clone(),
+        state.emitter.clone(),
+        state.connection_manager.clone_ref(),
+        state.db.conn.clone(),
     ));
 
     // Spawn the idle sweep so connections abandoned without an explicit

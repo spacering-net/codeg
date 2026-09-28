@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use codeg_lib::acp::assistant_tools::AssistantToolAccess;
 use codeg_lib::acp::delegation::broker::{
     ConversationDepthLookup, DelegationBroker, DelegationConfig,
 };
@@ -23,8 +24,8 @@ use codeg_lib::acp::delegation::listener::{
 };
 use codeg_lib::acp::delegation::spawner::{mock::MockSpawner, ConnectionSpawner};
 use codeg_lib::acp::delegation::transport::{
-    client_ask_round_trip, client_round_trip, client_status_round_trip, BrokerAskRequest,
-    BrokerRequest, BrokerStatusRequest,
+    client_ask_round_trip, client_round_trip, client_status_round_trip, AssistantActionResult,
+    AssistantSessionList, BrokerAskRequest, BrokerRequest, BrokerStatusRequest,
 };
 use codeg_lib::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
 use codeg_lib::acp::question::{
@@ -136,6 +137,63 @@ impl codeg_lib::acp::chat_authoring::ChatAuthoringAccess for NoAuthoring {
     }
 }
 
+/// These tests never reach the assistant tools; every call is refused.
+struct NoAssistant;
+#[async_trait::async_trait]
+impl AssistantToolAccess for NoAssistant {
+    async fn is_assistant_connection(&self, _conn_id: &str) -> bool {
+        false
+    }
+    async fn list_sessions(&self, _exclude_conn_id: &str) -> AssistantSessionList {
+        AssistantSessionList {
+            sessions: vec![],
+            folders: vec![],
+        }
+    }
+    async fn focus_session(&self, _session_id: i64) -> AssistantActionResult {
+        no_assistant()
+    }
+    async fn send_to_session(
+        &self,
+        _requester_conn_id: &str,
+        _session_id: i64,
+        _text: String,
+    ) -> AssistantActionResult {
+        no_assistant()
+    }
+    async fn cancel_session(
+        &self,
+        _requester_conn_id: &str,
+        _session_id: i64,
+    ) -> AssistantActionResult {
+        no_assistant()
+    }
+    async fn answer_permission(
+        &self,
+        _requester_conn_id: &str,
+        _session_id: i64,
+        _decision: String,
+    ) -> AssistantActionResult {
+        no_assistant()
+    }
+    async fn start_session(
+        &self,
+        _requester_conn_id: &str,
+        _folder_id: i64,
+        _agent_type: String,
+        _task: String,
+    ) -> AssistantActionResult {
+        no_assistant()
+    }
+}
+
+fn no_assistant() -> AssistantActionResult {
+    AssistantActionResult {
+        outcome: "unsupported".to_string(),
+        message: "no assistant".to_string(),
+    }
+}
+
 /// Controllable question access for the ask round-trip test: `register_question`
 /// parks a sender keyed by a freshly-minted id; the test pops it via
 /// `take_pending` and resolves it, exactly as a user answering the card would.
@@ -227,6 +285,7 @@ async fn end_to_end_uds_happy_path() {
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
         Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs)
             as Arc<dyn codeg_lib::acp::browser_tools::BrowserToolAccess>,
+        Arc::new(NoAssistant) as Arc<dyn AssistantToolAccess>,
     );
 
     // Freshly-named directory per test — no clashes across test bins.
@@ -346,6 +405,7 @@ async fn end_to_end_uds_batch_status() {
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
         Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs)
             as Arc<dyn codeg_lib::acp::browser_tools::BrowserToolAccess>,
+        Arc::new(NoAssistant) as Arc<dyn AssistantToolAccess>,
     );
 
     let dir = socket_dir();
@@ -436,6 +496,7 @@ async fn end_to_end_uds_invalid_token_rejected() {
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
         Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs)
             as Arc<dyn codeg_lib::acp::browser_tools::BrowserToolAccess>,
+        Arc::new(NoAssistant) as Arc<dyn AssistantToolAccess>,
     );
 
     let dir = socket_dir();
@@ -505,6 +566,7 @@ async fn end_to_end_uds_ask_question_round_trip() {
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
         Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs)
             as Arc<dyn codeg_lib::acp::browser_tools::BrowserToolAccess>,
+        Arc::new(NoAssistant) as Arc<dyn AssistantToolAccess>,
     );
 
     let dir = socket_dir();
@@ -648,6 +710,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
         Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs)
             as Arc<dyn codeg_lib::acp::browser_tools::BrowserToolAccess>,
+        Arc::new(NoAssistant) as Arc<dyn AssistantToolAccess>,
     );
 
     let dir = socket_dir();

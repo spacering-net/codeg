@@ -161,6 +161,7 @@ pub struct DelegationListener {
     /// exists only in the desktop build, because a browser tab is a native
     /// webview — server mode gets `NoBrowserTabs`.
     pub browser: Arc<dyn BrowserToolAccess>,
+    pub assistant: Arc<dyn crate::acp::assistant_tools::AssistantToolAccess>,
 }
 
 impl DelegationListener {
@@ -175,6 +176,7 @@ impl DelegationListener {
         tasks: Arc<dyn WorkTaskToolAccess>,
         authoring: Arc<dyn ChatAuthoringAccess>,
         browser: Arc<dyn BrowserToolAccess>,
+        assistant: Arc<dyn crate::acp::assistant_tools::AssistantToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
             broker,
@@ -186,6 +188,7 @@ impl DelegationListener {
             tasks,
             authoring,
             browser,
+            assistant,
         })
     }
 
@@ -423,6 +426,214 @@ impl DelegationListener {
             // Untokened on purpose — see `BrokerMessage::Ping`. Answered before
             // anything else is touched so the probe measures the serve path and
             // nothing more.
+            BrokerMessage::AssistantListSessions(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "not_found", "message": "invalid token"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                };
+                if !self
+                    .assistant
+                    .is_assistant_connection(&entry.parent_connection_id)
+                    .await
+                {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "unsupported", "message": "not an assistant connection"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let list = self
+                    .assistant
+                    .list_sessions(&entry.parent_connection_id)
+                    .await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(list).unwrap_or_else(|_| serde_json::Value::Null),
+                }
+            }
+            BrokerMessage::AssistantFocusSession(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "not_found", "message": "invalid token"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                };
+                if !self
+                    .assistant
+                    .is_assistant_connection(&entry.parent_connection_id)
+                    .await
+                {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "unsupported", "message": "not an assistant connection"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let res = self.assistant.focus_session(req.session_id).await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(res).unwrap_or_else(|_| serde_json::Value::Null),
+                }
+            }
+            BrokerMessage::AssistantSendToSession(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "not_found", "message": "invalid token"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                };
+                if !self
+                    .assistant
+                    .is_assistant_connection(&entry.parent_connection_id)
+                    .await
+                {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "unsupported", "message": "not an assistant connection"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let res = self
+                    .assistant
+                    .send_to_session(
+                        &entry.parent_connection_id,
+                        req.session_id,
+                        req.text,
+                    )
+                    .await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(res).unwrap_or_else(|_| serde_json::Value::Null),
+                }
+            }
+            BrokerMessage::AssistantCancelSession(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "not_found", "message": "invalid token"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                };
+                if !self
+                    .assistant
+                    .is_assistant_connection(&entry.parent_connection_id)
+                    .await
+                {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "unsupported", "message": "not an assistant connection"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let res = self
+                    .assistant
+                    .cancel_session(&entry.parent_connection_id, req.session_id)
+                    .await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(res).unwrap_or_else(|_| serde_json::Value::Null),
+                }
+            }
+            BrokerMessage::AssistantAnswerPermission(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "not_found", "message": "invalid token"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                };
+                if !self
+                    .assistant
+                    .is_assistant_connection(&entry.parent_connection_id)
+                    .await
+                {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "unsupported", "message": "not an assistant connection"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let res = self
+                    .assistant
+                    .answer_permission(
+                        &entry.parent_connection_id,
+                        req.session_id,
+                        req.decision,
+                    )
+                    .await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(res).unwrap_or_else(|_| serde_json::Value::Null),
+                }
+            }
+            BrokerMessage::AssistantStartSession(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "not_found", "message": "invalid token"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                };
+                if !self
+                    .assistant
+                    .is_assistant_connection(&entry.parent_connection_id)
+                    .await
+                {
+                    write_frame(
+                        conn,
+                        &BrokerResponse {
+                            outcome: serde_json::json!({"outcome": "unsupported", "message": "not an assistant connection"}),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let res = self
+                    .assistant
+                    .start_session(
+                        &entry.parent_connection_id,
+                        req.folder_id,
+                        req.agent_type,
+                        req.task,
+                    )
+                    .await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(res).unwrap_or_else(|_| serde_json::Value::Null),
+                }
+            }
             BrokerMessage::Ping => BrokerResponse {
                 outcome: serde_json::json!({ "ok": true }),
             },
@@ -1740,6 +1951,224 @@ mod tests {
         broker
     }
 
+    struct StubAssistant;
+    #[async_trait]
+    impl crate::acp::assistant_tools::AssistantToolAccess for StubAssistant {
+        async fn is_assistant_connection(&self, _conn_id: &str) -> bool {
+            true
+        }
+        async fn list_sessions(
+            &self,
+            _exclude_conn_id: &str,
+        ) -> crate::acp::delegation::transport::AssistantSessionList {
+            crate::acp::delegation::transport::AssistantSessionList {
+                sessions: vec![],
+                folders: vec![],
+            }
+        }
+        async fn focus_session(
+            &self,
+            _session_id: i64,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "not_found".to_string(),
+                message: String::new(),
+            }
+        }
+        async fn send_to_session(
+            &self,
+            _requester_conn_id: &str,
+            _session_id: i64,
+            _text: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: String::new(),
+            }
+        }
+        async fn cancel_session(
+            &self,
+            _requester_conn_id: &str,
+            _session_id: i64,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: String::new(),
+            }
+        }
+        async fn answer_permission(
+            &self,
+            _requester_conn_id: &str,
+            _session_id: i64,
+            _decision: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: String::new(),
+            }
+        }
+        async fn start_session(
+            &self,
+            _requester_conn_id: &str,
+            _folder_id: i64,
+            _agent_type: String,
+            _task: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: String::new(),
+            }
+        }
+    }
+
+    /// Treats only `assistant_conn` as the assistant and lists one fixed
+    /// session, so the tests can tell a refused call from a served one.
+    struct ScopedAssistant {
+        assistant_conn: &'static str,
+        list_calls: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl crate::acp::assistant_tools::AssistantToolAccess for ScopedAssistant {
+        async fn is_assistant_connection(&self, conn_id: &str) -> bool {
+            conn_id == self.assistant_conn
+        }
+        async fn list_sessions(
+            &self,
+            _exclude_conn_id: &str,
+        ) -> crate::acp::delegation::transport::AssistantSessionList {
+            self.list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            crate::acp::delegation::transport::AssistantSessionList {
+                sessions: vec![crate::acp::delegation::transport::AssistantSessionEntry {
+                    session_id: 7,
+                    title: "Fix login".into(),
+                    agent_type: "codex".into(),
+                    folder_id: 1,
+                    folder_name: "app".into(),
+                    status: "idle".into(),
+                    pending_action: None,
+                }],
+                folders: vec![],
+            }
+        }
+        async fn focus_session(
+            &self,
+            session_id: i64,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            StubAssistant.focus_session(session_id).await
+        }
+        async fn send_to_session(
+            &self,
+            requester_conn_id: &str,
+            session_id: i64,
+            text: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            StubAssistant.send_to_session(requester_conn_id, session_id, text).await
+        }
+        async fn cancel_session(
+            &self,
+            requester_conn_id: &str,
+            session_id: i64,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            StubAssistant.cancel_session(requester_conn_id, session_id).await
+        }
+        async fn answer_permission(
+            &self,
+            requester_conn_id: &str,
+            session_id: i64,
+            decision: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            StubAssistant.answer_permission(requester_conn_id, session_id, decision).await
+        }
+        async fn start_session(
+            &self,
+            requester_conn_id: &str,
+            folder_id: i64,
+            agent_type: String,
+            task: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            StubAssistant
+                .start_session(requester_conn_id, folder_id, agent_type, task)
+                .await
+        }
+    }
+
+    async fn list_sessions_as(token: &str) -> (serde_json::Value, usize) {
+        let tokens = Arc::new(TokenRegistry::default());
+        for (tok, parent) in [("assistant-tok", "assistant-conn"), ("tab-tok", "tab-conn")] {
+            tokens
+                .register(
+                    tok.into(),
+                    TokenEntry {
+                        parent_connection_id: parent.into(),
+                        working_dir: PathBuf::from("/repo"),
+                    },
+                )
+                .await;
+        }
+        let assistant = Arc::new(ScopedAssistant {
+            assistant_conn: "assistant-conn",
+            list_calls: Default::default(),
+        });
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        let listener = DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(Some(1))),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            Arc::new(StubSessionInfo::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            assistant.clone(),
+        );
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        let msg = BrokerMessage::AssistantListSessions(
+            crate::acp::delegation::transport::BrokerAssistantListSessionsRequest {
+                token: token.into(),
+            },
+        );
+        write_frame(&mut client, &msg).await.unwrap();
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+        let calls = assistant
+            .list_calls
+            .load(std::sync::atomic::Ordering::SeqCst);
+        (resp.outcome, calls)
+    }
+
+    #[tokio::test]
+    async fn assistant_list_sessions_with_a_bad_token_is_not_found() {
+        let (outcome, calls) = list_sessions_as("bogus").await;
+        assert_eq!(outcome["outcome"], "not_found");
+        assert_eq!(calls, 0);
+    }
+
+    /// A normal tab whose MCP config was hand-edited to `--features assistant`
+    /// still cannot list sessions: the listener checks the parent connection.
+    #[tokio::test]
+    async fn assistant_list_sessions_from_a_non_assistant_parent_is_unsupported() {
+        let (outcome, calls) = list_sessions_as("tab-tok").await;
+        assert_eq!(outcome["outcome"], "unsupported");
+        assert_eq!(calls, 0);
+    }
+
+    #[tokio::test]
+    async fn assistant_list_sessions_from_the_assistant_lists_via_the_access_impl() {
+        let (outcome, calls) = list_sessions_as("assistant-tok").await;
+        assert_eq!(calls, 1);
+        assert_eq!(outcome["sessions"][0]["session_id"], 7);
+        assert_eq!(outcome["sessions"][0]["title"], "Fix login");
+    }
+
     fn make_listener(
         broker: Arc<DelegationBroker>,
         tokens: Arc<TokenRegistry>,
@@ -1755,6 +2184,7 @@ mod tests {
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
             Arc::new(NoBrowserTabs),
+            Arc::new(StubAssistant),
         )
     }
 
@@ -1778,6 +2208,7 @@ mod tests {
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
             Arc::new(NoBrowserTabs),
+            Arc::new(StubAssistant),
         )
     }
 
@@ -1802,6 +2233,7 @@ mod tests {
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
             Arc::new(NoBrowserTabs),
+            Arc::new(StubAssistant),
         )
     }
 
@@ -1825,6 +2257,7 @@ mod tests {
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
             Arc::new(NoBrowserTabs),
+            Arc::new(StubAssistant),
         )
     }
 
@@ -1850,6 +2283,7 @@ mod tests {
             Arc::new(StubTaskTools),
             authoring,
             Arc::new(NoBrowserTabs),
+            Arc::new(StubAssistant),
         )
     }
 
@@ -1874,6 +2308,7 @@ mod tests {
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
             browser,
+            Arc::new(StubAssistant),
         )
     }
 

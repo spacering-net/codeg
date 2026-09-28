@@ -89,6 +89,8 @@ mod tauri_app {
         clipboard as clipboard_commands,
         config_sync,
         conversations,
+        speech,
+        assistant,
         custom_skills as custom_skills_commands,
         deepseek_settings as deepseek_settings_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
@@ -920,7 +922,8 @@ mod tauri_app {
                 // lifecycle events and emits `pet://sessions` for the sprite
                 // badge + panel window. Shares the same buses as the ambient
                 // mapper but is kept separate so the DB-free ambient task stays
-                // simple; desktop-only (server mode has no pet window).
+                // simple. Server mode spawns it too (codeg_server.rs) for
+                // voice mode's workspace announcements.
                 {
                     let bus = app
                         .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
@@ -1063,6 +1066,24 @@ mod tauri_app {
                                 app.handle().clone(),
                                 browser_tools_config.clone(),
                             ),
+                        ),
+                        std::sync::Arc::new(
+                            crate::commands::assistant_tools::DbAssistantToolAccess {
+                                manager: std::sync::Arc::new(cm_state.clone_ref()),
+                                db: std::sync::Arc::new(db::AppDatabase {
+                                    conn: db_conn.clone(),
+                                }),
+                                emitter: std::sync::Arc::new(
+                                    crate::web::event_bridge::EventEmitter::Tauri(
+                                        app.handle().clone(),
+                                    ),
+                                ),
+                                questions: std::sync::Arc::new(
+                                    crate::commands::assistant_tools::ManagerQuestions(
+                                        std::sync::Arc::new(cm_state.clone_ref()),
+                                    ),
+                                ),
+                            },
                         ),
                     );
                     // Bind through the service handle rather than a bare
@@ -1975,6 +1996,14 @@ mod tauri_app {
                 config_sync::config_sync_peek_file,
                 config_sync::config_sync_import_file,
                 config_sync::config_sync_get_settings,
+                speech::speech_get_settings,
+                speech::speech_update_settings,
+                speech::speech_transcribe,
+                speech::speech_synthesize,
+                assistant::assistant_get_settings,
+                assistant::assistant_set_settings,
+                assistant::assistant_reset,
+                assistant::assistant_ensure,
                 config_sync::config_sync_update_settings,
                 config_sync::config_sync_get_state,
                 config_sync::config_sync_test_connection,

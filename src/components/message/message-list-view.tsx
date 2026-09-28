@@ -981,6 +981,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           previousUserIndex={previousUserIndex}
           isResponseComplete={isResponseComplete}
           copyText={extractTextFromParts(group.parts)}
+          speechId={group.id}
           completedAt={group.completed_at}
           forkDisabled={forkDisabled || forkPointUnnamed}
           forkDisabledReason={forkPointUnnamed ? "unnamed" : "busy"}

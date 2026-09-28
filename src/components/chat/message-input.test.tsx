@@ -202,7 +202,32 @@ vi.mock("@/hooks/use-appearance", async (importOriginal) => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
 }))
 
+// The dictation engine itself is covered in use-speech-input.test.ts; here the
+// hook is a stub whose captured `onFinalText` stands in for a finished take.
+const speechHook = vi.hoisted(() => ({
+  onFinalText: null as ((text: string) => void) | null,
+}))
+vi.mock("./composer/use-speech-input", () => ({
+  useSpeechInput: (opts: { onFinalText: (text: string) => void }) => {
+    speechHook.onFinalText = opts.onFinalText
+    return {
+      status: "idle",
+      interimText: "",
+      unavailableReason: null,
+      start: () => {},
+      stop: () => {},
+      cancel: () => {},
+      toggle: () => {},
+    }
+  },
+}))
+
 import enMessages from "@/i18n/messages/en.json"
+import * as speechPlayer from "@/lib/speech-player"
+import {
+  resetSpeechPrefsCacheForTests,
+  saveSpeechPrefs,
+} from "@/lib/speech-prefs"
 import type {
   PromptCapabilitiesInfo,
   SessionConfigOptionInfo,
@@ -2425,5 +2450,137 @@ describe("MessageInput folder data arriving after mount", () => {
     expect(handle.getText()).toBe("keep this draft")
     act(() => editor.commands.undo())
     expect(handle.getText()).toBe("")
+  })
+})
+
+describe("MessageInput voice input", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    speechHook.onFinalText = null
+    localStorage.clear()
+    resetSpeechPrefsCacheForTests()
+  })
+
+  function enableSpeech(enabled: boolean) {
+    localStorage.clear()
+    resetSpeechPrefsCacheForTests()
+    saveSpeechPrefs({ input: { enabled, engine: "auto", language: "" } })
+  }
+
+  const startLabel = enMessages.Folder.chat.messageInput.speechStart
+
+  it("hides the mic button while voice input is off", async () => {
+    enableSpeech(false)
+    renderInput({})
+    await waitFor(() =>
+      expect(composerHandle.current?.getEditor()).toBeTruthy()
+    )
+    expect(
+      screen.queryByRole("button", { name: startLabel })
+    ).not.toBeInTheDocument()
+  })
+
+  it("inserts a transcript as literal text at the caret without sending", async () => {
+    enableSpeech(true)
+    const onSend = vi.fn()
+    renderInput({ onSend })
+    expect(
+      await screen.findByRole("button", { name: startLabel })
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(composerHandle.current?.getEditor()).toBeTruthy()
+    )
+    const editor = composerHandle.current!.getEditor()!
+    act(() => {
+      editor.commands.setContent("note:")
+      editor.commands.focus("end")
+    })
+
+    act(() => speechHook.onFinalText?.("<b>x</b>"))
+
+    expect(serializeDocToText(editor.state.doc)).toBe("note: <b>x</b>")
+    expect(editor.getHTML()).not.toContain("<b>")
+    expect(onSend).not.toHaveBeenCalled()
+  })
+})
+
+describe("MessageInput read-aloud stop triggers", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    speechPlayer.resetSpeechPlayerForTests()
+  })
+
+  async function mountWithPlayback(onSend = vi.fn()) {
+    vi.stubGlobal("speechSynthesis", {
+      getVoices: () => [],
+      speak: vi.fn(),
+      cancel: vi.fn(),
+    })
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        constructor(public text: string) {}
+      }
+    )
+    renderInput({ onSend })
+    await waitFor(() =>
+      expect(composerHandle.current?.getEditor()).toBeTruthy()
+    )
+    speechPlayer.speak("turn-1", "A reply.", {
+      engine: "browser",
+      language: "en-US",
+      labels: { codeOmitted: "", tableOmitted: "" },
+    })
+    expect(speechPlayer.getSpeechPlayerState().status).not.toBe("idle")
+    const stop = vi.spyOn(speechPlayer, "stopReadAloud")
+    return { editor: composerHandle.current!.getEditor()!, stop }
+  }
+
+  it("keeps a voice-mode reply playing when the user types", async () => {
+    const { editor } = await mountWithPlayback()
+    speechPlayer.beginSpeechStream("voice-turn", {
+      engine: "browser",
+      language: "en-US",
+      labels: { codeOmitted: "", tableOmitted: "" },
+    })
+    speechPlayer.enqueueSpeech("voice-turn", "Still talking.")
+    act(() => {
+      editor.commands.insertContent("x")
+    })
+    expect(speechPlayer.getSpeechPlayerState().playingId).toBe("voice-turn")
+    speechPlayer.stopSpeech()
+  })
+
+  it("stops reading when the user types", async () => {
+    const { editor, stop } = await mountWithPlayback()
+    act(() => {
+      editor.commands.insertContent("x")
+    })
+    expect(stop).toHaveBeenCalled()
+    expect(speechPlayer.getSpeechPlayerState().status).toBe("idle")
+  })
+
+  it("stops reading when the user sends", async () => {
+    const onSend = vi.fn()
+    const { editor, stop } = await mountWithPlayback(onSend)
+    act(() => {
+      editor.commands.insertContent("next question")
+    })
+    stop.mockClear()
+    speechPlayer.speak("turn-1", "A reply.", {
+      engine: "browser",
+      language: "en-US",
+      labels: { codeOmitted: "", tableOmitted: "" },
+    })
+    await userEvent
+      .setup()
+      .click(screen.getByTitle(enMessages.Folder.chat.messageInput.send))
+    await waitFor(() => expect(onSend).toHaveBeenCalled())
+    expect(stop).toHaveBeenCalled()
+    expect(speechPlayer.getSpeechPlayerState().status).toBe("idle")
   })
 })

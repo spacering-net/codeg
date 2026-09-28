@@ -425,6 +425,7 @@ pub async fn open_settings_window(
         Some("browser") => "settings/browser",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
+        Some("speech") => "settings/speech",
         Some("system") => "settings/system",
         _ => "settings/appearance",
     };

@@ -10,7 +10,24 @@ vi.mock("./use-create-task-from-message", () => ({
   useCreateTaskFromMessage: () => () => {},
 }))
 
+const playerSpies = vi.hoisted(() => ({
+  speak: vi.fn(),
+  stopSpeech: vi.fn(),
+}))
+vi.mock("@/lib/speech-player", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/speech-player")>()
+  playerSpies.speak.mockImplementation(actual.speak)
+  playerSpies.stopSpeech.mockImplementation(actual.stopSpeech)
+  return { ...actual, ...playerSpies }
+})
+
 import { TurnStats } from "./turn-stats"
+import { resetSpeechPlayerForTests } from "@/lib/speech-player"
+import {
+  DEFAULT_SPEECH_PREFS,
+  resetSpeechPrefsCacheForTests,
+  saveSpeechPrefs,
+} from "@/lib/speech-prefs"
 import { MessageScrollProvider } from "./message-scroll-context"
 import { ModelLabelProvider } from "./model-label-context"
 import type { ModelLabelResolver } from "@/hooks/use-model-labels"
@@ -239,5 +256,72 @@ describe("TurnStats zeroed counters", () => {
       />
     )
     expect(screen.getByLabelText(tokenStatsLabel)).toBeInTheDocument()
+  })
+})
+
+describe("TurnStats read aloud", () => {
+  const labels = enMessages.Folder.chat.messageList
+
+  function setup(enabled: boolean) {
+    localStorage.clear()
+    resetSpeechPrefsCacheForTests()
+    resetSpeechPlayerForTests()
+    playerSpies.speak.mockClear()
+    playerSpies.stopSpeech.mockClear()
+    vi.stubGlobal("speechSynthesis", {
+      getVoices: () => [{ voiceURI: "v", lang: "en-US" }],
+      speak: vi.fn(),
+      cancel: vi.fn(),
+    })
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        constructor(public text: string) {}
+      }
+    )
+    saveSpeechPrefs({ output: { ...DEFAULT_SPEECH_PREFS.output, enabled } })
+  }
+
+  it("is hidden while read aloud is disabled", () => {
+    setup(false)
+    renderStats(<TurnStats copyText="hello" speechId="turn-1" />)
+    expect(screen.queryByLabelText(labels.readAloud)).not.toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+
+  it("is hidden without text or on an unfinished reply", () => {
+    setup(true)
+    renderStats(<TurnStats copyText="  " speechId="turn-1" />)
+    renderStats(
+      <TurnStats
+        copyText="hello"
+        speechId="turn-2"
+        isResponseComplete={false}
+      />
+    )
+    expect(screen.queryByLabelText(labels.readAloud)).not.toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+
+  it("speaks the reply text, then stops on the second click", async () => {
+    setup(true)
+    const user = userEvent.setup()
+    renderStats(<TurnStats copyText="Hello **there**" speechId="turn-1" />)
+
+    await user.click(screen.getByLabelText(labels.readAloud))
+    expect(playerSpies.speak).toHaveBeenCalledWith(
+      "turn-1",
+      "Hello **there**",
+      expect.objectContaining({ language: "en-US" })
+    )
+    const active = screen.getByRole("button", { pressed: true })
+    expect([labels.readAloudLoading, labels.stopReading]).toContain(
+      active.getAttribute("aria-label")
+    )
+
+    await user.click(active)
+    expect(playerSpies.stopSpeech).toHaveBeenCalled()
+    expect(screen.getByLabelText(labels.readAloud)).toBeInTheDocument()
+    vi.unstubAllGlobals()
   })
 })

@@ -4860,7 +4860,7 @@ async fn send_new_session_capturing_models(
 /// (`feedback_tool_available`, a registered delegation token pi can never use).
 /// `supports_mcp` stays `true` for pi (session/new tolerates the field), so this
 /// is a separate, narrower gate. Gate codeg-mcp injection on it.
-fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
+pub(crate) fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
     !matches!(agent_type, AgentType::Pi)
 }
 
@@ -5125,6 +5125,8 @@ struct CompanionFeatureFlags {
     /// it still injects the companion so a task session always has its reporting
     /// tools.
     tasks: bool,
+    /// `assistant` session tools.
+    assistant: bool,
     /// `create_automation`, gated by the chat-authoring setting.
     automations: bool,
     /// `create_work_task`, gated by the chat-authoring setting.
@@ -5155,7 +5157,8 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.ask {
         features.push("ask");
     }
-    if flags.sessions {
+    // The assistant's tools build on `get_session_info`, so it always gets sessions.
+    if flags.sessions || flags.assistant {
         features.push("sessions");
     }
     if flags.tasks {
@@ -5176,6 +5179,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.browser && flags.browser_eval {
         features.push("browser_eval");
     }
+    if flags.assistant {
+        features.push("assistant");
+    }
     if features.is_empty() {
         return None;
     }
@@ -5192,12 +5198,14 @@ struct CompanionInjection {
     delegation_enabled: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn inject_codeg_mcp(
     servers: &mut Vec<McpServer>,
     injection: &DelegationInjection,
     parent_connection_id: &str,
     working_dir: &Path,
     tasks_enabled: bool,
+    assistant_enabled: bool,
     host_tools: HostToolsPolicy,
 ) -> Option<CompanionInjection> {
     inject_codeg_mcp_with_binary_locator(
@@ -5206,18 +5214,21 @@ async fn inject_codeg_mcp(
         parent_connection_id,
         working_dir,
         tasks_enabled,
+        assistant_enabled,
         host_tools,
         locate_codeg_mcp_binary,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn inject_codeg_mcp_with_binary_locator<F>(
     servers: &mut Vec<McpServer>,
     injection: &DelegationInjection,
     parent_connection_id: &str,
     working_dir: &Path,
     tasks_enabled: bool,
+    assistant_enabled: bool,
     host_tools: HostToolsPolicy,
     locate_binary: F,
 ) -> Option<CompanionInjection>
@@ -5281,6 +5292,7 @@ where
         browser: cfg!(feature = "tauri-runtime") && injection.browser.is_enabled().await,
         browser_eval: cfg!(feature = "tauri-runtime")
             && injection.browser.is_eval_enabled().await,
+        assistant: assistant_enabled,
     };
     // `None` (no feature enabled) short-circuits BEFORE the binary lookup, the
     // token registration and the server append: there is no companion to launch,
@@ -5632,6 +5644,20 @@ async fn run_connection(
                             Ok(()) => return Ok(()),
                             Err(responder) => responder,
                         };
+                    // An approval gating one of codeg's assistant workspace-action
+                    // tools on the assistant connection is also redundant: codeg's
+                    // own confirmation card is the user-facing gate.
+                    let owner_label = state_inner.read().await.owner_window_label.clone();
+                    let responder = match try_auto_allow_codeg_assistant_tool(
+                        &owner_label,
+                        &req,
+                        responder,
+                    )
+                    .await
+                    {
+                        Ok(()) => return Ok(()),
+                        Err(responder) => responder,
+                    };
                     // pi asks the user a question THROUGH this channel (see
                     // `try_bridge_pi_select_ask`); route it to the interactive
                     // question card instead of an approval card. Every reject
@@ -6134,12 +6160,15 @@ async fn run_connection(
                     // task_progress / task_complete tool group.
                     let tasks_enabled =
                         { state.read().await.owner_window_label == "work_task" };
+                    let assistant_enabled =
+                        { state.read().await.owner_window_label == crate::commands::assistant::ASSISTANT_OWNER_LABEL };
                     inject_codeg_mcp(
                         &mut mcp_servers,
                         inj,
                         &conn_id,
                         &cwd,
                         tasks_enabled,
+                        assistant_enabled,
                         host_tools,
                     )
                     .await
@@ -7023,6 +7052,62 @@ async fn handle_grok_ask_user_question(
 /// durable permission rule into the user's own agent settings — a decision that
 /// outlives this turn and this connection, so it stays theirs to make. With no
 /// such option (an agent that offers only "always"), `None` keeps today's card.
+/// Find the `allow_once` option id to auto-select when a permission request is
+/// gating one of codeg's own assistant workspace-action tools. Mirrors
+/// [`codeg_ask_auto_allow_option`]: the confirmation card codeg itself shows
+/// IS the user's consent, so asking the user to also approve the raw MCP
+/// tool call is a spurious second dialog.
+///
+/// Checked only when the caller already knows the connection carries
+/// `ASSISTANT_OWNER_LABEL` (see [`try_auto_allow_codeg_assistant_tool`]).
+fn codeg_assistant_auto_allow_option(req: &RequestPermissionRequest) -> Option<String> {
+    let permission_title = req
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("permission"))
+        .and_then(|p| p.get("title"))
+        .and_then(serde_json::Value::as_str);
+    let is_assistant_tool = [req.tool_call.fields.title.as_deref(), permission_title]
+        .into_iter()
+        .flatten()
+        .any(crate::acp::question::is_codeg_assistant_tool_name);
+    if !is_assistant_tool {
+        return None;
+    }
+    req.options
+        .iter()
+        .find(|opt| opt.kind == PermissionOptionKind::AllowOnce)
+        .map(|opt| opt.option_id.to_string())
+}
+
+/// Auto-allow a permission request that gates one of codeg's own assistant
+/// mutating tools on an ASSISTANT_OWNER_LABEL connection. The codeg-authored
+/// confirmation card is the actual user-facing gate; the raw tool-call
+/// approval would be a redundant second dialog.
+///
+/// `Err(responder)` returns the request to the normal permission path.
+#[allow(clippy::result_large_err)]
+async fn try_auto_allow_codeg_assistant_tool(
+    owner_window_label: &str,
+    req: &RequestPermissionRequest,
+    responder: Responder<RequestPermissionResponse>,
+) -> Result<(), Responder<RequestPermissionResponse>> {
+    if owner_window_label != crate::commands::assistant::ASSISTANT_OWNER_LABEL {
+        return Err(responder);
+    }
+    let Some(option_id) = codeg_assistant_auto_allow_option(req) else {
+        return Err(responder);
+    };
+    tracing::debug!(
+        "[ACP] auto-allowing assistant-tool permission on the assistant connection \
+         (option {option_id}); the codeg confirmation card is the actual gate"
+    );
+    let _ = responder.respond(RequestPermissionResponse::new(
+        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id)),
+    ));
+    Ok(())
+}
+
 fn codeg_ask_auto_allow_option(req: &RequestPermissionRequest) -> Option<String> {
     let permission_title = req
         .meta
@@ -18081,6 +18166,42 @@ mod tests {
     }
 
     #[test]
+    fn codeg_assistant_auto_allow_option_picks_allow_once_for_assistant_tools() {
+        for tool_name in [
+            "mcp__codeg-mcp__send_to_session",
+            "mcp__codeg-mcp__cancel_session",
+            "mcp__codeg-mcp__answer_permission",
+            "mcp__codeg-mcp__start_session",
+        ] {
+            let req =
+                claude_mcp_permission_request(tool_name, claude_permission_options());
+            assert_eq!(
+                codeg_assistant_auto_allow_option(&req).as_deref(),
+                Some("allow-once"),
+                "{tool_name} should auto-allow"
+            );
+        }
+    }
+
+    #[test]
+    fn codeg_assistant_auto_allow_option_rejects_non_assistant_tools() {
+        for tool_name in [
+            "mcp__other-server__send_to_session",
+            "mcp__codeg-mcp__ask_user_question",
+            "mcp__codeg-mcp__list_sessions",
+            "mcp__codeg-mcp__focus_session",
+            "Bash",
+        ] {
+            let req =
+                claude_mcp_permission_request(tool_name, claude_permission_options());
+            assert!(
+                codeg_assistant_auto_allow_option(&req).is_none(),
+                "{tool_name} must keep its approval card"
+            );
+        }
+    }
+
+    #[test]
     fn codex_retry_indicator_extracts_message_and_object_http_status() {
         // codex-acp #289: object-variant `codexErrorInfo` carries an inner
         // `httpStatusCode`; the message + status are surfaced.
@@ -26508,6 +26629,7 @@ mod tests {
             "parent-conn",
             std::path::Path::new("/tmp"),
             false,
+            false,
             HostToolsPolicy::Default,
         )
         .await;
@@ -26667,6 +26789,11 @@ mod tests {
         // The browser group too — a user who only shares browser tabs still
         // gets a companion.
         assert_eq!(only(|f| f.browser = true), Some("browser".to_string()));
+        // Assistant injects assistant and sessions.
+        assert_eq!(
+            only(|f| f.assistant = true),
+            Some("sessions,assistant".to_string())
+        );
         // All on → comma-joined, in the order the companion parses.
         assert_eq!(
             companion_features_arg(CompanionFeatureFlags {
@@ -26679,9 +26806,10 @@ mod tests {
                 taskboard: true,
                 browser: true,
                 browser_eval: true,
+                assistant: true,
             }),
             Some(
-                "delegation,feedback,ask,sessions,tasks,automations,taskboard,browser,browser_eval"
+                "delegation,feedback,ask,sessions,tasks,automations,taskboard,browser,browser_eval,assistant"
                     .to_string()
             )
         );

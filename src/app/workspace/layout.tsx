@@ -82,6 +82,7 @@ import {
 } from "@/components/workspace/deep-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
+import { VoiceModeHost } from "@/components/chat/voice-mode/voice-mode-host"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -1292,6 +1293,7 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
             <AcpConnectionsProvider>
               <DelegationProvider>
                 <ConversationStatusEventBridge />
+                <VoiceModeHost />
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>

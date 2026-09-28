@@ -31,6 +31,9 @@
       "../out": "web/"
     },
     "externalBin": ["binaries/codeg-mcp"],
+    "macOS": {
+      "entitlements": "./Entitlements.plist"
+    },
     "windows": {
       "nsis": {
         "installerHooks": "./windows/installer-hooks.nsh"

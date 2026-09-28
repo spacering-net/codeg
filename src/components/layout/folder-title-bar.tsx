@@ -2,6 +2,7 @@
 
 import { useCallback } from "react"
 import {
+  AudioLines,
   Menu,
   PanelRight,
   Search,
@@ -25,6 +26,11 @@ import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { WorkbenchRouteChromeActions } from "@/components/workbench/workbench-content"
 import { MAC_TRAFFIC_LIGHT_INSET } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
+import { useSpeechPrefs } from "@/lib/speech-prefs"
+import {
+  requestVoiceMode,
+  useVoiceModeState,
+} from "@/lib/voice-mode/voice-mode-store"
 import { WindowControls } from "./window-controls"
 
 /**
@@ -47,12 +53,15 @@ import { WindowControls } from "./window-controls"
 export function FolderTitleBar() {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
   const tCard = useTranslations("Folder.conversationCard")
+  const tVoice = useTranslations("VoiceMode")
   const { isOpen: sidebarOpen, toggle } = useSidebarContext()
   const { isOpen: auxPanelOpen, toggle: toggleAuxPanel } = useAuxPanelContext()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
   const { setOpen: setSearchOpen } = useSearchDialog()
   const { activeFolder } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
+  const speechPrefs = useSpeechPrefs()
+  const voiceState = useVoiceModeState()
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { isConversations, openConversations } = useWorkbenchRoute()
   const { isMac } = usePlatform()
@@ -171,6 +180,21 @@ export function FolderTitleBar() {
           buttonClassName="h-8 w-8 shrink-0"
           iconClassName="h-4 w-4"
         />
+        {speechPrefs.voiceMode.enabled && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              voiceState.phase !== "off" && "bg-accent"
+            )}
+            onClick={() => requestVoiceMode(voiceState.phase === "off")}
+            title={tVoice("toggleVoiceMode")}
+            aria-label={tVoice("toggleVoiceMode")}
+          >
+            <AudioLines className="h-4 w-4" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"

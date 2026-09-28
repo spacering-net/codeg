@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback } from "react"
-import { PanelRight, Settings, SquareTerminal } from "lucide-react"
+import { AudioLines, PanelRight, Settings, SquareTerminal } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { openSettingsWindow } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,11 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { rightChromeClusterWidth } from "@/lib/window-chrome"
+import { useSpeechPrefs } from "@/lib/speech-prefs"
+import {
+  requestVoiceMode,
+  useVoiceModeState,
+} from "@/lib/voice-mode/voice-mode-store"
 
 /**
  * Contents of the window's fixed top-RIGHT chrome overlay: terminal + aux-panel
@@ -30,8 +35,11 @@ import { rightChromeClusterWidth } from "@/lib/window-chrome"
  */
 export function RightEdgeChrome() {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
+  const tVoice = useTranslations("VoiceMode")
   const { activeFolder } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
+  const speechPrefs = useSpeechPrefs()
+  const voiceState = useVoiceModeState()
   // Full-page workbench routes (tasks / automations) overlay the workspace the
   // terminal and aux panel live in — toggling them there is invisible, so the
   // two buttons hide and the route's own page-level controls take their slots
@@ -96,6 +104,22 @@ export function RightEdgeChrome() {
           buttonClassName="h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10"
           iconClassName="h-3.5 w-3.5"
         />
+        {speechPrefs.voiceMode.enabled && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={tVoice("toggleVoiceMode")}
+            data-testid="topbar-voice-mode-btn"
+            className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${voiceState.phase !== "off" ? "bg-accent text-accent-foreground" : ""}`}
+            onClick={() => requestVoiceMode(voiceState.phase === "off")}
+            title={tTitleBar("withShortcut", {
+              label: tVoice("toggleVoiceMode"),
+              shortcut: formatShortcutLabel(shortcuts.toggle_voice_mode, isMac),
+            })}
+          >
+            <AudioLines className="h-3.5 w-3.5" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
