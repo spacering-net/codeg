@@ -1390,6 +1390,13 @@ mod tauri_app {
                         tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
                     )
                 {
+                    // Stop the hover watcher with the window it watches. Its
+                    // poll loop round-trips to *this* thread on every tick, and
+                    // it would otherwise keep doing so until it next noticed
+                    // the window had left the window map, which on the quit
+                    // path is while the event loop is already tearing down.
+                    windows::stop_pet_hover_watcher();
+
                     // Persist `enabled = false` so the next launch doesn't
                     // race-open the pet before the user asks for it. We
                     // intentionally do NOT clear `active_pet_id` — the user
@@ -2035,6 +2042,15 @@ mod tauri_app {
             .run(|app, event| match event {
                 tauri::RunEvent::ExitRequested { .. } => {
                     APP_QUITTING.store(true, Ordering::Relaxed);
+                    // First, before anything below blocks this thread. The pet
+                    // hover watcher polls the windowing layer every 80 ms, and
+                    // each poll is a request only the main thread can answer,
+                    // so leaving it running through the `block_on` calls below
+                    // has a tokio worker waiting on a thread that is waiting on
+                    // that worker's runtime. A watcher whose window is already
+                    // gone gets no close event, so this is not covered by the
+                    // `label == "pet"` branch above.
+                    windows::stop_pet_hover_watcher();
                     // Drop the desktop pet alongside the workspace so it
                     // never outlives a real quit. Tauri also tears down all
                     // windows on shutdown, but doing it explicitly here lets

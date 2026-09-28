@@ -11,6 +11,7 @@ use tauri::{
     window::{Effect, EffectState, EffectsBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::app_error::AppCommandError;
 use crate::db::service::app_metadata_service;
@@ -1309,6 +1310,67 @@ const PET_BASE_HEIGHT: f64 = 208.0;
 /// the user has to wiggle off-pet-and-back to re-trigger waving.
 static PET_HOVER_WAS_INSIDE: AtomicBool = AtomicBool::new(false);
 
+/// Cancellation handle for the live hover watcher, so its poll loop stops on a
+/// signal rather than on eventually noticing the window has gone.
+///
+/// Every tick of that loop is a synchronous request/reply round trip to the
+/// main thread: `outer_position`, `outer_size` and `cursor_position` are all
+/// messages that only tauri's event loop can answer. A watcher that outlives
+/// the window it watches therefore keeps posting work at a window being
+/// destroyed and at an event loop that is shutting down, and it blocks a tokio
+/// worker on each one while the main thread is busy with teardown.
+///
+/// Holding the handle here also enforces at most one live watcher.
+/// `open_pet_window` early-returns only while `get_webview_window` still
+/// answers, so a close immediately followed by a re-open can build a second
+/// window before the first watcher's next tick sees the gap. The old watcher
+/// then finds the *new* window, never exits, and two loops poll in parallel
+/// while fighting over the single [`PET_HOVER_WAS_INSIDE`] flag.
+static PET_HOVER_WATCHER: Mutex<Option<CancellationToken>> = Mutex::new(None);
+
+/// Install `next` as the live hover watcher, cancelling whatever it replaced.
+///
+/// Takes the slot explicitly rather than reading the global, so the bookkeeping
+/// is testable without a running app.
+fn install_watcher_in(slot: &Mutex<Option<CancellationToken>>, next: Option<CancellationToken>) {
+    let previous = {
+        // Poison-tolerant: the guarded value is a single `Option` that cannot
+        // be left half-written, and this runs from `on_window_event` and
+        // `RunEvent::ExitRequested`, i.e. on the main thread inside the
+        // platform event loop, where a panic cannot unwind across the
+        // `extern "system"` boundary and aborts the process instead.
+        let mut live = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::replace(&mut *live, next)
+    };
+    // Cancelled outside the lock: `cancel` runs the token's registered wakers,
+    // and none of them should be able to re-enter this slot.
+    if let Some(previous) = previous {
+        previous.cancel();
+    }
+}
+
+/// Install `next` as the live hover watcher. See [`PET_HOVER_WATCHER`].
+fn install_pet_hover_watcher(next: Option<CancellationToken>) {
+    install_watcher_in(&PET_HOVER_WATCHER, next);
+}
+
+/// Stop the pet hover watcher, if one is running.
+///
+/// Called from `lib.rs` when the pet window closes or is destroyed, and once
+/// more at the top of `ExitRequested` so the quit path is covered even if no
+/// close event ever reaches a watcher whose window is already gone.
+///
+/// Stopping first on quit matters: `ExitRequested` goes on to `block_on` the
+/// web-server stop and the ACP disconnects *on the main thread*, and every
+/// watcher tick during that window is a request only that blocked thread can
+/// answer.
+///
+/// A watcher that has already ended leaves its (now inert) token behind;
+/// cancelling it is a no-op, and the next install replaces it.
+pub fn stop_pet_hover_watcher() {
+    install_pet_hover_watcher(None);
+}
+
 /// Apply the pet-window-specific platform style. Deliberately separate from
 /// `apply_platform_window_style`: that helper sets a solid background color
 /// for the main / settings / git windows, which would defeat the
@@ -1416,8 +1478,18 @@ pub async fn open_pet_window(
 /// the cursor crosses into the pet window's bounds. Native webviews on
 /// macOS don't reliably deliver mouse events to non-key windows, so we
 /// detect "cursor over the pet" in Rust and let the frontend trigger the
-/// waving animation in response. The task ends when the pet window is
-/// closed.
+/// waving animation in response.
+///
+/// Cross-platform on purpose, despite the macOS-shaped reason above: the pet
+/// renderer has no DOM hover handler of its own, so these events are the only
+/// thing that drives the waving animation anywhere. Gating this to macOS would
+/// silently drop hover-waving on Windows and Linux.
+///
+/// The task ends on the first of: [`stop_pet_hover_watcher`] (window close,
+/// window destroy, or app quit), a newer watcher replacing this one, or the pet
+/// window leaving the window map. The signal comes first so a stopped watcher
+/// issues no further round trips, rather than firing one more tick's worth at a
+/// window that is being destroyed.
 fn spawn_pet_hover_watcher(app: AppHandle) {
     use std::time::Duration;
     use tauri::Emitter;
@@ -1427,6 +1499,11 @@ fn spawn_pet_hover_watcher(app: AppHandle) {
     // false hover-enter that cache staleness produces during a drag is
     // suppressed on the JS side via a pointer-down guard (see PetWindow).
     const BOUNDS_REFRESH_TICKS: u8 = 5;
+
+    let cancel = CancellationToken::new();
+    // Retires any watcher left over from an earlier pet window before this one
+    // starts, so the two never poll (and never race on the hover flag) at once.
+    install_pet_hover_watcher(Some(cancel.clone()));
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(80));
@@ -1438,7 +1515,15 @@ fn spawn_pet_hover_watcher(app: AppHandle) {
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
         let mut ticks_since_refresh: u8 = BOUNDS_REFRESH_TICKS;
         loop {
-            interval.tick().await;
+            // `biased` so a cancellation that is already pending wins over a
+            // tick that is also ready: the point of the signal is that no
+            // round trip is issued after the stop. Both branches are cancel
+            // safe, so losing one drops no tick and no cancellation.
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
                 break;
             };
@@ -2685,6 +2770,80 @@ mod pet_panel_geometry_tests {
             380.0,
         );
         assert_eq!(y, short_mon.1, "clamped to the monitor top, not above it");
+    }
+}
+
+#[cfg(test)]
+mod pet_hover_watcher_tests {
+    use super::install_watcher_in;
+    use std::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    /// A slot of its own per test, so none of these touch the process-global
+    /// `PET_HOVER_WATCHER` and they stay safe to run in parallel.
+    fn slot() -> Mutex<Option<CancellationToken>> {
+        Mutex::new(None)
+    }
+
+    /// The invariant that keeps a second watcher from ever existing. A pet
+    /// window can be closed and re-opened inside one 80 ms tick, in which case
+    /// the old loop's `get_webview_window` check never sees the gap: it finds
+    /// the *new* window, never exits, and two loops then poll the windowing
+    /// layer in parallel while fighting over one hover flag. Starting a watcher
+    /// has to retire the previous one.
+    #[test]
+    fn starting_a_watcher_retires_the_previous_one() {
+        let slot = slot();
+
+        let first = CancellationToken::new();
+        install_watcher_in(&slot, Some(first.clone()));
+        assert!(
+            !first.is_cancelled(),
+            "a freshly installed watcher must not start out stopped"
+        );
+
+        let second = CancellationToken::new();
+        install_watcher_in(&slot, Some(second.clone()));
+        assert!(first.is_cancelled(), "the older watcher must be retired");
+        assert!(
+            !second.is_cancelled(),
+            "the watcher that replaced it keeps running"
+        );
+    }
+
+    /// The close and quit path. Without a signal the loop only stops once it
+    /// happens to notice the window has left the window map, which is up to a
+    /// tick later, and on the quit path that tick is spent round-tripping to a
+    /// main thread that is already tearing the event loop down.
+    #[test]
+    fn stopping_cancels_the_live_watcher() {
+        let slot = slot();
+        let live = CancellationToken::new();
+        install_watcher_in(&slot, Some(live.clone()));
+
+        install_watcher_in(&slot, None);
+        assert!(live.is_cancelled(), "the live watcher must be stopped");
+    }
+
+    /// Stopping is called more than once per quit (the pet window's close
+    /// handler and `ExitRequested` both do it) and may be called with nothing
+    /// running at all. Neither may leave the slot in a state that stops the
+    /// next watcher before it has run, because an ordinary close is routinely
+    /// followed by a re-open.
+    #[test]
+    fn stopping_twice_leaves_a_later_watcher_running() {
+        let slot = slot();
+        install_watcher_in(&slot, Some(CancellationToken::new()));
+        install_watcher_in(&slot, None);
+        install_watcher_in(&slot, None);
+
+        let reopened = CancellationToken::new();
+        install_watcher_in(&slot, Some(reopened.clone()));
+        assert!(
+            !reopened.is_cancelled(),
+            "the watcher for a re-opened pet window must survive the stops \
+             that preceded it"
+        );
     }
 }
 
