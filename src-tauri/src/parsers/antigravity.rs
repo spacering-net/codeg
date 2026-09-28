@@ -1022,7 +1022,11 @@ const MCP_PROMPT_KEYS: [&str; 5] = [
 /// The server does not ship that shape to ACP clients either:
 /// `tools.py::unwrap_mcp_tool_call` rewrites it to `<server>_<tool>` with
 /// `{"arguments": {…}}` before it goes on the wire. This is the same rewrite,
-/// so the historical and live views resolve to the same tool.
+/// so the historical and live views resolve to the same tool. 1.2 also copies
+/// the arguments onto the top level and moves the sentence into `_meta`; the
+/// live path folds that back into this shape
+/// (`acp::connection::fold_antigravity_mcp_raw_input`) rather than this one
+/// doubling every input against `TOOL_INPUT_CAP`.
 ///
 /// `None` means "not an MCP envelope" — every native tool, plus any envelope
 /// missing `ToolName` or whose `Arguments` is not an object, which is exactly

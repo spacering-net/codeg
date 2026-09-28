@@ -19,6 +19,51 @@
 
 export const BACKGROUND_TASK_MARKER = "[[codeg-background-task]]"
 
+/**
+ * Agents whose OUT-OF-TURN transcript activity already has a live render path.
+ *
+ * `background_watch.rs::spawn_if_claude` arms the transcript-tail watcher for
+ * Claude Code and returns `None` for everyone else. That watcher is what feeds
+ * the `background_activity` overlay turns which `applyStreamingAction`'s
+ * out-of-turn guard defers to when it drops wire content outside a prompting
+ * turn. For every other agent the guard drops that content with no producer
+ * behind it, so nothing renders until the transcript is re-read.
+ *
+ * Keep in sync with `spawn_if_claude`: arming the watcher for another agent
+ * without adding it here makes that agent render its background work twice.
+ */
+const AGENTS_WITH_TRANSCRIPT_OVERLAY: ReadonlySet<string> = new Set([
+  "claude_code",
+])
+
+/** See `AGENTS_WITH_TRANSCRIPT_OVERLAY`. */
+export function hasTranscriptOverlay(agentType: string): boolean {
+  return AGENTS_WITH_TRANSCRIPT_OVERLAY.has(agentType)
+}
+
+/**
+ * Whether an envelope carries turn material that would be LOST if it arrived
+ * outside a prompting turn — i.e. worth telling the user their transcript has
+ * content the timeline is not showing.
+ *
+ * Deliberately narrower than "everything the out-of-turn guard drops":
+ *
+ * - `tool_call_update` revises a call already on screen. A tool that settles
+ *   just after its turn closed is the common case, and it is not new material.
+ * - Empty or whitespace-only deltas carry no new readable content. Codex can
+ *   flush a final newline after a completed or cancelled turn; treating it as
+ *   background work leaves a persistent recovery notice on ordinary replies.
+ */
+export function isOutOfTurnContentEvent(envelope: {
+  type: string
+  text?: string
+}): boolean {
+  if (envelope.type === "content_delta" || envelope.type === "thinking") {
+    return (envelope.text?.trim().length ?? 0) > 0
+  }
+  return envelope.type === "tool_call"
+}
+
 export interface BackgroundTaskLifecycle {
   taskId: string
   /** `<status>` of the latest task-notification ("completed" on success);

@@ -181,6 +181,38 @@ describe("AutomationsPage (master-detail)", () => {
     ).not.toBeInTheDocument()
   })
 
+  // `label_snapshot` freezes whatever the agent called these at save time —
+  // including its language, for an agent that hardcodes one. The detail has the
+  // stable ids too, so it resolves from those and keeps the frozen label only
+  // as a fallback.
+  it("localises a frozen DeepSeek label snapshot from the ids beside it", () => {
+    automations = [
+      {
+        ...FIXTURE,
+        agent_type: "deepseek",
+        config: {
+          prompt_blocks: [{ type: "text", text: "do the thing" }],
+          display_text: "do the thing",
+          mode_id: "plan",
+          config_values: { sandbox: "read-only", model: "deepseek-flash" },
+          label_snapshot: {
+            mode_label: "计划",
+            config_labels: {
+              sandbox: "只读",
+              model: "深度求索 Flash",
+            },
+          },
+        },
+      },
+    ]
+    renderPage()
+    expect(screen.getByText("Plan")).toBeInTheDocument()
+    expect(screen.getByText("Read-only")).toBeInTheDocument()
+    expect(screen.queryByText("只读")).not.toBeInTheDocument()
+    // The model catalogue is the user's own data, so its frozen label stands.
+    expect(screen.getByText("深度求索 Flash")).toBeInTheDocument()
+  })
+
   it("keeps the header switch and surfaces Run now + Edit under the title", () => {
     renderPage()
     // The detail title row exposes only the enable toggle...

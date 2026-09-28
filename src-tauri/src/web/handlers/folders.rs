@@ -421,6 +421,8 @@ pub async fn open_settings_window(
         Some("experts") => "settings/experts",
         Some("science") => "settings/science",
         Some("office-tools") => "settings/office-tools",
+        Some("collaboration") => "settings/collaboration",
+        Some("browser") => "settings/browser",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",

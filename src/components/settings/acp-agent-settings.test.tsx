@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  adapterChannelFromEnv,
+  adapterChannelFromEnvText,
   applyClaudeProviderToConfigText,
   buildCodexSandboxConfig,
   codexSandboxBaselineOf,
@@ -23,6 +25,7 @@ import {
   patchImportantConfigText,
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
+  setAdapterChannel,
   setClaudeEnvFlagInConfigText,
   setHostToolsAgentMode,
   showsCodexReadOnlyAcpWarning,
@@ -825,6 +828,77 @@ describe("buildVersionCheck", () => {
 
     expect(check?.status).toBe("fail")
     expect(check?.fixes).toHaveLength(0)
+  })
+
+  // The opt-in latest channel keeps the Upgrade action available in the pass
+  // state: an installed latest-channel agent normally sits AT or AHEAD of the
+  // pin, so the compare-to-pin flow would never offer an upgrade again — and
+  // codeg cannot know whether npm has something newer, because nothing polls
+  // in the background.
+  it("keeps Upgrade available for an installed latest-channel npx agent", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "gemini" as AgentType,
+        distribution_type: "npx",
+        registry_version: "0.57.0",
+        installed_version: "0.60.0",
+        env: { CODEG_ADAPTER_CHANNEL: "latest" },
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("Latest channel")
+    expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(true)
+    expect(check?.fixes.some((fix) => fix.kind === "uninstall_npx")).toBe(true)
+  })
+
+  // The pinned default's pass state is byte-for-byte what it was before the
+  // channel existed.
+  it("leaves the pinned default's pass state unchanged", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "gemini" as AgentType,
+        distribution_type: "npx",
+        registry_version: "0.57.0",
+        installed_version: "0.57.0",
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("Already latest")
+    expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(false)
+  })
+
+  // A latest-channel agent below the pin still warns: the upgrade it offers
+  // resolves the `latest` dist-tag, which is at least the pin.
+  it("still warns when a latest-channel agent sits below the pin", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "gemini" as AgentType,
+        distribution_type: "npx",
+        registry_version: "0.57.0",
+        installed_version: "0.50.0",
+        env: { CODEG_ADAPTER_CHANNEL: "latest" },
+      })
+    )
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain("Upgrade available")
+  })
+
+  // The channel is an npx concept (an npm dist-tag), so the same env key on a
+  // binary agent must not rewrite its version card.
+  it("ignores the channel key on a non-npx agent", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        distribution_type: "binary",
+        registry_version: "1.0.0",
+        installed_version: "1.0.0",
+        env: { CODEG_ADAPTER_CHANNEL: "latest" },
+      })
+    )
+    expect(check?.message).toContain("Already latest")
+    expect(check?.fixes.some((fix) => fix.kind === "upgrade_binary")).toBe(
+      false
+    )
   })
 })
 
@@ -1758,6 +1832,50 @@ describe("host-tools toggle — hand the fs/terminal channels back to the agent"
     expect(hostToolsAgentModeEnabled(setHostToolsAgentMode(off, true))).toBe(
       true
     )
+  })
+})
+
+describe("adapter-channel control — opt into the latest adapter release", () => {
+  const KEY = "CODEG_ADAPTER_CHANNEL"
+
+  it("defaults to pinned for an agent that has never touched the control", () => {
+    expect(adapterChannelFromEnvText("")).toBe("pinned")
+    expect(adapterChannelFromEnvText("XAI_API_KEY=abc")).toBe("pinned")
+    expect(adapterChannelFromEnv({})).toBe("pinned")
+  })
+
+  it("round-trips latest and back to pinned", () => {
+    const latest = setAdapterChannel("XAI_API_KEY=abc", "latest")
+    expect(latest).toContain(`${KEY}=latest`)
+    expect(adapterChannelFromEnvText(latest)).toBe("latest")
+
+    // Pinned DELETES the key: unlike the host-tools knob there is no
+    // process-env second layer that could make "absent" mean something else,
+    // so absent is unambiguously the default on both sides, and the raw
+    // editor stays free of a key that only restates it.
+    const pinned = setAdapterChannel(latest, "pinned")
+    expect(pinned).not.toContain(KEY)
+    expect(adapterChannelFromEnvText(pinned)).toBe("pinned")
+    expect(pinned).toContain("XAI_API_KEY=abc")
+  })
+
+  it("reads only the exact sentinel, matching the Rust reader", () => {
+    // `adapter_channel_is_latest` (commands/acp.rs) treats exactly the trimmed
+    // `latest` as the opt-in; everything else stays on the reviewed pin.
+    expect(adapterChannelFromEnvText(`${KEY}=latest`)).toBe("latest")
+    expect(adapterChannelFromEnvText(`${KEY} = latest `)).toBe("latest")
+    expect(adapterChannelFromEnvText(`${KEY}=Latest`)).toBe("pinned")
+    expect(adapterChannelFromEnvText(`${KEY}=pinned`)).toBe("pinned")
+    expect(adapterChannelFromEnvText(`${KEY}=`)).toBe("pinned")
+    expect(adapterChannelFromEnv({ [KEY]: "latest" })).toBe("latest")
+    expect(adapterChannelFromEnv({ [KEY]: "nightly" })).toBe("pinned")
+  })
+
+  it("does not double up when selected twice", () => {
+    const once = setAdapterChannel("", "latest")
+    const twice = setAdapterChannel(once, "latest")
+    expect(twice).toBe(once)
+    expect(twice.match(new RegExp(KEY, "g"))).toHaveLength(1)
   })
 })
 

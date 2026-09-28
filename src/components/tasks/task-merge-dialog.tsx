@@ -40,8 +40,11 @@ interface TaskMergeDialogProps {
  * task's session (conflicts resolved in the same turn), so the form is down to
  * two choices: let the agent write the commit message (default) or provide one,
  * and whether to delete the worktree after landing. Submit awaits only the
- * dispatch; the outcome rides `task://changed` (merging → done, or back to
- * review with a readable error on the card).
+ * dispatch — the CAS onto `merging` plus getting an agent up, not the landing
+ * and not the context compaction that may precede it — so the dialog closes in
+ * about as long as it takes to start a session. The outcome rides
+ * `task://changed` (merging → done, or back to review with a readable error on
+ * the card).
  *
  * A project lands one task at a time, so a submit that arrives while another
  * merge is running is QUEUED — the dialog says so up front and the button
@@ -258,7 +261,14 @@ export function TaskMergeDialog({
             onClick={submit}
             disabled={submitting || (!autoMessage && !message.trim())}
           >
-            {willQueue ? t("mergeSubmitQueue") : t("mergeSubmit")}
+            {/* A disabled button alone reads as "the click did nothing" — the
+                dispatch is short but not instant (it waits for the agent to
+                come up), and this is the only thing on screen that says so. */}
+            {submitting
+              ? t("mergeSubmitting")
+              : willQueue
+                ? t("mergeSubmitQueue")
+                : t("mergeSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>

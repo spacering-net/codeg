@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  activeSessionFailureView,
+  activeRetryIncidentView,
   activeSessionFailures,
   dismissSessionFailures,
-  hasSettleableRetryIncident,
+  hasActiveRetryIncident,
   knownSessionFailureActions,
   lastUserPromptText,
+  latestActiveTerminalFailure,
   mergeSessionFailures,
   mostRecentRecoveredWarning,
   resolvedSessionFailures,
+  sessionFailureCategoryLabelKey,
+  sessionFailureNotice,
   settleSessionFailures,
   upsertSessionFailure,
 } from "./session-failures"
@@ -155,22 +158,22 @@ describe("settleSessionFailures", () => {
   })
 })
 
-describe("hasSettleableRetryIncident", () => {
+describe("hasActiveRetryIncident", () => {
   it("is true only for an unresolved non-'unknown' warning", () => {
-    expect(hasSettleableRetryIncident([])).toBe(false)
+    expect(hasActiveRetryIncident([])).toBe(false)
     expect(
-      hasSettleableRetryIncident([record("n", 1, { category: "unknown" })])
+      hasActiveRetryIncident([record("n", 1, { category: "unknown" })])
     ).toBe(false)
     expect(
-      hasSettleableRetryIncident([record("e", 1, { severity: "error" })])
+      hasActiveRetryIncident([record("e", 1, { severity: "error" })])
     ).toBe(false)
     expect(
-      hasSettleableRetryIncident([
+      hasActiveRetryIncident([
         record("c", 1, { category: "connection", resolved: true }),
       ])
     ).toBe(false)
     expect(
-      hasSettleableRetryIncident([record("c", 1, { category: "connection" })])
+      hasActiveRetryIncident([record("c", 1, { category: "connection" })])
     ).toBe(true)
   })
 })
@@ -195,7 +198,7 @@ describe("dismissSessionFailures", () => {
     const table = [record("w1", 1), record("w2", 1), record("w3", 1)]
     const next = dismissSessionFailures(table, ["w1", "w2", "w3"])
     expect(next.every((f) => f.resolved && f.dismissed)).toBe(true)
-    expect(activeSessionFailureView(next).warning).toBeNull()
+    expect(activeRetryIncidentView(next).incident).toBeNull()
   })
 
   it("marks dismissal distinctly so it never renders as recovery", () => {
@@ -262,40 +265,184 @@ describe("mostRecentRecoveredWarning", () => {
     expect(mostRecentRecoveredWarning([])).toBeNull()
     expect(mostRecentRecoveredWarning([record("w", 1)])).toBeNull()
   })
+
+  it("never announces an advisory the turn end merely swept as 'recovered'", () => {
+    // Category "unknown" is the advisory lane (config notices, model-fallback
+    // notes). A clean turn end settles it, but nothing was broken, so the
+    // muted "Recovered · …" line must not claim a fix for it.
+    const advisory = record("adv", 1, { category: "unknown", resolved: true })
+    expect(mostRecentRecoveredWarning([advisory])).toBeNull()
+    // A genuine incident behind it still gets its line.
+    const incident = record("inc", 1, {
+      category: "connection",
+      resolved: true,
+    })
+    expect(mostRecentRecoveredWarning([incident, advisory])?.id).toBe("inc")
+  })
 })
 
-describe("activeSessionFailureView", () => {
-  it("collapses active warnings to the latest plus a count", () => {
-    const view = activeSessionFailureView([
+describe("latestActiveTerminalFailure", () => {
+  it("finds the latest unresolved non-warning record, or null", () => {
+    expect(latestActiveTerminalFailure([])).toBeNull()
+    expect(latestActiveTerminalFailure([record("w", 1)])).toBeNull()
+    expect(
+      latestActiveTerminalFailure([
+        record("e", 1, { severity: "error", resolved: true }),
+      ])
+    ).toBeNull()
+    expect(
+      latestActiveTerminalFailure([
+        record("e1", 1, { severity: "error" }),
+        record("e2", 1, { severity: "error" }),
+        record("w", 1),
+      ])?.id
+    ).toBe("e2")
+    // An unrecognized severity is terminal, like the notification treats it.
+    expect(
+      latestActiveTerminalFailure([record("x", 1, { severity: "fatal" })])?.id
+    ).toBe("x")
+  })
+})
+
+describe("activeRetryIncidentView", () => {
+  it("collapses active incidents to the latest plus a count", () => {
+    const view = activeRetryIncidentView([
       record("w1", 1),
       record("w2", 1),
       record("w3", 1),
       record("gone", 1, { resolved: true }),
     ])
-    expect(view.warning?.id).toBe("w3")
-    expect(view.hiddenWarnings).toBe(2)
-    expect(view.errors).toEqual([])
+    expect(view.incident?.id).toBe("w3")
+    expect(view.hiddenCount).toBe(2)
+    expect(view.ids).toEqual(["w1", "w2", "w3"])
   })
 
-  it("never collapses errors — each carries its own actions", () => {
-    const view = activeSessionFailureView([
-      record("e1", 1, { severity: "error" }),
-      record("e2", 1, { severity: "error" }),
+  it("leaves out what is news rather than progress", () => {
+    // Terminal failures and category-"unknown" advisories are notifications.
+    const view = activeRetryIncidentView([
+      record("e", 1, { severity: "error" }),
+      record("advisory", 1, { category: "unknown" }),
       record("w", 1),
     ])
-    expect(view.errors.map((f) => f.id)).toEqual(["e1", "e2"])
-    expect(view.warning?.id).toBe("w")
-    expect(view.hiddenWarnings).toBe(0)
+    expect(view.incident?.id).toBe("w")
+    expect(view.hiddenCount).toBe(0)
+    expect(view.ids).toEqual(["w"])
   })
 
-  it("reports an empty view when everything is resolved", () => {
-    const view = activeSessionFailureView([record("w", 1, { resolved: true })])
-    expect(view).toEqual({
-      errors: [],
-      warning: null,
-      hiddenWarnings: 0,
-      warningIds: [],
-    })
+  it("reports an empty view when nothing is in flight", () => {
+    expect(
+      activeRetryIncidentView([
+        record("w", 1, { resolved: true }),
+        record("e", 1, { severity: "error" }),
+      ])
+    ).toEqual({ incident: null, hiddenCount: 0, ids: [] })
+  })
+})
+
+describe("sessionFailureNotice", () => {
+  const terminal = (overrides: Partial<SessionFailureRecord> = {}) =>
+    record("t", 1, { severity: "error", category: "access", ...overrides })
+  const advisory = (overrides: Partial<SessionFailureRecord> = {}) =>
+    record("a", 1, { category: "unknown", actions: [], ...overrides })
+
+  it("tells a new terminal failure and a new advisory", () => {
+    expect(sessionFailureNotice(undefined, terminal())).toBe("terminal")
+    expect(sessionFailureNotice(undefined, advisory())).toBe("advisory")
+    // An unrecognized severity is terminal.
+    expect(
+      sessionFailureNotice(undefined, terminal({ severity: "fatal" }))
+    ).toBe("terminal")
+  })
+
+  it("never tells a retry incident — the dock draws that one live", () => {
+    expect(sessionFailureNotice(undefined, record("w", 1))).toBeNull()
+    expect(
+      sessionFailureNotice(record("w", 1), record("w", 2, { title: "again" }))
+    ).toBeNull()
+  })
+
+  it("tells an incident the adapter escalated to a terminal failure", () => {
+    // codex reuses the id with a bumped revision: warning → error.
+    expect(
+      sessionFailureNotice(
+        record("x", 1),
+        record("x", 2, { severity: "error" })
+      )
+    ).toBe("terminal")
+  })
+
+  it("stays quiet for stale and replayed revisions", () => {
+    expect(
+      sessionFailureNotice(terminal({ revision: 2 }), terminal())
+    ).toBeNull()
+    expect(sessionFailureNotice(terminal(), terminal())).toBeNull()
+    expect(
+      sessionFailureNotice(undefined, terminal({ id: "", revision: 1 }))
+    ).toBeNull()
+    expect(
+      sessionFailureNotice(undefined, terminal({ revision: 0 }))
+    ).toBeNull()
+  })
+
+  it("stays quiet for a re-publish that changes nothing on screen", () => {
+    // Adapters bump revisions to re-publish; the same active wording is not
+    // news a second time.
+    expect(
+      sessionFailureNotice(advisory(), advisory({ revision: 2 }))
+    ).toBeNull()
+    expect(
+      sessionFailureNotice(terminal(), terminal({ revision: 2 }))
+    ).toBeNull()
+  })
+
+  it("tells a revision that says something new", () => {
+    expect(
+      sessionFailureNotice(
+        advisory(),
+        advisory({ revision: 2, title: "Different" })
+      )
+    ).toBe("advisory")
+    expect(
+      sessionFailureNotice(
+        terminal(),
+        terminal({ revision: 2, details: "now with a reason" })
+      )
+    ).toBe("terminal")
+    expect(
+      sessionFailureNotice(
+        terminal({ actions: ["login"] }),
+        terminal({ revision: 2, actions: ["login", "retry"] })
+      )
+    ).toBe("terminal")
+  })
+
+  it("tells the same wording again once it was settled — a new occurrence", () => {
+    expect(
+      sessionFailureNotice(
+        advisory({ resolved: true }),
+        advisory({ revision: 2 })
+      )
+    ).toBe("advisory")
+    expect(
+      sessionFailureNotice(
+        terminal({ resolved: true }),
+        terminal({ revision: 2 })
+      )
+    ).toBe("terminal")
+  })
+})
+
+describe("sessionFailureCategoryLabelKey", () => {
+  it("names each known category and folds the rest onto unknown", () => {
+    expect(sessionFailureCategoryLabelKey("connection")).toBe(
+      "category.connection"
+    )
+    expect(sessionFailureCategoryLabelKey("access")).toBe("category.access")
+    expect(sessionFailureCategoryLabelKey("limit")).toBe("category.limit")
+    expect(sessionFailureCategoryLabelKey("request")).toBe("category.request")
+    expect(sessionFailureCategoryLabelKey("service")).toBe("category.service")
+    expect(sessionFailureCategoryLabelKey("unknown")).toBe("category.unknown")
+    expect(sessionFailureCategoryLabelKey("_vendor")).toBe("category.unknown")
   })
 })
 

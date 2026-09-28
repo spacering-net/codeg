@@ -106,6 +106,7 @@ function emptySession(conversationId: number): ConversationRuntimeSession {
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
 }

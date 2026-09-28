@@ -82,7 +82,7 @@ impl TailSlice {
 /// Bounded ring buffer of an agent process's stderr, redacted on write.
 ///
 /// Written from the `with_debug` callback, whose signature is a synchronous
-/// `Fn(&str, LineDirection) + Send + Sync` (see `vendor/sacp-tokio`), so the
+/// `Fn(&str, LineDirection) + Send + Sync` (see `acp::agent_process`), so the
 /// lock is a `std::sync::Mutex` — there is no `.await` inside and a tokio mutex
 /// would not compile there.
 #[derive(Debug, Default)]

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 const CODEG_DIR_NAME: &str = ".codeg";
 const PETS_DIR_NAME: &str = "pets";
+const BROWSER_PROFILES_DIR_NAME: &str = "browser-profiles";
 const UPLOADS_DIR_NAME: &str = "uploads";
 const LOGS_DIR_NAME: &str = "logs";
 const TURN_TIMINGS_DIR_NAME: &str = "turn-timings";
@@ -45,6 +46,23 @@ pub fn codeg_pets_root() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(CODEG_DIR_NAME).join(PETS_DIR_NAME))
         .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(PETS_DIR_NAME))
+}
+
+/// Root directory for built-in browser profiles (WebView2 user-data folders
+/// on Windows, WebKitGTK data directories on Linux; macOS keeps profiles in
+/// WebKit's own store and never reads this).
+///
+/// Resolution order matches `codeg_pets_root()`.
+pub fn codeg_browser_profiles_root() -> PathBuf {
+    if let Some(custom) = std::env::var_os("CODEG_HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(custom).join(BROWSER_PROFILES_DIR_NAME);
+    }
+    if let Some(data) = std::env::var_os("CODEG_DATA_DIR").filter(|s| !s.is_empty()) {
+        return PathBuf::from(data).join(BROWSER_PROFILES_DIR_NAME);
+    }
+    dirs::home_dir()
+        .map(|h| h.join(CODEG_DIR_NAME).join(BROWSER_PROFILES_DIR_NAME))
+        .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(BROWSER_PROFILES_DIR_NAME))
 }
 
 /// Root directory for attachments uploaded from the web client.

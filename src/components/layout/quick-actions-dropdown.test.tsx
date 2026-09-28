@@ -18,8 +18,14 @@ const mocks = vi.hoisted(() => {
     openRemoteWorkspace: vi.fn(() => Promise.resolve()),
     listRemoteWorkspaceConnections: vi.fn(() => Promise.resolve(connections)),
     setRoute: vi.fn(),
+    openConversations: vi.fn(),
+    openBrowserTab: vi.fn(() => "browser:new"),
   }
 })
+
+// The built-in browser row is gated on the backend's own answer, not on the
+// platform, so the test drives that answer directly.
+let browserAvailable = true
 
 let desktop = true
 vi.mock("@/lib/platform", () => ({ isDesktop: () => desktop }))
@@ -47,7 +53,19 @@ vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
     routeId: "conversations",
     setRoute: mocks.setRoute,
+    openConversations: mocks.openConversations,
   }),
+}))
+
+vi.mock("@/contexts/workspace-context", () => ({
+  useOptionalWorkspaceActions: () => ({
+    openBrowserTab: mocks.openBrowserTab,
+  }),
+}))
+
+vi.mock("@/lib/browser/use-browser-capabilities", () => ({
+  useBrowserCapabilities: () =>
+    browserAvailable ? { available: true } : { available: false },
 }))
 
 // Dialogs render nothing until opened and drag in large trees; the menu only
@@ -94,11 +112,12 @@ const FORGE_ROW = "Repository panel"
 
 beforeEach(() => {
   desktop = true
+  browserAvailable = true
   vi.clearAllMocks()
 })
 
 describe("QuickActionsDropdown", () => {
-  it("groups all eight actions under their headings on desktop", async () => {
+  it("groups all nine actions under their headings on desktop", async () => {
     await mountAndOpen()
 
     for (const group of ["Workspace", "Navigation", "More"]) {
@@ -112,10 +131,36 @@ describe("QuickActionsDropdown", () => {
       AUTOMATIONS_ROW,
       "To-dos",
       FORGE_ROW,
+      "Open browser tab",
       "Show pet",
     ]) {
       expect(await screen.findByRole("menuitem", { name: label })).toBeVisible()
     }
+  })
+
+  it("opens a blank browser tab, returning to the conversations route first", async () => {
+    await mountAndOpen()
+    await clickItem("Open browser tab")
+
+    // The file column that holds browser tabs only exists on the conversations
+    // route, so the route swap has to happen too — otherwise the tab opens
+    // behind whichever full-page route is covering the workspace.
+    expect(mocks.openConversations).toHaveBeenCalled()
+    expect(mocks.openBrowserTab).toHaveBeenCalledWith("about:blank")
+  })
+
+  it("drops the browser row when there is no built-in browser", async () => {
+    browserAvailable = false
+    await mountAndOpen()
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Open browser tab" })
+    ).toBeNull()
+    // The rest of the group survives, so this is the gate and not the group
+    // failing to render.
+    expect(
+      await screen.findByRole("menuitem", { name: "Show pet" })
+    ).toBeVisible()
   })
 
   it("has no Search row — that button is always visible in the chrome", async () => {

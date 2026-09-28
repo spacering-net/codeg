@@ -1311,11 +1311,36 @@
 }
 
 /* 分栏拖拽把手的静止细线（会话↔文件、自动化列表↔详情…）：ResizableHandle 的 `before:bg-border` 在
-   背景图上同样被冲淡，两栏之间没了边界。只把 **inactive** 态换成加强色——hover/drag 态那两档
-   （foreground/40 · /60）是 Tailwind layered 工具类，无条件覆盖会被 unlayered 规则静默吃掉、丢掉拖拽
-   反馈，故用 state 属性精确限定。关图无此规则 → 仍是 bg-border，零回归。 */
+   背景图上同样被冲淡，两栏之间没了边界。只把 **inactive** 态换成加强色——hover/drag 态那两档是
+   Tailwind layered 工具类，无条件覆盖会被 unlayered 规则静默吃掉、丢掉拖拽反馈，故用 state 属性
+   精确限定。关图无此规则 → 仍是 bg-border，零回归。 */
 [data-workspace-bg="on"] [data-resize-handle-state="inactive"]::before {
   background-color: var(--ws-chrome-border);
+}
+
+/* ===== 分栏拖拽把手 hover/drag 的**实色** =====
+   这两档原本是 `bg-foreground/40` / `/60`（半透明）。把手盒子本身只有 1px 宽，加粗后的 5px 线
+   居中压过去 → 两侧各 2px 骑在相邻面板上，正中 1px 却是两个面板都够不到的缝，透出的是面板组
+   底下的页面底色。于是只要两栏的背景不是页面底色（会话↔文件分栏顶部那条 `bg-muted` 标签条就是
+   典型），半透明线在缝上会亮一档，整条线读成「两条竖线中间夹一道缝」（用户反馈「顶部有两个边框
+   竖线重叠」）。实色取「40%/60% foreground 压在 --background 上」的同一个合成值：页面底色上与
+   原来逐像素一致（`in srgb` 而非 oklab——alpha 合成就是在 sRGB 分量上线性插值，oklab 混出来会
+   暗一档），换到标签条那种别的底色上也不再变调，缝随之消失。随主题走：自定义属性里的 var() 是在
+   **声明它的那个元素**上代入的（不是使用处），而主题的 --foreground/--background 正是由
+   `[data-theme=…]` / `.dark` 写在根元素上的（见 appearance-provider 的 documentElement），
+   和这条 :root 同一个元素 ⇒ 深色主题、强调色主题自动跟随。要把主题挪到子树上，这两行得跟着挪。
+   color-mix 不是新依赖——Tailwind v4 的 `/40` 透明度修饰符本身就是 color-mix。 */
+:root {
+  --resize-handle-hover: color-mix(
+    in srgb,
+    var(--foreground) 40%,
+    var(--background)
+  );
+  --resize-handle-drag: color-mix(
+    in srgb,
+    var(--foreground) 60%,
+    var(--background)
+  );
 }
 
 /* 旧 WebKitGTK 无 color-mix 时降级为不透明（背景图仅在透明内容区透出，不崩）。 */
@@ -2796,8 +2821,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   0%,
   100% {
     box-shadow:
-      var(--tw-ring-offset-shadow, 0 0 #0000),
-      var(--tw-ring-shadow, 0 0 #0000);
+      var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000);
   }
   50% {
     box-shadow:
@@ -2953,4 +2977,14 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .canvas-surface[data-canvas-panning],
 .canvas-surface[data-canvas-panning] * {
   cursor: grabbing !important;
+}
+
+/* Built-in browser: indeterminate loading bar under the toolbar. */
+@keyframes browser-loading {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
 }

@@ -17,10 +17,8 @@ import {
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
-import {
-  isComposerChromeClick,
-  restampSkillPrefixes,
-} from "@/components/chat/composer/composer-commands"
+import { restampSkillPrefixes } from "@/components/chat/composer/composer-commands"
+import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
   RichComposer,
   type RichComposerHandle,
@@ -146,6 +144,7 @@ export function TaskMessageComposer({
   const t = useTranslations("Folder.chat.messageInput")
   const editorRef = useRef<RichComposerHandle>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const chromeFocus = useComposerChromeFocus(editorRef)
 
   const { groupLabels, uiLabels } = useComposerMentionLabels()
   const referenceSearch = useReferenceSearch({
@@ -240,6 +239,13 @@ export function TaskMessageComposer({
   // the editor exists; `defaultBlocks` is read at that moment and not watched,
   // matching `defaultText` — the box is uncontrolled after mount.
   const hydratedRef = useRef(false)
+  // Read inside the deferred frame rather than captured with the callback: the
+  // agent probe that fills the list can still be in flight at mount, and a brief
+  // holding a real `/cmd` should come back as that command's badge.
+  const knownInvocationsRef = useRef(invocations.knownInvocations)
+  useEffect(() => {
+    knownInvocationsRef.current = invocations.knownInvocations
+  }, [invocations.knownInvocations])
   const handleReady = useCallback(() => {
     if (hydratedRef.current) return
     hydratedRef.current = true
@@ -250,7 +256,7 @@ export function TaskMessageComposer({
     requestAnimationFrame(() => {
       const live = editorRef.current?.getEditor()
       if (!live) return
-      attach.hydrateFromBlocks(live, defaultBlocks)
+      attach.hydrateFromBlocks(live, defaultBlocks, knownInvocationsRef.current)
       onChange(editorRef.current?.getText() ?? "")
     })
     // Mount-time seed: re-running on a new `defaultBlocks` identity would
@@ -285,12 +291,9 @@ export function TaskMessageComposer({
   return (
     <div
       ref={containerRef}
-      onMouseDown={(e) => {
-        // Clicking the box's padding focuses the nearest caret, like a textarea.
-        if (!isComposerChromeClick(e.target)) return
-        e.preventDefault()
-        editorRef.current?.focusAtCoords(e.clientX, e.clientY)
-      }}
+      // Clicking or tapping the box's padding focuses the nearest caret, like a
+      // textarea.
+      {...chromeFocus}
       {...attach.containerDragProps}
       // Same shell the drawer's Textarea had (and the same rounding as every
       // other box in it); the editor brings the matching px-3 padding.
@@ -320,6 +323,7 @@ export function TaskMessageComposer({
         tabLabels={groupLabels}
         // Same box the `/` menu hangs off, so both panels span the composer.
         mentionAnchorRef={containerRef}
+        knownInvocations={invocations.knownInvocations}
         submitShortcut={submitShortcut}
         newlineShortcut={newlineShortcut}
         onReady={handleReady}

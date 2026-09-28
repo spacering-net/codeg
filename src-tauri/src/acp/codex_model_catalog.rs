@@ -68,8 +68,9 @@ struct EnumSpec {
 
 // Authoritative value sets + nullability, extracted from the codex binary itself
 // by feeding it candidate catalogs and reading the full `unknown variant …,
-// expected …` / `invalid type: null, expected …` errors (verified on 0.147 —
-// treat these as version-specific and re-probe when codex moves).
+// expected …` / `invalid type: null, expected …` errors (re-probed on 0.156.1,
+// unchanged since 0.147 — treat these as version-specific and re-probe when
+// codex moves).
 fn enum_spec_for(key: &str) -> Option<EnumSpec> {
     let spec = |allowed, nullable| Some(EnumSpec { allowed, nullable });
     match key {
@@ -93,6 +94,33 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 
 /// `ModelInfo` fields codex parses as a plain `bool`. A string here ("true",
 /// "yes", …) rejects the whole catalog, so the type is checked, not assumed.
+///
+/// `supports_parallel_tool_calls` is kept although 0.153.4 dropped the field
+/// (it now parses as an ignored unknown key): guarding it still costs nothing
+/// and keeps a stored override honest for anyone pinned to an older codex.
+///
+/// `supports_experimental_context` is the only `ModelInfo` field 0.154.0 added
+/// (codex-acp 1.12.0 moves `@openai/codex` ^0.153.4 → ^0.154.0). It is strict:
+/// `supports_experimental_context = "yes"` earns `invalid type: string "yes",
+/// expected a boolean` and takes the WHOLE catalog down with it — probed
+/// against the 0.154.0 binary, same as the rest of this list.
+///
+/// `node_repl_auto_review_required` / `node_repl_disabled` ship as booleans on
+/// every entry and are just as strict: a string earns the same `expected a
+/// boolean` rejection, and so does a `null` — probed against the 0.155.1
+/// binary, which also re-confirmed every other entry here. The editor offers
+/// no control for either, so only an imported or hand-edited override can
+/// carry one, which is exactly the input this list exists to catch.
+///
+/// `supports_reasoning_effort_updates` is the only boolean 0.156.1 added
+/// (codex-acp 1.13.1 moves `@openai/codex` ^0.155.1 → ^0.156.1). It ships on
+/// every entry and is as strict as the rest: `"yes"` earns `expected a
+/// boolean`, and so does `null` — probed against the 0.156.1 binary, which
+/// also re-confirmed every other entry here and every enum set above. The one
+/// other key the 0.156.1 snapshot newly carries, `default_service_tier`
+/// (`"priority"` on GPT-6 Sol and Luna), is an optional string rather than an
+/// enum — an unknown tier name parses and only a non-string is refused — so
+/// it needs no entry in either list.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -101,9 +129,13 @@ const BOOL_FIELDS: &[&str] = &[
     "supports_search_tool",
     "supports_image_detail_original",
     "supports_reasoning_summary_parameter",
+    "supports_experimental_context",
     "include_apps_usage_instructions",
     "include_plugin_usage_instructions",
     "include_skills_usage_instructions",
+    "node_repl_auto_review_required",
+    "node_repl_disabled",
+    "supports_reasoning_effort_updates",
 ];
 
 /// Whether a custom `overrides` entry is safe to write. A single value codex
@@ -617,7 +649,20 @@ mod tests {
     #[test]
     fn bundled_snapshot_matches_launched_codex_shape() {
         let models = snap();
-        assert_eq!(models.len(), 8, "snapshot should carry codex 0.147's catalog");
+        assert_eq!(
+            models.len(),
+            11,
+            "snapshot should carry codex 0.156.1's catalog"
+        );
+        assert!(models.iter().any(|m| slug_of(m) == Some("gpt-6-astra")));
+        // 0.156.1 adds GPT-6 Sol and Luna, both listed.
+        for added in ["gpt-6-sol", "gpt-6-luna"] {
+            let m = models
+                .iter()
+                .find(|m| slug_of(m) == Some(added))
+                .unwrap_or_else(|| panic!("{added} missing — regenerate the snapshot"));
+            assert!(is_listable(m), "{added} should be listed");
+        }
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-5.6-sol")));
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-5.5")));
         // codex-auto-review ships hidden.
@@ -626,10 +671,7 @@ mod tests {
             .find(|m| slug_of(m) == Some("codex-auto-review"))
             .expect("present");
         assert_eq!(review.get("visibility").unwrap(), "hide");
-        // Every codex required ModelInfo field present on entry 0. Note
-        // `supports_reasoning_summaries` is NOT here: 0.147 renamed it to
-        // `supports_reasoning_summary_parameter`, which is skipped while it
-        // holds its `true` default and so never appears in the snapshot.
+        // Every codex required ModelInfo field present on entry 0.
         let required = [
             "slug",
             "display_name",
@@ -638,7 +680,6 @@ mod tests {
             "priority",
             "supported_reasoning_levels",
             "support_verbosity",
-            "supports_parallel_tool_calls",
             "shell_type",
             "web_search_tool_type",
             "experimental_supported_tools",
@@ -648,13 +689,21 @@ mod tests {
         for f in required {
             assert!(models[0].get(f).is_some(), "missing required field {f}");
         }
-        assert!(
-            models
-                .iter()
-                .all(|m| m.get("supports_reasoning_summaries").is_none()),
-            "0.147 dropped supports_reasoning_summaries — regenerate the snapshot"
-        );
-        assert_eq!(fallback_base_slug(&models).as_deref(), Some("gpt-5.6-sol"));
+        // Fields codex retired: 0.147 renamed `supports_reasoning_summaries` to
+        // `supports_reasoning_summary_parameter` and 0.153 dropped
+        // `supports_parallel_tool_calls`. Both are now unknown keys codex simply
+        // ignores, and neither is serialized, so seeing one back means the
+        // snapshot went stale rather than being regenerated.
+        for gone in [
+            "supports_reasoning_summaries",
+            "supports_parallel_tool_calls",
+        ] {
+            assert!(
+                models.iter().all(|m| m.get(gone).is_none()),
+                "codex dropped {gone} — regenerate the snapshot"
+            );
+        }
+        assert_eq!(fallback_base_slug(&models).as_deref(), Some("gpt-6-astra"));
     }
 
     #[test]
@@ -671,14 +720,25 @@ mod tests {
             default: None,
         };
         let cat = expand_to_catalog(&config, &snap());
-        // All 8 officials auto-included + 1 custom = 9.
-        assert_eq!(slugs(&cat).len(), 9);
+        // All 11 officials auto-included + 1 custom = 12.
+        assert_eq!(slugs(&cat).len(), 12);
         // Custom is first (top of picker) and forced list + api.
         let c = find(&cat, "gw/opus").expect("custom present");
         assert_eq!(c.get("visibility").unwrap(), "list");
         assert_eq!(c.get("supported_in_api").unwrap(), &Value::Bool(true));
         assert_eq!(c.get("priority").unwrap().as_i64(), Some(0));
         assert!(c.get("base_instructions").and_then(Value::as_str).is_some());
+        // codex 0.156.1 points gpt-5.6-sol at gpt-6-sol through an `upgrade`
+        // block, which codex's TUI raises as a model-migration prompt. A custom
+        // that clones it must not inherit a migration offer for a model it is
+        // not, so the base's block is cleared — the official itself keeps it
+        // verbatim.
+        assert_eq!(c.get("upgrade"), Some(&Value::Null));
+        let official = find(&cat, "gpt-5.6-sol").expect("official present");
+        assert_eq!(
+            official.pointer("/upgrade/model").and_then(Value::as_str),
+            Some("gpt-6-sol")
+        );
         // Official preserved VERBATIM — hidden stays hidden.
         let review = find(&cat, "codex-auto-review").expect("official present");
         assert_eq!(review.get("visibility").unwrap(), "hide");
@@ -694,10 +754,10 @@ mod tests {
 
     #[test]
     fn expand_excludes_removed_officials_and_empty_is_off() {
-        let config = excluding(&["gpt-5.2"]);
+        let config = excluding(&["gpt-5.5"]);
         let cat = expand_to_catalog(&config, &snap());
         let s = slugs(&cat);
-        assert!(!s.iter().any(|x| x == "gpt-5.2"));
+        assert!(!s.iter().any(|x| x == "gpt-5.5"));
         assert!(s.iter().any(|x| x == "gpt-5.6-sol"));
         // Empty config = feature off.
         assert!(is_effectively_empty(&CodexModelConfig::default(), &snap()));
@@ -710,18 +770,19 @@ mod tests {
     #[test]
     fn expand_keeps_hidden_officials_even_when_excluded() {
         let s = snap();
-        // gpt-5.4 / gpt-5.4-mini are hidden in 0.147; codex-auto-review always is.
-        for slug in ["gpt-5.4", "gpt-5.4-mini", "codex-auto-review"] {
+        // gpt-5.4 and the two daybreak builds ship hidden; codex-auto-review
+        // always is.
+        for slug in ["gpt-5.4", "gpt-daybreak-blue-latest", "codex-auto-review"] {
             let hidden = s
                 .iter()
                 .find(|m| slug_of(m) == Some(slug))
                 .expect("in snapshot");
             assert_eq!(hidden.get("visibility").unwrap(), "hide", "{slug}");
         }
-        let cat = expand_to_catalog(&excluding(&["gpt-5.4", "gpt-5.4-mini"]), &s);
+        let cat = expand_to_catalog(&excluding(&["gpt-5.4", "gpt-daybreak-blue-latest"]), &s);
         let out = slugs(&cat);
         assert!(out.iter().any(|x| x == "gpt-5.4"));
-        assert!(out.iter().any(|x| x == "gpt-5.4-mini"));
+        assert!(out.iter().any(|x| x == "gpt-daybreak-blue-latest"));
         assert_eq!(out.len(), s.len(), "nothing dropped");
     }
 
@@ -730,13 +791,21 @@ mod tests {
         let s = snap();
         // Only stale removals of now-hidden officials → hand control back.
         assert!(is_effectively_empty(
-            &excluding(&["gpt-5.4", "gpt-5.4-mini"]),
+            &excluding(&["gpt-5.4", "gpt-daybreak-blue-latest"]),
             &s
         ));
         // A removal that still applies keeps the takeover.
-        assert!(!is_effectively_empty(&excluding(&["gpt-5.2"]), &s));
+        assert!(!is_effectively_empty(&excluding(&["gpt-5.5"]), &s));
         // Mixed: the live one wins.
-        assert!(!is_effectively_empty(&excluding(&["gpt-5.4", "gpt-5.2"]), &s));
+        assert!(!is_effectively_empty(&excluding(&["gpt-5.4", "gpt-5.5"]), &s));
+        // codex 0.155.1 DELETED gpt-5.2 and gpt-5.4-mini outright rather than
+        // hiding them, which is the other way a stored exclusion goes stale. A
+        // slug that is not in the catalog at all cannot be listable either, so
+        // it reads as a ghost by the same rule and control goes back to codex.
+        assert!(is_effectively_empty(
+            &excluding(&["gpt-5.2", "gpt-5.4-mini"]),
+            &s
+        ));
         // A custom always counts.
         let with_custom = CodexModelConfig {
             customs: vec![CodexCustomEntry {
@@ -890,6 +959,12 @@ mod tests {
                         "supports_reasoning_summary_parameter".into(),
                         Value::Bool(false),
                     ),
+                    ("node_repl_disabled".into(), Value::String("true".into())),
+                    ("node_repl_auto_review_required".into(), Value::Null),
+                    (
+                        "supports_reasoning_effort_updates".into(),
+                        Value::String("yes".into()),
+                    ),
                 ]),
             }],
             ..Default::default()
@@ -898,6 +973,17 @@ mod tests {
         let x = find(&cat, "gw/b").expect("present");
         assert_eq!(x.get("use_responses_lite").unwrap(), &Value::Bool(true));
         assert_eq!(x.get("supports_search_tool").unwrap(), &Value::Bool(true));
+        // The node_repl pair keeps gpt-5.6-sol's own `false`s.
+        assert_eq!(x.get("node_repl_disabled").unwrap(), &Value::Bool(false));
+        assert_eq!(
+            x.get("node_repl_auto_review_required").unwrap(),
+            &Value::Bool(false)
+        );
+        // So does 0.156.1's `supports_reasoning_effort_updates`.
+        assert_eq!(
+            x.get("supports_reasoning_effort_updates").unwrap(),
+            &Value::Bool(false)
+        );
         // A real boolean still lands.
         assert_eq!(
             x.get("supports_reasoning_summary_parameter").unwrap(),
@@ -928,7 +1014,7 @@ mod tests {
         assert_eq!(default_slug(&cfg2, &s).as_deref(), Some("mine"));
         // No custom, no default → first listable official (not hidden).
         let cfg3 = CodexModelConfig::default();
-        assert_eq!(default_slug(&cfg3, &s).as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(default_slug(&cfg3, &s).as_deref(), Some("gpt-6-astra"));
     }
 
     #[test]
@@ -973,12 +1059,17 @@ mod tests {
     fn import_splits_officials_customs_and_infers_exclusions() {
         let s = snap();
         // A foreign catalog that kept only gpt-5.5 + one custom gateway model.
-        let sol = s
+        // The gateway model clones the *clone base* import will assign it, so
+        // its description is the only field that genuinely differs — and the
+        // test keeps that meaning across catalog refreshes, which move which
+        // model is highest-priority.
+        let base_slug = fallback_base_slug(&s).expect("snapshot has a clone base");
+        let base_model = s
             .iter()
-            .find(|m| slug_of(m) == Some("gpt-5.6-sol"))
+            .find(|m| slug_of(m) == Some(base_slug.as_str()))
             .cloned()
             .unwrap();
-        let mut gw = sol.as_object().unwrap().clone();
+        let mut gw = base_model.as_object().unwrap().clone();
         gw.insert("slug".into(), Value::String("gw/opus".into()));
         // A field that genuinely differs from the clone base (its own description),
         // so import must capture it as an override.
@@ -994,7 +1085,7 @@ mod tests {
         // The gateway model became a custom.
         assert_eq!(cfg.customs.len(), 1);
         assert_eq!(cfg.customs[0].slug, "gw/opus");
-        assert_eq!(cfg.customs[0].base, "gpt-5.6-sol");
+        assert_eq!(cfg.customs[0].base, base_slug);
         assert_eq!(
             cfg.customs[0].overrides.get("description").unwrap(),
             "My private gateway"

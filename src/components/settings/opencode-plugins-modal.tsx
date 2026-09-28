@@ -18,7 +18,18 @@ import {
 } from "@/lib/api"
 import { usePluginInstallStream } from "@/hooks/use-plugin-install-stream"
 import { randomUUID } from "@/lib/utils"
-import type { PluginCheckSummary, PluginInfo } from "@/lib/types"
+import type { PluginCheckSummary, PluginInfo, PluginStatus } from "@/lib/types"
+
+/** Only a package the install pass can actually fetch gets an install action. */
+function isInstallable(status: PluginStatus): boolean {
+  return status === "missing" || status === "needs_migration"
+}
+
+function badgeVariant(status: PluginStatus) {
+  if (status === "installed" || status === "path") return "secondary"
+  if (status === "needs_migration") return "outline"
+  return "destructive"
+}
 
 interface OpencodePluginsModalProps {
   open: boolean
@@ -119,8 +130,12 @@ export function OpencodePluginsModal({
     [onOpenChange, onCompleted]
   )
 
+  // `needs_migration` counts as actionable: the package exists on disk, but in
+  // the layout opencode stopped reading, so it still has to be installed.
+  // `path` / `path_missing` never do: opencode imports those off disk, and
+  // `bun add file:///…` fails on every one of them.
   const missingCount =
-    summary?.plugins.filter((p) => p.status === "missing").length ?? 0
+    summary?.plugins.filter((p) => isInstallable(p.status)).length ?? 0
   const floatingCount =
     summary?.plugins.filter((p) => p.declared_spec.endsWith("@latest"))
       .length ?? 0
@@ -161,11 +176,7 @@ export function OpencodePluginsModal({
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <Badge
-                        variant={
-                          plugin.status === "installed"
-                            ? "secondary"
-                            : "destructive"
-                        }
+                        variant={badgeVariant(plugin.status)}
                         className="text-3xs px-1.5 py-0"
                       >
                         {t(`opencodePlugins.status.${plugin.status}`)}
@@ -176,9 +187,17 @@ export function OpencodePluginsModal({
                         </span>
                       )}
                     </div>
+                    {/* Where we looked, for the one state where that is the
+                        whole story: the declared path resolved to nothing. */}
+                    {plugin.status === "path_missing" &&
+                      plugin.resolved_path && (
+                        <div className="text-3xs text-muted-foreground truncate mt-0.5">
+                          {plugin.resolved_path}
+                        </div>
+                      )}
                   </div>
                   <div className="shrink-0 ml-2">
-                    {plugin.status === "missing" ? (
+                    {isInstallable(plugin.status) ? (
                       <Button
                         size="xs"
                         variant="outline"
@@ -188,7 +207,7 @@ export function OpencodePluginsModal({
                         <Download className="h-3 w-3 mr-1" />
                         {t("opencodePlugins.install")}
                       </Button>
-                    ) : (
+                    ) : plugin.status === "installed" ? (
                       <Button
                         size="xs"
                         variant="ghost"
@@ -202,7 +221,7 @@ export function OpencodePluginsModal({
                         )}
                         {t("opencodePlugins.uninstall")}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               ))}

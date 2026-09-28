@@ -19,6 +19,7 @@ use crate::db::error::DbError;
 use crate::db::service::canvas_service;
 use crate::db::AppDatabase;
 use crate::models::canvas::{CanvasMutation, CanvasNode, CanvasSnapshot};
+use crate::terminal::manager::TerminalManager;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// Serializes each mutation's `commit → broadcast` PAIR. The service's
@@ -107,6 +108,10 @@ pub struct CreateCanvasNode {
     pub title: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
+    /// Required for `file` (the document's absolute path) and `terminal` (its
+    /// working directory); rejected for every other kind.
+    #[serde(default)]
+    pub path: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
     #[serde(default)]
@@ -280,6 +285,7 @@ pub async fn canvas_create_node_core(
             conversation_id: input.conversation_id,
             title: input.title,
             content: input.content,
+            path: input.path,
             color: input.color,
             grid_columns: input.grid_columns,
             grid_rows: input.grid_rows,
@@ -459,9 +465,39 @@ pub async fn canvas_detach_member_core(
     })
 }
 
+
+/// The PTY id a `terminal` card owns. Mirrors `canvasTerminalId` in
+/// `canvas-model.ts` — the card spawns under this name, so the two spellings
+/// have to match exactly or a deleted card's shell becomes unreachable.
+fn canvas_terminal_id(node_id: i32) -> String {
+    format!("canvas-term-{node_id}")
+}
+
+/// End the shells of canvas nodes that were just deleted.
+///
+/// A terminal card's PTY outlives its component on purpose — the canvas is a
+/// full-page route that really unmounts whenever the user looks at another
+/// page, and a running command must not die with a view switch — so the one
+/// thing that ends it is the CARD being deleted. That decision has to be made
+/// where the deletion is authoritative: a client-side kill issued after its own
+/// successful delete is a second, unretried request, and whenever THAT is the
+/// one that gets lost the process keeps running with no card left to reach it
+/// from.
+///
+/// Attempted for every deleted id rather than only the terminal rows: the id is
+/// derived from the row id alone, terminal-panel tabs are uuid-named so they
+/// cannot collide, and `kill` on an unknown id is a `NotFound` we ignore — so
+/// this needs neither the row's kind nor a read of a row that no longer exists.
+fn kill_canvas_terminals(terminals: &TerminalManager, node_ids: &[i32]) {
+    for node_id in node_ids {
+        let _ = terminals.kill(&canvas_terminal_id(*node_id));
+    }
+}
+
 pub async fn canvas_delete_node_core(
     emitter: &EventEmitter,
     db: &AppDatabase,
+    terminals: &TerminalManager,
     node_id: i32,
 ) -> Result<CanvasMutation<()>, AppCommandError> {
     let _order = event_order_lock().lock().await;
@@ -470,6 +506,7 @@ pub async fn canvas_delete_node_core(
         .map_err(map_db)?
     {
         Some(revision) => {
+            kill_canvas_terminals(terminals, &[node_id]);
             emit_event(
                 emitter,
                 CANVAS_CHANGED_EVENT,
@@ -503,6 +540,7 @@ pub async fn canvas_delete_node_core(
 pub async fn canvas_delete_nodes_core(
     emitter: &EventEmitter,
     db: &AppDatabase,
+    terminals: &TerminalManager,
     node_ids: Vec<i32>,
 ) -> Result<CanvasMutation<Vec<i32>>, AppCommandError> {
     let _order = event_order_lock().lock().await;
@@ -511,6 +549,9 @@ pub async fn canvas_delete_nodes_core(
         .map_err(map_db)?
     {
         Some((deleted_ids, revision)) => {
+            // Only what was actually deleted: an id the batch skipped still has
+            // a card, and that card still owns its shell.
+            kill_canvas_terminals(terminals, &deleted_ids);
             emit_event(
                 emitter,
                 CANVAS_CHANGED_EVENT,
@@ -643,9 +684,10 @@ pub async fn canvas_detach_member(
 pub async fn canvas_delete_node(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    terminals: tauri::State<'_, TerminalManager>,
     node_id: i32,
 ) -> Result<CanvasMutation<()>, AppCommandError> {
-    canvas_delete_node_core(&EventEmitter::Tauri(app), &db, node_id).await
+    canvas_delete_node_core(&EventEmitter::Tauri(app), &db, &terminals, node_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -653,9 +695,10 @@ pub async fn canvas_delete_node(
 pub async fn canvas_delete_nodes(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    terminals: tauri::State<'_, TerminalManager>,
     node_ids: Vec<i32>,
 ) -> Result<CanvasMutation<Vec<i32>>, AppCommandError> {
-    canvas_delete_nodes_core(&EventEmitter::Tauri(app), &db, node_ids).await
+    canvas_delete_nodes_core(&EventEmitter::Tauri(app), &db, &terminals, node_ids).await
 }
 
 #[cfg(test)]
@@ -668,6 +711,46 @@ mod tests {
         EventEmitter::Noop
     }
 
+    #[test]
+    fn the_pty_id_is_derived_from_the_row_alone() {
+        // Must match `canvasTerminalId` in `canvas-model.ts` byte for byte: the
+        // card spawns under this name and the delete below is the only handle
+        // left to end it once the row is gone.
+        assert_eq!(canvas_terminal_id(12), "canvas-term-12");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_terminal_card_ends_its_shell() {
+        // The kill rides the deletion rather than following it from the client:
+        // a client-side kill after its own successful delete is a second,
+        // unretried request, and whenever that one is lost the process keeps
+        // running with no card left to reach it from.
+        let db = fresh_in_memory_db().await;
+        let terminals = TerminalManager::new();
+        let node = canvas_create_node_core(
+            &emitter(),
+            &db,
+            CreateCanvasNode {
+                kind: CanvasNodeKind::Terminal,
+                path: Some("/tmp".to_string()),
+                ..region_input(CanvasNodeKind::Terminal)
+            },
+        )
+        .await
+        .expect("create terminal card")
+        .value;
+
+        // No PTY was ever spawned for this row, so the kill is a NotFound the
+        // command swallows — what this pins down is that the command REACHES
+        // for it, with the right id, and does not fail the delete over it.
+        canvas_delete_node_core(&emitter(), &db, &terminals, node.id)
+            .await
+            .expect("delete succeeds even when there is no shell to end");
+        assert!(terminals
+            .kill(&canvas_terminal_id(node.id))
+            .is_err());
+    }
+
     fn region_input(kind: CanvasNodeKind) -> CreateCanvasNode {
         CreateCanvasNode {
             kind,
@@ -677,6 +760,7 @@ mod tests {
             conversation_id: None,
             title: None,
             content: None,
+            path: None,
             color: None,
             grid_columns: None,
             grid_rows: None,
@@ -762,7 +846,7 @@ mod tests {
         assert!(moved.value.is_empty(), "nothing was written");
         assert_eq!(moved.revision, after_create, "and nothing was consumed");
 
-        let deleted = canvas_delete_nodes_core(&emitter(), &db, vec![region + 4242])
+        let deleted = canvas_delete_nodes_core(&emitter(), &db, &TerminalManager::new(), vec![region + 4242])
             .await
             .expect("delete of a ghost is not an error");
         assert!(deleted.value.is_empty());
@@ -951,13 +1035,13 @@ mod tests {
             .expect("note")
             .value;
 
-        let first = canvas_delete_node_core(&emitter(), &db, node.id)
+        let first = canvas_delete_node_core(&emitter(), &db, &TerminalManager::new(), node.id)
             .await
             .expect("delete");
         assert_eq!(first.revision, 2);
 
         // Second delete: no-op, revision unchanged (no phantom event/bump).
-        let second = canvas_delete_node_core(&emitter(), &db, node.id)
+        let second = canvas_delete_node_core(&emitter(), &db, &TerminalManager::new(), node.id)
             .await
             .expect("idempotent delete");
         assert_eq!(second.revision, 2);
@@ -1494,7 +1578,7 @@ mod tests {
         let second = seed_region(&db, CanvasNodeKind::Custom).await;
         let before = canvas_list_nodes_core(&db).await.expect("snapshot").revision;
 
-        let deleted = canvas_delete_nodes_core(&emitter(), &db, vec![first, second, 4242])
+        let deleted = canvas_delete_nodes_core(&emitter(), &db, &TerminalManager::new(), vec![first, second, 4242])
             .await
             .expect("delete batch");
         assert_eq!(deleted.value, vec![first, second], "ghost ids are skipped");
@@ -1506,7 +1590,7 @@ mod tests {
             .is_empty());
 
         // Nothing left to delete: no bump, no phantom event.
-        let noop = canvas_delete_nodes_core(&emitter(), &db, vec![first])
+        let noop = canvas_delete_nodes_core(&emitter(), &db, &TerminalManager::new(), vec![first])
             .await
             .expect("delete gone");
         assert!(noop.value.is_empty());
@@ -1542,6 +1626,7 @@ mod broadcast_tests {
                 conversation_id: Some(conv),
                 title: None,
                 content: None,
+                path: None,
                 color: None,
                 grid_columns: None,
                 grid_rows: None,
@@ -1583,6 +1668,7 @@ mod broadcast_tests {
             conversation_id: Some(conversation_id),
             title: None,
             content: None,
+            path: None,
             color: None,
             grid_columns: None,
             grid_rows: None,
@@ -1705,7 +1791,7 @@ mod broadcast_tests {
         let emitter = EventEmitter::test_web_only(broadcaster.clone());
 
         let deleted =
-            canvas_delete_nodes_core(&emitter, &db, vec![first.value.id, second.value.id])
+            canvas_delete_nodes_core(&emitter, &db, &TerminalManager::new(), vec![first.value.id, second.value.id])
                 .await
                 .expect("delete batch");
 

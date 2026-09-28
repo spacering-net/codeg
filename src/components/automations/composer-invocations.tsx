@@ -18,6 +18,7 @@ import {
   type PopupPosition,
 } from "@/components/chat/composer/suggestion/popup-position"
 import {
+  buildKnownInvocations,
   commandInvocationToken,
   commandToReference,
   skillToReference,
@@ -26,6 +27,7 @@ import type { ReferenceAttrs } from "@/components/chat/composer/types"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import { rankByTextMatch } from "@/lib/fuzzy-text-match"
 import { isImeCompositionKey } from "@/lib/ime-composition"
+import type { KnownInvocations } from "@/lib/invocation-token"
 import { cn } from "@/lib/utils"
 import type {
   AgentSkillItem,
@@ -53,6 +55,9 @@ export interface ComposerInvocations {
   isOpen: boolean
   commands: AvailableCommandInfo[]
   skills: AgentSkillItem[]
+  /** Every invocation this menu could offer, for the composer's `knownInvocations`
+   *  — so seeded / pasted text badges exactly what the menu would insert. */
+  knownInvocations: KnownInvocations
   /** Index into the merged [commands, skills] list. */
   activeIndex: number
   /** Re-evaluate the trigger from the editor's current caret (call on change). */
@@ -133,6 +138,18 @@ export function useComposerInvocations({
       (skill) => skill.id
     )
   }, [isCodex, open, triggerChar, skills, filter])
+
+  // Built from the FULL lists, not the filtered ones: this answers "is there
+  // such a command", which the current query has no say in.
+  const knownInvocations = useMemo(
+    () =>
+      buildKnownInvocations(
+        availableCommands,
+        isCodex ? skills : null,
+        isCodex ? "$" : "/"
+      ),
+    [availableCommands, isCodex, skills]
+  )
 
   const count = commands.length + matchedSkills.length
   // Clamp on read so a shrinking filtered list never points past the end (avoids
@@ -228,6 +245,7 @@ export function useComposerInvocations({
     isOpen: open && count > 0,
     commands,
     skills: matchedSkills,
+    knownInvocations,
     activeIndex,
     detect,
     onKeyDown,

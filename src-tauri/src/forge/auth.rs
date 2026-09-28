@@ -187,15 +187,15 @@ pub struct HostProfile {
     /// path in a git remote carries that prefix while no API path does.
     pub base_path: String,
     /// Whether `provider` is something codeg actually KNOWS about this host —
-    /// an account configured for it, or a hostname that names one of the two
-    /// forges — as opposed to the last-resort GitHub guess.
+    /// an account configured for it, or a hostname that names one of the
+    /// supported forges — as opposed to the last-resort GitHub guess.
     ///
     /// Load-bearing for what a user is TOLD, not for what is called: a repo on
-    /// Bitbucket, Gitee or a Gitea resolves to a perfectly well-formed
+    /// Bitbucket or Gitee resolves to a perfectly well-formed
     /// `(github, host, owner/repo)` triple that no GitHub API can answer, and
     /// the panel used to report that as an account or API failure. Whoever is
     /// about to spend a request on a host checks this first and says "only
-    /// GitHub and GitLab are supported" instead.
+    /// GitHub, GitLab and Gitea are supported" instead.
     ///
     /// Deliberately OPTIMISTIC about a configured host, and the reason is that
     /// a provider-less account is ambiguous by construction. Two flows write
@@ -305,16 +305,23 @@ pub fn host_profile_in(server_host: &str, accounts: &[GitHubAccount]) -> HostPro
 ///
 /// A whole label, never a substring: `mygitlabhost.com` is somebody's domain,
 /// and matching it would send their repository to a GitLab that is not there.
+///
+/// `forgejo` names a Gitea: it is a fork of it and serves the same `/api/v1`,
+/// so the client that talks to one talks to the other.
 pub fn provider_from_host_name(server_host: &str) -> Option<ForgeProvider> {
     let host = server_host.trim().to_ascii_lowercase();
     if host.is_empty() {
         return None;
     }
-    if host.split('.').any(|label| label == "gitlab") {
+    let names = |wanted: &str| host.split('.').any(|label| label == wanted);
+    if names("gitlab") {
         return Some(ForgeProvider::GitLab);
     }
-    if host.split('.').any(|label| label == "github") {
+    if names("github") {
         return Some(ForgeProvider::GitHub);
+    }
+    if names("gitea") || names("forgejo") {
+        return Some(ForgeProvider::Gitea);
     }
     None
 }
@@ -375,9 +382,10 @@ fn guess_provider(host: &str) -> ForgeProvider {
 /// re-derivable, not a setting. Nothing the user can see gets written, so a
 /// wrong entry cannot outlive a restart.
 /// An entry means the host ANSWERED; `None` inside it means the answer was
-/// "not a GitLab" — a verdict worth keeping, because without it every request
-/// to a GitHub Enterprise would re-probe (`folder_forge_remote_core`, and so
-/// this function, runs on every forge call).
+/// "neither a Gitea nor a GitLab" — a verdict worth keeping, because without it
+/// every request to a GitHub Enterprise would re-probe
+/// (`folder_forge_remote_core`, and so this function, runs on every forge
+/// call).
 static DETECTED_FORGE: LazyLock<RwLock<HashMap<String, Option<ForgeProvider>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
@@ -406,7 +414,8 @@ pub(crate) fn recall_forge(host: &str) -> Option<ForgeProvider> {
 }
 
 /// Whether the host has answered at all, and what it said. `Some(None)` is
-/// "asked and answered: not a GitLab"; `None` is "never got a usable answer".
+/// "asked and answered: neither forge the probe can recognise"; `None` is
+/// "never got a usable answer".
 fn recall_verdict(host: &str) -> Option<Option<ForgeProvider>> {
     DETECTED_FORGE.read().ok()?.get(host).copied()
 }
@@ -422,11 +431,22 @@ pub(crate) fn forget_forge(host: &str) {
 /// API" is told apart from "this host answers everything the same way".
 const NONEXISTENT_PATH: &str = "__codeg_forge_probe";
 
-/// What one probe request came back as. Only the two facts the verdict needs.
+/// What one probe request came back as. Only the facts a verdict needs: the
+/// status, whether the answer claimed to be JSON, and the first few bytes of it
+/// — enough for the one probe below whose verdict rests on the BODY rather than
+/// on the status alone.
 struct Answer {
     status: u16,
     json: bool,
+    body: String,
 }
+
+/// How much of a probe's answer is read. A version payload is forty bytes; this
+/// is the ceiling on what an unidentified host — which is exactly what this
+/// runs against — gets to put in memory before being ruled out. Anything longer
+/// is TRUNCATED rather than refused, and truncated JSON does not parse, which
+/// is the same verdict a page of HTML gets.
+const PROBE_BODY_CAP: usize = 4096;
 
 /// Statuses that mean "ask again later", not "this is not a GitLab". A GitLab
 /// mid-deploy is a 502 from its own reverse proxy; recording that as a verdict
@@ -437,7 +457,7 @@ fn is_transient(status: u16) -> bool {
 }
 
 async fn ask(client: &reqwest::Client, url: String) -> Option<Answer> {
-    let response = client
+    let mut response = client
         .get(url)
         .header("User-Agent", "codeg")
         .header("Accept", "application/json")
@@ -452,26 +472,55 @@ async fn ask(client: &reqwest::Client, url: String) -> Option<Answer> {
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.to_ascii_lowercase().contains("json"));
-    Some(Answer { status: response.status().as_u16(), json })
+    let status = response.status().as_u16();
+
+    // Streamed to a cap rather than `text()`d whole. This asks an
+    // UNIDENTIFIED host a question, and a host that answers every path with a
+    // megabyte of HTML is one of the shapes it is meant to rule out — reading
+    // that in full to look at its first forty bytes would let the thing being
+    // ruled out decide how much memory the ruling costs.
+    let mut body = Vec::new();
+    while body.len() < PROBE_BODY_CAP {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    body.truncate(PROBE_BODY_CAP);
+    Some(Answer {
+        status,
+        json,
+        body: String::from_utf8_lossy(&body).into_owned(),
+    })
 }
 
 /// Ask `origin` which forge it is, once per host per process.
 ///
-/// The question is `GET {origin}/api/v4/version`. GitLab mounts it and answers
-/// 200 with a token or 401 without — either way it EXISTS; GitHub Enterprise,
-/// which mounts its API at `/api/v3`, answers 404.
+/// Two questions, cheapest first.
 ///
-/// A JSON 401 alone is NOT enough. An authenticating gateway in front of a
-/// GitHub Enterprise can answer exactly that to every request, and believing it
-/// would break a setup that works today. So a 401 is confirmed against a path
-/// nothing routes: GitLab answers `{"error":"404 Not Found"}` there, while a
-/// blanket gateway answers 401 again and the probe declines to conclude.
+/// **Gitea/Forgejo: `GET {origin}/api/v1/version`.** Deliberately the first
+/// one, because it is the only probe here that needs no credential and whose
+/// verdict rests on the BODY: the endpoint is public on every Gitea, and it
+/// answers `{"version":"1.23.4"}`. A blanket gateway or a catch-all 200 does
+/// not produce that key, so no control request is needed to rule one out.
+/// Neither GitHub Enterprise (`/api/v3`) nor GitLab (`/api/v4`) mounts
+/// `/api/v1` at all.
+///
+/// **GitLab: `GET {origin}/api/v4/version`.** GitLab mounts it and answers 200
+/// with a token or 401 without — either way it EXISTS; GitHub Enterprise
+/// answers 404.
+///
+/// A JSON 401 alone is NOT enough there. An authenticating gateway in front of
+/// a GitHub Enterprise can answer exactly that to every request, and believing
+/// it would break a setup that works today. So a 401 is confirmed against a
+/// path nothing routes: GitLab answers `{"error":"404 Not Found"}` there, while
+/// a blanket gateway answers 401 again and the probe declines to conclude.
 ///
 /// Two failures are deliberately NOT recorded, so they are re-asked rather than
 /// remembered: an unreachable host, and a transient server status
-/// ([`is_transient`]). Everything else IS recorded — including "answered, not a
-/// GitLab" — because `folder_forge_remote_core` runs on every forge call, and
-/// an uncached negative would put a probe in front of each one.
+/// ([`is_transient`]). Everything else IS recorded — including "answered, and
+/// it is neither" — because `folder_forge_remote_core` runs on every forge
+/// call, and an uncached negative would put two probes in front of each one.
 async fn detect_forge(host: &str, origin: &str) -> Option<ForgeProvider> {
     if let Some(verdict) = recall_verdict(host) {
         return verdict;
@@ -481,6 +530,18 @@ async fn detect_forge(host: &str, origin: &str) -> Option<ForgeProvider> {
         return None;
     }
     let client = super::http_client().ok()?;
+
+    let gitea = ask(&client, format!("{origin}/api/v1/version")).await?;
+    // A transient answer to this one does NOT end the question. Asking Gitea
+    // first is new, and returning here on a 5xx would mean a GitLab behind a
+    // proxy that errors on unknown `/api/v1` paths never gets asked the
+    // question it used to be asked first — a host that detected fine before
+    // this probe existed, silently falling back to the hostname guess.
+    let gitea_answered = !is_transient(gitea.status);
+    if gitea_answered && gitea.status == 200 && gitea.json && announces_version(&gitea.body) {
+        record_verdict(host, Some(ForgeProvider::Gitea));
+        return Some(ForgeProvider::Gitea);
+    }
 
     let probe = ask(&client, format!("{origin}/api/v4/version")).await?;
     if is_transient(probe.status) {
@@ -500,8 +561,31 @@ async fn detect_forge(host: &str, origin: &str) -> Option<ForgeProvider> {
         None
     };
 
+    // A NEGATIVE verdict is only worth remembering when both questions were
+    // actually answered: "it is not a GitLab, and we never heard back about
+    // Gitea" is not the "asked and answered: neither" this cache records, and
+    // pinning it would keep a Gitea that was merely restarting unrecognised
+    // until codeg does.
+    if verdict.is_none() && !gitea_answered {
+        return None;
+    }
     record_verdict(host, verdict);
     verdict
+}
+
+/// Whether a probe body is Gitea's version payload — a JSON object with a
+/// non-empty `version` string, and nothing else asked of it.
+///
+/// Parsed rather than substring-matched: `"version"` appears in plenty of JSON
+/// a proxy or an unrelated service might answer with, and the whole point of
+/// reading the body here is that it is a stronger witness than the status was.
+fn announces_version(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.get("version"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| !v.trim().is_empty())
 }
 
 /// The path component of a stored `server_url`, without surrounding slashes.
@@ -576,7 +660,8 @@ pub fn host_of_server_url(server_url: &str) -> String {
 /// REST base for a host. github.com uses the dedicated API host; GitHub
 /// Enterprise mounts its API under the instance (`{origin}/api/v3`, the exact
 /// derivation `validate_github_token` already uses); GitLab — public and
-/// self-hosted alike — always mounts `{origin}/api/v4`.
+/// self-hosted alike — always mounts `{origin}/api/v4`, and Gitea/Forgejo
+/// `{origin}/api/v1`.
 fn api_base_for(provider: ForgeProvider, host: &str, server_url: &str) -> String {
     if provider == ForgeProvider::GitHub && host == "github.com" {
         return "https://api.github.com".to_string();
@@ -585,6 +670,7 @@ fn api_base_for(provider: ForgeProvider, host: &str, server_url: &str) -> String
     match provider {
         ForgeProvider::GitHub => format!("{origin}/api/v3"),
         ForgeProvider::GitLab => format!("{origin}/api/v4"),
+        ForgeProvider::Gitea => format!("{origin}/api/v1"),
     }
 }
 
@@ -668,6 +754,23 @@ mod tests {
         assert_eq!(
             api_base_for(gl, "gitlab.corp.com", "https://gitlab.corp.com:8443/"),
             "https://gitlab.corp.com:8443/api/v4"
+        );
+    }
+
+    /// Gitea mounts at `/api/v1`, and — unlike GitHub — there is no public
+    /// service with a dedicated API host to exempt. gitea.com and codeberg.org
+    /// answer under their own origins like every self-hosted instance does.
+    #[test]
+    fn gitea_api_base_is_v1_under_the_instance() {
+        let gt = ForgeProvider::Gitea;
+        assert_eq!(api_base_for(gt, "gitea.com", ""), "https://gitea.com/api/v1");
+        assert_eq!(
+            api_base_for(gt, "codeberg.org", "https://codeberg.org/"),
+            "https://codeberg.org/api/v1"
+        );
+        assert_eq!(
+            api_base_for(gt, "git.corp.com", "http://git.corp.com:3000"),
+            "http://git.corp.com:3000/api/v1"
         );
     }
 
@@ -805,6 +908,14 @@ mod tests {
         assert_eq!(provider_from_host_name("bitbucket.org"), None);
         assert_eq!(provider_from_host_name(""), None);
         assert_eq!(provider_from_host_name("   "), None);
+        // Forgejo is a Gitea fork serving the same `/api/v1`, so its name
+        // claims the same client. `codeberg.org` deliberately does NOT — this
+        // is a rule about what a name SAYS, not a list of instances we happen
+        // to know about, and the probe identifies that one anyway.
+        assert_eq!(provider_from_host_name("gitea.corp.com"), Some(ForgeProvider::Gitea));
+        assert_eq!(provider_from_host_name("forgejo.example"), Some(ForgeProvider::Gitea));
+        assert_eq!(provider_from_host_name("codeberg.org"), None);
+        assert_eq!(provider_from_host_name("giteaish.dev"), None);
     }
 
     /// What the instance itself said vouches for it, exactly as an account or a
@@ -1220,5 +1331,77 @@ mod tests {
     async fn the_public_hosts_are_never_probed() {
         assert_eq!(detect_forge("github.com", "http://127.0.0.1:1").await, None);
         assert_eq!(detect_forge("gitlab.com", "http://127.0.0.1:1").await, None);
+    }
+
+    /// A Gitea that answers `/api/v1/version` — public on every instance, no
+    /// token needed — and 404s everything else, which is what its own router
+    /// does for an unrouted API path.
+    async fn mock_gitea(body: &'static str) -> String {
+        use axum::routing::get;
+        let app = axum::Router::new().route(
+            "/api/v1/version",
+            get(move || async move {
+                (
+                    axum::http::StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "application/json;charset=utf-8")],
+                    body,
+                )
+            }),
+        );
+        serve(app).await
+    }
+
+    /// The Gitea equivalent of the GitLab probe, and the reason it goes FIRST:
+    /// `/api/v1/version` needs no credential, so a self-hosted instance whose
+    /// name says nothing identifies itself before a single token is spent.
+    #[tokio::test]
+    async fn an_instance_that_announces_a_version_on_v1_is_detected_as_gitea() {
+        let host = "probe-serves-v1.test";
+        forget_forge(host);
+        let origin = mock_gitea("{\"version\":\"1.23.4\"}").await;
+        assert_eq!(detect_forge(host, &origin).await, Some(ForgeProvider::Gitea));
+        // The guess this overrode would have been GitHub, and with it /api/v3.
+        assert_eq!(guess_provider(host), ForgeProvider::GitHub);
+        assert_eq!(recall_forge(host), Some(ForgeProvider::Gitea));
+        forget_forge(host);
+    }
+
+    /// The BODY is what concludes it, not the status. A proxy that answers 200
+    /// JSON to every path — the mirror image of the 401 gateway the GitLab
+    /// control request exists to catch — carries no `version`, so it is not
+    /// taken for a Gitea, and the probe falls through to the GitLab question
+    /// rather than stopping there.
+    #[tokio::test]
+    async fn a_json_200_without_a_version_is_not_a_gitea() {
+        let host = "probe-json-catch-all.test";
+        forget_forge(host);
+        let origin = mock_catch_all(200, "application/json").await;
+        assert_eq!(detect_forge(host, &origin).await, None);
+        // It answered — twice, in fact, since a non-Gitea falls through — and
+        // neither question concluded anything. Recorded so a GitHub Enterprise
+        // behind such a proxy does not re-probe on every forge call.
+        assert_eq!(recall_verdict(host), Some(None));
+        forget_forge(host);
+
+        // A `version` that is present but empty says nothing either.
+        let host = "probe-blank-version.test";
+        forget_forge(host);
+        let origin = mock_gitea("{\"version\":\"  \"}").await;
+        assert_eq!(detect_forge(host, &origin).await, None);
+        forget_forge(host);
+    }
+
+    /// A Gitea mid-restart answers 502 through whatever sits in front of it.
+    /// That has to stay "ask again later" on the FIRST probe too — recording it
+    /// would pin the host to the hostname guess for the life of the process,
+    /// and never even ask the GitLab question.
+    #[tokio::test]
+    async fn a_transient_answer_to_the_gitea_probe_is_not_a_verdict() {
+        let host = "probe-gitea-restarting.test";
+        forget_forge(host);
+        let origin = mock_catch_all(503, "application/json").await;
+        assert_eq!(detect_forge(host, &origin).await, None);
+        assert_eq!(recall_verdict(host), None, "503 is not an answer");
+        forget_forge(host);
     }
 }

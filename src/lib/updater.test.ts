@@ -25,6 +25,7 @@ import {
   appUpdateErrorMessageKey,
   checkAppUpdateInfo,
   confirmRollbackVersion,
+  describeAppUpdateError,
   getCurrentAppVersion,
   getRunningServerVersion,
   getServerUpdateStatus,
@@ -316,11 +317,38 @@ describe("checkAppUpdateInfo", () => {
 })
 
 describe("appUpdateErrorMessageKey", () => {
+  it("identifies an unwritable server update target as a permission error", () => {
+    const { kind } = normalizeAppUpdateError(
+      "Update target is not writable: /usr/local/bin"
+    )
+    expect(kind).toBe("permission_denied")
+    expect(appUpdateErrorMessageKey(kind, "install")).toBe(
+      "updateErrors.permissionDenied"
+    )
+  })
+
+  it("keeps permission failures distinct from network and install failures", () => {
+    expect(
+      normalizeAppUpdateError("Update target is not writable: /mnt/network/bin")
+        .kind
+    ).toBe("permission_denied")
+    expect(
+      normalizeAppUpdateError("Download failed: permission denied").kind
+    ).toBe("download_failed")
+    expect(
+      normalizeAppUpdateError("Permission denied (os error 13)").kind
+    ).toBe("install_failed")
+    expect(normalizeAppUpdateError("Installer failed").kind).toBe(
+      "install_failed"
+    )
+  })
+
   it("maps each classified kind to its own message", () => {
     const kinds = [
       "source_unreachable",
       "network",
       "download_failed",
+      "permission_denied",
       "install_failed",
     ] as const
     const keys = kinds.map((k) => appUpdateErrorMessageKey(k, "check"))
@@ -341,5 +369,87 @@ describe("appUpdateErrorMessageKey", () => {
       new Error("error sending request for url")
     )
     expect(appUpdateErrorMessageKey(kind, "check")).toBe("updateErrors.network")
+  })
+})
+
+describe("describeAppUpdateError", () => {
+  const unwritable = (path: string) => ({
+    code: "permission_denied",
+    message: `Update target is not writable: ${path}`,
+    detail: "Permission denied (os error 13)",
+    i18n_key: "SystemSettings.updateErrors.permissionDenied",
+    i18n_params: { path },
+  })
+
+  it("renders the server's explanation with the directory it names", () => {
+    // A message the classifier can't place, so only `info` can produce this.
+    const info = unwritable("/usr/local/bin")
+    expect(describeAppUpdateError("Update failed", "install", info)).toEqual({
+      key: "updateErrors.permissionDenied",
+      values: { path: "/usr/local/bin" },
+    })
+  })
+
+  it("tells a full disk apart from refused permission", () => {
+    const info = {
+      code: "io_error",
+      message: "Update target is not writable: /usr/local/bin",
+      detail: "No space left on device (os error 28)",
+      i18n_key: "SystemSettings.updateErrors.targetWriteFailed",
+      i18n_params: {
+        path: "/usr/local/bin",
+        reason: "No space left on device (os error 28)",
+      },
+    }
+    expect(describeAppUpdateError(info.message, "install", info)).toEqual({
+      key: "updateErrors.targetWriteFailed",
+      values: {
+        path: "/usr/local/bin",
+        reason: "No space left on device (os error 28)",
+      },
+    })
+  })
+
+  it("reads the directory out of the message from a server without errorInfo", () => {
+    // Older servers only send the string; the path keeps its own spaces.
+    expect(
+      describeAppUpdateError(
+        "Update target is not writable: /opt/My Apps/codeg",
+        "install"
+      )
+    ).toEqual({
+      key: "updateErrors.permissionDenied",
+      values: { path: "/opt/My Apps/codeg" },
+    })
+  })
+
+  it("classifies the message when the explanation is unknown or incomplete", () => {
+    const message = "Update target is not writable: /usr/local/bin"
+    const fallback = {
+      key: "updateErrors.permissionDenied",
+      values: { path: "/usr/local/bin" },
+    }
+    for (const info of [
+      { ...unwritable("/x"), i18n_key: "SystemSettings.updateErrors.later" },
+      { ...unwritable("/x"), i18n_params: {} },
+      // Off the wire, so it must not resolve to an Object.prototype member.
+      { ...unwritable("/x"), i18n_key: "constructor" },
+    ]) {
+      expect(describeAppUpdateError(message, "install", info)).toEqual(fallback)
+    }
+  })
+
+  it("classifies an unexplained failure by its message, as before", () => {
+    // The structured error carries a detail the message doesn't; classifying
+    // that instead would turn this download failure into a network one.
+    const info = {
+      code: "network_error",
+      message: "Failed to download update package",
+      detail: "error sending request for url (https://example.com)",
+    }
+    expect(describeAppUpdateError(info.message, "install", info)).toEqual({
+      key: "updateErrors.downloadFailed",
+      values: {},
+    })
   })
 })

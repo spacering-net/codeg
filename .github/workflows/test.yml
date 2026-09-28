@@ -40,7 +40,21 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm eslint .
+        run: pnpm lint .
+
+      - name: Browser agent bundle matches its source
+        # `src-tauri/src/browser/js/agent.bundle.js` is committed so that a
+        # cargo build needs no node — `include_str!` reads it at compile time.
+        # A committed artifact is only worth anything if it is the one the
+        # source produces, and nothing else in the build would notice a stale
+        # one: the Rust side would happily embed last week's bundle.
+        run: pnpm browser:agent:check
+
+      - name: Browser agent typecheck
+        # `browser-agent/` is excluded from the app's tsconfig (its vendored
+        # half answers to Playwright's compiler settings, not ours), so the
+        # repo-wide typecheck in `pnpm build` never sees our entry point.
+        run: pnpm browser:agent:types
 
       - name: Unit tests (vitest)
         run: pnpm test
@@ -122,17 +136,6 @@ jobs:
         # run the executable test suites.
         working-directory: src-tauri
         run: cargo test ${{ matrix.cargo_args }} ${{ (matrix.os == 'windows-latest' && matrix.mode == 'desktop') && '--no-run' || '' }}
-
-      - name: cargo test (vendored sacp-tokio)
-        # `vendor/sacp-tokio` is a path dependency, NOT a workspace member, so
-        # the cargo test above never reaches its unit tests — including the ones
-        # covering codeg's own patches to it (process-exit reporting, cwd
-        # handling). One Linux desktop cell is enough: the crate is plain
-        # tokio/futures with no system deps, and its process tests are
-        # `#[cfg(unix)]`.
-        if: matrix.os == 'ubuntu-22.04' && matrix.mode == 'desktop'
-        working-directory: src-tauri
-        run: cargo test --manifest-path vendor/sacp-tokio/Cargo.toml --lib
 
       - name: cargo clippy
         # Clippy on each (os, mode) cell — desktop covers tauri-only code

@@ -4,12 +4,15 @@ import { useMemo, useState } from "react"
 import { useReactFlow } from "@xyflow/react"
 import {
   Bot,
+  FileText,
   Folder,
+  FolderOpen,
   Layers,
   MessageSquare,
   MessageSquarePlus,
   Plus,
   Sparkles,
+  SquareTerminal,
   StickyNote,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -24,17 +27,28 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { useWorkspaceFileTabs } from "@/contexts/workspace-context"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { useFileTree } from "@/hooks/use-file-tree"
 import type { CreateCanvasNodeInput } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { getAgentLabel } from "@/lib/custom-agents"
+import { rankFileMatches } from "@/lib/file-search-match"
+import { joinRootRel, normalizeAbsPath } from "@/lib/file-open-target"
 import { formatFolderLabelWithAlias } from "@/lib/folder-display"
+import { openFileDialog } from "@/lib/platform"
+import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
   DETAIL_CARD_HEIGHT,
   DETAIL_CARD_WIDTH,
+  FILE_CARD_HEIGHT,
+  FILE_CARD_WIDTH,
+  TERMINAL_CARD_HEIGHT,
+  TERMINAL_CARD_WIDTH,
+  basePathName,
   compareByRecency,
   isCanvasEligible,
 } from "./canvas-model"
@@ -66,8 +80,9 @@ interface AddNodeMenuProps {
 /**
  * The toolbar "+" menu: every way to put something new on the canvas — a
  * folder region (open workspace folders), an agent region (installed agents),
- * a single conversation card (recent root conversations, filterable), a
- * hand-curated custom region, or a sticky note.
+ * a single conversation card (recent root conversations, filterable), a file
+ * card (read-only, see `AddFileSubmenu`), a terminal card in a folder's
+ * directory, a hand-curated custom region, or a sticky note.
  */
 export function AddNodeMenu({
   onCreate,
@@ -262,6 +277,62 @@ export function AddNodeMenu({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSeparator />
+        <AddFileSubmenu
+          onPick={(absPath) => {
+            const { x, y } = dropPoint(FILE_CARD_WIDTH, FILE_CARD_HEIGHT)
+            onCreate({
+              kind: "file",
+              path: absPath,
+              x,
+              y,
+              width: FILE_CARD_WIDTH,
+              height: FILE_CARD_HEIGHT,
+            })
+          }}
+        />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <SquareTerminal className="text-muted-foreground" />
+            {t("addTerminalCard")}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+            {folders.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-muted-foreground">
+                {t("noFolders")}
+              </div>
+            ) : (
+              folders.map((f) => (
+                <DropdownMenuItem
+                  key={f.id}
+                  onSelect={() => {
+                    const { x, y } = dropPoint(
+                      TERMINAL_CARD_WIDTH,
+                      TERMINAL_CARD_HEIGHT
+                    )
+                    onCreate({
+                      kind: "terminal",
+                      // The folder's path, not its id: a terminal card outlives
+                      // the folder being closed, and a shell that has to look
+                      // up where it lives every time it starts is a shell that
+                      // stops starting the day that lookup fails.
+                      path: normalizeAbsPath(f.path),
+                      x,
+                      y,
+                      width: TERMINAL_CARD_WIDTH,
+                      height: TERMINAL_CARD_HEIGHT,
+                    })
+                  }}
+                >
+                  <SquareTerminal className="text-muted-foreground" />
+                  <span className="min-w-0 truncate">
+                    {formatFolderLabelWithAlias(f)}
+                  </span>
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => createRegion({ kind: "custom" })}>
           <Sparkles className="text-muted-foreground" />
           {t("addCustomRegion")}
@@ -283,5 +354,151 @@ export function AddNodeMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/** How many ranked file matches the picker shows. Long enough to scroll a
+ *  little, short enough that the submenu stays a menu. */
+const FILE_RESULT_LIMIT = 20
+
+/**
+ * "Add a file card" — the picker for which file.
+ *
+ * Two sources, because a board is not scoped to one folder but a file search
+ * has to be: with no query it lists the files ALREADY OPEN in the workspace
+ * (cross-folder, instant, and almost always what the user means), and typing
+ * searches the active folder through the same gitignore-aware backend walk the
+ * search dialog and the composer's `@` picker use. "Browse…" covers everything
+ * outside a workspace folder.
+ *
+ * The walk is lazy: `useFileTree` only fetches once `enabled` goes true, which
+ * happens when the submenu opens — a board that never adds a file never pays
+ * for the listing.
+ */
+function AddFileSubmenu({ onPick }: { onPick: (absPath: string) => void }) {
+  const t = useTranslations("Canvas")
+  const folders = useAppWorkspaceStore((s) => s.folders)
+  const activeFolderId = useAppWorkspaceStore((s) => s.activeFolderId)
+  const { fileTabs } = useWorkspaceFileTabs()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+
+  const searchFolder = useMemo(() => {
+    const active = folders.find((f) => f.id === activeFolderId)
+    // Chat folders are a bookkeeping row with a scratch directory behind them,
+    // not a place the user filed anything — fall back to the first real folder.
+    if (active && active.kind !== "chat") return active
+    return folders.find((f) => f.kind !== "chat") ?? null
+  }, [activeFolderId, folders])
+
+  const { allFiles, loading } = useFileTree({
+    folderPath: searchFolder?.path,
+    enabled: open && searchFolder != null,
+  })
+
+  const results = useMemo(() => {
+    if (!query.trim() || !searchFolder) return []
+    return rankFileMatches(
+      query,
+      allFiles.filter((f) => f.kind === "file"),
+      FILE_RESULT_LIMIT
+    ).map((f) => ({
+      key: f.relativePath,
+      label: f.name,
+      hint: f.relativePath,
+      absPath: joinRootRel(searchFolder.path, f.relativePath),
+    }))
+  }, [allFiles, query, searchFolder])
+
+  /** Files already open in the workspace — the no-query listing. */
+  const openFiles = useMemo(
+    () =>
+      fileTabs
+        .filter(
+          (tab): tab is typeof tab & { path: string } =>
+            tab.kind === "file" &&
+            typeof tab.path === "string" &&
+            tab.path !== ""
+        )
+        .slice(0, FILE_RESULT_LIMIT)
+        .map((tab) => ({
+          key: tab.id,
+          label: basePathName(tab.path),
+          hint: tab.path,
+          absPath: tab.path,
+        })),
+    [fileTabs]
+  )
+
+  const items = query.trim() ? results : openFiles
+  // A native dialog picks a path on THIS machine; a desktop window driving a
+  // remote backend would hand the server a path it cannot read, and the web
+  // fallback only ever learns a bare file name. Both get the search instead.
+  const canBrowse = isDesktop() && !isRemoteDesktopMode()
+
+  const browse = async () => {
+    const picked = await openFileDialog({ title: t("addFileCard") }).catch(
+      () => null
+    )
+    const path = Array.isArray(picked) ? picked[0] : picked
+    if (path) onPick(normalizeAbsPath(path))
+  }
+
+  return (
+    <DropdownMenuSub open={open} onOpenChange={setOpen}>
+      <DropdownMenuSubTrigger>
+        <FileText className="text-muted-foreground" />
+        {t("addFileCard")}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-72">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={
+            searchFolder
+              ? t("searchFilesIn", {
+                  folder: formatFolderLabelWithAlias(searchFolder),
+                })
+              : t("searchFiles")
+          }
+          disabled={!searchFolder}
+          className="mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-lg border border-input bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          // The menu treats printable keys as type-ahead navigation; the input
+          // owns them while it has focus.
+          onKeyDown={(e) => e.stopPropagation()}
+        />
+        <div className="max-h-64 overflow-y-auto">
+          {items.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              {loading && query.trim()
+                ? t("searchingFiles")
+                : query.trim()
+                  ? t("noFiles")
+                  : t("noOpenFiles")}
+            </div>
+          ) : (
+            items.map((item) => (
+              <DropdownMenuItem
+                key={item.key}
+                onSelect={() => onPick(normalizeAbsPath(item.absPath))}
+                title={item.hint}
+              >
+                <FileText className="text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              </DropdownMenuItem>
+            ))
+          )}
+        </div>
+        {canBrowse && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => void browse()}>
+              <FolderOpen className="text-muted-foreground" />
+              {t("browseForFile")}
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }

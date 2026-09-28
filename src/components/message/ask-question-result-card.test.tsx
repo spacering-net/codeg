@@ -294,6 +294,56 @@ describe("AskQuestionResultCard", () => {
     expect(chosen).toBeDisabled()
   })
 
+  it("shows the pick for pi's extension-UI select (#644)", () => {
+    // pi asks through `session/request_permission`, so nothing about the answer
+    // reaches the transcript on its own — the connection bridge synthesizes this
+    // completed tool call once the user submits (`try_bridge_pi_select_ask`).
+    // Captured verbatim from a live pi-acp 0.0.33 run; the option labels carry
+    // pi's own "N. " numbering. Regression guard for "after picking you can't
+    // see which one you chose".
+    const question =
+      "[未提交改动] 当前分支有未提交的 AddIOP.cs 修改；创建热修复分支时应如何处理？"
+    const picked = "2. 独立 worktree — 保留当前工作区不动"
+    const input = JSON.stringify({
+      questions: [
+        {
+          multiSelect: false,
+          question,
+          options: [
+            {
+              description: "",
+              label:
+                "1. 暂存后切分支 (Recommended) — 把当前改动保存到具名 stash",
+            },
+            { description: "", label: picked },
+            { description: "", label: "3. 携带改动切换 — 直接创建并切换分支" },
+            { description: "", label: "4. Type something." },
+          ],
+        },
+      ],
+    })
+    const output = JSON.stringify({
+      answers: [
+        { header: "", multi_select: false, question, selected: [picked] },
+      ],
+      declined: false,
+    })
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    expect(screen.getByText(picked)).toBeInTheDocument()
+    expect(screen.queryByText(result.noSelection)).toBeNull()
+    expand()
+    const chosen = screen.getByRole("radio", { name: picked })
+    expect(chosen).toBeChecked()
+    expect(chosen).toBeDisabled()
+  })
+
   it("echoes opencode's answer, which arrives only as the result text", () => {
     // OpenCode drops the MCP `structuredContent` and keeps just the companion's
     // human-readable text — the same string on the live ACP wire and in

@@ -11,8 +11,10 @@ import {
   extractClaudeCodeMetaTitle,
   extractClaudeCodeSkillName,
   normalizeToolName,
+  toolCallMovedToBackground,
 } from "@/lib/tool-call-normalization"
 import { parseBackgroundLaunch } from "@/lib/background-task"
+import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { normalizePriority, normalizeStatus } from "@/lib/plan-parse"
 import { isDelegateToAgentToolName } from "@/lib/delegation-card"
 import { useTranslations } from "next-intl"
@@ -54,9 +56,13 @@ import {
   ContextCompactionCard,
   isContextCompactionMeta,
 } from "./context-compaction-card"
+import { contextCompactionSummary } from "@/lib/context-compaction"
 import { FeedbackCheckResultCard } from "./feedback-check-result-card"
 import { SearchResultsOutput } from "./search-results-output"
-import { parseCodexCommandEnvelope } from "@/lib/codex-command-action"
+import {
+  isCodexGrepNoMatchEnvelope,
+  parseCodexCommandEnvelope,
+} from "@/lib/codex-command-action"
 import {
   CODEX_SCRIPT_TOOL_NAME,
   parseCodexScriptCard,
@@ -883,6 +889,10 @@ function getToolIcon(
   if (name === "edit") return <FilePenLineIcon className={ICON_CLASS} />
   if (name === "write" || name === "notebookedit")
     return <FilePlusIcon className={ICON_CLASS} />
+  // No `powershell` arm: every caller passes the NORMALIZED name, and
+  // `normalizeToolName` now aliases the Windows shells onto `bash` so the icon
+  // and the card body can no longer disagree about what the call is. The raw
+  // name still reaches `classifyToolKind`, which keeps its own arm.
   if (name === "bash" || name === "exec_command")
     return <TerminalIcon className={ICON_CLASS} />
   if (name === CODEX_SCRIPT_TOOL_NAME)
@@ -898,7 +908,8 @@ function getToolIcon(
     )
   }
   if (name === "apply_patch") return <FilePenLineIcon className={ICON_CLASS} />
-  if (name === "glob" || name === "grep")
+  // pi spells its glob tool `find` and its directory listing `ls`.
+  if (name === "glob" || name === "grep" || name === "find" || name === "ls")
     return <SearchIcon className={ICON_CLASS} />
   if (name === "memory_recall") return <BrainIcon className={ICON_CLASS} />
   if (name === "webfetch" || name === "websearch")
@@ -2295,6 +2306,38 @@ const ToolCallPart = memo(function ToolCallPart({
         : null,
     [isCommandTool, part.output, part.errorText]
   )
+  // The same statement, told a different way. codex-acp doesn't put a launch
+  // notice in the output — it never completes the call at all — and says so on
+  // the ACP `_meta` instead (`toolCallMovedToBackground`). Not gated on
+  // `isCommandTool`: the marker is authoritative about THIS call regardless of
+  // how the tool name resolved, which is what makes it safe to trust over a
+  // parsed string. The live strip above the transcript owns the rest of the
+  // lifecycle (and the stop button); this badge only answers "why is it still
+  // spinning".
+  //
+  // Gated on the call being UNSETTLED, which the claude arm below is not — and
+  // the asymmetry is the wire's, not a style choice. Claude's launch call
+  // completes immediately (its output IS the ack), so its badge has to survive
+  // a settled card; codex's stays open for the process's whole life and settles
+  // only when the process dies or a stop lands. Ungated, the marker would
+  // outlive its own truth: the reducer keeps the stored meta when an update
+  // carries none (`meta: action.meta ?? block.info.meta`), so a settling frame
+  // without `_meta` would leave "Background" pinned to a finished command.
+  // `isUnsettledToolCall` rather than a bare state check, so the badge survives
+  // COMPLETE_TURN promotion — that flips `state` to `output-available` while the
+  // forwarded ACP status is still `in_progress`.
+  //
+  // The gate only fires when the settle lands INSIDE the turn (a short task) or
+  // after a detail reload. A process that outlives its turn settles out-of-turn,
+  // and the reducer routes an out-of-turn `tool_call_update` to
+  // `outOfTurnToolCalls` rather than into the promoted turn — so the card keeps
+  // both its `in_progress` status and this badge until the conversation is
+  // reloaded. That is pre-existing routing, not something the marker changes,
+  // and the strip above the transcript is the surface that does clear on time.
+  const airBackgrounded = useMemo(
+    () => toolCallMovedToBackground(part.meta) && isUnsettledToolCall(part),
+    [part]
+  )
   const title = useMemo(() => {
     // claude-agent-acp ≥0.63 supplies the human-readable description as
     // `_meta.claudeCode.title` (ACP `title` stays the raw command). It wins
@@ -2397,6 +2440,7 @@ const ToolCallPart = memo(function ToolCallPart({
       !hasStats &&
       !wallTime &&
       !backgroundLaunch &&
+      !airBackgrounded &&
       !announcedSessionId &&
       !codexScript?.label
     ) {
@@ -2427,10 +2471,13 @@ const ToolCallPart = memo(function ToolCallPart({
             {t("shellSession", { id: announcedSessionId })}
           </span>
         )}
-        {backgroundLaunch && (
+        {/* One badge, two sources — a parsed launch notice (claude/grok) or the
+            AIR marker (codex). They never coexist on one call, and the claim
+            they make is the same, so the AIR arm reuses the existing copy. */}
+        {(backgroundLaunch || airBackgrounded) && (
           <span
             className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
-            title={backgroundLaunch.taskId}
+            title={backgroundLaunch?.taskId ?? part.toolCallId}
           >
             <TerminalIcon className="size-3" />
             {t("backgroundTask.runningInBackground")}
@@ -2459,6 +2506,8 @@ const ToolCallPart = memo(function ToolCallPart({
     lineChangeStats,
     wallTime,
     backgroundLaunch,
+    airBackgrounded,
+    part.toolCallId,
     announcedSessionId,
     codexScript,
     t,
@@ -2532,18 +2581,17 @@ const ToolCallPart = memo(function ToolCallPart({
 
     // codex appears to derive the tool status from the exit code, so an rg/grep
     // "no matches" (exit 1, no output) can arrive as a FAILED call and land on
-    // the error channel. Recognise exactly that shape as an empty result instead
-    // of a red envelope dump. Scoped to `grep`: exit 1 means "nothing selected"
-    // only for grep-likes — for the list-files commands that classify as `glob`
-    // (ls/find/…) it is a genuine failure, and a successful empty listing
-    // already arrives with exit 0. A real grep failure (exit ≥ 2, or any stderr
-    // text) keeps the error rendering, as does any non-codex error string.
+    // the error channel. `adaptMessageTurn` normally takes that shape off the
+    // error channel entirely (same `isCodexGrepNoMatchEnvelope` predicate, so
+    // the card's status and this body can never disagree); this arm still
+    // catches the adapter-independent callers — an `agent_stats` child call, an
+    // export/replay part built outside the turn adapter — and renders an empty
+    // result instead of a red envelope dump. A real grep failure (exit ≥ 2, or
+    // any stderr text) keeps the error rendering, as does any non-codex error
+    // string.
     if (typeof part.errorText === "string") {
       if (toolNameLower !== "grep") return null
-      const envelope = parseCodexCommandEnvelope(part.errorText)
-      const noMatches =
-        envelope?.exitCode === 1 && envelope.output.trim().length === 0
-      return noMatches ? "" : null
+      return isCodexGrepNoMatchEnvelope(part.errorText) ? "" : null
     }
 
     if (typeof part.output !== "string") return null
@@ -2600,7 +2648,13 @@ const ToolCallPart = memo(function ToolCallPart({
   // with `_meta.contextCompaction` (not addressed by tool name) → a subtle
   // status card instead of the generic tool shell.
   if (isContextCompactionMeta(part.meta)) {
-    return <ContextCompactionCard state={part.state} meta={part.meta} />
+    return (
+      <ContextCompactionCard
+        state={part.state}
+        meta={part.meta}
+        summary={contextCompactionSummary(part.meta, part.output)}
+      />
+    )
   }
 
   // Agent/subagent tools get a dedicated container rendering

@@ -100,6 +100,7 @@ const WS_BACKOFF_MAX_SECS: u64 = 32;
 /// `sec-websocket-protocol` header looking for `codeg-token.{base64url}`.
 const WS_EVENT_PROTOCOL: &str = "codeg-events";
 const WS_TOKEN_PROTOCOL_PREFIX: &str = "codeg-token.";
+const WS_EVENTS_PATH: &str = "/ws/events";
 
 /// Internal Tauri-event channels emitted by this proxy. The frontend
 /// `RemoteDesktopTransport` reserves these names. MUST match the
@@ -1759,7 +1760,7 @@ async fn run_ws_task(
     mut outbound_rx: mpsc::Receiver<String>,
 ) {
     let event_name = format!("remote-ws-event-{connection_id}");
-    let ws_url = http_url_to_ws_url(&base_url);
+    let ws_url = http_url_to_ws_url(&base_url, WS_EVENTS_PATH);
     let mut fail_count: u32 = 0;
 
     'reconnect: loop {
@@ -1775,7 +1776,7 @@ async fn run_ws_task(
                 }
                 continue;
             }
-            res = connect_with_subprotocol_auth(&ws_url, &token, &custom_headers) => res,
+            res = connect_with_subprotocol_auth(&ws_url, WS_EVENT_PROTOCOL, &token, &custom_headers) => res,
         };
 
         let mut socket = match connect_result {
@@ -1965,51 +1966,64 @@ async fn snapshot_subscribers(entry: &Arc<WsTaskEntry>) -> Vec<String> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-/// Connect to the remote WebSocket with subprotocol-based token auth.
-/// The remote server's auth middleware (see `web/auth.rs`) accepts either
-/// `Authorization: Bearer …` or a subprotocol entry shaped
-/// `codeg-token.{base64url(token)}`. The latter is what browser
-/// WebSocket clients use because browsers cannot set arbitrary headers
-/// on WS handshakes; we follow the same convention here so both transports
-/// share one server-side codepath.
-async fn connect_with_subprotocol_auth(
+/// Connect to a remote WebSocket with subprotocol-based token auth, speaking
+/// `protocol` (`codeg-events`, or the browser tunnel's). The remote server's
+/// auth middleware (see `web/auth.rs`) accepts either `Authorization: Bearer …`
+/// or a subprotocol entry shaped `codeg-token.{base64url(token)}`. The latter
+/// is what browser WebSocket clients use because browsers cannot set arbitrary
+/// headers on WS handshakes; we follow the same convention here so both
+/// transports share one server-side codepath.
+pub(crate) async fn connect_with_subprotocol_auth(
     ws_url: &str,
+    protocol: &str,
     token: &str,
     custom_headers: &HeaderMap,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
 > {
-    let mut request: Request = ws_url
-        .into_client_request()
-        .map_err(|e| format!("invalid WS URL: {e}"))?;
-
-    let encoded_token = URL_SAFE_NO_PAD.encode(token.trim().as_bytes());
-    let protocols_value = format!("{WS_EVENT_PROTOCOL}, {WS_TOKEN_PROTOCOL_PREFIX}{encoded_token}");
-    request.headers_mut().insert(
-        "sec-websocket-protocol",
-        HeaderValue::from_str(&protocols_value)
-            .map_err(|e| format!("invalid subprotocol value: {e}"))?,
-    );
-    request.headers_mut().extend(custom_headers.clone());
-
+    let request = ws_request_with_subprotocol_auth(ws_url, protocol, token, custom_headers)?;
     let (stream, _resp) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("connect_async: {e}"))?;
     Ok(stream)
 }
 
+/// The handshake request `connect_with_subprotocol_auth` sends, for a caller
+/// that needs tungstenite's own error back (the HTTP status of a refused
+/// upgrade says what the server is).
+pub(crate) fn ws_request_with_subprotocol_auth(
+    ws_url: &str,
+    protocol: &str,
+    token: &str,
+    custom_headers: &HeaderMap,
+) -> Result<Request, String> {
+    let mut request: Request = ws_url
+        .into_client_request()
+        .map_err(|e| format!("invalid WS URL: {e}"))?;
+
+    let encoded_token = URL_SAFE_NO_PAD.encode(token.trim().as_bytes());
+    let protocols_value = format!("{protocol}, {WS_TOKEN_PROTOCOL_PREFIX}{encoded_token}");
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        HeaderValue::from_str(&protocols_value)
+            .map_err(|e| format!("invalid subprotocol value: {e}"))?,
+    );
+    request.headers_mut().extend(custom_headers.clone());
+    Ok(request)
+}
+
 /// Convert an `http://…` or `https://…` base URL into the corresponding
-/// WebSocket URL ending in `/ws/events`. Anything else is passed through
-/// untouched so tungstenite can surface a clean parse error.
-fn http_url_to_ws_url(base_url: &str) -> String {
+/// WebSocket URL ending in `path` (`/ws/events`, …). Anything else is passed
+/// through untouched so tungstenite can surface a clean parse error.
+pub(crate) fn http_url_to_ws_url(base_url: &str, path: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     if let Some(rest) = trimmed.strip_prefix("https://") {
-        format!("wss://{rest}/ws/events")
+        format!("wss://{rest}{path}")
     } else if let Some(rest) = trimmed.strip_prefix("http://") {
-        format!("ws://{rest}/ws/events")
+        format!("ws://{rest}{path}")
     } else {
-        format!("{trimmed}/ws/events")
+        format!("{trimmed}{path}")
     }
 }
 
@@ -2223,7 +2237,7 @@ mod tests {
     #[test]
     fn http_url_to_ws_url_http() {
         assert_eq!(
-            http_url_to_ws_url("http://localhost:8080"),
+            http_url_to_ws_url("http://localhost:8080", "/ws/events"),
             "ws://localhost:8080/ws/events"
         );
     }
@@ -2231,7 +2245,7 @@ mod tests {
     #[test]
     fn http_url_to_ws_url_https_trailing_slash() {
         assert_eq!(
-            http_url_to_ws_url("https://example.com/"),
+            http_url_to_ws_url("https://example.com/", "/ws/events"),
             "wss://example.com/ws/events"
         );
     }
@@ -2240,7 +2254,7 @@ mod tests {
     fn http_url_to_ws_url_unknown_scheme() {
         // tungstenite will reject this, but our helper passes it through.
         assert_eq!(
-            http_url_to_ws_url("ftp://example.com"),
+            http_url_to_ws_url("ftp://example.com", "/ws/events"),
             "ftp://example.com/ws/events"
         );
     }

@@ -36,7 +36,11 @@ import {
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
 import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
-import { pushClosedTab, snapshotConversationTab } from "@/lib/closed-tab-stack"
+import {
+  batchCloseSlots,
+  pushClosedTab,
+  snapshotConversationTab,
+} from "@/lib/closed-tab-stack"
 import type {
   AgentType,
   ConversationChange,
@@ -197,7 +201,14 @@ export interface TabStoreState {
     conversationId: number,
     agentType: AgentType,
     pin?: boolean,
-    title?: string
+    title?: string,
+    opts?: {
+      /** rawTabs slot for a tab that needs a NEW slot (clamped); omitted =
+       *  append. Reopening a closed tab passes the slot it was closed from. A
+       *  conversation that is already open is focused where it is, and a
+       *  preview still replaces the group's current preview in place. */
+      index?: number
+    }
   ) => void
   /**
    * `recordForReopen: false` closes without offering the tab to
@@ -254,6 +265,11 @@ export interface TabStoreState {
        *  agent (e.g. "ask about this selection" continues the conversation the
        *  text came from), not merely suggest one. */
       forceAgent?: AgentType
+      /** rawTabs slot for the draft (clamped); omitted = append / leave put.
+       *  Reopening a closed draft passes the slot it was closed from — and
+       *  since the per-group singleton may hand it the group's EXISTING draft
+       *  instead of a new tab, that draft is moved to the slot. */
+      index?: number
     }
   ) => OpenedDraftTarget
   openChatModeTab: (options?: {
@@ -452,6 +468,78 @@ function findTabIndexForConversation(
   )
 }
 
+/** A requested slot clamped to a strip of `length`. */
+function clampSlot(index: number, length: number): number {
+  return Math.max(0, Math.min(index, length))
+}
+
+/** `tabs` with `tab` inserted at `index`, clamped to the array, or appended
+ *  when no index is given. Reopening a closed tab passes the slot it was
+ *  closed from, so it goes back where it was rather than to the end. */
+function insertTab(
+  tabs: TabItemInternal[],
+  tab: TabItemInternal,
+  index: number | undefined
+): TabItemInternal[] {
+  const at = index == null ? tabs.length : clampSlot(index, tabs.length)
+  return [...tabs.slice(0, at), tab, ...tabs.slice(at)]
+}
+
+/** `tabs` with the tab already at `tabId` moved to `index` (clamped) — the same
+ *  array back when it is absent or already there, so callers can skip the write.
+ *  Reopening a closed DRAFT lands here: the per-group draft singleton hands the
+ *  reopen an existing draft instead of a new tab, and that draft still has to
+ *  take the closed one's slot. */
+function moveTabToSlot(
+  tabs: TabItemInternal[],
+  tabId: string,
+  index: number
+): TabItemInternal[] {
+  const from = tabs.findIndex((t) => t.id === tabId)
+  if (from < 0) return tabs
+  const without = tabs.filter((t) => t.id !== tabId)
+  if (clampSlot(index, without.length) === from) return tabs
+  return insertTab(without, tabs[from], index)
+}
+
+/**
+ * `raw` with the tabs sitting at `slots` rearranged into the order a reorder
+ * callback asked for, or `null` when that list is not a permutation of exactly
+ * those slots (and so must be ignored).
+ *
+ * A reorder callback is a request to MOVE tabs, never a new tab set. The
+ * distinction matters because `Reorder.Group` emits the order it has measured
+ * since its own last render and then drops, by reference, whatever is missing
+ * from its current `values` — so mid-drag it can legitimately hand back a list
+ * that is short, repeats an id, or carries a tab object from an earlier derive.
+ * Resolving every entry back to the live `rawTabs` item by id keeps a drag
+ * unable to close a tab, resurrect a closed one, or write a stale copy of a
+ * tab's fields over the current one (a draft that bound to a conversation
+ * mid-drag would otherwise go back to being an unbound draft).
+ */
+function permuteSlots(
+  raw: TabItemInternal[],
+  slots: number[],
+  orderedTabs: TabItem[]
+): TabItemInternal[] | null {
+  if (orderedTabs.length !== slots.length) return null
+  const slotIds = new Set(slots.map((i) => raw[i].id))
+  const seen = new Set<string>()
+  const ordered: TabItemInternal[] = []
+  for (const tab of orderedTabs) {
+    if (!slotIds.has(tab.id) || seen.has(tab.id)) return null
+    seen.add(tab.id)
+    const item = raw.find((t) => t.id === tab.id)
+    if (!item) return null
+    ordered.push(item)
+  }
+  const next = [...raw]
+  slots.forEach((slot, k) => {
+    next[slot] = ordered[k]
+  })
+  return next.every((tab, i) => tab === raw[i]) ? null : next
+}
+
 /** Field-wise equality for derived tab items. Backs the cross-derive reuse in
  *  the `tabs` derivation: an item whose every field matches the previous derive
  *  keeps its old reference, so downstream `Object.is` gates (consumers' memos)
@@ -533,6 +621,57 @@ export function isReparentUnmount(
 ): boolean {
   if (!state.rawTabs.some((tab) => tab.id === tabId)) return false
   return groupOfTab(state.groupOf, state.groupLayout, tabId) !== renderedGroupId
+}
+
+/** The conversation view each tab has mounted: the group it rendered under and
+ *  the runtime session key it mounted on. Module scope rather than store state
+ *  because it tracks React mounts, which nothing renders from. */
+const mountedConversationViews = new Map<
+  string,
+  { groupId: string; runtimeConversationId: number }
+>()
+
+/** Record the conversation view `tabId` just mounted. The returned release
+ *  drops only its own entry, so it can never unregister a successor. */
+export function trackConversationView(
+  tabId: string,
+  groupId: string,
+  runtimeConversationId: number
+): () => void {
+  const entry = { groupId, runtimeConversationId }
+  mountedConversationViews.set(tabId, entry)
+  return () => {
+    if (mountedConversationViews.get(tabId) === entry) {
+      mountedConversationViews.delete(tabId)
+    }
+  }
+}
+
+/**
+ * Mount-side counterpart of `isReparentUnmount`: the runtime session key a
+ * conversation view arriving for `tabId` must inherit from the view it
+ * replaces, or null when a fresh key is right.
+ *
+ * React renders the arriving view BEFORE the departing one's cleanup runs, so
+ * at this view's first render its predecessor is still registered, and that
+ * cleanup is about to ask `isReparentUnmount` about its own group. This asks the
+ * same question first. Yes means the session is kept, and the arriving view has
+ * to carry on with it rather than key itself by the tab's row id — a tab that
+ * started as a draft keeps its transcript under a virtual key for good. No
+ * means the session is about to be removed (the desktop/mobile layout swap
+ * remounts every view in one commit without moving any), so inheriting it
+ * would strand the view on a key with nothing behind it; a virtual key never
+ * fetches.
+ */
+export function reparentedViewRuntimeConversationId(
+  state: Pick<TabStoreState, "rawTabs" | "groupOf" | "groupLayout">,
+  tabId: string
+): number | null {
+  const predecessor = mountedConversationViews.get(tabId)
+  if (!predecessor) return null
+  return isReparentUnmount(state, tabId, predecessor.groupId)
+    ? predecessor.runtimeConversationId
+    : null
 }
 
 /** Where a new tab should land: the explicit target when it's a live group,
@@ -1061,7 +1200,7 @@ function initialTabState() {
 export const useTabStore = create<TabStoreState>()((set, get) => ({
   ...initialTabState(),
 
-  openTab: (folderId, conversationId, agentType, pin = false, title) => {
+  openTab: (folderId, conversationId, agentType, pin = false, title, opts) => {
     const prevState = get()
     const existingIndex = findTabIndexForConversation(
       prevState.rawTabs,
@@ -1117,7 +1256,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     if (pin) {
       set({
-        rawTabs: [...prevState.rawTabs, newTab],
+        rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
         activeTabId: tabId,
         groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
       })
@@ -1127,7 +1266,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     // Preview replacement stays within the focused group — a preview parked in
-    // another group is left alone (the new tab appends instead).
+    // another group is left alone (the new tab gets a slot of its own instead).
     const previewIndex = prevState.rawTabs.findIndex(
       (t) =>
         !t.isPinned &&
@@ -1153,7 +1292,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     set({
-      rawTabs: [...prevState.rawTabs, newTab],
+      rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
       activeTabId: tabId,
       groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
     })
@@ -1169,7 +1308,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (index >= 0) {
       const closingTab = prevState.rawTabs[index]
       if (options?.recordForReopen !== false) {
-        pushClosedTab(snapshotConversationTab(closingTab))
+        pushClosedTab(snapshotConversationTab(closingTab, index))
       }
       const next = prevState.rawTabs.filter((t) => t.id !== tabId)
       // A closing draft's composer text is scoped to that tab's key. Drop it —
@@ -1277,10 +1416,12 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       return
     }
     const keepIds = new Set(keep.map((tab) => tab.id))
-    for (const tab of prevState.rawTabs) {
-      if (!keepIds.has(tab.id)) {
-        pushClosedTab(snapshotConversationTab(tab))
-      }
+    const closing = batchCloseSlots(
+      prevState.rawTabs,
+      (tab) => !keepIds.has(tab.id)
+    )
+    for (const [tab, slot] of closing) {
+      pushClosedTab(snapshotConversationTab(tab, slot))
     }
     set({ rawTabs: keep, activeTabId: tabId })
     recomputeTabs()
@@ -1292,8 +1433,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       if (prevState.rawTabs.length === 0 && prevState.activeTabId == null) {
         return
       }
-      for (const tab of prevState.rawTabs) {
-        pushClosedTab(snapshotConversationTab(tab))
+      for (const [tab, slot] of batchCloseSlots(prevState.rawTabs)) {
+        pushClosedTab(snapshotConversationTab(tab, slot))
       }
       set({ rawTabs: [], activeTabId: null })
       recomputeTabs()
@@ -1306,8 +1447,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       prevState.rawTabs.find((t) => t.id === prevState.activeTabId) ??
       prevState.rawTabs[0]
     const replacementTab = makeReplacementDraftTab(seedTab)
-    for (const tab of prevState.rawTabs) {
-      pushClosedTab(snapshotConversationTab(tab))
+    for (const [tab, slot] of batchCloseSlots(prevState.rawTabs)) {
+      pushClosedTab(snapshotConversationTab(tab, slot))
     }
     set({ rawTabs: [replacementTab], activeTabId: replacementTab.id })
     recomputeTabs()
@@ -1576,24 +1717,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         slots.push(i)
       }
     })
-    if (orderedTabs.length !== slots.length) return
-    const slotIds = new Set(slots.map((i) => raw[i].id))
-    const seen = new Set<string>()
-    const ordered: TabItemInternal[] = []
-    for (const tab of orderedTabs) {
-      if (!slotIds.has(tab.id) || seen.has(tab.id)) return
-      seen.add(tab.id)
-      const item = raw.find((t) => t.id === tab.id)
-      if (!item) return
-      ordered.push(item)
-    }
     // Partition permutation: only this group's slots move, so the other
     // groups' persisted positions stay byte-stable.
-    const next = [...raw]
-    slots.forEach((slot, k) => {
-      next[slot] = ordered[k]
-    })
-    if (next.every((tab, i) => tab === raw[i])) return
+    const next = permuteSlots(raw, slots, orderedTabs)
+    if (!next) return
     set({ rawTabs: next })
     recomputeTabs()
   },
@@ -1612,7 +1739,16 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   reorderTabs: (reorderedTabs) => {
-    set({ rawTabs: reorderedTabs })
+    // The unsplit strip shows every tab, so its slots are the whole array —
+    // otherwise identical to a group reorder, guards included.
+    const raw = get().rawTabs
+    const next = permuteSlots(
+      raw,
+      raw.map((_, i) => i),
+      reorderedTabs
+    )
+    if (!next) return
+    set({ rawTabs: next })
     recomputeTabs()
   },
 
@@ -1680,7 +1816,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         agentTypeProvisional: provisional,
       }
       set({
-        rawTabs: [...prevState.rawTabs, newTab],
+        rawTabs: insertTab(prevState.rawTabs, newTab, options?.index),
         activeTabId: tabId,
         groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
       })
@@ -1695,8 +1831,20 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const provisionalChanged =
       (existingTab.agentTypeProvisional ?? false) !== provisional
 
+    // The singleton means a reopened draft resolves to THIS draft rather than a
+    // tab of its own, so the slot it was closed from has to move this one — a
+    // close-all walked back would otherwise leave the draft shunted to the end
+    // of the strip it is meant to rebuild. Only the reopen path passes an
+    // index, and drafts never reach `buildPersistItems`, so no save fires.
+    const nextRawTabs =
+      options?.index == null
+        ? prevState.rawTabs
+        : moveTabToSlot(prevState.rawTabs, existingTab.id, options.index)
+    const moved = nextRawTabs !== prevState.rawTabs
+
     if (folderChanged || agentChanged) {
       set({
+        ...(moved ? { rawTabs: nextRawTabs } : {}),
         draftRetargetRequests: [
           ...prevState.draftRetargetRequests,
           {
@@ -1710,15 +1858,19 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ],
       })
       focusTab(existingTab.id)
+      if (moved) recomputeTabs()
     } else if (workingDirChanged || provisionalChanged) {
       set({
-        rawTabs: prevState.rawTabs.map((tab) =>
+        rawTabs: nextRawTabs.map((tab) =>
           tab.id === existingTab.id
             ? { ...tab, workingDir, agentTypeProvisional: provisional }
             : tab
         ),
         activeTabId: existingTab.id,
       })
+      recomputeTabs()
+    } else if (moved) {
+      set({ rawTabs: nextRawTabs, activeTabId: existingTab.id })
       recomputeTabs()
     } else {
       focusTab(existingTab.id)

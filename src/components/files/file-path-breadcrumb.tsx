@@ -185,7 +185,9 @@ function DirSegmentPopover({
           type="button"
           title={title}
           className={cn(
-            "flex min-w-0 shrink items-center rounded px-1 py-0.5",
+            // Pill, like every other button on this row — with `px-2` so the
+            // label clears the curve (`px-1` had it touching).
+            "flex min-w-0 shrink items-center rounded-full px-2 py-0.5",
             "text-muted-foreground transition-colors",
             "hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
           )}

@@ -65,11 +65,13 @@ const CARD_CHROME =
   7 + // below the title
   13.75 // footer line box (11px × leading-tight)
 
-/** Every board element and the root element the board sizes. All four opt out
- *  of the appearance zoom the same way. */
+/** Every board element and the root element the board sizes. All of them opt
+ *  out of the appearance zoom the same way. `card-frame.tsx` is the shared
+ *  window every content-bearing card renders inside (live conversations, file
+ *  previews, terminals), so it carries the opt-out for all three at once. */
 const BOARD_NODES = [
   "conversation-card-node.tsx",
-  "conversation-detail-node.tsx",
+  "card-frame.tsx",
   "region-node.tsx",
   "note-node.tsx",
 ] as const
@@ -115,17 +117,35 @@ describe("canvas card footprint", () => {
     expect(code(readNode("conversation-card-node.tsx"))).not.toMatch(/rotate-/)
   })
 
-  it("the expanded card keeps its body selectable and drags by its title bar", () => {
+  it("the shared card frame keeps its body selectable and drags by its title bar", () => {
     // ReactFlow's own stylesheet puts `user-select: none` on every
-    // `.react-flow__node`, so a conversation rendered inside one cannot be
+    // `.react-flow__node`, so a document rendered inside one cannot be
     // selected or copied unless the body says otherwise out loud — and the
     // title bar has to carry the drag-handle class the node points `dragHandle`
     // at, or the whole card becomes draggable again and clicking into the
-    // composer hauls it around. Both are invisible in review and only show up
-    // when someone tries to copy a line of output.
-    const source = readNode("conversation-detail-node.tsx")
+    // composer (or the terminal) hauls it around. Both are invisible in review
+    // and only show up when someone tries to copy a line of output.
+    const source = readNode("card-frame.tsx")
     expect(source).toContain("select-text")
     expect(source).toContain("DRAG_HANDLE_CLASS")
+  })
+
+  it("every card built on the shared frame declares a drag handle", () => {
+    // `dragHandle` is set by the DERIVE layer, not by the component: without it
+    // d3-drag passes every mousedown in the node through its filter and installs
+    // a window-level `selectstart` preventDefault, so a click inside the card
+    // takes focus without moving the caret. The symptom looks like a broken
+    // input, not like a drag bug.
+    const derive = readSource("src/components/canvas/canvas-model.ts")
+    // The file / terminal branch, which derives both kinds together.
+    expect(derive).toContain("dragHandle: DRAG_HANDLE_SELECTOR")
+    // The pinned conversation card's is conditional on being expanded — a
+    // collapsed summary tile has no document to click into and drags whole.
+    expect(derive).toContain("dragHandle: detail ? DRAG_HANDLE_SELECTOR")
+    // Draft cards are minted in the view, not the derive layer.
+    expect(readSource("src/components/canvas/canvas-view.tsx")).toContain(
+      "dragHandle: DRAG_HANDLE_SELECTOR"
+    )
   })
 
   it("the default region width is an exact multiple of the card grid", () => {

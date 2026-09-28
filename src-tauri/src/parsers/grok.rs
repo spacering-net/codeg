@@ -10,6 +10,8 @@ use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageTurn, TurnRole, TurnUsage,
 };
+use crate::acp::connection::grok_failed_compaction_meta;
+use crate::acp::types::PromptInputBlock;
 use crate::parsers::claude::BACKGROUND_TASK_MARKER;
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
@@ -736,11 +738,13 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
 
         match kind {
             "user_message_chunk" => {
-                let block = user_chunk_to_block(update);
+                let input = user_chunk_to_input(update);
+                let block = input.as_ref().map(crate::parsers::user_turn_block);
                 out.content_events += 1;
-                // Title/first-prompt text comes only from prose chunks; an image
-                // chunk carries no text and must not overwrite it.
-                if let Some(ContentBlock::Text { text }) = &block {
+                // Title/first-prompt text comes only from PROSE chunks: an image
+                // chunk carries no text, and an attachment projects to a
+                // `[name](uri)` marker that would make a poor title.
+                if let Some(PromptInputBlock::Text { text }) = &input {
                     if out.first_user_text.is_none() && !text.trim().is_empty() {
                         out.first_user_text = Some(text.clone());
                     }
@@ -911,6 +915,33 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     images: Vec::new(),
                 });
             }
+            // A failed auto-compaction: the same card in its failed state, as the
+            // live mapper renders it (the two share `grok_failed_compaction_meta`,
+            // whose `error` is the card's reason). `is_error` on the paired
+            // result is what marks the card failed.
+            "auto_compact_failed" => {
+                out.content_events += 1;
+                let id = params_meta
+                    .and_then(|m| m.get("eventId"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("grok-compaction-{}", out.content_events));
+                let turn = ensure_assistant(&mut assistant, now);
+                turn.blocks.push(ContentBlock::ToolUse {
+                    tool_use_id: Some(id.clone()),
+                    tool_name: "context_compaction".to_string(),
+                    input_preview: None,
+                    status: None,
+                    meta: Some(grok_failed_compaction_meta(update)),
+                });
+                turn.blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: None,
+                    is_error: true,
+                    agent_stats: None,
+                    images: Vec::new(),
+                });
+            }
             // Sub-agent lifecycle (namespaced `_x.ai/session/update` method).
             // Metadata, not content — deliberately NOT counted into
             // `content_events` and never a turn boundary. Collected in spawn
@@ -1025,59 +1056,24 @@ fn update_text(update: &Value) -> String {
 /// Grok sends prose as `{type:"text"}`. Current codeg prompts send a native
 /// `{type:"image"}` chunk (so grok's describe sidecar runs). Older transcripts
 /// still carry the embedded `{type:"resource", resource:{blob, mimeType, uri}}`
-/// shape from when we followed grok's `image:false` advertisement. Both
-/// image-mime forms become [`ContentBlock::Image`] so they render as a
-/// thumbnail; a non-image embedded resource folds to a `[uri](uri)` link
-/// (same as the live [`crate::acp::user_blocks_from_prompt`]). Anything else
-/// falls back to a (possibly empty) text block.
-fn user_chunk_to_block(update: &Value) -> Option<ContentBlock> {
-    let content = update.get("content")?;
-    match content.get("type").and_then(Value::as_str).unwrap_or("") {
-        "resource" => {
-            let resource = content.get("resource")?;
-            let mime = resource.get("mimeType").and_then(Value::as_str);
-            let blob = resource.get("blob").and_then(Value::as_str);
-            match (mime, blob) {
-                (Some(mime), Some(blob)) if mime.starts_with("image/") => {
-                    Some(ContentBlock::Image {
-                        data: blob.to_string(),
-                        mime_type: mime.to_string(),
-                        uri: resource
-                            .get("uri")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                    })
-                }
-                _ => {
-                    let uri = resource.get("uri").and_then(Value::as_str).unwrap_or("");
-                    Some(ContentBlock::Text {
-                        text: format!("[{uri}]({uri})"),
-                    })
-                }
-            }
-        }
-        // Native ACP image content — the live send path for every grok that
-        // decodes the format (see `normalize_grok_image_blocks`).
-        "image" => {
-            let data = content.get("data").and_then(Value::as_str)?;
-            Some(ContentBlock::Image {
-                data: data.to_string(),
-                mime_type: content
-                    .get("mimeType")
-                    .and_then(Value::as_str)
-                    .unwrap_or("image/png")
-                    .to_string(),
-                uri: content
-                    .get("uri")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            })
-        }
-        // "text" and unknown kinds: existing behavior (reads `/content/text`).
-        _ => Some(ContentBlock::Text {
-            text: update_text(update),
-        }),
-    }
+/// shape from when we followed grok's `image:false` advertisement.
+///
+/// All of it goes through [`crate::parsers::user_turn_block_from_wire`], the
+/// one projection every surface uses for a user's own message — so both image
+/// carriages become a thumbnail, and an attached file becomes the same
+/// `[name](uri)` marker a viewer saw live. This parser used to fold resources
+/// itself and had no `resource_link` case at all, which silently dropped
+/// plain file attachments from a reloaded grok turn.
+///
+/// Returns the block the chunk was SENT as, so the caller can both render it
+/// (via [`crate::parsers::user_turn_block`]) and tell prose from an attachment
+/// — an attachment projects to a `Text` marker, and the conversation's title
+/// must not latch onto `[report.pdf](…)` when the prose follows it.
+///
+/// `None` for a chunk with nothing to render (empty prose, a malformed
+/// resource): the caller still opens the user turn, it just starts empty.
+fn user_chunk_to_input(update: &Value) -> Option<PromptInputBlock> {
+    crate::acp::types::prompt_block_from_wire(update.get("content")?)
 }
 
 // ---------------------------------------------------------------------------
@@ -2149,6 +2145,47 @@ mod tests {
     }
 
     #[test]
+    fn history_renders_failed_auto_compaction_as_failed_compaction_tool() {
+        // The live mapper renders `auto_compact_failed` as the compaction card in
+        // its failed state; a reopened conversation has to show the same card,
+        // not drop the failure.
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"plan a page"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}},"timestamp":1783584020}"#, "\n",
+            r#"{"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"auto_compact_failed","reason":"API error (status 503)"},"_meta":{"eventId":"ev-compact-failed"}},"timestamp":1783584021}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584022}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let detail = GrokParser::with_base_dir(sessions)
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let blocks: Vec<_> = detail.turns.iter().flat_map(|t| &t.blocks).collect();
+        let meta = blocks
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    meta: Some(m),
+                    ..
+                } if id == "ev-compact-failed" => Some(m.clone()),
+                _ => None,
+            })
+            .expect("failed compaction tool_use present in history");
+        assert_eq!(
+            meta,
+            serde_json::json!({
+                "contextCompaction": { "version": 1, "error": "API error (status 503)" }
+            })
+        );
+        // The paired result is what marks the card failed.
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            ContentBlock::ToolResult { tool_use_id: Some(id), is_error: true, .. }
+                if id == "ev-compact-failed"
+        )));
+    }
+
+    #[test]
     fn merges_prompt_text_and_native_image_into_one_user_turn() {
         // Grok echoes a native ACP image as its own `user_message_chunk` (same
         // `promptIndex` as the prose) — the shape captured from a live 1.0.0 and
@@ -2213,6 +2250,37 @@ mod tests {
                     && uri.as_deref() == Some("clipboard://image.png-abc")
         ));
         assert!(matches!(turns[1].role, TurnRole::Assistant));
+    }
+
+    /// A plain (non-image) file attachment. This parser folded resources
+    /// itself and had no `resource_link` case at all, so an attached file came
+    /// back from history as an empty block — the same gap `acp_native` had.
+    /// Both now go through the one projection a viewer saw live.
+    #[test]
+    fn plain_file_attachments_survive_a_reload_as_their_markers() {
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"看看"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"resource_link","name":"report.pdf","uri":"file:///tmp/report.pdf"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"resource","resource":{"text":"body","mimeType":"text/plain","uri":"clipboard://notes.txt-1"}},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"读了"}}},"timestamp":1783584024}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584024}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let parser = GrokParser::with_base_dir(sessions);
+        let detail = parser
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let turns = &detail.turns;
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks.len(), 3);
+        assert!(matches!(&turns[0].blocks[0], ContentBlock::Text { text } if text == "看看"));
+        assert!(
+            matches!(&turns[0].blocks[1], ContentBlock::Text { text } if text == "[report.pdf](file:///tmp/report.pdf)")
+        );
+        // A text resource: the attachment it is shown as, without its body.
+        assert!(
+            matches!(&turns[0].blocks[2], ContentBlock::Text { text } if text == "clipboard://notes.txt-1\n<context ref=\"clipboard://notes.txt-1\">\n\n</context>")
+        );
     }
 
     /// One turn whose stats live where Grok really puts them: model in

@@ -18,12 +18,16 @@ import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
+  LeakedTempReclaim,
+  LeakedTempScan,
   AgentType,
   AgentDelegationDefaults,
   AgentOptionsSnapshot,
   Automation,
   AutomationRun,
   AutomationDraft,
+  DeepSeekCatalogModel,
+  DeepSeekModelCatalog,
   ForgeChangeDetail,
   ForgeChangedFileList,
   ForgeComment,
@@ -110,6 +114,7 @@ import type {
   OpenedTab,
   OpenedTabsSnapshot,
   SaveTabsOutcome,
+  GitBlobBase64,
   GitStatusEntry,
   GitBranchList,
   GitHeadInfo,
@@ -126,6 +131,7 @@ import type {
   PreflightResult,
   FolderCommand,
   TerminalInfo,
+  TerminalSnapshot,
   PromptInputBlock,
   FileTreeNode,
   WorkspaceFileEntry,
@@ -141,6 +147,9 @@ import type {
   AvailableTerminalShells,
   SystemLanguageSettings,
   SystemProxySettings,
+  CloseRequestPayload,
+  CloseWindowBehavior,
+  SystemCloseBehaviorSettingsView,
   SystemRenderingSettings,
   SystemAutostartSettings,
   SystemTerminalSettings,
@@ -156,6 +165,7 @@ import type {
   GitHubAccountsSettings,
   GitHubTokenValidation,
   McpAppType,
+  LocalMcpScan,
   LocalMcpServer,
   McpMarketplaceProvider,
   McpMarketplaceItem,
@@ -345,15 +355,15 @@ export async function acpFork(
   connectionId: string,
   // Linkage for a conversation opened from history: its connection resumed via
   // session_id but the row isn't bound to the connection until the first prompt
-  // fires, and a fork-send forks BEFORE that prompt. Passing these lets the
-  // backend adopt the row so the fork doesn't reject as unlinked. Ignored once
-  // the connection is already linked (a new-conversation-then-fork). See
-  // `ConnectionManager::fork_session`.
+  // fires, and forking from a rendered turn needs no prompt at all. Passing
+  // these lets the backend adopt the row so the fork doesn't reject as
+  // unlinked. Ignored once the connection is already linked (a
+  // new-conversation-then-fork). See `ConnectionManager::fork_session`.
   conversationId?: number | null,
   folderId?: number | null,
-  // "Fork from here": the rendered turn to fork at. Omit to fork at the tail,
-  // which is what fork-send does. A turn the agent cannot name also forks at
-  // the tail rather than failing — the backend decides, see `resolve_fork_point`.
+  // "Fork from here": the rendered turn to fork at. The UI always passes one;
+  // omitting it forks at the tail, which the backend also falls back to for a
+  // turn the agent cannot name — its call, see `resolve_fork_point`.
   forkFromTurnId?: string | null
 ): Promise<ForkResult> {
   try {
@@ -496,6 +506,21 @@ export async function acpEnvDiagnostics(
 
 export async function acpClearBinaryCache(agentType: AgentType): Promise<void> {
   return getTransport().call("acp_clear_binary_cache", { agentType })
+}
+
+/** Read-only scan of the system temp dir for pre-isolation launch leftovers. */
+export async function acpScanLeakedTemp(): Promise<LeakedTempScan> {
+  return getTransport().call("acp_scan_leaked_temp", {})
+}
+
+/**
+ * Delete leaked temp artifacts. The backend re-validates every path
+ * immediately before deleting — this list is never trusted as-is.
+ */
+export async function acpReclaimLeakedTemp(
+  paths: string[]
+): Promise<LeakedTempReclaim> {
+  return getTransport().call("acp_reclaim_leaked_temp", { paths })
 }
 
 export async function acpDownloadAgentBinary(
@@ -811,6 +836,31 @@ export async function loadPiConfig(): Promise<{
 }
 
 /**
+ * Read the DeepSeek Harness model catalog — `llm-deepseek.models` in
+ * `$DSH_HOME/settings.yaml` — for the settings panel. A missing document is
+ * "inheriting the agent's built-in list", not an error; an unreadable one
+ * arrives as `error` so the panel can refuse to edit it.
+ */
+export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> {
+  return getTransport().call("acp_load_deepseek_model_catalog", {})
+}
+
+/**
+ * Store the DeepSeek Harness model catalog, replacing `llm-deepseek.models`
+ * and leaving every other key (and every comment) in the document alone.
+ *
+ * `null` — and an empty list — REMOVE the key, so the agent's built-in catalog
+ * is inherited again. Invalid entries are rejected before anything is written.
+ * The agent reads the document at launch, so a save reaches sessions started
+ * after it, not the ones already running.
+ */
+export async function updateDeepSeekModelCatalog(
+  models: DeepSeekCatalogModel[] | null
+): Promise<void> {
+  return getTransport().call("acp_update_deepseek_model_catalog", { models })
+}
+
+/**
  * Validate a user-supplied custom pi binary (BYO-pi): resolve it (path or
  * `PATH`) and best-effort read its `--version`. A not-found binary returns
  * `{ found: false, resolvedPath: null, version: null }` (not an error).
@@ -978,6 +1028,32 @@ export async function acpAntigravityLoginFinish(
 /** Abandon a pending browser-free sign-in and stop its agent process. */
 export async function acpAntigravityLoginCancel(handle: string): Promise<void> {
   return getTransport().call("acp_antigravity_login_cancel", { handle })
+}
+
+/**
+ * Clear the credential Antigravity is holding, so the next sign-in can reach a
+ * different Google account.
+ *
+ * Without it a signed-in Antigravity cannot switch accounts at all: the agent
+ * refreshes its cached token silently, so `acpAntigravityLoginStart` answers
+ * `alreadySignedIn` and never produces a consent link.
+ *
+ * Returns the settings.json sync report rather than a success flag. Signing out
+ * removes `auth.type` from that file, so the backend writes the saved method
+ * straight back — and a `skipped` report is the warning that it could not, and
+ * that every later session will fail with "Authentication required" until the
+ * user edits the file themselves.
+ */
+export async function acpAntigravitySignOut(): Promise<AntigravitySyncReport> {
+  // The backend spawns the agent and puts two requests to it: up to 60s for
+  // `initialize` (CPython inside a PAR, unpacked on first run) plus 60s for the
+  // sign-out itself. The transport defaults — 60s on web, 30s through the
+  // remote-desktop proxy — would abort while that child is still starting.
+  return getTransport().call(
+    "acp_antigravity_sign_out",
+    {},
+    { timeoutMs: 180_000 }
+  )
 }
 
 /**
@@ -1771,6 +1847,49 @@ export async function updateSystemAutostartSettings(
   return getTransport().call("update_system_autostart_settings", { settings })
 }
 
+// --- Close window behavior ---
+
+/**
+ * Emitted when a close press needs an answer. Addressed to `main`, but the
+ * Tauri transport subscribes with `EventTarget::Any`, so every webview sharing
+ * the root layout still receives it — `CloseRequestDialog` gates on the window
+ * label rather than trusting the target.
+ */
+export const CLOSE_REQUEST_EVENT = "app://close-request"
+
+export async function getSystemCloseBehaviorSettings(): Promise<SystemCloseBehaviorSettingsView> {
+  return getTransport().call("get_system_close_behavior_settings")
+}
+
+export async function updateSystemCloseBehaviorSettings(
+  behavior: CloseWindowBehavior
+): Promise<SystemCloseBehaviorSettingsView> {
+  return getTransport().call("update_system_close_behavior_settings", {
+    behavior,
+  })
+}
+
+/**
+ * Answer an open close prompt. The backend holds a "a prompt is up" flag that
+ * only this call clears, so every dismissal path — including Cancel and the
+ * Esc key — has to reach it or the close button goes dead for the session.
+ */
+export async function resolveCloseRequest(
+  action: "minimize" | "exit" | "cancel",
+  remember: boolean
+): Promise<void> {
+  return getTransport().call("resolve_close_request", { action, remember })
+}
+
+export async function listenCloseRequest(
+  handler: (payload: CloseRequestPayload) => void
+): Promise<() => void> {
+  return getTransport().subscribe<CloseRequestPayload>(
+    CLOSE_REQUEST_EVENT,
+    handler
+  )
+}
+
 // --- Logging ---
 
 /** Live-tail channel: one event per appended log record. */
@@ -1873,6 +1992,16 @@ export async function validateGitLabToken(
   return getTransport().call("validate_gitlab_token", { serverUrl, token })
 }
 
+/** Same answer shape again, from Gitea's `GET /api/v1/user`. `scopes` always
+ *  comes back empty: Gitea reports a token's scopes only on an endpoint that
+ *  wants the account password and refuses the token being checked. */
+export async function validateGiteaToken(
+  serverUrl: string,
+  token: string
+): Promise<GitHubTokenValidation> {
+  return getTransport().call("validate_gitea_token", { serverUrl, token })
+}
+
 export async function updateGitHubAccounts(
   settings: GitHubAccountsSettings
 ): Promise<GitHubAccountsSettings> {
@@ -1896,7 +2025,7 @@ export async function deleteAccountToken(accountId: string): Promise<void> {
   return getTransport().call("delete_account_token", { accountId })
 }
 
-export async function mcpScanLocal(): Promise<LocalMcpServer[]> {
+export async function mcpScanLocal(): Promise<LocalMcpScan> {
   return getTransport().call("mcp_scan_local")
 }
 
@@ -2703,6 +2832,20 @@ export async function gitShowFile(
   })
 }
 
+export async function gitShowFileBase64(
+  path: string,
+  file: string,
+  refName?: string,
+  maxBytes?: number
+): Promise<GitBlobBase64> {
+  return getTransport().call("git_show_file_base64", {
+    path,
+    file,
+    refName: refName ?? null,
+    maxBytes: maxBytes ?? null,
+  })
+}
+
 export async function gitIsTracked(
   path: string,
   file: string
@@ -2807,7 +2950,8 @@ export async function removeFolderLink(
 
 /** Input for `canvasCreateNode`. Binding fields are kind-specific (validated
  *  server-side): folder → folderId, group → folderGroupId, agent → agentType,
- *  conversation → conversationId; custom starts empty; note uses content. */
+ *  conversation → conversationId; custom starts empty; note uses content;
+ *  file and terminal use path. */
 export interface CreateCanvasNodeInput {
   kind: CanvasNodeKind
   folderId?: number
@@ -2816,6 +2960,9 @@ export interface CreateCanvasNodeInput {
   conversationId?: number
   title?: string
   content?: string
+  /** file → the document's absolute path; terminal → its working directory.
+   *  Required for those two kinds, rejected for the rest. */
+  path?: string
   color?: string
   /** Pinned grid axes (regions only); omitted / 0 = auto. */
   gridColumns?: number
@@ -3000,6 +3147,7 @@ export async function openCommitWindow(folderId: number): Promise<void> {
 }
 
 export type SettingsSection =
+  | "general"
   | "appearance"
   | "agents"
   | "mcp"
@@ -3007,6 +3155,8 @@ export type SettingsSection =
   | "experts"
   | "science"
   | "office-tools"
+  | "collaboration"
+  | "browser"
   | "version-control"
   | "shortcuts"
   | "system"
@@ -3936,7 +4086,7 @@ export interface UploadWorkspaceFileResult {
  * Tauri window (no remote binding) is rejected, because it has its own
  * native file dialogs and these helpers would just be the wrong tool.
  */
-function isWorkspaceFileApiAvailable(): boolean {
+export function isWorkspaceFileApiAvailable(): boolean {
   return !isDesktop() || isRemoteDesktopMode()
 }
 
@@ -4575,6 +4725,22 @@ export async function terminalResize(
   return getTransport().call("terminal_resize", { terminalId, cols, rows })
 }
 
+/**
+ * Recent output of an already-running terminal, for a viewer attaching to a
+ * PTY it did not spawn (a canvas terminal card coming back from another
+ * route). `alive: false` is the settled answer "nothing to attach to" — spawn
+ * instead; it is never an error, so callers don't have to parse one.
+ *
+ * Subscribe to `terminal://output/<id>` BEFORE calling this, and drop the
+ * events whose `seq` is at or below the returned `seq` — that overlap is
+ * already in `data`. See `TerminalEvent.seq`.
+ */
+export async function terminalSnapshot(
+  terminalId: string
+): Promise<TerminalSnapshot> {
+  return getTransport().call("terminal_snapshot", { terminalId })
+}
+
 export async function terminalKill(terminalId: string): Promise<void> {
   return getTransport().call("terminal_kill", { terminalId })
 }
@@ -4858,6 +5024,67 @@ export async function setDelegationSettings(
   return getTransport().call("set_delegation_settings", { settings })
 }
 
+// ─── codeg-mcp service status ──────────────────────────────────────────
+
+/** Headline verdict from Rust `CodegMcpServiceState`. Ordered by which problem
+ * to solve first: only `stopped` is repairable from this process. */
+export type CodegMcpServiceState =
+  | "stopped"
+  | "unavailable"
+  | "disabled"
+  | "running"
+
+/** One toggleable companion tool group, named by its `--features` slug. */
+export interface CodegMcpToolGroup {
+  key: string
+  enabled: boolean
+  /** The group this one lives inside, when it lives inside one
+   * (`browser_eval` inside `browser`). Sent by the backend so the two
+   * surfaces that render this list cannot disagree about which switch gates
+   * which. Absent for a group proper. */
+  requires?: string | null
+}
+
+/** Mirror of Rust `CodegMcpServiceStatus`. */
+export interface CodegMcpServiceStatus {
+  state: CodegMcpServiceState
+  /** Whether the broker socket answered a liveness ping just now. */
+  listening: boolean
+  socket_path: string
+  /** Resolved `codeg-mcp` path; `null` when the lookup came up empty. */
+  binary_path: string | null
+  tool_groups: CodegMcpToolGroup[]
+  companion_count: number
+  session_count: number
+  active_delegations: number
+  depth_limit: number
+  /** Unix millis of the bind that produced the current accept loop. */
+  started_at: number | null
+  last_error: string | null
+  /** False in runtimes that never bound a socket — hide the start button
+   * rather than offer one that can only fail. */
+  can_start: boolean
+}
+
+export async function getCodegMcpServiceStatus(): Promise<CodegMcpServiceStatus> {
+  return getTransport().call("get_codeg_mcp_service_status")
+}
+
+/** Bind the broker socket if it isn't already answering. Idempotent. */
+export async function startCodegMcpService(): Promise<void> {
+  return getTransport().call("start_codeg_mcp_service")
+}
+
+/** Flip one tool group by the slug the status report uses. The backend
+ * dispatches to that feature's own settings writer, so this is the same write
+ * the settings window performs — sibling fields and change events included. */
+export async function setCodegMcpToolGroup(
+  key: string,
+  enabled: boolean
+): Promise<void> {
+  return getTransport().call("set_codeg_mcp_tool_group", { key, enabled })
+}
+
 // ─── Live feedback settings + submit ───────────────────────────────────
 
 /** Mirror of Rust `FeedbackSettings`. */
@@ -4880,14 +5107,29 @@ export async function setFeedbackSettings(
  * steering path). Returns the stored note (it also arrives via the
  * `feedback_submitted` event). Rejects when no turn is in flight — callers
  * detect that with `isNoActiveTurnRejection` and fall back to a normal prompt.
+ *
+ * `blocks` (optional) is the full prompt-block draft when the note carries
+ * image attachments; `text` stays the recorded/display form. Blocks ride the
+ * native `_session/steering` wire only — the backend rejects them on the pull
+ * path (same `NoActiveTurn` fallback) so an attachment is never silently
+ * dropped. Uploaded payloads are stripped to their `file://` markers in every
+ * HTTP-body mode, exactly like `acpPrompt`; the backend re-hydrates them.
  */
 export async function submitSessionFeedback(
   connectionId: string,
-  text: string
+  text: string,
+  blocks?: PromptInputBlock[] | null
 ): Promise<FeedbackItem> {
   return getTransport().call("submit_session_feedback", {
     connectionId,
     text,
+    blocks:
+      blocks && blocks.length > 0
+        ? stripUploadedImagePayloads(
+            blocks,
+            !isDesktop() || getActiveRemoteConnectionId() !== null
+          )
+        : null,
   })
 }
 
@@ -4923,6 +5165,32 @@ export async function setSessionInfoSettings(
   settings: SessionInfoSettings
 ): Promise<SessionInfoSettings> {
   return getTransport().call("set_session_info_settings", { settings })
+}
+
+// ─── Built-in browser tools settings ───────────────────────────────────────
+
+/** Mirror of Rust `BrowserToolsSettings` (default OFF). Whether agents get
+ *  `browser_list_tabs` / `browser_snapshot` at all; which individual page they
+ *  may read is a separate, per-tab decision made from the tab's own toolbar. */
+export interface BrowserToolsSettings {
+  enabled: boolean
+  /** Whether `browser_eval` exists: an agent running its own code on a shared
+   *  page. Off by default and separate from `enabled`, because everything else
+   *  in the group is a named act a person sharing a tab can picture and this
+   *  is not one of them. Never in force with `enabled` off — the backend drops
+   *  it, so a stale `true` cannot outlive the switch above it. Even on, every
+   *  individual snippet is shown to the person and approved on its own. */
+  eval: boolean
+}
+
+export async function getBrowserToolsSettings(): Promise<BrowserToolsSettings> {
+  return getTransport().call("get_browser_tools_settings")
+}
+
+export async function setBrowserToolsSettings(
+  settings: BrowserToolsSettings
+): Promise<BrowserToolsSettings> {
+  return getTransport().call("set_browser_tools_settings", { settings })
 }
 
 // ─── Create-from-chat (chat authoring) settings ────────────────────────────
@@ -4981,6 +5249,18 @@ export interface BackupManifestEntry {
   sha256: string
 }
 
+/** How badly one third-party SQLite store degraded during backup. */
+export type SqliteDegradation =
+  | "recoveredOnCopy"
+  | "bareFileOnly"
+  | "notArchived"
+
+export interface DegradedSqlite {
+  agent: string
+  archivePath: string
+  level: SqliteDegradation
+}
+
 export interface BackupManifest {
   formatVersion: number
   kind: string
@@ -4990,6 +5270,10 @@ export interface BackupManifest {
   runtime: string
   includesExternalTranscripts: boolean
   includesSecrets: boolean
+  /** Which codeg-owned sections this archive claims to manage. */
+  managedSections?: string[] | null
+  /** Stores that could not be snapshotted cleanly. */
+  degradedSqlite?: DegradedSqlite[]
   entries: BackupManifestEntry[]
 }
 
@@ -5022,11 +5306,40 @@ export interface BackupPreview {
   rejectReason?: string | null
 }
 
+/** Why an archive entry was refused outright (the live file was untouched). */
+export type ExternalRefusalReason = "legacyUnprovableSqlitePair"
+
+export interface RefusedExternal {
+  archivePath: string
+  targetPath: string
+  reason: ExternalRefusalReason
+}
+
+export type ExternalDowngradeReason = "agentsRunning"
+
+export interface ExternalDowngrade {
+  reason: ExternalDowngradeReason
+  agents: string[]
+  path: string
+}
+
 export interface StagedRestore {
   stagingDir: string
   manifest: BackupManifest
   restoredExternalPath?: string | null
   skippedConflicts: string[]
+  refusedExternal?: RefusedExternal[]
+  /** Set when the requested external mode could not be honored. */
+  externalDowngraded?: ExternalDowngrade | null
+}
+
+/** A pre-restore safety snapshot the user can inspect or roll back to. */
+export interface SafetySnapshot {
+  id: string
+  path: string
+  createdAt?: string | null
+  sizeBytes: number
+  rollbackSupported: boolean
 }
 
 /** Where (if anywhere) external agent transcripts are restored. */
@@ -5082,11 +5395,20 @@ export async function exportBackupDesktop(
 // while the backend is still working (and possibly committing a restore).
 const BACKUP_LONG_CALL_TIMEOUT_MS = 60 * 60_000
 
+export interface BackupTicketResult {
+  url: string
+  filename: string
+  /** Stores that could not be snapshotted cleanly. The desktop path reads
+   *  these off the returned manifest; the web path has no manifest, so the
+   *  ticket carries them. */
+  degradedSqlite: DegradedSqlite[]
+}
+
 /** Web export: build server-side, then trigger a browser download via ticket. */
 export async function exportBackupWeb(
   opts: BackupExportOptions
-): Promise<void> {
-  const ticket = await getTransport().call<{ url: string; filename: string }>(
+): Promise<BackupTicketResult> {
+  const ticket = await getTransport().call<BackupTicketResult>(
     "backup_create_ticket",
     {
       includeExternalTranscripts: opts.includeExternalTranscripts,
@@ -5100,6 +5422,7 @@ export async function exportBackupWeb(
   document.body.appendChild(a)
   a.click()
   a.remove()
+  return ticket
 }
 
 /** Web restore step 1: upload the archive once; returns an opaque upload id. */
@@ -5147,43 +5470,62 @@ export async function uploadBackupWeb(
   })
 }
 
-/** Validate a backup (desktop: by path). */
-export async function inspectBackupDesktop(
-  srcPath: string,
-  passphrase?: string | null
-): Promise<BackupPreview> {
-  return getTransport().call<BackupPreview>("backup_inspect", {
-    srcPath,
-    passphrase: passphrase ?? null,
-  })
+/**
+ * A decrypted archive parked under the data dir, reused by the conflict scan
+ * and by staging. `sourceId` is absent when the archive is encrypted and no
+ * usable passphrase was given — prompt and prepare again.
+ */
+export interface PreparedBackupSource {
+  sourceId?: string | null
+  preview: BackupPreview
 }
 
-/** Validate a backup (web: by upload id). */
-export async function inspectBackupWeb(
-  uploadId: string,
+/** Restore step 1 (desktop: by path) — decrypt once, preview, get a handle. */
+export async function prepareBackupSourceDesktop(
+  srcPath: string,
   passphrase?: string | null
-): Promise<BackupPreview> {
-  return getTransport().call<BackupPreview>(
-    "backup_inspect",
-    {
-      uploadId,
-      passphrase: passphrase ?? null,
-    },
+): Promise<PreparedBackupSource> {
+  return getTransport().call<PreparedBackupSource>(
+    "backup_prepare_source",
+    { srcPath, passphrase: passphrase ?? null },
     { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
   )
 }
 
-/** Stage a restore (desktop: by path). Applied on next app start. */
-export async function stageRestoreDesktop(args: {
-  srcPath: string
+/** Restore step 1 (web: by upload id). */
+export async function prepareBackupSourceWeb(
+  uploadId: string,
   passphrase?: string | null
+): Promise<PreparedBackupSource> {
+  return getTransport().call<PreparedBackupSource>(
+    "backup_prepare_source",
+    { uploadId, passphrase: passphrase ?? null },
+    { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
+  )
+}
+
+/**
+ * Drop a prepared source. Safe to call on an already-released handle, and safe
+ * to skip — an abandoned source is reaped on idle and at startup — but calling
+ * it removes the decrypted archive immediately.
+ */
+export async function releaseBackupSource(sourceId: string): Promise<boolean> {
+  return getTransport().call<boolean>("backup_release_source", { sourceId })
+}
+
+/** Stage a restore (desktop). Applied on next app start. */
+export async function stageRestoreDesktop(args: {
+  sourceId: string
   externalMode?: ExternalRestoreMode | null
 }): Promise<StagedRestore> {
-  return getTransport().call<StagedRestore>("backup_restore_stage", {
-    srcPath: args.srcPath,
-    passphrase: args.passphrase ?? null,
-    externalMode: args.externalMode ?? null,
-  })
+  return getTransport().call<StagedRestore>(
+    "backup_restore_stage",
+    {
+      sourceId: args.sourceId,
+      externalMode: args.externalMode ?? null,
+    },
+    { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
+  )
 }
 
 export interface StageRestoreWebResult {
@@ -5192,17 +5534,15 @@ export interface StageRestoreWebResult {
   staged: StagedRestore
 }
 
-/** Stage a restore (web: by upload id). Applied on next server start. */
+/** Stage a restore (web). Applied on next server start. */
 export async function stageRestoreWeb(args: {
-  uploadId: string
-  passphrase?: string | null
+  sourceId: string
   externalMode?: ExternalRestoreMode | null
 }): Promise<StageRestoreWebResult> {
   return getTransport().call<StageRestoreWebResult>(
     "backup_restore_stage",
     {
-      uploadId: args.uploadId,
-      passphrase: args.passphrase ?? null,
+      sourceId: args.sourceId,
       externalMode: args.externalMode ?? null,
     },
     { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
@@ -5217,25 +5557,44 @@ export interface ExternalConflict {
 }
 
 /** Scan a backup for external transcripts whose live target already exists. */
-export async function scanExternalConflictsDesktop(
-  srcPath: string,
-  passphrase?: string | null
+export async function scanExternalConflicts(
+  sourceId: string
 ): Promise<ExternalConflict[]> {
   return getTransport().call<ExternalConflict[]>(
     "backup_scan_external_conflicts",
-    { srcPath, passphrase: passphrase ?? null }
+    { sourceId },
+    { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
   )
 }
 
-export async function scanExternalConflictsWeb(
-  uploadId: string,
-  passphrase?: string | null
-): Promise<ExternalConflict[]> {
-  return getTransport().call<ExternalConflict[]>(
-    "backup_scan_external_conflicts",
-    { uploadId, passphrase: passphrase ?? null },
-    { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
+/**
+ * Agents connected right now. Advisory only — the actual guarantee is a lock
+ * the backend takes before it writes, which downgrades to the side location
+ * rather than failing.
+ */
+export async function backupActiveAgents(): Promise<string[]> {
+  return getTransport().call<string[]>("backup_active_agents", {})
+}
+
+/** Pre-restore safety snapshots still on disk, newest first. */
+export async function listSafetySnapshots(): Promise<SafetySnapshot[]> {
+  return getTransport().call<SafetySnapshot[]>(
+    "backup_list_safety_snapshots",
+    {}
   )
+}
+
+/** Stage a rollback to a safety snapshot; applied on the next start. */
+export async function rollbackToSnapshot(snapshotId: string): Promise<unknown> {
+  return getTransport().call("backup_rollback", { snapshotId })
+}
+
+/**
+ * Discard a staged restore that was never applied. The escape hatch when the
+ * restart after staging never happened and every retry hits `alreadyPending`.
+ */
+export async function discardPendingRestore(): Promise<boolean> {
+  return getTransport().call<boolean>("backup_discard_pending", {})
 }
 
 // ── Forge workbench (Issues/PR) ────────────────────────────────────────────

@@ -1043,6 +1043,64 @@ pub async fn soft_delete(conn: &DatabaseConnection, conversation_id: i32) -> Res
     Ok(())
 }
 
+/// Undo [`soft_delete`] for a conversation the user re-selected in the
+/// import picker. Returns `true` when this call is the one that brought the row
+/// back, `false` when it was already live (or is a delegation child, which is
+/// never a sidebar row) — so a caller can count restores without double-
+/// counting a concurrent one.
+///
+/// Deleting a conversation in codeg never touches the agent's own session file
+/// and never removes the row: it only stamps `deleted_at`. Everything needed to
+/// bring it back is therefore still on both sides, which is what makes restore
+/// a single conditional UPDATE rather than a re-insert — the conversation keeps
+/// its id, so bound tabs, token-usage rows and delegation children all still
+/// point at it.
+///
+/// Three columns move, and only these:
+/// * `deleted_at → NULL` — the restore itself.
+/// * `folder_id → folder_id` — the folder the import is landing this session's
+///   group in, which `add_folder` has just made live AND open. The row's own
+///   `folder_id` is deliberately NOT preserved: it may point at a folder the
+///   user has since removed or closed, and restoring into an invisible folder
+///   looks exactly like a restore that did not work. This is also the folder
+///   header the user checked the row under in the picker. (Live rows are still
+///   never moved — see `import_service::refresh_existing`; this applies only to
+///   a row being brought back.)
+/// * `status → pending_review` — the same status a fresh import lands on, and
+///   for the same reason: the sidebar's "show completed" filter defaults OFF,
+///   so a conversation restored as `completed` would come back invisible.
+///
+/// `updated_at` is deliberately left alone: a restore is not activity, and the
+/// caller's `refresh_external_activity` pass adopts the transcript's real
+/// last-activity time right after, so the row sorts where it belongs.
+///
+/// The `deleted_at IS NOT NULL` guard is re-evaluated by the database at write
+/// time, so a row that was un-deleted between the caller's read and this write
+/// is not clobbered back to `pending_review`.
+pub async fn restore_soft_deleted(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    folder_id: i32,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let res = conversation::Entity::update_many()
+        .col_expr(
+            conversation::Column::DeletedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(conversation::Column::FolderId, Expr::value(folder_id))
+        .col_expr(
+            conversation::Column::Status,
+            Expr::value(conversation::ConversationStatus::PendingReview),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_not_null())
+        .filter(conversation::Column::ParentId.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
 fn parse_agent_type(s: &str) -> AgentType {
     match serde_json::from_value(serde_json::Value::String(s.to_string())) {
         Ok(at) => at,
@@ -1138,6 +1196,57 @@ pub async fn get_by_id(
     let mut summary = conv_to_summary(conv);
     fill_child_counts(conn, std::slice::from_mut(&mut summary)).await?;
     Ok(summary)
+}
+
+/// Resolve a `codeg://session/<ref>` path to a live (non-deleted) conversation.
+///
+/// `session_ref` is either Codeg's numeric primary key (what MCP and the
+/// `codeg://session/<id>` markdown mentions use) or the agent's own session
+/// id stored as `external_id` (a Grok UUID, a Codex thread id, …). Several
+/// rows can share an `external_id` across agents; the most recently updated
+/// live row wins. Missing rows return `Ok(None)` — a stale deep link is not
+/// an error.
+///
+/// A numeric ref is tried as a primary key *first* and as an `external_id`
+/// only if no live row carries that id: nothing stops an agent from handing
+/// out all-digit session ids, and silently resolving one to an unrelated
+/// conversation that happens to own that PK is worse than a second query.
+pub async fn find_live_by_session_ref(
+    conn: &DatabaseConnection,
+    session_ref: &str,
+) -> Result<Option<DbConversationSummary>, DbError> {
+    let session_ref = session_ref.trim();
+    if session_ref.is_empty() {
+        return Ok(None);
+    }
+    let by_pk = match session_ref.parse::<i32>() {
+        Ok(id) if id > 0 => {
+            conversation::Entity::find_by_id(id)
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(conn)
+                .await?
+        }
+        _ => None,
+    };
+    let conv = match by_pk {
+        Some(conv) => Some(conv),
+        None => {
+            conversation::Entity::find()
+                .filter(conversation::Column::ExternalId.eq(session_ref))
+                .filter(conversation::Column::DeletedAt.is_null())
+                .order_by_desc(conversation::Column::UpdatedAt)
+                .one(conn)
+                .await?
+        }
+    };
+    match conv {
+        Some(conv) => {
+            let mut summary = conv_to_summary(conv);
+            fill_child_counts(conn, std::slice::from_mut(&mut summary)).await?;
+            Ok(Some(summary))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Look up a child conversation by its `delegation_call_id` (the broker's

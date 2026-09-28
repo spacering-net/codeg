@@ -40,7 +40,7 @@ expression: detail
           "type": "tool_use",
           "tool_use_id": "call_skill",
           "tool_name": "skill",
-          "input_preview": "{\"name\":\"demo-skill\",\"skill\":\"demo-skill\"}"
+          "input_preview": "{\"skill\":\"demo-skill\",\"name\":\"demo-skill\"}"
         },
         {
           "type": "tool_result",
@@ -57,14 +57,14 @@ expression: detail
         {
           "type": "tool_result",
           "tool_use_id": "call_read",
-          "output_preview": "{\"content\":\"export function greet(name: string) {\\n  return `hello ${name}`\\n}\",\"start_line\":1}",
+          "output_preview": "{\"start_line\":1,\"content\":\"export function greet(name: string) {\\n  return `hello ${name}`\\n}\"}",
           "is_error": false
         },
         {
           "type": "tool_use",
           "tool_use_id": "call_edit",
           "tool_name": "edit",
-          "input_preview": "{\"_start_line\":2,\"file_path\":\"src/app.ts\",\"new_string\":\"Hello, ${name}!\",\"old_string\":\"hello ${name}\"}"
+          "input_preview": "{\"file_path\":\"src/app.ts\",\"old_string\":\"hello ${name}\",\"new_string\":\"Hello, ${name}!\",\"_start_line\":2}"
         },
         {
           "type": "tool_result",
@@ -76,7 +76,7 @@ expression: detail
           "type": "tool_use",
           "tool_use_id": "call_write",
           "tool_name": "write",
-          "input_preview": "{\"content\":\"export const A = 1\\n\",\"file_path\":\"src/new.ts\"}"
+          "input_preview": "{\"file_path\":\"src/new.ts\",\"content\":\"export const A = 1\\n\"}"
         },
         {
           "type": "tool_result",
@@ -88,7 +88,7 @@ expression: detail
           "type": "tool_use",
           "tool_use_id": "call_grep",
           "tool_name": "grep",
-          "input_preview": "{\"glob\":\"*.ts\",\"path\":\".\",\"pattern\":\"VERSION\"}"
+          "input_preview": "{\"pattern\":\"VERSION\",\"path\":\".\",\"glob\":\"*.ts\"}"
         },
         {
           "type": "tool_result",
@@ -100,7 +100,7 @@ expression: detail
           "type": "tool_use",
           "tool_use_id": "call_task",
           "tool_name": "Agent",
-          "input_preview": "{\"description\":\"Inspect VERSION\",\"model\":\"claude-sonnet-4-6\",\"prompt\":\"Find the VERSION constant and report it.\",\"subagent_type\":\"general\"}"
+          "input_preview": "{\"subagent_type\":\"general\",\"description\":\"Inspect VERSION\",\"prompt\":\"Find the VERSION constant and report it.\",\"model\":\"claude-sonnet-4-6\"}"
         },
         {
           "type": "tool_result",
@@ -115,7 +115,7 @@ expression: detail
             "tool_calls": [
               {
                 "tool_name": "edit",
-                "input_preview": "{\"file_path\":\"src/app.ts\",\"new_string\":\"  VERSION = \\\"1.0.1\\\"\\n\",\"old_string\":\"  VERSION = \\\"1.0.0\\\"\\n\"}",
+                "input_preview": "{\"file_path\":\"src/app.ts\",\"old_string\":\"  VERSION = \\\"1.0.0\\\"\\n\",\"new_string\":\"  VERSION = \\\"1.0.1\\\"\\n\"}",
                 "output_preview": "Edit applied successfully.",
                 "is_error": false
               },
@@ -132,7 +132,7 @@ expression: detail
           "type": "tool_use",
           "tool_use_id": "call_edit_fail",
           "tool_name": "edit",
-          "input_preview": "{\"file_path\":\"src/missing.ts\",\"new_string\":\"yep\",\"old_string\":\"nope\"}"
+          "input_preview": "{\"file_path\":\"src/missing.ts\",\"old_string\":\"nope\",\"new_string\":\"yep\"}"
         },
         {
           "type": "tool_result",

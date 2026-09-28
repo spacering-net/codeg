@@ -6,6 +6,7 @@
 //! Every step that touches live files happens *after* the signature is
 //! verified.
 
+use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -208,6 +209,19 @@ pub fn take_upgrade_staged() -> bool {
     }
 }
 
+/// Why an in-place update cannot run here, found without starting one: the
+/// same preflight [`perform_update`] runs first. Lets the UI explain an
+/// install this process cannot write (root-owned files run by an unprivileged
+/// service, a read-only filesystem) before the operator clicks, instead of
+/// offering an upgrade certain to fail — or, when the write was refused
+/// outright, a [`rollback`] that would be refused too. Local and cheap:
+/// creates and removes one empty file per target directory.
+pub fn self_update_blocker() -> Option<AppCommandError> {
+    resolve_targets()
+        .and_then(|targets| preflight_writable(&targets))
+        .err()
+}
+
 /// Fail fast if we cannot write where the swap needs to land — much better
 /// to abort before downloading 50 MB than to discover a read-only
 /// `/usr/local/bin` halfway through.
@@ -230,11 +244,41 @@ fn check_writable(dir: &Path) -> Result<(), AppCommandError> {
             let _ = std::fs::remove_file(&probe);
             Ok(())
         }
-        Err(e) => Err(AppCommandError::permission_denied(format!(
-            "Update target is not writable: {}",
-            dir.display()
-        ))
-        .with_detail(e.to_string())),
+        Err(e) => Err(unwritable_target_error(dir, &e)),
+    }
+}
+
+/// i18n keys (root-qualified message paths) for an unwritable update target,
+/// which the frontend renders in preference to the English message. Mirrored
+/// by `SERVER_UPDATE_ERROR_MESSAGES` in `src/lib/updater.ts`. Params: `path`,
+/// plus `reason` (the OS error) for [`UPDATE_I18N_KEY_TARGET_WRITE_FAILED`].
+pub const UPDATE_I18N_KEY_TARGET_NOT_WRITABLE: &str =
+    "SystemSettings.updateErrors.permissionDenied";
+pub const UPDATE_I18N_KEY_TARGET_WRITE_FAILED: &str =
+    "SystemSettings.updateErrors.targetWriteFailed";
+
+/// Explain a failed write probe in `dir`. Refused permission (including a
+/// read-only filesystem) gets the "update manually or fix the permissions"
+/// advice; anything else — a full disk, a missing directory — only names the
+/// OS reason, since sending the operator to fix permissions would mislead.
+fn unwritable_target_error(dir: &Path, err: &std::io::Error) -> AppCommandError {
+    let path = dir.display().to_string();
+    // Clients older than the i18n key only see this message, and recognize the
+    // failure by its prefix (`normalizeAppUpdateError`) — keep it stable.
+    let message = format!("Update target is not writable: {path}");
+    let mut params = BTreeMap::from([("path".to_string(), path)]);
+    match err.kind() {
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem => {
+            AppCommandError::permission_denied(message)
+                .with_detail(err.to_string())
+                .with_i18n(UPDATE_I18N_KEY_TARGET_NOT_WRITABLE, params)
+        }
+        _ => {
+            params.insert("reason".to_string(), err.to_string());
+            AppCommandError::io_error(message)
+                .with_detail(err.to_string())
+                .with_i18n(UPDATE_I18N_KEY_TARGET_WRITE_FAILED, params)
+        }
     }
 }
 
@@ -366,7 +410,53 @@ pub async fn perform_update(
 /// Restore the previous bundle from the `.bak` artifacts kept by
 /// [`perform_update`]. Best-effort per artifact.
 pub fn rollback() -> Result<(), AppCommandError> {
-    let targets = resolve_targets()?;
+    rollback_targets(&resolve_targets()?, check_writable)?;
+    // The staged upgrade has been undone; clear its marker so the next
+    // `perform_update` is not refused as "already staged".
+    let _ = take_upgrade_staged();
+    Ok(())
+}
+
+/// Restore `targets` from their `.bak`s. `probe` is [`check_writable`] — a
+/// parameter so a test can make a directory refuse writes regardless of the
+/// user the tests run as.
+fn rollback_targets(
+    targets: &Targets,
+    probe: fn(&Path) -> Result<(), AppCommandError>,
+) -> Result<(), AppCommandError> {
+    // Refuse before restoring anything if a directory a restore is about to
+    // write to refuses writes. Otherwise an install whose binary directory is
+    // writable but whose `web/` parent is not would get its binaries rolled
+    // back and then fail on the web bundle — possibly after
+    // `restore_dir_from_bak` has already emptied the live `web/`. Only a
+    // refused write counts: a full disk or a spent inode quota fails the
+    // probe's create, but not the remove-then-rename a restore does.
+    let refuses_writes = |dir: Option<&Path>| match dir.map(probe) {
+        Some(Err(e)) if matches!(e.code, crate::app_error::AppErrorCode::PermissionDenied) => {
+            Err(e)
+        }
+        _ => Ok(()),
+    };
+    // Whether an artifact has a backup to restore. A lookup that fails (a
+    // directory this process can't traverse) is not "no backup" — the restore
+    // below would skip it just the same and report success over a mix of
+    // versions — so every lookup runs, and any failure stops the rollback,
+    // before anything is touched.
+    let has_bak = |target: &Path| {
+        let bak = bak_path(target);
+        bak.try_exists()
+            .map_err(|e| unwritable_target_error(bak.parent().unwrap_or(&bak), &e))
+    };
+    let server_backed_up = has_bak(&targets.server_bin)?;
+    let mcp_backed_up = has_bak(&targets.mcp_bin)?;
+    let web_backed_up = has_bak(&targets.web_dir)?;
+    if server_backed_up || mcp_backed_up {
+        refuses_writes(targets.server_bin.parent())?;
+    }
+    if web_backed_up {
+        refuses_writes(targets.web_dir.parent())?;
+    }
+
     let mut restored = false;
     restored |= restore_from_bak(&targets.server_bin)?;
     restored |= restore_from_bak(&targets.mcp_bin)?;
@@ -376,9 +466,6 @@ pub fn rollback() -> Result<(), AppCommandError> {
             "No previous version is available to roll back to",
         ));
     }
-    // The staged upgrade has been undone; clear its marker so the next
-    // `perform_update` is not refused as "already staged".
-    let _ = take_upgrade_staged();
     Ok(())
 }
 
@@ -1108,6 +1195,213 @@ mod tests {
                 assert_eq!(std::fs::read(b.join("mark")).unwrap(), b"B");
             }
         }
+    }
+
+    #[test]
+    fn unwritable_target_error_keeps_the_prefix_the_ui_classifies() {
+        // A client that predates the i18n key tells an installation permission
+        // problem apart from a generic install failure only by this prefix, so
+        // rewording it would bring back the "close the app and try again"
+        // advice there.
+        let dir = tempfile::tempdir().unwrap();
+        // A missing directory fails the probe even when the tests run as
+        // root, which a read-only mode bit would not.
+        let missing = dir.path().join("missing");
+
+        let err = check_writable(&missing).unwrap_err();
+
+        // `to_string()` is exactly what the update state publishes as `error`.
+        assert_eq!(
+            err.to_string(),
+            format!("Update target is not writable: {}", missing.display())
+        );
+    }
+
+    #[test]
+    fn a_refused_write_is_explained_as_a_permission_problem() {
+        let dir = Path::new("/usr/local/bin");
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::ReadOnlyFilesystem,
+        ] {
+            let err = unwritable_target_error(dir, &std::io::Error::from(kind));
+
+            assert!(
+                matches!(err.code, crate::app_error::AppErrorCode::PermissionDenied),
+                "{kind:?}"
+            );
+            // The literal the frontend's `SERVER_UPDATE_ERROR_MESSAGES` maps.
+            assert_eq!(
+                err.i18n_key.as_deref(),
+                Some("SystemSettings.updateErrors.permissionDenied"),
+                "{kind:?}"
+            );
+            assert_eq!(
+                err.i18n_params,
+                Some(BTreeMap::from([(
+                    "path".to_string(),
+                    "/usr/local/bin".to_string()
+                )])),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_write_failure_names_the_os_reason_instead() {
+        // A full disk is not fixed by granting permissions; the advice for a
+        // refused write would send the operator the wrong way.
+        let dir = Path::new("/usr/local/bin");
+        let os_err = std::io::Error::from(std::io::ErrorKind::StorageFull);
+
+        let err = unwritable_target_error(dir, &os_err);
+
+        assert!(matches!(err.code, crate::app_error::AppErrorCode::IoError));
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some("SystemSettings.updateErrors.targetWriteFailed")
+        );
+        assert_eq!(
+            err.i18n_params,
+            Some(BTreeMap::from([
+                ("path".to_string(), "/usr/local/bin".to_string()),
+                ("reason".to_string(), os_err.to_string()),
+            ]))
+        );
+        // Same English message either way: older clients keep recognizing it.
+        assert_eq!(err.message, "Update target is not writable: /usr/local/bin");
+    }
+
+    /// An upgraded install with `.bak`s for the server binary and the web
+    /// bundle, the bundle under `<dir>/share` (a root-owned
+    /// `/usr/local/share/codeg` in the deployments this guards).
+    fn upgraded_install(dir: &Path) -> Targets {
+        let bindir = dir.join("bin");
+        let web_dir = dir.join("share").join("web");
+        std::fs::create_dir_all(&bindir).unwrap();
+        std::fs::create_dir_all(bak_path(&web_dir)).unwrap();
+        std::fs::create_dir_all(&web_dir).unwrap();
+        let server_bin = bindir.join("codeg-server");
+        std::fs::write(&server_bin, b"new").unwrap();
+        std::fs::write(bak_path(&server_bin), b"old").unwrap();
+        std::fs::write(web_dir.join("index.html"), b"new").unwrap();
+        std::fs::write(bak_path(&web_dir).join("index.html"), b"old").unwrap();
+        Targets {
+            server_bin,
+            mcp_bin: bindir.join("codeg-mcp"),
+            web_dir,
+        }
+    }
+
+    /// Probes as if `share` refused writes, or ran out of space.
+    fn share_denied(dir: &Path) -> Result<(), AppCommandError> {
+        share_fails(dir, std::io::ErrorKind::PermissionDenied)
+    }
+    fn share_full(dir: &Path) -> Result<(), AppCommandError> {
+        share_fails(dir, std::io::ErrorKind::StorageFull)
+    }
+    fn share_fails(dir: &Path, kind: std::io::ErrorKind) -> Result<(), AppCommandError> {
+        if dir.file_name().is_some_and(|name| name == "share") {
+            Err(unwritable_target_error(dir, &std::io::Error::from(kind)))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn rollback_refuses_before_touching_what_it_could_not_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let targets = upgraded_install(dir.path());
+
+        let err = rollback_targets(&targets, share_denied).unwrap_err();
+
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some(UPDATE_I18N_KEY_TARGET_NOT_WRITABLE)
+        );
+        // The binary was not rolled back ahead of a web bundle that couldn't be.
+        assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"new");
+        assert_eq!(
+            std::fs::read(targets.web_dir.join("index.html")).unwrap(),
+            b"new"
+        );
+    }
+
+    #[test]
+    fn rollback_goes_ahead_when_the_probe_only_lacks_space() {
+        // A full disk or spent inode quota fails the probe's create, but not
+        // the remove-then-rename a restore does.
+        let dir = tempfile::tempdir().unwrap();
+        let targets = upgraded_install(dir.path());
+
+        rollback_targets(&targets, share_full).unwrap();
+
+        assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"old");
+        assert_eq!(
+            std::fs::read(targets.web_dir.join("index.html")).unwrap(),
+            b"old"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rollback_refuses_a_backup_it_cannot_even_look_up() {
+        use std::os::unix::fs::PermissionsExt;
+        // Root traverses a mode-000 directory anyway, so there is nothing to
+        // observe when the tests run as root.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let targets = upgraded_install(dir.path());
+        let share = dir.path().join("share");
+        std::fs::set_permissions(&share, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // The probe itself would pass: only the `web.bak` lookup can fail.
+        let result = rollback_targets(&targets, |_| Ok(()));
+        std::fs::set_permissions(&share, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some(UPDATE_I18N_KEY_TARGET_NOT_WRITABLE)
+        );
+        // Not "rolled back" over a web bundle it never saw.
+        assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rollback_looks_up_every_backup_before_restoring_any() {
+        // A present server backup must not excuse the mcp one from the lookup:
+        // a self-referencing link fails it (ELOOP) even for root.
+        let dir = tempfile::tempdir().unwrap();
+        let targets = upgraded_install(dir.path());
+        let mcp_bak = bak_path(&targets.mcp_bin);
+        std::os::unix::fs::symlink(&mcp_bak, &mcp_bak).unwrap();
+
+        let err = rollback_targets(&targets, |_| Ok(())).unwrap_err();
+
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some(UPDATE_I18N_KEY_TARGET_WRITE_FAILED)
+        );
+        assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"new");
+    }
+
+    #[test]
+    fn rollback_ignores_a_refusing_directory_it_restores_nothing_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let targets = upgraded_install(dir.path());
+        std::fs::remove_dir_all(bak_path(&targets.web_dir)).unwrap();
+
+        rollback_targets(&targets, share_denied).unwrap();
+
+        assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"old");
+        assert_eq!(
+            std::fs::read(targets.web_dir.join("index.html")).unwrap(),
+            b"new"
+        );
     }
 
     #[test]

@@ -169,6 +169,42 @@ export function statusAccent(task: WorkTask): string {
   }
 }
 
+/**
+ * Statuses in which the engine is holding an agent for this task, and the
+ * card's italic note line is therefore about work happening right now.
+ *
+ * `preparing` counts: a round that resumes a session spends it on a real agent
+ * turn — the pre-prompt context compaction, minutes of it on a full context
+ * window — and that is exactly the stretch the note line exists to explain.
+ * Shared by the card and the list row so the two cannot drift.
+ */
+export function isLiveStatus(task: WorkTask): boolean {
+  return (
+    task.status === "preparing" ||
+    task.status === "running" ||
+    task.status === "awaiting_input" ||
+    task.status === "merging"
+  )
+}
+
+/**
+ * The italic line under a live card: what this generation is doing.
+ *
+ * The compaction outranks the agent's own last milestone because it is the
+ * more recent truth AND the more surprising one — a card that has sat in
+ * 准备中 or 合并中 for minutes has no other explanation on screen. Below it,
+ * `latest_progress` is already scoped to this generation by the backend, so
+ * there is nothing here to guard against a previous round's leftovers.
+ */
+export function liveNote(
+  task: WorkTask,
+  t: (key: "compactingNote") => string
+): string | null {
+  if (!isLiveStatus(task)) return null
+  if (task.compacting) return t("compactingNote")
+  return task.latest_progress ?? null
+}
+
 interface TaskCardProps extends TaskActionHandlers {
   task: WorkTask
   folderName: string | null
@@ -347,10 +383,7 @@ export function TaskCard({
 }: TaskCardProps) {
   const t = useTranslations("Tasks")
   const archived = task.archived_at != null
-  const live =
-    task.status === "running" ||
-    task.status === "awaiting_input" ||
-    task.status === "merging"
+  const note = liveNote(task, t)
 
   const stat =
     task.files_changed != null && task.files_changed > 0 ? (
@@ -495,9 +528,9 @@ export function TaskCard({
           {task.result_summary}
         </p>
       ) : null}
-      {live && task.latest_progress ? (
+      {note ? (
         <p className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug text-muted-foreground italic">
-          {task.latest_progress}
+          {note}
         </p>
       ) : null}
 

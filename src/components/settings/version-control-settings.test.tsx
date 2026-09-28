@@ -11,6 +11,7 @@ vi.mock("@/lib/api", () => ({
   updateGitHubAccounts: vi.fn(),
   validateGitHubToken: vi.fn(),
   validateGitLabToken: vi.fn(),
+  validateGiteaToken: vi.fn(),
   getAccountToken: vi.fn(),
   deleteAccountToken: vi.fn(),
   saveAccountToken: vi.fn(),
@@ -115,5 +116,62 @@ describe("VersionControlSettings account avatars", () => {
     // Indexing with [0] would have split the surrogate pair and rendered a
     // replacement glyph instead of a letter.
     await waitFor(() => expect(screen.getByText("𝒥")).toBeInTheDocument())
+  })
+})
+
+describe("VersionControlSettings forge sections", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockDetectGit.mockResolvedValue({
+      installed: true,
+      version: "git version 2.39.0",
+      path: "/usr/bin/git",
+    })
+    mockGetGitSettings.mockResolvedValue({ custom_path: null })
+  })
+
+  /**
+   * A declared Gitea account has to land in the Gitea section and NOWHERE else.
+   * The section that would otherwise swallow it is the plain-git one at the
+   * bottom — a catch-all defined by what the forge sections leave behind — and
+   * an account filed there loses the two actions only a forge account gets
+   * (test the token against the API, rotate it in place).
+   */
+  it("files a declared Gitea account under Gitea, not among the plain git credentials", async () => {
+    mockGetGitHubAccounts.mockResolvedValue({
+      accounts: [
+        account({
+          id: "acc-gitea",
+          server_url: "https://git.corp.example",
+          username: "tea",
+          provider: "gitea",
+          avatar_url: null,
+        }),
+      ],
+    })
+
+    renderWithIntl()
+
+    await waitFor(() =>
+      expect(screen.getByText("Gitea accounts")).toBeInTheDocument()
+    )
+    // The empty-state of the section it must NOT be in, which is only rendered
+    // when that section really has nothing.
+    expect(
+      screen.getByText("No Git server accounts configured.")
+    ).toBeInTheDocument()
+    // …and the Gitea section's own empty-state is gone, because the account
+    // is in it.
+    expect(screen.queryByText("No Gitea account yet")).not.toBeInTheDocument()
+  })
+
+  it("shows an empty Gitea section when nothing is configured for it", async () => {
+    mockGetGitHubAccounts.mockResolvedValue({ accounts: [] })
+
+    renderWithIntl()
+
+    await waitFor(() =>
+      expect(screen.getByText("No Gitea account yet")).toBeInTheDocument()
+    )
   })
 })

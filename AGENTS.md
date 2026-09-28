@@ -21,7 +21,7 @@ Codeg（Code Generation）是一个多智能体编码工作台，它将多个智
 ### 前端
 
 ```bash
-pnpm eslint .                  # lint
+pnpm lint .                    # lint
 pnpm test                      # vitest 全跑（CI 用同一条命令）
 pnpm test:watch                # 开发时增量重跑
 pnpm test:coverage             # 覆盖率报告（输出到 coverage/index.html）

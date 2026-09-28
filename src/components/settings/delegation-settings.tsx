@@ -14,13 +14,13 @@
  * forwarded from the parent agent CLI; there is no broker-side timeout to
  * configure here.
  *
- * Mounted under `/settings/general` next to the terminal and rendering
- * sections, because delegation is a global feature — not per-agent — and
- * doesn't belong inside the 7,800-line `acp-agent-settings.tsx` that
- * powers `/settings/agents`.
+ * Mounted under `/settings/collaboration` above the in-conversation tools,
+ * because delegation is a global feature — not per-agent — and doesn't belong
+ * inside the 7,800-line `acp-agent-settings.tsx` that powers
+ * `/settings/agents`.
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { AlertTriangle, Bubbles, Gauge, HardDrive, Power } from "lucide-react"
 import { toast } from "sonner"
@@ -41,6 +41,8 @@ import {
   setDelegationSettings,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { subscribe } from "@/lib/platform"
+import { DELEGATION_SETTINGS_CHANGED_EVENT } from "@/lib/types"
 import type { AgentDelegationDefaults, AgentType } from "@/lib/types"
 import { DelegationAgentDefaultsPanel } from "./delegation-agent-defaults"
 
@@ -76,13 +78,24 @@ export function DelegationSettingsSection() {
   // tools (see `withheldByHostTools`). Empty until the agent list loads, and
   // left empty if it fails — this is an explanatory note, never a gate.
   const [withheldAgents, setWithheldAgents] = useState<string[]>([])
+  /** Last value of the switch that came from the backend — a load, a save, or
+   * the broadcast below. `enabled !== baselineEnabledRef.current` is therefore
+   * "the user moved this and hasn't saved yet". */
+  const baselineEnabledRef = useRef(false)
+  /** Bumped by every broadcast, so the initial load can tell that its own read
+   * is the older fact and leave the switch alone. */
+  const remoteGenRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
+    const gen = remoteGenRef.current
     void getDelegationSettings()
       .then((s) => {
         if (cancelled) return
-        setEnabled(s.enabled)
+        if (remoteGenRef.current === gen) {
+          setEnabled(s.enabled)
+          baselineEnabledRef.current = s.enabled
+        }
         setDepth(s.depth_limit)
         setCacheMb(s.completed_cache_max_mb)
         setAgentDefaults(s.agent_defaults ?? {})
@@ -133,6 +146,51 @@ export function DelegationSettingsSection() {
     }
   }, [])
 
+  /**
+   * Converge on a delegation write that happened elsewhere.
+   *
+   * The status-bar codeg-mcp popover flips `enabled` on its own, while the save
+   * below submits the whole record. Without this, a form left open across such
+   * a toggle would send its stale `enabled` on the next save — changing only the
+   * depth limit would silently switch delegation back off.
+   *
+   * A switch the user has already moved keeps their pending value; only the
+   * baseline follows the remote, so their edit still wins on save.
+   */
+  useEffect(() => {
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void subscribe<DelegationSettings>(
+      DELEGATION_SETTINGS_CHANGED_EVENT,
+      (remote) => {
+        remoteGenRef.current += 1
+        // Snapshot the old baseline before overwriting it, rather than reading
+        // the ref from inside the updater. React usually computes an updater
+        // eagerly, which would read it before the line below — but only while
+        // the fiber has no pending work; once it defers, the updater would see
+        // the NEW baseline, conclude an untouched switch had been edited, and
+        // refuse the broadcast, which is the one case this exists for. Reading
+        // it here is correct under both schedules.
+        const previousBaseline = baselineEnabledRef.current
+        baselineEnabledRef.current = remote.enabled
+        setEnabled((current) =>
+          current === previousBaseline ? remote.enabled : current
+        )
+      }
+    )
+      .then((fn) => {
+        if (disposed) fn()
+        else unsubscribe = fn
+      })
+      // Transport not ready is not a reason to break the form; this window just
+      // keeps whatever it loaded.
+      .catch(() => {})
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
+  }, [])
+
   const save = useCallback(async () => {
     const payload: DelegationSettings = {
       enabled,
@@ -146,6 +204,7 @@ export function DelegationSettingsSection() {
       // Mirror any server-side clamps / filter passes back into the UI so the
       // inputs reflect what was actually persisted.
       setEnabled(applied.enabled)
+      baselineEnabledRef.current = applied.enabled
       setDepth(applied.depth_limit)
       setCacheMb(applied.completed_cache_max_mb)
       setAgentDefaults(applied.agent_defaults ?? {})

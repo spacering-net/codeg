@@ -143,6 +143,15 @@ function folderCheckbox(name: string): HTMLElement {
   })
 }
 
+/** The toolbar's two switches, by their visible labels. */
+function importableOnlySwitch(): HTMLElement {
+  return screen.getByRole("switch", { name: "Importable only" })
+}
+function includeDeletedSwitch(): HTMLElement {
+  // The label carries the scan's deleted count — one row in the fixture.
+  return screen.getByRole("switch", { name: "Include deleted (1)" })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   scanMock.mockResolvedValue(scanFixture())
@@ -150,6 +159,7 @@ beforeEach(() => {
     imported: 0,
     updated: 0,
     skipped: 0,
+    restored: 0,
     not_found: 0,
     failed: 0,
     created_folders: 0,
@@ -253,11 +263,87 @@ describe("ImportSessionsWindow", () => {
     renderWindow()
     await screen.findByText("alpha")
 
-    fireEvent.click(screen.getByRole("switch"))
+    fireEvent.click(importableOnlySwitch())
     expect(screen.queryByText("Alpha old")).toBeNull()
     expect(screen.queryByText("Beta gone")).toBeNull()
     expect(screen.getByText("Alpha one")).toBeVisible()
     expect(screen.getByText("Beta new")).toBeVisible()
+  })
+
+  it("include-deleted opts a deleted session into selection and import", async () => {
+    renderWindow()
+    await screen.findByText("alpha")
+
+    // Off by default: the deleted row is inert and the footer counts only the
+    // three new sessions.
+    expect(sessionCheckbox("Beta gone")).toBeDisabled()
+    expect(
+      screen.getByText("5 sessions · 3 importable · 2 folders")
+    ).toBeVisible()
+
+    fireEvent.click(includeDeletedSwitch())
+    expect(sessionCheckbox("Beta gone")).toBeEnabled()
+    // It counts as offerable now — and the badge still says "Deleted", which is
+    // what tells the user this checkbox restores rather than imports.
+    expect(
+      screen.getByText("5 sessions · 4 importable · 2 folders")
+    ).toBeVisible()
+    expect(screen.getByText("Deleted")).toBeVisible()
+
+    fireEvent.click(sessionCheckbox("Beta gone"))
+    fireEvent.click(screen.getByRole("button", { name: "Import selected" }))
+
+    await screen.findByText("Import finished")
+    expect(importMock).toHaveBeenCalledWith([
+      { agentType: "gemini", externalId: "b1" },
+    ])
+  })
+
+  it("select-all never sweeps up a deleted session until opted in", async () => {
+    renderWindow()
+    await screen.findByText("alpha")
+
+    // The deletion was deliberate: no bulk helper may resurrect it by accident.
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }))
+    expect(screen.getByText("3 selected")).toBeVisible()
+    expect(sessionCheckbox("Beta gone")).not.toBeChecked()
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }))
+
+    fireEvent.click(includeDeletedSwitch())
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }))
+    expect(screen.getByText("4 selected")).toBeVisible()
+    expect(sessionCheckbox("Beta gone")).toBeChecked()
+  })
+
+  it("turning include-deleted back off un-stages the deleted selections", async () => {
+    renderWindow()
+    await screen.findByText("alpha")
+
+    fireEvent.click(includeDeletedSwitch())
+    fireEvent.click(sessionCheckbox("Beta gone"))
+    fireEvent.click(sessionCheckbox("Alpha one"))
+    expect(screen.getByText("2 selected")).toBeVisible()
+
+    // The deleted row goes inert again, so its key must leave the selection —
+    // otherwise the footer promises an import the run would not perform.
+    fireEvent.click(includeDeletedSwitch())
+    expect(screen.getByText("1 selected")).toBeVisible()
+    expect(sessionCheckbox("Beta gone")).not.toBeChecked()
+    expect(sessionCheckbox("Alpha one")).toBeChecked()
+  })
+
+  it("disables the include-deleted switch when the scan found none", async () => {
+    const clean = scanFixture()
+    clean.folders[1].sessions = clean.folders[1].sessions.filter(
+      (s) => s.status !== "deleted"
+    )
+    scanMock.mockResolvedValue(clean)
+    renderWindow()
+    await screen.findByText("alpha")
+
+    expect(
+      screen.getByRole("switch", { name: "Include deleted" })
+    ).toBeDisabled()
   })
 
   it("imports exactly the selected keys and shows the summary", async () => {
@@ -265,6 +351,7 @@ describe("ImportSessionsWindow", () => {
       imported: 2,
       updated: 0,
       skipped: 0,
+      restored: 0,
       not_found: 0,
       failed: 0,
       created_folders: 1,
@@ -276,6 +363,7 @@ describe("ImportSessionsWindow", () => {
           imported: 2,
           updated: 0,
           skipped: 0,
+          restored: 0,
         },
       ],
       errors: [],
@@ -295,6 +383,7 @@ describe("ImportSessionsWindow", () => {
     ])
     // Summary tiles show the tallies.
     expect(screen.getByText("Imported")).toBeVisible()
+    expect(screen.getByText("Restored")).toBeVisible()
     expect(screen.getByText("Folders created")).toBeVisible()
   })
 

@@ -54,6 +54,7 @@ import { normalizeMcpType } from "@/lib/mcp-types"
 import { cn } from "@/lib/utils"
 import type {
   LocalMcpServer,
+  LocalMcpSourceWarning,
   McpAppType,
   McpMarketplaceItem,
   McpMarketplaceInstallOption,
@@ -79,6 +80,31 @@ const DEFAULT_DRAFT_SPEC = JSON.stringify(
   2
 )
 
+/**
+ * Servers worth offering by name rather than making someone find.
+ *
+ * One, and the reason for it is not convenience: the registry carries
+ * lookalikes of `chrome-devtools-mcp` under the same name and description with
+ * a different owner, and a person adding a browser tool by hand is exactly the
+ * person who cannot tell them apart. This fills the draft with the official
+ * package. It does not install it — the spec stays in front of the user, who
+ * still chooses which agents get it — and the note beside it says what the
+ * thing is and, just as much, what it is not.
+ */
+export const SUGGESTED_SERVERS = [
+  {
+    key: "chromeDevtools",
+    id: "chrome-devtools",
+    label: "Chrome DevTools",
+    note: "local.suggestedChromeNote",
+    spec: {
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "chrome-devtools-mcp@latest"],
+    },
+  },
+] as const
+
 type McpTranslator = (
   key: string,
   values?: Record<string, string | number>
@@ -102,7 +128,28 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "deepseek", label: "DeepSeek Harness" },
   { value: "qoder", label: "Qoder" },
   { value: "antigravity", label: "Google Antigravity" },
+  // pi 同理不作为可分配目标：读写的 ~/.pi/agent/mcp.json 属于第三方 pi 扩展，
+  // pi 自身没有 MCP，pi-acp 也不转发线缆上的 mcpServers。给没装该扩展的用户
+  // 写这个文件只会造出一个没人读的配置。存量 "pi" 条目照样能改能删——
+  // saveLocalServer 会保留既有分配，后端 ALL_MCP_APPS 也包含 Pi。
 ]
+
+// The backend SCANS more agents than it lets you assign to: OpenClaw and pi are
+// read back so existing entries survive (see each one's note in APP_OPTIONS),
+// but neither is an assignable target in any of the three checkbox grids. A
+// scan warning can still name them, so they need a label.
+const SCAN_ONLY_APP_LABELS: Partial<Record<McpAppType, string>> = {
+  open_claw: "OpenClaw",
+  pi: "pi",
+}
+
+function appLabel(app: McpAppType): string {
+  return (
+    APP_OPTIONS.find((option) => option.value === app)?.label ??
+    SCAN_ONLY_APP_LABELS[app] ??
+    app
+  )
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -271,6 +318,7 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     deepseek: appSet.has("deepseek"),
     qoder: appSet.has("qoder"),
     antigravity: appSet.has("antigravity"),
+    pi: appSet.has("pi"),
   }
 }
 
@@ -338,6 +386,9 @@ export function McpSettings() {
   const [selection, setSelection] = useState<Selection>(null)
 
   const [installedServers, setInstalledServers] = useState<LocalMcpServer[]>([])
+  const [sourceWarnings, setSourceWarnings] = useState<LocalMcpSourceWarning[]>(
+    []
+  )
   const [localFilter, setLocalFilter] = useState("")
 
   const [providers, setProviders] = useState<McpMarketplaceProvider[]>([])
@@ -409,6 +460,13 @@ export function McpSettings() {
     [localSpecText]
   )
 
+  // A scan that could not read every agent is fine to LIST from but not to
+  // reassign from: the app checkboxes it seeds drive removals, so an agent
+  // missing only because its file was unreadable would be stripped. The
+  // backend refuses such a save; the UI blocks composing one, which also stops
+  // the draft outliving the repair (fix the file, hit Refresh, then edit).
+  const scanDegraded = sourceWarnings.length > 0
+
   const filteredLocalServers = useMemo(() => {
     const q = localFilter.trim().toLowerCase()
     if (!q) return installedServers
@@ -420,9 +478,10 @@ export function McpSettings() {
   }, [installedServers, localFilter, mcpT])
 
   const refreshLocalServers = useCallback(async () => {
-    const servers = await mcpScanLocal()
-    setInstalledServers(servers)
-    return servers
+    const scan = await mcpScanLocal()
+    setInstalledServers(scan.servers)
+    setSourceWarnings(scan.warnings)
+    return scan.servers
   }, [])
 
   const loadInitial = useCallback(async () => {
@@ -430,18 +489,19 @@ export function McpSettings() {
     setLoadingError(null)
 
     try {
-      const [servers, marketProviders] = await Promise.all([
+      const [scan, marketProviders] = await Promise.all([
         mcpScanLocal(),
         mcpListMarketplaces(),
       ])
-      setInstalledServers(servers)
+      setInstalledServers(scan.servers)
+      setSourceWarnings(scan.warnings)
       setProviders(marketProviders)
       setSelectedProvider(
         (current) => current || marketProviders[0]?.id || "official_registry"
       )
 
-      if (servers[0]) {
-        setSelection({ kind: "local", id: servers[0].id })
+      if (scan.servers[0]) {
+        setSelection({ kind: "local", id: scan.servers[0].id })
       }
     } catch (err) {
       const message = toLocalizedErrorMessage(err, mcpT)
@@ -609,11 +669,13 @@ export function McpSettings() {
 
     // Apps the user can see and toggle in the UI.
     const visibleApps = selectedAppsFromDraft(localAppsDraft)
-    // Carry forward assignments for agents no longer offered in the UI (e.g.
-    // OpenClaw, which no longer accepts MCP over the ACP wire). We never add
-    // these, but must not silently strip a legacy assignment from a server the
-    // user is editing — that would destroy existing on-disk config and could
-    // wedge an OpenClaw-only server into an unsavable "no apps" state.
+    // Carry forward assignments for agents not offered in the UI (OpenClaw,
+    // which no longer accepts MCP over the ACP wire, and pi, whose config
+    // belongs to a third-party extension). We never add these, but must not
+    // silently strip such an assignment from a server the user is editing —
+    // the backend save means "these agents and no others", so dropping one
+    // here DELETES that agent's on-disk entry, and it could also wedge an
+    // OpenClaw- or pi-only server into an unsavable "no apps" state.
     const hiddenLegacyApps = selectedLocal.apps.filter(
       (app) => !APP_OPTIONS.some((option) => option.value === app)
     )
@@ -1082,6 +1144,21 @@ export function McpSettings() {
                 </div>
               ) : null}
 
+              {/* One agent's config being unreadable hides only that agent's
+                  servers — the rest of the list below is still real, so this
+                  is a warning beside it rather than an error instead of it. */}
+              {sourceWarnings.map((warning) => (
+                <div
+                  key={warning.app}
+                  className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500 break-all"
+                >
+                  {t("local.sourceUnreadable", {
+                    app: appLabel(warning.app),
+                    message: warning.message,
+                  })}
+                </div>
+              ))}
+
               <div className="flex-1 min-h-0 overflow-auto space-y-1">
                 {filteredLocalServers.length === 0 ? (
                   <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
@@ -1356,6 +1433,38 @@ export function McpSettings() {
 
               <div className="space-y-2">
                 <div className="text-xs text-muted-foreground">
+                  {t("local.suggestedLabel")}
+                </div>
+                {SUGGESTED_SERVERS.map((suggested) => (
+                  <div key={suggested.key} className="space-y-1.5">
+                    {/* Off once the spec has been written in: "start from" is
+                        for a form nobody has started, and a button that threw
+                        away a spec someone had typed — with no undo and no
+                        warning — would be a bad trade for saving them a
+                        paste. The id is left alone for the same reason. */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={draftSpecText.trim() !== DEFAULT_DRAFT_SPEC}
+                      onClick={() => {
+                        if (!draftServerId.trim())
+                          setDraftServerId(suggested.id)
+                        setDraftSpecText(
+                          JSON.stringify(suggested.spec, null, 2)
+                        )
+                      }}
+                    >
+                      {suggested.label}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      {t(suggested.note)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">
                   {t("local.serverIdLabel")}
                 </div>
                 <Input
@@ -1411,6 +1520,15 @@ export function McpSettings() {
                 </div>
               ) : null}
 
+              {/* Creating writes through the same command, which refuses while
+                  any agent's config is unreadable — an id that already exists
+                  in the unread one would be assigned away from it. */}
+              {scanDegraded ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                  {t("local.saveBlockedByUnreadableSource")}
+                </div>
+              ) : null}
+
               <div className="flex justify-end gap-2">
                 <Button
                   variant="outline"
@@ -1425,7 +1543,10 @@ export function McpSettings() {
                       console.error("[Settings] create local MCP failed:", err)
                     })
                   }}
-                  disabled={Boolean(runningAction?.startsWith("create:"))}
+                  disabled={
+                    scanDegraded ||
+                    Boolean(runningAction?.startsWith("create:"))
+                  }
                 >
                   {runningAction?.startsWith("create:") ? (
                     <>
@@ -1517,6 +1638,18 @@ export function McpSettings() {
                 </div>
               ) : null}
 
+              {/* The checkboxes above were seeded from a scan that could not
+                  read every agent, so an agent that holds this server may be
+                  showing as unchecked — and saving means "remove it from every
+                  unchecked agent". The backend refuses such a save too; this
+                  keeps the user from composing one whose stale draft would
+                  still be accepted once they repair the file out of band. */}
+              {scanDegraded ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                  {t("local.saveBlockedByUnreadableSource")}
+                </div>
+              ) : null}
+
               <div className="flex justify-end">
                 <Button
                   onClick={() => {
@@ -1524,7 +1657,9 @@ export function McpSettings() {
                       console.error("[Settings] save local MCP failed:", err)
                     })
                   }}
-                  disabled={runningAction === `save:${selectedLocal.id}`}
+                  disabled={
+                    scanDegraded || runningAction === `save:${selectedLocal.id}`
+                  }
                 >
                   {runningAction === `save:${selectedLocal.id}` ? (
                     <>

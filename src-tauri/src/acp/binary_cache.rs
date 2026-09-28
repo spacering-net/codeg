@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::acp::cursor_acp_retry_compat;
 use crate::acp::error::AcpError;
 use crate::acp::registry;
 use crate::models::agent::AgentType;
@@ -13,10 +14,43 @@ use crate::models::agent::AgentType;
 /// resolution) and would otherwise collide on the rename target.
 static TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Root for codeg-managed agent binaries.
+///
+/// Resolution order mirrors `paths.rs`:
+/// 1. `$CODEG_HOME/acp-binaries`
+/// 2. `$CODEG_DATA_DIR/acp-binaries` (server mode)
+/// 3. `<data-local>/app.codeg/acp-binaries`
+///
+/// **Not** `dirs::cache_dir()`, which is where this used to live. On Windows
+/// the two are the same directory (`%LOCALAPPDATA%`), so nothing moves there.
+/// On macOS `cache_dir()` is `~/Library/Caches`, which the platform documents
+/// as reclaimable and which storage optimization, APFS purging and third-party
+/// cleaners all treat as fair game; on Linux `~/.cache` is XDG-defined as safe
+/// to delete. Neither is a defensible home for several hundred megabytes of
+/// agent runtime that cannot be regenerated without a network round trip —
+/// losing it presents to the user as "the agent I installed is gone".
 pub(crate) fn cache_dir() -> Result<PathBuf, AcpError> {
-    let base = dirs::cache_dir()
-        .ok_or_else(|| AcpError::DownloadFailed("cannot determine cache directory".into()))?;
+    if let Some(custom) = std::env::var_os("CODEG_HOME").filter(|s| !s.is_empty()) {
+        return Ok(PathBuf::from(custom).join("acp-binaries"));
+    }
+    if let Some(data) = std::env::var_os("CODEG_DATA_DIR").filter(|s| !s.is_empty()) {
+        return Ok(PathBuf::from(data).join("acp-binaries"));
+    }
+    let base = dirs::data_local_dir()
+        .ok_or_else(|| AcpError::DownloadFailed("cannot determine data directory".into()))?;
     Ok(base.join("app.codeg").join("acp-binaries"))
+}
+
+/// The pre-relocation root, when it is a DIFFERENT directory that still exists.
+///
+/// `None` once migration has finished — and permanently `None` on Windows and
+/// under either env override, where old and new resolve to the same path. Every
+/// read-through below is therefore a transient state that ends when
+/// [`migrate_legacy_root`] succeeds, never a steady-state dual root.
+pub(crate) fn legacy_cache_dir() -> Option<PathBuf> {
+    let legacy = dirs::cache_dir()?.join("app.codeg").join("acp-binaries");
+    let current = cache_dir().ok()?;
+    (legacy != current && legacy.is_dir()).then_some(legacy)
 }
 
 /// Directory where codeg caches a managed `uv` toolchain (`uv` + `uvx`),
@@ -214,9 +248,249 @@ pub(crate) fn binary_dir(agent_id: &str, version: &str) -> Result<PathBuf, AcpEr
         .join(registry::current_platform()))
 }
 
+/// Move a pre-relocation binary root into the persistent one.
+///
+/// Called at startup from a detached thread. Best effort and idempotent: a
+/// failure leaves the legacy root in place, where the read-through paths keep
+/// finding it, and the next startup tries again.
+///
+/// Whole-root, not per agent: it also holds the managed `uv` toolchain
+/// (`uv-tool/`), the Uvx prepared-version markers (`uvx-prepared/`) and the
+/// `.trash/` aside directory, and leaving any of those behind would strand a
+/// working install just as thoroughly as leaving a binary behind.
+pub fn migrate_legacy_root() {
+    let Some(legacy) = legacy_cache_dir() else {
+        return;
+    };
+    let Ok(current) = cache_dir() else {
+        return;
+    };
+    migrate_root(&legacy, &current);
+}
+
+/// [`migrate_legacy_root`] with both roots handed in, so the behaviour that
+/// matters — cross-filesystem fallback, merge into an existing destination,
+/// and never dropping a source whose copy did not land — is testable without
+/// touching process-wide env.
+fn migrate_root(legacy: &Path, current: &Path) {
+    // Fast path: nothing at the destination yet, so the whole tree can be
+    // renamed. Same volume in the normal case, which makes this instant.
+    if !current.exists() {
+        if let Some(parent) = current.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::rename(legacy, current).is_ok() {
+            tracing::info!(
+                "[ACP] moved agent binaries {} -> {}",
+                legacy.display(),
+                current.display()
+            );
+            return;
+        }
+    }
+
+    // Either the destination already has content, or the rename failed —
+    // typically `EXDEV`, because `~/.cache` and `~/.local/share` need not be on
+    // one filesystem. Copy entry by entry, and only drop a source once its copy
+    // is verified present. NOT a permanent read-through fallback: leaving the
+    // legacy root as a live second root would make `ensure_binary_*` short
+    // circuit on the old copy and never populate the new one, while
+    // `clear_agent_cache` deleted only the new one — so an uninstall would undo
+    // itself on the next read.
+    if std::fs::create_dir_all(current).is_err() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(legacy) else {
+        return;
+    };
+    let staging_root = current.join(MIGRATION_STAGING);
+    let _ = std::fs::create_dir_all(&staging_root);
+    sweep_dead_staging(&staging_root);
+    let mut all_moved = true;
+    for entry in entries {
+        // A per-entry error means this child was NOT migrated, so the legacy
+        // root has to survive. `.flatten()` here would swallow that and let the
+        // final `remove_dir_all` delete something nothing ever copied.
+        let Ok(entry) = entry else {
+            all_moved = false;
+            continue;
+        };
+        let from = entry.path();
+        let to = current.join(entry.file_name());
+        if to.exists() {
+            // The destination already has this agent/tool. The newer root wins;
+            // the stale copy is redundant.
+            all_moved &= std::fs::remove_dir_all(&from).is_ok();
+            continue;
+        }
+        if std::fs::rename(&from, &to).is_ok() {
+            continue;
+        }
+        // Cross-filesystem (`EXDEV`): `~/.cache` and `~/.local/share` need not
+        // be one volume. Copy into a PRIVATE staging directory and rename that
+        // into place, so `to` only ever exists complete. Two failures depend on
+        // it. A crash mid-copy would otherwise leave a half-tree that the next
+        // startup reads as a finished migration — `to.exists()` — and then
+        // deletes the intact source over. And a second codeg running the same
+        // migration would otherwise be able to delete the copy this one just
+        // landed, because its cleanup would name `to`; now its cleanup can only
+        // ever reach its own staging directory.
+        let staging = staging_root.join(format!(
+            "{}-{}",
+            std::process::id(),
+            TRASH_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&staging);
+        match copy_tree(&from, &staging).and_then(|()| std::fs::rename(&staging, &to)) {
+            Ok(()) => {
+                all_moved &= std::fs::remove_dir_all(&from).is_ok();
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[ACP] could not migrate {} -> {}: {e}; retrying next startup",
+                    from.display(),
+                    to.display()
+                );
+                let _ = std::fs::remove_dir_all(&staging);
+                all_moved = false;
+            }
+        }
+    }
+    if all_moved {
+        let _ = std::fs::remove_dir_all(legacy);
+        tracing::info!(
+            "[ACP] migrated agent binaries to {} (legacy root removed)",
+            current.display()
+        );
+    }
+}
+
+/// Where a cross-volume migration assembles a copy before publishing it, as a
+/// child of the destination root.
+///
+/// Deliberately NOT `.trash/`, which was the first thing to hand and is wrong:
+/// [`sweep_trash`] deletes every child of that directory unconditionally, and a
+/// peer codeg sweeping while this one is mid-copy would delete the staging tree
+/// out from under it. On Unix that is worse than it sounds — `remove_dir_all`
+/// walks by descriptor, so a sweep that opened the directory can keep deleting
+/// through the rename and gut the copy AFTER it was published, while the legacy
+/// source is being removed on the strength of that same rename.
+///
+/// Nothing enumerates this name: agent and version lookups join a specific
+/// agent id, and the trash sweep reads `.trash/`.
+const MIGRATION_STAGING: &str = ".migrating";
+
+/// Drop staging directories left behind by a codeg that is no longer running.
+///
+/// Owner-pid gated for the same reason `acp::scratch_dir`'s foreign sweep is:
+/// a peer instance may be using one right now, and only a POSITIVELY confirmed
+/// dead owner authorizes a delete. "The probe failed" is not "the owner is
+/// gone" — hence the tri-state probe rather than a bool.
+fn sweep_dead_staging(staging_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(staging_root) else {
+        return;
+    };
+    let ours = std::process::id();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .split('-')
+            .next()
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        // Our own pid can only appear here because some EARLIER process held
+        // that number: this runs before this process stages anything, and
+        // migration runs once per process.
+        if pid != ours
+            && crate::acp::scratch_dir::probe_pid(pid) != crate::acp::scratch_dir::PidState::Dead
+        {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
+}
+
+/// Recursive copy used by [`migrate_legacy_root`] when a rename cannot cross
+/// the filesystem boundary. Returns the first error, leaving the caller to
+/// clean up the partial destination.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if meta.file_type().is_symlink() {
+        // Recreated, never followed and never skipped. Skipping used to be
+        // reported as success, after which the SOURCE was deleted — so a `uv`
+        // tool venv, whose `bin/` entries are links, would migrate into an
+        // install that is missing exactly the files it launches through.
+        let target = std::fs::read_link(from)?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, to)?;
+            return Ok(());
+        }
+        #[cfg(windows)]
+        {
+            // Creating a symlink on Windows needs Developer Mode or
+            // `SeCreateSymbolicLinkPrivilege`, so this can legitimately fail —
+            // and an error is the right answer: the caller keeps the source
+            // whenever a copy does not land. (Barely reachable: on Windows the
+            // two roots are the same path unless `CODEG_HOME`/`CODEG_DATA_DIR`
+            // moves one of them, so there is normally nothing to migrate.)
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!(
+                    "cannot recreate symlink {} -> {}",
+                    from.display(),
+                    target.display()
+                ),
+            ));
+        }
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(from, to)?;
+    // The executable bit is the whole point of a binary cache; `fs::copy`
+    // preserves it on Unix, but re-assert it for anything that was marked
+    // executable so a copied agent stays launchable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode();
+        if mode & 0o111 != 0 {
+            let _ = std::fs::set_permissions(to, std::fs::Permissions::from_mode(mode));
+        }
+    }
+    Ok(())
+}
+
 pub fn clear_agent_cache(agent_type: AgentType) -> Result<(), AcpError> {
     let agent_id = agent_cache_key(agent_type);
-    let dir = cache_dir()?.join(&agent_id);
+    // BOTH roots, and both have to succeed. While a migration is pending the
+    // legacy root is still readable, so a legacy copy that survives an
+    // "uninstall" is not a harmless leftover: `installed_binary_path` falls
+    // back to it and launches the agent the user just removed. Reporting
+    // success there would be a lie the next launch tells on — hence a real
+    // rename-aside fallback on the legacy root too, and a propagated error
+    // rather than `let _ =`.
+    let legacy = match legacy_cache_dir() {
+        Some(legacy) => clear_agent_dir_in(&legacy, &agent_id),
+        None => Ok(()),
+    };
+    // Attempted regardless of the legacy outcome — a failure on one root is no
+    // reason to leave the other populated — then the first error wins.
+    let current = clear_agent_dir_in(&cache_dir()?, &agent_id);
+    legacy.and(current)
+}
+
+/// Remove one agent's directory from ONE cache root.
+fn clear_agent_dir_in(root: &Path, agent_id: &str) -> Result<(), AcpError> {
+    let dir = root.join(agent_id);
     if !dir.exists() {
         return Ok(());
     }
@@ -230,7 +504,10 @@ pub fn clear_agent_cache(agent_type: AgentType) -> Result<(), AcpError> {
     // renaming a directory whose children are locked because rename only
     // updates the parent directory entry; the locked file's FILE_OBJECT keeps
     // working under the new path. The aside is swept on next startup.
-    let trash_root = cache_dir()?.join(".trash");
+    //
+    // `.trash/` under THIS root, not the current one: a rename cannot cross a
+    // filesystem, and the two roots need not be on one.
+    let trash_root = root.join(".trash");
     let _ = std::fs::create_dir_all(&trash_root);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -256,13 +533,16 @@ pub fn clear_agent_cache(agent_type: AgentType) -> Result<(), AcpError> {
 /// `clear_agent_cache` racing to rename a fresh entry into `.trash/` cannot
 /// have its target directory yanked out from under it.
 pub fn sweep_trash() {
-    let Ok(base) = cache_dir() else { return };
-    let trash = base.join(".trash");
-    let Ok(entries) = std::fs::read_dir(&trash) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let _ = std::fs::remove_dir_all(entry.path());
+    // Both roots: a migration that has not completed still has a `.trash/`
+    // under the old one, and nothing else would ever come back for it.
+    let roots = [cache_dir().ok(), legacy_cache_dir()];
+    for base in roots.into_iter().flatten() {
+        let Ok(entries) = std::fs::read_dir(base.join(".trash")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
 }
 
@@ -305,14 +585,33 @@ fn complete_dir_tree_install(
         .then_some(path)
 }
 
+/// Read-through across the two roots: current first, then a legacy root that
+/// has not finished migrating.
+///
+/// TRANSIENT by construction — [`legacy_cache_dir`] answers `None` the moment
+/// the old directory is gone, so this stops costing anything after the first
+/// successful [`migrate_legacy_root`]. It exists so a migration that cannot
+/// complete (a cross-filesystem copy that runs out of space, say) degrades to
+/// "still works, from the old place" instead of "every agent vanished".
 fn installed_binary_path(agent_id: &str, version: &str, cmd_name: &str) -> Option<PathBuf> {
+    if let Some(path) = installed_binary_path_in(&cache_dir().ok()?, agent_id, version, cmd_name) {
+        return Some(path);
+    }
+    installed_binary_path_in(&legacy_cache_dir()?, agent_id, version, cmd_name)
+}
+
+fn installed_binary_path_in(
+    root: &Path,
+    agent_id: &str,
+    version: &str,
+    cmd_name: &str,
+) -> Option<PathBuf> {
     let normalized = normalize_version_label(version);
     if normalized.is_empty() {
         return None;
     }
 
-    let platform_dir = cache_dir()
-        .ok()?
+    let platform_dir = root
         .join(agent_id)
         .join(normalized)
         .join(registry::current_platform());
@@ -339,14 +638,29 @@ fn installed_binary_path(agent_id: &str, version: &str, cmd_name: &str) -> Optio
 }
 
 fn installed_version_labels(agent_id: &str, cmd_name: &str) -> Result<Vec<String>, AcpError> {
-    let root = cache_dir()?.join(agent_id);
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-
     let mut versions = Vec::new();
     let mut seen = HashSet::new();
-    let entries = std::fs::read_dir(&root)
+    // Same two-root read-through as `installed_binary_path`, and `seen`
+    // already de-duplicates a version present in both.
+    let roots = [Some(cache_dir()?), legacy_cache_dir()];
+    for base in roots.into_iter().flatten() {
+        collect_version_labels(&base.join(agent_id), agent_id, cmd_name, &mut versions, &mut seen)?;
+    }
+    Ok(versions)
+}
+
+fn collect_version_labels(
+    root: &Path,
+    agent_id: &str,
+    cmd_name: &str,
+    versions: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) -> Result<(), AcpError> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(root)
         .map_err(|e| AcpError::DownloadFailed(format!("failed to read cache dir: {e}")))?;
 
     for entry in entries.flatten() {
@@ -367,7 +681,7 @@ fn installed_version_labels(agent_id: &str, cmd_name: &str) -> Result<Vec<String
         }
     }
 
-    Ok(versions)
+    Ok(())
 }
 
 fn installed_version_for_agent(
@@ -412,6 +726,7 @@ pub fn find_best_cached_binary_for_agent(
     versions.sort_by(|a, b| version_cmp(a, b));
     while let Some(version) = versions.pop() {
         if let Some(path) = installed_binary_path(&agent_id, &version, cmd_name) {
+            apply_cursor_acp_retry_compat(&agent_id, &version);
             return Ok(Some((path, version)));
         }
     }
@@ -464,6 +779,8 @@ pub async fn ensure_binary_for_agent_with_progress(
 ) -> Result<PathBuf, AcpError> {
     if let Some(path) = find_cached_binary_for_agent(agent_type, version, cmd_name)? {
         on_progress("Binary already cached, skipping download");
+        let agent_id = agent_cache_key(agent_type);
+        apply_cursor_acp_retry_compat(&agent_id, version);
         return Ok(path);
     }
 
@@ -525,6 +842,7 @@ async fn ensure_binary_with_progress(
     on_progress: impl Fn(&str),
 ) -> Result<PathBuf, AcpError> {
     if let Some(path) = find_cached_binary(agent_id, version, cmd_name)? {
+        apply_cursor_acp_retry_compat(agent_id, version);
         return Ok(path);
     }
 
@@ -606,9 +924,29 @@ async fn ensure_binary_with_progress(
     if result.is_err() {
         // Avoid leaving empty version/platform directories on failed downloads.
         let _ = std::fs::remove_dir_all(&dir);
+    } else {
+        apply_cursor_acp_retry_compat_after_install(agent_id, version);
     }
 
     result
+}
+
+/// Hook for a cache HIT: the install was already on disk, so the compat layer
+/// may answer from its per-process memo instead of re-reading the bundle.
+fn apply_cursor_acp_retry_compat(agent_id: &str, version: &str) {
+    let Ok(platform_dir) = binary_dir(agent_id, version) else {
+        return;
+    };
+    cursor_acp_retry_compat::maybe_apply_for_agent(agent_id, &platform_dir, version);
+}
+
+/// Hook for a fresh install: the extraction just replaced the bytes any
+/// earlier outcome described, so the memo must not short-circuit this one.
+fn apply_cursor_acp_retry_compat_after_install(agent_id: &str, version: &str) {
+    let Ok(platform_dir) = binary_dir(agent_id, version) else {
+        return;
+    };
+    cursor_acp_retry_compat::apply_after_install_for_agent(agent_id, &platform_dir, version);
 }
 
 /// Move a dir-tree archive's extracted content into the final per-version
@@ -872,6 +1210,229 @@ pub(crate) fn is_binary_file_compatible(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The common case: nothing at the destination, so the whole tree moves in
+    /// one rename and the old root is gone afterwards.
+    #[test]
+    fn migrate_root_renames_when_the_destination_is_empty() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("old");
+        let current = tmp.path().join("new");
+        std::fs::create_dir_all(legacy.join("opencode").join("1.0.0")).expect("mkdir");
+        std::fs::write(legacy.join("opencode").join("1.0.0").join("bin"), b"x").expect("write");
+
+        migrate_root(&legacy, &current);
+
+        assert!(!legacy.exists(), "legacy root must be gone");
+        assert!(current.join("opencode").join("1.0.0").join("bin").is_file());
+    }
+
+    /// A destination that already has content cannot be renamed onto, so the
+    /// merge path runs. Everything must still end up under the new root, and
+    /// the legacy root must still disappear — leaving it would make it a second
+    /// live root, which is how an uninstall gets undone by a read-through.
+    #[test]
+    fn migrate_root_merges_into_an_existing_destination() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("old");
+        let current = tmp.path().join("new");
+        std::fs::create_dir_all(legacy.join("cursor")).expect("mkdir");
+        std::fs::write(legacy.join("cursor").join("bin"), b"cursor").expect("write");
+        std::fs::create_dir_all(legacy.join("uv-tool")).expect("mkdir");
+        std::fs::write(legacy.join("uv-tool").join("uvx"), b"uvx").expect("write");
+        // Destination already holds a different agent.
+        std::fs::create_dir_all(current.join("opencode")).expect("mkdir");
+        std::fs::write(current.join("opencode").join("bin"), b"opencode").expect("write");
+
+        migrate_root(&legacy, &current);
+
+        assert!(!legacy.exists(), "legacy root must be gone after a merge");
+        assert!(current.join("cursor").join("bin").is_file());
+        // The managed uv toolchain travels too: leaving it behind strands
+        // every Uvx agent just as thoroughly as leaving a binary behind.
+        assert!(current.join("uv-tool").join("uvx").is_file());
+        assert!(current.join("opencode").join("bin").is_file());
+    }
+
+    /// A symlink used to be "copied" by skipping it and returning `Ok`, after
+    /// which the caller deleted the source. A `uv` tool venv is exactly that
+    /// shape — `bin/` is links — so the agent it migrated arrived missing the
+    /// file it launches through, and the original was already gone.
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_recreates_a_symlink_instead_of_dropping_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let from = tmp.path().join("from");
+        let to = tmp.path().join("to");
+        std::fs::create_dir_all(&from).expect("mkdir");
+        std::fs::write(from.join("real"), b"payload").expect("write");
+        std::os::unix::fs::symlink("real", from.join("link")).expect("symlink");
+
+        copy_tree(&from, &to).expect("copy");
+
+        let meta = std::fs::symlink_metadata(to.join("link")).expect("link must exist");
+        assert!(meta.file_type().is_symlink(), "and must still be a symlink");
+        assert_eq!(std::fs::read_link(to.join("link")).expect("read_link"), Path::new("real"));
+        assert_eq!(std::fs::read(to.join("real")).expect("read"), b"payload");
+    }
+
+    /// A successful merge must leave no staging directory behind, or every
+    /// startup would accumulate another.
+    #[test]
+    fn migrate_root_leaves_no_staging_directory_behind() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("old");
+        let current = tmp.path().join("new");
+        std::fs::create_dir_all(legacy.join("cursor")).expect("mkdir");
+        std::fs::write(legacy.join("cursor").join("bin"), b"cursor").expect("write");
+        // Force the merge path.
+        std::fs::create_dir_all(&current).expect("mkdir");
+        std::fs::write(current.join("marker"), b"x").expect("write");
+
+        migrate_root(&legacy, &current);
+
+        let residue: Vec<_> = std::fs::read_dir(current.join(MIGRATION_STAGING))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(residue.is_empty(), "staging residue: {residue:?}");
+    }
+
+    /// Staging must NOT live under `.trash/`, because `sweep_trash` deletes
+    /// every child of that directory unconditionally — including, from a peer
+    /// codeg, a copy this one is still assembling.
+    #[test]
+    fn staging_is_out_of_the_trash_sweep() {
+        assert_ne!(MIGRATION_STAGING, ".trash");
+    }
+
+    /// A staging directory abandoned by a process that is gone is reclaimed;
+    /// one whose owner is still alive is left alone, because a peer codeg may
+    /// be copying into it right now.
+    #[test]
+    fn dead_owners_staging_is_reclaimed_and_a_live_owner_is_not() {
+        // A pid the probe cannot answer `Dead` for, standing in for "a peer
+        // instance that is still working". Unix pid 1 is `init`/`launchd`.
+        // Windows has no pid 1 — `OpenProcess` fails it with
+        // ERROR_INVALID_PARAMETER, which the probe correctly reads as `Dead`,
+        // so pid 1 there is a stand-in for the opposite case. Pid 4 is the
+        // Windows System process: `Alive` when we may open it, `Unknown`
+        // (access-denied) when we may not, and both are non-`Dead` owners the
+        // gate must refuse to delete.
+        #[cfg(windows)]
+        const LIVE_PID: u32 = 4;
+        #[cfg(not(windows))]
+        const LIVE_PID: u32 = 1;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let staging_root = tmp.path().join(MIGRATION_STAGING);
+        let live = staging_root.join(format!("{LIVE_PID}-0"));
+        // No process can hold this: it is above every platform's pid ceiling.
+        let dead = staging_root.join("4294967294-0");
+        let foreign = staging_root.join("not-a-pid");
+        for dir in [&live, &dead, &foreign] {
+            std::fs::create_dir_all(dir).expect("mkdir");
+        }
+        // Fail on the premise rather than the conclusion if some platform ever
+        // stops holding that pid: "the survivor was deleted" reads as a bug in
+        // the sweep, which would be the wrong place to look.
+        assert_ne!(
+            crate::acp::scratch_dir::probe_pid(LIVE_PID),
+            crate::acp::scratch_dir::PidState::Dead,
+            "pid {LIVE_PID} must not probe as dead, or this test proves nothing"
+        );
+
+        sweep_dead_staging(&staging_root);
+
+        assert!(!dead.exists(), "a dead owner's staging must be reclaimed");
+        assert!(live.exists(), "a live owner's staging must survive");
+        assert!(foreign.exists(), "an unrecognized name must be left alone");
+    }
+
+    /// The uninstall fix in one line: removal is parameterized by ROOT, so the
+    /// legacy root gets the same treatment — including the rename-aside — as
+    /// the current one. Clearing only the current root would let
+    /// `installed_binary_path`'s legacy fallback resurrect the agent the user
+    /// just removed, while the call still reported success.
+    #[test]
+    fn clear_agent_dir_in_clears_whichever_root_it_is_given() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("some-root");
+        std::fs::create_dir_all(root.join("opencode").join("1.0.0")).expect("mkdir");
+        std::fs::write(root.join("opencode").join("1.0.0").join("bin"), b"x").expect("write");
+
+        clear_agent_dir_in(&root, "opencode").expect("clear");
+
+        assert!(!root.join("opencode").exists());
+        // A second pass over an absent directory is a no-op, not an error —
+        // `clear_agent_cache` calls this for a legacy root that usually is not
+        // there at all.
+        clear_agent_dir_in(&root, "opencode").expect("second clear");
+    }
+
+    /// When both roots hold the same agent the destination wins and the stale
+    /// copy is dropped, rather than the migration silently preferring the old
+    /// bytes.
+    #[test]
+    fn migrate_root_keeps_the_destination_copy_on_a_collision() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("old");
+        let current = tmp.path().join("new");
+        std::fs::create_dir_all(legacy.join("opencode")).expect("mkdir");
+        std::fs::write(legacy.join("opencode").join("bin"), b"stale").expect("write");
+        std::fs::create_dir_all(current.join("opencode")).expect("mkdir");
+        std::fs::write(current.join("opencode").join("bin"), b"fresh").expect("write");
+        // Force the merge path.
+        std::fs::write(current.join("marker"), b"x").expect("write");
+
+        migrate_root(&legacy, &current);
+
+        assert_eq!(
+            std::fs::read(current.join("opencode").join("bin")).expect("read"),
+            b"fresh"
+        );
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn migrate_root_is_a_noop_when_the_legacy_root_is_absent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("missing");
+        let current = tmp.path().join("new");
+        std::fs::create_dir_all(&current).expect("mkdir");
+        std::fs::write(current.join("keep"), b"x").expect("write");
+
+        migrate_root(&legacy, &current);
+
+        assert!(current.join("keep").is_file());
+    }
+
+    #[test]
+    fn copy_tree_preserves_the_executable_bit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let from = tmp.path().join("from");
+        let to = tmp.path().join("to");
+        std::fs::create_dir_all(&from).expect("mkdir");
+        let bin = from.join("agent");
+        std::fs::write(&bin, b"#!/bin/sh\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+
+        copy_tree(&from, &to).expect("copy");
+
+        assert!(to.join("agent").is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(to.join("agent"))
+                .expect("meta")
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "a copied agent must stay launchable");
+        }
+    }
 
     #[test]
     fn cache_key_uses_registry_id() {

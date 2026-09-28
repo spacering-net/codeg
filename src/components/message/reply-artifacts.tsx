@@ -10,7 +10,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useWorkspaceActions } from "@/contexts/workspace-context"
+import { useOpenFileTarget } from "@/hooks/use-open-file-target"
 import {
   CommitFileAdditions,
   CommitFileDeletions,
@@ -68,7 +68,7 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
   const t = useTranslations("Folder.chat.replyArtifacts")
   const tCommon = useTranslations("Folder.common")
   const { activeFolder: folder } = useActiveFolder()
-  const { openFilePreview, openSessionFileDiff } = useWorkspaceActions()
+  const openFileTarget = useOpenFileTarget()
   const [newFilesOpen, setNewFilesOpen] = useState(true)
   const [changedOpen, setChangedOpen] = useState(false)
 
@@ -100,10 +100,10 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
   const folderPath = folder?.path
 
   const openInTabs = (file: FileChangeStat) => {
-    // openFilePreview accepts absolute paths (any location) and paths
-    // relative to the active folder — agent-reported paths are one of the
-    // two, so hand them over as-is.
-    void openFilePreview(normalizeSlashPath(file.path))
+    // The opener accepts absolute paths (any location) and paths relative to
+    // the active folder — agent-reported paths are one of the two, so hand
+    // them over as-is.
+    void openFileTarget(normalizeSlashPath(file.path))
   }
 
   const revealInFolder = (file: FileChangeStat) => {
@@ -111,17 +111,21 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
     if (absolute) void revealItemInDir(absolute)
   }
 
-  // Open the file's unified diff in an editor tab. Keyed by the reply's first
-  // turn id so the same file changed by two different replies opens as two
-  // distinct diff tabs instead of colliding into one. Works in web too (unlike
-  // reveal), so it stays ungated by `isLocalDesktop()`.
+  // Open the file's unified diff. Keyed by the reply's first turn id so the
+  // same file changed by two different replies opens as two distinct diff tabs
+  // instead of colliding into one. Works in web too (unlike reveal), so it
+  // stays ungated by `isLocalDesktop()`. Routed through the same opener as
+  // `openInTabs` above — the two sit in one action row, and sending only one of
+  // them to the side panel would leave this one silently opening a diff tab
+  // behind whichever full-page route is covering the workspace.
   const replyDiffKey = sourceTurns[0]?.id ?? "reply"
   const viewDiff = (file: FileChangeStat) => {
-    openSessionFileDiff(
-      file.path,
-      file.diff ?? t("noDiffDataAvailable", { filePath: file.path }),
-      replyDiffKey
-    )
+    void openFileTarget(file.path, {
+      diff: {
+        content: file.diff ?? t("noDiffDataAvailable", { filePath: file.path }),
+        groupLabel: replyDiffKey,
+      },
+    })
   }
 
   const totalAdditions = changedFiles.reduce((sum, f) => sum + f.additions, 0)

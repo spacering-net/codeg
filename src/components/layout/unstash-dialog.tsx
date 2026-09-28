@@ -1,7 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { Archive, ArchiveRestore, ChevronRight, Loader2 } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronRight,
+  FileIcon,
+  Loader2,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -35,8 +41,10 @@ import {
   FileTree,
   FileTreeFile,
   FileTreeFolder,
+  FileTreeIcon,
 } from "@/components/ai-elements/file-tree"
 import { DiffViewer } from "@/components/diff/diff-viewer"
+import { ImageDiffView } from "@/components/diff/image-diff-view"
 import {
   gitStashList,
   gitStashShow,
@@ -45,7 +53,8 @@ import {
   gitShowFile,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { languageFromPath } from "@/lib/language-detect"
+import { loadImageDiffSides, type ImageDiffSides } from "@/lib/image-diff"
+import { isBinaryImageFile, languageFromPath } from "@/lib/language-detect"
 import type { GitStashEntry, GitStatusEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -186,9 +195,18 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
   const [selectedStashRef, setSelectedStashRef] = useState<string | null>(null)
   const [originalContent, setOriginalContent] = useState("")
   const [modifiedContent, setModifiedContent] = useState("")
+  // Keyed by the (stash, file) it was loaded for: two quick selections can
+  // settle out of order, and the key keeps one stash entry's pixels from being
+  // painted under another's label.
+  const [imageSides, setImageSides] = useState<{
+    stashRef: string
+    file: string
+    sides: ImageDiffSides
+  } | null>(null)
 
   const [listLoading, setListLoading] = useState(false)
   const [diffLoading, setDiffLoading] = useState(false)
+  const diffRequestRef = useRef(0)
   const [actionLoading, setActionLoading] = useState(false)
 
   const loadStashes = useCallback(async () => {
@@ -228,21 +246,39 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
   }
 
   async function handleSelectFile(stashRef: string, file: string) {
+    // Only the newest selection may write to the diff pane: two loads can
+    // settle in either order, and an older one landing last would overwrite
+    // the current file's content and clear its spinner.
+    const requestId = ++diffRequestRef.current
     setSelectedFile(file)
     setSelectedStashRef(stashRef)
     setDiffLoading(true)
+    setImageSides(null)
     try {
+      if (isBinaryImageFile(file)) {
+        const sides = await loadImageDiffSides(
+          folderPath,
+          file,
+          { kind: "ref", ref: `${stashRef}^` },
+          { kind: "ref", ref: stashRef }
+        )
+        if (requestId !== diffRequestRef.current) return
+        setImageSides({ stashRef, file, sides })
+        return
+      }
       const [orig, mod] = await Promise.all([
         gitShowFile(folderPath, file, stashRef + "^").catch(() => ""),
         gitShowFile(folderPath, file, stashRef).catch(() => ""),
       ])
+      if (requestId !== diffRequestRef.current) return
       setOriginalContent(orig)
       setModifiedContent(mod)
     } catch {
+      if (requestId !== diffRequestRef.current) return
       setOriginalContent("")
       setModifiedContent("")
     } finally {
-      setDiffLoading(false)
+      if (requestId === diffRequestRef.current) setDiffLoading(false)
     }
   }
 
@@ -298,11 +334,13 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
     return (
       <ContextMenu key={node.path}>
         <ContextMenuTrigger>
-          <FileTreeFile
-            name={node.name}
-            path={node.path}
-            className="gap-1 px-1.5 py-1"
-          >
+          <FileTreeFile name={node.name} path={node.path}>
+            {/* The icon fills the leading column a sibling folder spends on its
+                chevron; without it the file names hang one glyph LEFT of the
+                directory names they sit under. */}
+            <FileTreeIcon>
+              <FileIcon className="size-4 text-muted-foreground" />
+            </FileTreeIcon>
             <span className="flex-1 truncate text-left" title={node.path}>
               {node.name}
             </span>
@@ -376,14 +414,26 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : selectedFile && selectedStashRef ? (
-          <DiffViewer
-            original={originalContent}
-            modified={modifiedContent}
-            originalLabel={`${selectedStashRef}^ (${t("original")})`}
-            modifiedLabel={`${selectedStashRef} (${t("modified")})`}
-            language={languageFromPath(selectedFile)}
-            className="h-full"
-          />
+          imageSides &&
+          imageSides.file === selectedFile &&
+          imageSides.stashRef === selectedStashRef ? (
+            <ImageDiffView
+              original={imageSides.sides.original}
+              modified={imageSides.sides.modified}
+              originalLabel={`${selectedStashRef}^ (${t("original")})`}
+              modifiedLabel={`${selectedStashRef} (${t("modified")})`}
+              className="h-full"
+            />
+          ) : (
+            <DiffViewer
+              original={originalContent}
+              modified={modifiedContent}
+              originalLabel={`${selectedStashRef}^ (${t("original")})`}
+              modifiedLabel={`${selectedStashRef} (${t("modified")})`}
+              language={languageFromPath(selectedFile)}
+              className="h-full"
+            />
+          )
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             {t("selectFile")}

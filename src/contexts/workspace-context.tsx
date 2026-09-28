@@ -13,13 +13,14 @@ import {
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { buildFileTabId } from "@/lib/file-tab-id"
+import { browserTabBackendId, buildFileTabId } from "@/lib/file-tab-id"
 import {
   gitDiff,
   gitDiffWithBranch,
   gitIsTracked,
   gitShowDiff,
   gitShowFile,
+  listDirectoryWithFiles,
   readFileBase64,
   readFileForEdit,
   readFilePreview,
@@ -36,8 +37,14 @@ import {
   splitAbsPath,
 } from "@/lib/file-open-target"
 import { isAbsoluteFilePath } from "@/lib/file-path-display"
-import { pushClosedTab, snapshotFileTab } from "@/lib/closed-tab-stack"
 import {
+  batchCloseSlots,
+  pushClosedTab,
+  snapshotBrowserTab,
+  snapshotFileTab,
+} from "@/lib/closed-tab-stack"
+import {
+  isBinaryImageFile,
   isHiddenPath,
   isHtmlPreviewable,
   isImageFile,
@@ -45,6 +52,11 @@ import {
   isOfficePreviewable,
   languageFromPath,
 } from "@/lib/language-detect"
+import {
+  loadImageDiffSides,
+  type ImageDiffSides,
+  type ImageDiffSource,
+} from "@/lib/image-diff"
 import { toErrorMessage } from "@/lib/app-error"
 import {
   HIDDEN_TAB_CONTENT_BUDGET_CHARS,
@@ -56,17 +68,73 @@ import {
   type WorkspaceExternalConflict,
 } from "@/hooks/use-open-file-tabs-watch"
 import { useOfficeAutoPreview } from "@/lib/office-preview-prefs"
+import {
+  browserTabHiddenAt,
+  getBrowserTabState,
+  hasSurfaceClaim,
+  releaseBrowserTab,
+} from "@/lib/browser/browser-tab-store"
+import {
+  BLANK_PAGE_URL,
+  displayHostPort,
+  normalizeUrlForDedupe,
+} from "@/lib/browser/browser-url"
+import {
+  DEFAULT_BROWSER_PROFILE_ID,
+  browserProfileExists,
+  getBrowserPrefs,
+  subscribeBrowserPrefs,
+} from "@/lib/browser/browser-prefs"
+import {
+  isRemoteHostAddress,
+  remoteConnectionOfProfile,
+} from "@/lib/browser/remote-host"
+import { randomUUID } from "@/lib/utils"
 
 export type WorkspaceMode = "conversation" | "fusion"
+
+/** The closed-stack entry for a browser tab: the page it was showing, read
+ *  from the live state while that still exists (it is released right after).
+ *  `index` is the strip slot to reopen into — for a batch close, the slot
+ *  `batchCloseSlots` assigned, not the position in the pre-close strip. */
+function closedBrowserTab(tab: BrowserWorkspaceTab, index: number) {
+  const state = getBrowserTabState(tab.id)
+  return snapshotBrowserTab(
+    tab,
+    state?.url || state?.requestedUrl || tab.browser.initialUrl,
+    state?.title || tab.title,
+    index
+  )
+}
+
 export type WorkspacePane = "conversation" | "files"
 
-type FileWorkspaceTabKind = "file" | "diff" | "rich-diff"
+type FileLikeTabKind = "file" | "diff" | "rich-diff"
+type FileWorkspaceTabKind = FileLikeTabKind | "browser"
 type FileSaveState = "idle" | "saving" | "error"
 type LineEnding = "lf" | "crlf" | "mixed" | "none"
 
-export interface FileWorkspaceTab {
+/** Seed of a built-in browser tab. Live state (url, title, loading, history)
+ *  lives in `lib/browser/browser-tab-store`, keyed by the tab id, so page
+ *  activity never churns the `fileTabs` slice. */
+export interface BrowserTabSeed {
+  /** The URL the tab was opened with; the surface navigates to it once. */
+  initialUrl: string
+  /** Set on a tab adopted from another tab's `window.open` (popup). */
+  openerTabId: string | null
+  /** The browser profile the tab lives in (its cookie jar and storage).
+   *  Fixed for the tab's life: the surface is built in it. */
+  profile: string
+  /** The address lives on the codeg host this window is bound to — a
+   *  loopback or private address seen from a remote-workspace window. Such a
+   *  tab never loads in a profile of this computer: there it would reach this
+   *  machine's `localhost`, not the one the address was printed on. Absent on
+   *  every other tab. */
+  remote?: true
+}
+
+interface FileWorkspaceTabBase {
   id: string
-  kind: FileWorkspaceTabKind
   // Repo context for git-scoped diff tabs (working/branch/commit/session
   // diffs are repository operations and need the repo root). Plain file
   // tabs are folder-free: folderId is ALWAYS null and `path` holds the
@@ -84,6 +152,11 @@ export interface FileWorkspaceTab {
   modifiedContent?: string
   gitBaseContent?: string
   savedContent?: string
+  /** Both sides of an image diff, on a `rich-diff` tab whose file is a binary
+   *  image. Set INSTEAD of originalContent/modifiedContent, which are
+   *  text-shaped; `language === "image"` is what tells the panel which of the
+   *  two the tab carries. */
+  imageDiff?: ImageDiffSides
   isDirty?: boolean
   etag?: string | null
   mtimeMs?: number | null
@@ -96,6 +169,25 @@ export interface FileWorkspaceTab {
   // resolved against disk. Cleared by any successful content reload.
   stale?: boolean
 }
+
+/** A file, a unified diff, or a rich (side-by-side) diff. */
+export interface FileLikeWorkspaceTab extends FileWorkspaceTabBase {
+  kind: FileLikeTabKind
+  browser?: never
+}
+
+/** A built-in browser tab: no path, no editable content. */
+export interface BrowserWorkspaceTab extends FileWorkspaceTabBase {
+  kind: "browser"
+  path: null
+  language: "browser"
+  browser: BrowserTabSeed
+}
+
+// A discriminated union rather than optional fields on one shape: a `file`
+// tab can never carry browser state and a `browser` tab can never be dirty,
+// and the compiler should say so at every switch on `kind`.
+export type FileWorkspaceTab = FileLikeWorkspaceTab | BrowserWorkspaceTab
 
 // The provider value is split across three contexts so high-frequency
 // fileTabs churn (per-keystroke content updates, watcher-driven reloads)
@@ -118,10 +210,32 @@ interface WorkspaceActionsValue {
   // ONLY a resolution base for relative paths (defaults to the active
   // folder); once the path is absolute it plays no further role — the tab
   // is identified by the absolute path alone.
+  //
+  // Resolves with that absolute normalized path — i.e. the tab's identity —
+  // or null when the input could not be resolved (a bare relative path with
+  // no folder to resolve against). Callers that only want the side effect
+  // ignore it; a caller that must then FIND the tab (the file viewer drawer)
+  // has no other way to reproduce this resolution.
+  //
+  // `background` opens the tab WITHOUT bringing the files pane forward or
+  // moving its selection (it still claims the selection when nothing holds
+  // it). For openers that render the tab themselves and would otherwise
+  // rearrange a workspace the user is not looking at — the canvas's file
+  // cards, which re-open every tab on the board each time the route mounts.
+  //
+  // `index` is the strip slot for a tab that is not open yet, clamped to the
+  // strip; omitted = append. Reopening a closed tab passes the slot it was
+  // closed from. A tab that is already open is activated where it is.
   openFilePreview: (
     path: string,
-    options?: { line?: number; reload?: boolean; folderId?: number }
-  ) => Promise<void>
+    options?: {
+      line?: number
+      reload?: boolean
+      folderId?: number
+      background?: boolean
+      index?: number
+    }
+  ) => Promise<string | null>
   // Refetch the open tab matching the absolute `path` without changing
   // activeFileTabId. No-op when no tab matches or when the tab has unsaved
   // local edits (use markTabsStale for that case).
@@ -181,6 +295,70 @@ interface WorkspaceActionsValue {
   reloadActiveFile: () => Promise<void>
   toggleFileTabPreview: (tabId: string) => void
   toggleFilesMaximized: () => void
+  // Open (or re-activate) a built-in browser tab for an http(s) URL. One tab
+  // per URL (fragment ignored): a second open activates the existing tab.
+  // Returns the tab id, or null when the URL does not parse. The native
+  // surface is created by the tab's view when it mounts, not here.
+  // `openerTabId` (a workspace tab id) places the new tab right after that
+  // tab, the way a ⌘/Ctrl-click lands next to the page it came from.
+  // `index` is the strip slot for a tab that is not open yet, clamped to the
+  // strip; omitted = append, and an `openerTabId` wins over it. Reopening a
+  // closed tab passes the slot it was closed from. A tab already on this URL
+  // in the same profile is activated where it is — except for the blank page
+  // (`BLANK_PAGE_URL`), which always opens a fresh empty tab. `profile`
+  // defaults to the opener's, else to the preference for new tabs.
+  // `activate`: `true`/omitted shows the tab and brings the files pane
+  // forward; `"tab"` selects it in the strip but leaves the pane where it is
+  // (for an opener that is not the file column — a local server coming up —
+  // which should show its page without pulling anyone out of a conversation);
+  // `false` leaves the selection alone, claiming it only when nothing holds
+  // it, so the strip never carries a tab with an empty column beside it.
+  //
+  // `remote` opens the address as one on the remote codeg host (see
+  // `BrowserTabSeed.remote`); a tab opened from a remote tab is remote too.
+  openBrowserTab: (
+    url: string,
+    options?: {
+      folderId?: number
+      activate?: boolean | "tab"
+      openerTabId?: string
+      index?: number
+      profile?: string
+      remote?: boolean
+    }
+  ) => string | null
+  // Register a tab for a webview the BACKEND already created — a popup the
+  // page opened that the host adopted. `backendTabId` is the backend's id
+  // (`<opener>-p<n>`); the record is inserted right after its opener.
+  adoptBrowserTab: (params: {
+    backendTabId: string
+    url: string
+    openerBackendTabId: string
+    /** The profile the backend built the popup in; null = unknown. */
+    profile?: string | null
+  }) => string
+  // Bring back browser tabs saved by a previous run, as records only: none
+  // is activated, and a native surface is created for one when it is first
+  // shown. Entries are appended in order; nothing happens when the workspace
+  // already has browser tabs (a second document of the same run).
+  restoreBrowserTabs: (entries: RestorableBrowserTab[]) => void
+  // Release a background tab's native surface (memory) while keeping its
+  // record: the record moves to the page the tab was showing, so the next
+  // time it is shown a fresh surface loads that page. No-op for a tab that
+  // has no surface. Returns whether a surface was released.
+  suspendBrowserTab: (tabId: string) => boolean
+}
+
+/** What a browser tab needs to come back after a restart (see
+ *  `lib/browser/browser-tab-persistence`). */
+export interface RestorableBrowserTab {
+  url: string
+  title: string | null
+  folderId: number | null
+  /** A profile that exists (the restorer maps deleted ones to the default). */
+  profile: string
+  /** See `BrowserTabSeed.remote`. */
+  remote?: boolean
 }
 
 interface WorkspaceViewValue {
@@ -296,7 +474,7 @@ const IMAGE_MIME: Record<string, string> = {
 function loadingTab(
   id: string,
   folderId: number | null,
-  kind: FileWorkspaceTabKind,
+  kind: FileLikeTabKind,
   title: string,
   description: string | null,
   path: string | null,
@@ -383,6 +561,9 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     new Map()
   )
   const fileTabsRef = useRef<FileWorkspaceTab[]>([])
+  // Keep dismissals across folder changes and effect re-subscriptions. A
+  // watcher event must not reopen a preview the user already closed.
+  const autoOpenedOfficePathsRef = useRef(new Set<string>())
   // Latest-state mirrors for the stable action callbacks. Actions live in a
   // context value that must NOT change identity when tabs/folder change, so
   // they read these refs instead of capturing render-scoped state. The refs
@@ -566,24 +747,44 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   // folder surfaces as a load error on the next refresh, not a wipe.
 
   // Pure activation — no content mutation.
+  //
+  // `background` is for openers that are not the file column and must not
+  // steal it: a canvas file card opens the tab it renders FROM, so bringing
+  // the (covered) files pane forward and re-pointing its selection every time
+  // the board mounts would rearrange a workspace the user isn't even looking
+  // at. It still claims the selection when nothing holds it, so "tabs exist
+  // but none is active" never becomes reachable.
   const activateTab = useCallback(
-    (tabId: string) => {
+    (tabId: string, background = false) => {
+      if (background) {
+        setActiveFileTabId((prev) => prev ?? tabId)
+        return
+      }
       setActiveFileTabId(tabId)
       activateFilePane()
     },
     [activateFilePane]
   )
 
-  // Insert a freshly created (loading, empty) tab. Caller has verified no tab
-  // with this id exists. If a race introduced one, leave it alone.
+  // Insert a freshly created (loading, empty) tab at `index` (clamped), or at
+  // the end. Caller has verified no tab with this id exists. If a race
+  // introduced one, leave it alone.
   const seedLoadingTab = useCallback(
-    (nextTab: FileWorkspaceTab) => {
+    (nextTab: FileWorkspaceTab, background = false, index?: number) => {
       setFileTabs((prev) => {
         if (prev.some((tab) => tab.id === nextTab.id)) return prev
-        return [...prev, nextTab]
+        const at =
+          index == null
+            ? prev.length
+            : Math.max(0, Math.min(index, prev.length))
+        return [...prev.slice(0, at), nextTab, ...prev.slice(at)]
       })
-      setActiveFileTabId(nextTab.id)
-      activateFilePane()
+      if (background) {
+        setActiveFileTabId((prev) => prev ?? nextTab.id)
+      } else {
+        setActiveFileTabId(nextTab.id)
+        activateFilePane()
+      }
       // Open HTML/Markdown file tabs in the rendered preview by default rather
       // than the source editor. Only runs on first seed: reloads go through
       // markTabRefreshing (never here), so if the user later switches to the
@@ -604,6 +805,384 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     },
     [activateFilePane]
   )
+
+  const browserTabRecord = useCallback(
+    (
+      backendTabId: string,
+      url: string,
+      folderId: number | null,
+      openerTabId: string | null,
+      profile: string,
+      title?: string | null,
+      remote?: boolean
+    ): BrowserWorkspaceTab => ({
+      id: buildFileTabId({ kind: "browser", id: backendTabId }),
+      kind: "browser",
+      folderId,
+      // Host AND port, not just the host: two local servers are two tabs both
+      // called "localhost" otherwise, which is now a routine sight — a tab
+      // opened in the background (an auto-opened local server, a ⌘-click)
+      // keeps this name until someone switches to it and the page says its
+      // own. For an ordinary address with no explicit port this is the host,
+      // exactly as before.
+      title: title || (displayHostPort(url) ?? url),
+      description: null,
+      path: null,
+      language: "browser",
+      content: "",
+      loading: true,
+      readonly: true,
+      browser: {
+        initialUrl: url,
+        openerTabId,
+        profile,
+        ...(remote ? { remote: true as const } : {}),
+      },
+    }),
+    []
+  )
+
+  const openBrowserTab = useCallback(
+    (
+      url: string,
+      options?: {
+        folderId?: number
+        activate?: boolean | "tab"
+        openerTabId?: string
+        index?: number
+        profile?: string
+        remote?: boolean
+      }
+    ) => {
+      const normalized = normalizeUrlForDedupe(url)
+      if (!normalized) return null
+      const activate = options?.activate ?? true
+      const opener = options?.openerTabId
+        ? fileTabsRef.current.find((tab) => tab.id === options.openerTabId)
+        : undefined
+      // A caller that says settles it — "open it on this computer" is a
+      // person's decision. Otherwise a tab opened from a remote tab is
+      // remote, and so is any address of the remote host however it came to
+      // be opened (a page's ⌘-click, a refused pop-up opened anyway): in a
+      // profile of this computer it would reach this machine instead.
+      const remote =
+        options?.remote ??
+        ((opener?.kind === "browser" && opener.browser.remote === true) ||
+          // A request from a page of a connection's profile (a ⌘-click):
+          // its opener's, even when the opener's record is already gone.
+          remoteConnectionOfProfile(options?.profile) !== null ||
+          isRemoteHostAddress(url))
+      // A tab opened from another tab (⌘-click, a popup) belongs with it:
+      // same cookies, same signed-in state. Otherwise the preference. A
+      // profile that no longer exists (a reopened tab of a deleted one, a
+      // stale record) is not recreated on the backend: default instead. A
+      // remote address is not in any profile of this computer, so it takes
+      // no part in the choice.
+      const prefs = getBrowserPrefs()
+      const wanted =
+        options?.profile ??
+        (opener?.kind === "browser" ? opener.browser.profile : undefined) ??
+        prefs.newTabProfile
+      const profile =
+        !remote && browserProfileExists(prefs, wanted)
+          ? wanted
+          : DEFAULT_BROWSER_PROFILE_ID
+      // One tab per page AND profile: the same page in two profiles is two
+      // different sessions, and both are worth a tab. A remote tab is its own
+      // kind of session: never the same tab as a local one on that address.
+      //
+      // The blank page is exempt: it is an empty tab, not a page, so two of
+      // them are two tabs. Dedupe would also misfire once one is used — a
+      // record keeps the URL it was OPENED with, so a blank tab the user has
+      // since navigated somewhere would be handed back (and its page brought
+      // to the front) in place of the new empty tab they just asked for.
+      const existing =
+        normalized === BLANK_PAGE_URL
+          ? undefined
+          : fileTabsRef.current.find(
+              (tab) =>
+                tab.kind === "browser" &&
+                tab.browser.profile === profile &&
+                (tab.browser.remote === true) === remote &&
+                normalizeUrlForDedupe(tab.browser.initialUrl) === normalized
+            )
+      if (existing) {
+        if (activate === "tab") setActiveFileTabId(existing.id)
+        else activateTab(existing.id, activate === false)
+        return existing.id
+      }
+      const record = browserTabRecord(
+        randomUUID(),
+        url,
+        options?.folderId ??
+          opener?.folderId ??
+          activeFolderRef.current?.id ??
+          null,
+        opener?.id ?? null,
+        profile,
+        null,
+        remote
+      )
+      const insert = (prev: FileWorkspaceTab[]) => {
+        if (prev.some((tab) => tab.id === record.id)) return prev
+        const idx = opener ? prev.findIndex((tab) => tab.id === opener.id) : -1
+        const at =
+          idx >= 0
+            ? idx + 1
+            : options?.index == null
+              ? prev.length
+              : Math.max(0, Math.min(options.index, prev.length))
+        const next = [...prev]
+        next.splice(at, 0, record)
+        return next
+      }
+      if (activate === false) {
+        setFileTabs(insert)
+        // Claim the selection only when nothing holds it, exactly as
+        // `activateTab`'s background mode does: a strip that holds tabs while
+        // the column beside it shows "open a file from the right panel" is a
+        // state the user can only get out of by clicking a tab.
+        setActiveFileTabId((prev) => prev ?? record.id)
+      } else if (activate === "tab") {
+        // Shown, but the pane stays put — the page loads and is there to look
+        // at without the workspace jumping out of whatever it was on.
+        setFileTabs(insert)
+        setActiveFileTabId(record.id)
+      } else if (opener) {
+        setFileTabs(insert)
+        setActiveFileTabId(record.id)
+        activateFilePane()
+      } else {
+        seedLoadingTab(record, false, options?.index)
+      }
+      return record.id
+    },
+    [activateFilePane, activateTab, browserTabRecord, seedLoadingTab]
+  )
+
+  const adoptBrowserTab = useCallback(
+    (params: {
+      backendTabId: string
+      url: string
+      openerBackendTabId: string
+      /** The profile the backend built the popup in (its opener's). */
+      profile?: string | null
+    }) => {
+      const openerId = buildFileTabId({
+        kind: "browser",
+        id: params.openerBackendTabId,
+      })
+      const opener = fileTabsRef.current.find((tab) => tab.id === openerId)
+      // A popup shares its opener's data store on the backend whatever is
+      // said here; the record says the same so the toolbar shows it. The
+      // backend's word comes first — the opener record may be gone by now.
+      const record = browserTabRecord(
+        params.backendTabId,
+        params.url,
+        opener?.folderId ?? activeFolderRef.current?.id ?? null,
+        openerId,
+        params.profile ??
+          (opener?.kind === "browser"
+            ? opener.browser.profile
+            : getBrowserPrefs().newTabProfile),
+        null,
+        // A popup lives where its opener's traffic goes — which the profile
+        // the backend built it in says too, when the opener's record is gone.
+        (opener?.kind === "browser" && opener.browser.remote === true) ||
+          remoteConnectionOfProfile(params.profile) !== null
+      )
+      setFileTabs((prev) => {
+        if (prev.some((tab) => tab.id === record.id)) return prev
+        const idx = prev.findIndex((tab) => tab.id === openerId)
+        if (idx < 0) return [...prev, record]
+        const next = [...prev]
+        next.splice(idx + 1, 0, record)
+        return next
+      })
+      // A popup is what the user just clicked for: show it, like a browser
+      // would, and the opener stays one tab to the left.
+      setActiveFileTabId(record.id)
+      activateFilePane()
+      return record.id
+    },
+    [activateFilePane, browserTabRecord]
+  )
+
+  const restoreBrowserTabs = useCallback(
+    (entries: RestorableBrowserTab[]) => {
+      if (entries.length === 0) return
+      setFileTabs((prev) => {
+        // Merge, never replace: a tab opened before the restore ran (a deep
+        // link, an agent request — the capability probe is a round trip) must
+        // not cost the user the whole stored set. Same one-tab-per-URL rule
+        // as `openBrowserTab`, so a page already open is not duplicated.
+        const open = new Set(
+          prev.flatMap((tab) =>
+            tab.kind === "browser"
+              ? [
+                  `${tab.browser.remote === true ? "remote" : tab.browser.profile} ${normalizeUrlForDedupe(tab.browser.initialUrl) ?? ""}`,
+                ]
+              : []
+          )
+        )
+        const records: FileWorkspaceTab[] = []
+        const prefs = getBrowserPrefs()
+        for (const entry of entries) {
+          const normalized = normalizeUrlForDedupe(entry.url)
+          if (!normalized) continue
+          // An address of the remote host comes back as a remote tab even
+          // if its record did not say so (a page that walked there on its
+          // own): never as a page of this computer.
+          const remote = entry.remote === true || isRemoteHostAddress(entry.url)
+          const profile =
+            !remote && browserProfileExists(prefs, entry.profile)
+              ? entry.profile
+              : DEFAULT_BROWSER_PROFILE_ID
+          const key = `${remote ? "remote" : profile} ${normalized}`
+          if (open.has(key)) continue
+          open.add(key)
+          records.push(
+            browserTabRecord(
+              randomUUID(),
+              entry.url,
+              entry.folderId,
+              null,
+              profile,
+              entry.title,
+              remote
+            )
+          )
+        }
+        // Records only; not activated, so no surface is created until the
+        // user switches to one. The pane state is left exactly as it was.
+        return records.length === 0 ? prev : [...prev, ...records]
+      })
+    },
+    [browserTabRecord]
+  )
+
+  // A deleted profile has no store any more. Its loaded tabs are closed by
+  // the backend as part of the deletion (their records go with the
+  // `browser://closed` event, and until then they still name the store their
+  // surface lives in); the records that are NOT loaded (restored, suspended)
+  // would recreate the store the moment they are shown, so they move to the
+  // default profile as soon as the preference says the profile is gone — or
+  // go, if the default profile already has a tab on that page (one tab per
+  // page and profile).
+  useEffect(
+    () =>
+      subscribeBrowserPrefs(() => {
+        const prefs = getBrowserPrefs()
+        setFileTabs((prev) => {
+          // Dormant = no live state AND no surface being created: a tab
+          // whose create is in flight has no state yet but already has a
+          // webview in its profile's store on the way, and the backend will
+          // close it with the rest of the profile.
+          const dormantOrphan = (tab: FileWorkspaceTab) =>
+            tab.kind === "browser" &&
+            !browserProfileExists(prefs, tab.browser.profile) &&
+            getBrowserTabState(tab.id) === null &&
+            !hasSurfaceClaim(browserTabBackendId(tab.id) ?? "")
+          if (!prev.some(dormantOrphan)) return prev
+          // A remote tab is not a page of the default profile, whatever id it
+          // carries: never the tab that makes a local one a duplicate.
+          const inDefault = new Set(
+            prev.flatMap((tab) =>
+              tab.kind === "browser" &&
+              tab.browser.remote !== true &&
+              tab.browser.profile === DEFAULT_BROWSER_PROFILE_ID
+                ? [normalizeUrlForDedupe(tab.browser.initialUrl) ?? ""]
+                : []
+            )
+          )
+          const next: FileWorkspaceTab[] = []
+          for (const tab of prev) {
+            if (!dormantOrphan(tab) || tab.kind !== "browser") {
+              next.push(tab)
+              continue
+            }
+            const key = normalizeUrlForDedupe(tab.browser.initialUrl) ?? ""
+            if (inDefault.has(key)) continue
+            inDefault.add(key)
+            next.push({
+              ...tab,
+              browser: {
+                ...tab.browser,
+                profile: DEFAULT_BROWSER_PROFILE_ID,
+              },
+            })
+          }
+          return next
+        })
+      }),
+    []
+  )
+
+  const suspendBrowserTab = useCallback((tabId: string) => {
+    const tab = fileTabsRef.current.find((t) => t.id === tabId)
+    if (!tab || tab.kind !== "browser") return false
+    const state = getBrowserTabState(tabId)
+    if (!state) return false
+    // Re-checked here, not just by the caller: the surface host may have
+    // mounted (the user switched to this tab) between the caller picking it
+    // and this call. `null` means "on screen right now", `undefined` "never
+    // shown by this document" — releasing either would blank a live pane.
+    if (typeof browserTabHiddenAt(tabId) !== "number") return false
+    const url = state.url || state.requestedUrl || tab.browser.initialUrl
+    const title = state.title || tab.title
+    // Move the record to where the page got to before letting the surface
+    // go: the tab strip keeps showing the page's title, and the surface
+    // created when the tab is next shown loads that page, not the address
+    // the tab was opened with. History and scroll position are lost, as in
+    // a browser's discarded tab. A profile deleted while the tab was loaded
+    // is left behind here too: the dormant record must not name it — and if
+    // the default profile already shows that page, the record goes rather
+    // than becoming a duplicate (one tab per page and profile).
+    const profile = browserProfileExists(getBrowserPrefs(), tab.browser.profile)
+      ? tab.browser.profile
+      : DEFAULT_BROWSER_PROFILE_ID
+    // Decided inside the updater, against the list as it is when the update
+    // applies (a queued insert may land first); the active pointer moves to
+    // the neighbouring survivor the way `closeFileTab` does — a suspended
+    // tab is off screen, but the file pane may be hidden with it selected.
+    const normalized = normalizeUrlForDedupe(url)
+    setFileTabs((prev) => {
+      const duplicate =
+        profile !== tab.browser.profile &&
+        prev.some(
+          (t) =>
+            t.kind === "browser" &&
+            t.id !== tabId &&
+            t.browser.remote !== true &&
+            t.browser.profile === profile &&
+            normalizeUrlForDedupe(t.browser.initialUrl) === normalized
+        )
+      if (!duplicate) {
+        return prev.map((t) =>
+          t.id === tabId && t.kind === "browser"
+            ? {
+                ...t,
+                title,
+                browser: { ...t.browser, initialUrl: url, profile },
+              }
+            : t
+        )
+      }
+      const idx = prev.findIndex((t) => t.id === tabId)
+      const next = prev.filter((t) => t.id !== tabId)
+      setActiveFileTabId((current) => {
+        if (current !== tabId) return current
+        if (next.length === 0) return null
+        return next[Math.min(Math.max(idx, 0), next.length - 1)].id
+      })
+      return next
+    })
+    // The surface goes, the tab stays — so what the person answered for the
+    // sites it has been on stays with it, and the `browser://closed` the
+    // backend emits for this is about the surface. Only a close ends a tab.
+    releaseBrowserTab(tabId, { suspending: true })
+    return true
+  }, [])
 
   // Mark an existing tab as refreshing. Preserves content / originalContent /
   // modifiedContent / gitBaseContent / savedContent / etag / mtimeMs /
@@ -679,13 +1258,18 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   }, [])
 
   const decideLoad = useCallback(
-    (seed: FileWorkspaceTab, reload: boolean): LoadDecision => {
+    (
+      seed: FileWorkspaceTab,
+      reload: boolean,
+      background = false,
+      index?: number
+    ): LoadDecision => {
       // Dedup synchronously. inFlightLoadsRef is updated immediately on
       // generation start, so rapid re-clicks within a single event loop
       // turn collapse here — unlike fileTabsRef.current, which only
       // reflects state after React flushes a render.
       if (inFlightLoadsRef.current.has(seed.id)) {
-        activateTab(seed.id)
+        activateTab(seed.id, background)
         return { kind: "skip" }
       }
 
@@ -695,11 +1279,11 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         // e.g. the user closed it while a watcher-driven reload was in
         // flight — do not resurrect it as a phantom tab.
         if (reload) return { kind: "skip" }
-        seedLoadingTab(seed)
+        seedLoadingTab(seed, background, index)
         return { kind: "fetch", gen: beginFetchGeneration(seed.id) }
       }
 
-      activateTab(existing.id)
+      activateTab(existing.id, background)
 
       if (existing.saveState === "error") {
         markErrorRetry(existing.id, existing.kind)
@@ -823,6 +1407,19 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         prev.map((tab) =>
           tab.id === tabId
             ? { ...tab, originalContent, modifiedContent, content: "", loading }
+            : tab
+        )
+      )
+    },
+    []
+  )
+
+  const resolveImageDiffTab = useCallback(
+    (tabId: string, imageDiff: ImageDiffSides) => {
+      setFileTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, imageDiff, content: "", loading: false }
             : tab
         )
       )
@@ -1119,72 +1716,122 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   const openFilePreview = useCallback(
     async (
       rawPath: string,
-      options?: { line?: number; reload?: boolean; folderId?: number }
+      options?: {
+        line?: number
+        reload?: boolean
+        folderId?: number
+        background?: boolean
+        index?: number
+      }
     ) => {
       const absPath = await resolveOpenAbsolutePath(rawPath, options?.folderId)
-      if (!absPath) return
+      if (!absPath) return null
       const io = splitAbsPath(absPath)
-      if (!io) return
-      const requestedLine =
-        typeof options?.line === "number" && Number.isFinite(options.line)
-          ? Math.max(1, Math.floor(options.line))
-          : null
-      if (requestedLine) {
-        fileRevealRequestIdRef.current += 1
-        setPendingFileReveal({
-          requestId: fileRevealRequestIdRef.current,
-          path: absPath,
-          line: requestedLine,
-        })
-      } else {
-        setPendingFileReveal(null)
-      }
-      const tabId = buildFileTabId({ kind: "file", path: absPath })
-      const image = isImageFile(absPath)
-      const office = !image && isOfficePreviewable(absPath)
-      const seed = loadingTab(
-        tabId,
-        null,
-        "file",
-        fileName(absPath),
-        absPath,
-        absPath,
-        image ? "image" : office ? "office" : languageFromPath(absPath)
-      )
-
-      const decision = decideLoad(seed, options?.reload ?? false)
-      if (decision.kind === "skip") return
-      const { gen } = decision
-
-      try {
-        // Office files (.docx/.xlsx/.pptx) are binary OpenXML — never read as
-        // text. The OfficePreview component renders them via the OfficeCLI
-        // backend on its own, so just settle the tab as a ready preview shell.
-        if (office) {
-          if (!settleFetch(tabId, gen)) return
-          setFileTabs((prev) =>
-            prev.map((tab) =>
-              tab.id === tabId
-                ? {
-                    ...tab,
-                    content: "",
-                    readonly: true,
-                    loading: false,
-                    saveState: "idle",
-                    saveError: null,
-                    stale: false,
-                  }
-                : tab
-            )
-          )
-          return
+      if (!io) return null
+      // The load runs in an inner closure purely so every early `return`
+      // below stays a plain "stop here" — the resolved absolute path is the
+      // caller's answer either way, and surfaces that mirror the tab
+      // elsewhere (the transcript's file viewer drawer) need it to find the
+      // tab this call created.
+      await (async () => {
+        const background = options?.background === true
+        const requestedLine =
+          typeof options?.line === "number" && Number.isFinite(options.line)
+            ? Math.max(1, Math.floor(options.line))
+            : null
+        // A background open never touches the pending reveal: it is not
+        // asking the file column to scroll anywhere, and clearing the field
+        // would cancel a reveal some other opener is waiting on.
+        if (!background) {
+          if (requestedLine) {
+            fileRevealRequestIdRef.current += 1
+            setPendingFileReveal({
+              requestId: fileRevealRequestIdRef.current,
+              path: absPath,
+              line: requestedLine,
+            })
+          } else {
+            setPendingFileReveal(null)
+          }
         }
+        const tabId = buildFileTabId({ kind: "file", path: absPath })
+        const image = isImageFile(absPath)
+        const office = !image && isOfficePreviewable(absPath)
+        const seed = loadingTab(
+          tabId,
+          null,
+          "file",
+          fileName(absPath),
+          absPath,
+          absPath,
+          image ? "image" : office ? "office" : languageFromPath(absPath)
+        )
 
-        if (image) {
-          const ext = absPath.split(".").pop()?.toLowerCase() ?? ""
-          const mime = IMAGE_MIME[ext] ?? "image/png"
-          const b64 = await withTimeout(
-            readFileBase64(absPath),
+        const decision = decideLoad(
+          seed,
+          options?.reload ?? false,
+          background,
+          options?.index
+        )
+        if (decision.kind === "skip") return
+        const { gen } = decision
+
+        try {
+          // Office files (.docx/.xlsx/.pptx) are binary OpenXML — never read as
+          // text. The OfficePreview component renders them via the OfficeCLI
+          // backend on its own, so just settle the tab as a ready preview shell.
+          if (office) {
+            if (!settleFetch(tabId, gen)) return
+            setFileTabs((prev) =>
+              prev.map((tab) =>
+                tab.id === tabId
+                  ? {
+                      ...tab,
+                      content: "",
+                      readonly: true,
+                      loading: false,
+                      saveState: "idle",
+                      saveError: null,
+                      stale: false,
+                    }
+                  : tab
+              )
+            )
+            return
+          }
+
+          if (image) {
+            const ext = absPath.split(".").pop()?.toLowerCase() ?? ""
+            const mime = IMAGE_MIME[ext] ?? "image/png"
+            const b64 = await withTimeout(
+              readFileBase64(absPath),
+              15_000,
+              t("previewRequestTimedOut")
+            )
+            if (!settleFetch(tabId, gen)) return
+            setFileTabs((prev) =>
+              prev.map((tab) =>
+                tab.id === tabId
+                  ? {
+                      ...tab,
+                      content: `data:${mime};base64,${b64}`,
+                      readonly: true,
+                      loading: false,
+                      saveState: "idle",
+                      saveError: null,
+                      stale: false,
+                    }
+                  : tab
+              )
+            )
+            return
+          }
+
+          const [result, gitBaseContent] = await withTimeout(
+            Promise.all([
+              readFileForEdit(io.rootPath, io.ioPath),
+              fetchGitBase(absPath),
+            ]),
             15_000,
             t("previewRequestTimedOut")
           )
@@ -1194,58 +1841,36 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
               tab.id === tabId
                 ? {
                     ...tab,
-                    content: `data:${mime};base64,${b64}`,
-                    readonly: true,
-                    loading: false,
+                    content: result.content,
+                    gitBaseContent: dedupeGitBase(
+                      result.content,
+                      gitBaseContent
+                    ),
+                    savedContent: result.content,
+                    isDirty: false,
+                    etag: result.etag,
+                    mtimeMs: result.mtime_ms,
+                    readonly: result.readonly,
+                    lineEnding: result.line_ending,
                     saveState: "idle",
                     saveError: null,
+                    loading: false,
                     stale: false,
                   }
                 : tab
             )
           )
-          return
+        } catch (error) {
+          if (!settleFetch(tabId, gen)) return
+          if (requestedLine) {
+            setPendingFileReveal((prev) =>
+              prev && prev.path === absPath ? null : prev
+            )
+          }
+          rejectTab(tabId, toErrorMessage(error))
         }
-
-        const [result, gitBaseContent] = await withTimeout(
-          Promise.all([
-            readFileForEdit(io.rootPath, io.ioPath),
-            fetchGitBase(absPath),
-          ]),
-          15_000,
-          t("previewRequestTimedOut")
-        )
-        if (!settleFetch(tabId, gen)) return
-        setFileTabs((prev) =>
-          prev.map((tab) =>
-            tab.id === tabId
-              ? {
-                  ...tab,
-                  content: result.content,
-                  gitBaseContent: dedupeGitBase(result.content, gitBaseContent),
-                  savedContent: result.content,
-                  isDirty: false,
-                  etag: result.etag,
-                  mtimeMs: result.mtime_ms,
-                  readonly: result.readonly,
-                  lineEnding: result.line_ending,
-                  saveState: "idle",
-                  saveError: null,
-                  loading: false,
-                  stale: false,
-                }
-              : tab
-          )
-        )
-      } catch (error) {
-        if (!settleFetch(tabId, gen)) return
-        if (requestedLine) {
-          setPendingFileReveal((prev) =>
-            prev && prev.path === absPath ? null : prev
-          )
-        }
-        rejectTab(tabId, toErrorMessage(error))
-      }
+      })()
+      return absPath
     },
     [
       decideLoad,
@@ -1285,10 +1910,16 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     // Leading-edge with dedup: an agent building a doc fires a burst of writes,
     // so we open on first sighting and remember it in `autoOpened` (which also
     // keeps a tab the user has since closed from popping back open).
-    const autoOpened = new Set<string>()
+    const autoOpened = autoOpenedOfficePathsRef.current
+    const pending = new Set<string>()
+    let cancelled = false
     const streamRoot = folderPath
     const unsubscribe = subscribeOfficeEnvelopes(({ changed_paths }) => {
       if (!changed_paths || changed_paths.length === 0) return
+      const directories = new Map<
+        string,
+        ReturnType<typeof listDirectoryWithFiles>
+      >()
       // Tab identity is the absolute path, so joining the stream root onto
       // the changed relative path compares exactly — an identically-named
       // doc in another folder has a different absolute path and never
@@ -1313,12 +1944,53 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         // at once — which arrived here as a dozen unreadable previews.
         if (isOfficeOwnerFile(changed)) continue
         const abs = joinRootRel(streamRoot, changed)
-        if (autoOpened.has(abs) || openPaths.has(abs)) continue
-        autoOpened.add(abs)
-        void openFilePreview(abs)
+        if (autoOpened.has(abs) || pending.has(abs)) continue
+        // An already-open tab counts as a sighting, not just a skip: this
+        // feature exists to surface documents the user has NOT seen, so a tab
+        // they opened by hand must not become a fresh auto-open the moment
+        // they close it and the agent writes again.
+        if (openPaths.has(abs)) {
+          autoOpened.add(abs)
+          continue
+        }
+        const io = splitAbsPath(abs)
+        if (!io) continue
+        pending.add(abs)
+        // changed_paths includes removals, including removed worktree copies.
+        // Inspect directory metadata before opening a tab, without reading or
+        // locking the Office document. Share one listing per parent per burst.
+        let listing = directories.get(io.rootPath)
+        if (!listing) {
+          listing = listDirectoryWithFiles(io.rootPath)
+          directories.set(io.rootPath, listing)
+        }
+        void listing
+          .then((entries) => {
+            if (cancelled || autoOpened.has(abs)) return
+            const exists = entries.some(
+              (entry) =>
+                !entry.isDir &&
+                entry.size != null &&
+                normalizeAbsPath(entry.path) === abs
+            )
+            if (!exists) return
+            autoOpened.add(abs)
+            // A manual open during the lookup already handled this file.
+            if (fileTabsRef.current.some((tab) => tab.path === abs)) return
+            return openFilePreview(abs)
+          })
+          .catch(() => {
+            // Covers both halves of the chain: a removed/unreadable parent is
+            // not a document to preview, and `openFilePreview` already reports
+            // its own failures on the tab it seeded.
+          })
+          .finally(() => pending.delete(abs))
       }
     })
-    return unsubscribe
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [
     folderPath,
     activeFolderIdForOffice,
@@ -1326,6 +1998,42 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     subscribeOfficeEnvelopes,
     openFilePreview,
   ])
+
+  // The image counterpart of the three rich-diff loaders below: a binary image
+  // has no text sides to fetch (`git show` refuses it outright), so both sides
+  // come back as bytes and land on the tab as an `imageDiff` instead.
+  const loadImageRichDiff = useCallback(
+    async (args: {
+      tabId: string
+      gen: number
+      folderPath: string
+      file: string
+      original: ImageDiffSource
+      modified: ImageDiffSource
+      timeoutMessage: string
+    }) => {
+      try {
+        const sides = await withTimeout(
+          loadImageDiffSides(
+            args.folderPath,
+            args.file,
+            args.original,
+            args.modified
+          ),
+          20_000,
+          args.timeoutMessage
+        )
+        if (settleFetch(args.tabId, args.gen)) {
+          resolveImageDiffTab(args.tabId, sides)
+        }
+      } catch (error) {
+        if (settleFetch(args.tabId, args.gen)) {
+          rejectTab(args.tabId, toErrorMessage(error))
+        }
+      }
+    },
+    [rejectTab, resolveImageDiffTab, settleFetch]
+  )
 
   const openWorkingTreeDiff = useCallback(
     async (
@@ -1454,7 +2162,8 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       })
       const title = t("diffTitleFile", { name: fileName(path) })
       const description = path
-      const lang = languageFromPath(path)
+      const isImageDiff = isBinaryImageFile(path)
+      const lang = isImageDiff ? "image" : languageFromPath(path)
 
       const seed = loadingTab(
         tabId,
@@ -1468,6 +2177,20 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       const decision = beginDiffLoad(seed)
       if (decision.skip) return
       const { gen } = decision
+      if (isImageDiff) {
+        await loadImageRichDiff({
+          tabId,
+          gen,
+          folderPath,
+          file: path,
+          // A fresh repo has an unborn HEAD: nothing came before, which is
+          // an absent side rather than a failed read.
+          original: { kind: "ref", ref: "HEAD", missingRefIsAbsent: true },
+          modified: { kind: "worktree" },
+          timeoutMessage: t("diffRequestTimedOut"),
+        })
+        return
+      }
       try {
         const [originalContent, modifiedResult] = await withTimeout(
           Promise.all([
@@ -1488,6 +2211,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     },
     [
       beginDiffLoad,
+      loadImageRichDiff,
       rejectTab,
       resolveTab,
       resolveRichDiffTab,
@@ -1533,7 +2257,8 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         : t("compareDescriptionBranch", { branch: targetBranch })
 
       if (mode !== "overview" && path) {
-        const lang = languageFromPath(path)
+        const isImageDiff = isBinaryImageFile(path)
+        const lang = isImageDiff ? "image" : languageFromPath(path)
         const seed = loadingTab(
           tabId,
           target.id,
@@ -1546,6 +2271,18 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         const decision = beginDiffLoad(seed)
         if (decision.skip) return
         const { gen } = decision
+        if (isImageDiff) {
+          await loadImageRichDiff({
+            tabId,
+            gen,
+            folderPath,
+            file: path,
+            original: { kind: "ref", ref: targetBranch },
+            modified: { kind: "worktree" },
+            timeoutMessage: t("branchCompareRequestTimedOut"),
+          })
+          return
+        }
         try {
           const [originalContent, modifiedResult] = await withTimeout(
             Promise.all([
@@ -1592,6 +2329,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     },
     [
       beginDiffLoad,
+      loadImageRichDiff,
       rejectTab,
       resolveRichDiffTab,
       resolveTab,
@@ -1629,7 +2367,8 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         : message || t("diffDescriptionCommit", { commit })
 
       if (path) {
-        const lang = languageFromPath(path)
+        const isImageDiff = isBinaryImageFile(path)
+        const lang = isImageDiff ? "image" : languageFromPath(path)
         const seed = loadingTab(
           tabId,
           target.id,
@@ -1642,6 +2381,27 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         const decision = beginDiffLoad(seed)
         if (decision.skip) return
         const { gen } = decision
+        if (isImageDiff) {
+          await loadImageRichDiff({
+            tabId,
+            gen,
+            folderPath,
+            file: path,
+            // A commit's parent fails to resolve for two reasons: it is a
+            // root commit, or this is a shallow clone's boundary. Both read
+            // as "nothing came before" — which is what git itself reports
+            // (`git show` at a shallow boundary lists every file as added),
+            // and what the text diff beside this one already assumes.
+            original: {
+              kind: "ref",
+              ref: `${commit}~1`,
+              missingRefIsAbsent: true,
+            },
+            modified: { kind: "ref", ref: commit },
+            timeoutMessage: t("commitDiffRequestTimedOut"),
+          })
+          return
+        }
         try {
           const [originalContent, modifiedContent] = await withTimeout(
             Promise.all([
@@ -1684,6 +2444,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     },
     [
       beginDiffLoad,
+      loadImageRichDiff,
       rejectTab,
       resolveTab,
       resolveRichDiffTab,
@@ -2161,8 +2922,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         // `pushClosedTab` keys on the tab id and moves an existing entry to the
         // top, so recording from inside this updater survives React invoking it
         // more than once (StrictMode, or a discarded render replayed).
-        const closed = snapshotFileTab(tab)
+        const closed = snapshotFileTab(tab, idx)
         if (closed) pushClosedTab(closed)
+        // Idempotent on the backend, so safe under a replayed updater.
+        if (tab.kind === "browser") {
+          pushClosedTab(closedBrowserTab(tab, idx))
+          releaseBrowserTab(tab.id)
+        }
 
         const next = prev.filter((candidate) => candidate.id !== tabId)
 
@@ -2210,11 +2976,16 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
           if (!confirmed) return prev
         }
 
-        for (const closing of closingTabs) {
-          // `pushClosedTab` is idempotent per tab id, which is what makes this
-          // safe inside an updater React may invoke more than once.
-          const closed = snapshotFileTab(closing)
+        // `pushClosedTab` is idempotent per tab id, which is what makes this
+        // safe inside an updater React may invoke more than once.
+        const slots = batchCloseSlots(prev, (tab) => tab.id !== tabId)
+        for (const [closing, slot] of slots) {
+          const closed = snapshotFileTab(closing, slot)
           if (closed) pushClosedTab(closed)
+          if (closing.kind === "browser") {
+            pushClosedTab(closedBrowserTab(closing, slot))
+            releaseBrowserTab(closing.id)
+          }
           inFlightLoadsRef.current.delete(closing.id)
         }
 
@@ -2233,9 +3004,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         if (!confirmed) return prev
       }
 
-      for (const tab of prev) {
-        const closed = snapshotFileTab(tab)
+      for (const [tab, slot] of batchCloseSlots(prev)) {
+        const closed = snapshotFileTab(tab, slot)
         if (closed) pushClosedTab(closed)
+        if (tab.kind === "browser") {
+          pushClosedTab(closedBrowserTab(tab, slot))
+          releaseBrowserTab(tab.id)
+        }
       }
 
       inFlightLoadsRef.current.clear()
@@ -2407,6 +3182,10 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       reloadActiveFile,
       toggleFileTabPreview,
       toggleFilesMaximized,
+      openBrowserTab,
+      adoptBrowserTab,
+      restoreBrowserTabs,
+      suspendBrowserTab,
     }),
     [
       setActivePane,
@@ -2435,6 +3214,10 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       reloadActiveFile,
       toggleFileTabPreview,
       toggleFilesMaximized,
+      openBrowserTab,
+      adoptBrowserTab,
+      restoreBrowserTabs,
+      suspendBrowserTab,
     ]
   )
 
@@ -2506,6 +3289,18 @@ export function useWorkspaceActions(): WorkspaceActionsValue {
     throw new Error("useWorkspaceActions must be used within WorkspaceProvider")
   }
   return ctx
+}
+
+/** The actions, or `null` outside a `WorkspaceProvider` — for hooks that can
+ *  degrade (the link opener falls back to the system browser). */
+export function useOptionalWorkspaceActions(): WorkspaceActionsValue | null {
+  return useContext(WorkspaceActionsContext)
+}
+
+/** The layout state, or `null` outside a `WorkspaceProvider` — the pair of
+ *  `useOptionalWorkspaceActions`, for the same callers. */
+export function useOptionalWorkspaceView(): WorkspaceViewValue | null {
+  return useContext(WorkspaceViewContext)
 }
 
 // Low-frequency layout state (mode / activePane / filesMaximized). Changes

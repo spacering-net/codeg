@@ -65,6 +65,19 @@ pub enum AcpError {
     /// message and the frontend renders the suggestion alongside it.
     #[error("{0}")]
     McpRejectedByAgent(String),
+    /// The agent refused to OPEN a session with ACP's `authRequired` (-32000):
+    /// it launched fine and simply has no credential it can use. Distinct from
+    /// the same rejection on `session/prompt`, which is turn-scoped and leaves
+    /// the connection alive (`turn_failed_auth_required`).
+    ///
+    /// It earns a code of its own because the agent's own wording is the part
+    /// the user cannot act on. cursor-agent, for one, answers `Please run
+    /// 'agent login' first` — and `agent` is not a command that exists: the
+    /// binary is `cursor-agent`, and codeg's managed copy is not on `$PATH`
+    /// either. The frontend renders codeg's instruction from the code instead
+    /// and points at the agent's own settings panel, which knows the path.
+    #[error("{0}")]
+    AgentAuthRequired(String),
 }
 
 impl AcpError {
@@ -89,6 +102,13 @@ impl AcpError {
         Self::McpRejectedByAgent(sanitize_protocol_message(&raw.into()))
     }
 
+    /// [`Self::AgentAuthRequired`] with the same sanitization. The payload is
+    /// only a fallback (logs, and any surface that has no code mapping); the
+    /// user-facing wording comes from the code.
+    pub fn agent_auth_required(raw: impl Into<String>) -> Self {
+        Self::AgentAuthRequired(sanitize_protocol_message(&raw.into()))
+    }
+
     /// Stable machine-readable identifier for this error kind.
     ///
     /// Returned to the frontend alongside the human-readable message so
@@ -111,6 +131,7 @@ impl AcpError {
             Self::DownloadFailed(_) => Some("download_failed"),
             Self::ConnectionNotFound(_) => Some("connection_not_found"),
             Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
+            Self::AgentAuthRequired(_) => Some("agent_auth_required"),
             Self::Protocol(_) => None,
         }
     }

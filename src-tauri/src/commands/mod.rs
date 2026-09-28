@@ -4,12 +4,23 @@ pub mod app_update;
 pub mod automation;
 pub mod background;
 pub mod backup;
+#[cfg(feature = "tauri-runtime")]
+pub mod browser;
+/// The browser tool group's on/off switch. Unlike `browser` itself this is not
+/// desktop-only: the shared codeg-mcp plumbing reads it in both runtimes.
+pub mod browser_tools;
 pub mod canvas;
 pub mod chat_authoring;
 pub mod chat_channel;
+/// Files-onto-the-OS-clipboard. Only the command itself is desktop-gated; the
+/// path validation and URI encoding stay compiled in every mode so their tests
+/// run without the tauri stack.
+pub mod clipboard;
+pub mod config_sync;
 pub mod conversations;
 pub mod custom_agents;
 pub mod custom_skills;
+pub mod deepseek_settings;
 pub mod delegation;
 pub mod experts;
 pub mod feedback;
@@ -21,6 +32,7 @@ pub mod folders;
 pub mod forge;
 pub mod logging;
 pub mod mcp;
+pub mod mcp_service;
 pub mod model_provider;
 pub mod office_tools;
 pub mod open_in;

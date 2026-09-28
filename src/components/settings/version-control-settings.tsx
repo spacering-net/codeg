@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   CheckCircle2,
   GitBranch,
+  GitFork,
   Github,
   Globe,
   Loader2,
@@ -37,10 +38,12 @@ import {
   updateGitHubAccounts,
   validateGitHubToken,
   validateGitLabToken,
+  validateGiteaToken,
   getAccountToken,
   deleteAccountToken,
 } from "@/lib/api"
 import type {
+  ForgeProviderId,
   GitDetectResult,
   GitHubAccount,
   GitHubAccountsSettings,
@@ -67,6 +70,34 @@ function isGitHubAccount(account: GitHubAccount): boolean {
 
 function isGitLabAccount(account: GitHubAccount): boolean {
   return account.provider === "gitlab"
+}
+
+/** Gitea (and Forgejo) only ever arrive DECLARED: the section shipped after the
+ *  field existed, so there is no legacy shape to guess at the way
+ *  `isGitHubAccount` has to. */
+function isGiteaAccount(account: GitHubAccount): boolean {
+  return account.provider === "gitea"
+}
+
+/** Which "who am I" endpoint tests an account's stored token, or `null` for a
+ *  plain git credential — those validate against nothing, so the most that can
+ *  be said is that the keyring still holds the secret. */
+function validatorFor(
+  account: GitHubAccount
+): typeof validateGitHubToken | null {
+  if (isGiteaAccount(account)) return validateGiteaToken
+  if (isGitLabAccount(account)) return validateGitLabToken
+  if (isGitHubAccount(account)) return validateGitHubToken
+  return null
+}
+
+/** Which forge dialog reopens for a token rotation. The account's own
+ *  declaration decides; GitHub is the fallback because an undeclared account
+ *  only ever reaches the rotate action from the GitHub section. */
+function providerOf(account: GitHubAccount): ForgeProviderId {
+  if (isGiteaAccount(account)) return "gitea"
+  if (isGitLabAccount(account)) return "gitlab"
+  return "github"
 }
 
 /** First character of a username, for the avatar fallback. Split with
@@ -197,6 +228,7 @@ export function VersionControlSettings() {
   })
   const [addGitHubOpen, setAddGitHubOpen] = useState(false)
   const [addGitLabOpen, setAddGitLabOpen] = useState(false)
+  const [addGiteaOpen, setAddGiteaOpen] = useState(false)
   const [rotateTarget, setRotateTarget] = useState<GitHubAccount | null>(null)
   const [addGitOpen, setAddGitOpen] = useState(false)
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null)
@@ -211,10 +243,14 @@ export function VersionControlSettings() {
     () => accounts.accounts.filter(isGitLabAccount),
     [accounts]
   )
+  const giteaAccounts = useMemo(
+    () => accounts.accounts.filter(isGiteaAccount),
+    [accounts]
+  )
   const gitAccounts = useMemo(
     () =>
       accounts.accounts.filter(
-        (a) => !isGitHubAccount(a) && !isGitLabAccount(a)
+        (a) => !isGitHubAccount(a) && !isGitLabAccount(a) && !isGiteaAccount(a)
       ),
     [accounts]
   )
@@ -317,10 +353,8 @@ export function VersionControlSettings() {
           toast.error(t("connectionFailed", { message: "Token not found" }))
           return
         }
-        if (isGitHubAccount(account) || isGitLabAccount(account)) {
-          const validate = isGitLabAccount(account)
-            ? validateGitLabToken
-            : validateGitHubToken
+        const validate = validatorFor(account)
+        if (validate) {
           const result = await validate(account.server_url, token)
           if (result.success) {
             toast.success(t("connectionSuccess"))
@@ -332,7 +366,7 @@ export function VersionControlSettings() {
             )
           }
         } else {
-          // For non-GitHub accounts we can't validate via API,
+          // A plain git credential has no API to validate against,
           // just confirm the token exists in keyring.
           toast.success(t("connectionSuccess"))
         }
@@ -566,7 +600,45 @@ export function VersionControlSettings() {
           </div>
         </section>
 
-        {/* ---- Git Accounts (non-GitHub) ---- */}
+        {/* ---- Gitea Accounts ---- */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <GitFork className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("giteaTitle")}</h2>
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("giteaDescription")}
+          </p>
+
+          {giteaAccounts.length === 0 ? (
+            <div className="rounded-md border border-dashed bg-muted/10 px-4 py-6 text-center text-xs text-muted-foreground">
+              {t("giteaNoAccounts")}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {giteaAccounts.map((account) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  testingId={testingAccountId}
+                  onTest={handleTestConnection}
+                  onRotate={setRotateTarget}
+                  onSetDefault={handleSetDefault}
+                  onRemove={setRemoveTarget}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setAddGiteaOpen(true)}>
+              {t("addAccount")}
+            </Button>
+          </div>
+        </section>
+
+        {/* ---- Git Accounts (non-forge) ---- */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Globe className="h-4 w-4 text-muted-foreground" />
@@ -621,10 +693,17 @@ export function VersionControlSettings() {
         onAccountAdded={handleAccountAdded}
         isFirstAccount={accounts.accounts.length === 0}
       />
+      <AddForgeAccountDialog
+        provider="gitea"
+        open={addGiteaOpen}
+        onOpenChange={setAddGiteaOpen}
+        onAccountAdded={handleAccountAdded}
+        isFirstAccount={accounts.accounts.length === 0}
+      />
       {rotateTarget && (
         <AddForgeAccountDialog
           key={rotateTarget.id}
-          provider={isGitLabAccount(rotateTarget) ? "gitlab" : "github"}
+          provider={providerOf(rotateTarget)}
           existing={rotateTarget}
           open
           onOpenChange={(open) => !open && setRotateTarget(null)}

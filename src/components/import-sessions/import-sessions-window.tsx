@@ -43,7 +43,12 @@ import {
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { cn } from "@/lib/utils"
-import { FolderHeaderRow, SessionRow, sessionKey } from "./import-sessions-rows"
+import {
+  FolderHeaderRow,
+  SessionRow,
+  isSessionSelectable,
+  sessionKey,
+} from "./import-sessions-rows"
 
 type Phase = "scanning" | "ready" | "importing" | "done" | "error"
 
@@ -92,6 +97,11 @@ export function ImportSessionsWindow({
   const [search, setSearch] = useState("")
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
   const [onlyImportable, setOnlyImportable] = useState(false)
+  // Deleting a conversation in codeg is a soft delete, so a deleted session can
+  // be brought back by importing it again. Off by default: the deletion was
+  // deliberate, and select-all must never resurrect a whole history by
+  // accident. Turning it on folds deleted rows into every selection helper.
+  const [includeDeleted, setIncludeDeleted] = useState(false)
   const [importResult, setImportResult] = useState<ImportSelectedResult | null>(
     null
   )
@@ -128,6 +138,9 @@ export function ImportSessionsWindow({
               normalizePathLoose(f.path).toLowerCase() === target.toLowerCase()
           )
         if (folder) {
+          // Preselect only the genuinely NEW sessions, never the deleted ones:
+          // this handoff arrives from the sidebar without the user having seen
+          // the list yet, so it must not stage a restore they did not ask for.
           setSelected(
             new Set(
               folder.sessions.filter((s) => s.status === "new").map(sessionKey)
@@ -222,7 +235,9 @@ export function ImportSessionsWindow({
         sessions = sessions.filter((s) => s.agent_type === agentFilter)
       }
       if (onlyImportable) {
-        sessions = sessions.filter((s) => s.status === "new")
+        sessions = sessions.filter((s) =>
+          isSessionSelectable(s, includeDeleted)
+        )
       }
       if (query) {
         const folderMatches =
@@ -237,7 +252,7 @@ export function ImportSessionsWindow({
       if (sessions.length > 0) entries.push({ folder, sessions })
     }
     return entries
-  }, [scan, search, agentFilter, onlyImportable])
+  }, [scan, search, agentFilter, onlyImportable, includeDeleted])
 
   const rows = useMemo(() => {
     const out: Row[] = []
@@ -258,14 +273,14 @@ export function ImportSessionsWindow({
     const map = new Map<string, { selectable: string[]; selected: number }>()
     for (const { folder, sessions } of filteredFolders) {
       const selectable = sessions
-        .filter((s) => s.status === "new")
+        .filter((s) => isSessionSelectable(s, includeDeleted))
         .map(sessionKey)
       let count = 0
       for (const key of selectable) if (selected.has(key)) count += 1
       map.set(folder.path, { selectable, selected: count })
     }
     return map
-  }, [filteredFolders, selected])
+  }, [filteredFolders, selected, includeDeleted])
   const folderSelectionRef = useRef(folderSelection)
   useEffect(() => {
     folderSelectionRef.current = folderSelection
@@ -274,10 +289,39 @@ export function ImportSessionsWindow({
   const allVisibleImportableKeys = useMemo(() => {
     const keys: string[] = []
     for (const { sessions } of filteredFolders) {
-      for (const s of sessions) if (s.status === "new") keys.push(sessionKey(s))
+      for (const s of sessions) {
+        if (isSessionSelectable(s, includeDeleted)) keys.push(sessionKey(s))
+      }
     }
     return keys
-  }, [filteredFolders])
+  }, [filteredFolders, includeDeleted])
+
+  // Footer total. Computed here rather than read from `scan.importable_count`
+  // (which only ever counts `new`) so the number the user reads matches what
+  // the checkboxes actually offer once deleted sessions are folded in. Spans
+  // the WHOLE scan, not the filtered view — same as `scan.total_sessions`.
+  const selectableTotal = useMemo(() => {
+    if (!scan) return 0
+    let total = 0
+    for (const folder of scan.folders) {
+      for (const s of folder.sessions) {
+        if (isSessionSelectable(s, includeDeleted)) total += 1
+      }
+    }
+    return total
+  }, [scan, includeDeleted])
+
+  // How many deleted sessions the scan found, across the whole scan. Drives the
+  // toggle's hint so a user who does not know deletion is reversible still sees
+  // there is something to recover.
+  const deletedTotal = useMemo(() => {
+    if (!scan) return 0
+    let total = 0
+    for (const folder of scan.folders) {
+      for (const s of folder.sessions) if (s.status === "deleted") total += 1
+    }
+    return total
+  }, [scan])
 
   // Whether every visible folder is currently collapsed — drives the
   // expand/collapse-all toggle's icon and action.
@@ -308,6 +352,28 @@ export function ImportSessionsWindow({
       return next
     })
   }, [])
+
+  // Turning the opt-in back OFF must also un-stage whatever it staged: the
+  // deleted rows go disabled and unchecked on screen, so leaving their keys in
+  // `selected` would show a footer count nothing on the list accounts for (and
+  // `handleImport` would drop them anyway, importing fewer than it promised).
+  const toggleIncludeDeleted = useCallback(
+    (next: boolean) => {
+      setIncludeDeleted(next)
+      if (next || !scan) return
+      const deletedKeys = new Set<string>()
+      for (const folder of scan.folders) {
+        for (const s of folder.sessions) {
+          if (s.status === "deleted") deletedKeys.add(sessionKey(s))
+        }
+      }
+      setSelected((prev) => {
+        const kept = new Set([...prev].filter((k) => !deletedKeys.has(k)))
+        return kept.size === prev.size ? prev : kept
+      })
+    },
+    [scan]
+  )
 
   const toggleCollapse = useCallback((path: string) => {
     setCollapsed((prev) => {
@@ -350,7 +416,10 @@ export function ImportSessionsWindow({
     const selections: SelectedSessionKey[] = []
     for (const folder of scan.folders) {
       for (const s of folder.sessions) {
-        if (s.status === "new" && selected.has(sessionKey(s))) {
+        if (
+          isSessionSelectable(s, includeDeleted) &&
+          selected.has(sessionKey(s))
+        ) {
           selections.push({
             agentType: s.agent_type,
             externalId: s.external_id,
@@ -368,7 +437,7 @@ export function ImportSessionsWindow({
       toast.error(t("toasts.importFailed", { message: toErrorMessage(err) }))
       setPhase("ready")
     }
-  }, [scan, selected, t])
+  }, [scan, selected, includeDeleted, t])
 
   const handleContinue = useCallback(() => {
     setImportResult(null)
@@ -438,6 +507,7 @@ export function ImportSessionsWindow({
   if (phase === "done" && importResult) {
     const stats: { label: string; value: number }[] = [
       { label: t("doneImported"), value: importResult.imported },
+      { label: t("doneRestored"), value: importResult.restored ?? 0 },
       { label: t("doneUpdated"), value: importResult.updated },
       { label: t("doneSkipped"), value: importResult.skipped },
       { label: t("doneCreatedFolders"), value: importResult.created_folders },
@@ -454,7 +524,7 @@ export function ImportSessionsWindow({
           <CheckCircle2 className="h-7 w-7 text-green-500" />
         )}
         <p className="text-sm font-semibold">{t("doneTitle")}</p>
-        <div className="grid grid-cols-3 gap-x-8 gap-y-2">
+        <div className="grid grid-cols-4 gap-x-8 gap-y-2">
           {stats.map((stat) => (
             <div key={stat.label} className="text-center">
               <div className="text-lg font-semibold tabular-nums">
@@ -528,6 +598,24 @@ export function ImportSessionsWindow({
             disabled={busy}
           />
           {t("onlyImportable")}
+        </label>
+        <label
+          className="flex items-center gap-1.5 text-xs text-muted-foreground"
+          title={t("includeDeletedHint")}
+        >
+          <Switch
+            // The opt-in survives a re-scan (it is the user's standing intent,
+            // and a re-scan clears the selection anyway), but a scan that finds
+            // nothing deleted has nothing to opt into — show it off rather than
+            // on-but-disabled. Behaviour is identical either way: with no
+            // deleted rows, the flag cannot select anything.
+            checked={includeDeleted && deletedTotal > 0}
+            onCheckedChange={toggleIncludeDeleted}
+            disabled={busy || deletedTotal === 0}
+          />
+          {deletedTotal > 0
+            ? t("includeDeletedWithCount", { count: deletedTotal })
+            : t("includeDeleted")}
         </label>
         <div className="flex-1" />
         <Button
@@ -626,6 +714,7 @@ export function ImportSessionsWindow({
                         session={row.session}
                         checked={selected.has(sessionKey(row.session))}
                         disabled={busy}
+                        includeDeleted={includeDeleted}
                         onToggle={toggleSession}
                       />
                     </div>
@@ -649,7 +738,7 @@ export function ImportSessionsWindow({
           <span className="text-xs text-muted-foreground">
             {t("summaryCounts", {
               total: scan.total_sessions,
-              importable: scan.importable_count,
+              importable: selectableTotal,
               folders: scan.folders.length,
             })}
             {scan.no_folder_count > 0 && (

@@ -15,7 +15,7 @@
  * failure mode to report, unlike the backend-backed sections around it.
  */
 
-import { useCallback } from "react"
+import { useCallback, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   BellOff,
@@ -79,6 +79,11 @@ export function NotificationSoundSettingsSection() {
   // here the same way.
   const prefs = useNotificationSoundPrefs()
 
+  // Always folded on arrival, however the master switch is set — same reason as
+  // the desktop-notification section next door: the General tab is a stack of
+  // sections, not one long form.
+  const [expanded, setExpanded] = useState(false)
+
   const setTone = useCallback(
     (eventId: SoundEventId, tone: SoundToneId) => {
       saveNotificationSoundPrefs({
@@ -98,7 +103,8 @@ export function NotificationSoundSettingsSection() {
   return (
     // The master switch is the section's heading row: with sounds off the whole
     // section is that one line, and the knobs it gates appear under it rather
-    // than in a card that repeats "Enable notification sounds".
+    // than in a card that repeats "Enable notification sounds". With them on
+    // the heading also folds those knobs away, and starts folded.
     <SettingsSection
       icon={Volume2}
       title={t("title")}
@@ -108,14 +114,24 @@ export function NotificationSoundSettingsSection() {
           <span className="mt-1 block">{t("enableHint")}</span>
         </>
       }
+      // Only labels the switch while there is nothing to fold; once the
+      // heading is the disclosure button the switch names itself instead.
       htmlFor="notification-sound-enabled"
+      collapsible
+      open={expanded}
+      onOpenChange={setExpanded}
       control={
         <Switch
           id="notification-sound-enabled"
+          aria-label={t("title")}
           checked={prefs.enabled}
-          onCheckedChange={(enabled) =>
+          onCheckedChange={(enabled) => {
             saveNotificationSoundPrefs({ ...prefs, enabled })
-          }
+            // Switching it on is a request to see what it does, so unfold in
+            // the same gesture. Only here, never on mount: arriving at the tab
+            // is not that request.
+            if (enabled) setExpanded(true)
+          }}
         />
       }
     >

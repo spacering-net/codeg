@@ -132,6 +132,15 @@ export const WORKSPACE_BG_PANEL_OPACITY_RANGE = { min: 0, max: 1, step: 0.01 }
 /** Client-side upload ceiling; matches the backend `MAX_BG_BYTES` (16 MiB). */
 export const MAX_WORKSPACE_BG_BYTES = 16 * 1024 * 1024
 
+/**
+ * Decoded-pixel ceiling; matches the backend `MAX_BG_PIXELS` (40 Mpx ≈ an 8K
+ * image). A local pick can't know this before the round trip — the picker never
+ * decodes the file — but the wallpaper market gets both dimensions in the
+ * listing, so it can tell which wallpapers would be refused before offering
+ * them as something to click.
+ */
+export const MAX_WORKSPACE_BG_PIXELS = 40_000_000
+
 // ─── Validation / clamp ───
 
 function clamp(v: number, min: number, max: number): number {

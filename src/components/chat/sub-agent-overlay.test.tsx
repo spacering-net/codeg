@@ -23,6 +23,7 @@ vi.mock("@/contexts/acp-connections-context", async () => {
     useConnectionStore: () => ({
       subscribeKey: () => () => {},
       getConnection: () => undefined,
+      getConnectPending: () => undefined,
       getActiveKey: () => null,
       subscribeActiveKey: () => () => {},
     }),

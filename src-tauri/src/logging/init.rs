@@ -53,30 +53,31 @@ pub struct LogGuard {
 ///   server's log file to 217GB. We never want it: real kill failures are
 ///   already surfaced at our own call sites via `error!`. Clamped here so even
 ///   `RUST_LOG=debug` can't re-open it.
-/// - `sacp` / `sacp_tokio` → `Warn` — the ACP transport logs **every JSON-RPC
-///   message in full**, several times per message: the `transport_actor` TRACEs
-///   each serialized outgoing line, `incoming_actor` TRACEs the parsed incoming
-///   message and again on every handler attempt, and `sacp::role` TRACEs each
-///   dispatch. Agent traffic is the largest data stream in the process (reply
-///   text, file contents, tool output), so at `debug` / `trace` this multiplies
-///   it several-fold onto disk — the shape behind the 34GB-in-8.8h field report
-///   on 0.23.3 (issue #427). It also carries one **INFO** line per unhandled
-///   method (`incoming_actor` "Rejecting message with error, no handler") which
-///   fires on the per-message hot path at the DEFAULT level. codeg keeps its own
-///   throttled account of dropped / unclaimed messages
+/// - `agent_client_protocol` → `Warn` — the ACP transport logs **every
+///   JSON-RPC message in full**, several times per message: the transport and
+///   outgoing actors TRACE each serialized line, and the incoming actor TRACEs
+///   the parsed message again on every handler attempt it makes. Agent traffic
+///   is the largest data stream in the process (reply text, file contents, tool
+///   output), so at `debug` / `trace` this multiplies it several-fold onto disk
+///   — the shape behind the 34GB-in-8.8h field report on 0.23.3 (issue #427,
+///   when this crate was still called `sacp`). It also carries one **INFO**
+///   line per unhandled request (`incoming_actor` "Rejecting request with error,
+///   no handler") on the per-message hot path at the DEFAULT level. codeg keeps
+///   its own throttled account of dropped / unclaimed messages
 ///   (`maybe_emit_ext_notification`, `TurnOutputProbe`), so none of that is
 ///   load-bearing.
 ///
-///   `Warn` — not lower — because two of the crate's three `warn!` sites are
-///   genuinely actionable transport faults (`outgoing_actor` "Sending error
-///   response", `incoming_actor` "Transport parse error"). Note both of those
-///   are ALSO per-message under a misbehaving agent, so this ceiling does not by
-///   itself bound sacp's output; it removes the payload dumps and the INFO line,
-///   and [`crate::logging::budget`] bounds whatever is left.
+///   `Warn` — not lower — because the crate's `warn!` sites are the actionable
+///   transport faults ("Sending error response", "Transport parse error", a
+///   handler that errored). Several of those are ALSO per-message under a
+///   misbehaving agent, so this ceiling does not by itself bound the crate's
+///   output; it removes the payload dumps and the INFO line, and
+///   [`crate::logging::budget`] bounds whatever is left.
 ///
 ///   Protocol-level debugging stays reachable: a MORE SPECIFIC target beats a
 ///   crate-level ceiling, so setting `CODEG_LOG` to
-///   `info,sacp::jsonrpc::transport_actor=trace` still dumps the wire.
+///   `info,agent_client_protocol::jsonrpc::transport_actor=trace` still dumps
+///   the wire.
 /// - `tungstenite` → `Debug` — `handshake/client.rs` TRACEs the serialized
 ///   handshake **in full**: `trace!("Request: {:?}", …)` over the raw request
 ///   bytes. For a remote workspace connection that request carries the
@@ -93,7 +94,8 @@ pub struct LogGuard {
 ///   harmless ones ("Client handshake done.", "Trying to contact {uri}",
 ///   "Received close frame"). `trace!` is where both problems live: this dump,
 ///   and a line per WebSocket frame read and written (`protocol/frame/mod.rs`),
-///   which is the sacp firehose shape again — every ACP event twice over.
+///   which is the ACP transport's firehose shape again — every ACP event
+///   twice over.
 /// - `tungstenite::handshake::client` → `Debug` — the same ceiling again, on
 ///   the exact target the dump is emitted from, and this one is not negotiable.
 ///   The crate-level entry above is a ceiling in the usual sense: a MORE
@@ -123,8 +125,7 @@ pub struct LogGuard {
 /// about; [`crate::logging::budget`] bounds the disk cost of the ones we don't.
 const TARGET_BACKSTOPS: &[(&str, LogLevel)] = &[
     ("kill_tree", LogLevel::Warn),
-    ("sacp", LogLevel::Warn),
-    ("sacp_tokio", LogLevel::Warn),
+    ("agent_client_protocol", LogLevel::Warn),
     ("tungstenite", LogLevel::Debug),
     ("tungstenite::handshake::client", LogLevel::Debug),
     ("sqlx::query", LogLevel::Warn),
@@ -154,6 +155,23 @@ fn is_credential_dump_target(target: &str) -> bool {
     target == "tungstenite::handshake::client"
 }
 
+/// Targets whose record is already in the rolling file by the time the
+/// subscriber sees the event, so the file layer must not write it again.
+///
+/// One entry: [`crate::logging::panic_hook`] appends its record to that exact
+/// file synchronously, because the write has to survive a process that is
+/// seconds from aborting (the file sink is a `non_blocking` writer whose flush
+/// is a no-op). Most panics do NOT end the process — tokio catches them in
+/// spawned tasks — so without this every survivable panic appeared twice in the
+/// log, in the same JSON shape, and anything counting them counted double.
+///
+/// Scoped to the file layer alone, unlike [`is_credential_dump_target`]: stderr,
+/// the ring buffer and the Logs viewer's live tail have no synchronous copy and
+/// still need the event.
+fn file_sink_has_own_copy(target: &str) -> bool {
+    target == crate::logging::panic_hook::PANIC_TARGET
+}
+
 /// How much a level lets through, ascending. Distinct from [`LogLevel::rank`],
 /// which is a *severity* rank for filtering records (and puts `Off` at 0
 /// alongside the most severe end); comparing verbosity needs `Off` to be the
@@ -179,11 +197,12 @@ fn verbosity(level: LogLevel) -> u8 {
 /// user-visible consequences before this clamped:
 ///
 /// - `LogLevel::Off` is documented as "disables capture entirely"
-///   ([`crate::logging::LogLevel`]), yet `off,sacp=warn` still captured sacp
-///   warnings — and sacp warns per message under a misbehaving agent, so
+///   ([`crate::logging::LogLevel`]), yet `off,agent_client_protocol=warn`
+///   still captured the ACP transport's warnings — and it warns per message
+///   under a misbehaving agent, so
 ///   "logging off" could still write on the hot path.
 /// - A global `Error` silently gained back WARN lines from every clamped target.
-/// - A user turning a clamped target DOWN (`sacp=off` in the Settings UI) was
+/// - A user turning a clamped target DOWN (`agent_client_protocol=off` in the Settings UI) was
 ///   overruled back up to `warn` — the backstop refusing a request to be
 ///   quieter, which is the opposite of its job.
 ///
@@ -225,7 +244,8 @@ fn env_override_directives(s: &str) -> String {
 /// `tracing-subscriber-0.3.22/src/filter/env/directive.rs`:
 ///
 /// - a directive's target matches by **raw `starts_with`** (`directive.rs:246`),
-///   not module-awareness — so `sacp=off` also governs `sacp_tokio`;
+///   not module-awareness — so `kill_tree=off` would also govern a
+///   `kill_tree_x`;
 /// - the longest matching target wins, and among equal ones the last;
 /// - a level may be named (case-insensitive) **or numeric** `0`..`5`
 ///   (`LevelFilter::from_str`);
@@ -244,7 +264,7 @@ fn env_override_directives(s: &str) -> String {
 /// **With nothing applicable the answer is `Off`, not "unbounded".** An
 /// expression like `codeg_lib=info` enables nothing else — `EnvFilter::builder()`
 /// leaves `default_directive` unset (`builder.rs:353`), so an unmatched target is
-/// disabled — and a ceiling emitted as `sacp=warn` there would *turn sacp on*, a
+/// disabled — and a ceiling emitted as `agent_client_protocol=warn` there would *turn agent_client_protocol on*, a
 /// floor masquerading as a ceiling, which is the whole bug this clamp prevents.
 ///
 /// A directive naming a target this one does not cover is skipped, including a
@@ -263,12 +283,12 @@ fn env_level_for_target(expr: &str, target: &str) -> LogLevel {
             // `target=level`. An OMITTED level is TRACE (`directive.rs:203`); an
             // INVALID one makes the whole directive unparseable, and
             // `parse_lossy` drops those — so must we, or we'd emit a ceiling for
-            // a directive `EnvFilter` never accepted. `CODEG_LOG=off,sacp=bogus`
+            // a directive `EnvFilter` never accepted. `CODEG_LOG=off,agent_client_protocol=bogus`
             // is the case that matters: EnvFilter keeps only `off`, so appending
-            // `sacp=warn` there would turn sacp back on.
+            // `agent_client_protocol=warn` there would turn agent_client_protocol back on.
             //
-            // Neither side is trimmed, per the whitespace note above: `sacp = warn`
-            // really does yield the target `"sacp "` (which nothing matches) and
+            // Neither side is trimmed, per the whitespace note above: `agent_client_protocol = warn`
+            // really does yield the target `"agent_client_protocol "` (which nothing matches) and
             // the level `" warn"` (invalid).
             Some((lhs, "")) => (Some(lhs), LogLevel::Trace),
             Some((lhs, rhs)) => match parse_level(rhs) {
@@ -474,6 +494,10 @@ fn init_file_writer(dir: &Path, prefix: &str) -> Option<(NonBlocking, WorkerGuar
         day,
         already_written,
     );
+    // Tell the panic hook which file to append its record to. Recorded only now
+    // that the appender exists, so the name it reconstructs is the file being
+    // written and the directory is known to have been created above.
+    crate::logging::panic_hook::set_log_file(dir, prefix, LOG_FILE_SUFFIX);
     Some(tracing_appender::non_blocking(budgeted))
 }
 
@@ -519,7 +543,20 @@ fn build_subscriber(
                 .with(filter_fn(|meta| !is_credential_dump_target(meta.target())))
                 .with(fmt::layer().with_writer(std::io::stderr))
                 .with(BufferEmitLayer)
-                .with(fmt::layer().json().with_writer(non_blocking))
+                // A PER-LAYER filter, so it applies to the file sink alone.
+                // `panic_hook` has already appended its record to this exact
+                // file, synchronously, because the write has to survive a
+                // process that is seconds from aborting. Letting the event
+                // through here too would write the same panic twice, in the
+                // same shape, to the same file. Every other sink still gets
+                // it: stderr, the ring buffer and the Logs viewer's live tail
+                // have no synchronous copy.
+                .with(
+                    fmt::layer()
+                        .json()
+                        .with_writer(non_blocking)
+                        .with_filter(filter_fn(|meta| !file_sink_has_own_copy(meta.target()))),
+                )
                 .init();
             Some(guard)
         }
@@ -535,6 +572,13 @@ fn build_subscriber(
             None
         }
     };
+
+    // Last here, because the hook logs through the subscriber that was just
+    // installed. Early everywhere else: every binary builds its subscriber
+    // through this one function, so this single call covers the desktop app,
+    // the server, `codeg-mcp`, the supervisor and the credential helper, and it
+    // runs before any of them does real work.
+    crate::logging::panic_hook::install();
 
     (reload_handle, guard)
 }
@@ -683,8 +727,7 @@ mod tests {
             "kill_tree=warn",
             // Full JSON-RPC payload per message (TRACE), plus a per-message
             // INFO line — the 34GB-in-8.8h shape.
-            "sacp=warn",
-            "sacp_tokio=warn",
+            "agent_client_protocol=warn",
             // The serialized WS handshake at TRACE — bearer token and every
             // custom header of a remote workspace connection, in the clear.
             // Clamped to the global `info` here: the ceiling never adds volume,
@@ -812,6 +855,29 @@ mod tests {
         }
     }
 
+    /// The panic record reaches the rolling file by its own synchronous write,
+    /// so the file layer must skip it — otherwise every survivable panic (most
+    /// of them: tokio catches panics in spawned tasks) is in the log twice.
+    /// Scoped to that one target, and to that one sink.
+    #[test]
+    fn the_file_sink_skips_only_the_record_the_panic_hook_already_wrote() {
+        assert!(file_sink_has_own_copy(
+            crate::logging::panic_hook::PANIC_TARGET
+        ));
+        for other in [
+            "codeg_lib::acp::connection",
+            "codeg_lib::panic_hook",
+            "codeg_lib::panicky",
+            "codeg_lib",
+            "panic",
+        ] {
+            assert!(
+                !file_sink_has_own_copy(other),
+                "{other} has no synchronous copy and must still reach the file"
+            );
+        }
+    }
+
     /// The predicate above is only half the claim; this exercises the wiring,
     /// with the same two global filters the real subscriber is built from and
     /// the most permissive directive anyone could write for the dump.
@@ -862,21 +928,90 @@ mod tests {
         );
     }
 
+    /// The panic filter is PER-LAYER, which is the whole point: the file sink
+    /// must lose the record it already holds while every other sink keeps it.
+    /// A global filter here would have silenced the panic on stderr and in the
+    /// Logs viewer too — which is the opposite of what this module is for.
+    ///
+    /// Built with the same layer stack `build_subscriber`'s file arm uses, so
+    /// this exercises the wiring and not just the predicate.
+    #[test]
+    fn the_file_layer_alone_loses_the_record_the_hook_already_wrote() {
+        use std::sync::{Arc, Mutex};
+
+        struct CaptureTargets(&'static str, Arc<Mutex<Vec<(String, String)>>>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CaptureTargets {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _ctx: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                self.1
+                    .lock()
+                    .unwrap()
+                    .push((self.0.to_string(), event.metadata().target().to_string()));
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        // The reloadable filter, not a bare `EnvFilter`: the real stack's first
+        // layer is a `reload::Layer`, and a per-layer filter beneath one is the
+        // combination this test exists to pin.
+        let (reloadable, _handle) =
+            reload::Layer::new(EnvFilter::builder().parse_lossy("trace"));
+        let subscriber = Registry::default()
+            .with(reloadable)
+            .with(filter_fn(|meta| !is_credential_dump_target(meta.target())))
+            // Stands in for the stderr fmt layer and the buffer layer.
+            .with(CaptureTargets("other", seen.clone()))
+            // Stands in for the JSON file layer, with its per-layer filter.
+            .with(
+                CaptureTargets("file", seen.clone())
+                    .with_filter(filter_fn(|meta| !file_sink_has_own_copy(meta.target()))),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(target: crate::logging::panic_hook::PANIC_TARGET, "panic in thread …");
+            tracing::info!(target: "codeg_lib::acp", "ordinary event");
+        });
+
+        let seen = seen.lock().unwrap();
+        let panic_target = crate::logging::panic_hook::PANIC_TARGET;
+        assert!(
+            !seen
+                .iter()
+                .any(|(sink, target)| sink == "file" && target == panic_target),
+            "the file sink must not write the record a second time: {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|(sink, target)| sink == "other" && target == panic_target),
+            "every other sink must still carry the panic: {seen:?}"
+        );
+        assert_eq!(
+            seen.iter()
+                .filter(|(_, target)| target == "codeg_lib::acp")
+                .count(),
+            2,
+            "an ordinary event still reaches both sinks: {seen:?}"
+        );
+    }
+
     #[test]
     fn env_override_appends_backstops_so_debug_cannot_reopen_them() {
         // The explicit RUST_LOG/CODEG_LOG path bypasses build_env_filter, so it
         // must apply the same backstops itself — otherwise `RUST_LOG=debug`
-        // re-opens the kill_tree per-PID firehose and the sacp wire dump.
+        // re-opens the kill_tree per-PID firehose and the agent_client_protocol wire dump.
         assert_eq!(
             env_override_directives("debug"),
-            "debug,kill_tree=warn,sacp=warn,sacp_tokio=warn,tungstenite=debug,\
+            "debug,kill_tree=warn,agent_client_protocol=warn,tungstenite=debug,\
              tungstenite::handshake::client=debug,sqlx::query=warn,codeg_lib::logging=off"
         );
         // And the parsed filter still carries the clamps under a global debug.
         let rendered = EnvFilter::builder()
             .parse_lossy(env_override_directives("debug"))
             .to_string();
-        for pin in ["kill_tree=warn", "sacp=warn", "sqlx::query=warn"] {
+        for pin in ["kill_tree=warn", "agent_client_protocol=warn", "sqlx::query=warn"] {
             assert!(
                 rendered.contains(pin),
                 "{pin} clamp must survive a global debug override: {rendered}"
@@ -887,7 +1022,7 @@ mod tests {
     /// A backstop is a CEILING, not a pin. `LogLevel::Off` is documented as
     /// "disables capture entirely", so a bare `target=warn` appended after it —
     /// which is what this used to emit — made "logging off" still write, and
-    /// two of sacp's `warn!` sites fire per message under a misbehaving agent.
+    /// two of agent_client_protocol's `warn!` sites fire per message under a misbehaving agent.
     #[test]
     fn off_means_off_and_backstops_never_raise_verbosity() {
         let off = build_env_filter(&LogSettings {
@@ -895,7 +1030,7 @@ mod tests {
             targets: Vec::new(),
         })
         .to_string();
-        for target in ["kill_tree", "sacp", "sacp_tokio", "sqlx::query"] {
+        for target in ["kill_tree", "agent_client_protocol", "sqlx::query"] {
             assert!(
                 off.contains(&format!("{target}=off")),
                 "{target} must collapse to off under a global Off: {off}"
@@ -912,13 +1047,13 @@ mod tests {
             targets: Vec::new(),
         })
         .to_string();
-        assert!(error.contains("sacp=error"), "{error}");
-        assert!(!error.contains("sacp=warn"), "{error}");
+        assert!(error.contains("agent_client_protocol=error"), "{error}");
+        assert!(!error.contains("agent_client_protocol=warn"), "{error}");
 
         // And the env-override path. `RUST_LOG=off` must be silent too.
         assert_eq!(
             env_override_directives("OFF"),
-            "OFF,kill_tree=off,sacp=off,sacp_tokio=off,tungstenite=off,\
+            "OFF,kill_tree=off,agent_client_protocol=off,tungstenite=off,\
              tungstenite::handshake::client=off,sqlx::query=off,codeg_lib::logging=off",
             "a bare off override collapses the ceilings, case-insensitively"
         );
@@ -927,76 +1062,76 @@ mod tests {
     /// The env path has no single global level to clamp against, so the ceiling
     /// is resolved per target against the expression itself. Clamping only when
     /// the whole expression was a bare level (the first attempt) left the two
-    /// cases below still emitting `sacp=warn` — overruling an explicit request
+    /// cases below still emitting `agent_client_protocol=warn` — overruling an explicit request
     /// for silence on a per-message path.
     #[test]
     fn env_override_clamps_per_target_not_just_bare_levels() {
         // An explicit directive for a backstopped target must be honored when it
-        // asks for LESS. `sacp=off` alone also enables nothing else, so every
+        // asks for LESS. `agent_client_protocol=off` alone also enables nothing else, so every
         // other ceiling collapses to off too.
         assert_eq!(
-            env_override_directives("sacp=off"),
-            "sacp=off,kill_tree=off,sacp=off,sacp_tokio=off,tungstenite=off,\
+            env_override_directives("agent_client_protocol=off"),
+            "agent_client_protocol=off,kill_tree=off,agent_client_protocol=off,tungstenite=off,\
              tungstenite::handshake::client=off,sqlx::query=off,codeg_lib::logging=off"
         );
         // ...but the same target asking for MORE is still refused: that is the
         // firehose this whole clamp exists to keep shut.
         assert!(
-            env_override_directives("sacp=trace").contains("sacp=warn"),
+            env_override_directives("agent_client_protocol=trace").contains("agent_client_protocol=warn"),
             "a crate-wide trace request must still be clamped"
         );
         // A compound expression's bare level is the ceiling for targets it
         // doesn't name.
         let compound = env_override_directives("off,codeg_lib::acp=trace");
-        assert!(compound.contains("sacp=off"), "{compound}");
-        assert!(!compound.contains("sacp=warn"), "{compound}");
+        assert!(compound.contains("agent_client_protocol=off"), "{compound}");
+        assert!(!compound.contains("agent_client_protocol=warn"), "{compound}");
         let error_compound = env_override_directives("error,codeg_lib::acp=info");
-        assert!(error_compound.contains("sacp=error"), "{error_compound}");
-        assert!(!error_compound.contains("sacp=warn"), "{error_compound}");
+        assert!(error_compound.contains("agent_client_protocol=error"), "{error_compound}");
+        assert!(!error_compound.contains("agent_client_protocol=warn"), "{error_compound}");
         // No bare level at all: EnvFilter leaves unmatched targets disabled, so a
         // ceiling of `off` is the honest answer — emitting `warn` here would turn
-        // sacp ON in an expression that never asked for it.
+        // agent_client_protocol ON in an expression that never asked for it.
         let targeted = env_override_directives("codeg_lib::acp=info");
-        assert!(targeted.contains("sacp=off"), "{targeted}");
-        assert!(!targeted.contains("sacp=warn"), "{targeted}");
+        assert!(targeted.contains("agent_client_protocol=off"), "{targeted}");
+        assert!(!targeted.contains("agent_client_protocol=warn"), "{targeted}");
     }
 
     #[test]
     fn env_level_for_target_resolves_like_env_filter_would() {
         // Exact target beats the global, and the last exact wins.
-        assert_eq!(env_level_for_target("info,sacp=off", "sacp"), LogLevel::Off);
+        assert_eq!(env_level_for_target("info,agent_client_protocol=off", "agent_client_protocol"), LogLevel::Off);
         assert_eq!(
-            env_level_for_target("sacp=warn,sacp=debug", "sacp"),
+            env_level_for_target("agent_client_protocol=warn,agent_client_protocol=debug", "agent_client_protocol"),
             LogLevel::Debug
         );
         // A later but BROADER directive can't displace a narrower earlier one.
         assert_eq!(
-            env_level_for_target("sacp=off,trace", "sacp"),
+            env_level_for_target("agent_client_protocol=off,trace", "agent_client_protocol"),
             LogLevel::Off
         );
         // A different target doesn't answer for this one.
         assert_eq!(
-            env_level_for_target("info,other=trace", "sacp"),
+            env_level_for_target("info,other=trace", "agent_client_protocol"),
             LogLevel::Info
         );
         // A MORE specific target doesn't either — EnvFilter prefers it for events
         // beneath it, which is the escape hatch.
         assert_eq!(
-            env_level_for_target("info,sacp::jsonrpc=trace", "sacp"),
+            env_level_for_target("info,agent_client_protocol::jsonrpc=trace", "agent_client_protocol"),
             LogLevel::Info
         );
         // Span/field syntax falls through to the global by design.
         assert_eq!(
-            env_level_for_target("info,sacp[span]=trace", "sacp"),
+            env_level_for_target("info,agent_client_protocol[span]=trace", "agent_client_protocol"),
             LogLevel::Info
         );
         // Nothing applicable at all ⇒ off, not unbounded.
-        assert_eq!(env_level_for_target("other=trace", "sacp"), LogLevel::Off);
-        assert_eq!(env_level_for_target("", "sacp"), LogLevel::Off);
+        assert_eq!(env_level_for_target("other=trace", "agent_client_protocol"), LogLevel::Off);
+        assert_eq!(env_level_for_target("", "agent_client_protocol"), LogLevel::Off);
         // Case is tolerated in a level.
-        assert_eq!(env_level_for_target("INFO,sacp=WARN", "sacp"), LogLevel::Warn);
+        assert_eq!(env_level_for_target("INFO,agent_client_protocol=WARN", "agent_client_protocol"), LogLevel::Warn);
         // Malformed `=level` is dropped, like `parse_lossy` does.
-        assert_eq!(env_level_for_target("=info", "sacp"), LogLevel::Off);
+        assert_eq!(env_level_for_target("=info", "agent_client_protocol"), LogLevel::Off);
     }
 
     /// `EnvFilter` normalizes whitespace NOWHERE: `Directive::parse` walks
@@ -1010,8 +1145,8 @@ mod tests {
     /// drift apart silently.
     #[test]
     fn padded_directives_are_inert_to_both_the_filter_and_the_ceiling() {
-        for expr in ["info ,sacp =off", " info,sacp = off", "info , sacp=off"] {
-            let level = env_level_for_target(expr, "sacp");
+        for expr in ["info ,agent_client_protocol =off", " info,agent_client_protocol = off", "info , agent_client_protocol=off"] {
+            let level = env_level_for_target(expr, "agent_client_protocol");
             assert_eq!(
                 level,
                 LogLevel::Off,
@@ -1021,22 +1156,18 @@ mod tests {
                 .parse_lossy(env_override_directives(expr))
                 .to_string();
             assert!(
-                !rendered.contains("sacp=warn"),
-                "padded `{expr}` must not end up enabling sacp: {rendered}"
-            );
-            assert!(
-                !rendered.contains("sacp_tokio=warn"),
-                "...nor sacp_tokio: {rendered}"
+                !rendered.contains("agent_client_protocol=warn"),
+                "padded `{expr}` must not end up enabling agent_client_protocol: {rendered}"
             );
         }
 
         // The unpadded spelling of the same intent still works normally, so this
         // is fidelity to EnvFilter rather than a blanket refusal.
         assert_eq!(
-            env_level_for_target("info,sacp=off", "sacp"),
+            env_level_for_target("info,agent_client_protocol=off", "agent_client_protocol"),
             LogLevel::Off
         );
-        assert_eq!(env_level_for_target("info,other=off", "sacp"), LogLevel::Info);
+        assert_eq!(env_level_for_target("info,other=off", "agent_client_protocol"), LogLevel::Info);
     }
 
     /// `parse_lossy` DROPS a directive whose level is invalid — it does not
@@ -1047,58 +1178,64 @@ mod tests {
     fn an_invalid_level_drops_the_directive_instead_of_widening_it() {
         // EnvFilter keeps only `off` here, so the ceiling must stay `off` too.
         assert_eq!(
-            env_level_for_target("off,sacp=bogus", "sacp"),
+            env_level_for_target("off,agent_client_protocol=bogus", "agent_client_protocol"),
             LogLevel::Off
         );
-        let rendered = env_override_directives("off,sacp=bogus");
-        assert!(rendered.contains("sacp=off"), "{rendered}");
-        assert!(!rendered.contains("sacp=warn"), "{rendered}");
-        assert!(!rendered.contains("sacp_tokio=warn"), "{rendered}");
+        let rendered = env_override_directives("off,agent_client_protocol=bogus");
+        assert!(rendered.contains("agent_client_protocol=off"), "{rendered}");
+        assert!(!rendered.contains("agent_client_protocol=warn"), "{rendered}");
 
         // Numeric spellings go through `usize` in `LevelFilter::from_str`, so
         // these are levels, not garbage — and `00` is `off`, not `trace`.
-        assert_eq!(env_level_for_target("sacp=00", "sacp"), LogLevel::Off);
-        assert_eq!(env_level_for_target("sacp=005", "sacp"), LogLevel::Trace);
+        assert_eq!(env_level_for_target("agent_client_protocol=00", "agent_client_protocol"), LogLevel::Off);
+        assert_eq!(env_level_for_target("agent_client_protocol=005", "agent_client_protocol"), LogLevel::Trace);
         // Out-of-range numbers are invalid, so that directive drops.
-        assert_eq!(env_level_for_target("off,sacp=9", "sacp"), LogLevel::Off);
+        assert_eq!(env_level_for_target("off,agent_client_protocol=9", "agent_client_protocol"), LogLevel::Off);
         // A padded level is invalid to `LevelFilter::from_str`, so it drops too.
         assert_eq!(
-            env_level_for_target("off,sacp= warn", "sacp"),
+            env_level_for_target("off,agent_client_protocol= warn", "agent_client_protocol"),
             LogLevel::Off
         );
     }
 
     /// The forms `EnvFilter` accepts that a naive "is it a bare level?" reader
-    /// misses. Each of these used to resolve to `Off` and thus emit `sacp=off`,
+    /// misses. Each of these used to resolve to `Off` and thus emit `agent_client_protocol=off`,
     /// silently disabling a target the expression had asked to see.
     #[test]
     fn env_level_for_target_understands_every_directive_form() {
         // Numeric levels (`LevelFilter::from_str`): 0=off .. 5=trace.
-        assert_eq!(env_level_for_target("5", "sacp"), LogLevel::Trace);
-        assert_eq!(env_level_for_target("0", "sacp"), LogLevel::Off);
-        assert_eq!(env_level_for_target("sacp=2", "sacp"), LogLevel::Warn);
+        assert_eq!(env_level_for_target("5", "agent_client_protocol"), LogLevel::Trace);
+        assert_eq!(env_level_for_target("0", "agent_client_protocol"), LogLevel::Off);
+        assert_eq!(env_level_for_target("agent_client_protocol=2", "agent_client_protocol"), LogLevel::Warn);
         // A bare target with no level means TRACE for it (directive.rs:163).
-        assert_eq!(env_level_for_target("sacp", "sacp"), LogLevel::Trace);
+        assert_eq!(env_level_for_target("agent_client_protocol", "agent_client_protocol"), LogLevel::Trace);
         // So does `target=` with the level omitted (directive.rs:203) — NOT the
         // `ERROR` that `LevelFilter::from_str("")` alone would give.
-        assert_eq!(env_level_for_target("sacp=", "sacp"), LogLevel::Trace);
+        assert_eq!(env_level_for_target("agent_client_protocol=", "agent_client_protocol"), LogLevel::Trace);
 
         // EnvFilter matches targets by raw `starts_with`, so a shorter directive
-        // target also governs longer ones: `sacp=off` covers `sacp_tokio` too,
-        // and the ceiling for `sacp_tokio` must not re-enable it.
+        // target also governs longer ones: `tungstenite=off` covers
+        // `tungstenite::handshake::client` too, and the ceiling for that longer
+        // target must not re-enable it. Raw, not module-aware: `kill_tree=off`
+        // answers for a `kill_tree_x` just the same.
         assert_eq!(
-            env_level_for_target("info,sacp=off", "sacp_tokio"),
+            env_level_for_target("info,tungstenite=off", "tungstenite::handshake::client"),
+            LogLevel::Off
+        );
+        assert_eq!(
+            env_level_for_target("info,kill_tree=off", "kill_tree_x"),
             LogLevel::Off
         );
         assert!(
-            env_override_directives("info,sacp=off").contains("sacp_tokio=off"),
+            env_override_directives("info,tungstenite=off")
+                .contains("tungstenite::handshake::client=off"),
             "a prefix directive governs the longer target as EnvFilter would"
         );
 
         // And the clamp still refuses "louder" for each of these forms.
-        for expr in ["sacp", "sacp=", "sacp=5", "5"] {
+        for expr in ["agent_client_protocol", "agent_client_protocol=", "agent_client_protocol=5", "5"] {
             assert!(
-                env_override_directives(expr).contains("sacp=warn"),
+                env_override_directives(expr).contains("agent_client_protocol=warn"),
                 "{expr} must still be clamped to warn"
             );
         }
@@ -1111,34 +1248,34 @@ mod tests {
         let rendered = build_env_filter(&LogSettings {
             level: LogLevel::Info,
             targets: vec![TargetDirective {
-                target: "sacp".into(),
+                target: "agent_client_protocol".into(),
                 level: LogLevel::Off,
             }],
         })
         .to_string();
-        assert!(rendered.contains("sacp=off"), "{rendered}");
-        assert!(!rendered.contains("sacp=warn"), "{rendered}");
+        assert!(rendered.contains("agent_client_protocol=off"), "{rendered}");
+        assert!(!rendered.contains("agent_client_protocol=warn"), "{rendered}");
     }
 
     #[test]
     fn a_more_specific_target_still_beats_the_crate_level_backstop() {
         // The backstops are a floor for the *crate*, not a gag order: pinning
-        // `sacp=warn` must not take away protocol-level debugging. EnvFilter
+        // `agent_client_protocol=warn` must not take away protocol-level debugging. EnvFilter
         // matches the most specific directive, so a submodule override wins even
         // though the backstop is appended after it. This is the documented
         // escape hatch for capturing the ACP wire.
         let rendered = EnvFilter::builder()
             .parse_lossy(env_override_directives(
-                "info,sacp::jsonrpc::transport_actor=trace",
+                "info,agent_client_protocol::jsonrpc::transport_actor=trace",
             ))
             .to_string();
         assert!(
-            rendered.contains("sacp::jsonrpc::transport_actor=trace"),
+            rendered.contains("agent_client_protocol::jsonrpc::transport_actor=trace"),
             "submodule override must survive the crate backstop: {rendered}"
         );
         assert!(
-            rendered.contains("sacp=warn"),
-            "the crate-level floor stays for every other sacp module: {rendered}"
+            rendered.contains("agent_client_protocol=warn"),
+            "the crate-level floor stays for every other agent_client_protocol module: {rendered}"
         );
     }
 
@@ -1146,13 +1283,13 @@ mod tests {
     fn a_same_target_override_loses_to_the_backstop() {
         // The other half of the contract: a directive on the *same* target as a
         // backstop is overwritten by it (last one wins for equal specificity),
-        // so neither the Settings UI nor `RUST_LOG=sacp=trace` can reopen the
+        // so neither the Settings UI nor `RUST_LOG=agent_client_protocol=trace` can reopen the
         // whole-crate firehose by accident.
         let rendered = EnvFilter::builder()
-            .parse_lossy(env_override_directives("sacp=trace"))
+            .parse_lossy(env_override_directives("agent_client_protocol=trace"))
             .to_string();
-        assert!(rendered.contains("sacp=warn"), "{rendered}");
-        assert!(!rendered.contains("sacp=trace"), "{rendered}");
+        assert!(rendered.contains("agent_client_protocol=warn"), "{rendered}");
+        assert!(!rendered.contains("agent_client_protocol=trace"), "{rendered}");
     }
 
     #[test]

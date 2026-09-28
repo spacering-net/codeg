@@ -1,6 +1,10 @@
 import type { JSONContent } from "@tiptap/core"
 
 import { parseUserMessageSegments } from "@/components/message/user-message-segments"
+import {
+  NO_KNOWN_INVOCATIONS,
+  type KnownInvocations,
+} from "@/lib/invocation-token"
 
 import { referenceToMarkdown } from "./reference-text"
 import { isEmbeddedReferenceUri } from "./reference-uri"
@@ -53,12 +57,20 @@ function isSendDroppedReference(attrs: ReferenceAttrs): boolean {
  *
  * Returns null when nothing hydrates (no reference in the text), so callers
  * can leave a plain paste to ProseMirror's default handling.
+ *
+ * A bare `/cmd`·`$skill` token only becomes a badge when it is one of `known` —
+ * the invocations the agent advertises right now. The default is none: a badge
+ * in the composer claims the text IS a command, and a claim nothing backs is
+ * exactly the one this argument exists to stop. Reference LINKS hydrate
+ * regardless; they carry a `file:`/`codeg:` destination and were deliberately
+ * inserted.
  */
 export function textToHydratedInlineContent(
-  text: string
+  text: string,
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS
 ): JSONContent[] | null {
   if (!text) return null
-  const segments = parseUserMessageSegments(text)
+  const segments = parseUserMessageSegments(text, { knownInvocations: known })
   const hydratable = segments.some(
     (segment) =>
       segment.kind === "reference" && !isSendDroppedReference(segment.attrs)
@@ -89,9 +101,15 @@ export function textToHydratedInlineContent(
  * badges immediately instead of only after the message is sent. Hydration is
  * lossless — the badges re-serialize to exactly the seeded text — so what gets
  * sent is unchanged either way.
+ *
+ * `known` gates the bare tokens exactly as in
+ * {@link textToHydratedInlineContent}.
  */
-export function textToSeededInlineContent(text: string): JSONContent[] {
-  return textToHydratedInlineContent(text) ?? textToInlineContent(text)
+export function textToSeededInlineContent(
+  text: string,
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS
+): JSONContent[] {
+  return textToHydratedInlineContent(text, known) ?? textToInlineContent(text)
 }
 
 /**
@@ -100,10 +118,15 @@ export function textToSeededInlineContent(text: string): JSONContent[] {
  * a legacy v1 Markdown draft, a queued message's display text, an injected
  * quick-action/expert template, a saved automation's prompt.
  */
-export function textToSeededDoc(text: string): JSONContent {
+export function textToSeededDoc(
+  text: string,
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS
+): JSONContent {
   return {
     type: "doc",
-    content: [{ type: "paragraph", content: textToSeededInlineContent(text) }],
+    content: [
+      { type: "paragraph", content: textToSeededInlineContent(text, known) },
+    ],
   }
 }
 
@@ -151,7 +174,8 @@ export interface ClipboardTextSnapshot {
  *   slice wrapper — a badge must never downgrade to its plain-text token.
  */
 export function decidePastedContent(
-  snapshot: ClipboardTextSnapshot
+  snapshot: ClipboardTextSnapshot,
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS
 ): JSONContent[] | null {
   // Copied from within a ProseMirror editor: defer so its native HTML round-trip
   // restores structure/hard breaks/badges exactly (see the doc comment).
@@ -161,7 +185,7 @@ export function decidePastedContent(
   if (snapshot.html.includes("data-reference")) return null
   // Nothing sensible to insert without a text/plain flavor, so defer.
   if (!snapshot.text) return null
-  const hydrated = textToHydratedInlineContent(snapshot.text)
+  const hydrated = textToHydratedInlineContent(snapshot.text, known)
   // An external rich fragment must insert its plain-text flavor even when
   // nothing hydrates (never the HTML); a plain-only clipboard without
   // references keeps ProseMirror's default paste.

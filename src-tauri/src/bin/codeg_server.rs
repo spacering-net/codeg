@@ -137,7 +137,9 @@ async fn async_main() -> ExitCode {
     // errors are silenced, no subprocesses spawned.
     std::thread::spawn(|| {
         let _ = std::panic::catch_unwind(|| {
+            codeg_lib::acp::binary_cache::migrate_legacy_root();
             codeg_lib::sweep_acp_binary_trash();
+            codeg_lib::sweep_acp_scratch_dirs();
         });
     });
 
@@ -265,6 +267,7 @@ async fn async_main() -> ExitCode {
         question_config,
         session_info_config,
         chat_authoring_config,
+        browser_tools_config,
     ) = codeg_lib::app_state::build_delegation_stack(
         &connection_manager,
         db.conn.clone(),
@@ -291,6 +294,7 @@ async fn async_main() -> ExitCode {
         question_config: question_config.clone(),
         session_info_config: session_info_config.clone(),
         chat_authoring_config: chat_authoring_config.clone(),
+        browser_tools_config: browser_tools_config.clone(),
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
     });
@@ -337,10 +341,19 @@ async fn async_main() -> ExitCode {
         &chat_authoring_config,
     )
     .await;
-    // Keep ACP model terminal fallbacks aligned with the same default-shell
-    // preference used by the built-in terminal before accepting connections.
+    // And the browser-tools switch, so the popover reports it truthfully.
+    // Server mode never advertises the group (there are no native tabs here),
+    // but the flag is one setting shared by both runtimes.
+    codeg_lib::commands::browser_tools::apply_persisted_browser_tools_config(
+        &state.db.conn,
+        &state.browser_tools_config,
+    )
+    .await;
+    // Before accepting connections: keep ACP model terminal fallbacks aligned
+    // with the same default-shell preference the built-in terminal uses, and
+    // seed the command-color opt-in that every launch env is built from.
     let terminal_shell_config = state.connection_manager.terminal_shell_config();
-    codeg_lib::commands::system_settings::apply_persisted_terminal_shell_config(
+    codeg_lib::commands::system_settings::apply_persisted_terminal_settings(
         &state.db.conn,
         &terminal_shell_config,
     )
@@ -375,11 +388,23 @@ async fn async_main() -> ExitCode {
                 state.emitter.clone(),
                 chat_authoring_config.clone(),
             )),
+            // No native webviews in this process: what a web user sees in a
+            // "browser tab" is an iframe their own browser renders, which
+            // nothing here can reach.
+            Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs),
         );
-        let socket = delegation_socket_path.clone();
+        // Bind through the service handle rather than a bare `listener.run`
+        // spawn: it keeps the bind error and the accept-loop handle around, so
+        // the workspace status indicator can report why the broker socket is
+        // down and rebind it without restarting the server.
+        let service = codeg_lib::acp::delegation::service::DelegationService::new(
+            listener,
+            delegation_socket_path.clone(),
+        );
+        codeg_lib::acp::delegation::service::install(service.clone());
         tokio::spawn(async move {
-            if let Err(e) = listener.run(socket).await {
-                tracing::info!("[delegation] listener exited: {e}");
+            if let Err(e) = service.start().await {
+                tracing::error!("[delegation] listener failed to start: {e}");
             }
         });
     }
@@ -473,6 +498,12 @@ async fn async_main() -> ExitCode {
         ));
     }
 
+    // Reclaim scratch directories lost track of mid-session. Deliberately NOT
+    // gated on `idle_timeout_from_env` like the sweep above: setting
+    // `CODEG_ACP_IDLE_TIMEOUT_SECS=0` disables idle disconnects, not disk
+    // reclamation.
+    tokio::spawn(codeg_lib::scratch_sweep_task());
+
     // Office watch preview servers: reap dead children + ref0 stragglers.
     if let Some(idle_timeout) = codeg_lib::office_watch::idle_timeout_from_env() {
         tokio::spawn(codeg_lib::office_watch::office_watch_idle_sweep_task(
@@ -507,6 +538,22 @@ async fn async_main() -> ExitCode {
         state.data_dir.clone(),
     ) {
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
+    }
+
+    // Config-sync uploader (mirrors lib.rs setup): sleeps a minute, then
+    // compares the configuration's hash every interval and uploads only when
+    // it changed. Does nothing at all until a WebDAV endpoint is configured.
+    {
+        let db_for_sync = state.db.conn.clone();
+        let emitter = std::sync::Arc::new(state.emitter.clone());
+        tokio::spawn(async move {
+            codeg_lib::commands::config_sync::auto_sync::run_auto_sync_loop(
+                db_for_sync,
+                emitter,
+                codeg_lib::commands::config_sync::APP_VERSION.to_string(),
+            )
+            .await;
+        });
     }
 
     // Label worktree folders registered before aliases were seeded at creation
@@ -576,6 +623,24 @@ async fn async_main() -> ExitCode {
     // Token on stderr ONLY (bearer credential — keep it out of the log files
     // and the in-app viewer); the bind addresses are safe to log normally.
     eprintln!("[SERVER] Token: {}", token);
+    // Port bridge for dev servers on this host (web-mode built-in browser):
+    // bound where our own socket is, on the ports after ours unless
+    // CODEG_BRIDGE_PORTS says otherwise — or nothing of its own at all when
+    // CODEG_BRIDGE_HOST_PATTERN names the targets by hostname on this port.
+    let bridge =
+        codeg_lib::web::browser_bridge::BridgeConfig::from_env(&advertised_host, actual_port);
+    match &bridge {
+        Some(config) => tracing::info!(
+            "[SERVER] Port bridge for dev servers: {}",
+            codeg_lib::web::describe_bridge(config)
+        ),
+        None => tracing::info!(
+            "[SERVER] Port bridge for dev servers: {}",
+            codeg_lib::web::BRIDGE_OFF
+        ),
+    }
+    codeg_lib::web::browser_bridge::configure(bridge);
+
     tracing::info!("[SERVER] Listening on:");
     for addr in &addresses {
         tracing::info!("  {}", addr);

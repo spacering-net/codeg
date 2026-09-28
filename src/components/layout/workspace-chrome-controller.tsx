@@ -52,8 +52,13 @@ export function WorkspaceChromeController() {
   // owns them too (see the keydown handler below).
   const { mode, activePane, filesMaximized } = useWorkspaceView()
   const { activeFileTabId, fileTabs } = useWorkspaceFileTabs()
-  const { closeFileTab, closeAllFileTabs, switchFileTab, openFilePreview } =
-    useWorkspaceActions()
+  const {
+    closeFileTab,
+    closeAllFileTabs,
+    switchFileTab,
+    openFilePreview,
+    openBrowserTab,
+  } = useWorkspaceActions()
   const { openConversations } = useWorkbenchRoute()
   const { shortcuts } = useShortcutSettings()
   // Search open-state is shared (see search-dialog-context): the trigger lives
@@ -205,12 +210,29 @@ export function WorkspaceChromeController() {
 
       if (matchShortcutEvent(e, shortcuts.reopen_last_closed_tab)) {
         e.preventDefault()
+        // Every entry carries the slot it was closed from, and each opener
+        // puts the tab back there (clamped to the strip) rather than at the
+        // end.
         while (true) {
           const closed = popClosedTab()
           if (!closed) return
           if (closed.kind === "file") {
             void openFilePreview(closed.path, {
               folderId: closed.folderId ?? undefined,
+              index: closed.index,
+            })
+            return
+          }
+          if (closed.kind === "browser") {
+            // Back at the page it was showing; a tab already on that page is
+            // activated instead (the usual one-tab-per-URL rule).
+            openBrowserTab(closed.url, {
+              folderId: closed.folderId ?? undefined,
+              index: closed.index,
+              profile: closed.profile,
+              // Said only when it was remote: otherwise the address decides,
+              // as it does when the tab comes back after a restart.
+              ...(closed.remote === true ? { remote: true } : {}),
             })
             return
           }
@@ -226,7 +248,8 @@ export function WorkspaceChromeController() {
               closed.conversationId,
               closed.agentType,
               closed.isPinned,
-              closed.title
+              closed.title,
+              { index: closed.index }
             )
             return
           }
@@ -236,7 +259,9 @@ export function WorkspaceChromeController() {
           const workingDir = closed.workingDir ?? folder?.path
           if (!workingDir) continue
           openConversations()
-          openNewConversationTab(closed.folderId, workingDir)
+          openNewConversationTab(closed.folderId, workingDir, {
+            index: closed.index,
+          })
           return
         }
       }
@@ -251,6 +276,7 @@ export function WorkspaceChromeController() {
     openNewConversationTab,
     openTab,
     openFilePreview,
+    openBrowserTab,
     setSearchOpen,
     shortcuts,
     toggle,

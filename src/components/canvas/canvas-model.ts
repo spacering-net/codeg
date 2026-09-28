@@ -58,6 +58,22 @@ export const BOARD_DOT_GAP = 24
 export const DETAIL_CARD_WIDTH = 520
 export const DETAIL_CARD_HEIGHT = 560
 
+/** Default footprint of a file card. Wide enough for ~80 columns of source at
+ *  the board's text size, tall enough that a screenful of it is worth pinning;
+ *  the user's own resize is what persists afterwards. */
+export const FILE_CARD_WIDTH = 460
+export const FILE_CARD_HEIGHT = 360
+/** Below this a file card is chrome with a sliver of document under it. */
+export const FILE_CARD_MIN_WIDTH = 240
+export const FILE_CARD_MIN_HEIGHT = 160
+
+/** Default footprint of a terminal card — 80×20-ish at the board's monospace
+ *  size, the shape a shell expects to open at. */
+export const TERMINAL_CARD_WIDTH = 480
+export const TERMINAL_CARD_HEIGHT = 300
+export const TERMINAL_CARD_MIN_WIDTH = 260
+export const TERMINAL_CARD_MIN_HEIGHT = 140
+
 /** The live-conversation cards' drag handle (their title bar). Fed to
  *  ReactFlow's per-node `dragHandle`, which is what lets the rest of the card be
  *  an ordinary document: selectable text, clickable composer, scrollable
@@ -708,6 +724,58 @@ export interface NoteNodeData {
   [key: string]: unknown
 }
 
+/** A read-only view of one file on disk. `path` is lifted out of the row (and
+ *  narrowed to a string) because it is the card's identity — every read, the
+ *  watch join and the "open in workspace" hand-off key on it — and a row that
+ *  somehow lost it has nothing to render. */
+export interface FileNodeData {
+  dbNode: CanvasNode
+  path: string
+  /** Basename, or the user's own title when they renamed the card. */
+  label: string
+  [key: string]: unknown
+}
+
+/** A shell running on the board. `workingDir` is where it is spawned; the PTY
+ *  itself is runtime state keyed off the row id (see `canvasTerminalId`), so
+ *  nothing about the process is persisted. */
+export interface TerminalNodeData {
+  dbNode: CanvasNode
+  workingDir: string
+  label: string
+  [key: string]: unknown
+}
+
+/** The PTY id a terminal card owns. Derived from the row id so the same card
+ *  re-attaches to the same shell after its host view unmounts (leaving the
+ *  canvas route) — and so two windows showing one board share one terminal
+ *  rather than racing to spawn two. */
+export function canvasTerminalId(dbId: number): string {
+  return `canvas-term-${dbId}`
+}
+
+/** Last segment of a filesystem path, both separators honoured (a Windows path
+ *  reaches this layer verbatim), trailing separators ignored. Falls back to the
+ *  whole string so a card is never labelled with an empty line. */
+export function basePathName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "")
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
+  return (index >= 0 ? trimmed.slice(index + 1) : trimmed) || path
+}
+
+/** Whether a node kind lays out a member grid — i.e. whether a resize should
+ *  quantize to whole cards. One predicate for the derive layer and the view's
+ *  resize handler, which must agree or a file card would snap to a
+ *  conversation grid. Mirrors `CanvasNodeKind::is_region` in Rust. */
+export function isRegionKind(kind: CanvasNode["kind"]): boolean {
+  return (
+    kind === "folder" ||
+    kind === "group" ||
+    kind === "agent" ||
+    kind === "custom"
+  )
+}
+
 /**
  * Whether deleting this row would destroy prose the user typed by hand.
  *
@@ -734,10 +802,21 @@ export function noteHoldsProse(
  *  kept RF-import-free so the derivation stays a plain testable function). */
 export interface CanvasFlowNode {
   id: string
-  type: "region" | "conversationCard" | "conversationDetail" | "note"
+  type:
+    | "region"
+    | "conversationCard"
+    | "conversationDetail"
+    | "note"
+    | "file"
+    | "terminal"
   position: { x: number; y: number }
   parentId?: string
-  data: RegionNodeData | ConversationCardData | NoteNodeData
+  data:
+    | RegionNodeData
+    | ConversationCardData
+    | NoteNodeData
+    | FileNodeData
+    | TerminalNodeData
   width?: number
   height?: number
   draggable?: boolean
@@ -865,6 +944,40 @@ export function deriveFlowGraph(input: DeriveFlowInput): DeriveFlowResult {
         width,
         height,
         data: { dbNode } satisfies NoteNodeData,
+      })
+      continue
+    }
+
+    // File and terminal cards hold a real document / a real shell, so — like
+    // the expanded conversation card — only their title bar may drag. Without
+    // `dragHandle` d3-drag installs a window-level `selectstart` preventDefault
+    // on every mousedown inside the node, and the browser asks THAT event
+    // whether a click may move the caret: the terminal would take focus without
+    // taking the cursor, and no text in either card could be selected.
+    if (dbNode.kind === "file" || dbNode.kind === "terminal") {
+      const width = liveSize?.width ?? dbNode.width
+      const height = liveSize?.height ?? dbNode.height
+      renderedSizes.set(dbNode.id, { width, height })
+      // A row that lost its path renders as unavailable rather than vanishing —
+      // the same soft-reference stance the folder and conversation bindings
+      // take, and the user needs something on the board to delete.
+      const path = dbNode.path ?? ""
+      const label = dbNode.title?.trim() || basePathName(path)
+      topNodes.push({
+        id: rfId,
+        type: dbNode.kind === "file" ? "file" : "terminal",
+        position,
+        width,
+        height,
+        dragHandle: DRAG_HANDLE_SELECTOR,
+        data:
+          dbNode.kind === "file"
+            ? ({ dbNode, path, label } satisfies FileNodeData)
+            : ({
+                dbNode,
+                workingDir: path,
+                label,
+              } satisfies TerminalNodeData),
       })
       continue
     }

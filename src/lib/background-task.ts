@@ -244,6 +244,171 @@ function grokSubagentCompletedToEnvelope(
   }
 }
 
+/** Statuses CodeBuddy reports for an ended task, mapped to the `stop` kind so
+ *  the row reads "stopped" (same convention as `GROK_STOPPED_STATUSES`). */
+const CODEBUDDY_STOPPED_STATUSES: ReadonlySet<string> = new Set([
+  "cancelled",
+  "canceled",
+  "killed",
+])
+
+/** The `<system-reminder data-role="tool-hint">…</system-reminder>` block
+ *  CodeBuddy appends to a STILL-RUNNING snapshot ("do NOT poll TaskOutput in a
+ *  loop") — addressed to the model, not the reader. */
+const CODEBUDDY_TOOL_HINT_RE = /<system-reminder\b[\s\S]*?<\/system-reminder>/gi
+
+/** `--- RESULT ---` separates CodeBuddy's agent snapshot header (+ the `Prompt:`
+ *  / `Response:` echoes) from the worker's actual report. */
+const CODEBUDDY_RESULT_SEPARATOR = "--- RESULT ---"
+
+/** Read `Label: value` off `line`, or `null` when it doesn't match. */
+function labeledLine(line: string | undefined, label: string): string | null {
+  if (line == null) return null
+  const prefix = `${label}: `
+  if (!line.startsWith(prefix)) return null
+  const value = line.slice(prefix.length).trim()
+  return value.length > 0 ? value : null
+}
+
+function cleanCodeBuddyBody(body: string): string | null {
+  const cleaned = body.replace(CODEBUDDY_TOOL_HINT_RE, "").trim()
+  return cleaned.length > 0 ? cleaned : null
+}
+
+/**
+ * Parse a CodeBuddy `TaskOutput` snapshot — a plain-text report, not an XML or
+ * JSON envelope, so neither of the shapes above claimed it. Without this the
+ * poll fell through to `record(poll, null)`: the row rendered a permanent
+ * "running" badge with NO output, silently dropping the worker's report.
+ *
+ * Two shapes, both built line-by-line by CodeBuddy's `TaskOutputTool`
+ * (`buildAgentTaskOutputLines` / `executeBackgroundShellTask`):
+ *
+ *   agent  → `Task ID: …` / `Status: …` / (Duration, Started, Ended, Agent Type,
+ *            Task ID (for resume)) / `Prompt:` … / `Response:` … /
+ *            `--- RESULT ---` / <report>
+ *   shell  → `Shell ID: …` / `Command: …` / `Status: …` / `Duration: …` /
+ *            `Timestamp: …` / `Stdout (full):` … / `Stderr (full):` …
+ *
+ * The agent shape's anchor is its first two lines, which the producer emits
+ * unconditionally and adjacently (`[\`Task ID: ${id}\`, \`Status: ${status}\`]`)
+ * with a generated single-line id. The shell shape anchors on its whole
+ * seven-line header instead, and only parses when that header is locatable with
+ * certainty — see [`shellHeaderIsUnambiguous`] for why a multiline command is
+ * left unparsed rather than guessed at. Both anchors are strict enough that
+ * ordinary tool output can't be hijacked into the background lane by
+ * `isBackgroundTaskToolCall`.
+ *
+ * The agent shape deliberately shows only the `--- RESULT ---` tail: the
+ * `Response:` section above it repeats the same report verbatim, and `Prompt:`
+ * echoes the dispatch. `taskType: "subagent"` routes the report through the
+ * prose renderer (it is Markdown, not a shell stream) — the same lane Grok's
+ * sub-agent polls use.
+ */
+function parseCodeBuddySnapshot(text: string): BackgroundTaskEnvelope | null {
+  const lines = text.split("\n")
+  const status = (raw: string | null) => raw?.trim().toLowerCase() ?? null
+  const kindFor = (s: string | null): "poll" | "stop" =>
+    s != null && CODEBUDDY_STOPPED_STATUSES.has(s) ? "stop" : "poll"
+
+  const agentId = labeledLine(lines[0], "Task ID")
+  if (agentId != null) {
+    const agentStatus = status(labeledLine(lines[1], "Status"))
+    if (agentStatus == null) return null
+    const separator = lines.indexOf(CODEBUDDY_RESULT_SEPARATOR)
+    const body = lines
+      .slice(
+        separator >= 0
+          ? separator + 1
+          : // No separator: a team-member snapshot, whose whole body is the
+            // note that follows the two header lines.
+            2
+      )
+      .join("\n")
+    return {
+      kind: kindFor(agentStatus),
+      retrievalStatus: null,
+      taskId: agentId,
+      taskType: "subagent",
+      status: agentStatus,
+      exitCode: null,
+      output: cleanCodeBuddyBody(body),
+      command: null,
+      message: null,
+    }
+  }
+
+  const shellId = labeledLine(lines[0], "Shell ID")
+  if (shellId == null) return null
+  const command = labeledLine(lines[1], "Command")
+  if (command == null || !shellHeaderIsUnambiguous(lines)) return null
+  const shellStatus = status(labeledLine(lines[2], "Status"))
+  return {
+    kind: kindFor(shellStatus),
+    retrievalStatus: null,
+    taskId: shellId,
+    taskType: "local_bash",
+    status: shellStatus,
+    // CodeBuddy's shell snapshot carries no exit code — leaving it null keeps
+    // `deriveBackgroundBadge` from inventing a failure.
+    exitCode: null,
+    // Everything from the `Stdout (…)` line on: stdout AND stderr, in the order
+    // the tool wrote them.
+    output: cleanCodeBuddyBody(lines.slice(6).join("\n")),
+    command,
+    message: null,
+  }
+}
+
+/**
+ * Whether a shell snapshot's header can be located with CERTAINTY: the run sits
+ * at its fixed offset (line 2, right after `Shell ID:` and a single-line
+ * `Command:`) AND occurs nowhere else in the text.
+ *
+ * Both halves are load-bearing. CodeBuddy interpolates the submitted command
+ * into `Command:` verbatim and unescaped (`title: task.originalCommand`), so a
+ * MULTILINE command pushes the header down by an unknown amount, and since the
+ * command and the captured output are BOTH arbitrary text, either one can
+ * reproduce the run. That makes the boundary undecidable by any scan: searching
+ * forward adopts a look-alike inside the command (a heredoc is enough),
+ * searching backward adopts one inside stdout. Either mistake truncates the
+ * command AND reports a status lifted out of unrelated text, which is wrong
+ * data rather than merely absent data.
+ *
+ * Requiring UNIQUENESS is what turns the undecidable case into an honest
+ * abstention: whenever a second candidate exists the snapshot is ambiguous, so
+ * `parseCodeBuddySnapshot` claims nothing and the poll renders as the generic
+ * tool call it did before this parser existed. The cost is abstaining on a
+ * snapshot whose captured output happens to contain the full run as well, which
+ * is indistinguishable from a forged header by construction.
+ */
+function shellHeaderIsUnambiguous(lines: string[]): boolean {
+  if (!shellHeaderRunAt(lines, 2)) return false
+  for (let i = 3; i < lines.length; i++) {
+    if (shellHeaderRunAt(lines, i)) return false
+  }
+  return true
+}
+
+/**
+ * Whether `lines[i]` opens the five-line run that closes a shell snapshot's
+ * header: `Status:` / `Duration:` / `Timestamp:` / blank / a `Stdout`-prefixed
+ * line. `executeBackgroundShellTask` emits all five unconditionally and
+ * adjacently (every branch ends in a `Stdout` line: `Stdout (full):`,
+ * `Stdout (filtered):`, or `Stdout: (no output)`).
+ */
+function shellHeaderRunAt(lines: string[], i: number): boolean {
+  const blank = lines[i + 3]
+  return (
+    (lines[i] ?? "").startsWith("Status: ") &&
+    (lines[i + 1] ?? "").startsWith("Duration: ") &&
+    (lines[i + 2] ?? "").startsWith("Timestamp: ") &&
+    blank != null &&
+    blank.trim() === "" &&
+    (lines[i + 4] ?? "").startsWith("Stdout")
+  )
+}
+
 /** Parse a Grok `get_command_or_subagent_output` result. Strict on the `type`
  *  discriminator so other JSON tool output is never hijacked. */
 function parseGrokTaskOutputEnvelopes(text: string): BackgroundTaskEnvelope[] {
@@ -269,15 +434,19 @@ function parseGrokTaskOutputEnvelopes(text: string): BackgroundTaskEnvelope[] {
 }
 
 /** Every task reported by one background-task tool result: a single envelope for
- *  Claude Code's poll/stop shapes, and one per task for Grok's `TaskOutput`
- *  (whose `MultiResult` variant can cover several). Empty when the text is
- *  neither (callers fall back to generic rendering). */
+ *  Claude Code's poll/stop and CodeBuddy's plain-text snapshot shapes, and one
+ *  per task for Grok's `TaskOutput` (whose `MultiResult` variant can cover
+ *  several). Empty when the text is none of them (callers fall back to generic
+ *  rendering). */
 export function parseBackgroundTaskEnvelopes(
   text: string | null | undefined
 ): BackgroundTaskEnvelope[] {
   const raw = text?.trim()
   if (!raw) return []
-  const single = parsePollEnvelope(raw) ?? parseStopEnvelope(raw)
+  const single =
+    parsePollEnvelope(raw) ??
+    parseStopEnvelope(raw) ??
+    parseCodeBuddySnapshot(raw)
   if (single) return [single]
   return parseGrokTaskOutputEnvelopes(raw)
 }

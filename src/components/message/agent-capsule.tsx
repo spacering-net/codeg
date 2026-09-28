@@ -35,6 +35,24 @@ interface AgentCapsuleProps {
    * title truncates first), so the capsule is identifiable at a glance.
    */
   idBadge?: ReactNode
+  /**
+   * How the sub-agent itself ended, as a compact chip inside the pill. Distinct
+   * from the pill's own running/error chrome, which describes the CALL: a codex
+   * spawn settles the moment the launch is acknowledged, long before the child
+   * it started is done. Sits in the pill rather than the body so it survives
+   * collapse — the state is the one thing worth seeing without a click.
+   */
+  stateBadge?: ReactNode
+  /**
+   * An action that belongs to the capsule rather than to its content — today,
+   * "open the child's own session". Rendered BESIDE the pill, not inside it:
+   * the pill is itself the collapsible trigger, so a nested button would be
+   * invalid, and an action buried in the body is unreachable while collapsed
+   * and absent entirely when there is no body (the live case, where the child's
+   * transcript is the only record there is). Mirrors the right-edge affordance
+   * `DelegationCardRow` gives every delegation card.
+   */
+  headerAction?: ReactNode
   /** Accessible label for the trigger. */
   statusLabel?: string
   /** Initial open state; defaults to open on error so failures are visible. */
@@ -48,6 +66,8 @@ export function AgentCapsule({
   isError,
   rightSuffix,
   idBadge,
+  stateBadge,
+  headerAction,
   statusLabel,
   defaultOpen,
   children,
@@ -115,6 +135,9 @@ export function AgentCapsule({
           {idBadge}
         </span>
       )}
+      {stateBadge != null && (
+        <span className="flex shrink-0 items-center">{stateBadge}</span>
+      )}
       {rightSuffix != null && (
         <span className="flex shrink-0 items-center text-muted-foreground/60">
           {rightSuffix}
@@ -123,10 +146,21 @@ export function AgentCapsule({
     </>
   )
 
+  // The pill's row. `headerAction` rides along here in every branch below, so
+  // the action sits in the same place whether the capsule is expanded,
+  // collapsed, or has no body at all — the three states a codex sub-agent moves
+  // through between live and reload.
+  const headerRow = (pill: ReactNode) => (
+    <div className="@container/agentcap flex w-full min-w-0 items-center gap-1.5">
+      {pill}
+      {headerAction}
+    </div>
+  )
+
   // Nothing to expand → a bare, non-interactive pill (no chevron, no bordered
   // frame). This is the fix for the empty sub-agent "white box".
   if (!hasBody) {
-    return (
+    return headerRow(
       <div className={pillClass} aria-label={statusLabel}>
         {pillInner}
       </div>
@@ -136,9 +170,11 @@ export function AgentCapsule({
   return (
     <Collapsible open={bodyOpen} onOpenChange={setBodyOpen} className="w-full">
       {/* Pill trigger — matches ToolGroupPart structure with themed emphasis. */}
-      <CollapsibleTrigger className={pillClass} aria-label={statusLabel}>
-        {pillInner}
-      </CollapsibleTrigger>
+      {headerRow(
+        <CollapsibleTrigger className={pillClass} aria-label={statusLabel}>
+          {pillInner}
+        </CollapsibleTrigger>
+      )}
 
       {/* Body — sits below the pill. Internal sections retain their own affordances. */}
       <CollapsibleContent

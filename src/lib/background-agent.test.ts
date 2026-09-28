@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   BACKGROUND_TASK_MARKER,
+  hasTranscriptOverlay,
   isAsyncLaunchAckText,
+  isOutOfTurnContentEvent,
   parseBackgroundTaskMarker,
 } from "@/lib/background-agent"
 
@@ -65,5 +67,72 @@ describe("isAsyncLaunchAckText", () => {
         "The tool said: Subagent started in background.\nsubagent_id: x"
       )
     ).toBe(false)
+  })
+})
+
+describe("hasTranscriptOverlay", () => {
+  it("is true only for the agent whose transcript watcher is armed", () => {
+    // Mirrors `background_watch.rs::spawn_if_claude`, which returns None for
+    // every other agent — so nothing produces `background_activity` overlay
+    // turns for them and their out-of-turn content renders nowhere.
+    expect(hasTranscriptOverlay("claude_code")).toBe(true)
+    for (const agent of ["code_buddy", "codex", "gemini", "custom:acme"]) {
+      expect(hasTranscriptOverlay(agent)).toBe(false)
+    }
+  })
+})
+
+describe("isOutOfTurnContentEvent", () => {
+  it("accepts new turn material", () => {
+    expect(isOutOfTurnContentEvent({ type: "content_delta", text: "hi" })).toBe(
+      true
+    )
+    expect(isOutOfTurnContentEvent({ type: "thinking", text: "hmm" })).toBe(
+      true
+    )
+    // No text field at all, and none needed: a tool call IS the material.
+    expect(isOutOfTurnContentEvent({ type: "tool_call" })).toBe(true)
+  })
+
+  it("rejects revisions of material already on screen", () => {
+    expect(isOutOfTurnContentEvent({ type: "tool_call_update" })).toBe(false)
+    expect(isOutOfTurnContentEvent({ type: "plan_update" })).toBe(false)
+    expect(isOutOfTurnContentEvent({ type: "turn_complete" })).toBe(false)
+  })
+
+  it("rejects empty deltas — a re-read would surface nothing", () => {
+    expect(isOutOfTurnContentEvent({ type: "content_delta", text: "" })).toBe(
+      false
+    )
+    expect(isOutOfTurnContentEvent({ type: "thinking", text: "" })).toBe(false)
+    expect(isOutOfTurnContentEvent({ type: "content_delta" })).toBe(false)
+  })
+
+  it("ignores trailing newlines and whitespace without suppressing subsequent background text", () => {
+    // Captured after Stop: turn_complete(cancelled), connected, then "\n".
+    // No cancellation timer/state is needed: meaningful output must remain
+    // recoverable even when an autonomous task resumes after an interruption.
+    for (const text of ["\n", "\r\n", " ", "\t", "\u00a0", "\u3000"]) {
+      expect(isOutOfTurnContentEvent({ type: "content_delta", text })).toBe(
+        false
+      )
+      expect(isOutOfTurnContentEvent({ type: "thinking", text })).toBe(false)
+    }
+    expect(
+      isOutOfTurnContentEvent({
+        type: "content_delta",
+        text: "Background result",
+      })
+    ).toBe(true)
+    expect(isOutOfTurnContentEvent({ type: "tool_call" })).toBe(true)
+  })
+
+  it("keeps indented code and text-bearing whitespace chunks recoverable", () => {
+    expect(
+      isOutOfTurnContentEvent({ type: "content_delta", text: "  return 1\n" })
+    ).toBe(true)
+    expect(
+      isOutOfTurnContentEvent({ type: "thinking", text: "\nnext step\n" })
+    ).toBe(true)
   })
 })

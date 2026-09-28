@@ -52,6 +52,8 @@
       "science": "البحث العلمي",
       "office_tools": "أدوات المكتب",
       "skill_packs": "حزم المهارات",
+      "collaboration": "التعاون",
+      "browser": "المتصفح",
       "quick_messages": "رسائل سريعة",
       "logs": "سجلات التشغيل"
     }
@@ -196,7 +198,33 @@
       "panelOpacityHint": "مدى عتامة الشريط الجانبي واللوحات وأشرطة التبويب. الأقل يُظهر المزيد من الصورة.",
       "errorTooLarge": "الصورة كبيرة جدًا (16 ميجابايت كحد أقصى).",
       "errorUnsupportedFormat": "صيغة صورة غير مدعومة. اختر ملف PNG أو JPEG أو WebP أو GIF.",
-      "errorUploadFailed": "فشل تعيين صورة الخلفية."
+      "errorUploadFailed": "فشل تعيين صورة الخلفية.",
+      "market": {
+        "open": "سوق الخلفيات",
+        "title": "سوق الخلفيات",
+        "description": "تصفح معرض Wallhaven العام؛ انقر للتنزيل والتطبيق.",
+        "searchPlaceholder": "ابحث عن خلفيات…",
+        "categories": {
+          "all": "الكل",
+          "general": "مناظر",
+          "anime": "أنمي",
+          "people": "أشخاص"
+        },
+        "pageInfo": "صفحة {page} من {lastPage}",
+        "prevPage": "السابق",
+        "nextPage": "التالي",
+        "refresh": "تحديث",
+        "empty": "لا توجد خلفيات مطابقة.",
+        "error": "فشل تحميل سوق الخلفيات.",
+        "retry": "إعادة المحاولة",
+        "cardLabel": "تطبيق الخلفية {id}",
+        "applied": "قيد الاستخدام",
+        "unavailable": "غير متاح",
+        "tooLarge": "أكبر من أن تُستخدم كخلفية: {actual} (الحد {limit})",
+        "downloadFailed": "فشل التنزيل، حاول مجددًا.",
+        "appliedToast": "تم تطبيق الخلفية",
+        "credit": "الصور من wallhaven.cc · محتوى آمن فقط"
+      }
     }
   },
   "SystemSettings": {
@@ -213,6 +241,8 @@
     "enableProxy": "تفعيل وكيل النظام",
     "proxyAddress": "عنوان الوكيل",
     "proxyHint": "يدعم http(s)/socks5، مثال: {example}. يعمل فقط عند تفعيل وكيل النظام.",
+    "proxyBypass": "تجاوز الوكيل لـ",
+    "proxyBypassHint": "افصل بين الإدخالات بفاصلة إنجليزية <code>,</code> دون مسافات، مثل <code>{example}</code>. يطابق <code>example.com</code> النطاق نفسه، ويطابق <code>.example.com</code> جميع نطاقاته الفرعية، ويمكن أيضًا إدخال عناوين IP. العناوين المحلية <code>localhost,127.0.0.1,::1</code> تتصل مباشرةً دائمًا ولا حاجة إلى إضافتها. تُطبَّق القائمة بوصفها متغير البيئة NO_PROXY.",
     "save": "حفظ",
     "saving": "جارٍ الحفظ...",
     "proxyRequired": "عنوان URL للوكيل مطلوب عند تفعيل الوكيل",
@@ -223,6 +253,8 @@
     "appLanguage": "لغة التطبيق",
     "languageSaveSuccess": "تم حفظ إعدادات اللغة",
     "languageSaveFailed": "فشل حفظ إعدادات اللغة: {message}",
+    "dataTitle": "البيانات والمزامنة",
+    "dataDescription": "تنقل مزامنة الإعدادات إعداداتك بين الأجهزة، بينما يحزم النسخ الاحتياطي كل بيانات codeg على هذا الجهاز.",
     "updateTitle": "تحديث التطبيق",
     "versionTitle": "تحديث البرنامج",
     "updateDescription": "تحقق من المصدر المهيأ للإصدارات الأحدث وثبّت التحديث مباشرة عند توفره.",
@@ -270,6 +302,8 @@
     "rollbackSuccess": "تم التراجع إلى الإصدار السابق. جارٍ إعادة التحميل...",
     "rollbackFailed": "فشل التراجع. تحقّق من سجلات الخادم.",
     "updateErrors": {
+      "permissionDenied": "تعذّرت الكتابة في {path}، لذا لا يمكن تثبيت التحديثات في مكانها. حدّث يدويًا بصلاحيات المسؤول أو تحقّق من أذونات التثبيت.",
+      "targetWriteFailed": "تعذّرت الكتابة في {path}، لذا لا يمكن تثبيت التحديثات في مكانها: {reason}",
       "sourceUnavailable": "تعذر الوصول إلى مصدر التحديث. تحقق من الشبكة أو الوكيل ثم أعد المحاولة.",
       "network": "فشل اتصال الشبكة. تحقق من الشبكة أو الوكيل ثم أعد المحاولة.",
       "downloadFailed": "فشل تنزيل حزمة التحديث. يرجى المحاولة مرة أخرى لاحقًا.",
@@ -304,6 +338,10 @@
     "gitlabDescription": "إدارة حسابات GitLab للمصادقة. يتم تخزين الرموز محليًا.",
     "gitlabTokenHint": "أنشئ رمز وصول شخصيًا بنطاق api من GitLab → Preferences → Access tokens.",
     "gitlabNoAccounts": "لا يوجد حساب GitLab بعد",
+    "giteaTitle": "حسابات Gitea",
+    "giteaDescription": "إدارة حسابات Gitea (و Forgejo) للمصادقة. يتم تخزين الرموز محليًا.",
+    "giteaTokenHint": "أنشئ رمز وصول بنطاقات write:repository و write:issue و read:user من Gitea → Settings → Applications.",
+    "giteaNoAccounts": "لا يوجد حساب Gitea بعد",
     "noAccounts": "لا توجد حسابات GitHub مكوّنة.",
     "addAccount": "إضافة حساب",
     "serverUrl": "عنوان الخادم",
@@ -336,7 +374,7 @@
     "loadFailed": "فشل تحميل الإعدادات: {message}",
     "gitAccount": {
       "sectionTitle": "حسابات خادم Git",
-      "sectionDescription": "إدارة بيانات الاعتماد لخوادم Git غير GitHub (GitLab، Bitbucket، الخوادم الذاتية، إلخ).",
+      "sectionDescription": "إدارة بيانات اعتماد خوادم Git التي ليس لها قسم خاص (Bitbucket، الاستضافة الذاتية، إلخ).",
       "noAccounts": "لا توجد حسابات خادم Git مكوّنة.",
       "addAccount": "إضافة حساب",
       "addTitle": "إضافة حساب Git",
@@ -397,7 +435,7 @@
       },
       "open_folder": {
         "title": "فتح مجلد",
-        "description": "فتح منتقي المجلدات وفتح المجلد في نافذة جديدة"
+        "description": "فتح منتقي المجلدات وفتح المجلد في مساحة العمل"
       },
       "open_settings": {
         "title": "فتح الإعدادات",
@@ -636,12 +674,16 @@
     "local": {
       "filterPlaceholder": "تصفية MCP المحلي...",
       "loadFailed": "فشل التحميل: {message}",
+      "sourceUnreadable": "تعذّرت قراءة إعدادات MCP الخاصة بـ {app}، لذا تم إخفاء خوادمها: {message}",
+      "saveBlockedByUnreadableSource": "أصلح هذا الملف أو احذفه ثم حدّث الصفحة قبل الحفظ: تُحتسب الإسنادات من الوكلاء الذين تمكّنت الصفحة من قراءتهم، لذا قد يؤدي الحفظ الآن إلى إزالة هذا الخادم من وكيل تعذّرت قراءته.",
       "empty": "لم يتم اكتشاف MCP محلي.",
       "description": "يمكن تعديل إعداد MCP المحلي وحفظه مباشرة.",
       "enabledApps": "التطبيقات المفعلة",
       "configJson": "إعداد MCP (JSON)",
       "draftTitle": "MCP جديد",
       "draftDescription": "أدخل معرّف الخادم والإعدادات لإنشاء خادم MCP محلي.",
+      "suggestedLabel": "ابدأ من خادم معروف",
+      "suggestedChromeNote": "يملأ النموذج بحزمة chrome-devtools-mcp الرسمية من Google — يضم السجل نسخًا مقلّدة بالاسم نفسه، وهذا يثبّت الحزمة الحقيقية. إنها تشغّل متصفح Chrome **منفصلًا** لا يشرف عليه codeg: ستحصل على بيانات الشبكة والأداء التي لا توفّرها أدوات المتصفح المدمج، ولن تحصل على أي من ضماناتها — لا مشاركة لكل علامة تبويب، ولا شريط نشاط، ولا موافقة على كل مقطع. ينزّل `npx` الحزمة من npm عند أول تشغيل.",
       "serverIdLabel": "معرّف الخادم",
       "serverIdPlaceholder": "معرّف الخادم (مثل: my-mcp)",
       "typeHint": "الأنواع المدعومة: stdio و http (الأسماء البديلة: streamable-http و streamableHttp) و sse. يُستخدم env مع stdio فقط؛ خوادم MCP البعيدة تحمل رموز المصادقة عبر headers.",
@@ -680,6 +722,13 @@
     "emptyNoAgent": "لا يوجد وكيل متاح.",
     "configManagement": "إدارة الإعدادات",
     "envVars": "متغيرات البيئة",
+    "adapterChannel": {
+      "label": "إصدار المحوّل",
+      "description": "يستخدم التثبيت والترقية الإصدار الذي راجعه codeg واعتمده. عند اختيار الأحدث يُثبَّت أحدث إصدار npm للحزمة في حينه؛ وإذا فشل ذلك، يعود codeg إلى الإصدار المعتمد ويوضح ذلك في سجل التثبيت.",
+      "pinned": "الإصدار المعتمد (موصى به)",
+      "latest": "الأحدث (غير مُراجَع)",
+      "latestWarning": "أحدث الإصدارات غير مُراجَعة وقد تعطّل هذا الوكيل في codeg، بل قد يكون الإصدار الأحدث معروفًا بأنه معطوب أحيانًا. تعرض حالة الإصدار ما تم تثبيته فعليًا."
+    },
     "hostTools": {
       "label": "دع الوكيل يتولى الملفات والأوامر بنفسه",
       "description": "يتوقف codeg عن تنفيذ الوصول إلى الملفات وأوامر الطرفية، فينفّذها الوكيل داخل عمليته الخاصة — وعندها فقط تُطبَّق البيئة المعزولة وقواعد الأذونات الخاصة به. كما يُعطَّل التفويض إلى وكلاء آخرين، لأنه سيعيد العمل نفسه عبر codeg. لا يضيف codeg بيئة معزولة من عنده، لذا فعّل هذا الخيار فقط إذا كان الوكيل قد أُعِدّت له واحدة."
@@ -819,7 +868,11 @@
       "authNotInstalled": "cursor-agent غير مثبّت",
       "authLoggedIn": "تم تسجيل الدخول",
       "authNotLoggedIn": "غير مسجّل الدخول",
+      "authUnverified": "تم تسجيل الدخول — تعذّر التحقق من بيانات الاعتماد",
+      "authUnverifiedHint": "لا يزال cursor-agent يحتفظ بتسجيل دخول، لكن تعذّر استخدامه مع Cursor الآن — وغالبًا ما يعني ذلك انتهاء صلاحية الجلسة. ستفشل الجلسات برسالة \"Authentication required\" حتى تسجّل الدخول من جديد؛ فهذا الـ CLI لا يستطيع تجديد تسجيل دخول المتصفح من تلقاء نفسه.",
+      "authUnverifiedHintApiKey": "لدى cursor-agent مفتاح API مخزَّن، لكن Cursor رفضه للتو — غالبًا لأنه ملغى أو منتهي الصلاحية أو مكتوب خطأ. ستفشل الجلسات برسالة \"Authentication required\" حتى تحفظ مفتاحًا صالحًا بالأسفل.",
       "loginHint": "شغّل هذا الأمر في الطرفية لتسجيل الدخول إلى حساب Cursor (سيفتح المتصفح)، ثم اضغط تحديث:",
+      "loginHintRemote": "شغّل هذا الأمر على مضيف codeg المثبَّت عليه cursor-agent، وليس على هذا الجهاز، ثم اضغط تحديث. عادةً لا يوجد على ذلك المضيف متصفح يمكن فتحه، لذا شغّله مع NO_OPEN_BROWSER=1 فيطبع بدلاً من ذلك رابط تسجيل دخول تفتحه أنت في متصفحك. أما الخادم غير المراقَب فبدّل الطريقة أعلاه إلى مفتاح API.",
       "apiKeyLabel": "مفتاح Cursor API",
       "apiKeyPlaceholder": "المفتاح من cursor.com/dashboard",
       "apiKeyHint": "CURSOR_API_KEY — مفتاح حساب من لوحة تحكم Cursor، بديل لتسجيل الدخول عبر المتصفح للأجهزة بدون واجهة أو الخوادم. ليس مفتاحًا خارجيًا أو من OpenAI.",
@@ -922,7 +975,28 @@
         "failed": "لم يكتمل تسجيل الدخول.",
         "startFailed": "تعذّر بدء تسجيل الدخول",
         "credentialHint": "يُخزَّن الرمز هنا. انسخ هذا الملف إلى جهاز آخر بلا سطح مكتب لتسجيل دخوله أيضاً."
-      }
+      },
+      "signOut": {
+        "title": "هل سجّلت الدخول بحساب خاطئ؟",
+        "description": "يحتفظ Antigravity بحساب Google الذي سجّل الدخول به ويعيد استخدامه بصمت، لذا فإن تسجيل الدخول مرة أخرى لا يصل إلى حساب آخر. يؤدي تسجيل الخروج إلى حذف بيانات الاعتماد المخزّنة، وتُنهى جلسات Antigravity الجارية أولاً، وإلا فإنها ستعيد كتابة الحساب القديم.",
+        "action": "تسجيل الخروج",
+        "done": "تم تسجيل الخروج. سجّل الدخول مرة أخرى لاختيار حساب آخر.",
+        "failed": "تعذّر تسجيل الخروج"
+      },
+      "tempReclaimTitle": "مساحة مؤقتة متبقية",
+      "tempReclaimHint": "لم تكن الإصدارات القديمة من codeg قادرة على تنظيف الدليل المؤقت الذي يفكه هذا الوكيل عند كل تشغيل. يفحص هذا الإجراء مجلد النظام المؤقت بحثًا عن تلك البقايا. هذا المجلد مشترك مع تطبيقات أخرى، لذا لا يُحذف أي شيء قبل تأكيدك، ويتم تخطي أي عنصر لا يزال قيد الاستخدام.",
+      "tempReclaimScan": "فحص",
+      "tempReclaimDelete": "حذف البقايا",
+      "tempReclaimNone": "لا يوجد ما يمكن استرجاعه.",
+      "tempReclaimFound": "{count} عنصرًا متبقيًا، يمكن استرجاع {size}.",
+      "tempReclaimSkipped": "تم تخطي {count} (لا يزال قيد الاستخدام أو حديث جدًا).",
+      "tempReclaimed": "تم استرجاع {size} من {count} عنصرًا.",
+      "tempReclaimSelectAll": "تحديد الكل",
+      "tempReclaimAgeHours": "{hours} ساعة",
+      "tempReclaimConfirmTitle": "حذف {count} عنصر؟",
+      "tempReclaimConfirmBody": "سيؤدي هذا إلى حذف {size} نهائيًا. مجلد النظام المؤقت مشترك مع تطبيقات أخرى، لذا تحقّق من كل مسار قبل التأكيد؛ وسيتم تخطّي أي عنصر قيد الاستخدام.",
+      "tempReclaimConfirmAction": "حذف",
+      "tempReclaimCancel": "إلغاء"
     },
     "deepseek": {
       "configManagement": "إعدادات DeepSeek Harness",
@@ -1130,6 +1204,46 @@
           "todowrite": "كتابة قائمة المهام",
           "question": "طرح سؤال عليك",
           "doom_loop": "يُفعَّل عند تكرار الاستدعاء نفسه ثلاث مرات بالمدخلات نفسها"
+        }
+      },
+      "behavior": {
+        "title": "السلوك والضغط",
+        "description": "الإعدادات الافتراضية للجلسة وضغط السياق وحدود مخرجات الأدوات. تُكتب في opencode.json وتُطبَّق بعد الحفظ أدناه.",
+        "docsLink": "توثيق الإعدادات",
+        "unset": "غير مضبوط",
+        "defaultAgent": "الوكيل الافتراضي",
+        "defaultAgentHint": "الوكيل الأساسي الذي تبدأ به الجلسة الجديدة. عند تركه فارغًا أو غير معروف يعود إلى build.",
+        "share": "المشاركة",
+        "shareHint": "هل يمكن نشر الجلسة كرابط مشاركة.",
+        "shareManual": "يدوي (عند الطلب فقط)",
+        "shareAuto": "تلقائي (كل جلسة جديدة)",
+        "shareDisabled": "معطَّل",
+        "autoUpdate": "التحديث التلقائي",
+        "autoUpdateHint": "هل يحدّث OpenCode نفسه إلى أحدث إصدار.",
+        "autoUpdateOn": "تحديث تلقائي",
+        "autoUpdateNotify": "إشعار فقط",
+        "autoUpdateOff": "أبدًا",
+        "snapshot": "لقطات نظام الملفات",
+        "snapshotHint": "يسجّل لقطة قبل كل خطوة. عند الإيقاف لن يتمكن التراجع والاستعادة من إرجاع الملفات.",
+        "compactionAuto": "الضغط التلقائي",
+        "compactionAutoHint": "يلخّص المحادثة تلقائيًا عند امتلاء نافذة السياق.",
+        "compactionPrune": "تقليم مخرجات الأدوات القديمة",
+        "compactionPruneHint": "يتخلص من مخرجات استدعاءات الأدوات القديمة أثناء الضغط بدل تلخيصها.",
+        "fields": {
+          "subagentDepth": "عمق الوكلاء الفرعيين",
+          "tailTurns": "الأدوار المحفوظة حرفيًا",
+          "preserveRecentTokens": "الرموز المحفوظة حرفيًا",
+          "reserved": "رموز محجوزة",
+          "maxLines": "حد أسطر مخرجات الأدوات",
+          "maxBytes": "حد بايتات مخرجات الأدوات"
+        },
+        "hints": {
+          "subagentDepth": "كم مستوى يمكن أن يتداخل فيه الوكلاء الفرعيون. القيمة 1 تمنع الوكيل الفرعي من إطلاق وكيل آخر.",
+          "tailTurns": "عدد أدوار المستخدم الأخيرة التي تبقى بلا ضغط. عند تركه فارغًا تحدّها ميزانية الرموز أدناه فقط.",
+          "preserveRecentTokens": "ميزانية رموز الأدوار الأخيرة التي تبقى حرفية بعد الضغط.",
+          "reserved": "نافذة تُترك خالية كي لا تتسبب عملية الضغط نفسها في تجاوز السياق.",
+          "maxLines": "المخرجات الأطول من ذلك تُكتب إلى القرص ويُستبدل بها معاينة. الافتراضي 2000.",
+          "maxBytes": "المخرجات الأكبر من ذلك تُكتب إلى القرص ويُستبدل بها معاينة. الافتراضي 51200."
         }
       }
     },
@@ -1387,7 +1501,8 @@
       "localUnrecognized": "{versionText}. الإصدار المحلي غير قابل للمقارنة؛ جرّب الترقية للكتابة فوق التثبيت.",
       "upgradeAvailable": "{versionText}. تتوفر ترقية.",
       "remoteUnavailable": "{versionText}. الإصدار البعيد غير متاح حاليًا.",
-      "latest": "{versionText}. أنت على أحدث إصدار."
+      "latest": "{versionText}. أنت على أحدث إصدار.",
+      "latestChannel": "{versionText}. قناة الأحدث مفعّلة؛ الترقية تثبّت أحدث إصدار."
     },
     "adapter": {
       "label": "محوّل ACP",
@@ -1400,7 +1515,11 @@
       "ready": "المحوّل {adapterCmd} مثبّت — وهو ما يشغّله Codeg. يأتي ببيئة تشغيل خاصة به، لذا لا حاجة إلى {nativeLabel}؛ وإن ثبّتها لاحقاً فالاثنان يتعايشان ويتشاركان {configDir}."
     },
     "cline": {
-      "configDescription": "تكوين مزود واجهة برمجة التطبيقات وبيانات اعتماد Cline. يتم حفظ الإعدادات في ~/.cline/data/."
+      "configDescription": "تكوين مزود واجهة برمجة التطبيقات وبيانات اعتماد Cline. يتم حفظ الإعدادات في ~/.cline/data/.",
+      "signInGroup": "تسجيل الدخول باستخدام Cline",
+      "byoGroup": "استخدم مزوّدك الخاص",
+      "externalGroup": "مُهيّأ خارج codeg",
+      "signInHint": "يحتفظ Cline بهذه البيانات بنفسه. شغّل الأمر أدناه في الطرفية لتسجيل الدخول — سيعرض رمزًا ويفتح صفحة في المتصفح لتأكيده."
     },
     "opencodePlugins": {
       "title": "إضافات OpenCode",
@@ -1408,7 +1527,10 @@
       "noPlugins": "لا توجد إضافات معلنة في opencode.json",
       "status": {
         "installed": "مثبّت",
-        "missing": "غير مثبّت"
+        "needs_migration": "يتطلب الترحيل",
+        "missing": "غير مثبّت",
+        "path": "إضافة من مسار",
+        "path_missing": "المسار غير موجود"
       },
       "installAll": "تثبيت جميع الإضافات المفقودة",
       "pinVersions": "تثبيت إصدارات @latest",
@@ -1469,6 +1591,7 @@
       "installing": "جارٍ التثبيت…",
       "recheck": "إعادة التحقق",
       "configDirSkillsNote": "عند تحديد دليل إعدادات مخصص، لن تنطبق المهارات والخبراء وأدوات المكتب المُدارة في الإعدادات على pi هذا — أدِر مهاراته مباشرةً في ذلك المجلد.",
+      "dirHistoryNote": "هذان الدليلان يصلان إلى عملية pi فقط. يقرأ سجل محادثات codeg الموقع الافتراضي لـ pi، لذا لن تظهر الجلسات المكتوبة في دليل مخصص ضمن القائمة.",
       "projectTrustTitle": "ثقة المشروع",
       "projectTrustDescription": "المجلدات التي سمحت لـ pi بتحميل ملفات المشروع منها. المجلد الموثوق يتيح لملفات ‎.pi/extensions في ذلك المستودع تنفيذ التعليمات البرمجية عند بدء pi، ويسري على كل المجلدات داخله، ويُستخدم أيضًا عند تشغيل pi في الطرفية.",
       "projectTrustLoading": "جارٍ التحميل…",
@@ -1538,16 +1661,64 @@
     "customAgentBadge": "مخصص",
     "customAgentNotLaunchable": "لا يمكن تشغيل هذا الوكيل هنا: {reason}"
   },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "عادي",
+    "deepseekModeDefaultDescription": "يقرأ الملفات ويعدّلها وينفّذ الأوامر مباشرة لإنجاز المهمة",
+    "deepseekModePlan": "خطة",
+    "deepseekModePlanDescription": "يبحث أولاً ثم يقدّم خطة كاملة لتؤكّدها قبل أي تعديل. هذا توجيه للنموذج فقط؛ الحدّ الفعلي يبقى وفق الوصول إلى الملفات.",
+    "deepseekOptionModel": "النموذج",
+    "deepseekOptionReasoning": "مستوى الاستدلال",
+    "deepseekOptionReasoningDescription": "كلما ارتفع كان أبطأ وأكثر استهلاكاً للرموز، لكنه أثبت في المسائل الصعبة",
+    "deepseekOptionSandbox": "الوصول إلى الملفات",
+    "deepseekOptionSandboxDescription": "تتشارك الأوامر وأدوات الملفات هذا الحدّ نفسه",
+    "deepseekReasoningOff": "إيقاف",
+    "deepseekReasoningOffDescription": "يجيب مباشرة دون استدلال؛ الأسرع",
+    "deepseekReasoningLow": "منخفض",
+    "deepseekReasoningLowDescription": "يستدل قليلاً؛ أثبت من الإيقاف وأسرع من المرتفع",
+    "deepseekReasoningHigh": "مرتفع",
+    "deepseekReasoningHighDescription": "يستدل ثم يجيب؛ الخيار الافتراضي للبرمجة اليومية",
+    "deepseekReasoningMax": "الأقصى",
+    "deepseekReasoningMaxDescription": "يستدل لفترة أطول؛ أثبت في المسائل الصعبة لكنه أبطأ وأكثر استهلاكاً للرموز",
+    "deepseekSandboxReadOnly": "قراءة فقط",
+    "deepseekSandboxReadOnlyDescription": "ينفّذ وفق سياسة القراءة فقط؛ بدّل الصلاحية عند الحاجة إلى الكتابة. التطبيق جزئي على بعض المنصات.",
+    "deepseekSandboxWorkspaceWrite": "الكتابة في مساحة العمل",
+    "deepseekSandboxWorkspaceWriteDescription": "يُفترض أن تبقى عمليات الكتابة داخل مساحة عمل الجلسة والمجلدات المؤقتة للنظام؛ وأي استدعاء خارجها يطلب إذناً لمرة واحدة. التطبيق جزئي على بعض المنصات.",
+    "deepseekSandboxFullAccess": "وصول كامل (بدون عزل)",
+    "deepseekSandboxFullAccessDescription": "لا يطبّق أي قيود على الملفات. اخترْه فقط إذا كنت تدرك العواقب.",
+    "deepseekPermissionAllowOnce": "السماح مرة واحدة",
+    "deepseekPermissionRejectOnce": "رفض"
+  },
   "SettingsPages": {
     "agentsLoading": "جارٍ تحميل إعدادات الوكلاء...",
     "skillPacksLoading": "جارٍ تحميل حزم المهارات…"
   },
+  "CloseBehaviorSettings": {
+    "title": "سلوك زر الإغلاق",
+    "description": "اختر ما يفعله زر إغلاق النافذة الرئيسية.",
+    "trayUnavailable": "لا تتوفر منطقة إشعارات في هذا النظام، لذا يؤدي زر الإغلاق دائمًا إلى إنهاء codeg.",
+    "behaviorAsk": "السؤال في كل مرة",
+    "behaviorMinimize": "التصغير إلى منطقة الإشعارات",
+    "behaviorExit": "إنهاء codeg",
+    "saveFailed": "تعذر حفظ سلوك الإغلاق: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "إغلاق codeg؟",
+    "askDescription": "يمكن أن يستمر codeg في العمل ضمن منطقة الإشعارات لإبقاء الوكلاء والطرفيات نشطة، أو أن يُنهى تمامًا.",
+    "confirmExitTitle": "إنهاء codeg؟",
+    "confirmExitDescription": "الإعداد الحالي يجعل إغلاق النافذة ينهي codeg.",
+    "runningTerminals": "لا تزال {count} من الطرفيات قيد التشغيل وسيتم إنهاؤها عند الخروج.",
+    "remember": "تذكّر اختياري",
+    "cancel": "إلغاء",
+    "minimize": "التصغير إلى منطقة الإشعارات",
+    "exit": "إنهاء codeg",
+    "actionFailed": "فشل تنفيذ الإجراء: {message}"
+  },
   "GeneralSettings": {
     "loading": "جارٍ التحميل...",
     "sectionTitle": "عام",
-    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض وأصوات الإشعارات وتفويض الوكلاء المتعدّدين.",
+    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض وسلوك إغلاق النافذة والإشعارات والأصوات.",
     "terminalTitle": "الطرفية الافتراضية",
-    "terminalDescription": "اختر الصدفة المستخدمة عند فتح علامات تبويب طرفية جديدة من شريط الطرفية أو شجرة الملفات. تستخدمها الوكلاء أيضًا عندما تطلب من codeg تنفيذ سطر أوامر كامل نيابةً عنها.",
+    "terminalDescription": "اختر الصدفة التي يشغّلها codeg لعلامات تبويب الطرفية الجديدة ولأسطر الأوامر الكاملة التي تطلب الوكلاء تنفيذها نيابةً عنها. أما الوكلاء الذين يملكون صدفة خاصة بهم (مثل Codex و Claude Code) فينفّذون الأوامر داخل عملياتهم، ولا يصل إليهم هذا الإعداد.",
     "terminalSystemDefault": "افتراضي النظام",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1561,13 +1732,19 @@
     "terminalShellNotInstalled": "غير مثبّت",
     "terminalShellNotFoundWarning": "هذا المسار غير موجود على هذا المضيف.",
     "terminalCurrentShell": "قيد الاستخدام: {path}",
-    "renderingDescription": "أوقف تشغيل تسريع الأجهزة إذا ظهرت شاشة سوداء أو أخطاء في العرض (شائع على بعض كروت AMD أو كروت Intel المدمجة). يسري على إصدار سطح المكتب لويندوز فقط.",
+    "colorizeCommandOutput": "تلوين مُخرجات الأوامر",
+    "colorizeCommandOutputDescription": "فرض ألوان ANSI على الأوامر التي تنفّذها الوكلاء، بحيث تظهر مخرجاتها ملوّنة في السجل بدلاً من نص عادي. يسري على الجلسات الجديدة.",
+    "renderingDescription": "أوقف تشغيل تسريع الأجهزة إذا ظهرت شاشة سوداء أو أخطاء في العرض (شائع على بعض كروت AMD أو كروت Intel المدمجة على ويندوز، وعلى تعريف NVIDIA المغلق على لينكس). يسري على إصدارات سطح المكتب لويندوز ولينكس فقط.",
     "disableHardwareAcceleration": "تعطيل تسريع الأجهزة",
     "renderingSaveFailed": "فشل حفظ إعدادات العرض: {message}",
     "restartRequired": "تم الحفظ. أعد تشغيل التطبيق ليصبح التغيير نافذًا.",
     "restartNow": "إعادة التشغيل الآن",
     "restartFailed": "فشل إعادة التشغيل: {message}",
     "loadFailed": "فشل التحميل: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "التعاون",
+    "sectionDescription": "كيفية تعاون الوكلاء فيما بينهم، وأدوات codeg التي يمكنهم الوصول إليها داخل المحادثة."
   },
   "LoginPage": {
     "documentTitle": "تسجيل الدخول - codeg",
@@ -1625,6 +1802,9 @@
     "searchPlaceholder": "ابحث في العنوان أو المسار…",
     "allAgents": "جميع الوكلاء",
     "onlyImportable": "القابلة للاستيراد فقط",
+    "includeDeleted": "تضمين المحذوفة",
+    "includeDeletedWithCount": "تضمين المحذوفة ({count})",
+    "includeDeletedHint": "حذف الجلسة في codeg يخفيها فقط — المحادثة وسجلها ما زالا موجودين. فعّل هذا الخيار لتحديد الجلسات المحذوفة واستعادتها في مكانها.",
     "selectAll": "تحديد الكل",
     "clearSelection": "مسح",
     "expandAll": "توسيع الكل",
@@ -1637,6 +1817,7 @@
     "toggleSessionAria": "تحديد الجلسة {title}",
     "statusImported": "مستوردة",
     "statusDeleted": "محذوفة",
+    "statusDeletedRestorable": "محذوفة — استيرادها يستعيد المحادثة الأصلية",
     "untitled": "جلسة بلا عنوان",
     "messageCount": "{count} رسالة",
     "selectedCount": "{count} محددة",
@@ -1645,6 +1826,7 @@
     "close": "إغلاق",
     "doneTitle": "اكتمل الاستيراد",
     "doneImported": "مستوردة",
+    "doneRestored": "مستعادة",
     "doneUpdated": "محدّثة",
     "doneSkipped": "متخطاة",
     "doneCreatedFolders": "مجلدات منشأة",
@@ -1986,7 +2168,8 @@
         "output": "إخراج",
         "cacheRead": "قراءة الكاش",
         "cacheWrite": "كتابة الكاش",
-        "total": "الإجمالي"
+        "total": "الإجمالي",
+        "cacheHit": "معدل إصابة الكاش"
       },
       "quickActions": {
         "title": "إجراءات سريعة",
@@ -1995,7 +2178,38 @@
           "navigation": "التنقل",
           "more": "المزيد"
         },
+        "browserTab": "فتح علامة تبويب المتصفح",
         "showPet": "إظهار الحيوان الأليف"
+      },
+      "mcp": {
+        "title": "خدمة codeg-mcp",
+        "state": {
+          "running": "قيد التشغيل",
+          "stopped": "متوقفة",
+          "disabled": "لا أدوات مفعّلة",
+          "unavailable": "المرافق مفقود",
+          "unknown": "غير معروف"
+        },
+        "hint": {
+          "running": "الوكلاء المشغّلون من هنا يمكنهم استخدام أدوات codeg.",
+          "stopped": "مقبس الوسيط لا يستجيب.",
+          "disabled": "جميع مجموعات الأدوات معطّلة.",
+          "unavailable": "ملف codeg-mcp التنفيذي غير موجود على القرص.",
+          "unknown": "تعذّرت قراءة الحالة."
+        },
+        "socketPath": "العنوان",
+        "binary": "المرافق",
+        "binaryMissing": "غير موجود",
+        "sessions": "الجلسات",
+        "activeDelegations": "التفويضات",
+        "depthLimit": "حد العمق",
+        "start": "بدء الخدمة",
+        "starting": "جارٍ البدء…",
+        "actionFailed": "فشلت العملية: {message}",
+        "lastError": "آخر خطأ: {message}",
+        "loadFailed": "تعذّرت قراءة الحالة: {message}",
+        "openSettings": "فتح الإعدادات الكاملة",
+        "refresh": "تحديث"
       }
     },
     "auxPanel": {
@@ -2037,12 +2251,20 @@
     },
     "fileWorkspace": {
       "files": "الملفات",
+      "newTab": "علامة تبويب جديدة",
+      "newBrowserTab": "علامة تبويب المتصفح",
+      "openFile": "فتح ملف…",
+      "openFileTitle": "فتح ملف",
+      "localServices": "الخوادم المحلية",
+      "localServiceFromAgent": "وكيل",
       "closeFileTab": "إغلاق تبويب الملف",
       "close": "إغلاق",
       "closeOthers": "إغلاق البقية",
       "closeAll": "إغلاق الكل",
       "preview": "معاينة",
       "editSource": "تحرير المصدر",
+      "openInSystemBrowser": "فتح في متصفح النظام",
+      "more": "المزيد",
       "maximize": "تكبير",
       "restore": "استعادة",
       "emptyDirectory": "مجلد فارغ"
@@ -2053,7 +2275,26 @@
       "closeOthers": "إغلاق البقية",
       "closeAll": "إغلاق الكل",
       "hideTerminal": "إخفاء الطرفية ({shortcut})",
-      "openFolderFirst": "افتح مجلدا أولا"
+      "openFolderFirst": "افتح مجلدا أولا",
+      "keybar": {
+        "label": "مفاتيح الطرفية الافتراضية",
+        "show": "إظهار المفاتيح الافتراضية",
+        "hide": "إخفاء المفاتيح الافتراضية",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "فتح مجلد",
@@ -2149,7 +2390,6 @@
       "imageZoomOut": "تصغير",
       "imageZoomReset": "إعادة تعيين التكبير",
       "htmlPreviewTitle": "معاينة HTML",
-      "htmlPreviewTrust": "تفعيل البرامج النصية",
       "htmlPreviewTrustHint": "تشغيل البرامج النصية لهذا الملف والسماح بالوصول إلى الشبكة. فعّلها فقط للملفات الموثوقة.",
       "officePreviewTitle": "معاينة مستند Office",
       "officeFullRender": "عرض كامل",
@@ -2161,6 +2401,17 @@
       "officeWatchRetry": "إعادة المحاولة",
       "officeServerInstallHint": "يجب تثبيت OfficeCLI على مضيف الخادم. شغّل هذا الأمر هناك ثم أعد المحاولة:",
       "officeRemoteDesktopUnsupported": "المعاينة المباشرة غير متاحة في نافذة سطح المكتب البعيد. افتح مساحة العمل هذه في واجهة الويب الخاصة بالخادم لمعاينة ملفات Office."
+    },
+    "fileViewer": {
+      "title": "معاينة الملف",
+      "description": "ملف مشار إليه في هذه المحادثة، مفتوح بجانبها.",
+      "openInWorkspace": "فتح في مساحة العمل",
+      "back": "رجوع",
+      "preview": "معاينة",
+      "source": "المصدر",
+      "loading": "جارٍ التحميل...",
+      "cannotResolve": "تعذّر تحليل مسار الملف هذا.",
+      "tooLargeToPreview": "هذا الملف أكبر من أن تتم معاينته هنا. افتحه في مساحة العمل بدلاً من ذلك."
     },
     "branchDropdown": {
       "toasts": {
@@ -2565,7 +2816,13 @@
       "openInTerminal": "الطرفية",
       "openInCode": "VS Code",
       "linkedFolder": "مجلد مرتبط",
+      "moreActions": "المزيد من الإجراءات",
       "copyPath": "نسخ المسار",
+      "copy": "نسخ",
+      "copyRelativePath": "المسار النسبي",
+      "copyAbsolutePath": "المسار المطلق",
+      "copyFileItself": "الملف نفسه",
+      "copyDirectoryItself": "المجلد نفسه",
       "upload": "رفع ملفات/مجلد",
       "download": "تنزيل ملف",
       "downloadAsZip": "تنزيل كملف ZIP",
@@ -2603,7 +2860,9 @@
         "downloadFailed": "فشل تنزيل {name}",
         "downloadSaved": "تم تنزيل {name}",
         "pathCopied": "تم نسخ المسار",
-        "copyPathFailed": "فشل نسخ المسار"
+        "copyPathFailed": "فشل نسخ المسار",
+        "fileCopied": "تم نسخ {name}",
+        "copyFileFailed": "فشل نسخ {name}"
       },
       "createDialog": {
         "newFile": "ملف جديد",
@@ -2751,8 +3010,6 @@
           "openAgentsSettings": "فتح إعدادات الوكلاء",
           "retry": "إعادة المحاولة"
         },
-        "agentsSetupHint": "افتح الإعدادات > الوكلاء لإدارة التثبيت.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "تعذر قراءة إعدادات الوكيل الحالية.",
           "disabled": "{agent} معطّل في إعدادات الوكلاء. قم بتمكينه قبل الاتصال.",
@@ -2774,18 +3031,25 @@
           "turnFailedMaxTokens": "بلغ {agent} الحد الأقصى للرموز المسموح بها في هذه الجولة.",
           "turnFailedMaxTurnRequests": "بلغ {agent} الحد الأقصى لعدد الطلبات المسموح بها في هذه الجولة.",
           "turnFailedUnknown": "أنهى {agent} الجولة بسبب توقف غير معروف.",
+          "turnFailedAuthRequired": "يحتاج {agent} إلى تسجيل دخولك من جديد قبل تنفيذ هذه الجولة. سجّل الدخول من الإعدادات ثم أعد إرسال الرسالة.",
+          "agentAuthRequired": "تعذّر على {agent} بدء جلسة: لا توجد بيانات اعتماد صالحة للاستخدام. سجّل الدخول من جديد عبر الإعدادات ← الوكلاء ← {agent}، ثم أعد فتح هذه المحادثة.",
           "grokModelSwitchIncompatibleAgent": "لا يمكن لـ {agent} التبديل إلى هذا النموذج في محادثة قائمة. ابدأ جلسة جديدة لاستخدامه.",
+          "setModeFailed": "تعذّر على {agent} تبديل الوضع.",
+          "setConfigOptionFailed": "تعذّر على {agent} تطبيق هذا الإعداد.",
+          "goalControlFailed": "تعذّر على {agent} تحديث الهدف.",
+          "imageDropped": "لم تصل إحدى الصور المرفقة إلى {agent}.",
+          "sessionLoadFallback": "تعذّر على {agent} استعادة الجلسة السابقة فبدأ جلسة جديدة، ولم يعد السياق السابق متاحًا.",
           "turnFailedEmpty": "أنهى {agent} الجولة دون إنتاج أي رد.",
           "turnFailedEmptyProtocol": "أنتج {agent} مخرجات تعذّر على codeg تحليلها — قد لا يتوافق إصدار الوكيل مع البروتوكول.",
-          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد.",
-          "detailsInAlerts": "افتح التنبيهات في شريط الحالة ووسّع التفاصيل لعرض مخرجات الوكيل."
+          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد."
         },
         "unableReadAgentConfig": "تعذر قراءة إعدادات الوكيل: {message}",
         "connectFailedTitle": "فشل اتصال {agent}",
         "toolFallbackTitle": "أداة",
-        "eventErrorTitle": "خطأ الوكيل",
         "notificationTurnComplete": "{agent} أنهى الاستجابة",
         "notificationError": "{agent} خطأ: {message}",
+        "notificationQuestion": "{agent} ينتظر إجابتك",
+        "notificationErrorRedacted": "واجه {agent} خطأً",
         "claudeApiRetry": {
           "fallbackError": "authentication_failed",
           "retryingWithMax": "إعادة المحاولة {attempt}/{max}",
@@ -2798,12 +3062,15 @@
           "lineNoErrorWithDelay": "{retry}، {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}"
+        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}",
+        "noticeTitle": "{agent}: {title}"
       },
       "connectionLifecycle": {
         "tasks": {
           "connectingTitle": "جارٍ الاتصال بـ {agent}",
           "connectingDescription": "جارٍ إنشاء الاتصال",
+          "preparingTitle": "جارٍ تحضير جلسة {agent}",
+          "preparingDescription": "جارٍ قراءة سجل المحادثة",
           "loadingSelectorsTitle": "جارٍ تحميل محددات {agent}",
           "loadingSelectorsDescription": "جارٍ جلب خيارات الوضع وإعدادات الجلسة",
           "initSessionTitle": "جارٍ تهيئة جلسة {agent}",
@@ -2839,6 +3106,9 @@
         "cut": "قص",
         "copy": "نسخ",
         "selectAll": "تحديد الكل",
+        "openLink": "فتح الرابط",
+        "openFile": "فتح الملف",
+        "sendEmail": "إرسال بريد",
         "pasteUnavailable": "تعذّر قراءة الحافظة. استخدم Ctrl/⌘V للصق.",
         "clipboardWriteFailed": "تعذّرت الكتابة إلى الحافظة. استخدم اختصار لوحة المفاتيح.",
         "quickMessageUntitled": "بدون عنوان",
@@ -2854,14 +3124,16 @@
         "searchModel": "البحث عن النماذج...",
         "searchModelAria": "البحث عن النماذج",
         "modelListLabel": "النماذج",
+        "recommendedBadge": "موصى به",
         "noModels": "لم يتم العثور على نماذج",
         "cancel": "إلغاء",
         "send": "إرسال",
         "queueMessage": "إضافة إلى قائمة الانتظار",
         "steerIntoTurn": "إدراج في الدور الحالي",
+        "steerAsNote": "إرسال ملاحظة للفحص التالي",
         "steerQueuedInstead": "أُضيفت إلى قائمة الانتظار — ستُرسل مع الدور التالي.",
         "steerFailed": "تعذّر الإدراج في الدور الحالي",
-        "steerAttachmentsUnsupported": "نص فقط — المسودات التي تحتوي على مرفقات تمر عبر قائمة الانتظار.",
+        "steerNoteFailed": "تعذّر إرسال ملاحظتك",
         "slashCommands": "أوامر الشرطة المائلة",
         "slashSearchPlaceholder": "البحث عن الأوامر...",
         "slashSearchEmpty": "لا توجد أوامر مطابقة",
@@ -2892,7 +3164,9 @@
         "saveEdit": "حفظ",
         "cancelEdit": "إلغاء التعديل",
         "editItem": "تعديل",
-        "deleteItem": "حذف"
+        "deleteItem": "حذف",
+        "steerItemNow": "إدراج في الدور الحالي",
+        "steerItemAsNote": "إرسال كملاحظة للفحص التالي"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "الإعدادات > الوكلاء",
@@ -3113,13 +3387,17 @@
         "openInFileManager": "فتح في مدير الملفات",
         "copyRelativePath": "نسخ المسار النسبي",
         "copyAbsolutePath": "نسخ المسار المطلق",
+        "download": "تنزيل ملف",
         "pathCopied": "تم نسخ المسار",
         "copyPathFailed": "فشل نسخ المسار",
-        "openFailed": "فشل فتح الملف المحلي"
+        "openFailed": "فشل فتح الملف المحلي",
+        "downloadSaved": "تم تنزيل {name}",
+        "downloadFailed": "فشل تنزيل {name}"
       },
       "messageList": {
         "attachedResources": "الموارد المرفقة",
         "loading": "جارٍ التحميل...",
+        "loadBackgroundActivity": "تحميل نشاط الخلفية",
         "loadEarlier": "تحميل الرسائل السابقة",
         "loadingEarlier": "جارٍ تحميل الرسائل السابقة…",
         "error": "خطأ: {message}",
@@ -3132,6 +3410,8 @@
         "systemMessage": "رسالة النظام",
         "copyMessage": "نسخ",
         "forkFromHere": "تفريع من هنا",
+        "forkBusy": "لا يمكن التفريع أثناء تنفيذ دور",
+        "forkNotReady": "لا يمكن التفريع من هذا الرد بعد، أعد المحاولة بعد قليل",
         "copied": "تم النسخ",
         "selectionActions": "إجراءات التحديد",
         "selectionCopy": "نسخ النص",
@@ -3237,6 +3517,8 @@
             "child_max_tokens": "الوكيل الفرعي: حد الرموز",
             "child_max_turn_requests": "الوكيل الفرعي: حد الطلبات",
             "child_empty": "الوكيل الفرعي بدون استجابة",
+            "child_auth_required": "الوكيل الفرعي يحتاج تسجيل دخول",
+            "child_rejected": "الوكيل الفرعي رفض الطلب",
             "child_unknown": "الوكيل الفرعي: خطأ",
             "unknown": "مهمة غير معروفة"
           }
@@ -3282,7 +3564,10 @@
         "agentSessionLoading": "جارٍ تحميل سجل الوكيل الفرعي…",
         "agentSessionEmpty": "لم يكتب الوكيل الفرعي أي شيء بعد.",
         "agentFallbackTitle": "جارٍ تشغيل الوكيل الفرعي…",
-        "agentCodexLaunchOnly": "تم التشغيل. لا يبلّغ Codex عن أي تقدّم إضافي لهذا الوكيل الفرعي — وستصل نتيجته كرسالة في هذه المحادثة.",
+        "agentCodexLaunchOnly": "تم التشغيل. لم يبلّغ Codex بعد عن نتيجة هذا الوكيل الفرعي — افتح جلسته لمتابعة العمل.",
+        "agentSubagentDone": "انتهى",
+        "agentSubagentInterrupted": "تمت مقاطعته",
+        "agentSubagentUnknown": "النتيجة غير معروفة",
         "agentStatsBash": "الأوامر",
         "agentStatsRead": "الملفات المقروءة",
         "agentStatsSearch": "عمليات البحث",
@@ -3447,7 +3732,9 @@
         "skip": "تخطّي",
         "next": "التالي",
         "submit": "إرسال",
-        "submitError": "تعذّر الإرسال. حاول مرة أخرى."
+        "submitError": "تعذّر الإرسال. حاول مرة أخرى.",
+        "collapse": "طيّ",
+        "expand": "توسيع"
       },
       "planApproval": {
         "title": "لدى الوكيل خطة — راجعها",
@@ -3502,7 +3789,6 @@
         "reconnecting": "جارٍ إعادة الاتصال…",
         "reconnectDisabledDuringTurn": "متاح بعد انتهاء الدور الحالي",
         "dismiss": "تجاهل",
-        "reconnectFailed": "فشل في إعادة الاتصال بالجلسة",
         "applied": "تم تطبيق الإعدادات الجديدة"
       },
       "piProjectTrust": {
@@ -3548,13 +3834,17 @@
         "opSpawn": "بدء تشغيل الوكيل الفرعي",
         "opWait": "جلب نتيجة الوكيل الفرعي",
         "opClose": "إغلاق الوكيل الفرعي",
-        "opResume": "استئناف الوكيل الفرعي"
+        "opResume": "استئناف الوكيل الفرعي",
+        "opList": "سرد الوكلاء الفرعيين"
       },
       "contextCompaction": {
         "compacting": "جارٍ ضغط السياق…",
         "compacted": "تم ضغط السياق",
         "compactedTokens": "تم ضغط السياق · {before} → {after} رمز",
-        "failed": "فشل ضغط السياق"
+        "failed": "فشل ضغط السياق",
+        "summary": "الملخص",
+        "triggerManual": "تم التشغيل يدويًا",
+        "triggerAutomatic": "تم التشغيل تلقائيًا"
       },
       "sessionFailure": {
         "category": {
@@ -3578,6 +3868,8 @@
       },
       "backgroundTasks": {
         "settledFallback": "انتهت مهمة الخلفية ({status})",
+        "notifySettledOne": "{agent}: انتهت مهمة في الخلفية",
+        "notifySettledMany": "{agent}: انتهت {count} مهمات في الخلفية",
         "cardRunning": "قيد التشغيل في الخلفية",
         "cardLaunchedPending": "بدأت مهمة الخلفية",
         "cardCompleted": "اكتملت مهمة الخلفية",
@@ -3610,6 +3902,16 @@
       "viewMode": {
         "split": "التبديل إلى العرض جنباً إلى جنب",
         "unified": "التبديل إلى العرض المضمّن"
+      },
+      "binaryFile": "ملف ثنائي — لا يتم عرض المحتوى",
+      "image": {
+        "sideBySide": "التبديل إلى العرض جنباً إلى جنب",
+        "swipe": "التبديل إلى عرض التمرير",
+        "swipeHandle": "شريط تمرير مقارنة الصور",
+        "noImage": "لا توجد صورة في هذه المراجعة",
+        "unavailable": "تعذر تحميل هذا الجانب",
+        "tooLarge": "الصورة كبيرة جدًا للمعاينة ({size})",
+        "loading": "جارٍ تحميل الصور..."
       }
     },
     "conversationContextBar": {
@@ -3924,7 +4226,7 @@
     "agentTypeRequired": "نوع الوكيل مطلوب.",
     "agentTypeImmutableHint": "لا يمكن تغيير نوع الوكيل بعد الإنشاء.",
     "model": "النموذج",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "النموذج الرئيسي",
     "claudeReasoningModel": "نموذج الاستدلال (التفكير)",
@@ -4369,14 +4671,20 @@
     "errorLoadingDir": "فشل تحميل المجلد",
     "selectedCount": "{count} محدد"
   },
+  "BranchPicker": {
+    "searchPlaceholder": "بحث في الفروع…",
+    "none": "لا توجد فروع",
+    "local": "محلي",
+    "remote": "بعيد",
+    "useCustom": "استخدام \"{query}\""
+  },
   "BackupSettings": {
-    "title": "النسخ الاحتياطي والاستعادة",
-    "description": "صدّر نسخة احتياطية محمولة من بيانات codeg، أو استعد من نسخة.",
     "tabs": {
       "backup": "نسخ احتياطي",
       "restore": "استعادة"
     },
     "export": {
+      "description": "يحزم بيانات codeg على هذا الجهاز — قاعدة البيانات والملفات المرفوعة — في أرشيف واحد.",
       "includeExternal": "تضمين محتوى المحادثات",
       "includeExternalHint": "يؤرشف أيضًا سجلات محادثات أدوات CLI (Claude وCodex وGemini …). يزيد الحجم.",
       "passphrase": "عبارة المرور (اختياري)",
@@ -4388,9 +4696,18 @@
       "button": "تصدير النسخة الاحتياطية",
       "inProgress": "جارٍ إنشاء النسخة الاحتياطية…",
       "success": "تم إنشاء النسخة الاحتياطية.",
-      "started": "بدأ تنزيل النسخة الاحتياطية."
+      "started": "بدأ تنزيل النسخة الاحتياطية.",
+      "degradedTitle": "احتاجت بعض قواعد بيانات جلسات الوكلاء إلى معالجة خاصة",
+      "degradedHint": "تحفظ هذه الوكلاء جلساتها في SQLite. ما لم يُذكر خلاف ذلك أدناه، فهي مضمَّنة في النسخة الاحتياطية.",
+      "degradedMore": "…و{count} غيرها.",
+      "degradedLevel": {
+        "recoveredOnCopy": "استُعيدت من نسخة خاصة — كاملة",
+        "bareFileOnly": "أُرشفت بدون سجل الكتابة المسبقة — قد تنقص أحدث الرسائل",
+        "notArchived": "لم تُؤرشف — ظلت تتغير أثناء النسخ"
+      }
     },
     "restore": {
+      "description": "يستبدل بيانات codeg على هذا الجهاز بمحتويات أرشيف النسخ الاحتياطي.",
       "selectFile": "اختر ملف النسخة الاحتياطية",
       "passphrasePrompt": "هذه النسخة مشفّرة. أدخل عبارة المرور الخاصة بها.",
       "unlock": "فتح القفل",
@@ -4426,11 +4743,136 @@
         "scanning": "جارٍ التحقق من التعارضات…",
         "noConflicts": "لن تتم الكتابة فوق أي ملف موجود.",
         "conflictCount": "سيتأثر {count} من الملفات الموجودة.",
-        "conflictSkipNote": "تُحفظ الملفات الموجودة (تُتخطى) ما لم تفعّل الكتابة فوقها."
+        "conflictSkipNote": "تُحفظ الملفات الموجودة (تُتخطى) ما لم تفعّل الكتابة فوقها.",
+        "agentsRunning": "يعمل {count} من الوكلاء ({agents}). أغلقها أولًا، وإلا فستُحفظ سجلات المحادثات في مجلد جانبي بدل إعادتها إلى مواضعها الأصلية."
       },
-      "restartFailed": "تم تجهيز الاستعادة، لكن تعذّر إعادة تشغيل الخادم. أعد تشغيله يدويًا لتطبيقها."
+      "restartFailed": "تم تجهيز الاستعادة، لكن تعذّر إعادة تشغيل الخادم. أعد تشغيله يدويًا لتطبيقها.",
+      "discardPending": "تجاهل الاستعادة المُجهَّزة",
+      "discarded": "تم تجاهل الاستعادة المُجهَّزة.",
+      "pendingBlockedHint": "توجد بالفعل استعادة مُجهَّزة تنتظر إعادة التشغيل. تجاهلها لتجهيز أخرى.",
+      "result": {
+        "title": "تم تجهيز الاستعادة",
+        "needsRestart": "ستُطبَّق عند التشغيل التالي. تُؤخذ لقطة من بياناتك الحالية أولًا.",
+        "downgraded": "كان {agents} قيد التشغيل، لذلك لم تُكتب سجلات المحادثات في مواضعها الأصلية، بل حُفظت في {path}.",
+        "skipped": "أُبقي على {count} من الملفات الموجودة",
+        "refused": "لم تُكتب {count} من قواعد بيانات الجلسات",
+        "refusedHint": "هي من نسخة احتياطية أقدم كانت تحفظ قاعدة البيانات وسجل الكتابة المسبقة منفصلين، ولا يمكن إثبات تطابقهما. لم تُمسّ قواعد بياناتك الحالية — استعِد إلى مجلد جانبي للحصول على الملفات الأصلية.",
+        "restartNow": "إعادة التشغيل الآن",
+        "later": "لاحقًا"
+      }
     },
-    "remoteUnsupported": "يعمل النسخ الاحتياطي والاستعادة على بيانات الجهاز الذي يشغّل codeg. أنت متصل بمساحة عمل بعيدة — أدِر نسخها الاحتياطية من ذلك الخادم مباشرة."
+    "remoteUnsupported": "يعمل النسخ الاحتياطي والاستعادة على بيانات الجهاز الذي يشغّل codeg. أنت متصل بمساحة عمل بعيدة — أدِر نسخها الاحتياطية من ذلك الخادم مباشرة.",
+    "progress": {
+      "cancel": "إلغاء"
+    },
+    "snapshots": {
+      "title": "لقطات ما قبل الاستعادة",
+      "hint": "تأخذ كل استعادة لقطة من بياناتك الحالية أولًا، ويُحتفظ بأحدث لقطتين.",
+      "empty": "لا توجد لقطات بعد.",
+      "rollback": "العودة إلى هذه",
+      "unsupported": "للاطلاع فقط",
+      "rollbackConfirmTitle": "العودة إلى هذه اللقطة؟",
+      "rollbackConfirmBody": "سيستبدل هذا بياناتك الحالية باللقطة ثم يعيد التشغيل. تُؤخذ لقطة من البيانات المستبدَلة أولًا."
+    }
+  },
+  "ConfigSyncSettings": {
+    "title": "مزامنة الإعدادات",
+    "scopeTitle": "ما الذي تتم مزامنته",
+    "scopeIncludedTitle": "مشمول",
+    "scopeExcludedTitle": "غير مشمول",
+    "scopeIncluded": {
+      "providers": "مزوّدو النماذج (مع مفاتيح API)",
+      "agentSettings": "إعدادات الوكلاء",
+      "customAgents": "الوكلاء المخصصون",
+      "quickMessages": "الرسائل السريعة",
+      "taskTemplates": "قوالب المهام",
+      "preferences": "تفضيلات التطبيق (اللغة والمظهر والخيارات)"
+    },
+    "scopeExcluded": {
+      "conversations": "المحادثات والسجل",
+      "uploads": "الملفات والصور المرفوعة",
+      "workspaces": "مشاريع مساحة العمل ومساراتها",
+      "mcp": "خوادم MCP (تديرها كل أداة CLI)",
+      "credentials": "بيانات الدخول والرموز"
+    },
+    "fileTitle": "ملف الإعدادات",
+    "exportButton": "تصدير إلى ملف",
+    "importButton": "استيراد من ملف",
+    "fileHint": "يُنشئ ملف JSON واحدًا يمكنك نقله إلى جهاز آخر. عند الاستيراد تُضاف العناصر أو تُحدّث، وتبقى العناصر الموجودة غير المذكورة في الملف كما هي.",
+    "webdavTitle": "مزامنة WebDAV",
+    "webdavHint": "ارفع لقطة الإعدادات إلى خادم WebDAV الخاص بك.",
+    "presetLabel": "الخادم",
+    "preset": {
+      "jianguoyun": "Jianguoyun",
+      "nextcloud": "Nextcloud",
+      "synology": "Synology NAS",
+      "custom": "مخصص"
+    },
+    "presetHint": {
+      "jianguoyun": "يتطلب Jianguoyun كلمة مرور تطبيق تُنشأ من إعدادات الأمان، وليس كلمة مرور الدخول.",
+      "nextcloud": "استبدل النطاق واسم المستخدم، ثم استخدم كلمة مرور تطبيق من الإعدادات ← الأمان.",
+      "synology": "فعّل WebDAV Server من مركز الحزم في DSM؛ المنافذ الافتراضية هي 5005 (HTTP) و 5006 (HTTPS)."
+    },
+    "serverUrl": "عنوان الخادم",
+    "username": "اسم المستخدم",
+    "password": "كلمة المرور",
+    "passwordKeep": "اتركه فارغًا للإبقاء على كلمة المرور المحفوظة",
+    "passwordPlaceholder": "كلمة مرور التطبيق",
+    "remoteDir": "المجلد البعيد",
+    "profile": "الملف التعريفي",
+    "profileHint": "الأجهزة التي تشترك في الملف التعريفي نفسه تتشارك إعدادًا واحدًا. استخدم ملفات مختلفة لفصل العمل عن الاستخدام الشخصي.",
+    "autoSyncLabel": "الرفع تلقائيًا",
+    "autoSyncHint": "يتحقق دوريًا ويرفع فقط عند تغير الإعدادات.",
+    "intervalLabel": "فاصل التحقق",
+    "intervalOption": "كل {minutes} دقيقة",
+    "saveButton": "حفظ",
+    "testButton": "اختبار الاتصال",
+    "uploadButton": "مزامنة الآن",
+    "restoreButton": "استعادة من الخادم",
+    "saved": "تم حفظ إعدادات المزامنة",
+    "testSucceeded": "تم الاتصال بخادم WebDAV",
+    "uploaded": "تم رفع الإعدادات",
+    "exported": "تم تصدير الإعدادات",
+    "restored": "{count, plural, one {تم تطبيق عنصر واحد} other {تم تطبيق # عنصرًا}}",
+    "imported": "{count, plural, one {تم تطبيق عنصر واحد} other {تم تطبيق # عنصرًا}}",
+    "noRemoteSnapshot": "لا توجد بعد لقطة إعدادات على الخادم",
+    "lastSyncAt": "آخر مزامنة: {time}",
+    "neverSynced": "لم تتم المزامنة بعد",
+    "lastError": "آخر خطأ: {message}",
+    "working": "جارٍ التنفيذ…",
+    "plaintextWarning": "تُرفع اللقطة دون تشفير وتتضمن مفاتيح API، لذا استخدم خادم WebDAV لا يصل إليه سواك. أما بيانات اعتماد المزامنة نفسها فلا تُدرج أبدًا في اللقطة.",
+    "importConfirmTitle": "استيراد الإعدادات؟",
+    "importConfirmBody": "ستُضاف عناصر الملف أو تُحدّث على هذا الجهاز، وتبقى العناصر الموجودة غير المذكورة في الملف.",
+    "restartHint": "تسري بعض التغييرات — المظهر واللغة وقائمة المزوّدين — بعد إعادة تشغيل codeg.",
+    "importConfirmAction": "استيراد",
+    "restoreConfirmTitle": "الاستعادة من الخادم؟",
+    "restoreConfirmBody": "ستُطبّق على هذا الجهاز اللقطة المأخوذة من {device} بتاريخ {time}، وتبقى العناصر الموجودة غير المذكورة في اللقطة.",
+    "restoreConfirmAction": "استعادة",
+    "cancel": "إلغاء",
+    "emptySnapshot": "لا تحتوي هذه اللقطة على أي عناصر إعدادات.",
+    "domain": {
+      "modelProviders": "{count, plural, one {مزود نماذج واحد} other {# مزود نماذج}}",
+      "agentSettings": "{count, plural, one {إعداد وكيل واحد} other {# إعداد وكيل}}",
+      "customAgents": "{count, plural, one {وكيل مخصص واحد} other {# وكيل مخصص}}",
+      "quickMessages": "{count, plural, one {رسالة سريعة واحدة} other {# رسالة سريعة}}",
+      "taskTemplates": "{count, plural, one {قالب مهمة واحد} other {# قالب مهمة}}",
+      "preferences": "{count, plural, one {تفضيل واحد} other {# تفضيل}}"
+    },
+    "rollbackTitle": "التراجع عن استيراد",
+    "rollbackHint": "يحفظ كل استيراد وكل استعادة حالة هذا الجهاز قبل التطبيق، ويُحتفظ بآخر عشر نسخ.",
+    "rollbackAction": "تراجع",
+    "rollbackUnknownTime": "الوقت غير معروف",
+    "rollbackConfirmTitle": "العودة إلى هذا الإعداد؟",
+    "rollbackConfirmBody": "سيحل محل الإعداد الحالي النسخةُ المحفوظة في {time}. يُحفظ الإعداد الحالي أولًا، لذا يمكن التراجع عن هذه الخطوة أيضًا.",
+    "rollbackConfirmAction": "تراجع",
+    "rolledBack": "{count, plural, one {تمت استعادة عنصر واحد} other {تمت استعادة # عنصرًا}}",
+    "encryptLabel": "تشفير اللقطة",
+    "encryptHint": "احمِ الملف المرفوع بعبارة مرور. تحتاج كل الأجهزة المتزامنة إلى العبارة نفسها.",
+    "encryptedNotice": "تُشفَّر اللقطة بعبارة المرور قبل رفعها. إذا فقدت العبارة تعذّرت استعادة النسخة الموجودة على الخادم.",
+    "passphrase": "عبارة المرور",
+    "passphraseKeep": "اتركه فارغًا للإبقاء على عبارة المرور المحفوظة",
+    "passphrasePlaceholder": "عبارة مرور التشفير",
+    "passphraseHint": "تُحفظ في سلسلة مفاتيح هذا الجهاز ولا تُرفع أبدًا. أدخل العبارة نفسها على أجهزتك الأخرى."
   },
   "backup": {
     "restore": {
@@ -4445,6 +4887,27 @@
     "error": {
       "diskSpace": "لا توجد مساحة قرص كافية لإكمال العملية.",
       "cancelled": "تم إلغاء العملية."
+    }
+  },
+  "configSync": {
+    "error": {
+      "newerSchema": "أُنشئت هذه اللقطة بإصدار أحدث من codeg (الصيغة {snapshotVersion})؛ وهذا الإصدار يدعم الصيغة {appVersion} كحد أقصى.",
+      "checksum": "اللقطة لا تطابق مجموع التحقق وقد تكون ناقصة.",
+      "invalidSnapshot": "هذا الملف ليس لقطة إعدادات codeg صالحة.",
+      "noRemoteSnapshot": "لا توجد بعد لقطة إعدادات على الخادم.",
+      "notConfigured": "أعدِدّ خادم WebDAV قبل المزامنة.",
+      "unauthorized": "رفض خادم WebDAV اسم المستخدم أو كلمة المرور.",
+      "forbidden": "منع خادم WebDAV الوصول إلى هذا المجلد.",
+      "remotePath": "المجلد البعيد أو اسم الملف التعريفي غير صالح.",
+      "quota": "لم تعد هناك مساحة على خادم WebDAV.",
+      "network": "تعذر الوصول إلى خادم WebDAV.",
+      "server": "أعاد خادم WebDAV خطأ ({status}).",
+      "passphraseRequired": "هذه اللقطة مشفَّرة. اضبط عبارة مرور التشفير قبل المزامنة.",
+      "badPassphrase": "تعذّر فك تشفير اللقطة. تحقق من عبارة المرور، وقد يكون الملف تالفًا أيضًا.",
+      "badDomain": "تعذّرت قراءة قسم {domain} من هذه اللقطة.",
+      "noRollback": "لم يعد ذلك الإعداد المحفوظ موجودًا على هذا الجهاز.",
+      "credentialsUnreadable": "تعذّرت قراءة بيانات الاعتماد المحفوظة. افتح قفل سلسلة مفاتيح النظام ثم أعد المحاولة.",
+      "notEncrypted": "اللقطة الموجودة على الخادم غير مشفّرة، لكن التشفير مُفعّل على هذا الجهاز. ارفع نسخة من هذا الجهاز لاستبدالها، أو أوقف التشفير لاستخدامها."
     }
   },
   "WebConnection": {
@@ -4477,21 +4940,92 @@
   "AgentToolsSettings": {
     "title": "أدوات داخل المحادثة",
     "description": "أدوات إضافية يمنحها codeg للوكيل داخل المحادثة. تُحقن عند بدء تشغيل الوكيل، لذا يسري أي تغيير على الوكلاء الذين يبدأون بعده.",
-    "feedbackLabel": "ملاحظات مباشرة",
-    "feedbackHint": "أرسل ملاحظات وتصحيحات إلى الوكيل أثناء عمله. إذا كان الوكيل يدعم الإدراج الفوري، تُدرج ملاحظتك فورًا في الدور الجاري؛ وإلا يحصل الوكيل على أداة للاطلاع على ملاحظاتك — وهؤلاء الوكلاء عادةً لا يتحققون منها إلا إذا ذكرت ذلك في الموجّه، مثلًا أضف \"تحقق من ملاحظاتي المباشرة بانتظام\" إلى رسالتك.",
-    "questionLabel": "سؤال المستخدم",
-    "questionHint": "يسمح للوكلاء بالتوقّف وطرح سؤال متعدّد الخيارات يظهر فوق مربّع إدخال المحادثة. ينتظر الوكيل حتى تجيب (أو تتخطّى).",
-    "sessionInfoLabel": "الحصول على معلومات الجلسة",
-    "sessionInfoHint": "يتيح للوكلاء البحث عن جلسة تشير إليها في رسالتك (شارة جلسة) لقراءة عنوانها والوكيل والحالة ومساحة العمل واستهلاك الرموز وأحدث الرسائل.",
-    "automationsLabel": "إنشاء الأتمتة",
-    "automationsHint": "يحفظ المحادثة كأتمتة تعمل وفق جدول زمني. مُعطّل افتراضيًا — إذ تبدأ بعد ذلك تشغيل الوكلاء من تلقاء نفسها.",
-    "workTasksLabel": "إنشاء مهام قيد الانتظار",
-    "workTasksHint": "يضيف بطاقة إلى لوحة المهام انطلاقًا من المحادثة. مُعطّل افتراضيًا — لأنه يكتب حالة التطبيق.",
     "save": "حفظ",
     "saving": "جارٍ الحفظ…",
     "saved": "تم حفظ إعدادات الأدوات",
     "saveFailed": "تعذّر حفظ إعدادات الأدوات",
     "loadFailed": "فشل التحميل: {detail}"
+  },
+  "AgentTools": {
+    "delegation": {
+      "label": "التفويض",
+      "short": "يسلّم مهمة إلى وكيل آخر.",
+      "hint": "يتيح للوكيل تسليم مهمة فرعية مكتملة إلى وكيل آخر ينفّذها في جلسته الخاصة ثم يعيد النتيجة. أما البقية — إلى أي عمق يمكن أن تتداخل التفويضات، وأي وكيل ينفّذها — فهي في القسم الذي فوق مباشرة."
+    },
+    "feedback": {
+      "label": "ملاحظات مباشرة",
+      "short": "يضيف ملاحظات دون مقاطعة الدور.",
+      "hint": "أرسل ملاحظات وتصحيحات إلى الوكيل أثناء عمله. إذا كان الوكيل يدعم الإدراج الفوري، تُدرج ملاحظتك فورًا في الدور الجاري؛ وإلا يحصل الوكيل على أداة للاطلاع على ملاحظاتك — وهؤلاء الوكلاء عادةً لا يتحققون منها إلا إذا ذكرت ذلك في الموجّه، مثلًا أضف \"تحقق من ملاحظاتي المباشرة بانتظام\" إلى رسالتك."
+    },
+    "ask": {
+      "label": "سؤال المستخدم",
+      "short": "يدع الوكيل يسألك قبل أن يقرر.",
+      "hint": "يسمح للوكلاء بالتوقّف وطرح سؤال متعدّد الخيارات يظهر فوق مربّع إدخال المحادثة. ينتظر الوكيل حتى تجيب (أو تتخطّى)."
+    },
+    "sessions": {
+      "label": "الحصول على معلومات الجلسة",
+      "short": "يبحث في الجلسات السابقة ونتائجها.",
+      "hint": "يتيح للوكلاء البحث عن جلسة تشير إليها في رسالتك (شارة جلسة) لقراءة عنوانها والوكيل والحالة ومساحة العمل واستهلاك الرموز وأحدث الرسائل."
+    },
+    "browser": {
+      "label": "قراءة المتصفح المدمج والتحكم فيه",
+      "short": "يفتح صفحات المتصفح المدمج ويقرأها ويتعامل معها.",
+      "hint": "يتيح للوكيل رؤية الصفحات المفتوحة في المتصفح المدمج، وقراءة ما تشاركه منها، والنقر والكتابة في الصفحات التي تسمح فيها بالإجراءات. كما يمكنه أن يفتح عنوانًا بنفسه، وأن ينقل علامة تبويب إلى مكان آخر، وأن يغلق علامات التبويب. معطّل افتراضيًا. تبقى الصفحة التي يُسمح له بقراءتها قرارك أنت من شريط أدوات تلك العلامة — لكن انتبه: إذا ضبطت مستوى مشاركة افتراضيًا، فإن الصفحة التي يفتحها الوكيل لنفسه تُشارك معه فور تحميلها. إيقاف هذا المفتاح يسري فورًا، وعلى الوكلاء قيد التشغيل أيضًا."
+    },
+    "browserEval": {
+      "label": "تشغيل تعليمات برمجية في المتصفح المدمج",
+      "short": "يشغّل تعليماته البرمجية على صفحة شاركتها، دون سؤال.",
+      "hint": "يسمح للوكلاء بتشغيل JavaScript خاصة بهم على صفحة شاركتها. معطّل افتراضيًا، ويحتاج إلى المفتاح أعلاه. تفعيله يعني أن المقاطع تُشغَّل دون سؤال، فالقرار إذًا يُتخذ عند هذا المفتاح؛ ومن الإعدادات ← المتصفح المدمج يمكنك بدلًا من ذلك أن يُعرض عليك كل مقطع."
+    },
+    "automations": {
+      "label": "إنشاء الأتمتة",
+      "short": "ينشئ الأتمتة المجدولة ويديرها.",
+      "hint": "يحفظ المحادثة كأتمتة تعمل وفق جدول زمني. مُعطّل افتراضيًا — إذ تبدأ بعد ذلك تشغيل الوكلاء من تلقاء نفسها."
+    },
+    "taskboard": {
+      "label": "إنشاء مهام قيد الانتظار",
+      "short": "ينشئ مهام العمل ويديرها.",
+      "hint": "يضيف بطاقة إلى لوحة المهام انطلاقًا من المحادثة. مُعطّل افتراضيًا — لأنه يكتب حالة التطبيق."
+    }
+  },
+  "DesktopNotificationSettings": {
+    "title": "إشعارات سطح المكتب",
+    "description": "إظهار إشعار من النظام عندما يحتاجك أحد الوكلاء. الإعداد خاص بكل جهاز — وهو مستقل في أي متصفح أو جهاز آخر.",
+    "permissionTitle": "الإذن",
+    "permissionGranted": "مسموح",
+    "permissionDenied": "محظور",
+    "permissionDefault": "لم يُطلب بعد",
+    "permissionUnsupported": "غير متاح",
+    "permissionManagedByOs": "يديره النظام",
+    "permissionGrantedHint": "سيعرض هذا المتصفح إشعارات Codeg.",
+    "permissionDeniedHint": "يحجب هذا المتصفح إشعارات Codeg. لا يمكن التراجع إلا من إعدادات الموقع في المتصفح — لا تستطيع الصفحة أن تسأل مرة أخرى.",
+    "permissionDefaultHint": "لم يُسأل هذا المتصفح بعد. لن تصل أي إشعارات حتى تسمح بها.",
+    "permissionUnsupportedHint": "تحتاج الإشعارات إلى سياق آمن. افتح هذا الخادم عبر HTTPS أو على localhost.",
+    "permissionManagedByOsHint": "يرسل تطبيق سطح المكتب عبر مركز إشعارات النظام، والنظام لا يخبرنا إن كان Codeg مسموحًا له. أرسل اختبارًا لتعرف.",
+    "identityTitle": "يُرسل باسم",
+    "identityHint": "يسجّل النظام هذه الإشعارات باسم هذا التطبيق، والمفاتيح السارية هي مفاتيحه هو.",
+    "identityDegradedHint": "تعذّر استخدام معرّف Codeg الخاص، لذا يرسلها النظام باسم {bundleId} وتسري مفاتيح ذلك التطبيق. ثبّت Codeg في مجلد التطبيقات لاستعادة هويته.",
+    "requestPermission": "السماح بالإشعارات",
+    "permissionGrantedToast": "تم السماح بالإشعارات.",
+    "permissionDeniedToast": "تم حجب الإشعارات. أعد تفعيلها من إعدادات الموقع في متصفحك.",
+    "openSystemSettings": "فتح إعدادات النظام",
+    "openSystemSettingsFailed": "تعذر فتح إعدادات إشعارات النظام.",
+    "sendTest": "إرسال اختبار",
+    "testTitle": "Codeg",
+    "testBody": "إشعارات سطح المكتب تعمل.",
+    "testSent": "تم إرسال إشعار الاختبار.",
+    "testFailed": "تعذر إرسال إشعار الاختبار.",
+    "whenTitle": "وقت الإشعار",
+    "whenHint": "النافذة على شاشة ثانية مرئية لكنها غير نشطة — اختر «النافذة غير نشطة» إن كانت الإشعارات لا تصل أبدًا.",
+    "whenAlways": "دائمًا",
+    "whenUnfocused": "النافذة غير نشطة",
+    "whenHidden": "النافذة غير مرئية",
+    "hideBody": "إخفاء محتوى الإشعار",
+    "hideBodyHint": "إظهار سطر عام بدل مخرجات الوكيل. يحتفظ مركز الإشعارات بالمحتوى خارج التطبيق، حتى بعد إغلاق المحادثة. يظل العنوان يذكر اسم المجلد لتعرف إلى أي نافذة تعود.",
+    "eventsTitle": "الأحداث",
+    "eventsHint": "أوقف أي حدث لا تريده أن يقاطعك. تُدمج تكرارات الحدث نفسه خلال ثوانٍ في إشعار واحد.",
+    "eventBackgroundTask": "مهمة في الخلفية",
+    "eventWorkTask": "مهمة عمل"
   },
   "NotificationSoundSettings": {
     "title": "أصوات التنبيه",
@@ -4511,6 +5045,100 @@
     "tonePop": "طقّة",
     "toneAlert": "تنبيه",
     "toneDescend": "نغمة هابطة"
+  },
+  "BrowserSettings": {
+    "title": "المتصفح المدمج",
+    "description": "يمكن عرض صفحات الويب المفتوحة من المحادثات ونتائج الأدوات والطرفية كعلامات تبويب بجانب ملفاتك دون مغادرة التطبيق.",
+    "descriptionWeb": "في جلسة المتصفح، تُفتح صفحات الويب في المتصفح الذي تستخدمه بالفعل. الاستثناء هو خادم يعمل على مضيف codeg: يُمرَّر إلى علامة تبويب هنا. هذه هي الإعدادات التي لا يزال لها أثر.",
+    "defaultTargetTitle": "مكان فتح الروابط",
+    "defaultTargetHint": "يُضبط لكل مصدر على حدة. اضغط ⌘/Ctrl مع النقر على رابط لاستخدام الخيار الآخر لهذه المرة فقط.",
+    "sourceTranscript": "رسائل المحادثة",
+    "sourceToolCard": "نتائج الأدوات",
+    "sourceTerminal": "الطرفية",
+    "sourceEditor": "المحرر",
+    "sourceNotification": "الإشعارات",
+    "targetBuiltin": "المتصفح المدمج",
+    "targetSystem": "متصفح النظام",
+    "devtoolsTitle": "مفتش الويب",
+    "devtoolsHint": "يعرض «فتح المفتّش» في قائمة «المزيد» لعلامة التبويب، ويتيح «فحص العنصر» على الصفحة. مُفعّل افتراضيًا. يسري على العلامات التي تُفتح من الآن فصاعدًا.",
+    "surfaceTitle": "طريقة عرض علامات التبويب",
+    "surfaceHint": "كيفية استضافة الصفحات. أبقِ الخيار على «تلقائي» ما لم تتعطل علامات التبويب المضمّنة على هذا النظام. يسري على علامات التبويب التي تُفتح من الآن فصاعدًا.",
+    "surfaceAuto": "تلقائي",
+    "surfaceChild": "مضمّنة في مساحة العمل",
+    "surfaceWindow": "نافذة منفصلة",
+    "clearTitle": "بيانات التصفح",
+    "clearHint": "ملفات تعريف الارتباط وذاكرة التخزين المؤقت وتخزين المواقع المشتركة بين جميع علامات تبويب المتصفح. يؤدي المسح إلى تسجيل خروجك من المواقع.",
+    "clearAction": "مسح…",
+    "clearConfirmTitle": "هل تريد مسح بيانات التصفح؟",
+    "clearConfirmDescription": "ستُزال ملفات تعريف الارتباط وذاكرة التخزين المؤقت وتخزين المواقع الخاصة بالمتصفح المدمج. تبقى علامات التبويب المفتوحة كما هي، لكن سيتم تسجيل خروجك من المواقع.",
+    "clearConfirmAction": "مسح",
+    "cancel": "إلغاء",
+    "cleared": "تم مسح بيانات التصفح",
+    "clearFailed": "تعذّر مسح بيانات التصفح: {message}",
+    "proxyTitle": "وكيل الشبكة",
+    "proxyHint": "تستخدم علامات تبويب المتصفح الوكيل المحدد في إعدادات النظام. عناوين هذا الجهاز (localhost) لا تمر عبر الوكيل أبدًا.",
+    "proxyOn": "يُستخدم {url}",
+    "proxyOff": "اتصال مباشر",
+    "proxyNextTab": "يسري تغيير الوكيل على علامات التبويب التي تُفتح من الآن فصاعدًا.",
+    "proxyRestart": "أعد تشغيل codeg لتستخدم علامات تبويب المتصفح الوكيل المتغيّر.",
+    "proxyUnsupported": "غير متاح في هذا الإصدار من macOS (يلزم الإصدار 14 أو أحدث).",
+    "proxyUnusable": "الوكيل المُعدّ ليس من نوع يمكن لعلامات تبويب المتصفح استخدامه (http وsocks5 فقط).",
+    "suspendTitle": "إلغاء تحميل علامات التبويب في الخلفية",
+    "suspendHint": "يحرّر ذاكرة علامات تبويب المتصفح التي تبقى في الخلفية لمدة 30 دقيقة. يُعاد تحميلها عند العودة إليها؛ ويُفقد موضع التمرير والسجل.",
+    "downloadsTitle": "التنزيلات",
+    "downloadsHint": "تُحفظ الملفات التي تنزّلها الصفحة في {dir}. لا يُفتح أي ملف تلقائيًا، ولا يُستبدل ملف موجود أبدًا.",
+    "rulesTitle": "قواعد المواقع",
+    "rulesHint": "لكل موقع: دائمًا المتصفح المدمج، أو دائمًا متصفح النظام، أو الحظر. الأنماط هي اسم مضيف أو *.example.com أو *، مع :منفذ اختياري؛ وتفوز المطابقة الأكثر تحديدًا.",
+    "rulesHintWeb": "لكل موقع: الحظر. مكان فتح الرابط ليس خيارًا في جلسة المتصفح. الأنماط هي اسم مضيف أو *.example.com أو *، مع :منفذ اختياري؛ وتفوز المطابقة الأكثر تحديدًا.",
+    "serviceOpenTitle": "الخوادم المحلية",
+    "serviceOpenHint": "عند طباعة خادم شغّلته في الطرفية لعنوانه، افتحه في علامة تبويب المتصفح. العناوين على هذا الجهاز فقط، وفقط عندما يكون هناك ما يستمع عليها.",
+    "serviceOpenOff": "لا تفعل شيئًا",
+    "serviceOpenNotify": "أعلِمني",
+    "serviceOpenOpen": "افتح علامة تبويب",
+    "rulePatternPlaceholder": "example.com أو *.example.com",
+    "rulePatternLabel": "نمط الموقع",
+    "ruleActionLabel": "الإجراء",
+    "ruleActionFor": "الإجراء لـ {pattern}",
+    "ruleAdd": "إضافة",
+    "ruleRemove": "إزالة القاعدة",
+    "ruleActionBlock": "حظر",
+    "ruleManaged": "محدّد من قِبل المسؤول",
+    "ruleInvalid": "ليس نمطًا صالحًا",
+    "ruleDuplicate": "توجد قاعدة لهذا النمط بالفعل",
+    "rulesEmpty": "لا توجد قواعد بعد.",
+    "agentGrantTitle": "مستوى المشاركة الافتراضي",
+    "agentGrantHint": "المستوى الذي تُشارَك به كل صفحة يفتحها تبويب، دون سؤال. يظل عنصر التحكم في الصفحة نفسه قادرًا على تغيير ذلك أو إنهائه لكل موقع؛ ويترك خيار «عدم المشاركة» كل القرارات لذلك العنصر.",
+    "agentGrantRead": "قراءة فقط",
+    "agentGrantControl": "قراءة وتنفيذ إجراءات",
+    "agentGrantNone": "عدم المشاركة",
+    "evalApprovalTitle": "تشغيل تعليمات برمجية في صفحة",
+    "evalApprovalHint": "ما الذي يحدث عندما يطلب وكيل تشغيل JavaScript خاصة به في صفحة مشارَكة بمستوى «قراءة وتنفيذ إجراءات». يُشغَّل دون سؤال؛ فالقرار يقع على مفتاح «تشغيل تعليمات برمجية في المتصفح المدمج» — وهو معطّل إلى أن تفعّله بنفسك — وعلى مستوى مشاركة الصفحة، ويظهر كل تشغيل في نشاط الوكيل الخاص بذلك التبويب. أما «اسألني في كل مرة» فيعرض عليك كل مقطع كاملًا وينتظر ردك.",
+    "evalApprovalAsk": "اسألني في كل مرة",
+    "evalApprovalSilent": "التشغيل دون سؤال",
+    "terminalMenuTitle": "قائمة روابط الطرفية",
+    "terminalMenuHint": "عند النقر على رابط في الطرفية تظهر قائمة صغيرة (المتصفح المدمج، متصفح النظام، نسخ الرابط) بدلاً من فتحه فورًا. لا يزال النقر مع ⌘/Ctrl يفتح الرابط مباشرة.",
+    "htmlPreviewTitle": "معاينة ملفات HTML",
+    "htmlPreviewHint": "عرض ملفات HTML عبر المتصفح المدمج في عرض مستند مقيَّد: لا برامج نصية حتى تفعّلها لملف ما، ولا يمكن الوصول إلا إلى مجلده. عند الإيقاف تُستخدم المعاينة المضمّنة كما في تطبيق الويب.",
+    "managedDisabled": "أوقفت سياسة المسؤول المتصفح المدمج؛ تُفتح الروابط في متصفح النظام.",
+    "profilesTitle": "الملفات الشخصية",
+    "profilesHint": "لكل ملف شخصي ملفات تعريف الارتباط وتخزين المواقع وحالات تسجيل الدخول الخاصة به. تُفتح علامات التبويب الجديدة في الملف الشخصي المحدد أدناه؛ ويمكن من شريط أدوات علامة التبويب فتح صفحتها في ملف شخصي آخر.",
+    "profileDefault": "الافتراضي",
+    "profileNewTabsTitle": "تُفتح علامات التبويب الجديدة في",
+    "profileNamePlaceholder": "اسم الملف الشخصي، مثل «العمل»",
+    "profileNameLabel": "اسم الملف الشخصي",
+    "profileAdd": "إضافة ملف شخصي",
+    "profileNameRequired": "أدخل اسمًا للملف الشخصي",
+    "profileNameDuplicate": "يوجد ملف شخصي بهذا الاسم بالفعل",
+    "profileClear": "مسح بيانات التصفح لـ {name}",
+    "profileDelete": "حذف الملف الشخصي {name}",
+    "profileDeleteConfirmTitle": "هل تريد حذف الملف الشخصي {name}؟",
+    "profileDeleteConfirmDescription": "ستُغلق علامات تبويبه وتُزال ملفات تعريف الارتباط وذاكرة التخزين المؤقت وتخزين المواقع الخاصة به. لا يمكن التراجع عن هذا الإجراء.",
+    "profileDeleteConfirmAction": "حذف",
+    "profileDeleted": "تم حذف الملف الشخصي",
+    "profileDeleteFailed": "تعذّر حذف الملف الشخصي: {message}",
+    "clearConfirmDescriptionProfile": "ستُزال ملفات تعريف الارتباط وذاكرة التخزين المؤقت وتخزين المواقع الخاصة بالملف الشخصي {name}. تبقى علامات التبويب المفتوحة كما هي، لكن سيتم تسجيل خروجك من المواقع.",
+    "signInUaTitle": "التوافق مع تسجيل الدخول إلى Google",
+    "signInUaHint": "ترفض Google تسجيل الدخول من المتصفحات المضمّنة. عند التفعيل، تقدّم علامات التبويب نفسها على أنها Firefox لصفحات تسجيل الدخول إلى Google فقط (accounts.google.com)؛ وفي كل مكان آخر تُعرِّف عن نفسها بالمحرك الذي تعمل به، ولا تنتحل Firefox أبدًا. في علامات التبويب المضمّنة فقط وليس في النافذة المنفصلة؛ وعندما تعيد صفحة تسجيل الدخول توجيهك إلى موقع آخر، يظل الطلب الأول إليه يحمل هوية تسجيل الدخول."
   },
   "LogsSettings": {
     "loading": "جارٍ التحميل…",
@@ -4690,12 +5318,7 @@
     "cronApply": "تطبيق",
     "cronPreviewLabel": "معاينة",
     "cronOpenBuilder": "فتح منشئ الجدولة",
-    "branchDefault": "الفرع الافتراضي",
-    "branchUseCustom": "استخدام \"{query}\"",
-    "branchLocal": "محلي",
-    "branchRemote": "بعيد",
-    "branchSearchPlaceholder": "بحث في الفروع…",
-    "branchNone": "لا توجد فروع"
+    "branchDefault": "الفرع الافتراضي"
   },
   "Tasks": {
     "title": "المهام قيد الانتظار",
@@ -4804,6 +5427,8 @@
     "errorView": "عرض",
     "notifyReview": "جاهزة للمراجعة: {title}",
     "notifyFailed": "فشلت المهمة: {title}",
+    "notifyReviewRedacted": "هناك مهمة جاهزة للمراجعة",
+    "notifyFailedRedacted": "فشلت إحدى المهمات",
     "createFromMessage": "إنشاء مهمة من الرسالة",
     "detailTokens": "إجمالي الرموز",
     "editorTitleNew": "مهمة جديدة",
@@ -4818,11 +5443,16 @@
     "phaseRetry": "إعادة التنفيذ",
     "phaseReturn": "متابعة",
     "phaseMerge": "الدمج",
+    "phaseCompact": "ضغط السياق",
     "titleLabel": "العنوان",
     "titlePlaceholder": "ما الذي يجب إنجازه؟",
     "promptLabel": "وصف المهمة",
     "promptPlaceholder": "صف المهمة للوكيل — استخدم @ للإشارة إلى الملفات و / للأوامر",
     "folderPlaceholder": "اختر مجلدًا",
+    "baseBranch": "الفرع الأساسي",
+    "baseBranchPlaceholder": "الفرع الحالي",
+    "baseBranchDefault": "الفرع الحالي عند بدء المهمة",
+    "baseBranchHint": "تتفرّع المهمة من هذا الفرع، ويعيدها الدمج إليه.",
     "agentInheritedHint": "موروث من إعدادات المهام — عدِّله ليصبح خاصًا بهذه المهمة",
     "agentOverrideReset": "العودة إلى الوراثة",
     "sectionTarget": "الهدف",
@@ -4848,6 +5478,7 @@
     "mergeDeleteWorktree": "حذف worktree بعد الدمج",
     "mergeSubmit": "دمج",
     "mergeSubmitQueue": "إضافة إلى طابور الدمج",
+    "mergeSubmitting": "جارٍ البدء…",
     "mergeQueuedToast": "تمت الإضافة إلى طابور الدمج — سيبدأ فور انتهاء الدمج الحالي.",
     "completeTitle": "إنهاء المهمة",
     "completeDescription": "لم تغيّر هذه المهمة أي ملف، لذا لا يوجد ما يُدمج — سيتم وضع علامة مكتملة عليها مباشرة.",
@@ -4869,6 +5500,7 @@
     "settingsMaxConcurrentHint": "0 = بلا حد",
     "settingsAutoCompact": "عتبة الضغط التلقائي",
     "settingsAutoCompactHint": "قبل جولة متابعة أو إعادة محاولة أو دمج، اضغط الجلسة إذا بلغ امتلاء نافذة السياق هذه النسبة. 0 يعني إيقاف.",
+    "compactingNote": "جارٍ ضغط سياق الجلسة…",
     "settingsCompactCommand": "أمر الضغط",
     "settingsCompactCommandHint": "اتركه فارغًا لاستخدام الأمر الذي يوفّره الوكيل أو قيمته الافتراضية المعروفة.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -5112,6 +5744,47 @@
     "fieldDescription": "الوصف",
     "baseInstructions": "موجّه النظام (base_instructions)"
   },
+  "DeepSeekModelEditor": {
+    "title": "قائمة النماذج",
+    "description": "النماذج التي يمكن لجلسة DeepSeek التبديل بينها. تُحفظ في مستند إعدادات الـ harness الذي يقرأه الوكيل عند الإقلاع — ويسري الحفظ على الجلسات التي تبدأ بعده.",
+    "inheritedBadge": "افتراضيات الوكيل",
+    "inheritedHint": "لا توجد قائمة محفوظة بعد، لذا هذه هي نماذج الوكيل المدمجة. الحفظ يثبّتها، ولن تغيّرها إصدارات الوكيل اللاحقة من تلقاء نفسها. الملف:",
+    "storedHint": "محفوظة في مستند إعدادات الـ harness. تبقى المفاتيح خارج هذه القائمة — والتعليقات المحيطة بها — كما هي. الملف:",
+    "unreadable": "لا يمكن تحرير مستند الإعدادات هذا من هنا دون المخاطرة بما يحتويه. حرّره يدويًا.",
+    "invalidStored": "يرفض الوكيل هذه القائمة المحفوظة، لذا تعمل الجلسات بنماذجه المدمجة إلى أن تُصلَح:",
+    "loading": "جارٍ قراءة مستند الإعدادات…",
+    "loadFailed": "تعذّرت قراءة مستند الإعدادات.",
+    "empty": "لا توجد نماذج. أضف واحدًا، أو احفظ للعودة إلى قائمة الوكيل المدمجة.",
+    "addModel": "إضافة نموذج",
+    "remove": "إزالة النموذج",
+    "advanced": "المزيد",
+    "save": "حفظ قائمة النماذج",
+    "saving": "جارٍ الحفظ…",
+    "restoreDefaults": "استخدام افتراضيات الوكيل",
+    "fieldId": "معرّف النموذج",
+    "fieldName": "الاسم المعروض",
+    "fieldContextWindow": "نافذة السياق",
+    "fieldDescription": "الوصف",
+    "fieldMaxTokens": "أقصى رموز للمخرجات",
+    "fieldAcceptsImages": "يقبل الصور",
+    "fieldImagePixelBudget": "حد وحدات البكسل",
+    "imageBudgetPixels": "عدد البكسل",
+    "imageBudgetLow": "تفاصيل منخفضة (512×512)",
+    "fieldImageMaxBytes": "حد البايتات",
+    "placeholderId": "deepseek-flash",
+    "placeholderName": "يظهر في المُحدِّد",
+    "placeholderInherit": "افتراضي الوكيل",
+    "errorMissingId": "كل نموذج يحتاج إلى معرّف.",
+    "errorDuplicateId": "نموذجان يحملان المعرّف “{id}”.",
+    "errorBadContextWindow": "يجب أن تكون نافذة سياق “{id}” عددًا صحيحًا أكبر من صفر.",
+    "errorBadMaxTokens": "يجب أن يكون أقصى رموز مخرجات “{id}” عددًا صحيحًا أكبر من صفر.",
+    "errorBadImageLimit": "يجب أن تكون حدود صور “{id}” أعدادًا صحيحة أكبر من صفر.",
+    "warnSingleModel": "مع نموذج واحد فقط، يتوقف الوكيل عن عرض مُحدِّد النماذج أصلًا.",
+    "warnLaunchModelMissing": "تبدأ الجلسات الجديدة على “{model}” وهو غير موجود في هذه القائمة. أضِفه، أو اضبط {variable} في متغيّرات البيئة أعلاه.",
+    "toastSaved": "تم حفظ قائمة النماذج",
+    "toastRestored": "يجري استخدام قائمة نماذج الوكيل المدمجة",
+    "toastSaveFailed": "تعذّر حفظ قائمة النماذج"
+  },
   "DiagnosticsSettings": {
     "title": "تشخيص البيئة",
     "description": "يتحقق من كيفية تحليل هذا التطبيق لواجهة سطر أوامر الوكيل داخل عمليته الخاصة، وقد يختلف ذلك عن الطرفية لديك.",
@@ -5279,7 +5952,7 @@
     "noRemote": "لا يحتوي هذا المجلد على remote معروف (origin)",
     "errors": {
       "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع.",
-      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab فقط، و{host} لا يُعرَف كأي منهما. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
+      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab و Gitea فقط، و{host} لا يُعرَف كأي منها. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab أو Gitea أو Forgejo، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
       "wrongForge": "{host} هو {provider}، وليس المنصة التي كان مصنّفًا ضمنها. تم تصحيح الاكتشاف — أعد التحميل للمحاولة مجددًا."
     },
     "addAccount": "إضافة حساب",
@@ -5543,6 +6216,317 @@
     "confirmDeleteCancel": "إلغاء",
     "confirmDeleteConfirm": "حذف",
     "canvasActions": "إجراءات اللوحة",
-    "mergeIntoNewRegion": "منطقة جديدة"
+    "mergeIntoNewRegion": "منطقة جديدة",
+    "addFileCard": "بطاقة ملف",
+    "addTerminalCard": "بطاقة طرفية",
+    "searchFiles": "البحث عن الملفات…",
+    "searchFilesIn": "البحث في {folder}…",
+    "searchingFiles": "جارٍ البحث…",
+    "noFiles": "لم يتم العثور على ملفات",
+    "noOpenFiles": "لا توجد ملفات مفتوحة — اكتب للبحث",
+    "browseForFile": "استعراض…",
+    "filePreview": "معاينة",
+    "fileSource": "المصدر",
+    "reloadFile": "إعادة التحميل",
+    "removeFileCard": "إزالة بطاقة الملف",
+    "restartTerminal": "إعادة تشغيل الطرفية",
+    "removeTerminalCard": "إزالة بطاقة الطرفية",
+    "terminalNoDirectory": "لا يوجد دليل عمل لهذه البطاقة",
+    "confirmDeleteTerminals": "سيتم إغلاق {count} من الطرفيات قيد التشغيل وإنهاء عملياتها.",
+    "confirmDeleteNotesAndTerminals": "سيتم حذف {notes} من الملاحظات التي كتبتها نهائيًا، وإنهاء {terminals} من الطرفيات قيد التشغيل."
+  },
+  "Browser": {
+    "toolbar": {
+      "back": "رجوع",
+      "forward": "تقدّم",
+      "reload": "إعادة تحميل",
+      "stop": "إيقاف",
+      "openInSystem": "فتح في متصفح النظام",
+      "more": "المزيد",
+      "copyUrl": "نسخ الرابط",
+      "copied": "تم نسخ الرابط",
+      "openInspector": "فتح المفتّش",
+      "inspectorFailed": "تعذّر فتح المفتّش",
+      "addressPlaceholder": "أدخل عنوانًا",
+      "invalidUrl": "عنوان غير صالح",
+      "profile": "الملف الشخصي: {name}",
+      "profileMenuLabel": "فتح هذه الصفحة في ملف شخصي آخر",
+      "profileDefault": "الافتراضي"
+    },
+    "status": {
+      "popupDenied": "تم حظر نافذة منبثقة: {host}",
+      "popupDeniedNoGesture": "لم تُفتح بنقرة",
+      "popupDeniedBlockedScheme": "نوع العنوان غير مسموح به",
+      "popupOpenAnyway": "فتح على أي حال",
+      "dismiss": "إغلاق",
+      "errorDns": "تعذّر العثور على هذا الموقع",
+      "errorTls": "هذا الاتصال غير آمن",
+      "errorBlocked": "هذا العنوان محظور في المتصفح المدمج",
+      "errorPopupDenied": "تم حظر النافذة المنبثقة",
+      "errorFailed": "تعذّر تحميل هذه الصفحة",
+      "errorFailedHint": "تعذّر الاتصال بالموقع. تحقّق من الشبكة والعنوان، وقد تحتاج إلى وكيل (proxy).",
+      "retry": "إعادة المحاولة",
+      "openInSystem": "فتح في متصفح النظام",
+      "ownedWindow": "تُعرض هذه الصفحة في نافذة مستقلة.",
+      "ownedWindowShow": "إظهار النافذة",
+      "remoteBanner": "فُتح عبر {host}",
+      "remoteBannerDown": "انقطع الاتصال بـ {host}. ستتم إعادة المحاولة مع الطلب التالي.",
+      "navigationBlocked": "تم حظر الانتقال: {host}",
+      "navigationBlockedRule": "محظور بقاعدة موقع",
+      "navigationBlockedScheme": "لا يمكن فتح هذا النوع من العناوين هنا",
+      "navigationBlockedOpenSystem": "فتح بتطبيق النظام",
+      "errorBlockedHint": "تحظر قاعدة موقع هذا العنوان. تُدار القواعد في الإعدادات ← المتصفح المدمج.",
+      "popupDeniedBlockedHost": "محظور بقاعدة موقع",
+      "channelDegraded": "يتم حظر النوافذ المنبثقة في علامة التبويب هذه وقد لا يتابع شريط العناوين الصفحة",
+      "channelDegradedHint": "تعذّر على codeg تثبيت برنامجه النصي في الصفحة. النوافذ المنبثقة التي تفتحها هذه الصفحة محظورة، ولن يتابع شريط العناوين التنقل داخل الصفحة، ولن يفتح اختصار البحث المضغوط داخل الصفحة شريطَ البحث. إعادة فتح علامة التبويب تحاول من جديد.",
+      "downloadsDenied": "تم حظر التنزيلات: {host}",
+      "downloadsDeniedNoGesture": "ملفات متعددة، لم تبدأ بنقرة",
+      "agentGrantLost": "انتهت المشاركة: غادرت الصفحة {origin}",
+      "agentGrantLostShare": "شارك {origin} أيضًا",
+      "agentGrantReplaced": "انتهت المشاركة: يخدم برنامج آخر {origin} الآن",
+      "agentGrantReplacedShare": "شارك على أي حال",
+      "errorRemoteRefused": "لا شيء يستمع على هذا العنوان في المضيف البعيد",
+      "errorRemoteRefusedHint": "رفض {host} الاتصال. تحقّق من أن الخادم الموجود خلف هذا العنوان يعمل هناك.",
+      "errorRemoteUnreachable": "لا يستطيع المضيف البعيد الوصول إلى هذا العنوان",
+      "errorRemoteUnreachableHint": "من جهة {host}، لا يمكن تحليل الاسم أو لا يوجد مسار إليه.",
+      "errorRemoteNotAllowed": "لا يفتح الخادم البعيد هذا العنوان للمتصفح",
+      "errorRemoteNotAllowedHint": "يسمح codeg-server على {host} لنفق المتصفح بالوصول إلى العناوين الخاصة فقط (CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "استغرق المضيف البعيد وقتًا طويلًا للاتصال",
+      "errorRemoteTimeoutHint": "لم يتلقَّ {host} ردًا من هذا العنوان في الوقت المحدد. قد يكون الخادم هناك مشغولًا أو خلف جدار حماية.",
+      "errorTunnelDown": "الاتصال بالمضيف البعيد مقطوع",
+      "errorTunnelDownHint": "النفق إلى {host} لا ينقل أي شيء حاليًا. أعد المحاولة عندما يصبح متاحًا مرة أخرى."
+    },
+    "tab": {
+      "untitled": "علامة تبويب جديدة"
+    },
+    "drawer": {
+      "title": "المتصفح المدمج",
+      "description": "صفحة ويب فُتحت من المحادثة",
+      "openInWorkspace": "فتح في مساحة العمل",
+      "cannotOpen": "لا يمكن فتح هذا العنوان هنا."
+    },
+    "bridge": {
+      "frameTitle": "معاينة خادم التطوير",
+      "opening": "جارٍ الاتصال عبر الخادم…",
+      "reload": "إعادة التحميل",
+      "openExternal": "فتح في علامة تبويب جديدة",
+      "copyAddress": "نسخ العنوان",
+      "copied": "تم نسخ العنوان",
+      "unreachableTitle": "تعذّر الوصول إلى منفذ الجسر",
+      "unreachableHint": "وضع خادم codeg هذه الصفحة على {origin}، لكن متصفحك لا يستطيع الوصول إليه. انشر هذا المنفذ (راجع CODEG_BRIDGE_PORTS) أو اضبط CODEG_BRIDGE_PUBLIC_HOST؛ وإذا كان codeg يُقدَّم عبر HTTPS فإن منافذ الجسر تحتاج إلى HTTPS أيضًا.",
+      "unreachableHostHint": "وضع خادم codeg هذه الصفحة على {origin}، لكن متصفحك لا يستطيع الوصول إليها. يجب أن يُترجَم اسم المضيف هذا إلى خادم codeg وأن يمر عبر الوكيل الموجود أمامه: سجل DNS بحرف بدل ومضيف افتراضي بحرف بدل (راجع CODEG_BRIDGE_HOST_PATTERN).",
+      "errorTitle": "لا يمكن عرض هذه الصفحة هنا"
+    },
+    "remote": {
+      "title": "هذا العنوان على {host}",
+      "titleUnnamed": "هذا العنوان على المضيف البعيد",
+      "description": "يشير إلى الجهاز الذي تعمل عليه مساحة العمل هذه، لا إلى هذا الكمبيوتر.",
+      "copyAddress": "نسخ العنوان",
+      "copied": "تم نسخ العنوان",
+      "tryHost": "تجربة {host}",
+      "tryHostHint": "يفتح {address} في علامة تبويب على هذا الجهاز. ينجح ذلك إذا كانت الصفحة هناك تستمع على جميع واجهات الشبكة وكان هذا الجهاز يصل إلى منفذها.",
+      "openHere": "فتح على هذا الجهاز",
+      "openHereHint": "يفتح العنوان في علامة تبويب على هذا الجهاز. ينجح ذلك إذا كان هذا الجهاز على الشبكة نفسها.",
+      "retry": "إعادة المحاولة",
+      "connecting": "جارٍ الاتصال عبر {host}…",
+      "connectingUnnamed": "جارٍ الاتصال عبر المضيف البعيد…"
+    },
+    "download": {
+      "started": "جارٍ التنزيل…",
+      "completed": "تم الحفظ",
+      "failed": "فشل",
+      "reveal": "إظهار في المجلد",
+      "dismiss": "إخفاء"
+    },
+    "find": {
+      "placeholder": "البحث في الصفحة",
+      "next": "التالي",
+      "previous": "السابق",
+      "noMatches": "لا توجد نتائج",
+      "close": "إغلاق"
+    },
+    "toast": {
+      "firstOpen": "تم الفتح في المتصفح المدمج",
+      "firstOpenHint": "اضغط ⌘/Ctrl أثناء النقر على رابط لفتحه في متصفح النظام بدلًا من ذلك. يمكن تغيير الافتراضي من الإعدادات.",
+      "useSystemAlways": "استخدام متصفح النظام دائمًا",
+      "serviceDetected": "هناك خادم يعمل على {address}",
+      "serviceDetectedHint": "شُغّل في الطرفية. من الإعدادات ← المتصفح المدمج يمكن فتحها تلقائيًا.",
+      "serviceOpen": "افتح",
+      "blockedHost": "محظور بقاعدة موقع: {host}"
+    },
+    "link": {
+      "openBuiltin": "فتح في المتصفح المدمج",
+      "openSystem": "فتح في متصفح النظام",
+      "copy": "نسخ الرابط"
+    },
+    "doc": {
+      "scriptsOff": "تفعيل البرامج النصية",
+      "scriptsOn": "البرامج النصية مفعّلة",
+      "scriptsHint": "تشغيل البرامج النصية لهذا المستند. لا يمكنها سوى قراءة الملفات في مجلده ولا يمكنها الوصول إلى الشبكة. إذا تغيّر أي من هذه الملفات لاحقًا، تُعطَّل البرامج النصية مجددًا.",
+      "reload": "إعادة التحميل",
+      "more": "المزيد",
+      "copyPath": "نسخ المسار",
+      "useInline": "استخدام المعاينة المضمّنة",
+      "useGuest": "استخدام معاينة المتصفح المدمج",
+      "unsaved": "لا تُعرض التغييرات غير المحفوظة",
+      "reset": "تغيّر {file} بعد تفعيل البرامج النصية. عُطِّلت البرامج النصية مجددًا.",
+      "enableAgain": "التفعيل مجددًا",
+      "dismiss": "إغلاق",
+      "externalLink": "لم يُتَّبع الرابط إلى {host}",
+      "openLink": "فتح الرابط",
+      "downloadRefused": "لا يُسمح بالتنزيل في معاينة المستند",
+      "openWithSystem": "فتح بتطبيق النظام",
+      "schemeBlocked": "لا يمكن فتح {url} هنا",
+      "cannotShow": "تعذّر عرض هذا المستند"
+    },
+    "agent": {
+      "share": "مشاركة هذه الصفحة مع الوكلاء ({origin})",
+      "shareLabel": "مشاركة مع الوكلاء",
+      "shareRead": "قراءة فقط",
+      "shareControl": "قراءة وتنفيذ إجراءات",
+      "levelDefault": "افتراضي",
+      "notShareable": "لا يوجد عنوان ويب في هذه الصفحة لمشاركته مع الوكلاء",
+      "remoteWindow": "يعمل وكلاء مساحة العمل البعيدة على مضيفها ولا يمكنهم استخدام متصفح هذا الجهاز",
+      "shared": "تمت المشاركة",
+      "sharedControl": "مشاركة · يمكنه التصرف",
+      "sharedWith": "يمكن للوكلاء قراءة {origin}",
+      "sharedWithControl": "يمكن للوكلاء قراءة {origin} والتصرف فيه",
+      "sharedScope": "تنتهي المشاركة بمجرد مغادرة الصفحة لهذا الموقع.",
+      "sharedScopeProgram": "تنتهي أيضًا إذا استولى برنامج آخر على هذا المنفذ من {program}.",
+      "sharedToast": "أصبح بإمكان الوكلاء الآن قراءة {origin}",
+      "sharedControlToast": "يمكن للوكلاء الآن قراءة {origin} والتصرف فيه",
+      "stopSharing": "إيقاف المشاركة",
+      "allowActions": "السماح بالإجراءات في هذه الصفحة",
+      "readOnly": "القراءة فقط",
+      "shareFailed": "لا يمكن مشاركة هذه الصفحة مع الوكلاء",
+      "activity": {
+        "read": {
+          "done": "قرأ الصفحة",
+          "refused": "مرفوض: هذه الصفحة غير مُشاركة",
+          "failed": "تعذّرت قراءة الصفحة"
+        },
+        "click": {
+          "done": "نقر",
+          "refused": "رُفض النقر: الإجراءات غير مسموح بها في هذه الصفحة",
+          "failed": "تعذر النقر"
+        },
+        "hover": {
+          "done": "مرّر المؤشر",
+          "refused": "رُفض التمرير: الإجراءات غير مسموح بها في هذه الصفحة",
+          "failed": "تعذر تمرير المؤشر"
+        },
+        "type": {
+          "done": "كتب في حقل",
+          "refused": "رُفضت الكتابة: الإجراءات غير مسموح بها في هذه الصفحة",
+          "failed": "تعذرت الكتابة"
+        },
+        "press": {
+          "done": "ضغط مفتاحًا",
+          "refused": "رُفض الضغط: الإجراءات غير مسموح بها في هذه الصفحة",
+          "failed": "تعذر الضغط على المفتاح"
+        },
+        "select": {
+          "done": "اختار خيارًا",
+          "refused": "رُفض الاختيار: الإجراءات غير مسموح بها في هذه الصفحة",
+          "failed": "تعذر اختيار الخيار"
+        },
+        "capture": {
+          "done": "التقط لقطة شاشة",
+          "refused": "رُفضت لقطة الشاشة: هذه الصفحة غير مُشاركة",
+          "failed": "تعذّر التقاط لقطة الشاشة"
+        },
+        "console": {
+          "done": "قرأ وحدة التحكم",
+          "refused": "رُفضت قراءة وحدة التحكم: هذه الصفحة غير مُشاركة",
+          "failed": "تعذّرت قراءة وحدة التحكم"
+        },
+        "eval": {
+          "done": "شغّل تعليمات برمجية على الصفحة",
+          "refused": "رُفض تشغيل التعليمات البرمجية على هذه الصفحة",
+          "failed": "تعذّر تشغيل التعليمات البرمجية"
+        },
+        "open": {
+          "done": "فتح هذه الصفحة",
+          "refused": "رُفض فتح علامة تبويب",
+          "failed": "تعذّر فتح علامة تبويب"
+        },
+        "navigate": {
+          "done": "انتقل إلى عنوان آخر",
+          "refused": "مرفوض: هذه الصفحة لا تسمح بالإجراءات",
+          "failed": "تعذّر تغيير العنوان"
+        },
+        "close": {
+          "done": "أغلق علامة التبويب هذه",
+          "refused": "رُفض الإغلاق: هذه الصفحة لا تسمح بالإجراءات",
+          "failed": "تعذّر إغلاق علامة التبويب هذه"
+        }
+      },
+      "activityCount": "{count}×",
+      "activityTitle": "ما فعله الوكلاء في هذه الصفحة",
+      "activityLabel": "نشاط الوكلاء: {entry}",
+      "eval": {
+        "title": "تشغيل هذه التعليمات البرمجية على {site}؟",
+        "description": "يريد وكيل تشغيل JavaScript على هذه الصفحة. كل ما يمكنك قراءته وتغييره على {site} يمكنه هو أيضًا.",
+        "descriptionWithTitle": "يريد وكيل تشغيل JavaScript على «{title}». كل ما يمكنك قراءته وتغييره على {site} يمكنه هو أيضًا.",
+        "codeLabel": "التعليمات البرمجية التي ستُشغَّل",
+        "everyTime": "سيُطلب منك ذلك مجددًا مع كل مقطع — الموافقة على هذا لا تعني الموافقة على التالي. وتحديد ما إذا كنت ستُسأل أصلًا يتم من الإعدادات ← المتصفح المدمج.",
+        "allow": "تشغيلها مرة واحدة",
+        "deny": "عدم التشغيل"
+      }
+    },
+    "handoff": {
+      "send": "أرسل هذه الصفحة إلى المحادثة",
+      "sendLabel": "إرسال إلى المحادثة",
+      "noConversation": "افتح محادثة لإرسال هذه الصفحة إليها",
+      "pickElement": "اختر عنصرًا…",
+      "screenshot": "أرسل لقطة شاشة",
+      "markUp": "علّم على لقطة شاشة…",
+      "consoleErrors": "أرسل أخطاء وحدة التحكم",
+      "consoleClean": "لم يحدث خطأ في هذه الصفحة",
+      "picking": "جارٍ الاختيار…",
+      "pickingHint": "انقر على عنصر في الصفحة، أو اضغط Esc للإنهاء",
+      "pickingCancel": "إنهاء الاختيار",
+      "sent": "أُضيف إلى المحادثة",
+      "failed": "تعذّر إرسال هذه الصفحة إلى المحادثة",
+      "noConsoleErrors": "لم تطبع هذه الصفحة أي أخطاء",
+      "chipElement": "عنصر من الصفحة",
+      "chipScreenshot": "لقطة من الصفحة",
+      "chipMarkedScreenshot": "لقطة شاشة عليها علامات",
+      "chipConsole": "{count, plural, zero {لا أخطاء في وحدة التحكم} one {خطأ واحد في وحدة التحكم} two {خطآن في وحدة التحكم} few {# أخطاء في وحدة التحكم} many {# خطأ في وحدة التحكم} other {# خطأ في وحدة التحكم}}",
+      "gone": "تلك المحادثة لم تعد مفتوحة",
+      "consoleErrorsCount": "{count, plural, zero {لا أخطاء لإرسالها} one {أرسل خطأ وحدة التحكم} two {أرسل خطأي وحدة التحكم} few {أرسل # أخطاء في وحدة التحكم} many {أرسل # خطأ في وحدة التحكم} other {أرسل # خطأ في وحدة التحكم}}",
+      "markupTitle": "التعليم على لقطة الشاشة",
+      "markupTools": "أداة الرسم",
+      "markupBox": "مربع",
+      "markupArrow": "سهم",
+      "markupUndo": "تراجع",
+      "markupClear": "مسح",
+      "markupHint": "اسحب على الصورة لترسم. تحمل كل علامة رقمًا يمكن لرسالتك أن تشير إليه.",
+      "markupCount": "{count, plural, zero {لا علامات} one {علامة واحدة} two {علامتان} few {# علامات} many {# علامة} other {# علامة}}",
+      "markupCancel": "إلغاء",
+      "markupSend": "أضف إلى المحادثة"
+    }
+  },
+  "browser": {
+    "agent": {
+      "error": {
+        "grantRequired": "لم تتم مشاركة علامة التبويب هذه مع وكيل. شاركها ليتمكّن الوكيل من قراءة الصفحة."
+      }
+    },
+    "inspector": {
+      "error": {
+        "switchedOff": "فُتحت هذه العلامة ومفتّش الويب مُعطّل. فعّله من إعدادات المتصفح ثم افتح الصفحة من جديد."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "يتطلب فتح عناوين المضيف البعيد في المتصفح المدمج نظام macOS 14 أو أحدث.",
+        "unsupported": "خادم codeg-server البعيد قديم جدًا ولا يمكنه نقل حركة المتصفح. حدّثه لفتح عناوينه هنا.",
+        "disabled": "نفق المتصفح معطّل على خادم codeg-server البعيد (CODEG_BROWSER_TUNNEL).",
+        "unreachable": "تعذّر الوصول إلى نفق المتصفح في خادم codeg-server البعيد ({reason}).",
+        "bypassed": "يرسل محرك المتصفح في هذا الكمبيوتر بعض العناوين خارج النفق، لذا تبقى صفحات المضيف البعيد مغلقة بدل تحميلها من هذا الكمبيوتر.",
+        "probeFailed": "تعذّر على المتصفح المدمج التأكد من أنه يصل إلى المضيف البعيد عبر النفق. حاول مرة أخرى بعد قليل."
+      }
+    }
   }
 }

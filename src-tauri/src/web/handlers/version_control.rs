@@ -172,6 +172,15 @@ pub async fn validate_gitlab_token(
     Ok(Json(result))
 }
 
+/// Same again for Gitea/Forgejo, which answers GitHub's `/user` shape behind a
+/// `token` authorization header and reports no scopes at all.
+pub async fn validate_gitea_token(
+    Json(params): Json<ValidateGitHubTokenParams>,
+) -> Result<Json<GitHubTokenValidation>, AppCommandError> {
+    let result = vc_commands::validate_gitea_token(params.server_url, params.token).await?;
+    Ok(Json(result))
+}
+
 // ---------------------------------------------------------------------------
 // Keyring token management
 // ---------------------------------------------------------------------------

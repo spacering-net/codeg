@@ -11,7 +11,7 @@ use crate::terminal::error::TerminalError;
 #[cfg(feature = "tauri-runtime")]
 use crate::terminal::manager::{SpawnOptions, TerminalManager};
 #[cfg(feature = "tauri-runtime")]
-use crate::terminal::types::TerminalInfo;
+use crate::terminal::types::{TerminalInfo, TerminalSnapshot};
 #[cfg(feature = "tauri-runtime")]
 use crate::web::event_bridge::EventEmitter;
 
@@ -123,6 +123,19 @@ pub fn terminal_resize(
     manager: State<'_, TerminalManager>,
 ) -> Result<(), TerminalError> {
     manager.resize(&terminal_id, cols, rows)
+}
+
+/// Recent output of a terminal that is already running, so a viewer mounting
+/// over an existing PTY (a canvas terminal card returning from another route)
+/// can redraw instead of attaching to a blank pane. `alive: false` means there
+/// is nothing to attach to and the caller should spawn.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub fn terminal_snapshot(
+    terminal_id: String,
+    manager: State<'_, TerminalManager>,
+) -> Result<TerminalSnapshot, TerminalError> {
+    Ok(manager.snapshot(&terminal_id))
 }
 
 #[cfg(feature = "tauri-runtime")]

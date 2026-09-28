@@ -35,6 +35,7 @@ const DEFAULT_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
 
 /** Stable empty table so the no-failures common case never re-renders. */
 const EMPTY_SESSION_FAILURES: SessionFailureRecord[] = []
+const EMPTY_STEERED_MESSAGE_IDS: string[] = []
 // Stable empty reference: a new [] on every render would break the memo below
 // for every connection that has no async tasks — i.e. almost all of them.
 const EMPTY_ASYNC_TASKS: AsyncTaskRecord[] = []
@@ -69,6 +70,10 @@ export interface UseConnectionReturn {
   availableCommands: AvailableCommandInfo[] | null
   pendingPermission: PendingPermission | null
   pendingUserMessage: PendingUserMessage | null
+  /** Feedback-note ids this turn's live message adopted as mid-turn user turns
+   *  (native steering). The notes list drops their strips so one message shows
+   *  in exactly one place. `[]` when nothing was steered. */
+  steeredMessageIds: string[]
   pendingQuestion: PendingQuestion | null
   pendingAskQuestion: PendingQuestionState | null
   pendingPlanApproval: PendingPlanApprovalState | null
@@ -212,11 +217,29 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     return raw
   }, [store, contextKey])
   const connection = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  // A `connect()` that has started but not yet produced an entry. Rides the
+  // same per-key listener set, so one subscription covers both.
+  const getPendingSnapshot = useCallback(
+    () => store.getConnectPending(contextKey),
+    [store, contextKey]
+  )
+  const connectPending = useSyncExternalStore(
+    subscribe,
+    getPendingSnapshot,
+    getPendingSnapshot
+  )
 
   const connectionId = connection?.connectionId ?? null
   const agentType = connection?.agentType ?? null
   const isViewer = connection?.isViewer ?? false
-  const status = connection?.status ?? null
+  // An in-flight `connect()` IS "connecting", even though the store has no
+  // entry for it yet: the backend call that creates one only returns after the
+  // agent has spawned, handshaken and resumed the session, so reporting `null`
+  // for that whole stretch told every consumer "idle, nothing in flight" —
+  // which is how opening a historical conversation ended up with no composer
+  // placeholder, no loading cue and no status-bar task. A real entry always
+  // wins: once it exists, its own status is the more specific truth.
+  const status = connection?.status ?? (connectPending ? "connecting" : null)
   const promptCapabilities =
     connection?.promptCapabilities ?? DEFAULT_PROMPT_CAPABILITIES
   const supportsFork = connection?.supportsFork ?? false
@@ -233,6 +256,8 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const availableCommands = connection?.availableCommands ?? null
   const pendingPermission = connection?.pendingPermission ?? null
   const pendingUserMessage = connection?.pendingUserMessage ?? null
+  const steeredMessageIds =
+    connection?.steeredMessageIds ?? EMPTY_STEERED_MESSAGE_IDS
   const pendingQuestion = connection?.pendingQuestion ?? null
   const pendingAskQuestion = connection?.pendingAskQuestion ?? null
   const pendingPlanApproval = connection?.pendingPlanApproval ?? null
@@ -339,6 +364,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       availableCommands,
       pendingPermission,
       pendingUserMessage,
+      steeredMessageIds,
       pendingQuestion,
       pendingAskQuestion,
       pendingPlanApproval,
@@ -380,6 +406,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       availableCommands,
       pendingPermission,
       pendingUserMessage,
+      steeredMessageIds,
       pendingQuestion,
       pendingAskQuestion,
       pendingPlanApproval,

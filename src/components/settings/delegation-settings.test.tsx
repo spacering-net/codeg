@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -13,6 +13,15 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
     error: vi.fn(),
   },
+}))
+
+// Capture the settings-change handler so a test can play a remote write back.
+let delegationHandler: ((p: unknown) => void) | undefined
+vi.mock("@/lib/platform", () => ({
+  subscribe: vi.fn((_event: string, handler: (p: unknown) => void) => {
+    delegationHandler = handler
+    return Promise.resolve(() => {})
+  }),
 }))
 
 import { DelegationSettingsSection } from "./delegation-settings"
@@ -74,6 +83,41 @@ beforeEach(() => {
 })
 
 describe("DelegationSettingsSection", () => {
+  /** The status-bar codeg-mcp popover flips `enabled` on its own, and Save here
+   * submits the whole record. A form left open across such a toggle must adopt
+   * it, or changing only the depth limit would switch delegation back off. */
+  it("adopts a remote enable instead of reverting it on save", async () => {
+    mockGetDelegationSettings.mockResolvedValue(settings({ enabled: false }))
+    mockSetDelegationSettings.mockImplementation(async (v) => v)
+    renderWithIntl()
+    const toggle = await screen.findByLabelText("Enable delegation")
+    expect(toggle).toHaveAttribute("data-state", "unchecked")
+
+    act(() => delegationHandler?.(settings({ enabled: true, depth_limit: 1 })))
+    await waitFor(() => expect(toggle).toHaveAttribute("data-state", "checked"))
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(mockSetDelegationSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: true })
+      )
+    )
+  })
+
+  /** ...but a switch the user already moved keeps their pending value. */
+  it("keeps a pending local edit when a remote write lands", async () => {
+    mockGetDelegationSettings.mockResolvedValue(settings({ enabled: false }))
+    mockSetDelegationSettings.mockImplementation(async (v) => v)
+    renderWithIntl()
+    const toggle = await screen.findByLabelText("Enable delegation")
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toHaveAttribute("data-state", "checked"))
+
+    act(() => delegationHandler?.(settings({ enabled: false })))
+    await waitFor(() => expect(toggle).toHaveAttribute("data-state", "checked"))
+  })
+
   it("renders the enable switch and depth input", async () => {
     mockGetDelegationSettings.mockResolvedValue(settings())
 

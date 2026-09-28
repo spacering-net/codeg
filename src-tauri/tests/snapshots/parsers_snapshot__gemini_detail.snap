@@ -39,7 +39,7 @@ expression: detail
       ],
       "timestamp": "[ts]",
       "usage": {
-        "input_tokens": 10,
+        "input_tokens": 7,
         "output_tokens": 20,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 3
@@ -51,15 +51,15 @@ expression: detail
   ],
   "session_stats": {
     "total_usage": {
-      "input_tokens": 10,
+      "input_tokens": 7,
       "output_tokens": 20,
       "cache_creation_input_tokens": 0,
       "cache_read_input_tokens": 3
     },
-    "total_tokens": 33,
+    "total_tokens": 30,
     "total_duration_ms": 2000,
-    "context_window_used_tokens": 33,
-    "context_window_max_tokens": 1000000,
-    "context_window_usage_percent": 0.0033000000000000004
+    "context_window_used_tokens": 10,
+    "context_window_max_tokens": 1048576,
+    "context_window_usage_percent": 0.00095367431640625
   }
 }

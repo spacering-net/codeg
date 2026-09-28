@@ -9,6 +9,24 @@ import {
   useWorkspaceView,
 } from "@/contexts/workspace-context"
 import * as api from "@/lib/api"
+import {
+  claimSurfaceCreation,
+  forgetSurfaceCreation,
+  getBrowserTabState,
+  markBrowserTabHidden,
+  resetBrowserTabStoreForTests,
+  setBrowserTabState,
+} from "@/lib/browser/browser-tab-store"
+import {
+  resetBrowserPrefsForTests,
+  setBrowserNewTabProfile,
+  setBrowserProfiles,
+} from "@/lib/browser/browser-prefs"
+import {
+  peekClosedTab,
+  popClosedTab,
+  resetClosedTabStackForTests,
+} from "@/lib/closed-tab-stack"
 import { resetHomeDirCacheForTests } from "@/lib/file-open-target"
 import {
   resetAppWorkspaceStore,
@@ -65,6 +83,17 @@ const foldersMock = vi.hoisted(() => {
   }
 })
 
+// A window bound to a remote codeg-server, when a test says so.
+const remoteMock = vi.hoisted(() => ({
+  remote: false,
+  serverBaseUrl: "https://dev.example.com",
+}))
+vi.mock(import("@/lib/transport"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  isRemoteDesktopMode: () => remoteMock.remote,
+  getServerBaseUrl: () => remoteMock.serverBaseUrl,
+}))
+
 vi.mock("@/contexts/active-folder-context", async () => {
   const { useSyncExternalStore } = await import("react")
   return {
@@ -98,6 +127,7 @@ beforeEach(() => {
 
 vi.mock("@/lib/api", () => ({
   getHomeDirectory: vi.fn(),
+  listDirectoryWithFiles: vi.fn(),
   readFileForEdit: vi.fn(),
   readFileBase64: vi.fn(),
   readFilePreview: vi.fn(),
@@ -242,6 +272,7 @@ function WorkspaceProbe() {
     activeFileTabId,
     filesMaximized,
     openSessionFileDiff,
+    openFilePreview,
     closeFileTab,
     closeAllFileTabs,
     toggleFilesMaximized,
@@ -250,6 +281,9 @@ function WorkspaceProbe() {
 
   return (
     <div>
+      <button type="button" onClick={() => void openFilePreview("report.docx")}>
+        Open office by hand
+      </button>
       <output data-testid="mode">{mode}</output>
       <output data-testid="file-tab-count">{fileTabs.length}</output>
       <output data-testid="active-pane">{activePane}</output>
@@ -1991,6 +2025,19 @@ describe("WorkspaceProvider office auto-preview", () => {
     workspaceStoreMock.reset()
     // Preference defaults ON; drop any "false" a prior test left behind.
     localStorage.removeItem("workspace:office-auto-preview")
+    // Reset first: call history is what the "one listing per parent" tests
+    // assert on, and an unconsumed `…Once` from a prior test would otherwise
+    // answer the next one's first lookup.
+    vi.mocked(api.listDirectoryWithFiles).mockReset()
+    vi.mocked(api.listDirectoryWithFiles).mockImplementation(async (root) =>
+      ["report.pptx", "deck.pptx", "report.docx"].map((name) => ({
+        name,
+        path: `${root}/${name}`,
+        isDir: false,
+        hasChildren: false,
+        size: 100,
+      }))
+    )
   })
 
   it("auto-opens an office file's preview when the watcher reports it, with no aux panel involved", async () => {
@@ -2106,6 +2153,157 @@ describe("WorkspaceProvider office auto-preview", () => {
     })
 
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+  })
+
+  it("does not open a removed document from a changed_paths envelope", async () => {
+    vi.mocked(api.listDirectoryWithFiles).mockResolvedValue([])
+    renderWorkspace()
+
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
+  })
+
+  it("does not open documents from a removed parent directory", async () => {
+    vi.mocked(api.listDirectoryWithFiles).mockRejectedValue(
+      new Error("Path is not a directory")
+    )
+    renderWorkspace()
+
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["scratch/report.docx"])
+    })
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("keeps a dismissed preview closed after switching folders and back", async () => {
+    renderWorkspace()
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    act(() => screen.getByRole("button", { name: "Close active" }).click())
+    act(() => foldersMock.setActiveFolderId(2))
+    act(() => foldersMock.setActiveFolderId(1))
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("can open a document recreated after an earlier removal event", async () => {
+    vi.mocked(api.listDirectoryWithFiles).mockResolvedValueOnce([])
+    renderWorkspace()
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+  })
+
+  it("does not mistake a directory with an Office suffix for a document", async () => {
+    vi.mocked(api.listDirectoryWithFiles).mockResolvedValue([
+      {
+        name: "report.docx",
+        path: "/repo/report.docx",
+        isDir: true,
+        hasChildren: true,
+        size: null,
+      },
+    ])
+    renderWorkspace()
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("discards a pending preview when its workspace is no longer active", async () => {
+    let finish!: (
+      entries: Awaited<ReturnType<typeof api.listDirectoryWithFiles>>
+    ) => void
+    vi.mocked(api.listDirectoryWithFiles).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    renderWorkspace()
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    act(() => foldersMock.setActiveFolderId(2))
+    await act(async () => {
+      finish([
+        {
+          name: "report.docx",
+          path: "/repo/report.docx",
+          isDir: false,
+          hasChildren: false,
+          size: 100,
+        },
+      ])
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("lists a parent once per burst and never re-lists a decided path", async () => {
+    // The existence probe sits on the watcher's hot path, and the backing
+    // command stats every sibling and ships the whole listing to the renderer
+    // (over HTTP in server/remote mode). Both bounds below are what keep that
+    // affordable: one lookup per parent per envelope, and none at all once a
+    // path has been decided.
+    renderWorkspace()
+
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope([
+        "report.docx",
+        "deck.pptx",
+        "report.pptx",
+      ])
+    })
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("3")
+    expect(api.listDirectoryWithFiles).toHaveBeenCalledTimes(1)
+    expect(api.listDirectoryWithFiles).toHaveBeenCalledWith("/repo")
+
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx", "deck.pptx"])
+    })
+
+    expect(api.listDirectoryWithFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not resurface a document the user opened by hand and closed", async () => {
+    renderWorkspace()
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Open office by hand" }).click()
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+
+    // The agent writes while the hand-opened tab is up: nothing to open, and
+    // no existence probe either — the open tab already answers the question.
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    expect(api.listDirectoryWithFiles).not.toHaveBeenCalled()
+
+    act(() => screen.getByRole("button", { name: "Close active" }).click())
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+
+    // A document the user has already seen and dismissed stays dismissed.
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.docx"])
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
   })
 
   it("does not auto-open when the preference is disabled", async () => {
@@ -3250,5 +3448,1217 @@ describe("unified absolute-path file tabs (outside-workspace opens)", () => {
     expect(mockedApi.readFileForEdit.mock.calls.length).toBe(
       readsAfterFreshness
     )
+  })
+})
+
+describe("browser tabs", () => {
+  beforeEach(() => {
+    resetBrowserTabStoreForTests()
+    resetClosedTabStackForTests()
+    resetBrowserPrefsForTests()
+    remoteMock.remote = false
+    remoteMock.serverBaseUrl = "https://dev.example.com"
+  })
+
+  function BrowserProbe() {
+    const {
+      openBrowserTab,
+      adoptBrowserTab,
+      closeFileTab,
+      restoreBrowserTabs,
+      suspendBrowserTab,
+      setActivePane,
+    } = useWorkspaceActions()
+    const { fileTabs, activeFileTabId } = useWorkspaceFileTabs()
+    const { activePane } = useWorkspaceView()
+    return (
+      <div>
+        <button onClick={() => openBrowserTab("https://example.com/docs#top")}>
+          open
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("https://example.com/docs#other", {
+              activate: true,
+            })
+          }
+        >
+          open-same
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { activate: false })
+          }
+        >
+          open-bg
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:4000/", { activate: "tab" })
+          }
+        >
+          open-shown
+        </button>
+        <button onClick={() => setActivePane("conversation")}>
+          to-conversation
+        </button>
+        <button onClick={() => openBrowserTab("not a url")}>open-bad</button>
+        <button onClick={() => openBrowserTab("about:blank")}>
+          open-blank
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("https://example.com/docs#top", {
+              profile: "p-work",
+            })
+          }
+        >
+          open-work
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find((t) => t.kind === "browser")
+            if (!opener) return
+            openBrowserTab("https://example.com/next", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-next
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find((t) => t.kind === "browser")
+            if (!opener) return
+            const parts = opener.id.slice("browser:".length)
+            adoptBrowserTab({
+              backendTabId: `${parts}-p1`,
+              url: "https://example.com/popup",
+              openerBackendTabId: parts,
+            })
+          }}
+        >
+          adopt
+        </button>
+        <button
+          onClick={() =>
+            adoptBrowserTab({
+              backendTabId: "orphan-p1",
+              url: "https://example.com/orphan-popup",
+              openerBackendTabId: "gone",
+              profile: "p-work",
+            })
+          }
+        >
+          adopt-orphan
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.profile === "default"
+            )
+            if (!opener) return
+            adoptBrowserTab({
+              backendTabId: "named-p1",
+              url: "https://example.com/named-popup",
+              openerBackendTabId: opener.id.slice("browser:".length),
+              profile: "p-work",
+            })
+          }}
+        >
+          adopt-named
+        </button>
+        <button
+          onClick={() => {
+            const openers = fileTabs.filter((t) => t.kind === "browser")
+            const opener = openers[openers.length - 1]
+            if (!opener) return
+            openBrowserTab("https://example.com/from-last", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-next-from-last
+        </button>
+        <button
+          onClick={() => {
+            if (activeFileTabId) closeFileTab(activeFileTabId)
+          }}
+        >
+          close-active
+        </button>
+        <button
+          onClick={() => {
+            const tab = fileTabs[1]
+            if (tab) closeFileTab(tab.id)
+          }}
+        >
+          close-second
+        </button>
+        {/* What the reopen shortcut does with a browser entry it pops. */}
+        <button
+          onClick={() => {
+            const closed = popClosedTab()
+            if (closed?.kind !== "browser") return
+            openBrowserTab(closed.url, {
+              folderId: closed.folderId ?? undefined,
+              index: closed.index,
+            })
+          }}
+        >
+          reopen-closed
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "https://restored.example/one",
+                title: "One",
+                folderId: 7,
+                profile: "default",
+              },
+              {
+                url: "not a url",
+                title: "bad",
+                folderId: null,
+                profile: "default",
+              },
+              {
+                url: "https://restored.example/two",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore
+        </button>
+        <button
+          onClick={() => {
+            const tab = fileTabs.find((t) => t.kind === "browser")
+            if (tab) suspendBrowserTab(tab.id)
+          }}
+        >
+          suspend-first
+        </button>
+        <button
+          onClick={() => {
+            const tabs = fileTabs.filter((t) => t.kind === "browser")
+            const tab = tabs[tabs.length - 1]
+            if (tab) suspendBrowserTab(tab.id)
+          }}
+        >
+          suspend-last
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", {
+              remote: true,
+              profile: "p-work",
+            })
+          }
+        >
+          open-remote
+        </button>
+        <button onClick={() => openBrowserTab("http://localhost:3000/")}>
+          open-local-3000
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { profile: "p-work" })
+          }
+        >
+          open-work-3000
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { remote: false })
+          }
+        >
+          open-here-3000
+        </button>
+        <button onClick={() => openBrowserTab("http://192.168.1.5:3000/")}>
+          open-server-host
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "http://127.0.0.1:8080/",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore-unmarked
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.remote === true
+            )
+            if (!opener) return
+            openBrowserTab("http://localhost:3000/next", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-from-remote
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.remote === true
+            )
+            if (!opener) return
+            adoptBrowserTab({
+              backendTabId: `${opener.id.slice("browser:".length)}-p1`,
+              url: "http://localhost:3000/popup",
+              openerBackendTabId: opener.id.slice("browser:".length),
+            })
+          }}
+        >
+          adopt-from-remote
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "http://localhost:5173/",
+                title: "",
+                folderId: null,
+                profile: "p-work",
+                remote: true,
+              },
+              {
+                url: "http://localhost:5173/",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore-remote
+        </button>
+        <pre data-testid="tabs">
+          {JSON.stringify(
+            fileTabs.map((t) => ({
+              id: t.id,
+              kind: t.kind,
+              title: t.title,
+              path: t.path,
+              opener: t.kind === "browser" ? t.browser.openerTabId : undefined,
+              url: t.kind === "browser" ? t.browser.initialUrl : undefined,
+              profile: t.kind === "browser" ? t.browser.profile : undefined,
+              remote:
+                t.kind === "browser" ? t.browser.remote === true : undefined,
+            }))
+          )}
+        </pre>
+        <span data-testid="active">{activeFileTabId ?? ""}</span>
+        <span data-testid="pane">{activePane}</span>
+      </div>
+    )
+  }
+
+  function readTabs(): Array<{
+    id: string
+    kind: string
+    title: string
+    path: string | null
+    opener?: string | null
+    url?: string
+    profile?: string
+    remote?: boolean
+  }> {
+    return JSON.parse(screen.getByTestId("tabs").textContent ?? "[]")
+  }
+
+  it("opens one browser tab per URL, activates it, and de-dupes by URL without fragment", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    let tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].kind).toBe("browser")
+    expect(tabs[0].id.startsWith("browser:")).toBe(true)
+    expect(tabs[0].path).toBeNull()
+    expect(tabs[0].title).toBe("example.com")
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    expect(screen.getByTestId("pane").textContent).toBe("files")
+
+    act(() => screen.getByText("open-same").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+
+    act(() => screen.getByText("open-bad").click())
+    expect(readTabs()).toHaveLength(1)
+
+    act(() => screen.getByText("open-bg").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    // Background open must not steal the active tab.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  it("gives every request for the blank page its own empty tab", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-blank").click())
+    act(() => screen.getByText("open-blank").click())
+    const tabs = readTabs()
+    // Two empty tabs, not one page opened twice. Dedupe by opening URL would
+    // also hand back a blank tab the user had since navigated somewhere —
+    // the record keeps `about:blank` for the tab's whole life.
+    expect(tabs.map((t) => t.url)).toEqual(["about:blank", "about:blank"])
+    expect(tabs[0].id).not.toBe(tabs[1].id)
+    // The second click is a request for a NEW empty tab, so that is the one
+    // brought to the front.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+
+    // A real page still de-dupes.
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-same").click())
+    expect(readTabs()).toHaveLength(3)
+  })
+
+  it("inserts an adopted popup right after its opener and activates it", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    act(() => screen.getByText("adopt").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/popup",
+      "http://localhost:3000/",
+    ])
+    expect(tabs[1].id).toBe(`${tabs[0].id}-p1`)
+    expect(tabs[1].opener).toBe(tabs[0].id)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+  })
+
+  it("inserts a modifier-click tab right after its opener without activating it", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    act(() => screen.getByText("open-next").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/next",
+      "http://localhost:3000/",
+    ])
+    expect(tabs[1].opener).toBe(tabs[0].id)
+    // Like a browser: the page the user is reading stays in front.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  // The strip and the column are one surface: a tab sitting in the strip
+  // while the column shows "open a file from the right panel" is a dead end
+  // the user can only leave by clicking the tab already in front of them.
+  it("shows a background tab when nothing else holds the selection", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-bg").click())
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    // Claimed, not activated: whichever pane the user was on is still the
+    // one in front.
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+  })
+
+  it("selects a tab opened with `tab` without pulling the files pane forward", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("to-conversation").click())
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+
+    act(() => screen.getByText("open-shown").click())
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    // Selected even though the strip was not empty: a page opened for someone
+    // is only opened if it is the one the column shows.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+
+    // An ordinary open still brings the pane forward...
+    act(() => screen.getByText("open").click())
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    expect(screen.getByTestId("pane").textContent).toBe("files")
+
+    // ...and a second `tab` open of an address already in the strip
+    // re-selects that tab, again without moving the pane.
+    act(() => screen.getByText("to-conversation").click())
+    act(() => screen.getByText("open-shown").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+  })
+
+  it("closes a browser tab without a dirty prompt and moves activation to a neighbour", () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    act(() => screen.getByText("close-active").click())
+    expect(confirmSpy).not.toHaveBeenCalled()
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].url).toBe("http://localhost:3000/")
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    confirmSpy.mockRestore()
+  })
+
+  // Restored records carry their stored title and folder, are appended in
+  // order, and none is activated: the surface of a restored tab is created
+  // when it is first shown, not at startup.
+  it("restores stored tabs as inactive records, skipping unusable addresses", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => t.url)).toEqual([
+      "https://restored.example/one",
+      "https://restored.example/two",
+    ])
+    expect(tabs[0].title).toBe("One")
+    // No stored title: the host, as for any freshly opened tab.
+    expect(tabs[1].title).toBe("restored.example")
+    expect(screen.getByTestId("active").textContent).toBe("")
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+
+    // A second restore (another document of the same run) is a no-op.
+    act(() => screen.getByText("restore").click())
+    expect(readTabs()).toHaveLength(2)
+  })
+
+  // A tab opened before the restore ran (a deep link, an agent request —
+  // the capability probe is a round trip) must not cost the user the stored
+  // set; and a page already open must not be duplicated.
+  it("merges a restore into tabs this window already has", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("restore").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://restored.example/one",
+      "https://restored.example/two",
+    ])
+
+    // The one-tab-per-URL rule holds across a repeat restore.
+    act(() => screen.getByText("restore").click())
+    expect(readTabs()).toHaveLength(3)
+  })
+
+  // A profile is a separate cookie jar: the same page in two profiles is two
+  // sessions, so it is two tabs; within one profile the one-tab rule holds.
+  it("keeps one tab per URL per profile and inherits the opener's profile", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default", "p-work"])
+    // Same page, same profile: the existing tab is activated instead.
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(readTabs()[1].id)
+
+    // Opened from another tab (⌘-click): the opener's profile wins over the
+    // preference — the work tab is last in the strip, the preference is
+    // default, so only inheritance yields p-work.
+    act(() => screen.getByText("open-next-from-last").click())
+    const next = readTabs().find(
+      (t) => t.url === "https://example.com/from-last"
+    )
+    expect(next?.profile).toBe("p-work")
+    // `open-next` uses the first browser tab as opener (the default one).
+    act(() => screen.getByText("open-next").click())
+    expect(
+      readTabs().find((t) => t.url === "https://example.com/next")?.profile
+    ).toBe("default")
+    // A popup adopted from the default tab says so as well.
+    act(() => screen.getByText("adopt").click())
+    const popup = readTabs().find((t) => t.url === "https://example.com/popup")
+    expect(popup?.profile).toBe("default")
+  })
+
+  // An address of the remote codeg host is its own kind of tab: never the
+  // same tab as the local page on that address, never in a local profile.
+  it("keeps a remote tab apart from the local page on the same address", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    let tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].remote).toBe(true)
+    // The profile asked for has no say: the page is not in any profile of
+    // this computer.
+    expect(tabs[0].profile).toBe("default")
+    // The local page on the same address is a different tab…
+    act(() => screen.getByText("open-local-3000").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    expect(tabs.map((t) => t.remote)).toEqual([true, false])
+    // …and asking for the remote one again brings that one back.
+    act(() => screen.getByText("open-remote").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  // A remote tab carries the default profile's id but is not a page of that
+  // profile: it must never make a local tab of a deleted profile a duplicate.
+  it("moves a dormant tab of a deleted profile past a remote tab on its page", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-work-3000").click())
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => [t.remote, t.profile])).toEqual([
+      [true, "default"],
+      [false, "default"],
+    ])
+  })
+
+  it("suspends a loaded tab of a deleted profile past a remote tab on its page", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-work-3000").click())
+    const local = readTabs()[1]
+    act(() =>
+      setBrowserTabState({
+        tabId: local.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "http://localhost:3000/",
+        requestedUrl: "http://localhost:3000/",
+        title: "Local",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "http://localhost:3000",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    act(() => markBrowserTabHidden(local.id))
+    act(() => screen.getByText("suspend-last").click())
+    expect(readTabs().map((t) => [t.remote, t.profile])).toEqual([
+      [true, "default"],
+      [false, "default"],
+    ])
+  })
+
+  // However it came to be opened — a page's ⌘-click, a refused pop-up opened
+  // anyway — an address of the remote host is remote in a remote window.
+  it("opens any address of the remote host as remote in a remote window", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-local-3000").click())
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => [t.url, t.remote])).toEqual([
+      ["http://localhost:3000/", true],
+      // A public page is the same page from here.
+      ["https://example.com/docs#top", false],
+    ])
+  })
+
+  it("keeps an address a person opens on this computer local", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-here-3000").click())
+    expect(readTabs()[0].remote).toBe(false)
+  })
+
+  // The window reaches the server itself directly: its own private address
+  // is reachable from this computer.
+  it("leaves the server's own private address to this computer", () => {
+    remoteMock.remote = true
+    remoteMock.serverBaseUrl = "http://192.168.1.5:3080"
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-server-host").click())
+    expect(readTabs()[0].remote).toBe(false)
+  })
+
+  it("restores an address of the remote host as remote even without the mark", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore-unmarked").click())
+    expect(readTabs()[0].remote).toBe(true)
+  })
+
+  it("makes a tab opened from a remote tab, and its popups, remote too", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-from-remote").click())
+    act(() => screen.getByText("adopt-from-remote").click())
+    const byUrl = new Map(readTabs().map((t) => [t.url, t]))
+    expect(byUrl.get("http://localhost:3000/next")?.remote).toBe(true)
+    expect(byUrl.get("http://localhost:3000/popup")?.remote).toBe(true)
+  })
+
+  it("restores a remote tab as remote, beside the local page on its address", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore-remote").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => [t.url, t.remote, t.profile])).toEqual([
+      ["http://localhost:5173/", true, "default"],
+      ["http://localhost:5173/", false, "default"],
+    ])
+  })
+
+  // A tab of a deleted profile must never recreate that profile's store:
+  // reopening (⇧⌘T) and dormant records both land in the default profile.
+  it("moves tabs of a deleted profile to the default one", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    // A tab whose surface is being created (claimed, no state yet) is not
+    // dormant either: the backend will close it with the profile.
+    const claimed = readTabs()[0]
+    claimSurfaceCreation(claimed.id.slice("browser:".length))
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    forgetSurfaceCreation(claimed.id.slice("browser:".length))
+    act(() => setBrowserProfiles([{ id: "p-work", name: "Work" }]))
+
+    // A loaded tab keeps naming its profile until the backend closes it
+    // (its surface still lives in that store); only dormant records move.
+    const loaded = readTabs()[0]
+    act(() =>
+      setBrowserTabState({
+        tabId: loaded.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs",
+        requestedUrl: "https://example.com/docs",
+        title: "Docs",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    // Suspending it now leaves a dormant record that must not name the
+    // deleted profile.
+    act(() => markBrowserTabHidden(loaded.id))
+    act(() => screen.getByText("suspend-first").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+
+    // Suspending a loaded tab of a deleted profile whose page the default
+    // profile already shows drops the record instead of duplicating it.
+    act(() => setBrowserProfiles([{ id: "p-work", name: "Work" }]))
+    act(() => screen.getByText("open-work").click())
+    const second = readTabs().find((t) => t.profile === "p-work")!
+    act(() =>
+      setBrowserTabState({
+        tabId: second.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs",
+        requestedUrl: "https://example.com/docs",
+        title: "Docs again",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    // It was the active tab (opened last, activated); the pane may be
+    // hidden with it selected, so the pointer must move to the survivor.
+    expect(screen.getByTestId("active").textContent).toBe(second.id)
+    act(() => markBrowserTabHidden(second.id))
+    act(() => screen.getByText("suspend-last").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    expect(readTabs()).toHaveLength(1)
+    expect(screen.getByTestId("active").textContent).toBe(readTabs()[0].id)
+
+    // A dormant record of a deleted profile whose page the default profile
+    // already shows is dropped rather than duplicated.
+    act(() => setBrowserProfiles([{ id: "p-work", name: "Work" }]))
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default", "p-work"])
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    // Asking for the deleted profile outright is answered with the default.
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    expect(readTabs()).toHaveLength(1)
+  })
+
+  it("adopts a popup in the profile the backend names, over the opener's and without one", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("adopt-orphan").click())
+    expect(
+      readTabs().find((t) => t.url === "https://example.com/orphan-popup")
+        ?.profile
+    ).toBe("p-work")
+    // With an opener present IN THE DEFAULT PROFILE the backend's word
+    // (p-work) still wins over the opener's.
+    act(() => screen.getByText("open").click())
+    expect(
+      readTabs().find((t) => t.url === "https://example.com/docs#top")?.profile
+    ).toBe("default")
+    act(() => screen.getByText("adopt-named").click())
+    const named = readTabs().find(
+      (t) => t.url === "https://example.com/named-popup"
+    )
+    expect(named?.profile).toBe("p-work")
+    expect(named?.opener).toBe(
+      readTabs().find((t) => t.url === "https://example.com/docs#top")?.id
+    )
+  })
+
+  it("opens new tabs in the preferred profile when it exists", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    setBrowserNewTabProfile("p-work")
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    // Restored records keep the profile they were saved with.
+    act(() => screen.getByText("restore").click())
+    expect(
+      readTabs()
+        .filter((t) => t.url?.startsWith("https://restored.example/"))
+        .map((t) => t.profile)
+    ).toEqual(["default", "default"])
+  })
+
+  it("suspending a loaded tab keeps the record at the page it was showing", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    const opened = readTabs()[0]
+    const backendId = opened.id.slice("browser:".length)
+    act(() =>
+      setBrowserTabState({
+        tabId: backendId,
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs/deep",
+        requestedUrl: "https://example.com/docs/deep",
+        title: "Deep",
+        favicon: null,
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "default",
+        agentGrant: null,
+      })
+    )
+    // Only a tab that is off screen may be released; the suspender's own
+    // bookkeeping says so, and the action re-checks it.
+    act(() => screen.getByText("suspend-first").click())
+    expect(readTabs()[0].url).toBe("https://example.com/docs#top")
+    act(() => markBrowserTabHidden(opened.id))
+
+    act(() => screen.getByText("suspend-first").click())
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].id).toBe(opened.id)
+    expect(tabs[0].url).toBe("https://example.com/docs/deep")
+    expect(tabs[0].title).toBe("Deep")
+    // The native surface is gone; the record is "not loaded" again.
+    expect(getBrowserTabState(opened.id)).toBeNull()
+
+    // Nothing to release the second time.
+    act(() => screen.getByText("suspend-first").click())
+    expect(readTabs()).toHaveLength(1)
+  })
+
+  it("records a closed browser tab so it can be reopened at its page", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    const opened = readTabs()[0]
+    act(() =>
+      setBrowserTabState({
+        tabId: opened.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs/deep",
+        requestedUrl: "https://example.com/docs/deep",
+        title: "Deep",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "default",
+        agentGrant: null,
+      })
+    )
+    act(() => screen.getByText("close-active").click())
+    const closed = popClosedTab()
+    expect(closed).toEqual({
+      kind: "browser",
+      key: opened.id,
+      index: 0,
+      url: "https://example.com/docs/deep",
+      title: "Deep",
+      folderId: 1,
+      profile: "default",
+    })
+  })
+
+  // A browser tab shares the file strip with the file tabs, so it obeys the
+  // same reopen rule: back at the slot it was closed from, not appended.
+  it("puts a reopened browser tab back at the slot it was closed from", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    // Lands right after its opener, i.e. in the middle.
+    act(() => screen.getByText("open-next").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/next",
+      "http://localhost:3000/",
+    ])
+
+    act(() => screen.getByText("close-second").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "http://localhost:3000/",
+    ])
+
+    act(() => screen.getByText("reopen-closed").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/next",
+      "http://localhost:3000/",
+    ])
+  })
+})
+
+describe("reopening a closed file tab", () => {
+  beforeEach(() => {
+    resetClosedTabStackForTests()
+    mockedApi.readFileForEdit.mockReset()
+    mockedApi.gitIsTracked.mockReset()
+    mockedApi.gitIsTracked.mockResolvedValue(false)
+    mockedApi.readFileForEdit.mockImplementation(
+      async (_rootPath: string, ioPath: string) => ({
+        path: ioPath,
+        content: `${ioPath}-v1`,
+        etag: `e-${ioPath}`,
+        mtime_ms: 1,
+        readonly: false,
+        line_ending: "lf",
+      })
+    )
+  })
+
+  function Probe({ onCapture }: { onCapture: (ids: string[]) => void }) {
+    const {
+      openFilePreview,
+      fileTabs,
+      closeFileTab,
+      closeOtherFileTabs,
+      closeAllFileTabs,
+    } = useWorkspaceContext()
+    onCapture(fileTabs.map((tab) => tab.id))
+    // What the reopen shortcut does with the entry it pops: hand the opener
+    // the path AND the slot the tab was closed from.
+    const restoreLast = () => {
+      const closed = popClosedTab()
+      if (closed?.kind !== "file") return
+      void openFilePreview(closed.path, {
+        folderId: closed.folderId ?? undefined,
+        index: closed.index,
+      })
+    }
+    return (
+      <div>
+        <button onClick={() => void openFilePreview("a.ts")}>open-a</button>
+        <button onClick={() => void openFilePreview("b.ts")}>open-b</button>
+        <button onClick={() => void openFilePreview("c.ts")}>open-c</button>
+        <button onClick={() => void openFilePreview("d.ts")}>open-d</button>
+        <button onClick={() => closeFileTab(fileTabId("/repo/b.ts"))}>
+          close-b
+        </button>
+        <button onClick={() => closeOtherFileTabs(fileTabId("/repo/c.ts"))}>
+          close-others-c
+        </button>
+        <button onClick={closeAllFileTabs}>close-all</button>
+        <button onClick={restoreLast}>restore</button>
+        <button onClick={() => void openFilePreview("b.ts", { index: 1 })}>
+          reopen-b
+        </button>
+        <button onClick={() => void openFilePreview("b.ts", { index: 9 })}>
+          reopen-b-far
+        </button>
+        <button onClick={() => void openFilePreview("c.ts", { index: 0 })}>
+          front-c
+        </button>
+      </div>
+    )
+  }
+
+  async function click(label: string) {
+    await act(async () => {
+      screen.getByText(label).click()
+    })
+  }
+
+  function mount() {
+    let ids: string[] = []
+    render(
+      <WorkspaceProvider>
+        <Probe onCapture={(next) => (ids = next)} />
+      </WorkspaceProvider>
+    )
+    return () => ids
+  }
+
+  it("puts the tab back at the slot it was closed from", async () => {
+    const ids = mount()
+    await click("open-a")
+    await click("open-b")
+    await click("open-c")
+    expect(ids()).toEqual([
+      fileTabId("/repo/a.ts"),
+      fileTabId("/repo/b.ts"),
+      fileTabId("/repo/c.ts"),
+    ])
+
+    await click("close-b")
+    expect(ids()).toEqual([fileTabId("/repo/a.ts"), fileTabId("/repo/c.ts")])
+    expect(peekClosedTab()).toMatchObject({
+      kind: "file",
+      path: "/repo/b.ts",
+      index: 1,
+    })
+
+    await click("reopen-b")
+    expect(ids()).toEqual([
+      fileTabId("/repo/a.ts"),
+      fileTabId("/repo/b.ts"),
+      fileTabId("/repo/c.ts"),
+    ])
+
+    // A tab that is already open is activated where it is, never moved.
+    await click("front-c")
+    expect(ids()).toEqual([
+      fileTabId("/repo/a.ts"),
+      fileTabId("/repo/b.ts"),
+      fileTabId("/repo/c.ts"),
+    ])
+  })
+
+  it("clamps the slot to the strip", async () => {
+    const ids = mount()
+    await click("open-a")
+    await click("open-b")
+    await click("open-c")
+    await click("close-b")
+
+    await click("reopen-b-far")
+    expect(ids()).toEqual([
+      fileTabId("/repo/a.ts"),
+      fileTabId("/repo/c.ts"),
+      fileTabId("/repo/b.ts"),
+    ])
+  })
+
+  // "Close others" records every tab against the same strip, but the stack is
+  // popped newest-first — so each entry carries the slot it would have had if
+  // the batch had closed one tab at a time.
+  it("walks a close-others batch back into its original order", async () => {
+    const ids = mount()
+    await click("open-a")
+    await click("open-b")
+    await click("open-c")
+    await click("open-d")
+
+    await click("close-others-c")
+    expect(ids()).toEqual([fileTabId("/repo/c.ts")])
+
+    await click("restore")
+    expect(ids()).toEqual([fileTabId("/repo/c.ts"), fileTabId("/repo/d.ts")])
+    await click("restore")
+    expect(ids()).toEqual([
+      fileTabId("/repo/b.ts"),
+      fileTabId("/repo/c.ts"),
+      fileTabId("/repo/d.ts"),
+    ])
+    await click("restore")
+    expect(ids()).toEqual([
+      fileTabId("/repo/a.ts"),
+      fileTabId("/repo/b.ts"),
+      fileTabId("/repo/c.ts"),
+      fileTabId("/repo/d.ts"),
+    ])
+  })
+
+  it("rebuilds a closed-all strip in its original order", async () => {
+    const ids = mount()
+    await click("open-a")
+    await click("open-b")
+    await click("open-c")
+
+    await click("close-all")
+    expect(ids()).toEqual([])
+
+    await click("restore")
+    await click("restore")
+    await click("restore")
+    expect(ids()).toEqual([
+      fileTabId("/repo/a.ts"),
+      fileTabId("/repo/b.ts"),
+      fileTabId("/repo/c.ts"),
+    ])
   })
 })

@@ -914,9 +914,10 @@ fn unlink_one_locked(expert_id: &str, agent_type: AgentType) -> Result<(), Exper
     let expert_id =
         validate_skill_id(expert_id).map_err(|e| ExpertsError::Metadata(e.to_string()))?;
 
-    // Scan ALL global dirs for this agent to handle shared-dir agents
-    // (Codex, Gemini and Cline all also point at `~/.agents/skills/`).
-    // Remove the link wherever it is found.
+    // Scan ALL global dirs for this agent to handle shared-dir agents — most
+    // built-ins also point at the cross-agent `~/.agents/skills/` store, so the
+    // link may sit in either. `skill_storage_spec` is the live list; do not
+    // enumerate them here, it drifts. Remove the link wherever it is found.
     let dirs = scoped_skill_dirs(agent_type, AgentSkillScope::Global, None)
         .map_err(|_| ExpertsError::UnsupportedAgent(agent_type))?;
 
@@ -1171,7 +1172,13 @@ mod tests {
     }
 
     #[tokio::test]
+    // The hydrate guard is held across the await on purpose — see the
+    // identical note in `custom_agent_service`.
+    #[allow(clippy::await_holding_lock)]
     async fn list_all_install_statuses_covers_every_expert_agent_pair() {
+        // A test hydrating a custom agent that declares a store would add a
+        // column between the snapshot and the count below.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
         let rows = experts_list_all_install_statuses()
             .await
             .expect("snapshot returns Ok");

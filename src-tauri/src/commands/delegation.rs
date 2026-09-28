@@ -29,6 +29,7 @@ use crate::acp::delegation::types::AgentDelegationDefaults;
 use crate::app_error::AppCommandError;
 use crate::db::service::app_metadata_service;
 use crate::models::AgentType;
+use crate::web::event_bridge::{emit_event, EventEmitter, DELEGATION_SETTINGS_CHANGED_EVENT};
 
 pub const KEY_DELEGATION_ENABLED: &str = "delegation.enabled";
 pub const KEY_DELEGATION_DEPTH: &str = "delegation.depth_limit";
@@ -157,13 +158,46 @@ pub async fn apply_persisted_config(conn: &DatabaseConnection, broker: &Delegati
     broker.set_config(settings.into_broker_config()).await;
 }
 
+/// Serializes every write to this record within the process. Both writers below
+/// finish by pushing the record onto the broker, and `load_delegation_settings`
+/// reads the four keys in four separate queries — so interleaved writers can
+/// leave the database correct while the broker (which is what actually gates a
+/// delegation) settles on a value neither of them intended.
+static DELEGATION_WRITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Move only the on/off switch, leaving the depth limit, the cache ceiling and
+/// the per-agent defaults at whatever the database holds.
+///
+/// [`set_delegation_settings_core`] republishes all four keys, which is right
+/// for the settings form and wrong for a caller that only means to flip
+/// `enabled` — the status-bar popover reads the record, flips one bool and
+/// would write the other three back, reverting any concurrent edit to them.
+pub async fn set_delegation_enabled_core(
+    conn: &DatabaseConnection,
+    broker: &DelegationBroker,
+    emitter: &EventEmitter,
+    enabled: bool,
+) -> Result<DelegationSettings, AppCommandError> {
+    let _guard = DELEGATION_WRITE_LOCK.lock().await;
+    app_metadata_service::upsert_value(conn, KEY_DELEGATION_ENABLED, &enabled.to_string())
+        .await
+        .map_err(AppCommandError::from)?;
+    let settings = load_delegation_settings(conn).await;
+    broker.set_config(settings.clone().into_broker_config()).await;
+    emit_event(emitter, DELEGATION_SETTINGS_CHANGED_EVENT, &settings);
+    Ok(settings)
+}
+
 /// Persist + apply. Used by both the Tauri command and the HTTP handler so
 /// the clamp / re-apply chain is in exactly one place.
 pub async fn set_delegation_settings_core(
     conn: &DatabaseConnection,
     broker: &DelegationBroker,
+    emitter: &EventEmitter,
     desired: DelegationSettings,
 ) -> Result<DelegationSettings, AppCommandError> {
+    let _guard = DELEGATION_WRITE_LOCK.lock().await;
     let clamped = desired.clamped();
     app_metadata_service::upsert_value(conn, KEY_DELEGATION_ENABLED, &clamped.enabled.to_string())
         .await
@@ -194,6 +228,7 @@ pub async fn set_delegation_settings_core(
     broker
         .set_config(clamped.clone().into_broker_config())
         .await;
+    emit_event(emitter, DELEGATION_SETTINGS_CHANGED_EVENT, &clamped);
     Ok(clamped)
 }
 
@@ -216,13 +251,17 @@ pub async fn get_delegation_settings(
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn set_delegation_settings(
+    #[cfg(feature = "tauri-runtime")] app: tauri::AppHandle,
     #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, crate::db::AppDatabase>,
     #[cfg(feature = "tauri-runtime")] broker: tauri::State<'_, Arc<DelegationBroker>>,
     settings: DelegationSettings,
 ) -> Result<DelegationSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        set_delegation_settings_core(&db.conn, broker.inner(), settings).await
+        // `app.emit` fans out to every window, so the status-bar popover's
+        // switch converges with this save.
+        let emitter = EventEmitter::Tauri(app);
+        set_delegation_settings_core(&db.conn, broker.inner(), &emitter, settings).await
     }
     #[cfg(not(feature = "tauri-runtime"))]
     {
@@ -282,7 +321,7 @@ mod tests {
             depth_limit: 3,
             ..DelegationSettings::default()
         };
-        let saved = set_delegation_settings_core(&db.conn, &broker, desired)
+        let saved = set_delegation_settings_core(&db.conn, &broker, &EventEmitter::Noop, desired)
             .await
             .unwrap();
         assert!(!saved.enabled);
@@ -319,7 +358,7 @@ mod tests {
             agent_defaults: agent_defaults.clone(),
             ..DelegationSettings::default()
         };
-        let saved = set_delegation_settings_core(&db.conn, &broker, desired)
+        let saved = set_delegation_settings_core(&db.conn, &broker, &EventEmitter::Noop, desired)
             .await
             .unwrap();
         assert_eq!(saved.agent_defaults, agent_defaults);
@@ -366,6 +405,7 @@ mod tests {
         let saved = set_delegation_settings_core(
             &db.conn,
             &broker,
+            &EventEmitter::Noop,
             DelegationSettings {
                 enabled: true,
                 depth_limit: 999,
@@ -387,7 +427,7 @@ mod tests {
             completed_cache_max_mb: 8,
             ..DelegationSettings::default()
         };
-        let saved = set_delegation_settings_core(&db.conn, &broker, desired)
+        let saved = set_delegation_settings_core(&db.conn, &broker, &EventEmitter::Noop, desired)
             .await
             .unwrap();
         assert_eq!(saved.completed_cache_max_mb, 8);

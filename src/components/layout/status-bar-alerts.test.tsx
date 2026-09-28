@@ -27,7 +27,7 @@ import { StatusBarAlerts } from "./status-bar-alerts"
 import enMessages from "@/i18n/messages/en.json"
 
 const EVIDENCE =
-  "dropped 1 update(s) (0 decode, 1 dispatch)\n" +
+  "dropped 1 unreadable update(s)\n" +
   "stderr (this turn, last 1 lines):\n  Error: 401 Unauthorized"
 
 function makeAlert(overrides: Partial<Alert>): Alert {
@@ -86,5 +86,31 @@ describe("StatusBarAlerts — evidence disclosure", () => {
       )
     ).toBeVisible()
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull()
+  })
+})
+
+describe("StatusBarAlerts — the notification record", () => {
+  it("lists the newest first", async () => {
+    openAlerts([
+      makeAlert({ id: "a1", message: "older", detail: undefined }),
+      makeAlert({ id: "a2", message: "newer", detail: undefined }),
+    ])
+    const newer = await screen.findByText("newer")
+    const older = screen.getByText("older")
+    expect(
+      newer.compareDocumentPosition(older) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("runs a callback action a notification carried", async () => {
+    const run = vi.fn()
+    openAlerts([
+      makeAlert({
+        message: "Claude Code: Authentication required.",
+        actions: [{ label: "Sign in", run }],
+      }),
+    ])
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+    expect(run).toHaveBeenCalledTimes(1)
   })
 })

@@ -40,13 +40,6 @@ Codeg(Code Generation)는 멀티 에이전트 코딩 워크스페이스입니다
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE" target="_blank"><img src="../images/sui-xiang.jpg" alt="随想AI中转站" width="200" /></a><br/>
-      <strong><a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">随想AI中转站</a></strong>
-    </td>
-    <td>본 프로젝트를 후원해 주신 随想AI中转站에 감사드립니다! 随想AI中转站는 Claude, Codex, Gemini 등의 중계 서비스를 제공하는 신뢰할 수 있고 효율적인 API 중계 서비스 제공업체입니다. 신규 계정은 <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">가입</a> 후 매일 출석 체크만 해도 0.5위안의 테스트 크레딧을 받을 수 있으며, 충전 금액은 1:1로 적립되고 구독 없이 사용한 만큼만 결제합니다. 다중 회선 이중화, 리전 간 재해 복구, 자동 장애 조치로 장시간 SSE 연결이 끊기지 않습니다.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
       <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
     </td>
@@ -54,17 +47,10 @@ Codeg(Code Generation)는 멀티 에이전트 코딩 워크스페이스입니다
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta" target="_blank"><img src="../images/onehop.jpg" alt="OneHop" width="120" /></a><br/>
-      <strong><a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">OneHop</a></strong>
-    </td>
-    <td>본 프로젝트를 후원해 주신 OneHop에 감사드립니다! OneHop를 사용하면 Codeg 사용자는 OpenAI 호환 API 키 하나로 GPT, Claude, Gemini, DeepSeek, Kimi, Qwen을 비롯한 수백 개의 주요 모델을 이용할 수 있습니다. 여러 공급업체 계정을 관리하거나 코드를 반복해서 수정하지 않고도 모델을 전환할 수 있으며, 사용한 만큼만 지불합니다. <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">Codeg를 통해 가입</a>하면 $1 크레딧을 받고, 여기에 OneHop 커뮤니티에 참여하여 웰컴 이벤트에 참여하면 추가로 $5——최대 총 $6의 테스트 크레딧을 받을 수 있습니다.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
       <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
     </td>
-    <td>본 프로젝트를 후원해 주신 LQ router 중계 서비스에 감사드립니다! LQ router는 개인 개발자와 기술 팀을 위한 엔터프라이즈급 API 통합 게이트웨이입니다. GPT, Claude, Grok, Gemini 등 주요 모델을 연동하고 기존 클라이언트 및 OpenAI SDK와 호환되며, 동적 계정 풀을 이용한 지능형 라우팅으로 하나의 엔드포인트에서 여러 모델을 호출할 수 있습니다. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">공식 웹사이트에서 그룹에 참여하면 1달러 체험 크레딧을 받을 수 있습니다</a>.</td>
+    <td>본 프로젝트를 후원해 주신 LQ router 중계 서비스에 감사드립니다! LQ router는 전문 엔터프라이즈급 AI 중계 서비스로, 기업과 개인 개발자에게 안정적이고 효율적이며 저렴한 AI 모델 API 연동 서비스를 제공합니다. GPT, Claude, Grok, Gemini 등 주요 모델을 지원하며 GPT Pro 과금 배율은 최저 0.1배입니다. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">공식 웹사이트에서 그룹에 참여하면 1달러 체험 크레딧을 받을 수 있습니다</a>.</td>
   </tr>
   <tr>
     <td align="center" width="220">
@@ -72,6 +58,31 @@ Codeg(Code Generation)는 멀티 에이전트 코딩 워크스페이스입니다
       <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
     </td>
     <td>본 프로젝트를 후원해 주신 APIMart에 감사드립니다! APIMart는 AI 이미지·영상 생성에 특화된 저비용 API 플랫폼입니다. GPT-Image-2는 장당 $0.006부터라 1달러로 160장 이상을 생성할 수 있습니다. 이미지와 영상을 하나의 비동기 API로 처리합니다. 작업을 제출해 ID를 받고 폴링이나 콜백으로 결과를 가져오세요. 수만 장을 일괄 처리해도 타임아웃이 없고, 모델을 바꿔도 코드를 수정할 필요가 없습니다. 월 요금 없이 사용한 만큼만 지불합니다 — <a href="https://go.apimart.ai/gh-codeg">여기에서 가입</a>하면 바로 시작할 수 있습니다.</td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="../images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
+      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
+    </td>
+    <td>
+      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
+      UCloud의 星图AstraFlow 대규모 모델 플랫폼은 200개 이상의 모델을 클릭 한 번으로 호출할 수 있습니다. Kimi K3, DeepSeek V4/V3, Qwen 3, GLM5.2, happyhorse 등 세계 최고 수준의 오픈소스 대규모 모델을 기본 제공하므로 직접 학습할 필요 없이 바로 사용할 수 있습니다.<br/>
+      위 링크에서 <strong>이메일</strong>로 가입하고 실명 인증을 마치면 <a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">50위안 상당의 컴퓨팅 크레딧을 받을 수 있습니다</a>.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG" target="_blank"><img src="../images/fluxion-ai.png" alt="Fluxion AI" width="160" /></a><br/>
+      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">Fluxion AI</a></strong>
+    </td>
+    <td>본 프로젝트를 후원해 주신 Fluxion AI에 감사드립니다! Fluxion AI는 하나의 통합 API를 통해 GPT, Claude, Gemini를 비롯한 주요 AI 모델에 빠르고 안정적이며 비용 효율적으로 접근할 수 있게 해 줍니다. 신규 사용자는 <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">전용 링크</a>를 통해 $3의 API 크레딧을 받을 수 있습니다.</td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
+      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
+    </td>
+    <td>본 프로젝트를 후원해 주신 <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a>에 감사드립니다! BeeAPI는 전문적인 멀티 모델 AI API 중계·통합 플랫폼으로, 여러 공급업체와 다양한 주요 AI 모델을 한데 모았습니다. 업체 간 가격 비교, 그룹별 스마트 라우팅, 통합 API 연동 및 과금을 지원하여 더 유연하고 안정적이며 저렴하게 AI 서비스를 호출할 수 있습니다.</td>
   </tr>
 </table>
 

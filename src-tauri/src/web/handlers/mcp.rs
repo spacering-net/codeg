@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::app_error::AppCommandError;
 use crate::commands::mcp as mcp_commands;
 use crate::commands::mcp::{
-    LocalMcpServer, McpAppType, McpMarketplaceItem, McpMarketplaceProvider,
+    LocalMcpScan, LocalMcpServer, McpAppType, McpMarketplaceItem, McpMarketplaceProvider,
     McpMarketplaceServerDetail,
 };
 
@@ -66,9 +66,8 @@ pub struct RemoveServerParams {
 // Handlers
 // ---------------------------------------------------------------------------
 
-pub async fn mcp_scan_local() -> Result<Json<Vec<LocalMcpServer>>, AppCommandError> {
-    let result = mcp_commands::mcp_scan_local().await?;
-    Ok(Json(result))
+pub async fn mcp_scan_local() -> Json<LocalMcpScan> {
+    Json(mcp_commands::mcp_scan_local().await)
 }
 
 pub async fn mcp_list_marketplaces() -> Result<Json<Vec<McpMarketplaceProvider>>, AppCommandError> {

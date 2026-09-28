@@ -170,11 +170,25 @@ pub const QUESTION_SETTINGS_CHANGED_EVENT: &str = "question-settings://changed";
 /// backend broadcast. Payload: `SessionInfoSettings` (`{ "enabled": bool }`).
 pub const SESSION_INFO_SETTINGS_CHANGED_EVENT: &str = "session-info-settings://changed";
 
+/// Global side-channel announcing a browser-tools enable/disable
+/// (`browser_list_tabs` / `browser_snapshot`). Same cross-window rationale as
+/// [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload: `BrowserToolsSettings`
+/// (`{ "enabled": bool }`).
+pub const BROWSER_TOOLS_SETTINGS_CHANGED_EVENT: &str = "browser-tools-settings://changed";
+
 /// Global side-channel announcing a chat-authoring enable/disable
 /// (`create_automation` / `create_work_task`). Same cross-window rationale as
 /// [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload: `ChatAuthoringSettings`
 /// (`{ "automations_enabled": bool, "work_tasks_enabled": bool }`).
 pub const CHAT_AUTHORING_SETTINGS_CHANGED_EVENT: &str = "chat-authoring-settings://changed";
+
+/// Announces a delegation-settings write. Same cross-window rationale as
+/// [`CHAT_AUTHORING_SETTINGS_CHANGED_EVENT`], and load-bearing for the same
+/// reason: the record has two editors — the settings form, which writes all
+/// four keys, and the status-bar codeg-mcp popover, which writes only
+/// `enabled` — so a form left open across a popover toggle would revert it on
+/// the next save. Payload: `DelegationSettings`.
+pub const DELEGATION_SETTINGS_CHANGED_EVENT: &str = "delegation-settings://changed";
 
 /// Payload for the global [`CONVERSATION_CHANGED_EVENT`] side-channel. Drives
 /// cross-client sidebar sync (membership + status) independent of the

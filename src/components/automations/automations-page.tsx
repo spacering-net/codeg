@@ -103,6 +103,7 @@ import {
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 import type { Automation, AutomationDraft, AutomationRun } from "@/lib/types"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 
 const AUTOMATION_CHANGED_EVENT = "automation://changed"
 
@@ -1021,6 +1022,12 @@ function AutomationDetail({
   const config = automation.config ?? null
   const labels = config?.label_snapshot
   const configEntries = Object.entries(config?.config_values ?? {})
+  // `label_snapshot` freezes whatever the agent CALLED these when the
+  // automation was saved — deliberately, so the badges survive the agent being
+  // uninstalled. For an agent that hardcodes one language that also freezes the
+  // language, and for every automation saved before this existed. Resolve from
+  // the stable ids first, fall back to the frozen label, then to the raw id.
+  const vocabulary = useAgentVocabulary(automation.agent_type)
   const isSchedule = automation.trigger_kind === "schedule" && !!automation.cron
 
   return (
@@ -1140,7 +1147,10 @@ function AutomationDetail({
                 <div className="flex flex-wrap gap-1">
                   {config?.mode_id ? (
                     <Badge variant="outline" className="text-[0.625rem]">
-                      {labels?.mode_label ?? config.mode_id}
+                      {vocabulary.modeLabel(
+                        config.mode_id,
+                        labels?.mode_label ?? config.mode_id
+                      )}
                     </Badge>
                   ) : null}
                   {configEntries.map(([k, v]) => (
@@ -1149,7 +1159,11 @@ function AutomationDetail({
                       variant="outline"
                       className="text-[0.625rem]"
                     >
-                      {labels?.config_labels?.[k] ?? v}
+                      {vocabulary.configValueLabel(
+                        k,
+                        v,
+                        labels?.config_labels?.[k] ?? v
+                      )}
                     </Badge>
                   ))}
                 </div>

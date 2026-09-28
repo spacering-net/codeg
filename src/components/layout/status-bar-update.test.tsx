@@ -52,6 +52,7 @@ function makeCtx(overrides: Partial<UpdateContextValue>): UpdateContextValue {
     liveProgress: false,
     runtime: undefined,
     rollbackAvailable: false,
+    selfUpdateBlocker: null,
     canInstallInPlace: true,
     dismissedVersion: null,
     checkNow: vi.fn(async () => {}),
@@ -74,6 +75,15 @@ function renderWith(overrides: Partial<UpdateContextValue>) {
 }
 
 const RELEASE = { version: "0.21.9", body: "## Fixes", date: "2026-07-24" }
+
+// What the server reports for an install directory it can't write.
+const UNWRITABLE_BIN = {
+  code: "permission_denied",
+  message: "Update target is not writable: /usr/local/bin",
+  detail: "Permission denied (os error 13)",
+  i18n_key: "SystemSettings.updateErrors.permissionDenied",
+  i18n_params: { path: "/usr/local/bin" },
+}
 
 beforeEach(() => {
   startUpdate.mockClear()
@@ -241,6 +251,56 @@ describe("StatusBarUpdate — popover", () => {
     expect(await screen.findByText(/Check your network or proxy/)).toBeVisible()
     fireEvent.click(screen.getByRole("button", { name: "Retry" }))
     expect(startUpdate).toHaveBeenCalled()
+  })
+
+  it("offers the release page, and says why, when the server can't install in place", async () => {
+    // A root-owned install run by an unprivileged service: the server reports
+    // it up front, so the popover must not offer an upgrade certain to fail.
+    renderWith({
+      available: RELEASE,
+      selfUpdateBlocker: UNWRITABLE_BIN,
+      canInstallInPlace: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: /New v0\.21\.9/ }))
+
+    expect(
+      await screen.findByText(
+        "Cannot write to /usr/local/bin, so updates can't be installed in place. Update manually with administrator privileges or check installation permissions."
+      )
+    ).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: /View v0\.21\.9 release/ })
+    ).toBeVisible()
+    expect(screen.queryByRole("button", { name: /Upgrade to/ })).toBeNull()
+  })
+
+  it("names the directory once when the failed install hit that wall", async () => {
+    renderWith({
+      available: RELEASE,
+      state: {
+        seq: 7,
+        status: "error",
+        error: UNWRITABLE_BIN.message,
+        errorInfo: UNWRITABLE_BIN,
+      },
+      selfUpdateBlocker: UNWRITABLE_BIN,
+      canInstallInPlace: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: /New v0\.21\.9/ }))
+
+    expect(
+      await screen.findByText(
+        /^Update error: Cannot write to \/usr\/local\/bin/
+      )
+    ).toBeVisible()
+    // Not repeated as a separate hint, and no retry that would fail again.
+    expect(
+      screen.getAllByText(/Cannot write to \/usr\/local\/bin/)
+    ).toHaveLength(1)
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+    expect(
+      screen.getByRole("button", { name: /View v0\.21\.9 release/ })
+    ).toBeVisible()
   })
 
   it("reports transferred bytes while downloading", async () => {

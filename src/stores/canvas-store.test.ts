@@ -24,6 +24,7 @@ function makeNode(id: number, over: Partial<CanvasNode> = {}): CanvasNode {
     member_ids: [],
     title: null,
     content: null,
+    path: null,
     color: null,
     collapsed: false,
     grid_columns: 0,

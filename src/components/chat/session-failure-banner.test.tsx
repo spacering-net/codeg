@@ -17,10 +17,10 @@ function record(
   return {
     id: "t1:error",
     revision: 1,
-    category: "access",
-    severity: "error",
-    title: "Authentication required.",
-    actions: ["login"],
+    category: "connection",
+    severity: "warning",
+    title: "Reconnecting... 1/5",
+    actions: [],
     resolved: false,
     ...overrides,
   }
@@ -28,57 +28,47 @@ function record(
 
 function renderBanner(
   failures: SessionFailureRecord[],
-  onAction?: (action: string, failure: SessionFailureRecord) => void,
-  onDismiss?: (ids: string[]) => void
+  onDismiss?: (ids: string[]) => void,
+  hideRetryIncidents = false
 ) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <SessionFailureBanner
         failures={failures}
-        onAction={onAction}
         onDismiss={onDismiss}
+        hideRetryIncidents={hideRetryIncidents}
       />
     </NextIntlClientProvider>
   )
 }
 
 describe("SessionFailureBanner", () => {
-  it("renders an active error strip with its suggested action wired", () => {
-    const onAction = vi.fn()
-    renderBanner([record()], onAction)
-    expect(screen.getByRole("alert")).toBeInTheDocument()
-    expect(screen.getByText("Authentication required.")).toBeInTheDocument()
-    // Only the record's suggested (and known) actions render.
+  it("draws an in-flight retry incident as progress", () => {
+    renderBanner([record({ actions: ["retry", "new_session"] })])
+    const strip = screen.getByRole("status")
+    expect(strip).toHaveTextContent("Reconnecting... 1/5")
+    expect(strip.className).toContain("bg-amber-500/10")
+    // The adapter is recovering on its own — nothing for the user to press.
     expect(screen.queryByText("Retry")).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText("Sign in"))
-    expect(onAction).toHaveBeenCalledWith(
-      "login",
-      expect.objectContaining({ id: "t1:error" })
-    )
-  })
-
-  it("hides action buttons without a handler (read-only surfaces)", () => {
-    renderBanner([record()])
-    expect(screen.getByText("Authentication required.")).toBeInTheDocument()
-    expect(screen.queryByText("Sign in")).not.toBeInTheDocument()
-  })
-
-  it("never renders action buttons on warning strips (adapter is mid-recovery)", () => {
-    const onAction = vi.fn()
-    renderBanner(
-      [
-        record({
-          severity: "warning",
-          title: "retrying request",
-          actions: ["retry", "login", "new_session"],
-        }),
-      ],
-      onAction
-    )
-    expect(screen.getByText("retrying request")).toBeInTheDocument()
-    expect(screen.queryByText("Retry")).not.toBeInTheDocument()
-    expect(screen.queryByText("Sign in")).not.toBeInTheDocument()
     expect(screen.queryByText("New session")).not.toBeInTheDocument()
+  })
+
+  it("never draws news — a failed turn or an advisory is a notification", () => {
+    const { container } = renderBanner([
+      record({
+        id: "e1",
+        severity: "error",
+        category: "access",
+        title: "Authentication required.",
+        actions: ["login"],
+      }),
+      record({
+        id: "adv",
+        category: "unknown",
+        title: "Model fallback",
+      }),
+    ])
+    expect(container).toBeEmptyDOMElement()
   })
 
   it("falls back to the category label for a blank title and expands details", () => {
@@ -87,7 +77,6 @@ describe("SessionFailureBanner", () => {
         category: "limit",
         title: "  ",
         details: "usage resets at 3pm",
-        actions: [],
       }),
     ])
     expect(screen.getByText("Limit reached")).toBeInTheDocument()
@@ -96,95 +85,27 @@ describe("SessionFailureBanner", () => {
     expect(screen.getByText("usage resets at 3pm")).toBeInTheDocument()
   })
 
-  it("maps unknown categories and actions onto safe fallbacks", () => {
-    const onAction = vi.fn()
-    renderBanner(
-      [record({ category: "quantum", title: "", actions: ["sing", "retry"] })],
-      onAction
-    )
-    // Unknown category → the generic label; unknown action → not rendered.
+  it("maps an unknown category onto the generic label", () => {
+    renderBanner([record({ category: "quantum", title: "" })])
     expect(screen.getByText("Session issue")).toBeInTheDocument()
-    expect(screen.queryByText("sing")).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText("Retry"))
-    expect(onAction).toHaveBeenCalledWith("retry", expect.anything())
   })
 
-  it("shows only the most recent recovered warning, and only when idle", () => {
-    const resolvedWarning = (id: string, title: string) =>
-      record({ id, severity: "warning", title, resolved: true, actions: [] })
+  it("collapses stacked incidents to the latest one plus a count (#496)", () => {
     renderBanner([
-      resolvedWarning("w1", "first retry incident"),
-      resolvedWarning("w2", "second retry incident"),
-      // Resolved ERRORS are watermarks only — never rendered.
-      record({ id: "e1", resolved: true, title: "old auth error" }),
-    ])
-    expect(
-      screen.getByText(/Recovered · second retry incident/)
-    ).toBeInTheDocument()
-    expect(screen.queryByText(/first retry incident/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/old auth error/)).not.toBeInTheDocument()
-  })
-
-  it("suppresses the recovered line while an active strip is showing", () => {
-    renderBanner([
-      record({ id: "w1", severity: "warning", resolved: true, actions: [] }),
-      record({ id: "e2", title: "still failing" }),
-    ])
-    expect(screen.getByText("still failing")).toBeInTheDocument()
-    expect(screen.queryByText(/Recovered/)).not.toBeInTheDocument()
-  })
-
-  it("renders nothing for an empty or fully-settled-error table", () => {
-    const { container } = renderBanner([record({ resolved: true })])
-    expect(container).toBeEmptyDOMElement()
-  })
-
-  it("collapses stacked warnings to the latest one plus a count (#496)", () => {
-    const incident = (id: string, title: string) =>
-      record({ id, severity: "warning", category: "connection", title })
-    renderBanner([
-      incident("i1", "Reconnecting... 1/5"),
-      incident("i2", "Reconnecting... 1/5"),
-      incident("i3", "Reconnecting... 1/5"),
+      record({ id: "i1" }),
+      record({ id: "i2" }),
+      record({ id: "i3", title: "Reconnecting... 3/5" }),
     ])
     // One strip, not three — the older incidents become a count.
-    expect(screen.getAllByRole("alert")).toHaveLength(1)
+    expect(screen.getAllByRole("status")).toHaveLength(1)
+    expect(screen.getByText("Reconnecting... 3/5")).toBeInTheDocument()
     expect(screen.getByText("+2 more")).toBeInTheDocument()
   })
 
-  it("renders every active error, with no count", () => {
-    renderBanner([
-      record({ id: "e1", title: "first failure" }),
-      record({ id: "e2", title: "second failure" }),
-    ])
-    expect(screen.getAllByRole("alert")).toHaveLength(2)
-    expect(screen.queryByText(/more$/)).not.toBeInTheDocument()
-  })
-
-  it("wires a close button on warnings and errors, opt-in via onDismiss", () => {
+  it("closes every incident the collapsed strip stands for, opt-in via onDismiss", () => {
     const onDismiss = vi.fn()
-    renderBanner([record({ id: "e1" })], undefined, onDismiss)
-    fireEvent.click(screen.getByLabelText("Dismiss"))
-    expect(onDismiss).toHaveBeenCalledWith(["e1"])
-
-    onDismiss.mockClear()
     renderBanner(
-      [record({ id: "w1", severity: "warning", title: "retrying" })],
-      undefined,
-      onDismiss
-    )
-    // Warnings get no recovery actions but must still be closable.
-    fireEvent.click(screen.getAllByLabelText("Dismiss")[1])
-    expect(onDismiss).toHaveBeenCalledWith(["w1"])
-  })
-
-  it("closes every warning the collapsed strip stands for, not just the visible one", () => {
-    const onDismiss = vi.fn()
-    const incident = (id: string) =>
-      record({ id, severity: "warning", category: "connection", title: id })
-    renderBanner(
-      [incident("i1"), incident("i2"), incident("i3")],
-      undefined,
+      [record({ id: "i1" }), record({ id: "i2" }), record({ id: "i3" })],
       onDismiss
     )
     fireEvent.click(screen.getByLabelText("Dismiss"))
@@ -194,6 +115,73 @@ describe("SessionFailureBanner", () => {
   it("omits the close button when no handler is wired", () => {
     renderBanner([record()])
     expect(screen.queryByLabelText("Dismiss")).not.toBeInTheDocument()
+  })
+
+  it("keeps the incidents out of sight when the host asks", () => {
+    // The host shows the same retry on its richer line — or no turn is
+    // running, and nothing can be retrying.
+    const { container } = renderBanner([record()], undefined, true)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("claims no recovery while a hidden incident is still in flight", () => {
+    const { container } = renderBanner(
+      [record({ id: "old", resolved: true }), record({ id: "live" })],
+      undefined,
+      true
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("shows only the most recent recovered incident", () => {
+    const resolved = (id: string, title: string) =>
+      record({ id, title, resolved: true })
+    renderBanner([
+      resolved("w1", "first retry incident"),
+      resolved("w2", "second retry incident"),
+      // Resolved ERRORS are watermarks only — never rendered.
+      record({
+        id: "e1",
+        severity: "error",
+        resolved: true,
+        title: "old auth error",
+      }),
+    ])
+    expect(
+      screen.getByText(/Recovered · second retry incident/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/first retry incident/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/old auth error/)).not.toBeInTheDocument()
+  })
+
+  it("claims no recovery after a turn that failed after all", () => {
+    const { container } = renderBanner([
+      record({ id: "w1", resolved: true }),
+      record({ id: "e2", severity: "error", title: "still failing" }),
+    ])
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("still confirms a recovery beside an unrelated advisory", () => {
+    renderBanner([
+      record({ id: "w1", title: "Reconnecting... 2/5", resolved: true }),
+      record({ id: "adv", category: "unknown", title: "Model fallback" }),
+    ])
+    expect(
+      screen.getByText(/Recovered · Reconnecting... 2\/5/)
+    ).toBeInTheDocument()
+  })
+
+  it("never announces an advisory the turn end swept as recovered", () => {
+    const { container } = renderBanner([
+      record({
+        id: "adv",
+        category: "unknown",
+        title: "Model fallback",
+        resolved: true,
+      }),
+    ])
+    expect(container).toBeEmptyDOMElement()
   })
 
   it("shows nothing at all after a dismissal — never a 'Recovered' line", () => {
@@ -238,7 +226,6 @@ describe("SessionFailureBanner", () => {
     const recoveredWarning = () =>
       record({
         id: "w1",
-        severity: "warning",
         title: "Reconnecting... 4/5",
         resolved: true,
       })
@@ -251,7 +238,7 @@ describe("SessionFailureBanner", () => {
       vi.useFakeTimers()
       try {
         const onDismiss = vi.fn()
-        renderBanner([recoveredWarning()], undefined, onDismiss)
+        renderBanner([recoveredWarning()], onDismiss)
         expect(screen.getByText(/Recovered/)).toBeInTheDocument()
         expect(onDismiss).not.toHaveBeenCalled()
         act(() => {
@@ -267,7 +254,7 @@ describe("SessionFailureBanner", () => {
 
     it("can also be closed by hand, before the timer", () => {
       const onDismiss = vi.fn()
-      renderBanner([recoveredWarning()], undefined, onDismiss)
+      renderBanner([recoveredWarning()], onDismiss)
       fireEvent.click(screen.getByLabelText("Dismiss"))
       expect(onDismiss).toHaveBeenCalledWith(["w1"])
     })
@@ -328,7 +315,7 @@ describe("SessionFailureBanner", () => {
         })
         remounted.unmount()
         renderWired(recurred)
-        expect(screen.getByRole("alert")).toBeInTheDocument()
+        expect(screen.getByRole("status")).toBeInTheDocument()
         expect(screen.getByText("Reconnecting... 4/5")).toBeInTheDocument()
       } finally {
         vi.useRealTimers()

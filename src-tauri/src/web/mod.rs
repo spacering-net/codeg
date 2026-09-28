@@ -1,4 +1,6 @@
 pub mod auth;
+pub mod browser_bridge;
+pub mod browser_tunnel;
 pub mod compression;
 pub mod event_bridge;
 pub mod handlers;
@@ -601,6 +603,7 @@ pub(crate) async fn do_start_web_server_with_state(
     // Advertise the IP the socket is actually bound to, not the raw config.
     let advertised_host = advertise_host(local_addr, &host);
     tracing::info!("[WEB] Starting web server on {}", addr);
+    configure_browser_bridge(&advertised_host, actual_port);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(async move {
@@ -628,7 +631,57 @@ pub(crate) async fn do_start_web_server_with_state(
     })
 }
 
+/// Bridge listeners follow the web service: the address its socket is
+/// actually bound to (so a `localhost` that resolves to two families lands
+/// on the same one), the ports after its own unless `CODEG_BRIDGE_PORTS`
+/// says otherwise — or no port of its own at all when
+/// `CODEG_BRIDGE_HOST_PATTERN` names the targets by hostname.
+fn configure_browser_bridge(bind_host: &str, port: u16) {
+    let config = browser_bridge::BridgeConfig::from_env(bind_host, port);
+    match &config {
+        Some(config) => tracing::info!(
+            "[WEB] Port bridge for dev servers: {}",
+            describe_bridge(config)
+        ),
+        None => tracing::info!("[WEB] Port bridge for dev servers: {}", BRIDGE_OFF),
+    }
+    browser_bridge::configure(config);
+}
+
+/// What the startup log says when no bridge is configured. Both switches can
+/// be the reason: either turns it off, and an unreadable value in either does
+/// too rather than fall back to a default the operator did not write.
+pub const BRIDGE_OFF: &str = "off (CODEG_BRIDGE_PORTS / CODEG_BRIDGE_HOST_PATTERN)";
+
+/// How the bridge puts a dev server in front of the browser, for the log.
+pub fn describe_bridge(config: &browser_bridge::BridgeConfig) -> String {
+    match &config.host_pattern {
+        Some(pattern) => format!(
+            "hostnames {} on this port (CODEG_BRIDGE_HOST_PATTERN)",
+            pattern.to_text()
+        ),
+        None => format!(
+            "ports {} (CODEG_BRIDGE_PORTS)",
+            describe_ports(&config.ports)
+        ),
+    }
+}
+
+/// `3081-3090` for a contiguous pool, the list otherwise, `any free port` for `0`.
+pub fn describe_ports(ports: &[u16]) -> String {
+    if ports == [0] {
+        return "any free port".to_string();
+    }
+    let contiguous = ports.windows(2).all(|w| w[1] == w[0] + 1);
+    match (ports.first(), ports.last()) {
+        (Some(first), Some(last)) if contiguous && ports.len() > 2 => format!("{first}-{last}"),
+        _ => ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "),
+    }
+}
+
 pub(crate) async fn do_stop_web_server(state: &WebServerState) {
+    // The bridge listeners belong to this web service: no API, no grants.
+    browser_bridge::configure(None);
     let handle_opt = state.handle.lock().unwrap().take();
     let shutdown_tx = state.shutdown_tx.lock().unwrap().take();
 
@@ -846,6 +899,12 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::acp::chat_authoring::ChatAuthoringRuntimeConfig>()
             .inner()
             .clone(),
+        // Reuse the same browser-tools handle MCP injection and the access impl
+        // read, so a switch flipped over HTTP reaches the running sessions.
+        browser_tools_config: app
+            .state::<crate::acp::browser_tools::BrowserToolsRuntimeConfig>()
+            .inner()
+            .clone(),
         system_op_lock: crate::app_state::default_system_op_lock(),
         // Reuse the same handle the desktop `app_update` commands write to so
         // HTTP and webview readers see the identical update snapshot.
@@ -876,6 +935,7 @@ pub(crate) async fn do_start_web_server_tauri(
     // Advertise the IP the socket is actually bound to, not the raw config.
     let advertised_host = advertise_host(local_addr, &host_val);
     tracing::info!("[WEB] Starting web server on {}", addr);
+    configure_browser_bridge(&advertised_host, actual_port);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(async move {

@@ -12,10 +12,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { openUrl } from "@/lib/platform"
-import {
-  appUpdateErrorMessageKey,
-  normalizeAppUpdateError,
-} from "@/lib/updater"
+import { describeAppUpdateError } from "@/lib/updater"
 import { cn } from "@/lib/utils"
 
 // The markdown stack is a settings-side dependency; keep it out of the
@@ -135,6 +132,7 @@ export function StatusBarUpdate() {
     canInstallInPlace,
     runtime,
     selfUpdateSupported,
+    selfUpdateBlocker,
     dismissAvailable,
     startUpdate,
     restart,
@@ -223,15 +221,23 @@ export function StatusBarUpdate() {
         : "install"
   const showRail = restarting || ready || isUpdating
 
-  const lifecycleError = failed && state.error ? state.error : null
-  const errorMessage = lifecycleError
-    ? t(
-        appUpdateErrorMessageKey(
-          normalizeAppUpdateError(lifecycleError).kind,
-          "install"
+  const failure =
+    failed && state.error
+      ? describeAppUpdateError(state.error, "install", state.errorInfo)
+      : null
+  const errorMessage = failure ? t(failure.key, failure.values) : null
+  // Why the release is offered as a link rather than an in-place upgrade —
+  // unless a failed attempt that hit the same wall already says so above.
+  const blocker =
+    offering && selfUpdateBlocker
+      ? describeAppUpdateError(
+          selfUpdateBlocker.message,
+          "install",
+          selfUpdateBlocker
         )
-      )
-    : null
+      : null
+  const blockerMessage = blocker ? t(blocker.key, blocker.values) : null
+  const blockerHint = blockerMessage !== errorMessage ? blockerMessage : null
 
   const handleLater = () => {
     dismissAvailable()
@@ -337,12 +343,19 @@ export function StatusBarUpdate() {
           </div>
         )}
 
-        {/* Docker upgrades only live as long as the container does. */}
-        {available && selfUpdateSupported && runtime === "docker" && (
-          <p className="text-2xs leading-5 text-muted-foreground/80">
-            {t("dockerUpgradeHint")}
-          </p>
+        {blockerHint && (
+          <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
         )}
+
+        {/* Docker upgrades only live as long as the container does. */}
+        {available &&
+          selfUpdateSupported &&
+          !selfUpdateBlocker &&
+          runtime === "docker" && (
+            <p className="text-2xs leading-5 text-muted-foreground/80">
+              {t("dockerUpgradeHint")}
+            </p>
+          )}
 
         <div className="flex items-center justify-end gap-2">
           {showAvailable && (
@@ -355,7 +368,9 @@ export function StatusBarUpdate() {
               <ArrowUpCircle className="h-3.5 w-3.5" />
               {t("restartToUpdate")}
             </Button>
-          ) : failed ? (
+          ) : failed && canInstallInPlace ? (
+            // Only while retrying can work: once the server reports what is
+            // in the way, the manual route below replaces it.
             <Button
               size="sm"
               onClick={() => void startUpdate()}

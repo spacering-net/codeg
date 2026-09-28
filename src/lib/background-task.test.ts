@@ -384,6 +384,250 @@ describe("Grok SubagentCompleted envelopes (0.2.11x sub-agent polls)", () => {
   })
 })
 
+describe("CodeBuddy TaskOutput snapshots", () => {
+  // Verbatim shape from a real session (`~/.codebuddy/projects/…/<sid>.jsonl`):
+  // a plain-text report, so neither the XML nor the JSON shape claimed it. The
+  // `Response:` section repeats the `--- RESULT ---` body verbatim — only the
+  // tail is shown.
+  const CB_AGENT_DONE = `Task ID: agent-5af21a8e9ff04b19
+Status: completed
+Duration: 19s
+Started: 2026-09-15T05:42:08.169Z
+Ended: 2026-09-15T05:42:27.996Z
+Agent Type: general-purpose
+Task ID (for resume): agent-5af21a8e9ff04b19
+
+Prompt:
+Run the command \`pnpm build\` in /Users/xggz/my/my-app.
+
+Response:
+Build succeeded (exit code 0).
+
+--- RESULT ---
+Build succeeded (exit code 0).
+
+**Summary:** Next.js 16.1.7 production build completed with no errors.`
+
+  const CB_AGENT_RUNNING = `Task ID: agent-77
+Status: running
+Duration: 3s
+Task ID (for resume): agent-77
+
+--- RESULT ---
+(no new progress since last check)
+
+(Task still running. You will be notified automatically when it completes.)
+
+<system-reminder data-role="tool-hint">
+Agent agent-77 is still running. You will be automatically notified via a <task-notification> message when it finishes — do NOT poll TaskOutput in a loop.
+</system-reminder>`
+
+  const CB_SHELL = `Shell ID: bash-9
+Command: pnpm dev
+Status: completed
+Duration: 2m 4s
+Timestamp: 2026-09-15T05:42:27.996Z
+
+Stdout (full):
+ready on :3000
+
+Stderr: (no output)`
+
+  it("parses a completed agent snapshot into a sub-agent row", () => {
+    const env = parseBackgroundTaskEnvelope(CB_AGENT_DONE)
+    expect(env).not.toBeNull()
+    expect(env!.kind).toBe("poll")
+    expect(env!.taskId).toBe("agent-5af21a8e9ff04b19")
+    expect(env!.taskType).toBe("subagent")
+    expect(env!.status).toBe("completed")
+    expect(env!.exitCode).toBeNull()
+    expect(env!.output).toContain("Next.js 16.1.7 production build")
+    // Only the RESULT tail — the header, the Prompt echo, and the duplicate
+    // Response section stay out of the card.
+    expect(env!.output).not.toContain("Task ID (for resume)")
+    expect(env!.output).not.toContain("Response:")
+    expect(env!.output).not.toContain("Prompt:")
+  })
+
+  it("strips the model-facing tool hint from a running snapshot", () => {
+    const env = parseBackgroundTaskEnvelope(CB_AGENT_RUNNING)
+    expect(env!.status).toBe("running")
+    expect(env!.output).toContain("no new progress")
+    expect(env!.output).not.toContain("system-reminder")
+    expect(env!.output).not.toContain("do NOT poll TaskOutput")
+  })
+
+  it("maps a cancelled worker to the stopped kind", () => {
+    const env = parseBackgroundTaskEnvelope(
+      "Task ID: agent-9\nStatus: cancelled\n\n--- RESULT ---\n(Task was cancelled)"
+    )
+    expect(env!.kind).toBe("stop")
+  })
+
+  it("keeps a team-member snapshot's note (no RESULT separator)", () => {
+    const env = parseBackgroundTaskEnvelope(
+      "Task ID: agent-t\nStatus: running\n\nThis is a team member task (status: running). TaskOutput does not wait for teammates."
+    )
+    expect(env!.taskId).toBe("agent-t")
+    expect(env!.output).toBe(
+      "This is a team member task (status: running). TaskOutput does not wait for teammates."
+    )
+  })
+
+  it("parses a background shell snapshot (command + stdout/stderr)", () => {
+    const env = parseBackgroundTaskEnvelope(CB_SHELL)
+    expect(env!.taskId).toBe("bash-9")
+    expect(env!.taskType).toBe("local_bash")
+    expect(env!.command).toBe("pnpm dev")
+    expect(env!.status).toBe("completed")
+    expect(env!.exitCode).toBeNull()
+    expect(env!.output).toContain("ready on :3000")
+    expect(env!.output).not.toContain("Duration:")
+  })
+
+  it("is not fooled by header labels echoed in the captured output", () => {
+    // Shell output is arbitrary: a command can print lines the header is made
+    // of. That is harmless as long as they don't form the whole five-line run.
+    const SNAPSHOT = `Shell ID: bash-7
+Command: ./emit-header.sh
+Status: completed
+Duration: 3s
+Timestamp: 2026-09-15T05:42:27.996Z
+
+Stdout (full):
+Status: running
+Duration: 99s
+Timestamp: 2026-01-01T00:00:00.000Z
+decoy
+
+Stderr: (no output)`
+    const env = parseBackgroundTaskEnvelope(SNAPSHOT)
+    expect(env).not.toBeNull()
+    expect(env!.command).toBe("./emit-header.sh")
+    expect(env!.status).toBe("completed")
+    expect(env!.output).toContain("Status: running")
+    expect(env!.output).toContain("decoy")
+    expect(env!.output).not.toContain("./emit-header.sh")
+
+    const [row] = buildBackgroundTaskRows([
+      poll({ output: SNAPSHOT, input: null }),
+    ])
+    expect(row.badge).toBe("completed")
+    expect(row.command).toBe("./emit-header.sh")
+    expect(row.output).toContain("decoy")
+  })
+
+  it("abstains whenever the header cannot be located with certainty", () => {
+    // `Command:` interpolates the submitted command verbatim and unescaped
+    // (`title: task.originalCommand`), so a multiline one pushes the header down
+    // by an unknown amount — and since the command AND the captured output are
+    // both arbitrary, either can reproduce the header run. No scan direction
+    // resolves that, so the parser claims the row only when the run sits at its
+    // fixed offset AND occurs nowhere else. Anything else renders generically,
+    // as it did before this parser existed.
+    const MULTILINE = `Shell ID: bash-9
+Command: pnpm install &&
+pnpm build
+Status: completed
+Duration: 12s
+Timestamp: 2026-09-15T05:42:27.996Z
+
+Stdout (full):
+done
+
+Stderr: (no output)`
+    // (1) Ordinary multiline command: the run is not at its fixed offset.
+    expect(parseBackgroundTaskEnvelope(MULTILINE)).toBeNull()
+
+    // (2) A heredoc forging the run EXACTLY, immediately after `Command:` — the
+    // case a fixed-offset check alone would accept, yielding the truncated
+    // command `cat <<'EOF'` and the forged `running` status. Two candidate runs
+    // exist, so nothing is claimed.
+    expect(
+      parseBackgroundTaskEnvelope(`Shell ID: bash-3
+Command: cat <<'EOF'
+Status: completed
+Duration: fake
+Timestamp: fake
+
+Stdout (full):
+EOF
+Status: running
+Duration: 1s
+Timestamp: 2026-09-15T05:42:27.996Z
+
+Stdout (full):
+hi`)
+    ).toBeNull()
+
+    // (3) Single-line command whose OUTPUT reproduces the whole run — a forged
+    // header and an innocent echo are indistinguishable here, so this abstains
+    // too. Accepted cost of never emitting wrong data.
+    expect(
+      parseBackgroundTaskEnvelope(`Shell ID: bash-4
+Command: ./emit-header.sh
+Status: completed
+Duration: 3s
+Timestamp: 2026-09-15T05:42:27.996Z
+
+Stdout (full):
+Status: running
+Duration: 99s
+Timestamp: 2026-01-01T00:00:00.000Z
+
+Stdout (full):
+decoy`)
+    ).toBeNull()
+
+    // Abstaining means the row renders generically — never with a truncated
+    // command or a status lifted out of unrelated text.
+    const [row] = buildBackgroundTaskRows([
+      poll({ output: MULTILINE, input: null }),
+    ])
+    expect(row.command).toBeNull()
+    expect(row.output).toBeNull()
+  })
+
+  it("does not hijack ordinary tool output that merely mentions a task id", () => {
+    expect(
+      parseBackgroundTaskEnvelope("Task ID: agent-1 was dispatched earlier.")
+    ).toBeNull()
+    expect(
+      parseBackgroundTaskEnvelope("Task ID: agent-1\nsomething else entirely")
+    ).toBeNull()
+    expect(parseBackgroundTaskEnvelope("Shell ID: s1\nStatus: done")).toBeNull()
+    // Shell-shaped prefix whose header never closes: rejected outright rather
+    // than half-parsed into a permanently-running row.
+    expect(
+      parseBackgroundTaskEnvelope("Shell ID: s1\nCommand: ls\nStatus: running")
+    ).toBeNull()
+    expect(
+      parseBackgroundTaskEnvelope(
+        "Shell ID: s1\nCommand: ls\nStatus: running\nDuration: 1s"
+      )
+    ).toBeNull()
+    expect(
+      isBackgroundTaskToolCall(
+        poll({
+          toolName: "Bash",
+          input: null,
+          output: "Shell ID: s1\nCommand: ls\nStatus: running",
+        })
+      )
+    ).toBe(false)
+  })
+
+  it("renders a settled snapshot as a completed row carrying its report", () => {
+    const [row] = buildBackgroundTaskRows([
+      poll({ output: CB_AGENT_DONE, input: null }),
+    ])
+    // Regression: the report used to be dropped and the row stuck on "running".
+    expect(row.badge).toBe("completed")
+    expect(row.isSubagent).toBe(true)
+    expect(row.output).toContain("Next.js 16.1.7 production build")
+  })
+})
+
 describe("Grok sub-agent rows", () => {
   // Verbatim tail of a real 0.2.9x `TaskOutput.Result.output` for a polled
   // sub-agent (session 019fe6be…, `pnpm build`): the report ends with two

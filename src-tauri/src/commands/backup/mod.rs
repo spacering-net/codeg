@@ -12,6 +12,8 @@ pub mod crypto;
 pub mod external;
 pub mod manifest;
 pub mod restore;
+pub mod sections;
+pub mod source;
 
 use std::collections::BTreeMap;
 
@@ -80,13 +82,13 @@ mod tauri_commands {
     use crate::web::event_bridge::EventEmitter;
     use crate::workspace_transfer::WorkspaceTransferManager;
 
-    use super::core::{
-        create_backup_core, inspect_backup_core, scan_external_conflicts_core, BackupInputs,
-        BackupOptions,
-    };
+    use super::core::{create_backup_core, scan_external_conflicts_core, BackupInputs, BackupOptions};
     use super::external::ExternalConflict;
-    use super::manifest::{BackupManifest, BackupPreview};
+    use super::manifest::BackupManifest;
     use super::restore::{stage_restore_core, ExternalRestoreMode, StagedRestore};
+    use super::source::{
+        prepare_source_core, release_source_core, resolve_prepared_zip, PreparedSource,
+    };
 
     const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -130,7 +132,7 @@ mod tauri_commands {
         let inputs = BackupInputs {
             conn: &db.conn,
             data_dir: &data_dir,
-            uploads_root: crate::paths::codeg_uploads_root(),
+            live_roots: super::sections::LiveRoots::resolve(&data_dir),
             app_version: APP_VERSION,
             runtime_label: "desktop",
         };
@@ -141,49 +143,127 @@ mod tauri_commands {
         result
     }
 
+    /// Decrypt once and hand back a handle the rest of the restore flow
+    /// reuses, together with the compatibility preview.
     #[tauri::command]
-    pub async fn backup_inspect(
+    pub async fn backup_prepare_source(
         src_path: String,
         passphrase: Option<String>,
-    ) -> Result<BackupPreview, AppCommandError> {
-        inspect_backup_core(Path::new(&src_path), passphrase.as_deref()).await
+        app: AppHandle,
+    ) -> Result<PreparedSource, AppCommandError> {
+        let data_dir = resolve_data_dir(&app)?;
+        // `false`: `src_path` is the user's own file, not ours to consume.
+        prepare_source_core(Path::new(&src_path), &data_dir, passphrase.as_deref(), false).await
+    }
+
+    #[tauri::command]
+    pub async fn backup_release_source(
+        source_id: String,
+        app: AppHandle,
+    ) -> Result<bool, AppCommandError> {
+        let data_dir = resolve_data_dir(&app)?;
+        release_source_core(&data_dir, &source_id)
     }
 
     #[tauri::command]
     pub async fn backup_scan_external_conflicts(
-        src_path: String,
-        passphrase: Option<String>,
+        source_id: String,
+        app: AppHandle,
     ) -> Result<Vec<ExternalConflict>, AppCommandError> {
-        scan_external_conflicts_core(Path::new(&src_path), passphrase.as_deref()).await
+        let data_dir = resolve_data_dir(&app)?;
+        let zip = resolve_prepared_zip(&data_dir, &source_id)?;
+        scan_external_conflicts_core(&zip).await
     }
 
     #[tauri::command]
     pub async fn backup_restore_stage(
-        src_path: String,
-        passphrase: Option<String>,
+        source_id: String,
         external_mode: Option<ExternalRestoreMode>,
         db: State<'_, AppDatabase>,
         transfer: State<'_, Arc<WorkspaceTransferManager>>,
+        connections: State<'_, crate::acp::manager::ConnectionManager>,
         app: AppHandle,
     ) -> Result<StagedRestore, AppCommandError> {
         // `db` is taken so a restore can't race in-flight DB work; the swap
         // itself happens on next startup before any connection opens.
         let _ = &db;
         let data_dir = resolve_data_dir(&app)?;
+        let zip = resolve_prepared_zip(&data_dir, &source_id)?;
         let (op_id, cancel) = transfer.register_transfer().await;
         let emitter = EventEmitter::Tauri(app.clone());
-        let result = stage_restore_core(
-            Path::new(&src_path),
+        let result =
+            stage_restore_core(&zip, &data_dir, &emitter, &op_id, &cancel).await;
+        transfer.finish_transfer(&op_id).await;
+        let mut staged = result?;
+        // Dispatched here, not inside the engine: this is the layer that can
+        // lock out new ACP connections while writing to the agents' own dirs.
+        super::restore::dispatch_external_after_stage(
+            &mut staged,
             &data_dir,
-            passphrase.as_deref(),
+            &connections,
             external_mode.unwrap_or_default(),
-            &emitter,
-            &op_id,
             &cancel,
         )
         .await;
-        transfer.finish_transfer(&op_id).await;
-        result
+        // The verified copy now lives in staging; the plaintext archive is no
+        // longer needed. A failed stage keeps it so the user can retry.
+        let _ = release_source_core(&data_dir, &source_id);
+        Ok(staged)
+    }
+
+    /// Agents connected right now, so the mode picker can advise closing them
+    /// before choosing "original locations". Advisory only.
+    #[tauri::command]
+    pub async fn backup_active_agents(
+        connections: State<'_, crate::acp::manager::ConnectionManager>,
+    ) -> Result<Vec<String>, AppCommandError> {
+        Ok(super::restore::active_agent_names(&connections).await)
+    }
+
+    /// Pre-restore snapshots still on disk, newest first.
+    #[tauri::command]
+    pub async fn backup_list_safety_snapshots(
+        app: AppHandle,
+    ) -> Result<Vec<super::restore::SafetySnapshot>, AppCommandError> {
+        let data_dir = resolve_data_dir(&app)?;
+        tokio::task::spawn_blocking(move || {
+            super::restore::list_safety_snapshots_core(&data_dir)
+        })
+        .await
+        .map_err(|e| {
+            AppCommandError::task_execution_failed("List snapshots failed").with_detail(e.to_string())
+        })
+    }
+
+    /// Stage a rollback to a safety snapshot; applied on the next startup, so
+    /// the caller restarts exactly as it does after a restore.
+    #[tauri::command]
+    pub async fn backup_rollback(
+        snapshot_id: String,
+        app: AppHandle,
+    ) -> Result<String, AppCommandError> {
+        let data_dir = resolve_data_dir(&app)?;
+        tokio::task::spawn_blocking(move || {
+            super::restore::rollback_to_snapshot_core(&data_dir, &snapshot_id)
+        })
+        .await
+        .map_err(|e| {
+            AppCommandError::task_execution_failed("Rollback failed").with_detail(e.to_string())
+        })?
+    }
+
+    /// Escape hatch when the restart after a stage never happened.
+    #[tauri::command]
+    pub async fn backup_discard_pending(app: AppHandle) -> Result<bool, AppCommandError> {
+        let data_dir = resolve_data_dir(&app)?;
+        tokio::task::spawn_blocking(move || {
+            super::restore::discard_pending_restore_core(&data_dir)
+        })
+        .await
+        .map_err(|e| {
+            AppCommandError::task_execution_failed("Discard pending failed")
+                .with_detail(e.to_string())
+        })?
     }
 
     #[tauri::command]

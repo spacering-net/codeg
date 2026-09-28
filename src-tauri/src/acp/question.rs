@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sacp::schema::{
+use agent_client_protocol::schema::v1::{
     CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction,
     ElicitationContentValue, ElicitationMode, ElicitationPropertySchema, ElicitationScope,
     MultiSelectItems, StringPropertySchema,
@@ -442,11 +442,12 @@ pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> Que
     }
 }
 
-/// Grok's native `ask_user_question` tool has NO `header` (the short category
-/// chip codeg renders); synthesize one from the leading characters of the
-/// question text, bounded to [`MAX_HEADER_CHARS`]. Always returns a non-empty,
-/// in-bounds string so [`validate_specs`] accepts it.
-fn synthesize_grok_header(question: &str) -> String {
+/// Some native asks carry NO `header` (the short category chip codeg renders):
+/// grok's `ask_user_question` tool and pi's extension-UI `select` both send bare
+/// question text. Synthesize one from the leading characters, bounded to
+/// [`MAX_HEADER_CHARS`]. Always returns a non-empty, in-bounds string so
+/// [`validate_specs`] accepts it.
+pub(crate) fn synthesize_header(question: &str) -> String {
     let header: String = question.trim().chars().take(MAX_HEADER_CHARS).collect();
     let header = header.trim();
     if header.is_empty() {
@@ -544,13 +545,163 @@ pub fn parse_grok_ext_questions(params: &Value) -> Result<Vec<QuestionSpec>, Str
         out.push(QuestionSpec {
             id: uuid::Uuid::new_v4().to_string(),
             question: question.chars().take(MAX_QUESTION_TEXT_CHARS).collect(),
-            header: synthesize_grok_header(question),
+            header: synthesize_header(question),
             multi_select,
             options,
             is_secret: false,
         });
     }
     Ok(out)
+}
+
+/// pi-acp's tool-call id prefix for an extension-UI request
+/// (`extensionUiToolCall`, pi-acp 0.0.33). It is the only marker that
+/// distinguishes a `ctx.ui.*` dialog from a real tool approval, since both
+/// arrive as a plain `session/request_permission`. Public so the connection
+/// handler can screen requests on it before paying for anything else — one
+/// definition, so the cheap screen and the full parse can never drift.
+pub const PI_EXTENSION_UI_ID_PREFIX: &str = "pi-ui-";
+
+/// pi-acp's option-id prefix for a `select` choice (`CHOICE_OPTION_PREFIX`); it
+/// maps the id back to the index of its own options array when replying to the
+/// extension.
+const PI_CHOICE_OPTION_PREFIX: &str = "choice-";
+
+/// pi's extension-UI `select` ask, lifted off a `session/request_permission`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiSelectAsk {
+    /// The single question to register on the interactive card.
+    pub spec: QuestionSpec,
+    /// `(option label, permission optionId)` in wire order. The user picks a
+    /// LABEL on the card, but pi must be answered with the id that label arrived
+    /// with — pi-acp turns it back into an index into its own options array — so
+    /// the pairing has to survive the round trip.
+    pub option_ids: Vec<(String, String)>,
+}
+
+/// Recognize a `session/request_permission` that is really pi asking the user a
+/// multiple-choice question, and convert it into a [`QuestionSpec`] so it renders
+/// in the SAME interactive card as the codeg-mcp ask tool.
+///
+/// pi has no dedicated question channel: `ctx.ui.select` from an extension
+/// becomes an `extension_ui_request`, which pi-acp translates into a permission
+/// request whose `toolCall` is a synthetic `{toolCallId: "pi-ui-<id>", kind:
+/// "other", status: "pending", rawInput: {method: "select", title, options:
+/// [...]}}` and whose permission options are the choices, keyed
+/// `choice-<index>` (verified against pi-acp 0.0.33 on a live run). Without this
+/// the choices render as a generic approval card that dumps that JSON verbatim.
+///
+/// Returns `None` — leaving the caller on the untouched permission path — for
+/// anything that does not fingerprint as pi's select, and for a select the card
+/// could not represent FAITHFULLY: more than [`MAX_OPTIONS`] choices (truncating
+/// would hide choices the user must be able to pick), fewer than
+/// [`MIN_OPTIONS`], or duplicate/blank labels (the label is the card's selection
+/// identity, so a duplicate would answer pi with the wrong index). Those keep
+/// today's approval card, which lists every option as its own button.
+///
+/// `options` is `(optionId, name)` in wire order.
+pub fn parse_pi_select_ask(tool_call: &Value, options: &[(String, String)]) -> Option<PiSelectAsk> {
+    let id = tool_call
+        .get("toolCallId")
+        .or_else(|| tool_call.get("tool_call_id"))
+        .and_then(|v| v.as_str())?;
+    if !id.starts_with(PI_EXTENSION_UI_ID_PREFIX) {
+        return None;
+    }
+    let raw_input = tool_call
+        .get("rawInput")
+        .or_else(|| tool_call.get("raw_input"))?;
+    if raw_input.get("method").and_then(|v| v.as_str()) != Some("select") {
+        return None;
+    }
+    // The dialog prompt: `rawInput.title` is the extension's own text, while the
+    // tool call's `title` falls back to a bare `Pi select` when it has none.
+    let question = raw_input
+        .get("title")
+        .and_then(|v| v.as_str())
+        .or_else(|| tool_call.get("title").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    if !(MIN_OPTIONS..=MAX_OPTIONS).contains(&options.len()) {
+        return None;
+    }
+    let mut choices = Vec::with_capacity(options.len());
+    let mut option_ids = Vec::with_capacity(options.len());
+    let mut seen = std::collections::HashSet::new();
+    for (option_id, name) in options {
+        if !option_id.starts_with(PI_CHOICE_OPTION_PREFIX) {
+            return None;
+        }
+        let label = name.trim();
+        if label.is_empty() || label.chars().count() > MAX_QUESTION_TEXT_CHARS {
+            return None;
+        }
+        if !seen.insert(label) {
+            return None;
+        }
+        choices.push(QuestionOption {
+            label: label.to_string(),
+            // pi's select carries no per-option description; the card renders
+            // fine without one.
+            description: String::new(),
+        });
+        option_ids.push((label.to_string(), option_id.clone()));
+    }
+    Some(PiSelectAsk {
+        spec: QuestionSpec {
+            id: uuid::Uuid::new_v4().to_string(),
+            question: question.chars().take(MAX_QUESTION_TEXT_CHARS).collect(),
+            header: synthesize_header(question),
+            // `ctx.ui.select` resolves to ONE value; pi-acp's reply carries a
+            // single `optionId`.
+            multi_select: false,
+            options: choices,
+            is_secret: false,
+        },
+        option_ids,
+    })
+}
+
+/// The permission `optionId` that answers pi with what the user picked, or
+/// `None` when the card produced nothing pi can accept: a declined card, or a
+/// free-text "Other" answer (the card always offers one, but pi's select can
+/// only be answered with one of ITS options). `None` means reply `Cancelled`,
+/// which pi-acp forwards to the extension as `{cancelled: true}` — the same
+/// thing `ctx.ui.select` returns when a TUI user presses Escape.
+pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Option<String> {
+    if outcome.declined {
+        return None;
+    }
+    let picked = outcome.answers.first()?.selected.first()?;
+    ask.option_ids
+        .iter()
+        .find(|(label, _)| label == picked)
+        .map(|(_, option_id)| option_id.clone())
+}
+
+/// True when a host's name for a tool is codeg's OWN `ask_user_question`
+/// companion tool, in whatever spelling the host composed it
+/// (`mcp__codeg-mcp__ask_user_question` from claude-agent-acp,
+/// `codeg-mcp/ask_user_question`, `codeg-mcp: ask_user_question`, …). Separators
+/// are folded and case is ignored, so only the two identifying words matter.
+///
+/// BOTH halves have to be present — the server name codeg itself injects
+/// (`codeg-mcp`, see `acp::connection::inject_codeg_mcp`) AND the tool name.
+/// The frontend can afford a bare `*ask_user_question` suffix rule because a
+/// wrong match there only picks a nicer card; this one unlocks an AUTO-APPROVAL
+/// of a blocked `session/request_permission`, and a third-party MCP server's
+/// similarly named tool is the user's to approve, not codeg's.
+///
+/// Auto-approving codeg's own ask tool is not a permission being skipped: the
+/// tool's entire effect is to put the interactive question card on screen and
+/// block until the user answers it. The consent IS the next dialog, so gating it
+/// behind a generic "run this tool?" card asks the user to approve being asked.
+pub fn is_codeg_ask_tool_name(name: &str) -> bool {
+    let normalized = name
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' ', '.', '/', ':'], "_");
+    normalized.ends_with("ask_user_question") && normalized.contains("codeg_mcp")
 }
 
 /// Serialize a resolved [`QuestionOutcome`] into grok's `AskUserQuestionExtResponse`
@@ -647,7 +798,7 @@ fn multi_select_choices(items: &MultiSelectItems) -> Vec<ElicitationChoice> {
                 value: o.value.clone(),
             })
             .collect(),
-        MultiSelectItems::Untitled(u) => u
+        MultiSelectItems::String(u) => u
             .values
             .iter()
             .map(|v| ElicitationChoice {
@@ -753,13 +904,253 @@ pub enum ElicitationPlan {
 /// offers its own "Other" on every question, so companions are skipped and the
 /// typed answer rides the main field (codex falls back to it).
 ///
-/// Name-based, and deliberately kept alongside the `_meta` marker below:
-/// codex-acp 1.1.9 (the pinned version) still emits ONLY this shape.
+/// Name-based, and deliberately kept alongside the `_meta` markers below.
+///
+/// codex-acp 1.12.0 renamed the companion to `<questionId>_note` — which this
+/// deliberately does NOT match. `_note` is a plausible suffix for a REAL field
+/// in a generic MCP server's form (`release_note`, `user_note`), and skipping
+/// one would silently drop a question the user has to answer. The rename needs
+/// no name heuristic anyway: `buildUserInputRequest` stamps
+/// `_meta.codex.role = "user_note"` on the new companion unconditionally, so
+/// [`codex_companion_role`] recognizes it exactly.
 fn is_other_companion(id: &str) -> bool {
     let Some(pos) = id.rfind("__other") else {
         return false;
     };
     pos > 0 && id[pos + "__other".len()..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// True when the raw schema property carries codex's own companion marker, the
+/// `_meta.codex` half of [`is_other_companion`]: `isOtherAnswer: true`
+/// (codex-acp ≤ 1.11.0) or `role: "user_note"` (≥ 1.12.0). Either one means the
+/// property is the free-text companion of a sibling select question, so the
+/// card must not render it as a question of its own.
+///
+/// Both markers are unconditional in `buildUserInputRequest` — the companion is
+/// created and marked in the same expression — so this is the exact recognizer
+/// for both generations, and the ONLY one for 1.12.0's `_note` naming.
+fn codex_companion_role(raw: &Value, id: &str) -> Option<CodexUserInputShape> {
+    let codex = codex_property_meta(raw, id)?;
+    if codex.get("isOtherAnswer").and_then(Value::as_bool) == Some(true) {
+        return Some(CodexUserInputShape::QuestionInDescription);
+    }
+    if codex.get("role").and_then(Value::as_str) == Some("user_note") {
+        return Some(CodexUserInputShape::QuestionInTitle);
+    }
+    None
+}
+
+/// Which generation of codex-acp's `request_user_input` bridge produced a form
+/// — i.e. which of a question property's `title` / `description` holds the
+/// QUESTION, and which holds the short tab header.
+///
+/// codex-acp 1.12.0 swapped the two:
+///
+/// ```text
+///   ≤ 1.11.0   title = header (the short tab label)   description = question
+///   ≥ 1.12.0   title = question                       description = header
+/// ```
+///
+/// Reading them the wrong way round is not cosmetic: a single-question ask has
+/// no tab strip, so the card would show only the header ("Approach") and the
+/// actual question would never be displayed at all.
+///
+/// The connection pins this at `initialize` from the RUNNING adapter's
+/// `agentInfo.version` (`SessionState::codex_user_input_shape`) — codeg's pin is
+/// 1.12.0, but launch may resolve an older PATH install or a custom pinned
+/// version, and both are supported configurations.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodexUserInputShape {
+    /// codex-acp ≤ 1.11.0 — the question is in `description`, and the free-text
+    /// companion is `<id>__other` marked `_meta.codex.isOtherAnswer`.
+    QuestionInDescription,
+    /// codex-acp ≥ 1.12.0 — the question is in `title`, the companion is
+    /// `<id>_note` marked `_meta.codex.role = "user_note"`, and an `isOther`
+    /// question's `oneOf` carries an injected "None of the above".
+    QuestionInTitle,
+}
+
+/// Who sent this `elicitation/create` — and the ONLY thing that may unlock a
+/// codex-specific fixup in this parser.
+///
+/// The identity has to come from the connection, not from the payload. `_meta`
+/// is an OPEN namespace: the ACP spec tells implementations to make no
+/// assumptions about keys they do not own, and this parser is shared — codeg
+/// advertises `elicitation.form` to DeepSeek as well as Codex, and EITHER
+/// adapter also forwards arbitrary MCP-server forms through it. Deciding "this
+/// is codex" from `_meta.codex.*` in the request would let a third party, by
+/// coincidence or on purpose, switch on codex's orientation flip, its companion
+/// skip and its synthetic-option filter for a form codex never sent — which can
+/// hide a legitimate field or change how an answer is encoded.
+///
+/// So `Other` is absolute: no codex fixup runs for it, whatever `_meta` claims.
+/// Only inside `Codex` does the payload get a say, and then only about WHICH
+/// generation sent it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElicitationPeer {
+    /// Anything that is not codex-acp (DeepSeek today; any future
+    /// `elicitation.form` speaker). The form is parsed generically.
+    Other,
+    /// codex-acp, carrying the `request_user_input` shape its RUNNING version
+    /// implies — `None` when `agentInfo.version` was absent or unparseable, in
+    /// which case the form's own markers have to date it.
+    Codex(Option<CodexUserInputShape>),
+}
+
+impl ElicitationPeer {
+    /// Whether codex's `_meta.codex` markers may be trusted on this connection.
+    fn is_codex(self) -> bool {
+        matches!(self, Self::Codex(_))
+    }
+}
+
+/// The `_meta.codex` object of one schema property, when present. codex-acp
+/// stamps it on every `request_user_input` field (question properties carry
+/// `isOther`/`isSecret`, companions carry `questionId` plus the role marker),
+/// and on nothing else — a generic MCP server's form has no `codex` namespace.
+/// The typed schema property structs carry no `_meta`, so this reads the raw
+/// JSON.
+fn codex_property_meta<'a>(raw: &'a Value, id: &str) -> Option<&'a Value> {
+    raw.get("requestedSchema")?
+        .get("properties")?
+        .get(id)?
+        .get("_meta")?
+        .get("codex")
+}
+
+/// Resolve a form's [`CodexUserInputShape`], or `None` when no codex-specific
+/// reading may be applied to it.
+///
+/// `None` is load-bearing well beyond orientation — it is the single switch that
+/// keeps EVERY 1.12.0 fixup (the orientation flip and the injected "None of the
+/// above") off forms codex did not send. Two independent things have to hold
+/// before it returns `Some`:
+///
+///   * the PEER is codex-acp ([`ElicitationPeer`]). This comes from the
+///     connection, never from the payload, because DeepSeek and arbitrary
+///     MCP-server forms share this parser and `_meta` is an open namespace;
+///   * the FORM is one of codex's `request_user_input` asks rather than an MCP
+///     tool-call approval or a server form codex is merely relaying —
+///     `buildUserInputRequest` stamps `_meta.codex.isOther` on every question
+///     property in both generations, and only it does.
+///
+/// Which generation then sent it is the remaining question, and nothing in the
+/// form distinguishes the two reliably — question properties look identical —
+/// so the answer comes from the ADAPTER, in descending order of authority:
+///
+///   1. `running` — the version the connection read out of the running
+///      adapter's `agentInfo` at `initialize`. This is the process that built
+///      the frame, so it is authoritative when known.
+///   2. The form's own free-text companion marker (`isOtherAnswer` ⇒ ≤1.11.0,
+///      `role: "user_note"` ⇒ ≥1.12.0), for the case where the adapter reported
+///      no `agentInfo` at all. Only present when the form has an `isOther`
+///      question.
+///   3. The pinned adapter's shape, which is 1.12.0's — the last resort for an
+///      undatable form from an unidentified adapter, and the likeliest truth
+///      since the pin is what codeg launches.
+fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInputShape> {
+    // Identity first, and unconditionally: a non-codex peer gets the generic
+    // reading no matter what its `_meta` says.
+    let ElicitationPeer::Codex(running) = peer else {
+        return None;
+    };
+    let properties = raw
+        .get("requestedSchema")?
+        .get("properties")?
+        .as_object()?;
+    let mut is_codex_form = false;
+    let mut companion_shape = None;
+    for id in properties.keys() {
+        if let Some(shape) = codex_companion_role(raw, id) {
+            companion_shape = Some(shape);
+            continue;
+        }
+        is_codex_form |= codex_property_meta(raw, id)
+            .is_some_and(|codex| codex.get("isOther").is_some());
+    }
+    if !is_codex_form && companion_shape.is_none() {
+        return None;
+    }
+    Some(
+        running
+            .or(companion_shape)
+            .unwrap_or(CodexUserInputShape::QuestionInTitle),
+    )
+}
+
+/// The synthetic choice codex-acp ≥1.12.0 appends to an `isOther` question's
+/// `oneOf`, verbatim — label and description both.
+///
+/// codeg's card already offers a free-text "Other" input on every question and
+/// writes it to the MAIN field, while the note field this option points at is
+/// skipped as a companion. So the option is a dead end here: picking it sends
+/// codex the bare string "None of the above" and no elaboration.
+///
+/// "None of the above" is an entirely plausible option for a MODEL to write, and
+/// codex-acp suppresses its own injection when one already did
+/// (`!options.some(o => o.label === USER_INPUT_OTHER_OPTION)`) — so dropping a
+/// bare label match would silently delete a real choice. Four conditions must
+/// hold together before one is removed, and each narrows a different axis:
+///
+///   * the PEER is codex-acp ([`ElicitationPeer`]) — DeepSeek and generic MCP
+///     forms share this parser and are never touched, and that is decided from
+///     the connection rather than from the form's `_meta`;
+///   * the form is a codex ≥1.12.0 `request_user_input`;
+///   * the property is an `isOther` question — the only kind codex injects into;
+///   * THIS choice's own raw `oneOf` entry — located by its `const`, not by
+///     scanning the array — carries codex's description verbatim.
+///
+/// That last point is why the match is by `const` rather than "does the array
+/// contain a synthetic entry anywhere": a scan drops any option that merely
+/// SHARES the label with a synthetic one sitting elsewhere in the same `oneOf`.
+/// A conforming codex cannot produce that pair — it builds every option as
+/// `{const: label, title: label}` and skips its injection entirely when the
+/// label is taken — but "the adapter would never" is not a property worth
+/// relying on when the exact check costs nothing.
+///
+/// Every failure lands on "keep the option". If upstream rewords the copy the
+/// filter simply stops firing and the redundant choice reappears.
+const CODEX_SYNTHETIC_OTHER_LABEL: &str = "None of the above";
+const CODEX_SYNTHETIC_OTHER_DESCRIPTION: &str = "Provide a different answer in the note field.";
+
+/// True when this property is an `isOther` codex question, i.e. the only place
+/// codex-acp ≥1.12.0 injects [`CODEX_SYNTHETIC_OTHER_LABEL`].
+fn is_codex_other_question(raw: &Value, id: &str) -> bool {
+    codex_property_meta(raw, id)
+        .and_then(|codex| codex.get("isOther"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// True when THIS choice is codex's injected option: its label and its `const`
+/// are both [`CODEX_SYNTHETIC_OTHER_LABEL`], and the raw `oneOf` entry carrying
+/// that same `const` describes it exactly as codex-acp does. Callers must have
+/// already established the peer, the form's generation and the property's
+/// `isOther`-ness.
+///
+/// `value` is the choice's `const`, which is what pins the lookup to the entry
+/// being rendered instead of to any entry in the array.
+fn is_codex_synthetic_other_choice(raw: &Value, id: &str, label: &str, value: &str) -> bool {
+    // codex writes `const: option.label` for every option, injected or
+    // model-authored, so a choice whose `const` is not the synthetic label is
+    // someone else's option that happens to display the same text.
+    if label != CODEX_SYNTHETIC_OTHER_LABEL || value != CODEX_SYNTHETIC_OTHER_LABEL {
+        return false;
+    }
+    let Some(one_of) = raw
+        .get("requestedSchema")
+        .and_then(|s| s.get("properties"))
+        .and_then(|p| p.get(id))
+        .and_then(|prop| prop.get("oneOf"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    one_of.iter().any(|entry| {
+        entry.get("const").and_then(Value::as_str) == Some(value)
+            && entry.get("description").and_then(Value::as_str)
+                == Some(CODEX_SYNTHETIC_OTHER_DESCRIPTION)
+    })
 }
 
 /// True when the raw schema property carries the shared custom-answer marker
@@ -773,8 +1164,8 @@ fn is_other_companion(id: &str) -> bool {
 /// marker means codeg keeps collapsing the companion into the card's built-in
 /// "Other" input no matter which adapter produced the form.
 ///
-/// Like [`is_secret_property`], this reads the raw JSON: the typed sacp
-/// property structs drop `_meta`.
+/// Like [`is_secret_property`], this reads the raw JSON: the typed schema
+/// property structs carry no `_meta`.
 fn is_custom_answer_property(raw: &Value, id: &str) -> bool {
     raw.get("requestedSchema")
         .and_then(|s| s.get("properties"))
@@ -796,17 +1187,6 @@ fn is_mcp_tool_call_approval(raw: &Value) -> bool {
         == Some("mcp_tool_call")
 }
 
-/// Codex's auto-resolution timeout for a `request_user_input` elicitation
-/// (`_meta.codex.autoResolutionMs`). When set, codex-acp races the elicitation
-/// against this timer and answers `{answers: {}}` itself on expiry — the
-/// connection handler mirrors it to reap the by-then-pointless card.
-pub fn elicitation_auto_resolution_ms(raw: &Value) -> Option<u64> {
-    raw.get("_meta")?
-        .get("codex")?
-        .get("autoResolutionMs")?
-        .as_u64()
-}
-
 /// Classify a form `elicitation/create` request (the raw JSON params) into its
 /// presentation plan. Everything codex-acp can send once `elicitation.form` is
 /// advertised lands here, so every shape must resolve to SOMETHING the user
@@ -824,14 +1204,26 @@ pub fn elicitation_auto_resolution_ms(raw: &Value) -> Option<u64> {
 ///   * Everything else (codex `request_user_input`, generic MCP forms) →
 ///     [`ElicitationQuestions`]: string `oneOf`/`enum` render as choices
 ///     (title displayed, `const` sent back), plain strings/numbers/integers as
-///     free text, booleans as Yes/No, arrays as multi-select; `<id>__other`
-///     companions are skipped (the card has its own "Other").
+///     free text, booleans as Yes/No, arrays as multi-select; the free-text
+///     companion is skipped (the card has its own "Other").
+///
+/// `peer` is who the connection is talking to — see [`ElicitationPeer`]. It is
+/// the sole gate on every codex-specific fixup here, and for a codex peer it
+/// also carries what `initialize` learned about the running adapter
+/// (`SessionState::codex_user_input_shape`), which settles the one thing the
+/// wire cannot: which of a codex question's `title`/`description` is the
+/// question — see [`CodexUserInputShape`]. `Codex(None)` is safe: the parser
+/// then dates the form from its own markers and falls back to the pinned
+/// adapter's shape.
 ///
 /// Counts are clamped to codeg's bounds because
 /// [`crate::acp::manager::ConnectionManager::register_question`] re-runs
 /// [`validate_specs`]. Errors only on non-form / undeserializable requests,
 /// which the connection handler turns into a graceful decline.
-pub fn classify_elicitation(raw: &Value) -> Result<ElicitationPlan, String> {
+pub fn classify_elicitation(
+    raw: &Value,
+    peer: ElicitationPeer,
+) -> Result<ElicitationPlan, String> {
     let req: CreateElicitationRequest = serde_json::from_value(raw.clone())
         .map_err(|e| format!("unparseable elicitation request: {e}"))?;
     let ElicitationMode::Form(form) = &req.mode else {
@@ -856,7 +1248,7 @@ pub fn classify_elicitation(raw: &Value) -> Result<ElicitationPlan, String> {
             tool_call_id,
         )));
     }
-    let mut questions = parse_form_questions(form, raw);
+    let mut questions = parse_form_questions(form, raw, peer);
     if questions.specs.is_empty() {
         // A form with nothing to fill in is a bare confirmation — mirror
         // codex-acp's own no-capability fallback (Accept/Decline options).
@@ -897,7 +1289,7 @@ fn decline_approval_option() -> ElicitationApprovalOption {
 /// Allow/Decline. Mirrors codex-acp's own `request_permission` fallback
 /// (`buildToolApprovalOptions`) so approvals look identical either way.
 fn approval_from_form(
-    form: &sacp::schema::ElicitationFormMode,
+    form: &agent_client_protocol::schema::v1::ElicitationFormMode,
     message: String,
     tool_call_id: Option<String>,
 ) -> ElicitationApproval {
@@ -957,8 +1349,8 @@ fn approval_from_form(
 }
 
 /// True when the raw schema property carries codex's secret marker
-/// (`_meta.codex.isSecret`). The typed sacp property structs drop `_meta`, so
-/// this reads the raw JSON alongside them.
+/// (`_meta.codex.isSecret`). The typed schema property structs carry no
+/// `_meta`, so this reads the raw JSON alongside them.
 fn is_secret_property(raw: &Value, id: &str) -> bool {
     raw.get("requestedSchema")
         .and_then(|s| s.get("properties"))
@@ -976,9 +1368,20 @@ fn is_secret_property(raw: &Value, id: &str) -> bool {
 /// always-present "Other" input) — including plain strings, numbers, integers,
 /// and choice fields whose options were all empty/duplicate.
 fn parse_form_questions(
-    form: &sacp::schema::ElicitationFormMode,
+    form: &agent_client_protocol::schema::v1::ElicitationFormMode,
     raw: &Value,
+    peer: ElicitationPeer,
 ) -> ElicitationQuestions {
+    // Decided once for the whole form: codex-acp 1.12.0 swapped which of
+    // `title`/`description` carries the question (see [`codex_form_shape`]).
+    let codex_shape = codex_form_shape(raw, peer);
+    // The 1.12.0-only fixups below apply to exactly one generation of exactly
+    // one adapter; everything else — DeepSeek, generic MCP servers — shares this
+    // parser and must come through untouched.
+    let is_codex_112_form = codex_shape == Some(CodexUserInputShape::QuestionInTitle);
+    // `_meta.codex` is only codex's to interpret. On any other peer the same
+    // keys are an unrelated extension that must not silently eat a field.
+    let peer_is_codex = peer.is_codex();
     let mut specs = Vec::new();
     let mut fields = Vec::new();
     for (id, prop) in &form.requested_schema.properties {
@@ -989,10 +1392,17 @@ fn parse_form_questions(
             break;
         }
         // Skip synthetic free-text "Other" companion fields — codex's
-        // name-based `<id>__other[N]` shape, and any adapter's `_meta`-marked
-        // companion (claude-agent-acp ≥0.64). The card always offers its own
-        // "Other" input, so a companion would render as a duplicate question.
-        if is_other_companion(id) || is_custom_answer_property(raw, id) {
+        // name-based `<id>__other[N]` shape, codex's own `_meta.codex` marker
+        // in either generation (codex peers only: on anything else those keys
+        // are not codex's and dropping the field would hide a real question),
+        // and any adapter's `_meta`-marked companion (claude-agent-acp ≥0.64,
+        // deliberately un-namespaced so every bridge is recognized alike).
+        // The card always offers its own "Other" input, so a companion would
+        // render as a duplicate question.
+        if is_other_companion(id)
+            || (peer_is_codex && codex_companion_role(raw, id).is_some())
+            || is_custom_answer_property(raw, id)
+        {
             continue;
         }
         let (title, description, kind, multi_select, choices) = match prop {
@@ -1045,14 +1455,30 @@ fn parse_form_questions(
             // reads the missing key as unanswered and proceeds).
             _ => continue,
         };
-        let question = description
+        // Which string is the question and which is the tab label. Everything
+        // except a codex-acp ≥1.12.0 `request_user_input` form keeps the
+        // original reading (`description` is the prose, `title` the label);
+        // 1.12.0 swapped codex's two slots, so that one form is read the other
+        // way round. See [`codex_form_shape`].
+        let (question_text, header_text) = if is_codex_112_form {
+            (&title, &description)
+        } else {
+            (&description, &title)
+        };
+        let question = question_text
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .or_else(|| title.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+            .or_else(|| {
+                header_text
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or(id.as_str());
         // Dedup + clamp option labels exactly like the grok bridge, keeping
         // the label→value map for the response rebuild.
+        let drop_synthetic_other = is_codex_112_form && is_codex_other_question(raw, id);
         let mut options = Vec::with_capacity(choices.len().min(MAX_OPTIONS));
         let mut value_by_label = std::collections::HashMap::new();
         let mut seen = std::collections::HashSet::new();
@@ -1064,6 +1490,11 @@ fn parse_form_questions(
             if label.is_empty() || !seen.insert(label.to_string()) {
                 continue;
             }
+            // codex-acp ≥1.12.0's injected "None of the above" choice — the
+            // card's own "Other" input already covers it, and better.
+            if drop_synthetic_other && is_codex_synthetic_other_choice(raw, id, label, &c.value) {
+                continue;
+            }
             let label: String = label.chars().take(MAX_QUESTION_TEXT_CHARS).collect();
             value_by_label.insert(label.clone(), c.value.clone());
             options.push(QuestionOption {
@@ -1071,12 +1502,12 @@ fn parse_form_questions(
                 description: String::new(),
             });
         }
-        let header = title
+        let header = header_text
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|h| h.chars().take(MAX_HEADER_CHARS).collect())
-            .unwrap_or_else(|| synthesize_grok_header(question));
+            .unwrap_or_else(|| synthesize_header(question));
         specs.push(QuestionSpec {
             id: id.clone(),
             question: question.chars().take(MAX_QUESTION_TEXT_CHARS).collect(),
@@ -1232,12 +1663,13 @@ pub fn elicitation_cancel_response() -> CreateElicitationResponse {
 
 /// Build the `raw_input` (questions) for the in-stream `AskQuestionResultCard`
 /// codeg synthesizes for a native ask that resolves out-of-band rather than as a
-/// completed stream tool_call. Two callers: grok (answers over the
-/// `_x.ai/ask_user_question` ext round-trip — `handle_grok_ask_user_question`)
-/// and codex `request_user_input` (answers over the `elicitation/create`
-/// round-trip — `handle_elicitation_request`). Neither emits a completed tool
-/// result into the ACP stream, so the connection handler emits this once the
-/// user submits.
+/// completed stream tool_call. Three callers: grok (answers over the
+/// `_x.ai/ask_user_question` ext round-trip — `handle_grok_ask_user_question`),
+/// codex `request_user_input` (answers over the `elicitation/create` round-trip
+/// — `handle_elicitation_request`), and pi's extension-UI `select` (answers over
+/// the `session/request_permission` round-trip — `try_bridge_pi_select_ask`).
+/// None of them emits a completed tool result into the ACP stream, so the
+/// connection handler emits this once the user submits.
 ///
 /// Deliberately omits `header`, so the frontend parses `header:""` and matches
 /// answers to questions by `question` text alone. The paired
@@ -1392,7 +1824,7 @@ mod tests {
             }),
             json!(["q1"]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(q.specs.len(), 1);
         assert_eq!(q.specs[0].id, "q1", "property key becomes the spec id");
         assert_eq!(q.specs[0].question, "Which approach?");
@@ -1411,6 +1843,455 @@ mod tests {
         );
     }
 
+    /// codex-acp ≥1.12.0's `request_user_input` shape, verbatim off
+    /// `buildUserInputRequest`: the QUESTION is in `title`, the short tab label
+    /// is in `description`, the companion is `<id>_note` with
+    /// `_meta.codex.role`, and an `isOther` question's `oneOf` ends with the
+    /// injected "None of the above".
+    #[test]
+    fn classify_elicitation_reads_codex_112_orientation_and_drops_its_extras() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Which approach should I take for the rewrite?",
+                    "description": "Approach",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}},
+                    "oneOf": [
+                        {"const": "Incremental", "title": "Incremental"},
+                        {"const": "Rewrite", "title": "Rewrite"},
+                        {
+                            "const": "None of the above",
+                            "title": "None of the above",
+                            "description": "Provide a different answer in the note field."
+                        }
+                    ]
+                },
+                "q1_note": {
+                    "type": "string",
+                    "title": "Additional answer or note",
+                    "_meta": {"codex": {
+                        "questionId": "q1", "role": "user_note", "isSecret": false
+                    }}
+                }
+            }),
+            json!(["q1"]),
+        );
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        assert_eq!(q.specs.len(), 1, "the `_note` companion must not render");
+        assert_eq!(q.specs[0].id, "q1");
+        assert_eq!(
+            q.specs[0].question, "Which approach should I take for the rewrite?",
+            "1.12.0 puts the question in `title`"
+        );
+        assert_eq!(
+            q.specs[0].header, "Approach",
+            "…and the short tab label in `description`"
+        );
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["Incremental", "Rewrite"],
+            "codex's injected 'None of the above' is dropped for the card's own Other input"
+        );
+    }
+
+    /// A model that writes "None of the above" itself: codex-acp then injects
+    /// nothing, so the option is REAL and must survive. Same label, no codex
+    /// description.
+    #[test]
+    fn classify_elicitation_keeps_a_model_authored_none_of_the_above() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Which approach?",
+                    "description": "Approach",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}},
+                    "oneOf": [
+                        {"const": "Incremental", "title": "Incremental"},
+                        {"const": "None of the above", "title": "None of the above"}
+                    ]
+                },
+                "q1_note": {
+                    "type": "string",
+                    "title": "Additional answer or note",
+                    "_meta": {"codex": {"questionId": "q1", "role": "user_note"}}
+                }
+            }),
+            json!(["q1"]),
+        );
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Incremental", "None of the above"]);
+    }
+
+    /// A codex-acp ≤1.11.0 form still reads the old way round. The `__other`
+    /// companion + `isOtherAnswer` marker date the form, so `description` stays
+    /// the question and `title` the tab label.
+    #[test]
+    fn classify_elicitation_keeps_codex_111_orientation() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Approach",
+                    "description": "Which approach should I take for the rewrite?",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}},
+                    "oneOf": [
+                        {"const": "Incremental", "title": "Incremental"},
+                        {"const": "Rewrite", "title": "Rewrite"}
+                    ]
+                },
+                "q1__other": {
+                    "type": "string",
+                    "title": "Other",
+                    "description": "Type your own answer instead of choosing an option above.",
+                    "_meta": {"codex": {
+                        "questionId": "q1", "isOtherAnswer": true, "isSecret": false
+                    }}
+                }
+            }),
+            json!([]),
+        );
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert_eq!(
+            q.specs[0].question, "Which approach should I take for the rewrite?",
+            "≤1.11.0 puts the question in `description`"
+        );
+        assert_eq!(q.specs[0].header, "Approach");
+    }
+
+    /// A codex form whose questions all have `isOther: false` carries NO
+    /// companion, in either generation — so the form itself cannot be dated and
+    /// the running adapter's version is the only real signal. Both readings are
+    /// reachable, and `None` falls back to the pinned adapter's shape.
+    ///
+    /// This is the ordinary case, not an edge one: most `request_user_input`
+    /// questions are plain selects.
+    #[test]
+    fn classify_elicitation_undated_codex_form_follows_the_running_adapter() {
+        let props = json!({
+            "q1": {
+                "type": "string",
+                "title": "Which approach should I take?",
+                "description": "Approach",
+                "_meta": {"codex": {"isOther": false, "isSecret": false}},
+                "oneOf": [{"const": "Incremental", "title": "Incremental"}]
+            }
+        });
+        let raw = elicitation_raw(props, json!(["q1"]));
+
+        // Running ≥1.12.0 — `title` is the question.
+        let q = expect_questions(
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
+        );
+        assert_eq!(q.specs[0].question, "Which approach should I take?");
+        assert_eq!(q.specs[0].header, "Approach");
+
+        // Running ≤1.11.0 — the old reading, even though no marker dates the
+        // form. A custom pin is a supported configuration.
+        let q = expect_questions(
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription))).unwrap(),
+        );
+        assert_eq!(q.specs[0].question, "Approach");
+        // …and the question text lands in the header slot, where the
+        // `MAX_HEADER_CHARS` clamp shears it — which is what the wrong
+        // orientation costs a user: a truncated chip and no question.
+        assert_eq!(
+            q.specs[0].header,
+            "Which approach should I take?"
+                .chars()
+                .take(MAX_HEADER_CHARS)
+                .collect::<String>()
+        );
+
+        // Adapter reported no usable version — fall back to the pinned shape.
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        assert_eq!(q.specs[0].question, "Which approach should I take?");
+    }
+
+    /// The running adapter's version OUTRANKS a companion marker: it describes
+    /// the process that built the frame. They agree in practice, so this pins
+    /// the precedence rather than a behavior anyone should see.
+    #[test]
+    fn classify_elicitation_running_version_outranks_the_companion_marker() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Approach",
+                    "description": "Which approach should I take?",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}},
+                    "oneOf": [{"const": "Incremental", "title": "Incremental"}]
+                },
+                "q1__other": {
+                    "type": "string",
+                    "title": "Other",
+                    "_meta": {"codex": {"questionId": "q1", "isOtherAnswer": true}}
+                }
+            }),
+            json!([]),
+        );
+        let q = expect_questions(
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
+        );
+        assert_eq!(q.specs[0].question, "Approach", "running version wins");
+        // …and with no running version, the marker dates it the old way.
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        assert_eq!(q.specs[0].question, "Which approach should I take?");
+    }
+
+    /// The 1.12.0 fixups are codex-only. DeepSeek is routed through this same
+    /// parser (`build_client_capabilities` advertises `elicitation.form` to it),
+    /// and for DeepSeek a value that is not in the option set is decoded as a
+    /// CUSTOM answer — so silently eating a real "None of the above" would not
+    /// just hide a radio, it would change what the agent is told.
+    #[test]
+    fn classify_elicitation_non_codex_form_keeps_none_of_the_above() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Pick one",
+                    "oneOf": [
+                        {"const": "Incremental", "title": "Incremental"},
+                        {
+                            "const": "None of the above",
+                            "title": "None of the above",
+                            "description": "Provide a different answer in the note field."
+                        }
+                    ]
+                }
+            }),
+            json!(["q1"]),
+        );
+        for peer in [
+            ElicitationPeer::Other,
+            ElicitationPeer::Codex(None),
+            ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription)),
+        ] {
+            let q = expect_questions(classify_elicitation(&raw, peer).unwrap());
+            let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+            assert_eq!(
+                labels,
+                ["Incremental", "None of the above"],
+                "no `_meta.codex` ⇒ not a codex form ⇒ no codex fixups (peer={peer:?})"
+            );
+        }
+    }
+
+    /// The gate is the PEER, not the payload. `_meta` is an open namespace, so
+    /// a non-codex speaker — DeepSeek, or any MCP server whose form either
+    /// adapter relays — can carry a `codex` block of its own meaning. If that
+    /// were enough to unlock the codex fixups, a third party could make codeg
+    /// hide one of its fields (the companion skip), read its questions upside
+    /// down (the orientation flip) and delete one of its options (the synthetic
+    /// filter). None of those may fire on `ElicitationPeer::Other`.
+    ///
+    /// The same payload under a codex peer is asserted right below, so the test
+    /// shows the identity gate doing the deciding rather than the payload
+    /// merely being inert.
+    #[test]
+    fn classify_elicitation_foreign_codex_meta_is_ignored_off_codex() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Approach",
+                    "description": "Which approach should I take?",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}},
+                    "oneOf": [
+                        {"const": "Incremental", "title": "Incremental"},
+                        {
+                            "const": "None of the above",
+                            "title": "None of the above",
+                            "description": "Provide a different answer in the note field."
+                        }
+                    ]
+                },
+                "q1_note": {
+                    "type": "string",
+                    "title": "Release note",
+                    "description": "Anything to add?",
+                    "_meta": {"codex": {"questionId": "q1", "role": "user_note"}}
+                }
+            }),
+            json!([]),
+        );
+
+        // Not codex: every field is a real field, the JSON Schema reading
+        // stands, and every option survives.
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(
+            q.specs.len(),
+            2,
+            "a `user_note` block from a non-codex peer is not a companion"
+        );
+        assert_eq!(q.specs[0].question, "Which approach should I take?");
+        assert_eq!(q.specs[0].header, "Approach");
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Incremental", "None of the above"]);
+
+        // The identical payload from codex: companion skipped, 1.12 orientation,
+        // injected option dropped. Same bytes, opposite treatment — the peer is
+        // the only input that changed.
+        let q = expect_questions(
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
+        );
+        assert_eq!(q.specs.len(), 1);
+        assert_eq!(q.specs[0].question, "Approach");
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Incremental"]);
+    }
+
+    /// The synthetic-option filter matches THIS choice's own `oneOf` entry, by
+    /// `const`, rather than asking whether the array contains a synthetic entry
+    /// anywhere. Scanning would drop a legitimate option that merely shares the
+    /// label with one — and since the labels collide, the dedup pass then eats
+    /// the synthetic one too, leaving the real choice unselectable and its
+    /// `const` unmappable on the way back.
+    ///
+    /// A conforming codex cannot send this pair (it writes `const: label` for
+    /// every option and skips its injection when the label is already taken),
+    /// so this pins the narrowing rather than a shape seen in the wild.
+    #[test]
+    fn classify_elicitation_keeps_a_same_label_option_with_its_own_const() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Approach",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}},
+                    "oneOf": [
+                        {
+                            "const": "real-none",
+                            "title": "None of the above",
+                            "description": "A real option the model wrote."
+                        },
+                        {
+                            "const": "None of the above",
+                            "title": "None of the above",
+                            "description": "Provide a different answer in the note field."
+                        }
+                    ]
+                }
+            }),
+            json!([]),
+        );
+        let q = expect_questions(
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
+        );
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["None of the above"],
+            "the model's own option survives; only the injected twin goes"
+        );
+        // …and it still round-trips to the model's `const`, not the synthetic
+        // one, so the agent is told what the user actually picked.
+        assert_eq!(
+            q.fields[0].value_by_label.get("None of the above"),
+            Some(&"real-none".to_string())
+        );
+    }
+
+    /// …and within codex, a NON-`isOther` question is never injected into
+    /// either, so its options are left alone too.
+    #[test]
+    fn classify_elicitation_codex_non_other_question_keeps_none_of_the_above() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Pick one",
+                    "_meta": {"codex": {"isOther": false, "isSecret": false}},
+                    "oneOf": [
+                        {"const": "Incremental", "title": "Incremental"},
+                        {
+                            "const": "None of the above",
+                            "title": "None of the above",
+                            "description": "Provide a different answer in the note field."
+                        }
+                    ]
+                }
+            }),
+            json!(["q1"]),
+        );
+        let q = expect_questions(
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
+        );
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Incremental", "None of the above"]);
+    }
+
+    /// A generic MCP server's form has no `codex` namespace at all, so it keeps
+    /// the JSON Schema reading codeg has always used — `description` is the
+    /// prose, `title` the short label. The swap is codex-only.
+    #[test]
+    fn classify_elicitation_generic_mcp_form_keeps_description_as_the_question() {
+        let raw = elicitation_raw(
+            json!({
+                "port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "description": "Which port should the server listen on?"
+                }
+            }),
+            json!(["port"]),
+        );
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        assert_eq!(q.specs[0].question, "Which port should the server listen on?");
+        assert_eq!(q.specs[0].header, "Port");
+    }
+
+    /// 1.12.0 omits `description` entirely when the model supplied no header —
+    /// the question still comes from `title`, and the tab label is synthesized.
+    #[test]
+    fn classify_elicitation_codex_112_without_a_header_still_reads_the_title() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {
+                    "type": "string",
+                    "title": "Which approach should I take?",
+                    "_meta": {"codex": {"isOther": false, "isSecret": false}}
+                }
+            }),
+            json!(["q1"]),
+        );
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        assert_eq!(q.specs[0].question, "Which approach should I take?");
+        assert!(!q.specs[0].header.is_empty(), "header is synthesized");
+    }
+
+    /// Defense against over-skipping the renamed companion: a REAL question
+    /// whose id merely ends in `_note` carries no `_meta.codex` marker, so it
+    /// must render. (This is why the `_note` rename is matched by marker only,
+    /// never by name — unlike the legacy `__other`.)
+    #[test]
+    fn classify_elicitation_keeps_an_unmarked_field_named_note() {
+        let raw = elicitation_raw(
+            json!({
+                "q1": {"type": "string", "title": "Pick one", "enum": ["a", "b"]},
+                "release_note": {"type": "string", "title": "Release note"}
+            }),
+            json!([]),
+        );
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let ids: Vec<_> = q.specs.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["q1", "release_note"]);
+    }
+
     #[test]
     fn classify_elicitation_free_text_renders_and_skips_other_companion() {
         // A free-text question (no options) renders as a 0-option spec (the
@@ -1426,7 +2307,7 @@ mod tests {
             }),
             json!([]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(q.specs.len(), 1);
         assert_eq!(q.specs[0].id, "q1");
         assert!(q.specs[0].options.is_empty(), "free text has no options");
@@ -1474,7 +2355,7 @@ mod tests {
             }),
             json!([]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(q.specs.len(), 1, "companion must not render as a question");
         assert_eq!(q.specs[0].id, "question_0");
         assert_eq!(q.specs[0].options.len(), 2);
@@ -1496,7 +2377,7 @@ mod tests {
             }),
             json!([]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         let ids: Vec<&str> = q.specs.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -1521,7 +2402,7 @@ mod tests {
             }),
             json!([]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(q.specs.len(), 1);
         assert!(q.specs[0].multi_select);
         // Titles display; consts ride back on accept.
@@ -1549,7 +2430,7 @@ mod tests {
             }),
             json!(["confirm"]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(q.specs.len(), 3);
         // Booleans render as Yes/No; numbers as free text.
         let confirm = q.specs.iter().position(|s| s.id == "confirm").unwrap();
@@ -1601,7 +2482,7 @@ mod tests {
             }),
             json!(["env"]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(q.specs[0].options[0].label, "Production (EU)");
         let answer = QuestionAnswer {
             answers: vec![QuestionAnswerItem {
@@ -1644,7 +2525,7 @@ mod tests {
             },
             "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"]}
         });
-        let approval = expect_approval(classify_elicitation(&raw).unwrap());
+        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(approval.message, "Allow tool call?");
         assert_eq!(approval.tool_call_id.as_deref(), Some("call-1"));
         assert!(approval.persist_in_content);
@@ -1685,7 +2566,7 @@ mod tests {
             "requestedSchema": {"type": "object", "properties": {}},
             "_meta": {"codex_approval_kind": "mcp_tool_call"}
         });
-        let approval = expect_approval(classify_elicitation(&raw).unwrap());
+        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert!(!approval.persist_in_content);
         let ids: Vec<_> = approval.options.iter().map(|o| o.option_id.as_str()).collect();
         assert_eq!(ids, ["accept", ELICITATION_DECLINE_OPTION_ID]);
@@ -1703,7 +2584,7 @@ mod tests {
         // A non-approval form with nothing to fill in (a bare MCP server
         // confirmation) renders Accept/Decline rather than auto-declining.
         let raw = elicitation_raw(json!({}), json!([]));
-        let approval = expect_approval(classify_elicitation(&raw).unwrap());
+        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(approval.message, "Input requested");
         let ids: Vec<_> = approval.options.iter().map(|o| o.option_id.as_str()).collect();
         assert_eq!(ids, ["accept", ELICITATION_DECLINE_OPTION_ID]);
@@ -1725,7 +2606,7 @@ mod tests {
             }),
             json!(["colour"]),
         );
-        let q = expect_questions(classify_elicitation(&raw).unwrap());
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         // Simulate the user picking "Blue" through the normal answer path.
         let answer = QuestionAnswer {
             answers: vec![QuestionAnswerItem {
@@ -1757,16 +2638,6 @@ mod tests {
         assert_eq!(v["action"], "decline");
         let v = serde_json::to_value(elicitation_cancel_response()).unwrap();
         assert_eq!(v["action"], "cancel");
-    }
-
-    #[test]
-    fn elicitation_auto_resolution_ms_reads_codex_meta() {
-        let mut raw = elicitation_raw(json!({}), json!([]));
-        assert_eq!(elicitation_auto_resolution_ms(&raw), None);
-        raw["_meta"] = json!({"codex": {"autoResolutionMs": 30000}});
-        assert_eq!(elicitation_auto_resolution_ms(&raw), Some(30000));
-        raw["_meta"] = json!({"codex": {"autoResolutionMs": null}});
-        assert_eq!(elicitation_auto_resolution_ms(&raw), None);
     }
 
     #[test]
@@ -2127,6 +2998,203 @@ mod tests {
         assert!(parse_grok_ext_questions(&json!({ "mode": "default" })).is_err());
         // Empty questions.
         assert!(parse_grok_ext_questions(&grok_params(json!([]))).is_err());
+    }
+
+    /// The `toolCall` of a `session/request_permission` captured from a live
+    /// pi-acp 0.0.33 run of an extension calling `ctx.ui.select` (#644).
+    fn pi_select_tool_call() -> Value {
+        json!({
+            "toolCallId": "pi-ui-69c549d7-9f79-4de6-a860-7ae4d27553f7",
+            "title": "[未提交改动] 当前分支有未提交的 AddIOP.cs 修改；创建热修复分支时应如何处理？",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": {
+                "method": "select",
+                "title": "[未提交改动] 当前分支有未提交的 AddIOP.cs 修改；创建热修复分支时应如何处理？",
+                "options": [
+                    "1. 暂存后切分支 (Recommended) — 把当前改动保存到具名 stash",
+                    "2. 独立 worktree — 保留当前工作区不动",
+                    "3. 携带改动切换 — 直接创建并切换分支",
+                    "4. Type something."
+                ]
+            }
+        })
+    }
+
+    /// The paired permission `options`, same run.
+    fn pi_select_options() -> Vec<(String, String)> {
+        [
+            "1. 暂存后切分支 (Recommended) — 把当前改动保存到具名 stash",
+            "2. 独立 worktree — 保留当前工作区不动",
+            "3. 携带改动切换 — 直接创建并切换分支",
+            "4. Type something.",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (format!("choice-{i}"), (*name).to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn parse_pi_select_ask_maps_captured_wire_shape() {
+        let ask = parse_pi_select_ask(&pi_select_tool_call(), &pi_select_options())
+            .expect("pi select must be recognized");
+        assert_eq!(
+            ask.spec.question,
+            "[未提交改动] 当前分支有未提交的 AddIOP.cs 修改；创建热修复分支时应如何处理？"
+        );
+        // `ctx.ui.select` yields one value.
+        assert!(!ask.spec.multi_select);
+        assert_eq!(ask.spec.options.len(), 4);
+        assert_eq!(
+            ask.spec.options[0].label,
+            "1. 暂存后切分支 (Recommended) — 把当前改动保存到具名 stash"
+        );
+        // Whatever we synthesize MUST satisfy the register-time re-validation,
+        // else `register_question` silently declines the ask and the user is
+        // left with the raw approval card.
+        validate_specs(std::slice::from_ref(&ask.spec))
+            .expect("synthesized spec must pass validate_specs");
+        // Labels round-trip to the ids pi replies against.
+        assert_eq!(
+            ask.option_ids
+                .iter()
+                .map(|(_, id)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["choice-0", "choice-1", "choice-2", "choice-3"]
+        );
+    }
+
+    #[test]
+    fn parse_pi_select_ask_declines_what_it_cannot_render_faithfully() {
+        let opts = |n: usize| -> Vec<(String, String)> {
+            (0..n)
+                .map(|i| (format!("choice-{i}"), format!("option {i}")))
+                .collect()
+        };
+        // More options than the card can show: truncating would HIDE choices the
+        // user must be able to pick, so keep the approval card (which lists all).
+        assert!(parse_pi_select_ask(&pi_select_tool_call(), &opts(MAX_OPTIONS + 1)).is_none());
+        assert!(parse_pi_select_ask(&pi_select_tool_call(), &opts(MIN_OPTIONS - 1)).is_none());
+        // Duplicate labels: the label is the card's selection identity, so a
+        // duplicate could answer pi with the wrong index.
+        let dup = vec![
+            ("choice-0".to_string(), "Same".to_string()),
+            ("choice-1".to_string(), "Same".to_string()),
+        ];
+        assert!(parse_pi_select_ask(&pi_select_tool_call(), &dup).is_none());
+        // Blank label.
+        let blank = vec![
+            ("choice-0".to_string(), "  ".to_string()),
+            ("choice-1".to_string(), "B".to_string()),
+        ];
+        assert!(parse_pi_select_ask(&pi_select_tool_call(), &blank).is_none());
+    }
+
+    #[test]
+    fn parse_pi_select_ask_ignores_other_permission_requests() {
+        let strip = |f: &str| {
+            let mut tc = pi_select_tool_call();
+            tc.as_object_mut().unwrap().remove(f);
+            tc
+        };
+        // An ordinary tool approval (claude/codex/pi's own tools) has no pi-ui id.
+        let mut edit = pi_select_tool_call();
+        edit["toolCallId"] = json!("call_abc");
+        assert!(parse_pi_select_ask(&edit, &pi_select_options()).is_none());
+        // pi's `confirm` dialog is a real yes/no approval, which the permission
+        // card already models (allow_once / reject_once).
+        let mut confirm = pi_select_tool_call();
+        confirm["rawInput"]["method"] = json!("confirm");
+        assert!(parse_pi_select_ask(&confirm, &pi_select_options()).is_none());
+        assert!(parse_pi_select_ask(&strip("rawInput"), &pi_select_options()).is_none());
+        // Option ids that aren't pi-acp's `choice-<index>`: the reply mapping
+        // would be a guess.
+        let foreign = vec![
+            ("allow".to_string(), "Allow".to_string()),
+            ("deny".to_string(), "Deny".to_string()),
+        ];
+        assert!(parse_pi_select_ask(&pi_select_tool_call(), &foreign).is_none());
+    }
+
+    #[test]
+    fn is_codeg_ask_tool_name_accepts_every_host_spelling_of_codegs_own_tool() {
+        for spelling in [
+            // claude-agent-acp: an MCP tool's permission card title IS the
+            // raw tool name.
+            "mcp__codeg-mcp__ask_user_question",
+            "codeg-mcp/ask_user_question",
+            "codeg-mcp: ask_user_question",
+            "mcp.codeg-mcp.ask_user_question",
+            // Hosts that title-case or pad it.
+            "  MCP__Codeg-MCP__Ask_User_Question  ",
+        ] {
+            assert!(
+                is_codeg_ask_tool_name(spelling),
+                "{spelling} is codeg's own ask tool"
+            );
+        }
+    }
+
+    #[test]
+    fn is_codeg_ask_tool_name_rejects_tools_that_are_not_codegs_ask() {
+        for other in [
+            // A third-party MCP server's similarly named tool: approving it is
+            // the user's decision, so the bare suffix must NOT be enough.
+            "mcp__other-server__ask_user_question",
+            "ask_user_question",
+            // grok's NATIVE ask arrives on its own ext channel, never as a
+            // permission request — and it is not codeg-mcp's tool either.
+            "_x.ai/ask_user_question",
+            // Codeg's other companion tools keep their approval gate.
+            "mcp__codeg-mcp__delegate_to_agent",
+            "mcp__codeg-mcp__check_user_feedback",
+            // Right server, right words, wrong tool — the match is anchored at
+            // the END so a longer name cannot borrow it.
+            "mcp__codeg-mcp__ask_user_question_twice",
+            "",
+        ] {
+            assert!(
+                !is_codeg_ask_tool_name(other),
+                "{other} must keep its approval card"
+            );
+        }
+    }
+
+    #[test]
+    fn pi_select_option_id_maps_pick_and_cancels_what_pi_cannot_take() {
+        let ask = parse_pi_select_ask(&pi_select_tool_call(), &pi_select_options()).unwrap();
+        let answered = |labels: Vec<&str>| QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: ask.spec.question.clone(),
+                header: ask.spec.header.clone(),
+                multi_select: false,
+                selected: labels.into_iter().map(str::to_string).collect(),
+            }],
+            declined: false,
+        };
+        assert_eq!(
+            pi_select_option_id(&answered(vec![&ask.spec.options[1].label]), &ask).as_deref(),
+            Some("choice-1")
+        );
+        // Declined card → cancel, which is what `ctx.ui.select` sees on Escape.
+        assert_eq!(
+            pi_select_option_id(
+                &QuestionOutcome {
+                    answers: vec![],
+                    declined: true
+                },
+                &ask
+            ),
+            None
+        );
+        // Free text typed into the card's always-present "Other" box has no
+        // option id, so pi can only be told the dialog was cancelled.
+        assert_eq!(
+            pi_select_option_id(&answered(vec!["something else"]), &ask),
+            None
+        );
+        assert_eq!(pi_select_option_id(&answered(vec![]), &ask), None);
     }
 
     #[test]

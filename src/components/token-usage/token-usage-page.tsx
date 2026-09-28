@@ -59,11 +59,13 @@ import {
   averagePerConversation,
   averageTurnsPerConversation,
   buildHeatMatrix,
+  CACHE_HIT_RATE_DIGITS,
   cacheHitRate,
   computeDelta,
   deriveArchetype,
   foldBreakdown,
   formatDuration,
+  formatPercent,
   formatTokensPrecise,
   freshTokens,
   idleDays,
@@ -1145,7 +1147,15 @@ export function TokenUsagePage() {
                             <div className="flex items-center gap-5 border-t border-border p-5 lg:border-s lg:border-t-0">
                               <RingMeter
                                 ratio={cache}
-                                valueText={`${Math.round(cache * 100)}%`}
+                                // One decimal, the same reading the composer's
+                                // popover gives (`CACHE_HIT_RATE_DIGITS`): the
+                                // two surfaces answer the same question, and a
+                                // rounded 95% next to a 94.6% looks like two
+                                // different numbers.
+                                valueText={formatPercent(
+                                  cache,
+                                  CACHE_HIT_RATE_DIGITS
+                                )}
                                 caption={t("cacheHitCaption")}
                               />
                               <div className="min-w-0">

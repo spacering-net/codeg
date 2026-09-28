@@ -14,9 +14,9 @@ import { toast } from "sonner"
 import {
   type AppUpdateInfo,
   type AppUpdateState,
-  appUpdateErrorMessageKey,
   checkAppUpdateInfo,
   confirmRollbackVersion,
+  describeAppUpdateError,
   getAppUpdateState,
   getCurrentAppVersion,
   getRunningServerVersion,
@@ -41,6 +41,8 @@ import {
   writeLastCheck,
 } from "@/lib/update-check-storage"
 import { getTransport } from "@/lib/transport"
+import { extractAppCommandError } from "@/lib/app-error"
+import type { AppCommandError } from "@/lib/types"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -118,9 +120,17 @@ export interface UpdateContextValue {
   liveProgress: boolean
   runtime: string | undefined
   rollbackAvailable: boolean
+  /** What keeps this server from updating in place although it supports
+   * doing so — an install directory it can't write, found by the same
+   * preflight the update runs first (a `permission_denied` one rules out a
+   * rollback too). Render with `describeAppUpdateError`. Written only by the
+   * local status refresh, which runs one request at a time, so an older answer
+   * can't land over a newer one. Null when nothing is in the way, on desktop,
+   * and on older servers. */
+  selfUpdateBlocker: AppCommandError | null
   /** This client can actually drive an in-place install — desktop (Tauri
-   * plugin) or a server speaking the live-progress protocol. When false the UI
-   * offers a "view release" link instead. */
+   * plugin) or a server speaking the live-progress protocol with nothing in
+   * the way. When false the UI offers a "view release" link instead. */
   canInstallInPlace: boolean
   /** Version the user dismissed the badge for, if any. */
   dismissedVersion: string | null
@@ -192,6 +202,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const [liveProgress, setLiveProgress] = useState(false)
   const [runtime, setRuntime] = useState<string | undefined>(undefined)
   const [rollbackAvailable, setRollbackAvailable] = useState(false)
+  const [selfUpdateBlocker, setSelfUpdateBlocker] =
+    useState<AppCommandError | null>(null)
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
 
   // Completion time of the answer currently applied to state, as a watermark so
@@ -403,11 +415,23 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   // The single follow-up pass owed to callers who arrived while that round-trip
   // was already running. See `refreshLocalStatus`.
   const trailingRefreshRef = useRef<Promise<void> | null>(null)
+  // `refreshLocalStatus`, for `runCheck` above its declaration.
+  const refreshLocalStatusRef = useRef<() => Promise<void>>(() =>
+    Promise.resolve()
+  )
 
   const runCheck = useCallback(
     async (silent: boolean) => {
       setChecking(true)
       try {
+        // Read what would block installing an update before asking whether
+        // one exists, so an offer never comes with a verdict older than the
+        // check itself. Before, not after: nothing may run between an answer
+        // and its publication, or a refresh there that found another process
+        // running could no longer discard that answer. The status refresh
+        // stays the verdict's only writer.
+        await refreshLocalStatusRef.current().catch(() => {})
+        if (!mountedRef.current) return
         const result = await checkAppUpdateInfo()
         if (!mountedRef.current) return
         setCurrentVersion(result.currentVersion)
@@ -437,12 +461,13 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
           return null
         })
       } catch (err) {
-        const { kind, rawMessage } = normalizeAppUpdateError(err)
+        const { rawMessage } = normalizeAppUpdateError(err)
         if (mountedRef.current) setCheckError(rawMessage)
         if (!silent) {
+          const reason = describeAppUpdateError(err, "check")
           toast.error(
             t("checkUpdateFailed", {
-              message: t(appUpdateErrorMessageKey(kind, "check")),
+              message: t(reason.key, reason.values),
             })
           )
         }
@@ -531,6 +556,9 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
               setLiveProgress(status.liveProgress ?? false)
               setRuntime(status.runtime)
               setRollbackAvailable(status.rollbackAvailable)
+              setSelfUpdateBlocker(
+                extractAppCommandError(status.selfUpdateBlocker)
+              )
             }
           }
         } catch (err) {
@@ -592,6 +620,9 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     trailingRefreshRef.current = next
     return next
   }, [startRefresh])
+  useEffect(() => {
+    refreshLocalStatusRef.current = refreshLocalStatus
+  }, [refreshLocalStatus])
 
   // Local status is cheap and offline-safe, so seed it right away rather than
   // waiting out the first manifest check.
@@ -618,6 +649,22 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (state.status === "error") void refreshLocalStatus()
   }, [state.status, refreshLocalStatus])
+
+  // What blocks an in-place update gets fixed outside codeg (a chown, a
+  // remount), typically in another window. Look again when the user comes
+  // back, rather than keeping the manual route up until a reconnect or reload.
+  useEffect(() => {
+    if (!selfUpdateBlocker) return
+    const recheck = () => {
+      if (!document.hidden) void refreshLocalStatus()
+    }
+    window.addEventListener("focus", recheck)
+    document.addEventListener("visibilitychange", recheck)
+    return () => {
+      window.removeEventListener("focus", recheck)
+      document.removeEventListener("visibilitychange", recheck)
+    }
+  }, [selfUpdateBlocker, refreshLocalStatus])
 
   // Floor between automatic attempts, so a failing check (which deliberately
   // does NOT record a completion time, so recovery isn't blocked for 6h) can't
@@ -872,9 +919,11 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
 
   // Desktop always drives the Tauri updater; a server only when it speaks the
   // detached live-progress protocol (older ones would block on the legacy
-  // endpoint), so anything else falls back to a "view release" link.
+  // endpoint) and reports nothing in the way (an in-place update it already
+  // knows would fail), so anything else falls back to a "view release" link.
   const canInstallInPlace =
-    usesTauriUpdater() || (selfUpdateSupported && liveProgress)
+    usesTauriUpdater() ||
+    (selfUpdateSupported && liveProgress && !selfUpdateBlocker)
 
   const value = useMemo<UpdateContextValue>(
     () => ({
@@ -894,6 +943,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       liveProgress,
       runtime,
       rollbackAvailable,
+      selfUpdateBlocker,
       canInstallInPlace,
       dismissedVersion,
       checkNow,
@@ -920,6 +970,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       liveProgress,
       runtime,
       rollbackAvailable,
+      selfUpdateBlocker,
       canInstallInPlace,
       dismissedVersion,
       checkNow,

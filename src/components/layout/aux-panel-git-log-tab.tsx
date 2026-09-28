@@ -620,7 +620,10 @@ function CommitFilesTree({
             title={file.path}
           >
             <>
-              <span className="size-4 shrink-0" />
+              {/* The status letter is this row's LEADING glyph and shares the
+                  column a sibling folder's chevron occupies; a spacer in front
+                  of it would hang every file one glyph right of its parent
+                  directory. */}
               <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
                 <CommitFileStatus status={mapFileStatus(file.status)}>
                   {file.status}

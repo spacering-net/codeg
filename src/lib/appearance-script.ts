@@ -48,6 +48,16 @@ export const STORAGE_KEY_WORKSPACE_BG_PANEL_OPACITY =
 // 写/换/删图后 bump，让 workspace 窗口经 storage 事件重新读盘。不需预水合。
 export const STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION =
   "codeg-workspace-bg-image-version"
+// 壁纸市场：当前背景的来源页（https://wallhaven.cc/w/<id>），仅用于市场卡片的
+// 「使用中」标记。本地选图 / 移除背景时清除；不参与渲染，丢了也只是标记失灵。
+//
+// 它和图片本身是两份状态，只在同一次操作里前后脚写，并非事务。同一个界面里
+// 换图是单飞的（市场对话框全网格禁用，本地选图有 busy 闸），但两个窗口/标签页
+// 同时换图时，最后落盘的图和最后写的标记可能来自不同的那一次 —— 图仍然是完整
+// 的一张（后端按写者独立暂存 + 原子 rename），错的只是「使用中」指向谁。要根治
+// 得把来源页跟图一起存到磁盘上，那是后端的形状改动，不在本次范围内。
+export const STORAGE_KEY_WORKSPACE_BG_SOURCE_URL =
+  "codeg-workspace-bg-source-url"
 
 // 自定义样式（外观设置页）。全部需要预水合 —— 少一帧就会看到「基底预设 → 用户配色」
 // 的跳变，比没有这个功能更糟。

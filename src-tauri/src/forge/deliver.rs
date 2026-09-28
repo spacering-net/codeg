@@ -29,8 +29,84 @@ use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
 use super::{
-    github, gitlab, urlencode_query, web_origin, ForgeError, ForgeItemKind, ForgeProvider,
+    gitea, github, gitlab, urlencode_query, web_origin, ForgeError, ForgeItemKind, ForgeProvider,
 };
+use crate::app_error::AppCommandError;
+
+/// Flatten a classified git failure into one line, git's own words included.
+///
+/// `AppCommandError`'s `Display` is `{message}` alone, and
+/// `classify_remote_git_error` puts everything specific — the whole of git's
+/// stderr — in `detail`. A plain `to_string()` here therefore hands the caller
+/// nothing but "git push failed", and the delivery path has no second channel
+/// to the failure: that one string is what a human reads. Losing the detail
+/// there once cost a reader a long detour, because the caller filled the
+/// silence with a guess about repository permissions when git had actually
+/// said the branch was out of date.
+///
+/// The detail is bounded. It is arbitrary output from another program, and
+/// this string does not just get read once — it is persisted on the task row
+/// and rendered in the UI, so a server-side hook that answers a push with a
+/// screenful of banner would otherwise all end up in the database. Git leads
+/// with the part that identifies the failure and follows with hints, so a
+/// prefix is the right thing to keep.
+const MAX_GIT_DETAIL_CHARS: usize = 800;
+
+fn git_failure_message(err: AppCommandError) -> String {
+    match err
+        .detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        Some(detail) => format!("{}: {}", err.message, truncate_chars(&redact_userinfo(detail))),
+        None => err.message,
+    }
+}
+
+/// Blank out `scheme://user:secret@host` in text about to be shown and stored.
+///
+/// The account's token never travels in a URL — it reaches git through
+/// `GIT_ASKPASS` — so this is not about that. It is about the URL git echoes
+/// back in its errors: `web_origin` returns a self-hosted `server_url` verbatim,
+/// so a user who typed credentials into their own forge address would have them
+/// come back out here, in a string that is persisted and rendered. Cheap to
+/// scrub, and this is a failure path where nothing is worth that risk.
+fn redact_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(scheme_end) = rest.find("://") {
+        let authority_start = scheme_end + "://".len();
+        // The authority runs to the first character that can only follow it.
+        // Quotes count: git wraps the URL in them ('https://…/repo.git/').
+        let authority_end = rest[authority_start..]
+            .find(|c: char| matches!(c, '/' | '?' | '#' | '\'' | '"') || c.is_whitespace())
+            .map(|i| authority_start + i)
+            .unwrap_or(rest.len());
+        let authority = &rest[authority_start..authority_end];
+        match authority.rfind('@') {
+            Some(at) => {
+                out.push_str(&rest[..authority_start]);
+                out.push_str("***@");
+                out.push_str(&authority[at + 1..]);
+            }
+            None => out.push_str(&rest[..authority_end]),
+        }
+        rest = &rest[authority_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Cut on a character boundary, never a byte one — git happily reports branch
+/// names and hook banners in any encoding, and slicing those mid-codepoint
+/// would panic on the failure path.
+fn truncate_chars(text: &str) -> String {
+    match text.char_indices().nth(MAX_GIT_DETAIL_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_string(),
+    }
+}
 
 /// A pull request as far as delivery cares. Deliberately not the full API
 /// object: everything here is either an adoption criterion or shown to the user.
@@ -273,6 +349,9 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::find_merge_requests(&auth, ctx.owner_repo, head_branch).await
             }
+            ForgeProvider::Gitea => {
+                gitea::find_pulls(&auth, ctx.owner_repo, head_branch).await
+            }
         }
         .map_err(|e| e.to_string())
     }
@@ -288,6 +367,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::create_merge_request(&auth, ctx.owner_repo, req).await
             }
+            ForgeProvider::Gitea => gitea::create_pull(&auth, ctx.owner_repo, req).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -299,6 +379,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::get_merge_request(&auth, ctx.owner_repo, number).await
             }
+            ForgeProvider::Gitea => gitea::get_pull(&auth, ctx.owner_repo, number).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -340,6 +421,11 @@ impl ForgeDeliveryApi for ForgeDelivery {
                 // comment. Same one request either way — and an anchor that did
                 // not survive sanitizing must not fail a comment that was
                 // posted (see `create_issue_comment`).
+                .map(|comment| comment.html_url.unwrap_or_default()),
+            // No kind here either: a pull request is an issue at Gitea, exactly
+            // as at GitHub, and one collection serves both.
+            ForgeProvider::Gitea => gitea::create_comment(&auth, ctx.owner_repo, number, body)
+                .await
                 .map(|comment| comment.html_url.unwrap_or_default()),
         }
         .map_err(|e| e.to_string())
@@ -543,9 +629,9 @@ async fn push_work_branch(
         .await
         .map_err(|e| format!("could not run git push: {e}"))?;
     if !output.status.success() {
-        return Err(
-            crate::commands::folders::classify_remote_git_error("push", &output.stderr).to_string(),
-        );
+        return Err(git_failure_message(
+            crate::commands::folders::classify_remote_git_error("push", &output.stderr),
+        ));
     }
     Ok(())
 }
@@ -575,8 +661,9 @@ async fn fetch_into_ref(
         .await
         .map_err(|e| format!("could not run git fetch: {e}"))?;
     if !out.status.success() {
-        return Err(crate::commands::folders::classify_remote_git_error("fetch", &out.stderr)
-            .to_string());
+        return Err(git_failure_message(
+            crate::commands::folders::classify_remote_git_error("fetch", &out.stderr),
+        ));
     }
     crate::work_task::git::rev_parse(repo_path, local_ref)
         .await
@@ -625,11 +712,13 @@ fn with_credentials(cmd: &mut tokio::process::Command, ctx: &DeliveryCtx<'_>, au
     match crate::git_credential::ensure_askpass_script(ctx.data_dir) {
         Ok(askpass) => {
             let username = if auth.username.trim().is_empty() {
-                // Neither forge checks the username when the password is a
-                // token, but git insists on having one; these are each
-                // ecosystem's conventional placeholder.
+                // No forge checks the username when the password is a token
+                // (Gitea looks the token up and authenticates by it, ignoring
+                // whatever name came with it), but git insists on having one;
+                // these are each ecosystem's conventional placeholder — Gitea's
+                // is GitHub's, which is what its own Actions runner sends.
                 match ctx.provider {
-                    ForgeProvider::GitHub => "x-access-token",
+                    ForgeProvider::GitHub | ForgeProvider::Gitea => "x-access-token",
                     ForgeProvider::GitLab => "oauth2",
                 }
             } else {
@@ -802,6 +891,82 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    /// The delivery error string is the only thing a human sees when a push
+    /// fails, and `classify_remote_git_error` files everything specific under
+    /// `detail`. `Display` prints `message` alone, so flattening has to reach
+    /// for the detail explicitly or the reader is left with "git push failed".
+    #[test]
+    fn a_flattened_git_failure_keeps_what_git_said() {
+        let stderr = b"! [rejected]        task/57 -> feat/x (fetch first)\n\
+                       error: failed to push some refs";
+        let flattened = git_failure_message(crate::commands::folders::classify_remote_git_error(
+            "push", stderr,
+        ));
+        assert!(flattened.starts_with("git push failed"), "{flattened}");
+        assert!(flattened.contains("(fetch first)"), "{flattened}");
+    }
+
+    #[test]
+    fn a_flattened_failure_without_detail_stays_one_clause() {
+        let bare = AppCommandError::network("git push: network error");
+        assert_eq!(git_failure_message(bare), "git push: network error");
+        let blank = AppCommandError::network("git push: network error").with_detail("   ");
+        assert_eq!(git_failure_message(blank), "git push: network error");
+    }
+
+    /// Git echoes the remote URL in its errors, and `web_origin` hands back a
+    /// self-hosted `server_url` verbatim — so credentials a user typed into
+    /// their own forge address would otherwise come back out in a string that
+    /// is persisted and rendered.
+    #[test]
+    fn a_flattened_failure_blanks_credentials_git_echoed_back() {
+        let echoed = "fatal: unable to access \
+             'https://me:s3cret@git.example.com/team/app.git/': The requested URL returned \
+             error: 403";
+        let flattened = git_failure_message(
+            AppCommandError::network("git push failed").with_detail(echoed),
+        );
+        assert!(!flattened.contains("s3cret"), "{flattened}");
+        assert!(flattened.contains("https://***@git.example.com/team/app.git/"), "{flattened}");
+        // The rest of git's sentence has to survive the scrub intact.
+        assert!(flattened.contains("returned error: 403"), "{flattened}");
+    }
+
+    #[test]
+    fn a_flattened_failure_leaves_a_credential_free_url_alone() {
+        let plain = "! [rejected] a -> b (fetch first)\nerror: failed to push some refs to \
+             'https://github.com/owner/repo.git'";
+        let flattened =
+            git_failure_message(AppCommandError::network("git push failed").with_detail(plain));
+        assert!(
+            flattened.contains("'https://github.com/owner/repo.git'"),
+            "{flattened}"
+        );
+        assert!(!flattened.contains("***"), "{flattened}");
+    }
+
+    /// This string is persisted and rendered, and the detail is another
+    /// program's output — a hook that answers a push with a banner must not
+    /// land in the database whole. Multi-byte input is the case that would
+    /// panic if the cut were taken on bytes.
+    #[test]
+    fn a_flattened_failure_bounds_a_runaway_detail() {
+        let banner = "の".repeat(MAX_GIT_DETAIL_CHARS * 2);
+        let flattened =
+            git_failure_message(AppCommandError::network("git push failed").with_detail(&banner));
+        assert!(flattened.starts_with("git push failed: の"), "{flattened}");
+        assert!(flattened.ends_with('…'), "expected an elision marker");
+        assert_eq!(
+            flattened.chars().count(),
+            "git push failed: ".chars().count() + MAX_GIT_DETAIL_CHARS + 1
+        );
+        // Exactly at the limit is kept whole, with no marker implying loss.
+        let exact = "x".repeat(MAX_GIT_DETAIL_CHARS);
+        let kept =
+            git_failure_message(AppCommandError::network("git push failed").with_detail(&exact));
+        assert!(kept.ends_with('x'), "{kept}");
+    }
 
     fn pr(number: i64, head_sha: &str, head_ref: &str, base: &str, repo: &str) -> ForgePr {
         ForgePr {

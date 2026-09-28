@@ -329,6 +329,9 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             config_values: BTreeMap::new(),
             label_snapshot: None,
             deliverable: None,
+            // No branch face on the authoring tool: the task branches from the
+            // project folder's checkout, as it did before the choice existed.
+            base_branch: None,
         };
         let config = match serde_json::to_value(&config) {
             Ok(v) => v,
@@ -420,14 +423,69 @@ pub async fn apply_persisted_chat_authoring_config(
     config.set(settings.into_runtime_config()).await;
 }
 
+/// Serializes every write to this record within the process.
+///
+/// Per-key upserts alone are not enough. Both writers below finish by re-reading
+/// the record and pushing it onto the runtime config, and `load_*` reads the two
+/// keys in two separate queries — so two writers can interleave such that the
+/// database ends correct while the runtime handle (which is what the companion
+/// injection actually reads) settles on a value neither writer intended, and
+/// stays there until the next write or a restart. Holding this across
+/// write → re-read → apply → broadcast makes the sequence atomic.
+static AUTHORING_WRITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Which of the two independent switches in the record to move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatAuthoringFlag {
+    Automations,
+    WorkTasks,
+}
+
+/// Move exactly one switch, leaving the sibling to whatever the database says
+/// at the moment of the write.
+///
+/// [`set_chat_authoring_settings_core`] republishes both keys, which is right
+/// for the settings form (it edits both) and wrong for any caller that only
+/// means to move one: two such callers racing — the status-bar popover's two
+/// adjacent switches are one click apart — each read the pair, each write the
+/// pair back, and whoever lands second silently reverts the other's flip. This
+/// writes one key and then re-reads the record, so concurrent flips of the two
+/// switches commute and the broadcast carries the record as it now stands
+/// rather than as the caller imagined it.
+pub async fn set_chat_authoring_flag_core(
+    conn: &DatabaseConnection,
+    config: &ChatAuthoringRuntimeConfig,
+    emitter: &EventEmitter,
+    flag: ChatAuthoringFlag,
+    enabled: bool,
+) -> Result<ChatAuthoringSettings, AppCommandError> {
+    let key = match flag {
+        ChatAuthoringFlag::Automations => KEY_CHAT_AUTHORING_AUTOMATIONS,
+        ChatAuthoringFlag::WorkTasks => KEY_CHAT_AUTHORING_WORK_TASKS,
+    };
+    let _guard = AUTHORING_WRITE_LOCK.lock().await;
+    app_metadata_service::upsert_value(conn, key, &enabled.to_string())
+        .await
+        .map_err(AppCommandError::from)?;
+    let settings = load_chat_authoring_settings(conn).await;
+    config.set(settings.clone().into_runtime_config()).await;
+    emit_event(emitter, CHAT_AUTHORING_SETTINGS_CHANGED_EVENT, &settings);
+    Ok(settings)
+}
+
 /// Persist + apply + broadcast. Shared by the Tauri command and the HTTP handler
 /// so the write + re-apply + notify chain lives in one place.
+///
+/// Takes [`AUTHORING_WRITE_LOCK`] too: its two upserts are not atomic either, so
+/// a per-flag write landing between them would be half-overwritten.
 pub async fn set_chat_authoring_settings_core(
     conn: &DatabaseConnection,
     config: &ChatAuthoringRuntimeConfig,
     emitter: &EventEmitter,
     desired: ChatAuthoringSettings,
 ) -> Result<ChatAuthoringSettings, AppCommandError> {
+    let _guard = AUTHORING_WRITE_LOCK.lock().await;
     app_metadata_service::upsert_value(
         conn,
         KEY_CHAT_AUTHORING_AUTOMATIONS,

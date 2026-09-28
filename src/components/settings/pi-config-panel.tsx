@@ -869,6 +869,19 @@ export function PiConfigPanel({
                     spellCheck={false}
                   />
                 </div>
+                {/*
+                  Both dirs persist to the per-agent `env_json`, which is injected
+                  into the spawned pi child and nowhere else — while the history
+                  parser resolves pi's sessions directory from codeg's OWN process
+                  environment. So a custom dir here splits the two: pi writes and
+                  resumes fine, and the sessions never show up in the list. Saying
+                  so beats letting the user discover it as missing history.
+                */}
+                {(configDir.trim() !== "" || sessionDir.trim() !== "") && (
+                  <p className="text-2xs text-amber-600 dark:text-amber-400">
+                    {t("pi.dirHistoryNote")}
+                  </p>
+                )}
                 <p className="text-2xs text-muted-foreground">
                   {t("pi.flagsHint")}
                 </p>

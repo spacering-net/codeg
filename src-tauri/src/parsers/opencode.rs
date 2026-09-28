@@ -79,6 +79,7 @@ impl OpenCodeParser {
         let directory: Option<String> = row.try_get("", "directory")?;
         let parent_id: Option<String> = row.try_get("", "parent_id")?;
         let title: Option<String> = row.try_get("", "title")?;
+        let first_user_text: Option<String> = row.try_get("", "first_user_text")?;
         let created_ms: i64 = row.try_get("", "created_ms")?;
         let updated_ms: i64 = row.try_get("", "updated_ms")?;
         let message_count_i64: i64 = row.try_get("", "message_count")?;
@@ -98,7 +99,7 @@ impl OpenCodeParser {
             agent_type: AgentType::OpenCode,
             folder_path,
             folder_name,
-            title: normalize_optional_string(title),
+            title: resolve_title(title, first_user_text),
             started_at: millis_to_datetime(created_ms),
             ended_at: (updated_ms > 0).then(|| millis_to_datetime(updated_ms)),
             message_count,
@@ -120,12 +121,14 @@ impl OpenCodeParser {
         let rows = conn
             .query_all(Statement::from_string(
                 DbBackend::Sqlite,
-                r#"
+                format!(
+                    r#"
                 SELECT
                     s.id AS id,
                     s.directory AS directory,
                     s.parent_id AS parent_id,
                     s.title AS title,
+                    {FIRST_USER_TEXT_SQL},
                     s.time_created AS created_ms,
                     s.time_updated AS updated_ms,
                     COALESCE((
@@ -144,7 +147,7 @@ impl OpenCodeParser {
                 FROM session s
                 ORDER BY s.time_created DESC
                 "#
-                .to_string(),
+                ),
             ))
             .await?;
 
@@ -168,12 +171,14 @@ impl OpenCodeParser {
         let row = conn
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
-                r#"
+                format!(
+                    r#"
                 SELECT
                     s.id AS id,
                     s.directory AS directory,
                     s.parent_id AS parent_id,
                     s.title AS title,
+                    {FIRST_USER_TEXT_SQL},
                     s.time_created AS created_ms,
                     s.time_updated AS updated_ms,
                     COALESCE((
@@ -192,7 +197,8 @@ impl OpenCodeParser {
                 FROM session s
                 WHERE s.id = ?
                 LIMIT 1
-                "#,
+                "#
+                ),
                 [conversation_id.into()],
             ))
             .await?;
@@ -295,9 +301,45 @@ impl OpenCodeParser {
                 None
             };
 
-            let (content_blocks, usage_from_step_finish) = self
+            let (mut content_blocks, usage_from_step_finish) = self
                 .load_sqlite_parts(conn, &msg_id, &subagent_tools)
                 .await?;
+
+            // A turn the provider rejected (or the user cancelled) leaves its
+            // only record in the message's `error` — the parts are empty or cut
+            // off mid-write — so without this the assistant bubble was blank
+            // with no hint that anything went wrong. 83 of the 2 849 messages in
+            // a real 430-session library carry one (48 aborts, 25 API errors).
+            if is_assistant {
+                if let Some(error) = assistant_error_text(&value) {
+                    content_blocks.push(ContentBlock::Text { text: error });
+                }
+            }
+
+            // A user message whose every part was synthetic (a plan/build switch
+            // reminder, the post-compaction continuation) is not a turn the user
+            // took — OpenCode's own prompt builder makes the same exclusion
+            // (`!m.parts.every(p => p.synthetic)`). Dropping it here keeps the
+            // now-empty bubble out of the transcript. Assistant messages are
+            // left alone: an empty one is still a turn that happened, and the
+            // error text above usually fills it.
+            if matches!(role, MessageRole::User) && content_blocks.is_empty() {
+                continue;
+            }
+
+            // OpenCode files the compaction boundary under a synthetic USER
+            // message (its continuation prompt is what resumes the turn), but a
+            // compaction is the system's act, not the user's — and the shared
+            // divider only hoists out of an assistant group
+            // (`compactionOnlyMeta` in `message-list-view.tsx`). Left as a user
+            // turn it renders as a tool card inside a user bubble instead of the
+            // subtle "context compacted" row every other agent gets. Scoped to a
+            // message that carries NOTHING else, which is how OpenCode writes it.
+            let role = if matches!(role, MessageRole::User) && is_compaction_only(&content_blocks) {
+                MessageRole::Assistant
+            } else {
+                role
+            };
 
             let usage = if is_assistant {
                 extract_opencode_usage(&value).or(usage_from_step_finish)
@@ -386,7 +428,7 @@ impl OpenCodeParser {
             .query_all(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
                 r#"
-                SELECT data
+                SELECT id, data
                 FROM part
                 WHERE message_id = ?
                 ORDER BY time_created ASC, id ASC
@@ -399,6 +441,7 @@ impl OpenCodeParser {
         let mut usage_from_step_finish: Option<TurnUsage> = None;
 
         for row in rows {
+            let part_id: String = row.try_get("", "id")?;
             let data_raw: String = row.try_get("", "data")?;
             let value: serde_json::Value = match serde_json::from_str(&data_raw) {
                 Ok(v) => v,
@@ -408,6 +451,16 @@ impl OpenCodeParser {
             let part_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
             match part_type {
+                // `synthetic` marks text OpenCode injected for the model, not
+                // words anyone typed: plan/build switch reminders, the
+                // post-compaction "continue" prompt, sub-agent recap requests,
+                // "The following tool was executed by the user". Its ACP adapter
+                // labels them `annotations.audience: ["assistant"]` and its own
+                // CLI filters them out of the transcript (`!part.synthetic` in
+                // `cli/cmd/run/session.shared.ts`); rendering them as the user's
+                // prose put whole system prompts in the user's bubble. The
+                // caller drops a user message that has nothing left.
+                "text" if value.get("synthetic").and_then(|v| v.as_bool()) == Some(true) => {}
                 "text" => {
                     if let Some(text) = value
                         .get("text")
@@ -418,6 +471,66 @@ impl OpenCodeParser {
                         blocks.push(ContentBlock::Text {
                             text: text.to_string(),
                         });
+                    }
+                }
+                // A context compaction, as the provider-neutral tool pair every
+                // agent's compaction renders through (`_meta.contextCompaction`
+                // on a ToolUse plus its settled ToolResult — see
+                // `parsers::pi::parse_compaction`). OpenCode writes it as the
+                // ONLY part of a synthetic user message, so without this the
+                // compaction showed up as an empty user bubble and the
+                // conversation appeared to lose its middle for no reason.
+                //
+                // `auto` is OpenCode's own flag for "the context filled up"
+                // versus a `/compact` the user ran; `overflow` (optional) marks
+                // the compaction that ran because the provider rejected the
+                // request outright.
+                "compaction" => {
+                    let mut marker = serde_json::Map::new();
+                    marker.insert("version".to_string(), serde_json::Value::from(1));
+                    let auto = value.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+                    marker.insert(
+                        "trigger".to_string(),
+                        serde_json::Value::from(if auto { "automatic" } else { "manual" }),
+                    );
+                    if let Some(overflow) = value.get("overflow").and_then(|v| v.as_bool()) {
+                        marker.insert("overflow".to_string(), serde_json::Value::from(overflow));
+                    }
+                    blocks.push(ContentBlock::ToolUse {
+                        tool_use_id: Some(part_id.clone()),
+                        tool_name: "context_compaction".to_string(),
+                        input_preview: None,
+                        status: None,
+                        meta: Some(serde_json::Value::Object(
+                            [("contextCompaction".to_string(), serde_json::Value::Object(marker))]
+                                .into_iter()
+                                .collect(),
+                        )),
+                    });
+                    // The pair is required: a ToolUse with no result reads as a
+                    // call still running.
+                    blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: Some(part_id),
+                        output_preview: None,
+                        is_error: false,
+                        agent_stats: None,
+                        images: Vec::new(),
+                    });
+                }
+                // A slash command that targets a sub-agent is recorded as a
+                // `subtask` part INSTEAD of the expanded prompt text the
+                // non-sub-agent branch writes (`session/prompt.ts`'s command
+                // handler), so the user's turn rendered completely blank.
+                //
+                // Rendered as prose rather than an Agent card on purpose: the
+                // sub-agent's own run is a separate session and its work shows
+                // up through the assistant side, so a card here would either sit
+                // unsettled forever or duplicate one. This is the user's half —
+                // which command they ran, which agent it went to, and the prompt
+                // it expanded into.
+                "subtask" => {
+                    if let Some(line) = subtask_summary(&value) {
+                        blocks.push(ContentBlock::Text { text: line });
                     }
                 }
                 "reasoning" => {
@@ -573,7 +686,13 @@ impl OpenCodeParser {
                         blocks.push(ContentBlock::ToolResult {
                             tool_use_id: call_id,
                             output_preview: normalized.output_preview,
-                            is_error: is_error_status(status) || normalized.is_error,
+                            // Authoritative: `normalize_tool_call` folds the
+                            // state's own status in, and a couple of tools
+                            // override it in both directions (`invalid`
+                            // completes "successfully" but IS a failure; a
+                            // dismissed `question` unwinds through the error
+                            // channel but is an outcome, not a failure).
+                            is_error: normalized.is_error,
                             agent_stats: None,
                             images: Vec::new(),
                         });
@@ -659,6 +778,113 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+/// The first words the user actually typed in a session, used to stand in for
+/// OpenCode's placeholder title (see [`resolve_title`]).
+///
+/// A correlated subquery rather than a join, so the listing stays a single
+/// statement; the `CASE` guard keeps it from running at all for the sessions
+/// that already carry a real title — which, on a healthy install, is most of
+/// them. `synthetic` parts are excluded for the same reason the transcript
+/// drops them: they are text OpenCode injected for the model, not words anyone
+/// typed, and a session that opens with one would otherwise be named after a
+/// plan/build switch reminder.
+const FIRST_USER_TEXT_SQL: &str = r#"CASE
+                        WHEN s.title LIKE 'New session - %'
+                          OR s.title LIKE 'Child session - %' THEN (
+                            SELECT json_extract(p.data, '$.text')
+                            FROM message um
+                            JOIN part p ON p.message_id = um.id
+                            WHERE um.session_id = s.id
+                              AND json_extract(um.data, '$.role') = 'user'
+                              AND json_extract(p.data, '$.type') = 'text'
+                              AND COALESCE(json_extract(p.data, '$.synthetic'), 0) = 0
+                              AND TRIM(COALESCE(json_extract(p.data, '$.text'), '')) <> ''
+                            ORDER BY um.time_created ASC, um.id ASC,
+                                     p.time_created ASC, p.id ASC
+                            LIMIT 1
+                        )
+                    END AS first_user_text"#;
+
+/// OpenCode names a session at creation time, before anyone has said anything:
+/// `title: q.title ?? (q.parentID ? "Child session - " : "New session - ") +
+/// new Date().toISOString()`. A real title is supposed to replace it on the
+/// first turn (`SessionPrompt.ensureTitle` asks the `title` agent for one), but
+/// that call is forked and its failures swallowed (`.pipe(ignore, forkIn)`), so
+/// whenever the small model is unreachable the placeholder is simply what the
+/// session is called forever — 243 of the 432 sessions in the author's store.
+const DEFAULT_TITLE_PREFIXES: [&str; 2] = ["New session - ", "Child session - "];
+
+/// Whether `title` is one of OpenCode's placeholders. Mirrors its own
+/// `Session.isDefaultTitle`, which anchors the timestamp exactly:
+/// `^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`.
+/// Matching the full shape rather than just the prefix is what keeps a session
+/// the user deliberately named "New session - notes" out of the fallback.
+fn is_default_title(title: &str) -> bool {
+    DEFAULT_TITLE_PREFIXES
+        .iter()
+        .any(|prefix| title.strip_prefix(prefix).is_some_and(is_iso_instant))
+}
+
+/// Whether `value` has the exact shape `new Date().toISOString()` produces.
+fn is_iso_instant(value: &str) -> bool {
+    // `0` stands for "any ASCII digit"; every other byte must match literally.
+    const SHAPE: &[u8] = b"0000-00-00T00:00:00.000Z";
+    let bytes = value.as_bytes();
+    bytes.len() == SHAPE.len()
+        && bytes.iter().zip(SHAPE).all(|(byte, slot)| match slot {
+            b'0' => byte.is_ascii_digit(),
+            _ => byte == slot,
+        })
+}
+
+/// Split OpenCode's fork marker off a title. Forking renames `<title>` to
+/// `<title> (fork #1)` and `<title> (fork #N)` to `<title> (fork #N+1)`, which
+/// means a fork of an unnamed session inherits the placeholder with a suffix —
+/// a string OpenCode's own `isDefaultTitle` no longer recognises. Peeling the
+/// marker lets the fallback see the placeholder underneath, and re-attaching it
+/// keeps the one genuinely meaningful part: which fork this is.
+fn split_fork_suffix(title: &str) -> (&str, &str) {
+    const MARKER: &str = " (fork #";
+    let Some(without_paren) = title.strip_suffix(')') else {
+        return (title, "");
+    };
+    let Some(at) = without_paren.rfind(MARKER) else {
+        return (title, "");
+    };
+    let number = &without_paren[at + MARKER.len()..];
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return (title, "");
+    }
+    (&title[..at], &title[at..])
+}
+
+/// Resolve what to call a session: its own title when it has one, otherwise the
+/// opening user message — the same substitution OpenCode's TUI makes
+/// (`if (title && !isDefaultTitle(title)) … else first non-empty message text`).
+///
+/// Falling back to `None` when there is nothing to derive from is deliberate:
+/// the UI's own "untitled" label reads better than a machine placeholder, and
+/// it is what every other agent's untitled session already shows.
+fn resolve_title(title: Option<String>, first_user_text: Option<String>) -> Option<String> {
+    let Some(title) = normalize_optional_string(title) else {
+        return derived_title(first_user_text, "");
+    };
+    let (base, fork) = split_fork_suffix(&title);
+    if !is_default_title(base) {
+        return Some(title);
+    }
+    derived_title(first_user_text, fork)
+}
+
+fn derived_title(first_user_text: Option<String>, fork_suffix: &str) -> Option<String> {
+    let text = normalize_optional_string(first_user_text)?;
+    let derived = super::title_from_user_text(&text);
+    if derived.is_empty() {
+        return None;
+    }
+    Some(format!("{derived}{fork_suffix}"))
 }
 
 fn value_to_preview(value: Option<&serde_json::Value>) -> Option<String> {
@@ -890,7 +1116,12 @@ fn normalize_tool_call(raw_tool: &str, state: Option<&serde_json::Value>) -> Nor
     let raw_output = state
         .and_then(|s| s.get("output"))
         .and_then(|v| value_to_preview(Some(v)));
-    let mut is_error = error_text.is_some();
+    // Folded in here rather than at the call site so this function is the
+    // single source of truth: the arms below override the verdict in BOTH
+    // directions (`invalid` completes "successfully" but is a failure; a
+    // dismissed `question` unwinds through `state.error` but is an outcome).
+    let mut is_error =
+        error_text.is_some() || is_error_status(pick_str(state, &["status"]).unwrap_or(""));
     let mut output_preview = raw_output.clone().or_else(|| error_text.clone());
 
     let mut obj = serde_json::Map::new();
@@ -1016,8 +1247,23 @@ fn normalize_tool_call(raw_tool: &str, state: Option<&serde_json::Value>) -> Nor
             tool_name = "websearch".to_string();
             copy_field(&mut obj, input, "query", "query");
         }
-        // Already canonical (`todowrite` → `{todos}`, `question` →
-        // `{questions}`, MCP and `lsp_*` tools carry server-defined shapes).
+        "question" => {
+            tool_name = "question".to_string();
+            input_preview = normalize_question_input(input);
+            if let Some(structured) =
+                structure_question_output(input, metadata, error_text.as_deref())
+            {
+                output_preview = Some(structured);
+                // Dismissing a question is an outcome, not a tool failure —
+                // OpenCode only reports it through `state.error` because the
+                // tool has to unwind. The card renders "declined" from the
+                // envelope; flagging the result as an error on top of that
+                // would show a red failure card instead.
+                is_error = false;
+            }
+        }
+        // Already canonical (`todowrite` → `{todos}`, MCP and `lsp_*` tools
+        // carry server-defined shapes).
         _ => {
             input_preview = input.and_then(|v| value_to_preview(Some(v)));
         }
@@ -1047,7 +1293,13 @@ fn normalize_tool_call(raw_tool: &str, state: Option<&serde_json::Value>) -> Nor
 /// the card. `display` carries the same content already clean, plus the true
 /// first line number, which is exactly the `{start_line, content}` shape the
 /// shared read-output structurizer produces for the other agents.
-fn structure_read_output(metadata: Option<&serde_json::Value>) -> Option<String> {
+///
+/// Shared with the LIVE path (`acp::connection::opencode_live_tool_output`):
+/// OpenCode's completion frame ships the same `metadata` under `rawOutput`, so
+/// both halves hand the Read card the identical payload and a reload no longer
+/// changes how a finished `read` renders. `metadata.display` is unique to the
+/// `read` tool, which is what makes it safe to key on the shape alone.
+pub(crate) fn structure_read_output(metadata: Option<&serde_json::Value>) -> Option<String> {
     let display = metadata?.get("display")?;
     match display.get("type").and_then(|v| v.as_str())? {
         "file" => {
@@ -1073,6 +1325,187 @@ fn structure_read_output(metadata: Option<&serde_json::Value>) -> Option<String>
         }
         _ => None,
     }
+}
+
+/// Whether `blocks` is nothing but the compaction divider pair this parser
+/// synthesizes for a `compaction` part — the test that decides whether a
+/// message gets re-filed from user to assistant (see the call site).
+fn is_compaction_only(blocks: &[ContentBlock]) -> bool {
+    let mut saw_compaction = false;
+    for block in blocks {
+        match block {
+            ContentBlock::ToolUse { tool_name, .. } if tool_name == "context_compaction" => {
+                saw_compaction = true;
+            }
+            // The paired result carries no name of its own; it is only ever
+            // emitted beside the ToolUse above.
+            ContentBlock::ToolResult { .. } => {}
+            _ => return false,
+        }
+    }
+    saw_compaction
+}
+
+/// The failure notice for an assistant message OpenCode settled with an
+/// `error`, or `None` for a turn that finished normally.
+///
+/// OpenCode's `AssistantMessage.error` is a named-error envelope —
+/// `{name, data: {message, …}}` — covering both provider failures
+/// (`APIError`, `ProviderAuthError`, `ContextOverflowError`,
+/// `MessageOutputLengthError`, `UnknownError`) and the user pressing stop
+/// (`MessageAbortedError`). The parts of such a message are empty or
+/// half-written, so the fact that it errored is itself the thing worth showing —
+/// otherwise a rejected request is indistinguishable from a turn that simply
+/// said nothing. Same shape as `parsers::pi::assistant_error_text`.
+///
+/// An abort is reported as an abort rather than an error: OpenCode fills its
+/// `message` with boilerplate ("The operation was aborted.") that says less than
+/// the name does.
+fn assistant_error_text(message: &serde_json::Value) -> Option<String> {
+    let error = message.get("error")?;
+    let name = pick_str(Some(error), &["name"]).unwrap_or("UnknownError");
+    if name == "MessageAbortedError" {
+        return Some("[opencode aborted]".to_string());
+    }
+    Some(match pick_str(error.get("data"), &["message"]) {
+        Some(detail) => format!("[opencode {name}] {}", truncate_str(detail, 2000)),
+        None => format!("[opencode {name}]"),
+    })
+}
+
+/// One-line header plus body for a `subtask` part: the command the user ran,
+/// the sub-agent it was routed to, and the prompt it expanded into.
+///
+/// `command` and `description` are both optional in the schema, so the header
+/// degrades to whichever parts exist; with none of the three fields present
+/// there is nothing worth showing and the part is dropped.
+fn subtask_summary(value: &serde_json::Value) -> Option<String> {
+    let agent = pick_str(Some(value), &["agent"]);
+    let command = pick_str(Some(value), &["command"]);
+    let description = pick_str(Some(value), &["description"]);
+    let prompt = pick_str(Some(value), &["prompt"]);
+
+    let mut header = String::new();
+    if let Some(command) = command {
+        header.push('/');
+        header.push_str(command);
+    }
+    if let Some(agent) = agent {
+        if !header.is_empty() {
+            header.push_str(" → ");
+        }
+        header.push('@');
+        header.push_str(agent);
+    }
+    if let Some(description) = description {
+        if !header.is_empty() {
+            header.push_str(": ");
+        }
+        header.push_str(description);
+    }
+
+    match (header.is_empty(), prompt) {
+        (true, None) => None,
+        (true, Some(prompt)) => Some(prompt.to_string()),
+        (false, None) => Some(header),
+        (false, Some(prompt)) => Some(format!("{header}\n\n{prompt}")),
+    }
+}
+
+/// Rebuild the ask-question outcome envelope from an OpenCode `question` tool
+/// call, so the read-only question card shows what the user actually picked.
+///
+/// OpenCode records the authoritative answers positionally in
+/// `state.metadata.answers` — `[["No Claude subscription"], ["No"], …]`, one
+/// inner array per question in `state.input.questions` order — and flattens the
+/// same information into a one-line `state.output` sentence:
+///   `User has answered your questions: "Q1"="A1", "Q2"="A2". You can now …`
+/// `parseAskQuestionOutcome` reads neither: the sentence is not JSON, and its
+/// line-based fallback wants the companion's numbered `1. [Header] Q` / `→ a, b`
+/// layout. So every answered question rendered as "no selection" even though the
+/// answers were sitting right there. Emitting the canonical
+/// `{"answers":[{header,question,selected}],"declined":false}` envelope — the
+/// same shape `render_ask_result` writes for codeg's own companion — routes it
+/// through the parser both cards already share.
+///
+/// A dismissal surfaces as `state.error` carrying `Question.RejectedError`'s
+/// message ("The user dismissed this question"), which has no `metadata.answers`
+/// at all; it maps to `declined`.
+///
+/// Returns `None` for every tool that is not `question` (nothing else writes
+/// `metadata.answers`), leaving the generic path untouched.
+fn structure_question_output(
+    input: Option<&serde_json::Value>,
+    metadata: Option<&serde_json::Value>,
+    error: Option<&str>,
+) -> Option<String> {
+    let questions = input
+        .and_then(|i| i.get("questions"))
+        .and_then(|q| q.as_array());
+
+    let Some(answers) = metadata
+        .and_then(|m| m.get("answers"))
+        .and_then(|a| a.as_array())
+    else {
+        // Only claim the dismissal when this really is a question call: without
+        // `questions` the error belongs to some other tool.
+        let dismissed = questions.is_some()
+            && error.is_some_and(|e| e.to_ascii_lowercase().contains("dismissed"));
+        return dismissed
+            .then(|| serde_json::json!({ "declined": true, "answers": [] }).to_string());
+    };
+
+    let entries: Vec<serde_json::Value> = answers
+        .iter()
+        .enumerate()
+        .map(|(index, picked)| {
+            let question = questions.and_then(|list| list.get(index));
+            // OpenCode stores each answer as an array of chosen labels; a
+            // single-select question still arrives as a one-element array.
+            let selected: Vec<&str> = match picked {
+                serde_json::Value::Array(items) => {
+                    items.iter().filter_map(|v| v.as_str()).collect()
+                }
+                serde_json::Value::String(one) => vec![one.as_str()],
+                _ => Vec::new(),
+            };
+            serde_json::json!({
+                "header": pick_str(question, &["header"]).unwrap_or_default(),
+                "question": pick_str(question, &["question"]).unwrap_or_default(),
+                "selected": selected,
+            })
+        })
+        .collect();
+
+    Some(serde_json::json!({ "declined": false, "answers": entries }).to_string())
+}
+
+/// Rewrite an OpenCode `question` tool's input into the shape the question card
+/// reads.
+///
+/// Only one key differs: OpenCode names the multi-select flag `multiple`, while
+/// `parseAskQuestionInput` accepts `multiSelect` / `multi_select`. Without the
+/// rename a multi-select question rendered as single-select. Everything else
+/// (`question`, `header`, `options[].label/description`) already matches, so the
+/// rest of the payload is passed through verbatim.
+fn normalize_question_input(input: Option<&serde_json::Value>) -> Option<String> {
+    let questions = input?.get("questions")?.as_array()?;
+    let rewritten: Vec<serde_json::Value> = questions
+        .iter()
+        .map(|question| {
+            let Some(obj) = question.as_object() else {
+                return question.clone();
+            };
+            let Some(multiple) = obj.get("multiple").and_then(|v| v.as_bool()) else {
+                return question.clone();
+            };
+            let mut out = obj.clone();
+            out.entry("multiSelect".to_string())
+                .or_insert(serde_json::Value::Bool(multiple));
+            serde_json::Value::Object(out)
+        })
+        .collect();
+    Some(serde_json::json!({ "questions": rewritten }).to_string())
 }
 
 fn is_error_status(status: &str) -> bool {
@@ -1555,7 +1988,7 @@ mod tests {
         // The `<path>`/`<content>` envelope and the `N: ` prefixes are gone.
         assert_eq!(
             read.output_preview.as_deref(),
-            Some(r#"{"content":"export const A = 1","start_line":1}"#)
+            Some(r#"{"start_line":1,"content":"export const A = 1"}"#)
         );
     }
 
@@ -1677,5 +2110,361 @@ mod tests {
         });
 
         assert!(extract_opencode_file_image(&value).is_none());
+    }
+
+    /// Verbatim `state` of a `question` tool part captured from a real
+    /// `~/.local/share/opencode/opencode.db`, trimmed to two questions.
+    fn question_state() -> serde_json::Value {
+        serde_json::json!({
+            "status": "completed",
+            "input": {
+                "questions": [
+                    {
+                        "question": "Do you have a Claude Pro/Max subscription?",
+                        "header": "Claude Subscription",
+                        "options": [
+                            { "label": "Yes, I'm on max20", "description": "20x mode" },
+                            { "label": "No Claude subscription", "description": "None" }
+                        ]
+                    },
+                    {
+                        "question": "Pick the integrations",
+                        "header": "Integrations",
+                        "multiple": true,
+                        "options": [
+                            { "label": "Gemini", "description": "" },
+                            { "label": "Copilot", "description": "" }
+                        ]
+                    }
+                ]
+            },
+            "output": "User has answered your questions: \"Do you have a Claude Pro/Max subscription?\"=\"No Claude subscription\", \"Pick the integrations\"=\"Gemini, Copilot\". You can now continue with the user's answers in mind.",
+            "title": "Asked 2 questions",
+            "metadata": {
+                "answers": [["No Claude subscription"], ["Gemini", "Copilot"]],
+                "truncated": false
+            }
+        })
+    }
+
+    #[test]
+    fn question_output_becomes_the_structured_answer_envelope() {
+        // `metadata.answers` is positional against `input.questions`; the
+        // one-line `output` sentence the tool also writes is what
+        // `parseAskQuestionOutcome` could not read, so every answered question
+        // rendered as "no selection".
+        let call = normalized("question", question_state());
+        assert_eq!(call.tool_name, "question");
+        let outcome: serde_json::Value =
+            serde_json::from_str(call.output_preview.as_deref().expect("output")).expect("json");
+        assert_eq!(
+            outcome,
+            serde_json::json!({
+                "declined": false,
+                "answers": [
+                    {
+                        "header": "Claude Subscription",
+                        "question": "Do you have a Claude Pro/Max subscription?",
+                        "selected": ["No Claude subscription"],
+                    },
+                    {
+                        "header": "Integrations",
+                        "question": "Pick the integrations",
+                        "selected": ["Gemini", "Copilot"],
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn question_input_gains_the_multi_select_key_the_card_reads() {
+        // OpenCode spells the flag `multiple`; `parseAskQuestionInput` only
+        // accepts `multiSelect` / `multi_select`, so a multi-select question
+        // rendered as single-select.
+        let call = normalized("question", question_state());
+        let input = input_of(&call);
+        assert_eq!(input["questions"][1]["multiSelect"], serde_json::json!(true));
+        // Untouched where the source said nothing, and the rest is verbatim.
+        assert!(input["questions"][0].get("multiSelect").is_none());
+        assert_eq!(
+            input["questions"][0]["options"][0]["label"],
+            serde_json::json!("Yes, I'm on max20")
+        );
+    }
+
+    #[test]
+    fn a_dismissed_question_reports_declined() {
+        let call = normalized(
+            "question",
+            serde_json::json!({
+                "status": "error",
+                "input": { "questions": [{ "question": "Continue?", "header": "Gate" }] },
+                "error": "The user dismissed this question",
+            }),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(call.output_preview.as_deref().unwrap())
+                .unwrap(),
+            serde_json::json!({ "declined": true, "answers": [] })
+        );
+    }
+
+    #[test]
+    fn a_dismissal_from_another_tool_is_not_claimed_as_a_question() {
+        // No `questions` in the input → not a question call, so the error text
+        // stays the plain failure output the generic card renders.
+        assert!(super::structure_question_output(
+            Some(&serde_json::json!({ "command": "rm -rf /" })),
+            None,
+            Some("The user dismissed this question"),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn read_output_is_rebuilt_from_the_display_metadata() {
+        // Same `metadata` OpenCode ships under `rawOutput` on the live wire, so
+        // this is the shared half of the live/history parity fix.
+        let structured = super::structure_read_output(Some(&serde_json::json!({
+            "display": {
+                "type": "file",
+                "path": "/w/notes.txt",
+                "text": "hello world\nsecond line",
+                "lineStart": 40,
+                "lineEnd": 41
+            }
+        })))
+        .expect("structured read output");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&structured).unwrap(),
+            serde_json::json!({ "start_line": 40, "content": "hello world\nsecond line" })
+        );
+
+        // Only the `read` tool writes `metadata.display`, which is what makes
+        // the live path safe to key on the shape alone.
+        assert!(super::structure_read_output(Some(&serde_json::json!({ "exit": 0 }))).is_none());
+        assert!(super::structure_read_output(None).is_none());
+    }
+
+    #[test]
+    fn assistant_errors_and_aborts_get_a_visible_marker() {
+        // 83 of 2 849 messages in a real 430-session library carry one, and the
+        // parts of such a message are empty — so without a marker the bubble is
+        // blank.
+        assert_eq!(
+            super::assistant_error_text(&serde_json::json!({
+                "role": "assistant",
+                "error": { "name": "APIError", "data": { "message": "Invalid Authentication" } }
+            }))
+            .as_deref(),
+            Some("[opencode APIError] Invalid Authentication")
+        );
+        // An abort's own message is boilerplate ("The operation was aborted.")
+        // that says less than the name does.
+        assert_eq!(
+            super::assistant_error_text(&serde_json::json!({
+                "error": {
+                    "name": "MessageAbortedError",
+                    "data": { "message": "The operation was aborted." }
+                }
+            }))
+            .as_deref(),
+            Some("[opencode aborted]")
+        );
+        assert_eq!(
+            super::assistant_error_text(&serde_json::json!({
+                "error": { "name": "UnknownError", "data": {} }
+            }))
+            .as_deref(),
+            Some("[opencode UnknownError]")
+        );
+        assert!(super::assistant_error_text(&serde_json::json!({ "role": "assistant" })).is_none());
+    }
+
+    #[test]
+    fn only_a_bare_compaction_message_gets_refiled_as_assistant() {
+        let compaction = || ContentBlock::ToolUse {
+            tool_use_id: Some("prt_1".into()),
+            tool_name: "context_compaction".into(),
+            input_preview: None,
+            status: None,
+            meta: None,
+        };
+        let result = || ContentBlock::ToolResult {
+            tool_use_id: Some("prt_1".into()),
+            output_preview: None,
+            is_error: false,
+            agent_stats: None,
+            images: Vec::new(),
+        };
+
+        assert!(super::is_compaction_only(&[compaction(), result()]));
+        // Anything the user actually said keeps the message theirs.
+        assert!(!super::is_compaction_only(&[
+            ContentBlock::Text { text: "carry on".into() },
+            compaction(),
+        ]));
+        // A different tool's pair is not a compaction, and neither is nothing.
+        assert!(!super::is_compaction_only(&[
+            ContentBlock::ToolUse {
+                tool_use_id: Some("prt_2".into()),
+                tool_name: "read".into(),
+                input_preview: None,
+                status: None,
+                meta: None,
+            },
+            result(),
+        ]));
+        assert!(!super::is_compaction_only(&[]));
+        assert!(!super::is_compaction_only(&[result()]));
+    }
+
+    #[test]
+    fn subtask_parts_describe_the_delegation_they_replaced() {
+        // A slash command routed to a sub-agent writes a `subtask` part INSTEAD
+        // of the expanded prompt text, so the user's turn was blank.
+        assert_eq!(
+            super::subtask_summary(&serde_json::json!({
+                "type": "subtask",
+                "agent": "explore",
+                "command": "review",
+                "description": "review changes",
+                "prompt": "Review the uncommitted diff."
+            }))
+            .as_deref(),
+            Some("/review → @explore: review changes\n\nReview the uncommitted diff.")
+        );
+        // `command` and `description` are both optional in the schema.
+        assert_eq!(
+            super::subtask_summary(&serde_json::json!({
+                "agent": "explore",
+                "prompt": "Look around."
+            }))
+            .as_deref(),
+            Some("@explore\n\nLook around.")
+        );
+        assert!(super::subtask_summary(&serde_json::json!({ "type": "subtask" })).is_none());
+    }
+
+    /// The placeholder test has to match the whole shape, not just the prefix:
+    /// "New session - " is a legal thing for a person to call a session, and
+    /// renaming one to that must not send it back to the fallback.
+    #[test]
+    fn only_opencodes_own_generated_name_counts_as_untitled() {
+        assert!(super::is_default_title("New session - 2026-09-16T03:09:14.543Z"));
+        assert!(super::is_default_title(
+            "Child session - 2026-09-16T03:09:14.543Z"
+        ));
+
+        for kept in [
+            "New session - notes",
+            "New session - 2026-09-16",
+            "New session - 2026-09-16T03:09:14.543Z ",
+            "New session - 2026-09-16T03:09:14.543Z extra",
+            "New session - 20X6-09-16T03:09:14.543Z",
+            "Fix the login flow",
+            "",
+        ] {
+            assert!(!super::is_default_title(kept), "{kept:?} is a real title");
+        }
+    }
+
+    #[test]
+    fn the_fork_marker_is_peeled_off_and_nothing_else_is() {
+        assert_eq!(
+            super::split_fork_suffix("New session - 2026-09-16T03:09:14.543Z (fork #12)"),
+            ("New session - 2026-09-16T03:09:14.543Z", " (fork #12)")
+        );
+        // Forking a fork nests the count rather than the marker, so only ever
+        // one suffix to peel.
+        assert_eq!(
+            super::split_fork_suffix("Fix login (fork #2)"),
+            ("Fix login", " (fork #2)")
+        );
+        for untouched in [
+            "Fix login",
+            "Fix login (fork #)",
+            "Fix login (fork #2) ",
+            "Fix login (fork #two)",
+            "(fork #2)",
+        ] {
+            assert_eq!(
+                super::split_fork_suffix(untouched),
+                (untouched, ""),
+                "{untouched:?} should be left whole"
+            );
+        }
+    }
+
+    /// OpenCode names a session before anyone has spoken and is supposed to
+    /// replace that name on the first turn — but the call is forked and its
+    /// errors swallowed, so an unreachable small model leaves every session
+    /// called "New session - <timestamp>" forever. Stand in for it the same way
+    /// OpenCode's own TUI does: with the opening user message.
+    #[test]
+    fn a_placeholder_title_gives_way_to_what_the_user_actually_said() {
+        let derived = super::resolve_title(
+            Some("New session - 2026-09-16T03:09:14.543Z".into()),
+            Some("执行一下 pnpm build".into()),
+        );
+        assert_eq!(derived.as_deref(), Some("执行一下 pnpm build"));
+
+        // A real title always wins, even with a first message to fall back to.
+        assert_eq!(
+            super::resolve_title(Some("Fix the login flow".into()), Some("hi".into())).as_deref(),
+            Some("Fix the login flow")
+        );
+
+        // A fork of an unnamed session inherits the placeholder plus a marker —
+        // a string OpenCode's own `isDefaultTitle` no longer recognises. Keep
+        // the marker (it is the only thing telling the two rows apart) and
+        // replace the placeholder under it.
+        assert_eq!(
+            super::resolve_title(
+                Some("New session - 2026-09-04T07:11:47.236Z (fork #1)".into()),
+                Some("hi".into()),
+            )
+            .as_deref(),
+            Some("hi (fork #1)")
+        );
+
+        // Nothing to derive from: report untitled and let the UI use its own
+        // localized label rather than showing a machine placeholder.
+        assert_eq!(
+            super::resolve_title(Some("New session - 2026-09-16T03:09:14.543Z".into()), None),
+            None
+        );
+        assert_eq!(
+            super::resolve_title(
+                Some("New session - 2026-09-16T03:09:14.543Z".into()),
+                Some("   ".into()),
+            ),
+            None
+        );
+        assert_eq!(super::resolve_title(None, Some("hi".into())).as_deref(), Some("hi"));
+    }
+
+    /// The fallback runs the same folding and capping every other agent's
+    /// derived title does, so a session opened with a file mention is named
+    /// after the label rather than a truncated `file://` URL.
+    #[test]
+    fn a_derived_title_is_folded_and_capped_like_every_other_agents() {
+        let long = "x".repeat(150);
+        assert_eq!(
+            super::resolve_title(
+                Some("New session - 2026-09-16T03:09:14.543Z".into()),
+                Some(long.clone()),
+            ),
+            Some(super::super::title_from_user_text(&long))
+        );
+        assert_eq!(
+            super::resolve_title(
+                Some("New session - 2026-09-16T03:09:14.543Z".into()),
+                Some("look at [notes.md](file:///tmp/a/very/long/path/notes.md)".into()),
+            )
+            .as_deref(),
+            Some("look at notes.md")
+        );
     }
 }

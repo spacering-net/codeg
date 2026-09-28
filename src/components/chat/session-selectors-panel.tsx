@@ -36,6 +36,9 @@ export interface SessionSelectorSetting {
   currentValue: string
   currentLabel: string
   groups: SessionSelectorGroup[]
+  /** The value the agent recommends (ACP `recommendedValue`), badged wherever it
+   *  appears in this setting's list. Absent for settings that carry no hint. */
+  recommendedValue?: string | null
   onSelect: (value: string) => void
   /** When set, the detail pane renders a searchable + virtualized list instead
    *  of the plain button list — used for long model lists that otherwise jank. */
@@ -46,6 +49,9 @@ interface SessionSelectorsPanelProps {
   settings: SessionSelectorSetting[]
   /** Accessible label for the left-hand settings rail. */
   settingsLabel: string
+  /** Localized chip text for a setting's `recommendedValue` row. One label for
+   *  the whole panel — omit it and no recommendation is shown anywhere. */
+  recommendedLabel?: string
   /** Invoked after a value is chosen (used to close the surrounding popover). */
   onAfterSelect?: () => void
 }
@@ -64,6 +70,7 @@ interface SessionSelectorsPanelProps {
 export function SessionSelectorsPanel({
   settings,
   settingsLabel,
+  recommendedLabel,
   onAfterSelect,
 }: SessionSelectorsPanelProps) {
   // `activeKey` is only a hint — the active setting is always resolved against
@@ -72,6 +79,9 @@ export function SessionSelectorsPanel({
 
   if (settings.length === 0) return null
   const active = settings.find((s) => s.key === activeKey) ?? settings[0]
+  // The active setting's recommendation, only when there is a label to show it
+  // with. `undefined` never equals an option value, so no row is badged.
+  const recommendedValue = recommendedLabel ? active.recommendedValue : null
 
   return (
     <div className="flex max-h-[min(60vh,24rem)] min-h-0">
@@ -130,6 +140,8 @@ export function SessionSelectorsPanel({
           <ModelOptionList
             groups={active.groups}
             currentValue={active.currentValue}
+            recommendedValue={recommendedValue}
+            recommendedLabel={recommendedLabel}
             onSelect={(value) => {
               active.onSelect(value)
               onAfterSelect?.()
@@ -182,6 +194,9 @@ export function SessionSelectorsPanel({
                     <DropdownRadioItemContent
                       label={opt.name}
                       description={opt.description}
+                      recommendedLabel={
+                        opt.value === recommendedValue ? recommendedLabel : null
+                      }
                     />
                   </button>
                 )

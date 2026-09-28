@@ -104,7 +104,27 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   counted via cumulative-counter deltas; Claude `Task` sub-agent transcripts
 ///   counted against the session that launched them; and facts anchored at the
 ///   turn's own timestamp instead of its last tool result.
-const FACT_SCHEMA_VERSION: &str = "2";
+/// * `3` — Qoder's cached prefix counted once instead of twice. Its transcripts
+///   carry Anthropic FIELD NAMES over OpenAI SEMANTICS, so `input_tokens` is
+///   the whole prompt and `cache_read_input_tokens` is a subset of it; summing
+///   the two (which every shared helper does, because for Claude they are
+///   disjoint) inflated input and total by the cached amount. See
+///   `parsers::qoder::qoder_turn_usage`.
+///
+/// Only the accounting stored in `token_usage_turn` counts: the four token
+/// counters, the duration and the timestamp. A conversation's context WINDOW is
+/// not stored here (nor anywhere else — `SessionStats` is recomputed by the
+/// parser on every read), so changing how a window is inferred needs no bump;
+/// it reaches every existing session the moment it ships.
+///
+/// Nor does a change to the DATA a transcript carries: shipping Qoder's
+/// `QODER_EXPOSE_TOKEN_USAGE` launch env only affects turns recorded after it,
+/// which are new rows either way. `3` is here because the same release also
+/// changed how an UNCHANGED transcript is read — and Qoder sessions with real
+/// counters predate it, since a custom/BYO model has always exposed them and
+/// the parser reads every session under `~/.qoder/projects`, not just the ones
+/// codeg launched.
+const FACT_SCHEMA_VERSION: &str = "3";
 
 const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 

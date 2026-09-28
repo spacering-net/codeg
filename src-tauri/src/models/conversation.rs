@@ -203,6 +203,12 @@ pub struct ImportResult {
     /// at first import). Manual renames are never touched.
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations brought back by this import. Only ever
+    /// non-zero for a run whose caller opted into
+    /// `DeletedPolicy::Restore` — i.e. the picker, where the user checked that
+    /// specific deleted session. A whole-folder sweep never resurrects.
+    #[serde(default)]
+    pub restored: u32,
 }
 
 /// Reconciliation state of one locally-discovered session against the codeg DB,
@@ -214,7 +220,11 @@ pub enum ScanSessionStatus {
     New,
     /// At least one live (non-deleted) row exists — already imported.
     Imported,
-    /// Only soft-deleted rows exist — never resurrected by import.
+    /// Only soft-deleted rows exist. Deletion is a soft delete, so the row (and
+    /// its whole history) is still there: the picker offers such a session for
+    /// RESTORE, and importing it un-deletes the existing row in place rather
+    /// than inserting a second one. Never restored implicitly — only when the
+    /// user checks that row (see `DeletedPolicy`).
     Deleted,
 }
 
@@ -283,6 +293,9 @@ pub struct ImportFolderOutcome {
     pub imported: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations restored in place under this folder.
+    #[serde(default)]
+    pub restored: u32,
 }
 
 /// Aggregate result of `import_selected_sessions`.
@@ -291,6 +304,10 @@ pub struct ImportSelectedResult {
     pub imported: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations the user re-selected and this run brought
+    /// back (see [`ImportResult::restored`]).
+    #[serde(default)]
+    pub restored: u32,
     /// Selection keys that no longer resolved to a scanned session (deleted on
     /// disk between scan and import, or bogus input).
     pub not_found: u32,

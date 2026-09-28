@@ -98,6 +98,7 @@ import {
   computeDropHint,
   computeRegionMembers,
   deriveFlowGraph,
+  isRegionKind,
   noteHoldsProse,
   packLayout,
   parseMemberNodeId,
@@ -127,8 +128,10 @@ import {
   ConversationDraftNode,
   type ConversationDraftData,
 } from "./nodes/conversation-detail-node"
+import { FileNode } from "./nodes/file-node"
 import { NoteNode } from "./nodes/note-node"
 import { RegionNode } from "./nodes/region-node"
+import { TerminalNode } from "./nodes/terminal-node"
 import { useCanvasMarqueeTextGuard } from "./use-canvas-marquee-text-guard"
 import { useCanvasRightDragPan } from "./use-canvas-right-drag-pan"
 
@@ -141,6 +144,8 @@ const NODE_TYPES = {
   conversationDetail: ConversationDetailNode,
   conversationDraft: ConversationDraftNode,
   note: NoteNode,
+  file: FileNode,
+  terminal: TerminalNode,
 } as unknown as NodeTypes
 
 /** How long a pan/zoom must be quiet before the viewport is written to disk.
@@ -269,12 +274,14 @@ function CanvasFlow() {
   )
   const [renamingRegionId, setRenamingRegionId] = useState<number | null>(null)
   // The delete waiting on the user's answer, or null for "not asking".
-  // `notes` is how many written notes it would take, so the dialog can say
-  // what is at stake. `run` is the delete itself, CAPTURED when the question
-  // was asked — the alternative, re-reading the live selection on confirm,
-  // lets the prompt describe one set of nodes and the confirm delete another.
+  // `notes` is how many written notes it would take and `terminals` how many
+  // live shells it would end, so the dialog can say what is at stake. `run` is
+  // the delete itself, CAPTURED when the question was asked — the alternative,
+  // re-reading the live selection on confirm, lets the prompt describe one set
+  // of nodes and the confirm delete another.
   const [pendingDelete, setPendingDelete] = useState<{
     notes: number
+    terminals: number
     run: () => Promise<void>
   } | null>(null)
   // Transient drag positions (RF node id → parent-relative position). State,
@@ -416,6 +423,15 @@ function CanvasFlow() {
     })
   }, [hydrated, dbNodes, setDetailCardsPersisted])
 
+  /** Terminal cards on the board, by row id. */
+  const terminalNodeIds = useMemo(() => {
+    const out: number[] = []
+    for (const node of dbNodes.values()) {
+      if (node.kind === "terminal") out.push(node.id)
+    }
+    return out
+  }, [dbNodes])
+
   const derived = useMemo(
     () =>
       deriveFlowGraph({
@@ -555,6 +571,22 @@ function CanvasFlow() {
     ).length
   }, [])
 
+  /**
+   * How many of these nodes are terminals — i.e. how many running processes
+   * the delete would end.
+   *
+   * The board's rule is "ask only when the delete destroys something that
+   * lives nowhere else", and a shell qualifies for the same reason a written
+   * note does: the command halfway through a migration exists only there.
+   * Liveness is deliberately not probed — a card whose process already exited
+   * answers "yes" and costs one dialog, while asking the backend would make a
+   * confirmation prompt depend on a round trip.
+   */
+  const terminalsAtRisk = useCallback((ids: readonly number[]) => {
+    const rows = useCanvasStore.getState().nodes
+    return ids.filter((id) => rows.get(id)?.kind === "terminal").length
+  }, [])
+
   const forgetNodes = useCallback(
     (ids: readonly number[]) => {
       if (ids.length === 0) return
@@ -593,13 +625,18 @@ function CanvasFlow() {
   const deleteNode = useCallback(
     async (nodeId: number) => {
       const notes = notesAtRisk([nodeId])
-      if (notes > 0) {
-        setPendingDelete({ notes, run: () => commitDeleteNode(nodeId) })
+      const terminals = terminalsAtRisk([nodeId])
+      if (notes > 0 || terminals > 0) {
+        setPendingDelete({
+          notes,
+          terminals,
+          run: () => commitDeleteNode(nodeId),
+        })
         return
       }
       await commitDeleteNode(nodeId)
     },
-    [commitDeleteNode, notesAtRisk]
+    [commitDeleteNode, notesAtRisk, terminalsAtRisk]
   )
 
   const createNode = useCallback(async (input: CreateCanvasNodeInput) => {
@@ -1039,8 +1076,12 @@ function CanvasFlow() {
       // cards on the way in, so record the column/row count it landed on as the
       // region's shape. Otherwise the next render would re-derive columns from
       // the width and the pinned shape would silently drift from the frame.
+      // Kinds are enumerated through ONE predicate, never re-listed here: the
+      // backend rejects grid fields on a non-region outright, so a kind this
+      // check forgot about would have its whole geometry patch fail and the
+      // card would snap back after every resize.
       const gridPatch =
-        dbNode && dbNode.kind !== "conversation" && dbNode.kind !== "note"
+        dbNode && isRegionKind(dbNode.kind)
           ? {
               gridColumns: columnsForRegionWidth(geometry.width),
               gridRows: rowsForRegionHeight(geometry.height),
@@ -1267,12 +1308,9 @@ function CanvasFlow() {
       }
       const dbId = parseRegionNodeId(change.id)
       const dbNode = dbId != null ? storeNodes.get(dbId) : undefined
-      // Only member GRIDS snap; notes and (expanded) conversation cards resize
-      // freely — they have no cards to line up.
-      const isRegion =
-        dbNode != null &&
-        dbNode.kind !== "note" &&
-        dbNode.kind !== "conversation"
+      // Only member GRIDS snap; notes, files, terminals and (expanded)
+      // conversation cards resize freely — they have no cards to line up.
+      const isRegion = dbNode != null && isRegionKind(dbNode.kind)
       liveSizes.push([
         change.id,
         isRegion
@@ -1804,12 +1842,19 @@ function CanvasFlow() {
    */
   const deleteSelection = useCallback(async () => {
     const notes = notesAtRisk(selection.noteIds)
-    if (notes > 0) {
-      setPendingDelete({ notes, run: commitDeleteSelection })
+    const terminals = terminalsAtRisk(selection.deletableIds)
+    if (notes > 0 || terminals > 0) {
+      setPendingDelete({ notes, terminals, run: commitDeleteSelection })
       return
     }
     await commitDeleteSelection()
-  }, [selection.noteIds, commitDeleteSelection, notesAtRisk])
+  }, [
+    selection.noteIds,
+    selection.deletableIds,
+    commitDeleteSelection,
+    notesAtRisk,
+    terminalsAtRisk,
+  ])
 
   // ── Toolbar actions ──
 
@@ -1950,13 +1995,15 @@ function CanvasFlow() {
         ) {
           return
         }
-        // Rename is a region's verb; with anything else selected these keys
-        // have nothing to do and are left alone.
+        // Rename is a region's verb — `renamingRegionId` is read by the region
+        // component's inline title input and nothing else, so arming it for any
+        // other kind swallows the key and opens nothing. Through the shared
+        // predicate rather than a list of exclusions, for the same reason the
+        // resize commit is.
         if (selectedNodes.length !== 1) return
         const dbId = parseRegionNodeId(selectedNodes[0].id)
-        if (dbId == null || dbNodes.get(dbId)?.kind == null) return
-        const kind = dbNodes.get(dbId)!.kind
-        if (kind === "conversation" || kind === "note") return
+        const kind = dbId != null ? dbNodes.get(dbId)?.kind : undefined
+        if (dbId == null || kind == null || !isRegionKind(kind)) return
         e.preventDefault()
         setRenamingRegionId(dbId)
         return
@@ -2093,7 +2140,14 @@ function CanvasFlow() {
   )
 
   const empty = hydrated && dbNodes.size === 0 && drafts.length === 0
-  const liveSurfaceCount = detailCards.size + drafts.length
+  // Nodes whose unmount would cost the user something: an expanded
+  // conversation takes its ACP connection with it, a draft its unsent text,
+  // and a terminal its emulator (the PTY survives, but the pane comes back
+  // holding only what the scrollback replay can redraw). None of them may be
+  // culled off-screen. File cards are absent on purpose — their content lives
+  // in the shared file tab and a re-mount rebuilds them from it for free.
+  const liveSurfaceCount =
+    detailCards.size + drafts.length + terminalNodeIds.length
 
   return (
     <CanvasViewProvider value={viewContext}>
@@ -2292,7 +2346,23 @@ function CanvasFlow() {
             <AlertDialogHeader>
               <AlertDialogTitle>{t("confirmDeleteTitle")}</AlertDialogTitle>
               <AlertDialogDescription>
-                {t("confirmDeleteNotes", { count: pendingDelete?.notes ?? 0 })}
+                {/* One sentence per situation rather than two stacked
+                    clauses: the mixed case is rare enough that a dedicated
+                    string reads better than gluing two together, and ICU
+                    plurals can't span two independent counts anyway. */}
+                {(pendingDelete?.notes ?? 0) > 0 &&
+                (pendingDelete?.terminals ?? 0) > 0
+                  ? t("confirmDeleteNotesAndTerminals", {
+                      notes: pendingDelete?.notes ?? 0,
+                      terminals: pendingDelete?.terminals ?? 0,
+                    })
+                  : (pendingDelete?.terminals ?? 0) > 0
+                    ? t("confirmDeleteTerminals", {
+                        count: pendingDelete?.terminals ?? 0,
+                      })
+                    : t("confirmDeleteNotes", {
+                        count: pendingDelete?.notes ?? 0,
+                      })}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

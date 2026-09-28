@@ -122,7 +122,12 @@ pub async fn canvas_delete_node(
     Json(params): Json<DeleteParams>,
 ) -> Result<Json<CanvasMutation<()>>, AppCommandError> {
     Ok(Json(
-        canvas_commands::canvas_delete_node_core(&state.emitter, &state.db, params.node_id)
+        canvas_commands::canvas_delete_node_core(
+            &state.emitter,
+            &state.db,
+            &state.terminal_manager,
+            params.node_id,
+        )
             .await?,
     ))
 }
@@ -138,7 +143,12 @@ pub async fn canvas_delete_nodes(
     Json(params): Json<DeleteManyParams>,
 ) -> Result<Json<CanvasMutation<Vec<i32>>>, AppCommandError> {
     Ok(Json(
-        canvas_commands::canvas_delete_nodes_core(&state.emitter, &state.db, params.node_ids)
+        canvas_commands::canvas_delete_nodes_core(
+            &state.emitter,
+            &state.db,
+            &state.terminal_manager,
+            params.node_ids,
+        )
             .await?,
     ))
 }

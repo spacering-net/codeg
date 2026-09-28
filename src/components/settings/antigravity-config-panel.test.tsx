@@ -7,6 +7,9 @@ vi.mock("@/lib/api", () => ({
   acpAntigravityLoginStart: vi.fn(),
   acpAntigravityLoginFinish: vi.fn(),
   acpAntigravityLoginCancel: vi.fn(),
+  acpAntigravitySignOut: vi.fn(),
+  acpScanLeakedTemp: vi.fn(),
+  acpReclaimLeakedTemp: vi.fn(),
 }))
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -18,6 +21,9 @@ import {
   acpAntigravityLoginCancel,
   acpAntigravityLoginFinish,
   acpAntigravityLoginStart,
+  acpAntigravitySignOut,
+  acpReclaimLeakedTemp,
+  acpScanLeakedTemp,
   acpSyncAntigravitySettings,
 } from "@/lib/api"
 import {
@@ -808,6 +814,199 @@ describe("AntigravityConfigPanel", () => {
       )
       // Still offering to try again, not stuck in a spinner.
       expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
+    })
+  })
+
+  /**
+   * The escape hatch from a wrong account.
+   *
+   * Antigravity refreshes its cached token by itself, so once a credential
+   * exists `authenticate` returns with no link and the sign-in above can only
+   * ever report `alreadySignedIn` — leaving the first Google account a user
+   * picks as the last one they get, through uninstalls and reinstalls alike.
+   */
+  describe("sign-out", () => {
+    const s = m.signOut
+    const h = m.headless
+
+    beforeEach(() => {
+      vi.mocked(acpAntigravitySignOut).mockResolvedValue({
+        path: "/home/u/.gemini/antigravity-acp/settings.json",
+        status: "written",
+        reason: null,
+      })
+    })
+
+    it("offers itself only for the methods with a credential to discard", () => {
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      expect(screen.getByRole("button", { name: s.action })).toBeInTheDocument()
+
+      // An API-key method reads its credential from the environment on every
+      // request, so there is nothing stored to sign out of.
+      fireEvent.click(screen.getByLabelText(m.methodLabel))
+      fireEvent.click(
+        screen.getByRole("option", { name: m.methods["gemini-api-key"] })
+      )
+      expect(screen.queryByRole("button", { name: s.action })).toBeNull()
+    })
+
+    it("clears the credential and says another account can be picked", async () => {
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: s.action }))
+
+      await waitFor(() => expect(acpAntigravitySignOut).toHaveBeenCalled())
+      expect(toast.success).toHaveBeenCalledWith(s.done)
+    })
+
+    /**
+     * The agent's `logout` removes `auth.type` on its way out and the backend
+     * writes the saved method straight back. When that write is refused the
+     * file now names NO method, and every later session fails outright with
+     * "Authentication required" — so this is the one outcome the panel must not
+     * report as a plain success.
+     */
+    it("warns when the settings file could not be rewritten afterwards", async () => {
+      vi.mocked(acpAntigravitySignOut).mockResolvedValue({
+        path: "/home/u/.gemini/antigravity-acp/settings.json",
+        status: "skipped",
+        reason:
+          "it is not strict JSON codeg can rewrite without losing content",
+      })
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: s.action }))
+
+      await waitFor(() => expect(toast.warning).toHaveBeenCalled())
+      expect(toast.success).not.toHaveBeenCalled()
+      // And it stays on screen, because it stays true until someone edits that
+      // file — the same standing notice a refused save raises.
+      expect(await screen.findByText(m.syncSkipped)).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          "it is not strict JSON codeg can rewrite without losing content"
+        )
+      ).toBeInTheDocument()
+    })
+
+    /**
+     * A stored row missing its project or location gates the SIGN-IN, because
+     * consenting without one only fails at license resolution. Signing out
+     * needs none of it — and a half-configured row is exactly what a user
+     * trying to leave the wrong account is likely to have.
+     */
+    it("stays available when the stored row cannot sign in", () => {
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
+      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
+      expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
+    })
+
+    it("shows the backend's message when the transport throws its JSON", async () => {
+      vi.mocked(acpAntigravitySignOut).mockRejectedValue({
+        code: "AcpError",
+        message: "Google Antigravity is not installed.",
+      })
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: s.action }))
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled())
+      expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toContain(
+        "Google Antigravity is not installed."
+      )
+      expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
+    })
+  })
+  /**
+   * The temp reclaim is a delete against the SYSTEM temp directory, which every
+   * PyInstaller application on the machine shares. The panel's own copy admits
+   * codeg cannot tell its own leftovers from someone else's — so consent has to
+   * be per path, and it cannot be the default.
+   */
+  describe("leaked temp reclaim", () => {
+    const r = enMessages.AcpAgentSettings.antigravity
+
+    const scan = {
+      root: "/tmp",
+      total_bytes: 3_000_000,
+      skipped: 1,
+      entries: [
+        {
+          path: "/tmp/_MEI111111",
+          bytes: 2_000_000,
+          age_hours: 30,
+          is_dir: true,
+        },
+        {
+          path: "/tmp/_MEI222222",
+          bytes: 1_000_000,
+          age_hours: 5,
+          is_dir: true,
+        },
+      ],
+    }
+
+    it("lists every path and pre-selects none of them", async () => {
+      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
+
+      await screen.findByText("/tmp/_MEI111111")
+      expect(screen.getByText("/tmp/_MEI222222")).toBeInTheDocument()
+      for (const box of screen.getAllByRole("checkbox")) {
+        expect(box).toHaveAttribute("data-state", "unchecked")
+      }
+      // Nothing selected means nothing to delete, so the destructive action is
+      // not reachable at all.
+      expect(
+        screen.getByRole("button", { name: r.tempReclaimDelete })
+      ).toBeDisabled()
+    })
+
+    it("deletes only what was ticked, and only after a confirmation", async () => {
+      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
+      vi.mocked(acpReclaimLeakedTemp).mockResolvedValue({
+        removed: 1,
+        freed_bytes: 2_000_000,
+        failed: [],
+      })
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
+      await screen.findByText("/tmp/_MEI111111")
+
+      // Tick the first entry only. Index 0 is the select-all header box.
+      fireEvent.click(screen.getAllByRole("checkbox")[1])
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimDelete }))
+
+      // The click opens the dialog; it must not have deleted anything yet.
+      expect(acpReclaimLeakedTemp).not.toHaveBeenCalled()
+      fireEvent.click(
+        await screen.findByRole("button", { name: r.tempReclaimConfirmAction })
+      )
+
+      await waitFor(() => expect(acpReclaimLeakedTemp).toHaveBeenCalled())
+      expect(acpReclaimLeakedTemp).toHaveBeenCalledWith(["/tmp/_MEI111111"])
+    })
+
+    it("shows every path the backend refused, not just the first", async () => {
+      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
+      vi.mocked(acpReclaimLeakedTemp).mockResolvedValue({
+        removed: 0,
+        freed_bytes: 0,
+        failed: ["/tmp/_MEI111111: in use", "/tmp/_MEI222222: access denied"],
+      })
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
+      await screen.findByText("/tmp/_MEI111111")
+
+      fireEvent.click(screen.getAllByRole("checkbox")[0])
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimDelete }))
+      fireEvent.click(
+        await screen.findByRole("button", { name: r.tempReclaimConfirmAction })
+      )
+
+      await screen.findByText("/tmp/_MEI111111: in use")
+      expect(
+        screen.getByText("/tmp/_MEI222222: access denied")
+      ).toBeInTheDocument()
     })
   })
 })

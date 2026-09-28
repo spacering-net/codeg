@@ -127,3 +127,57 @@ describe("firstTextOfParts", () => {
     expect(firstTextOfParts([{ type: "image" }])).toBe("")
   })
 })
+
+describe("compaction rounds", () => {
+  it("labels the compact command the engine sends on the user's behalf", () => {
+    // The engine sends it as an ordinary prompt, so the viewer renders a user
+    // turn nobody typed — between two labelled phases, unlabelled.
+    const rounds = extractRounds([
+      event(1, "context_compact", {
+        status: "started",
+        command: "/compact",
+        run_seq: 3,
+      }),
+      event(2, "round", {
+        kind: "merge",
+        prompt_head: "Land this task on main",
+      }),
+      event(3, "context_compact", {
+        status: "ok",
+        command: "/compact",
+        before_percent: 91.2,
+      }),
+    ])
+    expect(rounds).toEqual([
+      { kind: "compact", promptHead: "/compact" },
+      {
+        kind: "merge",
+        intent: undefined,
+        promptHead: "Land this task on main",
+      },
+    ])
+    expect(matchRoundKind(rounds, "/compact")).toBe("compact")
+    expect(matchRoundKind(rounds, "Land this task on main, squashed")).toBe(
+      "merge"
+    )
+  })
+
+  it("takes only the half of the pair that carries a turn", () => {
+    // The outcome event is written after the turn has landed; treating it as a
+    // round would put a second divider on the same turn's text.
+    for (const status of ["ok", "canceled", "failed", "skipped"]) {
+      expect(
+        extractRounds([
+          event(1, "context_compact", { status, command: "/compact" }),
+        ])
+      ).toEqual([])
+    }
+    // A skip records no command at all, and a round with no head matches
+    // every turn — so a blank one is dropped like any other.
+    expect(
+      extractRounds([
+        event(1, "context_compact", { status: "started", command: "  " }),
+      ])
+    ).toEqual([])
+  })
+})

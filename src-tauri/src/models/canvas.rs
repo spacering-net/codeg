@@ -20,6 +20,9 @@ pub struct CanvasNode {
     pub member_ids: Vec<i32>,
     pub title: Option<String>,
     pub content: Option<String>,
+    /// kind=file: the document's absolute path; kind=terminal: its working
+    /// directory. `None` for every other kind.
+    pub path: Option<String>,
     pub color: Option<String>,
     pub collapsed: bool,
     /// Region grid shape; 0 on either axis means "auto" (see the entity).
@@ -45,6 +48,7 @@ impl From<crate::db::entities::canvas_node::Model> for CanvasNode {
             member_ids: canvas_service::parse_member_ids(m.member_ids.as_deref()),
             title: m.title,
             content: m.content,
+            path: m.path,
             color: m.color,
             collapsed: m.collapsed,
             grid_columns: m.grid_columns,

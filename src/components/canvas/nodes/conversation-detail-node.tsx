@@ -1,7 +1,7 @@
 "use client"
 
 import { memo, useCallback } from "react"
-import { NodeResizer, type Node, type NodeProps } from "@xyflow/react"
+import { type Node, type NodeProps } from "@xyflow/react"
 import { Minimize2, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { AgentIcon } from "@/components/agent-icon"
@@ -14,12 +14,11 @@ import {
   type CanvasDraftTarget,
 } from "../canvas-conversation-surface"
 import {
-  DRAG_HANDLE_CLASS,
   type ConversationCardData,
   type NewConversationTarget,
 } from "../canvas-model"
-import { ColorWash } from "../canvas-swatches"
 import { useCanvasView } from "../canvas-view-context"
+import { CARD_HEADER_BUTTON_CLASS, CardFrame } from "./card-frame"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 export type ConversationDetailFlowNode = Node<
@@ -41,109 +40,6 @@ export type ConversationDraftFlowNode = Node<
   ConversationDraftData,
   "conversationDraft"
 >
-
-/**
- * Shared frame for both live-conversation cards: a titled window with a
- * resizer, sized entirely by the ReactFlow node wrapper.
- *
- * The title bar is the ONLY drag handle (`dragHandle` on the node points at
- * `DRAG_HANDLE_CLASS`), which buys the body the two things a conversation needs
- * and a canvas node normally forbids: text you can select and a composer you can
- * click into. ReactFlow's own stylesheet sets `user-select: none` and
- * `cursor: grab` on every `.react-flow__node`, so the body has to say
- * `select-text cursor-auto` out loud — the card is a window, not a tile.
- *
- * `onActivate` fires on the first interaction anywhere in the card: a card
- * restored from a previous visit renders its transcript but holds no ACP
- * connection until then.
- */
-function DetailFrame({
-  selected,
-  title,
-  icon,
-  color,
-  actions,
-  onResizeEnd,
-  onActivate,
-  children,
-}: {
-  selected?: boolean
-  title: React.ReactNode
-  icon?: React.ReactNode
-  /** The card's colour, same row and same wash as its collapsed form — a
-   *  colour that vanished on expanding would read as having been lost. */
-  color?: string | null
-  actions: React.ReactNode
-  onResizeEnd?: (geometry: {
-    x: number
-    y: number
-    width: number
-    height: number
-  }) => void
-  onActivate?: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        // The whole conversation inside here renders in board units too (see
-        // `canvas-board-units` in globals.css): a card on this board is drawn at
-        // the board's scale, and the board is zoomed with its own control. The
-        // menus it opens are portalled out and stay on the app's scale, which is
-        // right — those are chrome, not board content.
-        "canvas-board-units flex h-full w-full cursor-auto flex-col overflow-hidden rounded-2xl border bg-card transition-colors select-text",
-        selected
-          ? "border-primary ring-2 ring-primary/25"
-          : "border-foreground/15"
-      )}
-      // Primary button only. Right-drag pans the board, and a pan that starts
-      // over a restored card — or sweeps the pointer across several — must not
-      // be read as "the user wants these conversations connected"; that would
-      // spawn the very pile of agent processes dormancy exists to avoid.
-      onPointerDownCapture={(e) => {
-        if (e.button === 0) onActivate?.()
-      }}
-    >
-      {/* Behind the whole window, clipped to its radius. The two rows below say
-          `relative` for this: the wash is a positioned box and would otherwise
-          paint over static siblings — i.e. over the entire conversation. */}
-      <ColorWash color={color} className="rounded-2xl" opacity={0.08} />
-      {onResizeEnd && (
-        <NodeResizer
-          isVisible={Boolean(selected)}
-          minWidth={360}
-          minHeight={320}
-          lineClassName="!border-primary/40"
-          handleClassName="!size-2 !rounded-sm !border-primary !bg-background"
-          onResizeEnd={(_e, params) =>
-            onResizeEnd({
-              width: params.width,
-              height: params.height,
-              x: params.x,
-              y: params.y,
-            })
-          }
-        />
-      )}
-      <div
-        className={cn(
-          DRAG_HANDLE_CLASS,
-          "relative flex h-9 shrink-0 cursor-grab items-center gap-1.5 border-b border-border/70 px-2.5 select-none active:cursor-grabbing"
-        )}
-      >
-        {icon}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
-          {title}
-        </span>
-        {actions}
-      </div>
-      <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
-    </div>
-  )
-}
-
-const HEADER_BUTTON_CLASS =
-  "nodrag inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 
 /**
  * A pinned conversation card expanded into a live conversation: transcript,
@@ -182,7 +78,7 @@ export const ConversationDetailNode = memo(function ConversationDetailNode({
   const live = liveSurfaces.has(contextKey)
   const status = conversation.status as ConversationStatus
   return (
-    <DetailFrame
+    <CardFrame
       selected={selected}
       color={data.color}
       onActivate={live ? undefined : () => activateSurface(contextKey)}
@@ -209,7 +105,7 @@ export const ConversationDetailNode = memo(function ConversationDetailNode({
       actions={
         <button
           type="button"
-          className={HEADER_BUTTON_CLASS}
+          className={CARD_HEADER_BUTTON_CLASS}
           aria-label={t("collapseConversation")}
           title={t("collapseConversation")}
           onClick={() => setCardDetail(pinDbId, false)}
@@ -234,7 +130,7 @@ export const ConversationDetailNode = memo(function ConversationDetailNode({
           onSelectChatMode: () => {},
         }}
       />
-    </DetailFrame>
+    </CardFrame>
   )
 })
 
@@ -281,7 +177,7 @@ export const ConversationDraftNode = memo(function ConversationDraftNode({
       : { kind: "chat" }
 
   return (
-    <DetailFrame
+    <CardFrame
       selected={selected}
       color={data.color}
       onActivate={live ? undefined : () => activateSurface(contextKey)}
@@ -297,7 +193,7 @@ export const ConversationDraftNode = memo(function ConversationDraftNode({
         creating ? null : (
           <button
             type="button"
-            className={HEADER_BUTTON_CLASS}
+            className={CARD_HEADER_BUTTON_CLASS}
             aria-label={t("discardDraft")}
             title={t("discardDraft")}
             onClick={() => dismissDraft(data.draftId)}
@@ -330,6 +226,6 @@ export const ConversationDraftNode = memo(function ConversationDraftNode({
           void materializeDraft(data.draftId, conversationId)
         }
       />
-    </DetailFrame>
+    </CardFrame>
   )
 })

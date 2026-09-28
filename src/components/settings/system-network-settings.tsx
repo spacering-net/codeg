@@ -1,6 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
 import {
   ArrowUpCircle,
   CheckCircle2,
@@ -14,7 +20,7 @@ import {
 import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useAppI18n } from "@/components/i18n-provider"
-import { BackupSettings } from "@/components/settings/backup-settings"
+import { DataSyncSettings } from "@/components/settings/data-sync-settings"
 import { ReleaseNotes } from "@/components/settings/release-notes"
 import { SettingsSection } from "@/components/shared/settings-section"
 import {
@@ -48,14 +54,11 @@ import {
 import { isLocalDesktop, openUrl } from "@/lib/platform"
 import type { AppLocale } from "@/lib/types"
 import { readLastCheck } from "@/lib/update-check-storage"
-import {
-  appUpdateErrorMessageKey,
-  normalizeAppUpdateError,
-  usesTauriUpdater,
-} from "@/lib/updater"
+import { describeAppUpdateError, usesTauriUpdater } from "@/lib/updater"
 import { useAppUpdate } from "@/components/providers/update-provider"
 import { APP_LOCALES } from "@/lib/i18n"
 import { toErrorMessage } from "@/lib/app-error"
+import type { AppCommandError } from "@/lib/types"
 
 function GithubMarkIcon({ className }: { className?: string }) {
   return (
@@ -79,6 +82,18 @@ function formatBytes(bytes: number): string {
 }
 
 const PROXY_EXAMPLE = "http://127.0.0.1:7890"
+// Written exactly as the backend stores the list — comma-separated, no spaces —
+// so the example, the placeholder and the saved value all read the same.
+const PROXY_BYPASS_EXAMPLE = "git.example.com,.example.org,192.168.1.10"
+
+// A value in a hint, set apart from the prose so its punctuation is not read
+// as the sentence's. `dir="ltr"` keeps it intact in Arabic, where the leading
+// `.` of `.example.com` would otherwise move to the far end.
+const hintLiteral = (chunks: ReactNode) => (
+  <code dir="ltr" className="rounded bg-muted px-1 font-mono break-words">
+    {chunks}
+  </code>
+)
 const APP_LANGUAGE_VALUES = APP_LOCALES
 
 type LanguageSelectValue = "system" | AppLocale
@@ -102,6 +117,7 @@ export function SystemNetworkSettings() {
   const [enabled, setEnabled] = useState(false)
   const [proxyUrl, setProxyUrl] = useState("")
   const [proxyUrlError, setProxyUrlError] = useState<string | null>(null)
+  const [noProxy, setNoProxy] = useState("")
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false)
 
@@ -138,6 +154,7 @@ export function SystemNetworkSettings() {
     liveProgress: serverLiveProgress,
     runtime: serverRuntime,
     rollbackAvailable: serverRollbackAvailable,
+    selfUpdateBlocker,
     canInstallInPlace,
     checkNow,
     refreshLocalStatus,
@@ -151,10 +168,14 @@ export function SystemNetworkSettings() {
   // "Restart to update" prompt). For a server that speaks the live-progress
   // protocol, wait for the authoritative snapshot to hydrate before trusting
   // the status (the default is a placeholder `idle`); older servers don't
-  // hydrate, so they're allowed through on their reported availability.
+  // hydrate, so they're allowed through on their reported availability. A
+  // rollback renames within the same directories as an update: one the server
+  // refuses to write rules it out, while a full disk (which only stops the
+  // update from creating files) does not.
   const canRollback =
     serverSelfUpdate &&
     serverRollbackAvailable &&
+    selfUpdateBlocker?.code !== "permission_denied" &&
     !usesTauriUpdater() &&
     (updateState.status === "idle" || updateState.status === "error") &&
     (updateHydrated || !serverLiveProgress)
@@ -251,6 +272,7 @@ export function SystemNetworkSettings() {
 
       setEnabled(proxySettings.enabled)
       setProxyUrl(proxySettings.proxy_url ?? "")
+      setNoProxy(proxySettings.no_proxy ?? "")
 
       if (autostart) {
         setAutostartEnabled(autostart.settings?.enabled ?? false)
@@ -285,7 +307,7 @@ export function SystemNetworkSettings() {
   }, [])
 
   const saveProxySettings = useCallback(
-    async (nextEnabled: boolean, nextProxyUrl: string) => {
+    async (nextEnabled: boolean, nextProxyUrl: string, nextNoProxy: string) => {
       if (nextEnabled && !nextProxyUrl.trim()) return
 
       setSaving(true)
@@ -293,9 +315,11 @@ export function SystemNetworkSettings() {
         const next = await updateSystemProxySettings({
           enabled: nextEnabled,
           proxy_url: nextProxyUrl.trim() || null,
+          no_proxy: nextNoProxy.trim() || null,
         })
         setEnabled(next.enabled)
         setProxyUrl(next.proxy_url ?? "")
+        setNoProxy(next.no_proxy ?? "")
       } catch (err) {
         const message = toErrorMessage(err)
         toast.error(t("saveFailed", { message }))
@@ -349,12 +373,19 @@ export function SystemNetworkSettings() {
   )
 
   const formatUpdateError = useCallback(
-    (error: unknown, action: UpdateAction): string => {
-      const { kind, rawMessage } = normalizeAppUpdateError(error)
-      if (kind === "unknown" && action === "check") {
-        console.error("[Settings] updater unknown error:", rawMessage)
+    (
+      error: unknown,
+      action: UpdateAction,
+      info?: AppCommandError | null
+    ): string => {
+      const { key, values } = describeAppUpdateError(error, action, info)
+      if (key === "updateErrors.unknown") {
+        console.error(
+          "[Settings] updater unknown error:",
+          toErrorMessage(error)
+        )
       }
-      return t(appUpdateErrorMessageKey(kind, action))
+      return t(key, values)
     },
     [t]
   )
@@ -364,17 +395,28 @@ export function SystemNetworkSettings() {
   // same way as a check error — and it stays visible after navigating back.
   const lifecycleError =
     updateState.status === "error" && updateState.error
-      ? formatUpdateError(updateState.error, "install")
+      ? formatUpdateError(updateState.error, "install", updateState.errorInfo)
       : null
 
   // The shared check records the raw failure; classify it for display here.
   const updateError = checkError ? formatUpdateError(checkError, "check") : null
+  // The banner shows one of the two; a failed check takes precedence.
+  const bannerError = updateError || lifecycleError
+
+  // What keeps this server from updating in place, said up front rather than
+  // after a click that is certain to fail — unless the banner already says it.
+  const blockerMessage = selfUpdateBlocker
+    ? formatUpdateError(selfUpdateBlocker.message, "install", selfUpdateBlocker)
+    : null
+  const blockerHint = blockerMessage !== bannerError ? blockerMessage : null
 
   // A user-initiated check, so failures toast (the provider's own periodic
-  // checks stay silent).
+  // checks stay silent). Re-reads the local status too: that is where a
+  // blocker the operator has since fixed gets cleared.
   const checkForUpdates = useCallback(() => {
+    void refreshLocalStatus()
     void checkNow({ silent: false })
-  }, [checkNow])
+  }, [checkNow, refreshLocalStatus])
 
   // Close a stale rollback confirm dialog if the lifecycle leaves a
   // rollback-able state — e.g. another window staged an update while the dialog
@@ -594,8 +636,13 @@ export function SystemNetworkSettings() {
               </div>
             )}
 
+            {blockerHint && (
+              <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
+            )}
+
             {availableUpdate &&
               serverSelfUpdate &&
+              !selfUpdateBlocker &&
               serverRuntime === "docker" && (
                 <p className="text-muted-foreground/80 text-2xs leading-5">
                   {t("dockerUpgradeHint")}
@@ -623,11 +670,9 @@ export function SystemNetworkSettings() {
             )}
           </div>
 
-          {(updateError || lifecycleError) && (
+          {bannerError && (
             <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
-              {t("updateError", {
-                message: updateError || lifecycleError || "",
-              })}
+              {t("updateError", { message: bannerError })}
             </div>
           )}
         </section>
@@ -691,7 +736,7 @@ export function SystemNetworkSettings() {
                 }
                 setProxyUrlError(null)
                 setEnabled(next)
-                saveProxySettings(next, proxyUrl)
+                saveProxySettings(next, proxyUrl, noProxy)
               }}
             />
             {t("enableProxy")}
@@ -713,7 +758,7 @@ export function SystemNetworkSettings() {
                   return
                 }
                 setProxyUrlError(null)
-                saveProxySettings(enabled, proxyUrl)
+                saveProxySettings(enabled, proxyUrl, noProxy)
               }}
               placeholder={PROXY_EXAMPLE}
               disabled={saving}
@@ -724,6 +769,32 @@ export function SystemNetworkSettings() {
             )}
             <p className="text-2xs text-muted-foreground">
               {t("proxyHint", { example: PROXY_EXAMPLE })}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="system-proxy-bypass"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              {t("proxyBypass")}
+            </label>
+            <Input
+              id="system-proxy-bypass"
+              // Hosts read left to right in every locale; in Arabic an entry
+              // typed first as `.example.com` would show its dot at the end.
+              dir="ltr"
+              value={noProxy}
+              onChange={(event) => setNoProxy(event.target.value)}
+              onBlur={() => saveProxySettings(enabled, proxyUrl, noProxy)}
+              placeholder={PROXY_BYPASS_EXAMPLE}
+              disabled={saving}
+            />
+            <p className="text-2xs text-muted-foreground">
+              {t.rich("proxyBypassHint", {
+                example: PROXY_BYPASS_EXAMPLE,
+                code: hintLiteral,
+              })}
             </p>
           </div>
         </section>
@@ -780,7 +851,7 @@ export function SystemNetworkSettings() {
           </div>
         </section>
 
-        <BackupSettings />
+        <DataSyncSettings />
 
         <AlertDialog
           open={rollbackConfirmOpen}

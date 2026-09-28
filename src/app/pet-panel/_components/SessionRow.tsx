@@ -92,6 +92,7 @@ export function SessionRow({ session }: SessionRowProps) {
         <PanelPermissionCard
           connectionId={session.connectionId}
           permission={session.pending}
+          agentType={session.agentType}
         />
       ) : null}
     </div>

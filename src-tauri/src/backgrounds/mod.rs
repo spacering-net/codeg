@@ -13,7 +13,9 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use image::{ImageFormat, ImageReader};
@@ -21,6 +23,8 @@ use image::{ImageFormat, ImageReader};
 use crate::app_error::AppCommandError;
 use crate::models::background::BackgroundAsset;
 use crate::paths::codeg_backgrounds_root;
+
+pub mod marketplace;
 
 /// Smallest plausible image payload; rejecting tiny inputs early avoids
 /// decoding random files.
@@ -35,6 +39,15 @@ const MAX_BG_PIXELS: u64 = 40_000_000;
 /// Canonical on-disk filename. Extension-agnostic — the mime type is sniffed
 /// from the magic bytes on read, so a single path round-trips PNG/JPEG/WebP/GIF.
 const BACKGROUND_FILENAME: &str = "background.img";
+/// How long a staging file must sit untouched before a later write treats it as
+/// crash debris and deletes it. Comfortably longer than any real write, so a
+/// concurrent writer's in-flight staging file is never swept out from under it.
+const STALE_TMP_AGE: Duration = Duration::from_secs(600);
+
+/// Disambiguates staging files between concurrent writers. Paired with the pid
+/// it also separates two processes (desktop app + standalone server) pointed at
+/// one `CODEG_DATA_DIR`.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn background_path() -> PathBuf {
     codeg_backgrounds_root().join(BACKGROUND_FILENAME)
@@ -56,11 +69,18 @@ fn background_path() -> PathBuf {
 /// So the two guards bound different things, and neither bounds animation:
 /// `MAX_BG_PIXELS` caps the canvas (which every frame is confined to), and
 /// `MAX_BG_BYTES` caps the *input*, not the work a webview spends decoding a
-/// long one. Frame count and per-frame LZW payloads go unchecked. That is
-/// acceptable here because the file is explicit, local and user-picked behind
-/// an authenticated command — not an adversarial upload — and because APNG and
-/// animated WebP already reached the webview by this same route before GIF was
-/// allowed. Treat it as a sanity bound, not a DoS boundary.
+/// long one. Frame count and per-frame LZW payloads go unchecked. Treat this as
+/// a sanity bound, not a DoS boundary.
+///
+/// That framing was originally justified by every caller handing over a file the
+/// user had picked from their own disk. `marketplace::download` widened it: the
+/// bytes now come from a third-party upload site. The caps above are what still
+/// applies to that path — the *decode* cost of a pathological animation inside
+/// them does not, and the residual exposure is the user's own webview. It is
+/// accepted knowingly, not overlooked: APNG and animated WebP already reached
+/// the webview by this same route before GIF was allowed, and bounding frame
+/// counts would mean re-encoding, which would break animated backgrounds
+/// outright.
 pub fn validate_background(bytes: &[u8]) -> Result<(), AppCommandError> {
     if bytes.len() < MIN_BG_BYTES {
         return Err(AppCommandError::invalid_input(
@@ -109,17 +129,77 @@ fn ensure_backgrounds_root() -> Result<PathBuf, AppCommandError> {
     Ok(root)
 }
 
-fn write_background_atomic(bytes: &[u8]) -> Result<(), AppCommandError> {
+pub(crate) fn write_background_atomic(bytes: &[u8]) -> Result<(), AppCommandError> {
     let root = ensure_backgrounds_root()?;
+    write_background_atomic_in(&root, bytes)
+}
+
+/// Stage into a sibling file, then rename over the background.
+///
+/// The staging name is **per-writer** (`background.img.<pid>.<seq>.tmp`) rather
+/// than one shared `background.img.tmp`. Two writers do overlap in practice —
+/// the wallpaper market's grid lets a second wallpaper be picked while the first
+/// is still downloading — and a shared staging path made them fight over one
+/// inode: the second `File::create` truncates what the first is still writing,
+/// and whichever `rename` lands second fails with `ENOENT` because the other
+/// already moved the file away. That surfaced as "download failed" on a download
+/// that had in fact succeeded. With a private staging file each writer is a
+/// clean last-writer-wins: `rename` is atomic, so a reader sees one whole image
+/// either way, and neither writer can truncate the other's bytes.
+///
+/// Takes `root` explicitly so tests can exercise it against a temp dir instead
+/// of the process-global `CODEG_HOME`.
+fn write_background_atomic_in(root: &Path, bytes: &[u8]) -> Result<(), AppCommandError> {
+    sweep_stale_staging_files(root);
     let final_path = root.join(BACKGROUND_FILENAME);
-    let tmp_path = root.join(format!("{BACKGROUND_FILENAME}.tmp"));
-    {
+    let tmp_path = root.join(format!(
+        "{BACKGROUND_FILENAME}.{}.{}.tmp",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let staged = (|| -> Result<(), AppCommandError> {
         let mut f = fs::File::create(&tmp_path).map_err(AppCommandError::io)?;
         f.write_all(bytes).map_err(AppCommandError::io)?;
         f.sync_all().map_err(AppCommandError::io)?;
+        drop(f);
+        fs::rename(&tmp_path, &final_path).map_err(AppCommandError::io)
+    })();
+    if staged.is_err() {
+        // A private staging file is ours alone to remove, so a failed write
+        // never leaves debris behind for the sweep to find later.
+        let _ = fs::remove_file(&tmp_path);
     }
-    fs::rename(&tmp_path, &final_path).map_err(AppCommandError::io)?;
-    Ok(())
+    staged
+}
+
+/// Delete staging files left by a crash (or by a pre-`<pid>.<seq>` build, whose
+/// name was the fixed `background.img.tmp`). Only long-untouched entries are
+/// removed, so a staging file another writer is filling right now is safe.
+/// Best-effort: a failure here must never fail the write that follows.
+fn sweep_stale_staging_files(root: &Path) {
+    let prefix = format!("{BACKGROUND_FILENAME}.");
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(&prefix) || !name.ends_with(".tmp") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|modified| {
+                SystemTime::now()
+                    .duration_since(modified)
+                    .is_ok_and(|age| age >= STALE_TMP_AGE)
+            })
+            .unwrap_or(false);
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn decode_base64_payload(b64: &str) -> Result<Vec<u8>, AppCommandError> {
@@ -188,10 +268,11 @@ pub fn clear_background() -> Result<(), AppCommandError> {
 mod tests {
     use super::*;
 
-    // Filesystem-touching paths depend on the global `CODEG_HOME`/`CODEG_DATA_DIR`
-    // env (shared, races under parallel tests), so — like `pets::tests` — we
-    // exercise the pure validation surface here and cover disk I/O via manual
-    // smoke tests.
+    // The env-resolved paths (`background_path`, `ensure_backgrounds_root`)
+    // depend on the global `CODEG_HOME`/`CODEG_DATA_DIR` (shared, races under
+    // parallel tests), so — like `pets::tests` — those are covered by manual
+    // smoke tests. `write_background_atomic_in` takes its root explicitly, so
+    // the staging/rename behaviour is testable against a temp dir.
 
     fn encode_png(w: u32, h: u32) -> Vec<u8> {
         let mut img = image::RgbaImage::new(w, h);
@@ -281,5 +362,81 @@ mod tests {
         assert_eq!(sniff_mime(&encode_animated_gif(32, 32, 3)), "image/gif");
         assert_eq!(sniff_mime(b"GIF89a\x00\x00\x00\x00abcd"), "image/gif");
         assert_eq!(sniff_mime(b"GIF87a\x00\x00\x00\x00abcd"), "image/gif");
+    }
+
+    /// Two writers racing on one background — what the market grid produces
+    /// when a second wallpaper is clicked mid-download. Both must report
+    /// success, and the file left behind must be exactly one of the two inputs,
+    /// never a splice of both.
+    #[test]
+    fn concurrent_writes_both_succeed_and_leave_one_whole_image() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = vec![0xAAu8; 2 * 1024 * 1024];
+        let b = vec![0xBBu8; 2 * 1024 * 1024];
+        for _ in 0..8 {
+            std::thread::scope(|scope| {
+                let root = dir.path();
+                let h1 = scope.spawn(|| write_background_atomic_in(root, &a));
+                let h2 = scope.spawn(|| write_background_atomic_in(root, &b));
+                h1.join().unwrap().expect("first writer");
+                h2.join().unwrap().expect("second writer");
+            });
+            let out = fs::read(dir.path().join(BACKGROUND_FILENAME)).expect("background exists");
+            assert!(
+                out == a || out == b,
+                "expected one whole image, got {} bytes mixing both",
+                out.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_write_leaves_no_staging_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A directory where the final file goes makes `rename` fail after the
+        // staging file is fully written — the one window that used to leak.
+        fs::create_dir(dir.path().join(BACKGROUND_FILENAME)).expect("blocker");
+        assert!(write_background_atomic_in(dir.path(), &encode_png(32, 32)).is_err());
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .expect("read_dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leaked staging files: {leftovers:?}");
+    }
+
+    #[test]
+    fn sweep_removes_crash_debris_but_spares_a_fresh_staging_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Named exactly like the pre-`<pid>.<seq>` builds' shared staging file.
+        let stale = dir.path().join(format!("{BACKGROUND_FILENAME}.tmp"));
+        let fresh = dir.path().join(format!("{BACKGROUND_FILENAME}.999.0.tmp"));
+        let unrelated = dir.path().join("notes.txt");
+        for path in [&stale, &fresh, &unrelated] {
+            fs::write(path, b"x").expect("seed");
+        }
+        let old = SystemTime::now() - STALE_TMP_AGE - Duration::from_secs(60);
+        // Opened for writing rather than with `File::open`: Windows backs
+        // `set_modified` with `SetFileTime`, which needs `FILE_WRITE_ATTRIBUTES`
+        // on the handle, and only a write-mode open asks for it. A read-only
+        // handle backdates happily on Unix — `futimens` gates an explicit
+        // timestamp on the file's ownership, not the descriptor's access mode —
+        // and fails with "Access is denied" on Windows.
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .expect("open for backdating")
+            .set_modified(old)
+            .expect("backdate");
+
+        sweep_stale_staging_files(dir.path());
+
+        assert!(!stale.exists(), "crash debris should be swept");
+        assert!(
+            fresh.exists(),
+            "a concurrent writer's staging file must survive"
+        );
+        assert!(unrelated.exists(), "unrelated files must be untouched");
     }
 }

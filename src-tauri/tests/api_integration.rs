@@ -425,3 +425,95 @@ async fn get_folder_conversation_accepts_turn_window_params() {
     assert!(body["prefix_hash"].is_string());
     assert!(body["prefix_hash_before_index"].is_string());
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// codeg-mcp service status
+// ────────────────────────────────────────────────────────────────────────────
+
+/// The status endpoint has to answer even in a runtime that never bound a
+/// broker socket — that IS the "not running" case the workspace indicator
+/// exists to show, so a 500 here would blind exactly the situation it reports.
+/// `AppState::new_for_test` installs no service handle, which is that runtime.
+#[tokio::test]
+async fn codeg_mcp_service_status_reports_a_socketless_runtime_as_stopped() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/get_codeg_mcp_service_status")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.json::<Value>();
+    assert_eq!(body["state"], "stopped");
+    assert_eq!(body["listening"], false);
+    // No handle ⇒ nothing this process can start; the UI hides its button on
+    // this flag rather than offering one that can only fail.
+    assert_eq!(body["can_start"], false);
+    // The switches ride along regardless of socket health, so the popover can
+    // explain a healthy-but-toolless service without a second round trip.
+    let groups = body["tool_groups"].as_array().expect("tool_groups array");
+    let keys: Vec<&str> = groups.iter().filter_map(|g| g["key"].as_str()).collect();
+    assert!(keys.contains(&"delegation"), "got {keys:?}");
+    assert!(keys.contains(&"feedback"), "got {keys:?}");
+}
+
+/// Starting without a handle must fail loudly rather than report success the
+/// UI would then paint as a running service.
+#[tokio::test]
+async fn starting_codeg_mcp_service_without_a_handle_is_rejected() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/start_codeg_mcp_service")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 422);
+}
+
+#[tokio::test]
+async fn codeg_mcp_service_status_requires_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/get_codeg_mcp_service_status")
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// DeepSeek Harness model catalog
+//
+// Read-only side only: the update route writes the caller's real
+// `$DSH_HOME/settings.yaml`, which a test must never do. The assertions stay
+// content-agnostic for the same reason — the host may or may not have a
+// harness settings document, and either is a valid answer here.
+// ────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn deepseek_model_catalog_is_readable_and_shaped_for_the_panel() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_model_catalog")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    // camelCase on the wire, and every field the panel branches on is present
+    // — a missing document is reported in-band, never as an error status.
+    assert!(body["path"].is_string(), "got {body}");
+    assert!(body["exists"].is_boolean(), "got {body}");
+    assert!(body["configured"].is_boolean(), "got {body}");
+    assert!(body["models"].is_array(), "got {body}");
+    assert!(body["error"].is_string() || body["error"].is_null(), "got {body}");
+}
+
+#[tokio::test]
+async fn deepseek_model_catalog_requires_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_model_catalog")
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+}

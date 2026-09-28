@@ -3,13 +3,15 @@
 /**
  * Live AIR async tasks, pinned above the transcript in `conversation-shell`.
  *
- * These are Claude's NON-AGENT background jobs — a `Bash(run_in_background)`
- * shell, a workflow, a monitor — reported on the adapter's own lifecycle
- * channel (claude-agent-acp 0.73+). The transcript already draws the tool call
+ * These are the agent's NON-AGENT background jobs — Claude's
+ * `Bash(run_in_background)` shells, workflows and monitors (claude-agent-acp
+ * 0.73+), and codex's background terminals (codex-acp 1.10+) — reported on the
+ * adapter's own lifecycle channel. The transcript already draws the tool call
  * that LAUNCHED such a job, but it cannot say whether the job is still alive:
  * the poll-derived card explicitly refuses to claim "running" because a
- * transcript can't tell a live task from one whose CLI died. This strip is the
- * authoritative answer, and it is the only surface that can offer a stop.
+ * transcript can't tell a live task from one whose CLI died, and codex's
+ * launching call simply never settles. This strip is the authoritative answer,
+ * and it is the only surface that can offer a stop.
  *
  * ABOVE the messages rather than docked under the composer: the strip is the
  * status of work happening NOW, and the composer end of the shell is where

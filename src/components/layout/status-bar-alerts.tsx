@@ -55,13 +55,26 @@ function AlertLevelIcon({ level }: { level: AlertLevel }) {
   if (level === "error") {
     return <CircleAlert className="h-3 w-3 shrink-0 text-red-500" />
   }
-  return <CircleAlert className="h-3 w-3 shrink-0 text-yellow-500" />
+  return <CircleAlert className="h-3 w-3 shrink-0 text-amber-500" />
+}
+
+/** The trigger takes the colour of the worst alert it holds: red only when
+ *  something actually failed, amber when all it has are warnings. */
+function triggerTone(alerts: { level: AlertLevel }[]): string {
+  if (alerts.length === 0) return ""
+  return alerts.some((a) => a.level === "error")
+    ? "text-red-500"
+    : "text-amber-500"
 }
 
 function AlertActionButton({ action }: { action: AlertAction }) {
   const { connect } = useAcpActions()
 
   const handleClick = async () => {
+    if ("run" in action) {
+      action.run()
+      return
+    }
     switch (action.kind) {
       case "open_url":
         await openUrl(action.payload)
@@ -113,12 +126,9 @@ function AlertActionButton({ action }: { action: AlertAction }) {
 }
 
 /**
- * Collapsed disclosure for an alert's raw evidence (agent stderr tail, unparsed
- * update counts). The alert list is the only surface that can show that output
- * — the composer tooltip and the OS notification are one-line, and the tooltip
- * copy sends the user here — so the expander has to be visible and labelled,
- * not implied. Collapsed by default: evidence is multi-line machine output and
- * this is a 320px popover.
+ * Collapsed disclosure for an alert's raw evidence (multi-line machine output
+ * such as a command's or an agent's stderr tail). Visible and labelled rather
+ * than implied, and collapsed by default: this is a 320px popover.
  */
 function AlertEvidence({ text }: { text: string }) {
   const t = useTranslations("Folder.statusBar.alerts")
@@ -152,15 +162,18 @@ function AlertEvidence({ text }: { text: string }) {
 export function StatusBarAlerts() {
   const t = useTranslations("Folder.statusBar.alerts")
   const { alerts, hasAlerts, dismissAlert, clearAll } = useAlertContext()
+  const tone = triggerTone(alerts)
 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button className="flex items-center gap-1 hover:text-foreground transition-colors">
-          <CircleAlert
-            className={`size-3.5 ${hasAlerts ? "text-red-500" : ""}`}
-          />
-          {hasAlerts && <span className="text-red-500">{alerts.length}</span>}
+        <button
+          type="button"
+          aria-label={t("title")}
+          className="flex items-center gap-1 hover:text-foreground transition-colors"
+        >
+          <CircleAlert className={cn("size-3.5", tone)} />
+          {hasAlerts && <span className={tone}>{alerts.length}</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-80 p-3">
@@ -179,7 +192,9 @@ export function StatusBarAlerts() {
           <div className="text-xs text-muted-foreground py-2">{t("empty")}</div>
         ) : (
           <div className="space-y-2 max-h-56 overflow-y-auto">
-            {alerts.map((alert) => (
+            {/* Newest first: this is where a notification that already left
+                the screen is looked up again, and it is usually the latest. */}
+            {[...alerts].reverse().map((alert) => (
               <div
                 key={alert.id}
                 className="flex items-start gap-2 text-xs group"
@@ -188,7 +203,7 @@ export function StatusBarAlerts() {
                 <div className="flex-1 min-w-0">
                   <div className="break-words">{alert.message}</div>
                   {alert.detail && (
-                    <div className="text-3xs text-muted-foreground mt-0.5 break-all whitespace-pre-wrap">
+                    <div className="text-3xs text-muted-foreground mt-0.5 break-words whitespace-pre-wrap">
                       {alert.detail}
                     </div>
                   )}

@@ -6,11 +6,13 @@ import {
   averagePerConversation,
   averageTurnsPerConversation,
   buildHeatMatrix,
+  CACHE_HIT_RATE_DIGITS,
   cacheHitRate,
   computeDelta,
   deriveArchetype,
   foldBreakdown,
   formatDuration,
+  formatPercent,
   formatTokensPrecise,
   freshTokens,
   fromLocalDayValue,
@@ -358,6 +360,14 @@ describe("cacheHitRate", () => {
 
   it("returns null when nothing entered as context", () => {
     expect(cacheHitRate(totals({ output_tokens: 500 }))).toBeNull()
+  })
+
+  it("prints one decimal everywhere it is shown", () => {
+    // The dashboard ring, the share card and the composer popover all format
+    // through this constant. Rounding to whole percent on one of them made the
+    // same measurement read as two different numbers.
+    expect(formatPercent(0.94567, CACHE_HIT_RATE_DIGITS)).toBe("94.6%")
+    expect(formatPercent(1, CACHE_HIT_RATE_DIGITS)).toBe("100.0%")
   })
 })
 

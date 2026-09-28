@@ -32,6 +32,7 @@ function invocations(
     isOpen: true,
     commands,
     skills: [],
+    knownInvocations: new Set(commands.map((cmd) => `/${cmd.name}`)),
     activeIndex: 0,
     detect: () => {},
     onKeyDown: () => false,

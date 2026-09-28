@@ -25,11 +25,12 @@ const detachDelegationChild = vi.fn()
 vi.mock("@/contexts/acp-connections-context", () => ({
   useAcpActions: () => ({ attachDelegationChild, detachDelegationChild }),
 }))
+const workTaskEvents = vi.fn().mockResolvedValue([])
 vi.mock("@/lib/api", () => ({
   getFolderConversation: vi.fn().mockResolvedValue({
     summary: { agent_type: "claude_code" },
   }),
-  workTaskEvents: vi.fn().mockResolvedValue([]),
+  workTaskEvents: (...args: unknown[]) => workTaskEvents(...args),
 }))
 vi.mock("@/stores/app-workspace-store", () => {
   const state = {
@@ -53,7 +54,8 @@ vi.mock("./task-card", () => ({ StatusChip: () => <span /> }))
 
 function makeTask(
   status: WorkTaskStatus,
-  connectionId: string | null
+  connectionId: string | null,
+  extra?: Partial<WorkTask>
 ): WorkTask {
   return {
     id: 9,
@@ -81,6 +83,7 @@ function makeTask(
     preflight: null,
     archived_at: null,
     scheduled_at: null,
+    ...extra,
   } as unknown as WorkTask
 }
 
@@ -116,6 +119,7 @@ function attachedIds(): string[] {
 }
 
 beforeEach(() => {
+  workTaskEvents.mockClear()
   attachDelegationChild.mockClear()
   detachDelegationChild.mockClear()
   renderedConnectionId = undefined
@@ -144,17 +148,32 @@ describe("work-task transcript dialog attach", () => {
   })
 
   it("picks up the connection that appears AFTER open (preparing → running)", async () => {
-    // The 进行中 column covers `preparing`, which `isLive` excludes: a re-run
-    // generation is shown there while its connection is still being made. The
-    // old mount-latch left this dialog attached to nothing forever.
-    const { rerender } = await mount(
-      makeTask("preparing", "conn-previous-dead")
-    )
+    // A setup that has not spawned yet carries no connection at all —
+    // `begin_setup` clears the previous generation's — so there is nothing to
+    // attach to until one exists. The old mount-latch left this dialog
+    // attached to nothing forever afterwards.
+    const { rerender } = await mount(makeTask("preparing", null))
     expect(attachDelegationChild).not.toHaveBeenCalled()
 
     await update(rerender, makeTask("running", "conn-new"))
     expect(attachedIds()).toEqual(["conn-new"])
     expect(renderedConnectionId).toBe("conn-new")
+  })
+
+  it("streams a preparing round that is already running a turn", async () => {
+    // `preparing` is not idle when the round RESUMES a session: the pre-prompt
+    // context compaction is a real agent turn, and on a full context window it
+    // is minutes of work. The engine publishes the connection before sending
+    // the compact command, and that is the whole point — watching this status
+    // used to show the PREVIOUS round's finished transcript instead.
+    const { rerender } = await mount(makeTask("preparing", "conn-compacting"))
+    expect(attachedIds()).toEqual(["conn-compacting"])
+    expect(renderedConnectionId).toBe("conn-compacting")
+
+    // The round's own prompt follows on the same connection — no re-attach.
+    await update(rerender, makeTask("running", "conn-compacting"))
+    expect(attachedIds()).toEqual(["conn-compacting"])
+    expect(detachDelegationChild).not.toHaveBeenCalled()
   })
 
   it("moves to the next generation's connection, detaching the previous", async () => {
@@ -184,6 +203,35 @@ describe("work-task transcript dialog attach", () => {
     await update(rerender, makeTask("merging", "conn-merge"))
     expect(attachedIds()).toEqual(["conn-a", "conn-merge"])
     expect(detachDelegationChild).toHaveBeenCalledWith("conn-a")
+  })
+
+  it("refetches its round markers when a compaction starts", async () => {
+    // A generation's `run_seq` moves BEFORE its compaction exists, so a viewer
+    // already open when the round dispatched refetches on the bump and lands
+    // ahead of the `context_compact` marker. Without a second read the
+    // `/compact` turn it is about to stream in would have no divider — and it
+    // is the one turn whose provenance actually needs explaining.
+    const { rerender } = await mount(makeTask("running", "conn-a"))
+    expect(workTaskEvents).toHaveBeenCalledTimes(1)
+
+    // The follow-up dispatches: run_seq bumps, and the read it triggers is
+    // necessarily too early — the compact command has not been sent yet.
+    const next = { run_seq: 2 }
+    await update(rerender, makeTask("preparing", "conn-b", next))
+    expect(workTaskEvents).toHaveBeenCalledTimes(2)
+
+    await update(
+      rerender,
+      makeTask("preparing", "conn-b", { ...next, compacting: true })
+    )
+    expect(workTaskEvents).toHaveBeenCalledTimes(3)
+
+    // Once, not on every render while it runs.
+    await update(
+      rerender,
+      makeTask("preparing", "conn-b", { ...next, compacting: true })
+    )
+    expect(workTaskEvents).toHaveBeenCalledTimes(3)
   })
 
   it("detaches on close", async () => {

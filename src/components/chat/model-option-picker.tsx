@@ -94,6 +94,8 @@ export function ModelOptionPicker({
         <ModelOptionList
           groups={groups}
           currentValue={currentValue}
+          recommendedValue={option.recommended_value}
+          recommendedLabel={t("recommendedBadge")}
           onSelect={(value) => {
             onSelect(option.id, value)
             setOpen(false)

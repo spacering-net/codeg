@@ -13,13 +13,13 @@ import {
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import { docToPromptBlocks } from "@/components/chat/composer/to-prompt-blocks"
-import { isComposerChromeClick } from "@/components/chat/composer/composer-commands"
+import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
 } from "./agent-config-section"
-import { AutomationBranchPicker } from "./automation-branch-picker"
+import { BranchPicker } from "@/components/shared/branch-picker"
 import {
   ComposerInvocationsPopup,
   useComposerInvocations,
@@ -120,6 +120,7 @@ export function AutomationEditor({
   const [cronBuilderOpen, setCronBuilderOpen] = useState(false)
 
   const editorRef = useRef<RichComposerHandle>(null)
+  const chromeFocus = useComposerChromeFocus(editorRef)
   // The composer's outer box, so the `@` panel spans it like the `/` menu does.
   const composerBoxRef = useRef<HTMLDivElement>(null)
   // True once the user explicitly picks an agent. A system fallback (saved agent
@@ -357,16 +358,13 @@ export function AutomationEditor({
           config bottom bar, matching the new-conversation input. */}
       <div
         ref={composerBoxRef}
-        // Clicking the box's blank chrome (padding, the dead space below a short
-        // prompt, the config-bar gaps) focuses the editor at the click point —
-        // same affordance as the chat composer. Interactive controls, badges and
-        // the editor surface exclude themselves via NON_CHROME_SELECTOR;
-        // `codeg-composer-chrome` paints the text I-beam over the dead space.
-        onMouseDown={(e) => {
-          if (!isComposerChromeClick(e.target)) return
-          e.preventDefault()
-          editorRef.current?.focusAtCoords(e.clientX, e.clientY)
-        }}
+        // Clicking or tapping the box's blank chrome (padding, the dead space
+        // below a short prompt, the config-bar gaps) focuses the editor at that
+        // point — same affordance as the chat composer. Interactive controls,
+        // badges and the editor surface exclude themselves via
+        // NON_CHROME_SELECTOR; `codeg-composer-chrome` paints the text I-beam
+        // over the dead space.
+        {...chromeFocus}
         className="codeg-composer-chrome relative rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/50"
       >
         <ComposerInvocationsPopup inv={invocations} />
@@ -379,6 +377,7 @@ export function AutomationEditor({
           mentionUiLabels={mentionUiLabels}
           tabLabels={referenceGroupLabels}
           mentionAnchorRef={composerBoxRef}
+          knownInvocations={invocations.knownInvocations}
           onChange={(text) => {
             setPrompt(text)
             invocations.detect()
@@ -389,6 +388,7 @@ export function AutomationEditor({
         />
         <div className="px-2 pb-2 pt-1">
           <AgentConfigSection
+            agentType={agentOptions.snapshotAgentType}
             snapshot={agentOptions.snapshot}
             loading={agentOptions.loading}
             error={agentOptions.error}
@@ -491,7 +491,7 @@ export function AutomationEditor({
               and hides the picker. Enqueued tasks mint their own worktree in
               the work-task engine, so neither control applies. */}
           {action === "launch_session" && isolation === "shared_in_root" ? (
-            <AutomationBranchPicker
+            <BranchPicker
               folderPath={folderPath}
               value={branch}
               onChange={(b, isRemote) => {
@@ -499,6 +499,7 @@ export function AutomationEditor({
                 setIsRemoteBranch(isRemote)
               }}
               placeholder={t("branchPlaceholder")}
+              defaultLabel={t("branchDefault")}
               disabled={folderId == null}
               // shared_in_root checks the branch out in the root tree, which
               // can't track a remote-only branch — the backend rejects that

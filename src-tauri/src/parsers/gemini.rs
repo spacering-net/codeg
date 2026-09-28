@@ -46,6 +46,17 @@ impl GeminiParser {
         self.base_dir.join("projects.json")
     }
 
+    /// Gemini writes two shapes under a project's `chats/` directory:
+    ///
+    /// - a main session as `chats/session-<ts>-<shortId>.json[l]`;
+    /// - a SUBAGENT session as `chats/<parentSessionId>/<sessionId>.jsonl` —
+    ///   one directory deeper and with NO `session-` prefix
+    ///   (`ChatRecordingService::initialize`, gemini-cli 0.60.0).
+    ///
+    /// Requiring both the prefix and `chats` as the immediate parent — what this
+    /// used to do — made every subagent transcript invisible. Accept both
+    /// layouts; anything else under `chats/` that fails to parse is skipped by
+    /// the callers anyway.
     fn is_chat_file(path: &Path) -> bool {
         let Some(extension) = path
             .extension()
@@ -58,13 +69,34 @@ impl GeminiParser {
             return false;
         }
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !file_name.starts_with("session-") {
-            return false;
+        let parent_name = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
+
+        if parent_name == Some("chats") {
+            return file_name.starts_with("session-");
         }
+
+        // Subagent transcript: `chats/<parentSessionId>/<sessionId>.jsonl`.
         path.parent()
+            .and_then(|p| p.parent())
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             == Some("chats")
+    }
+
+    /// The parent session id a subagent transcript belongs to, i.e. the
+    /// directory name in `chats/<parentSessionId>/<sessionId>.jsonl`. `None`
+    /// for a main session (whose parent directory IS `chats`).
+    fn subagent_parent_id_from_chat_path(path: &Path) -> Option<String> {
+        let parent = path.parent()?;
+        let parent_name = parent.file_name()?.to_str()?;
+        if parent_name == "chats" {
+            return None;
+        }
+        (parent.parent()?.file_name()?.to_str()? == "chats")
+            .then(|| parent_name.to_string())
     }
 
     fn parse_chat_value(path: &Path, raw: &str) -> Option<Value> {
@@ -79,83 +111,169 @@ impl GeminiParser {
         }
     }
 
-    fn set_jsonl_root_field(
-        root: &mut Map<String, Value>,
-        key: &str,
-        value: Option<&Value>,
-        overwrite: bool,
+    /// Insert or REPLACE a message record, keeping the position it was first
+    /// seen at. Gemini's reader is `messagesMap.set(id, record)` on a JS `Map`
+    /// — a whole-record overwrite that preserves insertion order. The previous
+    /// per-field merge kept stale keys (a `toolCalls` array from an earlier
+    /// partial write survived a later record that dropped it), which surfaced
+    /// as ghost tool calls in the transcript.
+    fn upsert_message(
+        messages: &mut Vec<Value>,
+        index_by_id: &mut HashMap<String, usize>,
+        id: &str,
+        value: Value,
     ) {
-        let Some(value) = value else {
-            return;
-        };
-        if overwrite || !root.contains_key(key) {
-            root.insert(key.to_string(), value.clone());
-        }
-    }
-
-    fn merge_message_value(existing: &mut Value, update: Value) {
-        match (existing.as_object_mut(), update) {
-            (Some(existing_map), Value::Object(update_map)) => {
-                for (key, value) in update_map {
-                    existing_map.insert(key, value);
-                }
-            }
-            (_, update) => {
-                *existing = update;
+        match index_by_id.get(id).copied() {
+            Some(index) => messages[index] = value,
+            None => {
+                index_by_id.insert(id.to_string(), messages.len());
+                messages.push(value);
             }
         }
     }
 
+    /// `{"$rewindTo": "<id>"}` — drop that message and everything after it.
+    /// When the id is unknown gemini clears the WHOLE history rather than
+    /// leaving it untouched, so a rewind onto an already-rewound target does not
+    /// resurrect anything.
+    fn apply_rewind(
+        messages: &mut Vec<Value>,
+        index_by_id: &mut HashMap<String, usize>,
+        rewind_id: &str,
+    ) {
+        match index_by_id.get(rewind_id).copied() {
+            Some(index) => {
+                messages.truncate(index);
+                index_by_id.retain(|_, position| *position < index);
+            }
+            None => {
+                messages.clear();
+                index_by_id.clear();
+            }
+        }
+    }
+
+    fn absorb_inline_messages(
+        messages: &mut Vec<Value>,
+        index_by_id: &mut HashMap<String, usize>,
+        list: &[Value],
+    ) {
+        for message in list {
+            // `isMessageRecord` upstream: a string `id` is the whole test.
+            let Some(id) = message.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            Self::upsert_message(messages, index_by_id, id, message.clone());
+        }
+    }
+
+    /// Replay a `.jsonl` transcript the way gemini-cli's own
+    /// `loadConversationRecord` (packages/core/src/services/chatRecordingService.ts,
+    /// 0.60.0) does. It classifies each line into one of four record kinds, in
+    /// this order:
+    ///
+    /// 1. `$rewindTo` (string)  — truncate from that id; clear all if unknown.
+    /// 2. `id` (string)         — a message; whole-record replace, position kept.
+    /// 3. `$set` (object)       — metadata merge; a `$set.messages` ARRAY CLEARS
+    ///    the history and rebuilds it from that array.
+    /// 4. `sessionId` + `projectHash` (both strings) — metadata merge, plus any
+    ///    inline `messages` array APPENDED (not cleared).
+    ///
+    /// Kinds 1 and 3 were previously unhandled entirely, and kind 2 additionally
+    /// required a `type` field. Since `GeminiChat.initialize()` reconciles history
+    /// on startup — and resumes, aborted prompts and context compression all
+    /// rewrite the full array — most real transcripts carry their messages inside
+    /// `$set.messages`, and every one of them parsed as an empty session.
+    ///
+    /// A line that is not valid JSON is SKIPPED (upstream wraps `JSON.parse` in
+    /// its own try/catch); it used to abort the entire file, so one truncated
+    /// write made a whole session disappear.
     fn parse_jsonl_chat_value(raw: &str) -> Option<Value> {
-        let mut root = Map::new();
-        let mut messages = Vec::new();
-        let mut message_index_by_id: HashMap<String, usize> = HashMap::new();
-        let mut saw_json_line = false;
+        let mut metadata = Map::new();
+        let mut messages: Vec<Value> = Vec::new();
+        let mut index_by_id: HashMap<String, usize> = HashMap::new();
 
         for line in raw.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
-
-            let value: Value = serde_json::from_str(trimmed).ok()?;
+            let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+                continue;
+            };
             let Some(object) = value.as_object() else {
                 continue;
             };
-            saw_json_line = true;
 
-            Self::set_jsonl_root_field(&mut root, "kind", object.get("kind"), false);
-            Self::set_jsonl_root_field(&mut root, "sessionId", object.get("sessionId"), false);
-            Self::set_jsonl_root_field(&mut root, "projectHash", object.get("projectHash"), false);
-            Self::set_jsonl_root_field(&mut root, "startTime", object.get("startTime"), false);
-            Self::set_jsonl_root_field(&mut root, "lastUpdated", object.get("lastUpdated"), true);
-
-            if let Some(set) = object.get("$set").and_then(|v| v.as_object()) {
-                Self::set_jsonl_root_field(&mut root, "lastUpdated", set.get("lastUpdated"), true);
-            }
-
-            if object.get("type").and_then(|v| v.as_str()).is_none() {
+            if let Some(rewind_id) = object.get("$rewindTo").and_then(|v| v.as_str()) {
+                Self::apply_rewind(&mut messages, &mut index_by_id, rewind_id);
                 continue;
             }
 
-            if let Some(id) = object.get("id").and_then(|v| v.as_str()) {
-                if let Some(index) = message_index_by_id.get(id).copied() {
-                    Self::merge_message_value(&mut messages[index], value);
-                    continue;
-                }
-
-                message_index_by_id.insert(id.to_string(), messages.len());
+            // Own the id before handing `value` over: `object` borrows `value`,
+            // so a `&str` into it cannot survive the move.
+            if let Some(id) = object.get("id").and_then(|v| v.as_str()).map(str::to_string) {
+                Self::upsert_message(&mut messages, &mut index_by_id, &id, value);
+                continue;
             }
 
-            messages.push(value);
+            if let Some(set) = object.get("$set").and_then(|v| v.as_object()) {
+                if let Some(list) = set.get("messages").and_then(|v| v.as_array()) {
+                    messages.clear();
+                    index_by_id.clear();
+                    Self::absorb_inline_messages(&mut messages, &mut index_by_id, list);
+                }
+                for (key, value) in set {
+                    metadata.insert(key.clone(), value.clone());
+                }
+                continue;
+            }
+
+            let is_partial_metadata = object
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .is_some()
+                && object.get("projectHash").and_then(|v| v.as_str()).is_some();
+            if is_partial_metadata {
+                for (key, value) in object {
+                    metadata.insert(key.clone(), value.clone());
+                }
+                if let Some(list) = object.get("messages").and_then(|v| v.as_array()) {
+                    Self::absorb_inline_messages(&mut messages, &mut index_by_id, list);
+                }
+            }
         }
 
-        if !saw_json_line {
-            return None;
+        let has_session_id = metadata.get("sessionId").and_then(|v| v.as_str()).is_some();
+        let has_project_hash = metadata
+            .get("projectHash")
+            .and_then(|v| v.as_str())
+            .is_some();
+
+        if !has_session_id || !has_project_hash {
+            // `parseLegacyRecordFallback`: re-read the file as ONE JSON object.
+            if let Some(legacy) = Self::parse_legacy_record_value(raw) {
+                return Some(legacy);
+            }
+            // Upstream gives up here. codeg keeps a transcript that named its
+            // own session: `projectHash` is metadata codeg never reads, and
+            // dropping the session would hide history the user can still see in
+            // gemini's own `/resume` list for older files.
+            if !has_session_id {
+                return None;
+            }
         }
 
-        root.insert("messages".to_string(), Value::Array(messages));
-        Some(Value::Object(root))
+        metadata.insert("messages".to_string(), Value::Array(messages));
+        Some(Value::Object(metadata))
+    }
+
+    /// The pre-JSONL layout: the whole file is a single object carrying
+    /// `sessionId` and a `messages` array (`parseLegacyRecordFallback`).
+    fn parse_legacy_record_value(raw: &str) -> Option<Value> {
+        let value: Value = serde_json::from_str(raw).ok()?;
+        value.get("sessionId").and_then(|v| v.as_str())?;
+        Some(value)
     }
 
     fn list_chat_files(&self) -> Vec<PathBuf> {
@@ -179,11 +297,18 @@ impl GeminiParser {
         files
     }
 
+    /// The project directory name that owns this transcript: the component
+    /// directly above the `chats/` directory. Walking a fixed two levels up —
+    /// what this used to do — lands on `chats` itself for a subagent transcript
+    /// (`<alias>/chats/<parentSessionId>/<sessionId>.jsonl`), which would then be
+    /// looked up as a project alias and never resolve.
     fn project_alias_from_chat_path(path: &Path) -> Option<String> {
-        path.parent()?
-            .parent()?
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
+        let components: Vec<_> = path.iter().collect();
+        let chats_index = components
+            .iter()
+            .rposition(|component| component.to_str() == Some("chats"))?;
+        let alias = components.get(chats_index.checked_sub(1)?)?;
+        Some(alias.to_string_lossy().to_string())
     }
 
     fn read_project_root_file(path: PathBuf) -> Option<String> {
@@ -393,10 +518,18 @@ impl GeminiParser {
             .unwrap_or_else(Utc::now);
         let ended_at = Self::parse_timestamp(value.get("lastUpdated")).or(last_message_ts);
 
-        // Gemini emits its own AI-generated title through the `update_topic`
-        // tool call; prefer the newest non-empty one. Otherwise fall back to the
-        // first real user message, skipping the injected `<session_context>`
-        // bootstrap envelope so it never becomes the title.
+        // `$set.summary` is gemini's own session summary (`saveSummary`), the
+        // closest thing to an authoritative title, so it wins. Next comes the
+        // AI-generated title from the `update_topic` tool call (newest non-empty
+        // one). Last resort is the first real user message, skipping the
+        // injected `<session_context>` bootstrap envelope.
+        let summary_title = value
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| truncate_str(s, 100));
+
         let topic_title = messages.iter().rev().find_map(|m| {
             m.get("toolCalls")
                 .and_then(|c| c.as_array())
@@ -423,7 +556,7 @@ impl GeminiParser {
             .find(|t| !t.trim_start().starts_with("<session_context"))
             .map(|t| title_from_user_text(&t));
 
-        let title = topic_title.or(fallback_title);
+        let title = summary_title.or(topic_title).or(fallback_title);
 
         let model = messages.iter().rev().find_map(|m| {
             m.get("model")
@@ -434,11 +567,32 @@ impl GeminiParser {
         let folder_alias = Self::project_alias_from_chat_path(path);
         let folder_path = folder_alias
             .as_deref()
-            .and_then(|alias| self.resolve_project_root(alias));
+            .and_then(|alias| self.resolve_project_root(alias))
+            // `$set.directories` is the workspace list gemini records for the
+            // session (`recordDirectories`). It is the only in-file statement of
+            // where the session ran, so it backs up the alias lookup when
+            // neither `.project_root` nor `projects.json` knows the alias.
+            .or_else(|| {
+                value
+                    .get("directories")
+                    .and_then(|v| v.as_array())
+                    .and_then(|list| list.first())
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            });
         let folder_name = folder_path
             .as_ref()
             .map(|p| folder_name_from_path(p))
             .or(folder_alias);
+
+        // A subagent transcript is a CHILD: `parent_id` keeps it out of the
+        // import list and the root conversation list, exactly like a delegation
+        // child from any other agent.
+        let parent_id = (value.get("kind").and_then(|v| v.as_str()) == Some("subagent"))
+            .then(|| Self::subagent_parent_id_from_chat_path(path))
+            .flatten();
 
         Some(ConversationSummary {
             id,
@@ -451,7 +605,7 @@ impl GeminiParser {
             message_count: messages.len() as u32,
             model,
             git_branch: None,
-            parent_id: None,
+            parent_id,
             parent_tool_use_id: None,
             delegation_call_id: None,
         })
@@ -593,16 +747,48 @@ impl GeminiParser {
         blocks
     }
 
+    /// Gemini records `{input, output, cached, thoughts, tool, total}` straight
+    /// from the API's `usageMetadata` (`recordMessageTokens`), where:
+    ///
+    /// - `input` is `promptTokenCount`, which **already includes** `cached`
+    ///   (`cachedContentTokenCount`) — gemini's own telemetry derives the
+    ///   uncached part as `max(0, prompt - cached)`;
+    /// - `output` is `candidatesTokenCount`, which **excludes** `thoughts`
+    ///   (`thoughtsTokenCount`) and `tool` (`toolUsePromptTokenCount`);
+    /// - `total` is the API's `totalTokenCount`.
+    ///
+    /// codeg's [`TurnUsage`] buckets are Anthropic-shaped and DISJOINT —
+    /// `compute_session_stats` adds all four. Passing `input` through verbatim
+    /// alongside `cached` therefore counted the cache twice, and `thoughts` /
+    /// `tool` were dropped entirely.
     fn parse_usage(message: &Value) -> Option<TurnUsage> {
         let tokens = message.get("tokens")?;
-        let input_tokens = tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
-        let output_tokens = tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cached_tokens = tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0);
+        let field = |key: &str| tokens.get(key).and_then(|v| v.as_u64());
+
+        let input = field("input").unwrap_or(0);
+        let cached = field("cached").unwrap_or(0);
+        let output = field("output");
+        let thoughts = field("thoughts");
+        let tool = field("tool");
+
+        let output_tokens = match (output, thoughts, tool) {
+            // Nothing on the generated side was recorded: derive it from the
+            // API total. `input` already carries `cached`, so subtracting it
+            // again would undercount.
+            (None, None, None) => field("total")
+                .map(|total| total.saturating_sub(input))
+                .unwrap_or(0),
+            _ => output
+                .unwrap_or(0)
+                .saturating_add(thoughts.unwrap_or(0))
+                .saturating_add(tool.unwrap_or(0)),
+        };
+
         Some(TurnUsage {
-            input_tokens,
+            input_tokens: input.saturating_sub(cached),
             output_tokens,
             cache_creation_input_tokens: 0,
-            cache_read_input_tokens: cached_tokens,
+            cache_read_input_tokens: cached,
         })
     }
 
@@ -706,7 +892,12 @@ impl GeminiParser {
         super::backfill_turn_durations(&mut turns, &[]);
         summary.message_count = turns.len() as u32;
         summary.id = conversation_id.to_string();
-        let context_window_used_tokens = super::latest_turn_total_usage_tokens(&turns);
+        // Gemini gauges context as `promptTokenCount / tokenLimit(model)`
+        // (`getContextUsagePercentage`) — the reply is NOT resident in the
+        // prompt window that produced it. `latest_turn_prompt_usage_tokens`
+        // sums `input + cache_creation + cache_read`, which for the mapping in
+        // `parse_usage` reconstitutes exactly `promptTokenCount`.
+        let context_window_used_tokens = super::latest_turn_prompt_usage_tokens(&turns);
         let context_window_max_tokens =
             super::infer_context_window_max_tokens(summary.model.as_deref());
         let session_stats = super::merge_context_window_stats(
@@ -956,12 +1147,18 @@ mod tests {
         );
         assert!(detail.session_stats.is_some());
         let stats = detail.session_stats.expect("session stats");
-        assert_eq!(stats.context_window_used_tokens, Some(51));
-        assert_eq!(stats.context_window_max_tokens, Some(1_000_000));
+        // `input: 12` is `promptTokenCount` and ALREADY contains `cached: 5`,
+        // so the prompt window holds 12 tokens, not 12 + 5. The old expectation
+        // of 51 additionally folded in the 34 output tokens, which gemini itself
+        // never counts against the context window.
+        assert_eq!(stats.context_window_used_tokens, Some(12));
+        assert_eq!(stats.context_window_max_tokens, Some(1_048_576));
         let percent = stats
             .context_window_usage_percent
             .expect("context window percent");
-        assert!((percent - 0.0051).abs() < 1e-9);
+        assert!((percent - (12.0 / 1_048_576.0) * 100.0).abs() < 1e-9);
+        // 7 uncached input + 5 cached + 34 output.
+        assert_eq!(stats.total_tokens, Some(46));
 
         let _ = fs::remove_dir_all(base);
     }
@@ -1108,7 +1305,8 @@ mod tests {
             } if output == "Read README.md"
         )));
         let stats = detail.session_stats.expect("session stats");
-        assert_eq!(stats.total_tokens, Some(33));
+        // 7 uncached input (10 prompt − 3 cached) + 3 cached + 20 output.
+        assert_eq!(stats.total_tokens, Some(30));
 
         let _ = fs::remove_dir_all(base);
     }
@@ -1175,6 +1373,380 @@ mod tests {
     fn gemini_defaults_to_home_dot_gemini() {
         let resolved = resolve_gemini_base_dir_from(None, Some(PathBuf::from("/Users/default")));
         assert_eq!(resolved, PathBuf::from("/Users/default/.gemini"));
+    }
+
+    /// Build a `<base>/tmp/<alias>/chats/` directory with a `.project_root`,
+    /// returning the base so the caller can point a parser at it.
+    fn chat_fixture(tag: &str, alias: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let base: PathBuf = env::temp_dir().join(format!("codeg-gemini-{tag}-{nanos}"));
+        let chats_dir = base.join("tmp").join(alias).join("chats");
+        fs::create_dir_all(&chats_dir).expect("create chat dir");
+        fs::write(
+            base.join("tmp").join(alias).join(".project_root"),
+            "/Users/test/workspace/demo",
+        )
+        .expect("write project root");
+        base
+    }
+
+    fn message_texts(detail: &crate::models::ConversationDetail) -> Vec<String> {
+        detail
+            .turns
+            .iter()
+            .flat_map(|turn| turn.blocks.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The shape every ACP-driven session actually has: the messages live ONLY
+    /// inside a `$set.messages` array. This used to parse as zero messages.
+    #[test]
+    fn jsonl_rebuilds_history_from_set_messages() {
+        let base = chat_fixture("setmsgs", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-2026-09-09T06-29-setmsgs.jsonl");
+        let content = r#"{"sessionId":"set-msgs-1","projectHash":"abc","startTime":"2026-09-09T06:29:23.000Z","lastUpdated":"2026-09-09T06:29:23.000Z","kind":"main"}
+{"$set":{"messages":[{"id":"u1","timestamp":"2026-09-09T06:29:24.000Z","type":"user","content":[{"text":"hello from set"}]},{"id":"a1","timestamp":"2026-09-09T06:29:25.000Z","type":"gemini","content":"hi there","model":"gemini-3-pro"}],"lastUpdated":"2026-09-09T06:29:25.000Z"}}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let summaries = parser.list_conversations().expect("list conversations");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].message_count, 2);
+        assert_eq!(summaries[0].title.as_deref(), Some("hello from set"));
+
+        let detail = parser
+            .get_conversation("set-msgs-1")
+            .expect("get conversation");
+        assert_eq!(message_texts(&detail), vec!["hello from set", "hi there"]);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    /// `$set.messages` REPLACES the history wholesale (upstream clears the map
+    /// first), and bare records appended afterwards extend it.
+    #[test]
+    fn jsonl_set_messages_replaces_then_appends() {
+        let base = chat_fixture("replace", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-replace.jsonl");
+        let content = r#"{"sessionId":"replace-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"id":"old","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"dropped by the rewrite"}]}
+{"$set":{"messages":[{"id":"u1","timestamp":"2026-09-09T06:00:02.000Z","type":"user","content":[{"text":"kept one"}]}]}}
+{"id":"a1","timestamp":"2026-09-09T06:00:03.000Z","type":"gemini","content":"appended after"}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let detail = parser.get_conversation("replace-1").expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(message_texts(&detail), vec!["kept one", "appended after"]);
+    }
+
+    /// `$rewindTo` drops the target and everything after it.
+    #[test]
+    fn jsonl_rewind_truncates_from_target() {
+        let base = chat_fixture("rewind", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-rewind.jsonl");
+        let content = r#"{"sessionId":"rewind-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"first"}]}
+{"id":"a1","timestamp":"2026-09-09T06:00:02.000Z","type":"gemini","content":"answer one"}
+{"id":"u2","timestamp":"2026-09-09T06:00:03.000Z","type":"user","content":[{"text":"regretted question"}]}
+{"id":"a2","timestamp":"2026-09-09T06:00:04.000Z","type":"gemini","content":"regretted answer"}
+{"$rewindTo":"u2"}
+{"id":"u3","timestamp":"2026-09-09T06:00:05.000Z","type":"user","content":[{"text":"second attempt"}]}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let detail = parser.get_conversation("rewind-1").expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(
+            message_texts(&detail),
+            vec!["first", "answer one", "second attempt"]
+        );
+    }
+
+    /// A rewind onto an id that is no longer present clears the WHOLE history
+    /// upstream, rather than leaving it untouched.
+    #[test]
+    fn jsonl_rewind_to_unknown_id_clears_everything() {
+        let base = chat_fixture("rewind-miss", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-rewind-miss.jsonl");
+        let content = r#"{"sessionId":"rewind-miss-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"first"}]}
+{"$rewindTo":"never-written"}
+{"id":"u2","timestamp":"2026-09-09T06:00:02.000Z","type":"user","content":[{"text":"only survivor"}]}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let detail = parser
+            .get_conversation("rewind-miss-1")
+            .expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(message_texts(&detail), vec!["only survivor"]);
+    }
+
+    /// A repeated id REPLACES the record in place: the position is the first
+    /// one seen, and fields the newer record omits do NOT survive.
+    #[test]
+    fn jsonl_repeated_id_replaces_whole_record_in_place() {
+        let base = chat_fixture("replace-id", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-replace-id.jsonl");
+        let content = r#"{"sessionId":"replace-id-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"id":"a1","timestamp":"2026-09-09T06:00:01.000Z","type":"gemini","content":"draft","toolCalls":[{"id":"ghost-1","name":"read_file","args":{"path":"x"},"status":"success"}]}
+{"id":"u1","timestamp":"2026-09-09T06:00:02.000Z","type":"user","content":[{"text":"later user turn"}]}
+{"id":"a1","timestamp":"2026-09-09T06:00:03.000Z","type":"gemini","content":"final"}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let detail = parser
+            .get_conversation("replace-id-1")
+            .expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        // Position of `a1` is where it FIRST appeared, ahead of `u1`.
+        assert_eq!(message_texts(&detail), vec!["final", "later user turn"]);
+        // The tool call from the superseded record must not linger.
+        assert!(
+            !detail
+                .turns
+                .iter()
+                .flat_map(|turn| turn.blocks.iter())
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. })),
+            "stale toolCalls survived a whole-record replace"
+        );
+    }
+
+    /// One unparseable line must not take the whole transcript down with it.
+    #[test]
+    fn jsonl_skips_malformed_lines() {
+        let base = chat_fixture("badline", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-badline.jsonl");
+        let content = r#"{"sessionId":"badline-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"before the tear"}]}
+{"id":"a1","timestamp":"2026-09-09T06:00:02.000Z","type":"gemini","content":"tru
+{"id":"a2","timestamp":"2026-09-09T06:00:03.000Z","type":"gemini","content":"after the tear"}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let detail = parser.get_conversation("badline-1").expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(
+            message_texts(&detail),
+            vec!["before the tear", "after the tear"]
+        );
+    }
+
+    /// A `.jsonl` file that is really one pretty-printed JSON object falls back
+    /// to the legacy single-record reader.
+    #[test]
+    fn jsonl_falls_back_to_legacy_single_object() {
+        let base = chat_fixture("legacy", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-legacy.jsonl");
+        let content = r#"{
+  "sessionId": "legacy-1",
+  "startTime": "2026-09-09T06:00:00.000Z",
+  "lastUpdated": "2026-09-09T06:00:01.000Z",
+  "messages": [
+    {"id": "u1", "timestamp": "2026-09-09T06:00:00.000Z", "type": "user", "content": [{"text": "legacy prompt"}]}
+  ]
+}"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let detail = parser.get_conversation("legacy-1").expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(message_texts(&detail), vec!["legacy prompt"]);
+    }
+
+    /// A brand-new session whose history never changed carries metadata only —
+    /// `updateMessagesFromHistory` writes nothing when nothing moved. It must
+    /// still list, just with no messages.
+    #[test]
+    fn jsonl_metadata_only_session_still_lists() {
+        let base = chat_fixture("empty", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-empty.jsonl");
+        let content = r#"{"sessionId":"empty-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z","kind":"main"}
+{"$set":{"lastUpdated":"2026-09-09T06:00:05.000Z"}}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let summaries = parser.list_conversations().expect("list conversations");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, "empty-1");
+        assert_eq!(summaries[0].message_count, 0);
+    }
+
+    /// `$set.summary` outranks both `update_topic` and the first user message.
+    #[test]
+    fn jsonl_prefers_metadata_summary_for_title() {
+        let base = chat_fixture("summary", "codeg");
+        let file_path = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("session-summary.jsonl");
+        let content = r#"{"sessionId":"summary-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"the raw prompt"}]}
+{"id":"a1","timestamp":"2026-09-09T06:00:02.000Z","type":"gemini","content":"ok","toolCalls":[{"id":"ut-1","name":"update_topic","args":{"title":"Topic Title"},"status":"success"}]}
+{"$set":{"summary":"Authoritative Session Summary"}}
+"#;
+        fs::write(&file_path, content).expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let summaries = parser.list_conversations().expect("list conversations");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(
+            summaries[0].title.as_deref(),
+            Some("Authoritative Session Summary")
+        );
+    }
+
+    /// Subagent transcripts live one directory deeper and have no `session-`
+    /// prefix. They must be discovered, attributed to the right project, and
+    /// marked as children so they never import as root conversations.
+    #[test]
+    fn discovers_subagent_transcripts_as_children() {
+        let base = chat_fixture("subagent", "codeg");
+        let nested = base
+            .join("tmp")
+            .join("codeg")
+            .join("chats")
+            .join("parent-session-id");
+        fs::create_dir_all(&nested).expect("create nested chat dir");
+        fs::write(
+            nested.join("11111111-2222-3333-4444-555555555555.jsonl"),
+            r#"{"sessionId":"sub-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z","kind":"subagent"}
+{"$set":{"messages":[{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"investigate the auth flow"}]}]}}
+"#,
+        )
+        .expect("write subagent chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let summaries = parser.list_conversations().expect("list conversations");
+        let detail = parser.get_conversation("sub-1").expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        let sub = summaries
+            .iter()
+            .find(|s| s.id == "sub-1")
+            .expect("subagent session listed");
+        assert_eq!(sub.parent_id.as_deref(), Some("parent-session-id"));
+        // The project alias is the directory ABOVE `chats`, not `chats` itself.
+        assert_eq!(
+            sub.folder_path.as_deref(),
+            Some("/Users/test/workspace/demo")
+        );
+        assert_eq!(message_texts(&detail), vec!["investigate the auth flow"]);
+    }
+
+    /// `$set.directories` backs up folder resolution when the alias is unknown
+    /// to both `.project_root` and `projects.json`.
+    #[test]
+    fn falls_back_to_metadata_directories_for_folder_path() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let base: PathBuf = env::temp_dir().join(format!("codeg-gemini-dirs-{nanos}"));
+        let chats_dir = base.join("tmp").join("unmapped-alias").join("chats");
+        fs::create_dir_all(&chats_dir).expect("create chat dir");
+        // Deliberately NO `.project_root` and no `projects.json`.
+        fs::write(
+            chats_dir.join("session-dirs.jsonl"),
+            r#"{"sessionId":"dirs-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z"}
+{"$set":{"directories":["/Users/test/workspace/from-metadata"]}}
+{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"hi"}]}
+"#,
+        )
+        .expect("write chat file");
+
+        let parser = GeminiParser::with_base_dir(base.clone());
+        let summaries = parser.list_conversations().expect("list conversations");
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(
+            summaries[0].folder_path.as_deref(),
+            Some("/Users/test/workspace/from-metadata")
+        );
+    }
+
+    #[test]
+    fn usage_treats_cached_as_a_subset_of_input() {
+        let message = serde_json::json!({
+            "tokens": {"input": 100, "output": 20, "cached": 40, "thoughts": 7, "tool": 3}
+        });
+        let usage = GeminiParser::parse_usage(&message).expect("usage");
+        // 100 prompt tokens of which 40 were cache hits.
+        assert_eq!(usage.input_tokens, 60);
+        assert_eq!(usage.cache_read_input_tokens, 40);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+        // candidates + thoughts + tool.
+        assert_eq!(usage.output_tokens, 30);
+    }
+
+    #[test]
+    fn usage_derives_output_from_total_when_generated_side_is_absent() {
+        let message = serde_json::json!({
+            "tokens": {"input": 100, "cached": 40, "total": 130}
+        });
+        let usage = GeminiParser::parse_usage(&message).expect("usage");
+        assert_eq!(usage.input_tokens, 60);
+        assert_eq!(usage.cache_read_input_tokens, 40);
+        // `total - input`; `input` already carries `cached`, so it is not
+        // subtracted twice.
+        assert_eq!(usage.output_tokens, 30);
     }
 
     #[test]

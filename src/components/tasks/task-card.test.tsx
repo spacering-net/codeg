@@ -309,3 +309,25 @@ describe("TaskCard forge provenance", () => {
     expect(metaLine?.contains(link)).toBe(false)
   })
 })
+
+describe("TaskCard live note", () => {
+  it("explains a card that is parked on its context compaction", () => {
+    // Card and row share `liveNote`, so this is the card's half of the same
+    // contract: a resumed round spends `preparing` (retry, follow-up) or
+    // `merging` (a landing) on a real agent turn, and until it ends the card
+    // has nothing else to say for itself.
+    renderCard(task({ status: "preparing", compacting: true }))
+    expect(screen.getByText("Compacting the session context…")).toBeTruthy()
+  })
+
+  it("shows this generation's milestone once the compaction is over", () => {
+    renderCard(
+      task({
+        status: "running",
+        compacting: false,
+        latest_progress: "installing deps",
+      })
+    )
+    expect(screen.getByText("installing deps")).toBeTruthy()
+  })
+})

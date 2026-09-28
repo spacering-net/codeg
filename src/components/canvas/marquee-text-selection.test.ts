@@ -252,13 +252,15 @@ describe("the stylesheet the guard drives", () => {
     expect(body).toMatch(/user-select:\s*none\s*!important/)
   })
 
-  it("still lets an expanded card opt its own body back in", () => {
+  it("still lets a content card opt its own body back in", () => {
     // The rules above are only acceptable because the card overrides them
     // outside the gesture. Drop `select-text` and this fix silently becomes
-    // "you can no longer copy anything off the canvas".
-    expect(
-      readSource("src/components/canvas/nodes/conversation-detail-node.tsx")
-    ).toContain("select-text")
+    // "you can no longer copy anything off the canvas" — for the expanded
+    // conversation, the file preview and the terminal alike, since all three
+    // render inside this one frame.
+    expect(readSource("src/components/canvas/nodes/card-frame.tsx")).toContain(
+      "select-text"
+    )
   })
 
   it("still draws a marquee on left-drag", () => {

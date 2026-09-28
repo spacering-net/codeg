@@ -52,6 +52,8 @@
       "science": "科学研究",
       "office_tools": "Officeツール",
       "skill_packs": "スキルパック",
+      "collaboration": "コラボレーション",
+      "browser": "ブラウザ",
       "quick_messages": "クイックメッセージ",
       "logs": "実行ログ"
     }
@@ -196,7 +198,33 @@
       "panelOpacityHint": "サイドバー・パネル・タブバーの不透明度です。低いほど画像が透けて見えます。",
       "errorTooLarge": "画像が大きすぎます（最大 16 MB）。",
       "errorUnsupportedFormat": "対応していない画像形式です。PNG・JPEG・WebP・GIF から選んでください。",
-      "errorUploadFailed": "背景画像の設定に失敗しました。"
+      "errorUploadFailed": "背景画像の設定に失敗しました。",
+      "market": {
+        "open": "壁紙マーケット",
+        "title": "壁紙マーケット",
+        "description": "Wallhaven の公開ギャラリーを閲覧し、クリックでダウンロードして適用。",
+        "searchPlaceholder": "壁紙を検索…",
+        "categories": {
+          "all": "すべて",
+          "general": "風景",
+          "anime": "アニメ",
+          "people": "人物"
+        },
+        "pageInfo": "{page} / {lastPage} ページ",
+        "prevPage": "前へ",
+        "nextPage": "次へ",
+        "refresh": "更新",
+        "empty": "一致する壁紙がありません。",
+        "error": "壁紙マーケットの読み込みに失敗しました。",
+        "retry": "再試行",
+        "cardLabel": "壁紙 {id} を適用",
+        "applied": "使用中",
+        "unavailable": "利用不可",
+        "tooLarge": "背景に使うには大きすぎます：{actual}（上限 {limit}）",
+        "downloadFailed": "ダウンロードに失敗しました。再試行してください。",
+        "appliedToast": "壁紙を適用しました",
+        "credit": "画像提供 wallhaven.cc · SFW のみ"
+      }
     }
   },
   "SystemSettings": {
@@ -213,6 +241,8 @@
     "enableProxy": "システムプロキシを有効化",
     "proxyAddress": "プロキシアドレス",
     "proxyHint": "http(s)/socks5 をサポート。例: {example}。システムプロキシ有効時のみ有効です。",
+    "proxyBypass": "プロキシを使用しないアドレス",
+    "proxyBypassHint": "複数のアドレスは半角カンマ <code>,</code> で区切り、スペースは入れません。例: <code>{example}</code>。<code>example.com</code> はそのドメインに、<code>.example.com</code> はそのすべてのサブドメインに一致します。IP アドレスも指定できます。ローカルアドレス <code>localhost,127.0.0.1,::1</code> は常に直接接続されるため、入力は不要です。このリストは環境変数 NO_PROXY として適用されます。",
     "save": "保存",
     "saving": "保存中...",
     "proxyRequired": "プロキシ有効時はプロキシ URL が必要です",
@@ -223,6 +253,8 @@
     "appLanguage": "アプリ言語",
     "languageSaveSuccess": "言語設定を保存しました",
     "languageSaveFailed": "言語設定の保存に失敗しました: {message}",
+    "dataTitle": "データと同期",
+    "dataDescription": "「設定同期」は設定をマシン間で持ち運び、「バックアップ」はこのマシンの codeg データをまるごとまとめます。",
     "updateTitle": "アプリ更新",
     "versionTitle": "ソフトウェアアップデート",
     "updateDescription": "設定されたリリースソースで新しいバージョンを確認し、利用可能なら直接インストールします。",
@@ -270,6 +302,8 @@
     "rollbackSuccess": "以前のバージョンにロールバックしました。再読み込みしています...",
     "rollbackFailed": "ロールバックに失敗しました。サーバーのログを確認してください。",
     "updateErrors": {
+      "permissionDenied": "{path} に書き込めないため、その場で更新をインストールできません。管理者権限で手動更新するか、インストール先の権限を確認してください。",
+      "targetWriteFailed": "{path} に書き込めないため、その場で更新をインストールできません: {reason}",
       "sourceUnavailable": "更新ソースに接続できません。ネットワークまたはプロキシを確認して再試行してください。",
       "network": "ネットワーク接続に失敗しました。ネットワークまたはプロキシを確認して再試行してください。",
       "downloadFailed": "更新パッケージのダウンロードに失敗しました。しばらくしてから再試行してください。",
@@ -304,6 +338,10 @@
     "gitlabDescription": "認証用の GitLab アカウントを管理します。トークンはローカルに保存されます。",
     "gitlabTokenHint": "GitLab → Preferences → Access tokens で api スコープ付きのパーソナルアクセストークンを作成してください。",
     "gitlabNoAccounts": "GitLab アカウントがまだありません",
+    "giteaTitle": "Gitea アカウント",
+    "giteaDescription": "認証用の Gitea（および Forgejo）アカウントを管理します。トークンはローカルに保存されます。",
+    "giteaTokenHint": "Gitea → Settings → Applications で write:repository、write:issue、read:user スコープ付きのアクセストークンを作成してください。",
+    "giteaNoAccounts": "Gitea アカウントがまだありません",
     "noAccounts": "GitHub アカウントが設定されていません。",
     "addAccount": "アカウントを追加",
     "serverUrl": "サーバー URL",
@@ -336,7 +374,7 @@
     "loadFailed": "設定の読み込みに失敗しました：{message}",
     "gitAccount": {
       "sectionTitle": "Git サーバーアカウント",
-      "sectionDescription": "GitHub 以外の Git サーバーの認証情報を管理します（GitLab、Bitbucket、セルフホストなど）。",
+      "sectionDescription": "専用のセクションがない Git サーバーの認証情報を管理します（Bitbucket、自己ホスト型など）。",
       "noAccounts": "Git サーバーアカウントが設定されていません。",
       "addAccount": "アカウントを追加",
       "addTitle": "Git アカウントを追加",
@@ -397,7 +435,7 @@
       },
       "open_folder": {
         "title": "フォルダを開く",
-        "description": "フォルダ選択を開き、新しいウィンドウで開きます"
+        "description": "フォルダ選択を開き、そのフォルダをワークスペースで開きます"
       },
       "open_settings": {
         "title": "設定を開く",
@@ -636,12 +674,16 @@
     "local": {
       "filterPlaceholder": "ローカルMCPを絞り込み...",
       "loadFailed": "読み込み失敗: {message}",
+      "sourceUnreadable": "{app} の MCP 設定を読み取れませんでした。そのサーバーは表示されません: {message}",
+      "saveBlockedByUnreadableSource": "保存する前にそのファイルを修正または削除して再読み込みしてください。割り当てはこのページが読み取れたエージェントから計算されるため、今保存すると読み取れなかったエージェントからこのサーバーが削除される可能性があります。",
       "empty": "ローカルMCPが見つかりません。",
       "description": "ローカルMCP設定は直接編集して保存できます。",
       "enabledApps": "有効なアプリ",
       "configJson": "MCP設定 (JSON)",
       "draftTitle": "新規 MCP",
       "draftDescription": "Server ID と設定を入力してローカル MCP サーバーを作成します。",
+      "suggestedLabel": "既知のサーバーから始める",
+      "suggestedChromeNote": "Google 公式の chrome-devtools-mcp をフォームに入れます。レジストリには同名の偽物があるため、ここでは本物を指定します。これは codeg の管理外にある**別の** Chrome を操作します。内蔵ブラウザーのツールにはないネットワークやパフォーマンスの情報が得られる一方、その保護（タブごとの共有、アクティビティ表示、コードごとの承認）はどれもありません。`npx` は初回実行時に npm からパッケージをダウンロードします。",
       "serverIdLabel": "Server ID",
       "serverIdPlaceholder": "Server ID（例：my-mcp）",
       "typeHint": "対応タイプ：stdio、http（エイリアス streamable-http、streamableHttp）、sse。env は stdio 専用です。リモート MCP の認証トークンは headers で渡してください。",
@@ -680,6 +722,13 @@
     "emptyNoAgent": "利用可能なエージェントがありません。",
     "configManagement": "設定管理",
     "envVars": "環境変数",
+    "adapterChannel": {
+      "label": "アダプターのバージョン",
+      "description": "インストールとアップグレードは、codeg がレビューして固定したバージョンを使用します。「最新版」を選ぶと、その時点で最新の npm リリースをインストールします。最新版のインストールに失敗した場合は固定バージョンにフォールバックし、インストールログにその旨を記録します。",
+      "pinned": "固定バージョン（推奨）",
+      "latest": "最新版（未レビュー）",
+      "latestWarning": "最新リリースは未レビューのため、codeg でこのエージェントが動かなくなることがあります。まれに既知の不具合を含むリリースが最新版になっていることもあります。実際にインストールされたバージョンはバージョン状態に表示されます。"
+    },
     "hostTools": {
       "label": "ファイルとコマンドをエージェント自身に処理させる",
       "description": "codeg がファイルアクセスとターミナルコマンドを代行しなくなり、エージェントが自身のプロセスで実行します。そうすることで初めて、エージェント自身のサンドボックスと権限ルールが適用されます。他のエージェントへの委任も無効になります（同じ処理が codeg 経由に戻ってしまうため）。codeg 自体はサンドボックスを提供しないため、エージェント側でサンドボックスを設定済みの場合にのみ有効にしてください。"
@@ -819,7 +868,11 @@
       "authNotInstalled": "cursor-agent が未インストールです",
       "authLoggedIn": "ログイン済み",
       "authNotLoggedIn": "未ログイン",
+      "authUnverified": "ログイン済み（資格情報を検証できません）",
+      "authUnverifiedHint": "cursor-agent にログイン情報は残っていますが、たった今 Cursor に対して使用できませんでした。通常はセッションの期限切れです。再ログインするまでセッションは「Authentication required」で失敗します。この CLI はブラウザログインを自動更新できません。",
+      "authUnverifiedHintApiKey": "cursor-agent に API キーは保存されていますが、Cursor がたった今それを拒否しました。失効・期限切れ・入力ミスのいずれかが大半です。下で有効なキーを保存するまで、セッションは「Authentication required」で失敗します。",
       "loginHint": "ターミナルで次のコマンドを実行して Cursor アカウントにログイン（ブラウザが開きます）し、完了後に更新を押してください：",
+      "loginHintRemote": "cursor-agent がインストールされている codeg ホスト側で実行してください（この端末ではありません）。完了後に更新を押します。そのホストには通常開けるブラウザがないため、NO_OPEN_BROWSER=1 を付けて実行してください。代わりにサインイン URL が表示されるので、自分のブラウザで開きます。無人のサーバーでは上の方式を API キーに切り替えてください。",
       "apiKeyLabel": "Cursor API キー",
       "apiKeyPlaceholder": "cursor.com/dashboard で取得",
       "apiKeyHint": "CURSOR_API_KEY —— Cursor ダッシュボードのアカウントキー。ヘッドレス/サーバー環境でブラウザログインの代わりに使用します。サードパーティや OpenAI のキーではありません。",
@@ -922,7 +975,28 @@
         "failed": "サインインが完了しませんでした。",
         "startFailed": "サインインを開始できませんでした",
         "credentialHint": "トークンはここにキャッシュされます。このファイルを別のデスクトップなしマシンにコピーすれば、そちらもサインイン済みになります。"
-      }
+      },
+      "signOut": {
+        "title": "間違ったアカウントでサインインしましたか？",
+        "description": "Antigravity はサインインした Google アカウントをキャッシュして黙って再利用するため、再度サインインしても別のアカウントには切り替わりません。サインアウトすると保存された認証情報が破棄されます。実行中の Antigravity セッションは先に終了します。そのままだと古いアカウントが書き戻されるためです。",
+        "action": "サインアウト",
+        "done": "サインアウトしました。サインインし直すと別のアカウントを選べます。",
+        "failed": "サインアウトできませんでした"
+      },
+      "tempReclaimTitle": "残存した一時領域",
+      "tempReclaimHint": "以前のバージョンの codeg は、このエージェントが起動のたびに展開する一時ディレクトリを削除できませんでした。システムの一時フォルダーからその残存物を検索します。このフォルダーは他のアプリケーションと共有されているため、確認するまで何も削除されず、使用中の項目はスキップされます。",
+      "tempReclaimScan": "スキャン",
+      "tempReclaimDelete": "残存物を削除",
+      "tempReclaimNone": "回収できるものはありません。",
+      "tempReclaimFound": "残存物 {count} 件、{size} を回収できます。",
+      "tempReclaimSkipped": "{count} 件をスキップしました（使用中または新しすぎます）。",
+      "tempReclaimed": "{count} 件から {size} を回収しました。",
+      "tempReclaimSelectAll": "すべて選択",
+      "tempReclaimAgeHours": "{hours} 時間",
+      "tempReclaimConfirmTitle": "選択した {count} 件を削除しますか？",
+      "tempReclaimConfirmBody": "{size} を完全に削除します。システムの一時フォルダーは他のアプリと共有されるため、確認する前に各パスをご確認ください。使用中のものはスキップされます。",
+      "tempReclaimConfirmAction": "削除",
+      "tempReclaimCancel": "キャンセル"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness の設定",
@@ -1130,6 +1204,46 @@
           "todowrite": "TODO リストの書き込み",
           "question": "あなたへの質問",
           "doom_loop": "同じ入力で同じ呼び出しが 3 回繰り返されたときに作動"
+        }
+      },
+      "behavior": {
+        "title": "動作とコンパクション",
+        "description": "セッションの既定値、コンテキストのコンパクション、ツール出力の上限。opencode.json に書き込まれ、下の保存で反映されます。",
+        "docsLink": "設定ドキュメント",
+        "unset": "未設定",
+        "defaultAgent": "既定エージェント",
+        "defaultAgentHint": "新しいセッションで使うプライマリエージェント。空または不明な場合は build に戻ります。",
+        "share": "共有",
+        "shareHint": "セッションを共有リンクとして公開できるかどうか。",
+        "shareManual": "手動（必要なときだけ）",
+        "shareAuto": "自動（新しいセッションを常に共有）",
+        "shareDisabled": "無効",
+        "autoUpdate": "自動更新",
+        "autoUpdateHint": "OpenCode が自身を最新版へ更新するかどうか。",
+        "autoUpdateOn": "自動的に更新",
+        "autoUpdateNotify": "通知のみ",
+        "autoUpdateOff": "更新しない",
+        "snapshot": "ファイルシステムのスナップショット",
+        "snapshotHint": "各ステップの前にスナップショットを記録します。オフにすると取り消しと復元でファイルを戻せなくなります。",
+        "compactionAuto": "自動コンパクション",
+        "compactionAutoHint": "コンテキストウィンドウが埋まったら会話を自動的に要約します。",
+        "compactionPrune": "古いツール出力を削る",
+        "compactionPruneHint": "コンパクション時に古いツール呼び出しの出力を要約せずに破棄します。",
+        "fields": {
+          "subagentDepth": "サブエージェントの深さ",
+          "tailTurns": "原文のまま残すターン数",
+          "preserveRecentTokens": "原文のまま残すトークン数",
+          "reserved": "予約トークン",
+          "maxLines": "ツール出力の行数上限",
+          "maxBytes": "ツール出力のバイト数上限"
+        },
+        "hints": {
+          "subagentDepth": "サブエージェントを何段までネストできるか。1 ならサブエージェントはさらに別のサブエージェントを起動できません。",
+          "tailTurns": "直近いくつのユーザーターンをコンパクションから除外するか。未設定なら下のトークン予算だけが上限になります。",
+          "preserveRecentTokens": "コンパクション後も原文のまま残す直近ターンのトークン予算。",
+          "reserved": "コンパクション自体がコンテキストを溢れさせないよう空けておくウィンドウ。",
+          "maxLines": "これを超える出力はディスクに書き出され、プレビューだけが残ります。既定 2000。",
+          "maxBytes": "これを超える出力はディスクに書き出され、プレビューだけが残ります。既定 51200。"
         }
       }
     },
@@ -1387,7 +1501,8 @@
       "localUnrecognized": "{versionText}。ローカルバージョンは比較できません。上書きインストールのためアップグレードを試してください。",
       "upgradeAvailable": "{versionText}。アップグレード可能です。",
       "remoteUnavailable": "{versionText}。現在リモートバージョンは取得できません。",
-      "latest": "{versionText}。すでに最新です。"
+      "latest": "{versionText}。すでに最新です。",
+      "latestChannel": "{versionText}。最新版チャンネルが有効です。アップグレードで最新リリースをインストールします。"
     },
     "adapter": {
       "label": "ACP アダプター",
@@ -1400,7 +1515,11 @@
       "ready": "アダプター {adapterCmd} はインストール済みで、Codeg が起動するのはこれです。独自のランタイムを同梱しているため {nativeLabel} は不要です。後から入れても両者は共存し、{configDir} を共有します。"
     },
     "cline": {
-      "configDescription": "Cline API プロバイダーと認証情報を設定します。設定は ~/.cline/data/ に保存されます。"
+      "configDescription": "Cline API プロバイダーと認証情報を設定します。設定は ~/.cline/data/ に保存されます。",
+      "signInGroup": "Cline アカウントでサインイン",
+      "byoGroup": "自分のプロバイダーを使う",
+      "externalGroup": "codeg の外で設定済み",
+      "signInHint": "この資格情報は cline 自身が保持します。ターミナルで下のコマンドを実行してサインインしてください。コードが表示され、ブラウザで確認するページが開きます。"
     },
     "opencodePlugins": {
       "title": "OpenCode プラグイン",
@@ -1408,7 +1527,10 @@
       "noPlugins": "opencode.json にプラグインが宣言されていません",
       "status": {
         "installed": "インストール済み",
-        "missing": "未インストール"
+        "needs_migration": "移行が必要",
+        "missing": "未インストール",
+        "path": "パスプラグイン",
+        "path_missing": "パスが見つかりません"
       },
       "installAll": "不足プラグインをすべてインストール",
       "pinVersions": "@latest バージョンを固定",
@@ -1469,6 +1591,7 @@
       "installing": "インストール中…",
       "recheck": "再確認",
       "configDirSkillsNote": "カスタム設定ディレクトリを指定すると、設定画面で管理するスキル・エキスパート・オフィスツールはこの pi に適用されません。スキルはそのフォルダー内で直接管理してください。",
+      "dirHistoryNote": "これらのディレクトリは pi プロセスにのみ適用されます。codeg の会話履歴は pi の既定の場所を読むため、カスタムディレクトリに書き込まれたセッションは一覧に表示されません。",
       "projectTrustTitle": "プロジェクトの信頼",
       "projectTrustDescription": "pi にプロジェクトファイルの読み込みを許可したフォルダーです。信頼したフォルダーでは、そのリポジトリの .pi/extensions が pi の起動時にコードを実行します。配下のすべてのフォルダーに適用され、ターミナルで pi を実行するときにも使われます。",
       "projectTrustLoading": "読み込み中…",
@@ -1538,16 +1661,64 @@
     "customAgentBadge": "カスタム",
     "customAgentNotLaunchable": "この環境では起動できません: {reason}"
   },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "通常",
+    "deepseekModeDefaultDescription": "ファイルの読み書きとコマンド実行を直接おこなってタスクを完了します",
+    "deepseekModePlan": "プラン",
+    "deepseekModePlanDescription": "まず調査し、完全な計画を提示して確認を得てから着手します。これはモデルへの誘導であり、実際の境界は「ファイルアクセス」で決まります。",
+    "deepseekOptionModel": "モデル",
+    "deepseekOptionReasoning": "推論の強度",
+    "deepseekOptionReasoningDescription": "高いほど遅くトークンを消費しますが、難しい問題では安定します",
+    "deepseekOptionSandbox": "ファイルアクセス",
+    "deepseekOptionSandboxDescription": "コマンドとファイルツールはこの境界を共有します",
+    "deepseekReasoningOff": "オフ",
+    "deepseekReasoningOffDescription": "推論せずに直接回答します。最速です",
+    "deepseekReasoningLow": "低",
+    "deepseekReasoningLowDescription": "少しだけ推論します。オフより安定し、高より高速です",
+    "deepseekReasoningHigh": "高",
+    "deepseekReasoningHighDescription": "推論してから回答します。日常のコーディング向けの既定値です",
+    "deepseekReasoningMax": "最高",
+    "deepseekReasoningMaxDescription": "より長く推論します。難問には強いものの、遅くトークンも多く消費します",
+    "deepseekSandboxReadOnly": "読み取り専用",
+    "deepseekSandboxReadOnlyDescription": "読み取り専用ポリシーで実行します。書き込みが必要なときは権限を切り替えてください。プラットフォームによっては部分的な強制にとどまります。",
+    "deepseekSandboxWorkspaceWrite": "ワークスペース書き込み",
+    "deepseekSandboxWorkspaceWriteDescription": "書き込みはセッションのワークスペースとシステムの一時ディレクトリ内に収める想定です。範囲外の呼び出しは都度の承認を求めます。プラットフォームによっては部分的な強制にとどまります。",
+    "deepseekSandboxFullAccess": "フルアクセス（サンドボックスなし）",
+    "deepseekSandboxFullAccessDescription": "ファイルの制限を一切適用しません。結果を理解している場合にのみ選んでください。",
+    "deepseekPermissionAllowOnce": "今回のみ許可",
+    "deepseekPermissionRejectOnce": "拒否"
+  },
   "SettingsPages": {
     "agentsLoading": "エージェント設定を読み込み中...",
     "skillPacksLoading": "スキルパックを読み込み中…"
   },
+  "CloseBehaviorSettings": {
+    "title": "閉じるボタンの動作",
+    "description": "メインウィンドウの閉じるボタンを押したときの動作を選択します。",
+    "trayUnavailable": "このシステムでは通知領域を利用できないため、閉じるボタンは常に codeg を終了します。",
+    "behaviorAsk": "毎回確認する",
+    "behaviorMinimize": "通知領域に最小化",
+    "behaviorExit": "codeg を終了",
+    "saveFailed": "閉じる動作の保存に失敗しました: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "codeg を閉じますか？",
+    "askDescription": "通知領域に常駐してエージェントとターミナルを動かし続けることも、完全に終了することもできます。",
+    "confirmExitTitle": "codeg を終了しますか？",
+    "confirmExitDescription": "現在の設定では、ウィンドウを閉じると codeg が終了します。",
+    "runningTerminals": "{count} 個のターミナルが実行中です。終了するとすべて停止します。",
+    "remember": "この選択を記憶する",
+    "cancel": "キャンセル",
+    "minimize": "通知領域に最小化",
+    "exit": "codeg を終了",
+    "actionFailed": "操作に失敗しました: {message}"
+  },
   "GeneralSettings": {
     "loading": "読み込み中...",
     "sectionTitle": "一般",
-    "sectionDescription": "デフォルトターミナル、レンダリング高速化、通知音、マルチエージェント委譲などの共通設定をここで一括管理します。",
+    "sectionDescription": "デフォルトターミナル、レンダリング高速化、ウィンドウを閉じたときの動作、通知と通知音などの共通設定をここで一括管理します。",
     "terminalTitle": "デフォルトターミナル",
-    "terminalDescription": "ターミナルバーやファイルツリーから新しいターミナルタブを開くときに使用するシェルを選択します。エージェントが codeg にコマンドライン全体の実行を依頼するときにも使われます。",
+    "terminalDescription": "codeg が新しいターミナルタブを開くとき、およびエージェントに代わってコマンドライン全体を実行するときに使うシェルを選択します。独自のシェルを持つエージェント（Codex、Claude Code など）は自分のプロセス内でコマンドを実行するため、この設定は届きません。",
     "terminalSystemDefault": "システムデフォルト",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1561,13 +1732,19 @@
     "terminalShellNotInstalled": "未インストール",
     "terminalShellNotFoundWarning": "このパスはホスト上に存在しません。",
     "terminalCurrentShell": "現在使用中: {path}",
-    "renderingDescription": "アプリで黒画面や描画不具合が発生する場合（一部の AMD GPU や Intel 内蔵 GPU で報告あり）、ハードウェアアクセラレーションを無効化してください。Windows デスクトップ版のみ有効です。",
+    "colorizeCommandOutput": "コマンド出力に色を付ける",
+    "colorizeCommandOutputDescription": "エージェントが実行するコマンドに ANSI カラーを強制し、その出力をトランスクリプト上でプレーンテキストではなくカラーで表示します。新しいセッションから有効になります。",
+    "renderingDescription": "アプリで黒画面や描画不具合が発生する場合（Windows では一部の AMD GPU や Intel 内蔵 GPU、Linux では NVIDIA プロプライエタリドライバーで報告あり）、ハードウェアアクセラレーションを無効化してください。Windows と Linux のデスクトップ版のみ有効です。",
     "disableHardwareAcceleration": "ハードウェアアクセラレーションを無効化",
     "renderingSaveFailed": "レンダリング設定の保存に失敗しました: {message}",
     "restartRequired": "保存しました。再起動後に反映されます。",
     "restartNow": "今すぐ再起動",
     "restartFailed": "再起動に失敗しました: {message}",
     "loadFailed": "読み込みに失敗しました: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "コラボレーション",
+    "sectionDescription": "エージェント同士の連携と、会話の中から使える codeg 自身のツールの範囲を設定します。"
   },
   "LoginPage": {
     "documentTitle": "ログイン - codeg",
@@ -1625,6 +1802,9 @@
     "searchPlaceholder": "タイトルまたはパスを検索…",
     "allAgents": "すべてのエージェント",
     "onlyImportable": "インポート可能のみ",
+    "includeDeleted": "削除済みを含める",
+    "includeDeletedWithCount": "削除済みを含める（{count}）",
+    "includeDeletedHint": "codeg でセッションを削除しても非表示になるだけで、会話と履歴は残っています。オンにすると削除済みセッションを選択して元の場所に復元できます。",
     "selectAll": "すべて選択",
     "clearSelection": "クリア",
     "expandAll": "すべて展開",
@@ -1637,6 +1817,7 @@
     "toggleSessionAria": "セッション {title} を選択",
     "statusImported": "インポート済み",
     "statusDeleted": "削除済み",
+    "statusDeletedRestorable": "削除済み — インポートすると元の会話が復元されます",
     "untitled": "無題のセッション",
     "messageCount": "{count} 件のメッセージ",
     "selectedCount": "{count} 件選択中",
@@ -1645,6 +1826,7 @@
     "close": "閉じる",
     "doneTitle": "インポート完了",
     "doneImported": "インポート",
+    "doneRestored": "復元済み",
     "doneUpdated": "更新済み",
     "doneSkipped": "スキップ",
     "doneCreatedFolders": "作成フォルダー",
@@ -1986,7 +2168,8 @@
         "output": "出力",
         "cacheRead": "キャッシュ読み取り",
         "cacheWrite": "キャッシュ書き込み",
-        "total": "合計"
+        "total": "合計",
+        "cacheHit": "キャッシュヒット率"
       },
       "quickActions": {
         "title": "クイック操作",
@@ -1995,7 +2178,38 @@
           "navigation": "ナビゲーション",
           "more": "その他"
         },
+        "browserTab": "ブラウザータブを開く",
         "showPet": "ペットを表示"
+      },
+      "mcp": {
+        "title": "codeg-mcp サービス",
+        "state": {
+          "running": "実行中",
+          "stopped": "停止中",
+          "disabled": "ツール無効",
+          "unavailable": "コンパニオン未検出",
+          "unknown": "不明"
+        },
+        "hint": {
+          "running": "ここから起動したエージェントは codeg のツールを使えます。",
+          "stopped": "Broker ソケットが応答していません。",
+          "disabled": "すべてのツールグループが無効です。",
+          "unavailable": "codeg-mcp の実行ファイルが見つかりません。",
+          "unknown": "状態を読み取れませんでした。"
+        },
+        "socketPath": "アドレス",
+        "binary": "コンパニオン",
+        "binaryMissing": "見つかりません",
+        "sessions": "セッション",
+        "activeDelegations": "委任",
+        "depthLimit": "深さ上限",
+        "start": "サービスを起動",
+        "starting": "起動中…",
+        "actionFailed": "操作に失敗しました: {message}",
+        "lastError": "前回のエラー: {message}",
+        "loadFailed": "状態を取得できませんでした: {message}",
+        "openSettings": "詳細設定を開く",
+        "refresh": "更新"
       }
     },
     "auxPanel": {
@@ -2037,12 +2251,20 @@
     },
     "fileWorkspace": {
       "files": "ファイル",
+      "newTab": "新しいタブ",
+      "newBrowserTab": "ブラウザータブ",
+      "openFile": "ファイルを開く…",
+      "openFileTitle": "ファイルを開く",
+      "localServices": "ローカルサーバー",
+      "localServiceFromAgent": "エージェント",
       "closeFileTab": "ファイルタブを閉じる",
       "close": "閉じる",
       "closeOthers": "他を閉じる",
       "closeAll": "すべて閉じる",
       "preview": "プレビュー",
       "editSource": "ソースを編集",
+      "openInSystemBrowser": "システムのブラウザで開く",
+      "more": "その他",
       "maximize": "最大化",
       "restore": "元に戻す",
       "emptyDirectory": "空のフォルダー"
@@ -2053,7 +2275,26 @@
       "closeOthers": "他を閉じる",
       "closeAll": "すべて閉じる",
       "hideTerminal": "ターミナルを隠す ({shortcut})",
-      "openFolderFirst": "先にフォルダを開いてください"
+      "openFolderFirst": "先にフォルダを開いてください",
+      "keybar": {
+        "label": "仮想ターミナルキー",
+        "show": "仮想キーを表示",
+        "hide": "仮想キーを隠す",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "フォルダーを開く",
@@ -2149,7 +2390,6 @@
       "imageZoomOut": "縮小",
       "imageZoomReset": "ズームをリセット",
       "htmlPreviewTitle": "HTML プレビュー",
-      "htmlPreviewTrust": "スクリプトを有効化",
       "htmlPreviewTrustHint": "このファイルのスクリプトを実行し、ネットワークアクセスを許可します。信頼できるファイルでのみ有効にしてください。",
       "officePreviewTitle": "Office ドキュメントのプレビュー",
       "officeFullRender": "フル描画",
@@ -2161,6 +2401,17 @@
       "officeWatchRetry": "再試行",
       "officeServerInstallHint": "OfficeCLI はサーバーホストにインストールする必要があります。サーバーで次のコマンドを実行してから再試行してください：",
       "officeRemoteDesktopUnsupported": "リモートデスクトップウィンドウではライブプレビューを利用できません。Office ファイルをプレビューするには、サーバーの Web UI でこのワークスペースを開いてください。"
+    },
+    "fileViewer": {
+      "title": "ファイルプレビュー",
+      "description": "この会話で参照されたファイルを横に開きます。",
+      "openInWorkspace": "ワークスペースで開く",
+      "back": "戻る",
+      "preview": "プレビュー",
+      "source": "ソース",
+      "loading": "読み込み中...",
+      "cannotResolve": "このファイルパスを解決できません。",
+      "tooLargeToPreview": "このファイルは大きすぎてここではプレビューできません。ワークスペースで開いてください。"
     },
     "branchDropdown": {
       "toasts": {
@@ -2565,7 +2816,13 @@
       "openInTerminal": "ターミナル",
       "openInCode": "VS Code",
       "linkedFolder": "リンク済みフォルダー",
+      "moreActions": "その他のアクション",
       "copyPath": "パスをコピー",
+      "copy": "コピー",
+      "copyRelativePath": "相対パス",
+      "copyAbsolutePath": "絶対パス",
+      "copyFileItself": "ファイル本体",
+      "copyDirectoryItself": "フォルダ本体",
       "upload": "ファイル/フォルダをアップロード",
       "download": "ファイルをダウンロード",
       "downloadAsZip": "ZIP としてダウンロード",
@@ -2603,7 +2860,9 @@
         "downloadFailed": "{name} のダウンロードに失敗しました",
         "downloadSaved": "{name} をダウンロードしました",
         "pathCopied": "パスをコピーしました",
-        "copyPathFailed": "パスのコピーに失敗しました"
+        "copyPathFailed": "パスのコピーに失敗しました",
+        "fileCopied": "{name} をコピーしました",
+        "copyFileFailed": "{name} のコピーに失敗しました"
       },
       "createDialog": {
         "newFile": "新規ファイル",
@@ -2751,8 +3010,6 @@
           "openAgentsSettings": "エージェント設定を開く",
           "retry": "再試行"
         },
-        "agentsSetupHint": "インストール管理は「設定 > エージェント」を開いてください。",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "現在のエージェント設定を読み取れません。",
           "disabled": "{agent} はエージェント設定で無効になっています。接続前に有効化してください。",
@@ -2774,18 +3031,25 @@
           "turnFailedMaxTokens": "{agent} がこのターンの最大トークン数に達しました。",
           "turnFailedMaxTurnRequests": "{agent} がこのターンで許可された最大リクエスト数に達しました。",
           "turnFailedUnknown": "{agent} が不明な停止理由でターンを終了しました。",
+          "turnFailedAuthRequired": "{agent} はこのターンを実行する前に再度のサインインを必要としています。設定からサインインしてから、メッセージを送り直してください。",
+          "agentAuthRequired": "{agent} はセッションを開始できませんでした。使用可能な認証情報がありません。設定 → エージェント → {agent} で再度サインインしてから、この会話を開き直してください。",
           "grokModelSwitchIncompatibleAgent": "{agent} は既存の会話ではこのモデルに切り替えられません。新しいセッションを開始して使用してください。",
+          "setModeFailed": "{agent} はモードを切り替えられませんでした。",
+          "setConfigOptionFailed": "{agent} はその設定を適用できませんでした。",
+          "goalControlFailed": "{agent} は目標を更新できませんでした。",
+          "imageDropped": "添付画像の 1 枚が {agent} に届きませんでした。",
+          "sessionLoadFallback": "{agent} は以前のセッションを復元できなかったため、新しいセッションを開始しました。以前のコンテキストは引き継がれていません。",
           "turnFailedEmpty": "{agent} は応答を生成せずにターンを終了しました。",
           "turnFailedEmptyProtocol": "{agent} の出力を codeg が解析できませんでした。エージェントのバージョンがプロトコルと一致していない可能性があります。",
-          "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。",
-          "detailsInAlerts": "ステータスバーのアラートを開き、詳細を展開するとエージェントの出力を確認できます。"
+          "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。"
         },
         "unableReadAgentConfig": "エージェント設定を読み取れません: {message}",
         "connectFailedTitle": "{agent} の接続に失敗しました",
         "toolFallbackTitle": "ツール",
-        "eventErrorTitle": "エージェントエラー",
         "notificationTurnComplete": "{agent} の応答が完了しました",
         "notificationError": "{agent} エラー：{message}",
+        "notificationQuestion": "{agent} が回答を待っています",
+        "notificationErrorRedacted": "{agent} でエラーが発生しました",
         "claudeApiRetry": {
           "fallbackError": "authentication_failed",
           "retryingWithMax": "再試行中 {attempt}/{max}",
@@ -2798,12 +3062,15 @@
           "lineNoErrorWithDelay": "{retry}、{delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました"
+        "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました",
+        "noticeTitle": "{agent}：{title}"
       },
       "connectionLifecycle": {
         "tasks": {
           "connectingTitle": "{agent} に接続中",
           "connectingDescription": "接続を確立しています",
+          "preparingTitle": "{agent} セッションを準備中",
+          "preparingDescription": "会話履歴を読み込んでいます",
           "loadingSelectorsTitle": "{agent} のセレクターを読み込み中",
           "loadingSelectorsDescription": "モードとセッション設定オプションを取得しています",
           "initSessionTitle": "{agent} セッションを初期化中",
@@ -2839,6 +3106,9 @@
         "cut": "切り取り",
         "copy": "コピー",
         "selectAll": "すべて選択",
+        "openLink": "リンクを開く",
+        "openFile": "ファイルを開く",
+        "sendEmail": "メールを送信",
         "pasteUnavailable": "クリップボードを読み取れませんでした。Ctrl/⌘V で貼り付けてください。",
         "clipboardWriteFailed": "クリップボードに書き込めませんでした。キーボードショートカットをご利用ください。",
         "quickMessageUntitled": "無題",
@@ -2854,14 +3124,16 @@
         "searchModel": "モデルを検索...",
         "searchModelAria": "モデルを検索",
         "modelListLabel": "モデル",
+        "recommendedBadge": "推奨",
         "noModels": "モデルが見つかりません",
         "cancel": "キャンセル",
         "send": "送信",
         "queueMessage": "キューに追加",
         "steerIntoTurn": "現在のターンに挿入",
+        "steerAsNote": "次の確認用にメモを送信",
         "steerQueuedInstead": "代わりにキューに追加しました。次のターンで送信されます。",
         "steerFailed": "現在のターンに挿入できませんでした",
-        "steerAttachmentsUnsupported": "テキストのみ対応です。添付ファイル付きの下書きはキューをご利用ください。",
+        "steerNoteFailed": "メモを送信できませんでした",
         "slashCommands": "スラッシュコマンド",
         "slashSearchPlaceholder": "コマンドを検索...",
         "slashSearchEmpty": "一致するコマンドがありません",
@@ -2892,7 +3164,9 @@
         "saveEdit": "保存",
         "cancelEdit": "編集をキャンセル",
         "editItem": "編集",
-        "deleteItem": "削除"
+        "deleteItem": "削除",
+        "steerItemNow": "現在のターンに挿入",
+        "steerItemAsNote": "メモとして送信し次回チェック時に読ませる"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > エージェント",
@@ -3113,13 +3387,17 @@
         "openInFileManager": "ファイルマネージャーで開く",
         "copyRelativePath": "相対パスをコピー",
         "copyAbsolutePath": "絶対パスをコピー",
+        "download": "ファイルをダウンロード",
         "pathCopied": "パスをコピーしました",
         "copyPathFailed": "パスのコピーに失敗しました",
-        "openFailed": "ローカルファイルを開けませんでした"
+        "openFailed": "ローカルファイルを開けませんでした",
+        "downloadSaved": "{name} をダウンロードしました",
+        "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "messageList": {
         "attachedResources": "添付リソース",
         "loading": "読み込み中...",
+        "loadBackgroundActivity": "バックグラウンドの動作を読み込む",
         "loadEarlier": "以前のメッセージを読み込む",
         "loadingEarlier": "以前のメッセージを読み込み中…",
         "error": "エラー: {message}",
@@ -3132,6 +3410,8 @@
         "systemMessage": "システムメッセージ",
         "copyMessage": "コピー",
         "forkFromHere": "ここから分岐",
+        "forkBusy": "ターンの実行中は分岐できません",
+        "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください",
         "copied": "コピー済み",
         "selectionActions": "選択範囲の操作",
         "selectionCopy": "テキストをコピー",
@@ -3237,6 +3517,8 @@
             "child_max_tokens": "サブエージェント: トークン上限",
             "child_max_turn_requests": "サブエージェント: 要求上限",
             "child_empty": "サブエージェント応答なし",
+            "child_auth_required": "サブエージェント要サインイン",
+            "child_rejected": "サブエージェント: 要求拒否",
             "child_unknown": "サブエージェント: エラー",
             "unknown": "不明なタスク"
           }
@@ -3282,7 +3564,10 @@
         "agentSessionLoading": "サブエージェントの記録を読み込んでいます…",
         "agentSessionEmpty": "サブエージェントはまだ何も書き込んでいません。",
         "agentFallbackTitle": "サブエージェント起動中…",
-        "agentCodexLaunchOnly": "起動しました。Codex はこのサブエージェントの進捗をこれ以上通知しません。結果はこの会話のメッセージとして届きます。",
+        "agentCodexLaunchOnly": "起動しました。Codex はこのサブエージェントの結末をまだ報告していません。セッションを開くと作業を追えます。",
+        "agentSubagentDone": "完了",
+        "agentSubagentInterrupted": "中断",
+        "agentSubagentUnknown": "結果不明",
         "agentStatsBash": "コマンド",
         "agentStatsRead": "ファイル読取",
         "agentStatsSearch": "検索",
@@ -3447,7 +3732,9 @@
         "skip": "スキップ",
         "next": "次へ",
         "submit": "送信",
-        "submitError": "送信できませんでした。もう一度お試しください。"
+        "submitError": "送信できませんでした。もう一度お試しください。",
+        "collapse": "折りたたむ",
+        "expand": "展開"
       },
       "planApproval": {
         "title": "エージェントが計画を提示しました — 確認してください",
@@ -3502,7 +3789,6 @@
         "reconnecting": "再接続中…",
         "reconnectDisabledDuringTurn": "現在のターンが完了すると再接続できます",
         "dismiss": "閉じる",
-        "reconnectFailed": "セッションの再接続に失敗しました",
         "applied": "新しい設定を適用しました"
       },
       "piProjectTrust": {
@@ -3548,13 +3834,17 @@
         "opSpawn": "サブエージェントを起動中",
         "opWait": "サブエージェントの結果を取得中",
         "opClose": "サブエージェントを終了中",
-        "opResume": "サブエージェントを再開中"
+        "opResume": "サブエージェントを再開中",
+        "opList": "サブエージェント一覧"
       },
       "contextCompaction": {
         "compacting": "コンテキストを圧縮しています…",
         "compacted": "コンテキストを圧縮しました",
         "compactedTokens": "コンテキストを圧縮 · {before} → {after} トークン",
-        "failed": "コンテキストの圧縮に失敗しました"
+        "failed": "コンテキストの圧縮に失敗しました",
+        "summary": "要約",
+        "triggerManual": "手動で実行",
+        "triggerAutomatic": "自動で実行"
       },
       "sessionFailure": {
         "category": {
@@ -3578,6 +3868,8 @@
       },
       "backgroundTasks": {
         "settledFallback": "バックグラウンドタスクが終了しました（{status}）",
+        "notifySettledOne": "{agent}：バックグラウンドタスクが完了しました",
+        "notifySettledMany": "{agent}：{count} 件のバックグラウンドタスクが完了しました",
         "cardRunning": "バックグラウンドで実行中",
         "cardLaunchedPending": "バックグラウンドタスクを開始しました",
         "cardCompleted": "バックグラウンドタスクが完了しました",
@@ -3610,6 +3902,16 @@
       "viewMode": {
         "split": "左右分割ビューに切り替え",
         "unified": "インラインビューに切り替え"
+      },
+      "binaryFile": "バイナリファイル — 内容は表示されません",
+      "image": {
+        "sideBySide": "左右分割ビューに切り替え",
+        "swipe": "スワイプ比較ビューに切り替え",
+        "swipeHandle": "画像比較スライダー",
+        "noImage": "このリビジョンに画像はありません",
+        "unavailable": "この側を読み込めませんでした",
+        "tooLarge": "画像が大きすぎてプレビューできません（{size}）",
+        "loading": "画像を読み込み中..."
       }
     },
     "conversationContextBar": {
@@ -3924,7 +4226,7 @@
     "agentTypeRequired": "エージェントタイプを選択してください。",
     "agentTypeImmutableHint": "エージェントタイプは作成後に変更できません。",
     "model": "モデル",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "メインモデル",
     "claudeReasoningModel": "推論モデル（思考）",
@@ -4369,14 +4671,20 @@
     "errorLoadingDir": "ディレクトリの読み込みに失敗しました",
     "selectedCount": "{count} 件選択中"
   },
+  "BranchPicker": {
+    "searchPlaceholder": "ブランチを検索…",
+    "none": "ブランチがありません",
+    "local": "ローカル",
+    "remote": "リモート",
+    "useCustom": "「{query}」を使用"
+  },
   "BackupSettings": {
-    "title": "バックアップと復元",
-    "description": "codeg データのポータブルなバックアップを書き出すか、バックアップから復元します。",
     "tabs": {
       "backup": "バックアップ",
       "restore": "復元"
     },
     "export": {
+      "description": "このマシンの codeg データ（データベースとアップロードしたファイル）を 1 つのアーカイブにまとめます。",
       "includeExternal": "会話内容を含める",
       "includeExternalHint": "各 CLI の会話履歴（Claude、Codex、Gemini など）も保存します。サイズが増えます。",
       "passphrase": "パスフレーズ（任意）",
@@ -4388,9 +4696,18 @@
       "button": "バックアップを書き出す",
       "inProgress": "バックアップを作成中…",
       "success": "バックアップを作成しました。",
-      "started": "バックアップのダウンロードを開始しました。"
+      "started": "バックアップのダウンロードを開始しました。",
+      "degradedTitle": "一部のエージェントのセッションデータベースは特別な処理が必要でした",
+      "degradedHint": "これらのエージェントはセッションを SQLite に保存します。下記に別段の記載がない限り、バックアップには含まれています。",
+      "degradedMore": "…ほか {count} 件。",
+      "degradedLevel": {
+        "recoveredOnCopy": "専用のコピー上で復旧済み — 完全です",
+        "bareFileOnly": "先行書き込みログなしで保存 — 最新のメッセージが欠けている可能性があります",
+        "notArchived": "バックアップに含まれていません — コピー中に変化し続けたため"
+      }
     },
     "restore": {
+      "description": "このマシンの codeg データをバックアップアーカイブの内容で置き換えます。",
       "selectFile": "バックアップファイルを選択",
       "passphrasePrompt": "このバックアップは暗号化されています。パスフレーズを入力してください。",
       "unlock": "ロック解除",
@@ -4426,11 +4743,136 @@
         "scanning": "競合を確認中…",
         "noConflicts": "既存のファイルは上書きされません。",
         "conflictCount": "既存のファイル {count} 件が影響を受けます。",
-        "conflictSkipNote": "上書きを有効にしない限り、既存ファイルは保持（スキップ）されます。"
+        "conflictSkipNote": "上書きを有効にしない限り、既存ファイルは保持（スキップ）されます。",
+        "agentsRunning": "{count} 個のエージェントが実行中です（{agents}）。先に終了してください。そうしないと、記録は元の場所に書き戻されず別フォルダーに保存されます。"
       },
-      "restartFailed": "復元は準備できましたが、サーバーを再起動できませんでした。手動で再起動して復元を適用してください。"
+      "restartFailed": "復元は準備できましたが、サーバーを再起動できませんでした。手動で再起動して復元を適用してください。",
+      "discardPending": "保留中の復元を破棄",
+      "discarded": "保留中の復元を破棄しました。",
+      "pendingBlockedHint": "再起動を待っている復元がすでにあります。別のものを準備するには、これを破棄してください。",
+      "result": {
+        "title": "復元を準備しました",
+        "needsRestart": "次回の起動時に適用されます。現在のデータは先にスナップショットが取られます。",
+        "downgraded": "{agents} が実行中だったため、会話の記録は元の場所に書き戻されず {path} に保存されました。",
+        "skipped": "既存のファイル {count} 件をそのまま残しました",
+        "refused": "{count} 件のセッションデータベースは書き戻されませんでした",
+        "refusedHint": "古いバックアップのもので、データベースと先行書き込みログが別々に保存されており、両者が対応することを証明できません。既存のデータベースは変更していません — 別フォルダーへの復元を選べば元のファイルを取得できます。",
+        "restartNow": "今すぐ再起動",
+        "later": "あとで"
+      }
     },
-    "remoteUnsupported": "バックアップと復元は codeg を実行しているマシンのデータを対象とします。現在リモートワークスペースに接続中です。そのサーバー上で直接バックアップを管理してください。"
+    "remoteUnsupported": "バックアップと復元は codeg を実行しているマシンのデータを対象とします。現在リモートワークスペースに接続中です。そのサーバー上で直接バックアップを管理してください。",
+    "progress": {
+      "cancel": "キャンセル"
+    },
+    "snapshots": {
+      "title": "復元前のスナップショット",
+      "hint": "復元のたびに現在のデータのスナップショットを取り、新しい 2 件を保持します。",
+      "empty": "スナップショットはまだありません。",
+      "rollback": "これに戻す",
+      "unsupported": "閲覧のみ",
+      "rollbackConfirmTitle": "このスナップショットに戻しますか？",
+      "rollbackConfirmBody": "現在のデータをこのスナップショットで置き換えて再起動します。置き換えられるデータは先にスナップショットが取られます。"
+    }
+  },
+  "ConfigSyncSettings": {
+    "title": "設定同期",
+    "scopeTitle": "同期される範囲",
+    "scopeIncludedTitle": "含まれるもの",
+    "scopeExcludedTitle": "含まれないもの",
+    "scopeIncluded": {
+      "providers": "モデルプロバイダー（API キーを含む）",
+      "agentSettings": "エージェント設定",
+      "customAgents": "カスタムエージェント",
+      "quickMessages": "クイックメッセージ",
+      "taskTemplates": "タスクテンプレート",
+      "preferences": "アプリ設定（言語・外観・切り替え）"
+    },
+    "scopeExcluded": {
+      "conversations": "会話履歴",
+      "uploads": "アップロードしたファイルと画像",
+      "workspaces": "ワークスペースのプロジェクトとパス",
+      "mcp": "MCP サーバー（各 CLI が管理）",
+      "credentials": "ログイン認証情報とトークン"
+    },
+    "fileTitle": "設定ファイル",
+    "exportButton": "ファイルに書き出す",
+    "importButton": "ファイルから読み込む",
+    "fileHint": "他のマシンに持ち運べる JSON ファイルを 1 つ作成します。読み込みでは項目を追加・更新し、ファイルにない既存項目は残ります。",
+    "webdavTitle": "WebDAV 同期",
+    "webdavHint": "設定スナップショットを自分の WebDAV サーバーにアップロードします。",
+    "presetLabel": "サーバー",
+    "preset": {
+      "jianguoyun": "Jianguoyun",
+      "nextcloud": "Nextcloud",
+      "synology": "Synology NAS",
+      "custom": "カスタム"
+    },
+    "presetHint": {
+      "jianguoyun": "Jianguoyun ではログインパスワードではなく、セキュリティ設定で作成するアプリパスワードが必要です。",
+      "nextcloud": "ドメインとユーザー名を置き換え、「設定 → セキュリティ」のアプリパスワードを使います。",
+      "synology": "DSM パッケージセンターで WebDAV Server を有効にします。既定ポートは 5005（HTTP）/ 5006（HTTPS）です。"
+    },
+    "serverUrl": "サーバー URL",
+    "username": "ユーザー名",
+    "password": "パスワード",
+    "passwordKeep": "空のままにすると保存済みのパスワードを使います",
+    "passwordPlaceholder": "アプリパスワード",
+    "remoteDir": "リモートフォルダー",
+    "profile": "プロファイル",
+    "profileHint": "同じプロファイルを使うマシンは同じ設定を共有します。仕事用と個人用を分けたい場合は別のプロファイル名にしてください。",
+    "autoSyncLabel": "自動でアップロード",
+    "autoSyncHint": "定期的に確認し、設定が変わったときだけ送信します。",
+    "intervalLabel": "確認間隔",
+    "intervalOption": "{minutes} 分ごと",
+    "saveButton": "保存",
+    "testButton": "接続テスト",
+    "uploadButton": "今すぐ同期",
+    "restoreButton": "リモートから復元",
+    "saved": "同期設定を保存しました",
+    "testSucceeded": "WebDAV サーバーに接続できました",
+    "uploaded": "設定をアップロードしました",
+    "exported": "設定を書き出しました",
+    "restored": "{count} 件の設定を適用しました",
+    "imported": "{count} 件の設定を適用しました",
+    "noRemoteSnapshot": "サーバーにはまだ設定スナップショットがありません",
+    "lastSyncAt": "最終同期：{time}",
+    "neverSynced": "まだ同期していません",
+    "lastError": "前回のエラー：{message}",
+    "working": "処理中…",
+    "plaintextWarning": "スナップショットは暗号化せずに送信され、API キーも含まれます。自分だけがアクセスできる WebDAV サーバーを使ってください。同期用の認証情報自体は含まれません。",
+    "importConfirmTitle": "設定を読み込みますか？",
+    "importConfirmBody": "ファイルの項目がこのマシンに追加・更新されます。ファイルにない既存項目はそのまま残ります。",
+    "restartHint": "外観・言語・プロバイダー一覧などの一部の変更は、codeg を再起動すると反映されます。",
+    "importConfirmAction": "読み込む",
+    "restoreConfirmTitle": "リモートから復元しますか？",
+    "restoreConfirmBody": "{device} が {time} に作成したスナップショットをこのマシンに適用します。スナップショットにない既存項目は残ります。",
+    "restoreConfirmAction": "復元",
+    "cancel": "キャンセル",
+    "emptySnapshot": "このスナップショットに設定項目はありません。",
+    "domain": {
+      "modelProviders": "モデルプロバイダー {count} 件",
+      "agentSettings": "エージェント設定 {count} 件",
+      "customAgents": "カスタムエージェント {count} 件",
+      "quickMessages": "クイックメッセージ {count} 件",
+      "taskTemplates": "タスクテンプレート {count} 件",
+      "preferences": "アプリ設定 {count} 件"
+    },
+    "rollbackTitle": "インポートを元に戻す",
+    "rollbackHint": "インポートと復元のたびに、直前のこのマシンの設定を保存します。最新の 10 件が残ります。",
+    "rollbackAction": "元に戻す",
+    "rollbackUnknownTime": "時刻不明",
+    "rollbackConfirmTitle": "この設定に戻しますか？",
+    "rollbackConfirmBody": "現在の設定を {time} に保存されたコピーで置き換えます。現在の設定は先に保存されるので、この操作自体も元に戻せます。",
+    "rollbackConfirmAction": "元に戻す",
+    "rolledBack": "{count} 件の設定を復元しました",
+    "encryptLabel": "スナップショットを暗号化",
+    "encryptHint": "アップロードするファイルをパスフレーズで保護します。同期するすべてのマシンで同じものが必要です。",
+    "encryptedNotice": "スナップショットはアップロード前にパスフレーズで暗号化されます。パスフレーズを失うと、サーバー上のコピーは復元できません。",
+    "passphrase": "パスフレーズ",
+    "passphraseKeep": "空のままにすると保存済みのパスフレーズを使います",
+    "passphrasePlaceholder": "暗号化パスフレーズ",
+    "passphraseHint": "このマシンのキーチェーンにのみ保存され、アップロードされません。他のマシンでも同じパスフレーズを入力してください。"
   },
   "backup": {
     "restore": {
@@ -4445,6 +4887,27 @@
     "error": {
       "diskSpace": "操作を完了するためのディスク容量が足りません。",
       "cancelled": "操作はキャンセルされました。"
+    }
+  },
+  "configSync": {
+    "error": {
+      "newerSchema": "このスナップショットは新しいバージョンの codeg（形式 {snapshotVersion}）で作成されています。このバージョンは形式 {appVersion} まで対応しています。",
+      "checksum": "スナップショットがチェックサムと一致せず、壊れている可能性があります。",
+      "invalidSnapshot": "このファイルは有効な codeg 設定スナップショットではありません。",
+      "noRemoteSnapshot": "サーバーにはまだ設定スナップショットがありません。",
+      "notConfigured": "同期する前に WebDAV サーバーを設定してください。",
+      "unauthorized": "WebDAV サーバーがユーザー名またはパスワードを拒否しました。",
+      "forbidden": "WebDAV サーバーがこのフォルダーへのアクセスを拒否しました。",
+      "remotePath": "リモートフォルダーまたはプロファイル名が無効です。",
+      "quota": "WebDAV サーバーの空き容量がありません。",
+      "network": "WebDAV サーバーに接続できませんでした。",
+      "server": "WebDAV サーバーがエラーを返しました（{status}）。",
+      "passphraseRequired": "このスナップショットは暗号化されています。同期する前に暗号化パスフレーズを設定してください。",
+      "badPassphrase": "スナップショットを復号できませんでした。パスフレーズを確認してください。ファイルが壊れている可能性もあります。",
+      "badDomain": "このスナップショットの {domain} の部分を読み取れませんでした。",
+      "noRollback": "その保存済みの設定はこのマシンにもう残っていません。",
+      "credentialsUnreadable": "保存された認証情報を読み取れませんでした。システムキーチェーンのロックを解除してから再試行してください。",
+      "notEncrypted": "サーバー上のスナップショットは暗号化されていませんが、このデバイスでは暗号化が有効です。このデバイスからアップロードして置き換えるか、暗号化をオフにして使用してください。"
     }
   },
   "WebConnection": {
@@ -4477,21 +4940,92 @@
   "AgentToolsSettings": {
     "title": "会話内ツール",
     "description": "codeg が会話の中でエージェントに追加で渡すツールです。エージェントの起動時に注入されるため、変更は以降に起動したエージェントに適用されます。",
-    "feedbackLabel": "ライブフィードバック",
-    "feedbackHint": "作業中のエージェントにメモや修正を送れます。即時ステアリングに対応したエージェントでは、メモは実行中のターンへ即座に挿入されます。それ以外のエージェントはフィードバック確認ツールで読み取りますが、通常はプロンプトで言及した場合にのみ確認します。例：「ライブフィードバックを定期的に確認して」とメッセージに追加してください。",
-    "questionLabel": "ユーザーに質問",
-    "questionHint": "エージェントが処理を一時停止し、会話の入力欄の上に表示される選択式の質問をできるようにします。回答（またはスキップ）するまでエージェントは待機します。",
-    "sessionInfoLabel": "セッション情報の取得",
-    "sessionInfoHint": "メッセージ内で参照したセッション（セッションバッジ）をエージェントが照会し、タイトル・エージェント・ステータス・ワークスペース・トークン使用量・最近のメッセージを読み取れるようにします。",
-    "automationsLabel": "自動化を作成",
-    "automationsHint": "会話をスケジュール実行の自動化として保存します。既定はオフ — 自動化はその後、自分でエージェントを起動します。",
-    "workTasksLabel": "ToDo タスクを作成",
-    "workTasksHint": "会話から ToDo ボードにカードを追加します。既定はオフ — アプリの状態を書き換えます。",
     "save": "保存",
     "saving": "保存中…",
     "saved": "ツール設定を保存しました",
     "saveFailed": "ツール設定の保存に失敗しました",
     "loadFailed": "読み込みに失敗しました: {detail}"
+  },
+  "AgentTools": {
+    "delegation": {
+      "label": "委任",
+      "short": "タスクを別のエージェントに任せます。",
+      "hint": "エージェントが自己完結したサブタスクを別のエージェントに渡し、そちらが自分のセッションで実行して結果を返せるようにします。入れ子の深さや担当エージェントなど、残りの設定はすぐ上のセクションです。"
+    },
+    "feedback": {
+      "label": "ライブフィードバック",
+      "short": "実行を止めずに補足を送れます。",
+      "hint": "作業中のエージェントにメモや修正を送れます。即時ステアリングに対応したエージェントでは、メモは実行中のターンへ即座に挿入されます。それ以外のエージェントはフィードバック確認ツールで読み取りますが、通常はプロンプトで言及した場合にのみ確認します。例：「ライブフィードバックを定期的に確認して」とメッセージに追加してください。"
+    },
+    "ask": {
+      "label": "ユーザーに質問",
+      "short": "判断に迷ったら質問させます。",
+      "hint": "エージェントが処理を一時停止し、会話の入力欄の上に表示される選択式の質問をできるようにします。回答（またはスキップ）するまでエージェントは待機します。"
+    },
+    "sessions": {
+      "label": "セッション情報の取得",
+      "short": "過去のセッションと結果を調べます。",
+      "hint": "メッセージ内で参照したセッション（セッションバッジ）をエージェントが照会し、タイトル・エージェント・ステータス・ワークスペース・トークン使用量・最近のメッセージを読み取れるようにします。"
+    },
+    "browser": {
+      "label": "内蔵ブラウザーの読み取りと操作",
+      "short": "内蔵ブラウザーのページを開き、読み、操作します。",
+      "hint": "内蔵ブラウザーで開いているページの一覧をエージェントに見せ、共有したページを読ませ、操作を許可したページでクリックや入力をさせます。エージェント自身がアドレスを開いたり、タブの行き先を変えたり、タブを閉じたりすることもできます。既定はオフです。どのページを読ませるかは、そのタブのツールバーで個別に決めるままですが、既定の共有レベルを設定している場合、エージェントが自分で開いたページは読み込まれた時点でそのレベルで共有される点に注意してください。オフにすると即座に反映され、実行中のエージェントにも効きます。"
+    },
+    "browserEval": {
+      "label": "内蔵ブラウザーでコードを実行",
+      "short": "共有したページで自分のコードを実行します。既定では確認しません。",
+      "hint": "共有したページ上で、エージェントが自分で書いた JavaScript を実行できるようにします。既定ではオフで、上のスイッチも必要です。オンにするとコードは確認なしで実行されるため、判断はこのスイッチで行うことになります。1 つずつ確認したい場合は、設定 → 内蔵ブラウザで変更できます。"
+    },
+    "automations": {
+      "label": "自動化を作成",
+      "short": "定期自動化を作成・管理します。",
+      "hint": "会話をスケジュール実行の自動化として保存します。既定はオフ — 自動化はその後、自分でエージェントを起動します。"
+    },
+    "taskboard": {
+      "label": "ToDo タスクを作成",
+      "short": "作業タスクを作成・管理します。",
+      "hint": "会話から ToDo ボードにカードを追加します。既定はオフ — アプリの状態を書き換えます。"
+    }
+  },
+  "DesktopNotificationSettings": {
+    "title": "デスクトップ通知",
+    "description": "エージェントが応答を待っているときに OS 通知を表示します。設定はデバイスごとで、別のブラウザやマシンとは独立しています。",
+    "permissionTitle": "通知の許可",
+    "permissionGranted": "許可済み",
+    "permissionDenied": "ブロック中",
+    "permissionDefault": "未リクエスト",
+    "permissionUnsupported": "利用できません",
+    "permissionManagedByOs": "システムが管理",
+    "permissionGrantedHint": "このブラウザは Codeg の通知を表示します。",
+    "permissionDeniedHint": "このブラウザは Codeg の通知をブロックしています。解除できるのはブラウザのサイト設定だけで、ページから再度要求することはできません。",
+    "permissionDefaultHint": "このブラウザにはまだ確認していません。許可するまで通知は届きません。",
+    "permissionUnsupportedHint": "通知にはセキュアコンテキストが必要です。HTTPS または localhost 経由でアクセスしてください。",
+    "permissionManagedByOsHint": "デスクトップ版はシステムの通知センター経由で送信しますが、Codeg が許可されているかを OS は返しません。テスト送信で確かめてください。",
+    "identityTitle": "配信元アプリ",
+    "identityHint": "システムはこれらの通知をこのアプリのものとして扱います。実際に効くのはそのアプリ自身の通知スイッチです。",
+    "identityDegradedHint": "Codeg 自身の識別子を取得できなかったため、システムは {bundleId} として配信し、そのアプリの通知スイッチが適用されます。Codeg をアプリケーションフォルダにインストールすると元に戻ります。",
+    "requestPermission": "通知を許可",
+    "permissionGrantedToast": "通知を許可しました。",
+    "permissionDeniedToast": "通知がブロックされました。ブラウザのサイト設定から再度有効にしてください。",
+    "openSystemSettings": "システム設定を開く",
+    "openSystemSettingsFailed": "システムの通知設定を開けませんでした。",
+    "sendTest": "テスト送信",
+    "testTitle": "Codeg",
+    "testBody": "デスクトップ通知は正常に動作しています。",
+    "testSent": "テスト通知を送信しました。",
+    "testFailed": "テスト通知を送信できませんでした。",
+    "whenTitle": "通知するタイミング",
+    "whenHint": "サブモニターのウィンドウは見えていてもフォーカスされていません。通知が届かない場合は「ウィンドウが未フォーカスのとき」を選んでください。",
+    "whenAlways": "常に",
+    "whenUnfocused": "ウィンドウが未フォーカスのとき",
+    "whenHidden": "ウィンドウが見えていないとき",
+    "hideBody": "通知の本文を隠す",
+    "hideBodyHint": "エージェントの出力の代わりに汎用の一文を表示します。通知センターは内容をアプリの外に保持し、会話を閉じても残ります。どのウィンドウに戻ればよいか分かるよう、タイトルにはフォルダー名が残ります。",
+    "eventsTitle": "イベント",
+    "eventsHint": "邪魔してほしくないイベントをオフにします。数秒以内の同じイベントは 1 つにまとめられます。",
+    "eventBackgroundTask": "バックグラウンドタスク",
+    "eventWorkTask": "ワークタスク"
   },
   "NotificationSoundSettings": {
     "title": "通知音",
@@ -4511,6 +5045,100 @@
     "tonePop": "ポップ",
     "toneAlert": "アラート",
     "toneDescend": "下降音"
+  },
+  "BrowserSettings": {
+    "title": "内蔵ブラウザ",
+    "description": "会話、ツールの結果、ターミナルから開いたウェブページを、アプリを離れずにファイルの隣のタブとして表示できます。",
+    "descriptionWeb": "ブラウザセッションでは、ウェブページは今使っているブラウザで開きます。例外は codeg ホストで動いているサーバーで、ここのタブに転送されます。以下は、その場合でも効く設定です。",
+    "defaultTargetTitle": "リンクを開く場所",
+    "defaultTargetHint": "発生元ごとに設定します。⌘/Ctrl を押しながらクリックすると、その一回だけもう一方で開きます。",
+    "sourceTranscript": "会話メッセージ",
+    "sourceToolCard": "ツールの結果",
+    "sourceTerminal": "ターミナル",
+    "sourceEditor": "エディタ",
+    "sourceNotification": "通知",
+    "targetBuiltin": "内蔵ブラウザ",
+    "targetSystem": "システムのブラウザ",
+    "devtoolsTitle": "Web インスペクタ",
+    "devtoolsHint": "タブの「その他」メニューに「インスペクタを開く」を表示し、ページ上の「要素を検証」を有効にします。既定でオン。以降に開くタブに適用されます。",
+    "surfaceTitle": "タブの表示方式",
+    "surfaceHint": "ページの表示方法です。埋め込みタブがこの環境で正しく動作しない場合を除き「自動」のままにしてください。これ以降に開くタブに適用されます。",
+    "surfaceAuto": "自動",
+    "surfaceChild": "ワークスペースに埋め込む",
+    "surfaceWindow": "別ウィンドウ",
+    "clearTitle": "閲覧データ",
+    "clearHint": "すべてのブラウザタブで共有される Cookie、キャッシュ、サイトデータ。消去すると各サイトからサインアウトされます。",
+    "clearAction": "消去…",
+    "clearConfirmTitle": "閲覧データを消去しますか？",
+    "clearConfirmDescription": "内蔵ブラウザの Cookie、キャッシュ、サイトデータを削除します。開いているタブはそのまま残りますが、各サイトからサインアウトされます。",
+    "clearConfirmAction": "消去",
+    "cancel": "キャンセル",
+    "cleared": "閲覧データを消去しました",
+    "clearFailed": "閲覧データを消去できませんでした: {message}",
+    "proxyTitle": "ネットワークプロキシ",
+    "proxyHint": "ブラウザタブは「システム設定」のプロキシを使います。このマシン上のアドレス（localhost）はプロキシを経由しません。",
+    "proxyOn": "{url} を使用中",
+    "proxyOff": "直接接続",
+    "proxyNextTab": "プロキシの変更は、これ以降に開くタブに適用されます。",
+    "proxyRestart": "変更したプロキシをブラウザタブで使うには codeg を再起動してください。",
+    "proxyUnsupported": "このバージョンの macOS では利用できません（macOS 14 以降が必要です）。",
+    "proxyUnusable": "設定されたプロキシはブラウザタブで使用できない種類です（http と socks5 のみ対応）。",
+    "suspendTitle": "バックグラウンドのタブを解放",
+    "suspendHint": "30 分間バックグラウンドにあるブラウザタブのメモリを解放します。戻ると再読み込みされ、スクロール位置と履歴は失われます。",
+    "downloadsTitle": "ダウンロード",
+    "downloadsHint": "ページからダウンロードしたファイルは {dir} に保存されます。自動的に開かれることはなく、既存のファイルを上書きしません。",
+    "rulesTitle": "サイトルール",
+    "rulesHint": "サイトごとに設定: 常に内蔵ブラウザ、常にシステムブラウザ、またはブロック。パターンはホスト名、*.example.com、* のいずれかで、:ポートを付けられます。最も具体的な一致が優先されます。",
+    "rulesHintWeb": "サイトごとに設定: ブロック。ブラウザセッションでは、リンクをどこで開くかは選べません。パターンはホスト名、*.example.com、* のいずれかで、:ポートを付けられます。最も具体的な一致が優先されます。",
+    "serviceOpenTitle": "ローカルサーバー",
+    "serviceOpenHint": "ターミナルで起動したサーバーがアドレスを表示したら、ブラウザータブで開きます。このマシン上のアドレスのみ、かつ実際に待ち受けている場合だけです。",
+    "serviceOpenOff": "何もしない",
+    "serviceOpenNotify": "通知する",
+    "serviceOpenOpen": "タブで開く",
+    "rulePatternPlaceholder": "example.com または *.example.com",
+    "rulePatternLabel": "サイトのパターン",
+    "ruleActionLabel": "動作",
+    "ruleActionFor": "{pattern} の動作",
+    "ruleAdd": "追加",
+    "ruleRemove": "ルールを削除",
+    "ruleActionBlock": "ブロック",
+    "ruleManaged": "管理者による設定",
+    "ruleInvalid": "有効なパターンではありません",
+    "ruleDuplicate": "このパターンのルールは既にあります",
+    "rulesEmpty": "ルールはまだありません。",
+    "agentGrantTitle": "既定の共有レベル",
+    "agentGrantHint": "タブが開いた各サイトを、確認なしにこのレベルで共有します。ページ側のコントロールでサイトごとに変更・解除でき、「共有しない」を選ぶとすべての判断がそのコントロールに委ねられます。",
+    "agentGrantRead": "閲覧のみ",
+    "agentGrantControl": "閲覧と操作",
+    "agentGrantNone": "共有しない",
+    "evalApprovalTitle": "ページ上でのコード実行",
+    "evalApprovalHint": "「閲覧と操作」で共有したページで、エージェントが自分の JavaScript を実行しようとしたときの動作です。既定では確認なしで実行します。可否を決めるのは「内蔵ブラウザーでコードを実行」のスイッチ（既定はオフで、自分でオンにする必要があります）とページの共有レベルで、実行はいずれもそのタブのエージェント操作履歴に残ります。「毎回確認する」を選ぶと、コードがそのまま表示され、あなたの返事を待ちます。",
+    "evalApprovalAsk": "毎回確認する",
+    "evalApprovalSilent": "確認せずに実行",
+    "terminalMenuTitle": "ターミナルのリンクメニュー",
+    "terminalMenuHint": "ターミナル内のリンクをクリックすると、すぐに開く代わりに小さなメニュー（内蔵ブラウザ、システムブラウザ、リンクをコピー）を表示します。⌘/Ctrl クリックは引き続き直接開きます。",
+    "htmlPreviewTitle": "HTML ファイルのプレビュー",
+    "htmlPreviewHint": "HTML ファイルを内蔵ブラウザの制限付きドキュメントビューで表示します。ファイルごとに有効にするまでスクリプトは実行されず、そのフォルダーの外には到達できません。オフにすると、Web 版と同じインラインプレビューを使います。",
+    "managedDisabled": "管理者のポリシーにより内蔵ブラウザは無効です。リンクはシステムブラウザで開きます。",
+    "profilesTitle": "プロファイル",
+    "profilesHint": "プロファイルごとに Cookie、サイトデータ、ログイン状態を別々に保持します。新しいタブは下で選んだプロファイルで開きます。タブのツールバーから同じページを別のプロファイルで開けます。",
+    "profileDefault": "デフォルト",
+    "profileNewTabsTitle": "新しいタブで使うプロファイル",
+    "profileNamePlaceholder": "プロファイル名（例: 仕事）",
+    "profileNameLabel": "プロファイル名",
+    "profileAdd": "プロファイルを追加",
+    "profileNameRequired": "プロファイル名を入力してください",
+    "profileNameDuplicate": "同じ名前のプロファイルがすでにあります",
+    "profileClear": "{name} の閲覧データを消去",
+    "profileDelete": "プロファイル {name} を削除",
+    "profileDeleteConfirmTitle": "プロファイル {name} を削除しますか？",
+    "profileDeleteConfirmDescription": "そのタブは閉じられ、Cookie、キャッシュ、サイトデータが削除されます。この操作は元に戻せません。",
+    "profileDeleteConfirmAction": "削除",
+    "profileDeleted": "プロファイルを削除しました",
+    "profileDeleteFailed": "プロファイルを削除できませんでした: {message}",
+    "clearConfirmDescriptionProfile": "プロファイル {name} の Cookie、キャッシュ、サイトデータを削除します。開いているタブはそのままですが、各サイトからログアウトされます。",
+    "signInUaTitle": "Google ログインとの互換性",
+    "signInUaHint": "Google は埋め込みブラウザーからのログインを拒否します。オンにすると、タブは Google のログインページ（accounts.google.com）に対してだけ Firefox として名乗ります。それ以外では実際に動いているエンジンとして名乗り、Firefox を名乗ることはありません。埋め込みタブにのみ適用され、別ウィンドウ表示には適用されません。ログインページから別のサイトへリダイレクトされた場合、そのサイトへの最初のリクエストにはログイン時の識別情報が残ります。"
   },
   "LogsSettings": {
     "loading": "読み込み中…",
@@ -4690,12 +5318,7 @@
     "cronApply": "適用",
     "cronPreviewLabel": "プレビュー",
     "cronOpenBuilder": "スケジュールビルダーを開く",
-    "branchDefault": "デフォルトブランチ",
-    "branchUseCustom": "「{query}」を使用",
-    "branchLocal": "ローカル",
-    "branchRemote": "リモート",
-    "branchSearchPlaceholder": "ブランチを検索…",
-    "branchNone": "ブランチがありません"
+    "branchDefault": "デフォルトブランチ"
   },
   "Tasks": {
     "title": "ToDo タスク",
@@ -4804,6 +5427,8 @@
     "errorView": "表示",
     "notifyReview": "レビュー待ち: {title}",
     "notifyFailed": "タスクが失敗しました: {title}",
+    "notifyReviewRedacted": "レビュー待ちのタスクがあります",
+    "notifyFailedRedacted": "タスクが失敗しました",
     "createFromMessage": "このメッセージからタスクを作成",
     "detailTokens": "合計トークン",
     "editorTitleNew": "新規タスク",
@@ -4818,11 +5443,16 @@
     "phaseRetry": "再実行",
     "phaseReturn": "追加指示",
     "phaseMerge": "マージ",
+    "phaseCompact": "コンテキスト圧縮",
     "titleLabel": "タイトル",
     "titlePlaceholder": "何をしますか？",
     "promptLabel": "タスクの説明",
     "promptPlaceholder": "エージェントへの指示を記述 — @ でファイル参照、/ でコマンド",
     "folderPlaceholder": "フォルダを選択",
+    "baseBranch": "ベースブランチ",
+    "baseBranchPlaceholder": "現在のブランチ",
+    "baseBranchDefault": "タスク開始時の現在のブランチ",
+    "baseBranchHint": "タスクはこのブランチから分岐し、マージもこのブランチに戻ります。",
     "agentInheritedHint": "タスク設定から継承 — 変更するとこのタスク専用になります",
     "agentOverrideReset": "継承に戻す",
     "sectionTarget": "ターゲット",
@@ -4848,6 +5478,7 @@
     "mergeDeleteWorktree": "マージ後に worktree を削除",
     "mergeSubmit": "マージ",
     "mergeSubmitQueue": "マージ待ちに追加",
+    "mergeSubmitting": "開始中…",
     "mergeQueuedToast": "マージ待ちに追加しました。実行中のマージが終わり次第開始します。",
     "completeTitle": "タスクを完了",
     "completeDescription": "このタスクはファイルを変更していないため、マージするものはありません。そのまま完了にします。",
@@ -4869,6 +5500,7 @@
     "settingsMaxConcurrentHint": "0 = 無制限",
     "settingsAutoCompact": "自動コンパクトのしきい値",
     "settingsAutoCompactHint": "フォローアップ・再試行・マージの前に、コンテキストウィンドウの使用率がこの値以上ならセッションを圧縮してから送信します。0 で無効。",
+    "compactingNote": "セッションのコンテキストを圧縮中…",
     "settingsCompactCommand": "コンパクトコマンド",
     "settingsCompactCommandHint": "空欄ならエージェントが提供するコマンド（または既知の既定値）を自動で使います。",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -5112,6 +5744,47 @@
     "fieldDescription": "説明",
     "baseInstructions": "システムプロンプト（base_instructions）"
   },
+  "DeepSeekModelEditor": {
+    "title": "モデル一覧",
+    "description": "DeepSeek セッションで切り替えられるモデルです。harness の設定ドキュメントに保存され、エージェントは起動時に読み込みます——保存後に開始されたセッションから反映されます。",
+    "inheritedBadge": "エージェント既定",
+    "inheritedHint": "まだ一覧が保存されていないため、これはエージェント内蔵のモデルです。保存すると固定され、以降のエージェント更新でも自動では変わりません。ファイル：",
+    "storedHint": "harness の設定ドキュメントに保存されています。この一覧の外にあるキーと、その周りのコメントはそのまま残ります。ファイル：",
+    "unreadable": "この設定ドキュメントは、既存の内容を失わずにここから編集することができません。手動で編集してください。",
+    "invalidStored": "保存されているこの一覧はエージェントに拒否されています。直すまでセッションは内蔵モデルで動きます：",
+    "loading": "設定ドキュメントを読み込み中…",
+    "loadFailed": "設定ドキュメントを読み込めませんでした。",
+    "empty": "モデルがありません。追加するか、そのまま保存してエージェント内蔵の一覧に戻してください。",
+    "addModel": "モデルを追加",
+    "remove": "モデルを削除",
+    "advanced": "詳細",
+    "save": "モデル一覧を保存",
+    "saving": "保存中…",
+    "restoreDefaults": "エージェント既定を使う",
+    "fieldId": "モデル id",
+    "fieldName": "表示名",
+    "fieldContextWindow": "コンテキストウィンドウ",
+    "fieldDescription": "説明",
+    "fieldMaxTokens": "最大出力トークン",
+    "fieldAcceptsImages": "画像を受け付ける",
+    "fieldImagePixelBudget": "画像ピクセル上限",
+    "imageBudgetPixels": "ピクセル数",
+    "imageBudgetLow": "低精細（512×512）",
+    "fieldImageMaxBytes": "画像バイト上限",
+    "placeholderId": "deepseek-flash",
+    "placeholderName": "選択時に表示される名前",
+    "placeholderInherit": "エージェント既定",
+    "errorMissingId": "すべてのモデルに id が必要です。",
+    "errorDuplicateId": "「{id}」という id のモデルが 2 つあります。",
+    "errorBadContextWindow": "「{id}」のコンテキストウィンドウは 0 より大きい整数にしてください。",
+    "errorBadMaxTokens": "「{id}」の最大出力トークンは 0 より大きい整数にしてください。",
+    "errorBadImageLimit": "「{id}」の画像上限は 0 より大きい整数にしてください。",
+    "warnSingleModel": "モデルが 1 つだけの場合、エージェントはモデル選択そのものを表示しなくなります。",
+    "warnLaunchModelMissing": "新しいセッションは「{model}」で開始されますが、この一覧にありません。追加するか、上の環境変数で {variable} を設定してください。",
+    "toastSaved": "モデル一覧を保存しました",
+    "toastRestored": "エージェント内蔵のモデル一覧を使用します",
+    "toastSaveFailed": "モデル一覧を保存できませんでした"
+  },
   "DiagnosticsSettings": {
     "title": "環境診断",
     "description": "このアプリが自身のプロセス内でエージェントの CLI をどう解決するかを確認します（ターミナルとは異なる場合があります）。",
@@ -5279,7 +5952,7 @@
     "noRemote": "このフォルダには認識できるリモート（origin）がありません",
     "errors": {
       "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
-      "unsupportedHost": "リポジトリパネルは GitHub と GitLab にのみ対応しており、{host} はそのどちらとしても認識できません。自己ホスト型の GitHub Enterprise または GitLab インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
+      "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
       "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。"
     },
     "addAccount": "アカウントを追加",
@@ -5543,6 +6216,317 @@
     "confirmDeleteCancel": "キャンセル",
     "confirmDeleteConfirm": "削除",
     "canvasActions": "キャンバス操作",
-    "mergeIntoNewRegion": "新しい領域"
+    "mergeIntoNewRegion": "新しい領域",
+    "addFileCard": "ファイルカード",
+    "addTerminalCard": "ターミナルカード",
+    "searchFiles": "ファイルを検索…",
+    "searchFilesIn": "{folder} 内を検索…",
+    "searchingFiles": "検索中…",
+    "noFiles": "ファイルが見つかりません",
+    "noOpenFiles": "開いているファイルはありません — 入力して検索",
+    "browseForFile": "参照…",
+    "filePreview": "プレビュー",
+    "fileSource": "ソース",
+    "reloadFile": "再読み込み",
+    "removeFileCard": "ファイルカードを削除",
+    "restartTerminal": "ターミナルを再起動",
+    "removeTerminalCard": "ターミナルカードを削除",
+    "terminalNoDirectory": "このカードには作業ディレクトリがありません",
+    "confirmDeleteTerminals": "実行中のターミナル {count} 個が閉じられ、そのプロセスも終了します。",
+    "confirmDeleteNotesAndTerminals": "書き込んだメモ {notes} 件が完全に削除され、実行中のターミナル {terminals} 個も終了します。"
+  },
+  "Browser": {
+    "toolbar": {
+      "back": "戻る",
+      "forward": "進む",
+      "reload": "再読み込み",
+      "stop": "停止",
+      "openInSystem": "システムのブラウザで開く",
+      "more": "その他",
+      "copyUrl": "リンクをコピー",
+      "copied": "リンクをコピーしました",
+      "openInspector": "インスペクタを開く",
+      "inspectorFailed": "インスペクタを開けませんでした",
+      "addressPlaceholder": "アドレスを入力",
+      "invalidUrl": "有効なアドレスではありません",
+      "profile": "プロファイル: {name}",
+      "profileMenuLabel": "このページを別のプロファイルで開く",
+      "profileDefault": "デフォルト"
+    },
+    "status": {
+      "popupDenied": "ポップアップをブロックしました: {host}",
+      "popupDeniedNoGesture": "クリックによる操作ではありません",
+      "popupDeniedBlockedScheme": "許可されていないアドレス形式です",
+      "popupOpenAnyway": "それでも開く",
+      "dismiss": "閉じる",
+      "errorDns": "このサイトは見つかりません",
+      "errorTls": "この接続は安全ではありません",
+      "errorBlocked": "内蔵ブラウザではこのアドレスを開けません",
+      "errorPopupDenied": "ポップアップがブロックされました",
+      "errorFailed": "ページを読み込めません",
+      "errorFailedHint": "サイトに接続できませんでした。ネットワークとアドレスを確認してください。プロキシが必要な場合もあります。",
+      "retry": "再試行",
+      "openInSystem": "システムのブラウザで開く",
+      "ownedWindow": "このページは別ウィンドウに表示されています。",
+      "ownedWindowShow": "ウィンドウを表示",
+      "remoteBanner": "{host} 経由で開いています",
+      "remoteBannerDown": "{host} との接続が切れました。次のリクエストで再接続します。",
+      "navigationBlocked": "移動をブロックしました: {host}",
+      "navigationBlockedRule": "サイトルールによりブロック",
+      "navigationBlockedScheme": "この種類のアドレスはここでは開けません",
+      "navigationBlockedOpenSystem": "システムアプリで開く",
+      "errorBlockedHint": "サイトルールがこのアドレスをブロックしています。ルールは「設定 → 内蔵ブラウザ」で管理します。",
+      "popupDeniedBlockedHost": "サイトルールによりブロック",
+      "channelDegraded": "このタブではポップアップがブロックされ、アドレスバーがページに追従しないことがあります",
+      "channelDegradedHint": "codeg がページスクリプトを組み込めませんでした。このページが開くポップアップはブロックされ、アドレスバーはページ内のナビゲーションに追従せず、ページ内で検索ショートカットを押しても検索バーは開きません。タブを開き直すと再試行します。",
+      "downloadsDenied": "ダウンロードをブロックしました: {host}",
+      "downloadsDeniedNoGesture": "複数のファイル、クリックによるものではありません",
+      "agentGrantLost": "共有を終了しました：ページが {origin} を離れました",
+      "agentGrantLostShare": "{origin} も共有",
+      "agentGrantReplaced": "共有を終了しました：現在 {origin} には別のプログラムが応答しています",
+      "agentGrantReplacedShare": "それでも共有",
+      "errorRemoteRefused": "リモートホストのこのアドレスで待ち受けているものはありません",
+      "errorRemoteRefusedHint": "{host} が接続を拒否しました。このアドレスのサーバーがそのマシンで動いているか確認してください。",
+      "errorRemoteUnreachable": "リモートホストからこのアドレスに到達できません",
+      "errorRemoteUnreachableHint": "{host} から見て、この名前は解決できないか、そこへの経路がありません。",
+      "errorRemoteNotAllowed": "リモートサーバーはこのアドレスをブラウザーに開放していません",
+      "errorRemoteNotAllowedHint": "{host} の codeg-server は、ブラウザートンネルからプライベートアドレスへの接続だけを許可しています（CODEG_BROWSER_TUNNEL=private）。",
+      "errorRemoteTimeout": "リモートホストの接続がタイムアウトしました",
+      "errorRemoteTimeoutHint": "{host} はこのアドレスから時間内に応答を得られませんでした。そちらのサーバーが混んでいるか、ファイアウォールの内側にある可能性があります。",
+      "errorTunnelDown": "リモートホストとの接続が切れています",
+      "errorTunnelDownHint": "{host} へのトンネルは現在何も運べません。再び到達できるようになったら再試行してください。"
+    },
+    "tab": {
+      "untitled": "新しいタブ"
+    },
+    "drawer": {
+      "title": "内蔵ブラウザ",
+      "description": "会話から開いたウェブページ",
+      "openInWorkspace": "ワークスペースで開く",
+      "cannotOpen": "このアドレスはここでは開けません。"
+    },
+    "bridge": {
+      "frameTitle": "開発サーバーのプレビュー",
+      "opening": "サーバー経由で接続しています…",
+      "reload": "再読み込み",
+      "openExternal": "新しいタブで開く",
+      "copyAddress": "アドレスをコピー",
+      "copied": "アドレスをコピーしました",
+      "unreachableTitle": "ブリッジポートに到達できません",
+      "unreachableHint": "codeg サーバーはこのページを {origin} で公開していますが、お使いのブラウザから到達できません。そのポートを公開する（CODEG_BRIDGE_PORTS を参照）か CODEG_BRIDGE_PUBLIC_HOST を設定してください。codeg を HTTPS で提供している場合は、ブリッジポートにも HTTPS が必要です。",
+      "unreachableHostHint": "codeg のサーバーはこのページを {origin} に置きましたが、ブラウザから到達できません。そのホスト名が codeg サーバーに解決され、前段のプロキシを通り抜ける必要があります。ワイルドカードの DNS レコードとワイルドカードの vhost を用意してください（CODEG_BRIDGE_HOST_PATTERN を参照）。",
+      "errorTitle": "このページはここに表示できません"
+    },
+    "remote": {
+      "title": "このアドレスは {host} 上にあります",
+      "titleUnnamed": "このアドレスはリモートホスト上にあります",
+      "description": "このアドレスはこのワークスペースが動いているマシンを指しており、このコンピューターではありません。",
+      "copyAddress": "アドレスをコピー",
+      "copied": "アドレスをコピーしました",
+      "tryHost": "{host} を試す",
+      "tryHostHint": "{address} をこのコンピューターのタブで開きます。向こうのページがすべてのネットワークインターフェースで待ち受けていて、このコンピューターからそのポートに届く場合に使えます。",
+      "openHere": "このコンピューターで開く",
+      "openHereHint": "このアドレスをこのコンピューターのタブで開きます。このコンピューターが同じネットワークにある場合に使えます。",
+      "retry": "再試行",
+      "connecting": "{host} 経由で接続しています…",
+      "connectingUnnamed": "リモートホスト経由で接続しています…"
+    },
+    "download": {
+      "started": "ダウンロード中…",
+      "completed": "保存しました",
+      "failed": "失敗しました",
+      "reveal": "フォルダに表示",
+      "dismiss": "閉じる"
+    },
+    "find": {
+      "placeholder": "ページ内を検索",
+      "next": "次を検索",
+      "previous": "前を検索",
+      "noMatches": "一致なし",
+      "close": "閉じる"
+    },
+    "toast": {
+      "firstOpen": "内蔵ブラウザで開きました",
+      "firstOpenHint": "⌘/Ctrl を押しながらリンクをクリックするとシステムのブラウザで開きます。既定は設定で変更できます。",
+      "useSystemAlways": "常にシステムのブラウザを使う",
+      "serviceDetected": "{address} でサーバーが動いています",
+      "serviceDetectedHint": "ターミナルで起動しました。設定 → 内蔵ブラウザで自動的に開くようにできます。",
+      "serviceOpen": "開く",
+      "blockedHost": "サイトルールによりブロック: {host}"
+    },
+    "link": {
+      "openBuiltin": "内蔵ブラウザで開く",
+      "openSystem": "システムのブラウザで開く",
+      "copy": "リンクをコピー"
+    },
+    "doc": {
+      "scriptsOff": "スクリプトを有効にする",
+      "scriptsOn": "スクリプト有効",
+      "scriptsHint": "このドキュメントのスクリプトを実行します。スクリプトは同じフォルダー内のファイルしか読めず、ネットワークにはアクセスできません。その後いずれかのファイルが変更されると、スクリプトは再び無効になります。",
+      "reload": "再読み込み",
+      "more": "その他",
+      "copyPath": "パスをコピー",
+      "useInline": "インラインプレビューを使う",
+      "useGuest": "内蔵ブラウザのプレビューを使う",
+      "unsaved": "未保存の変更は表示されません",
+      "reset": "スクリプトを有効にした後に {file} が変更されました。スクリプトは再び無効になりました。",
+      "enableAgain": "再度有効にする",
+      "dismiss": "閉じる",
+      "externalLink": "{host} へのリンクは開きませんでした",
+      "openLink": "リンクを開く",
+      "downloadRefused": "ドキュメントプレビューではダウンロードできません",
+      "openWithSystem": "システムのアプリで開く",
+      "schemeBlocked": "{url} はここでは開けません",
+      "cannotShow": "このドキュメントを表示できません"
+    },
+    "agent": {
+      "share": "このページをエージェントに共有（{origin}）",
+      "shareLabel": "エージェントに共有",
+      "shareRead": "閲覧のみ",
+      "shareControl": "閲覧と操作",
+      "levelDefault": "既定",
+      "notShareable": "このページには共有できるウェブアドレスがありません",
+      "remoteWindow": "リモートワークスペースのエージェントはそのホスト上で動いており、このコンピューターのブラウザーは使えません",
+      "shared": "共有中",
+      "sharedControl": "共有中 · 操作可",
+      "sharedWith": "エージェントは {origin} を読み取れます",
+      "sharedWithControl": "エージェントは {origin} を読み取り、操作できます",
+      "sharedScope": "ページがこのサイトを離れた時点で共有は終了します。",
+      "sharedScopeProgram": "このポートが {program} から別のプログラムに替わった場合も共有は終了します。",
+      "sharedToast": "エージェントが {origin} を読み取れるようになりました",
+      "sharedControlToast": "エージェントが {origin} を読み取り、操作できるようになりました",
+      "stopSharing": "共有を停止",
+      "allowActions": "このページでの操作を許可",
+      "readOnly": "読み取りのみ",
+      "shareFailed": "このページはエージェントに共有できません",
+      "activity": {
+        "read": {
+          "done": "ページを読み取りました",
+          "refused": "拒否：このページは共有されていません",
+          "failed": "ページを読み取れませんでした"
+        },
+        "click": {
+          "done": "クリックしました",
+          "refused": "クリックを拒否：このページでは操作が許可されていません",
+          "failed": "クリックできませんでした"
+        },
+        "hover": {
+          "done": "ホバーしました",
+          "refused": "ホバーを拒否：このページでは操作が許可されていません",
+          "failed": "ホバーできませんでした"
+        },
+        "type": {
+          "done": "入力欄に入力しました",
+          "refused": "入力を拒否：このページでは操作が許可されていません",
+          "failed": "入力できませんでした"
+        },
+        "press": {
+          "done": "キーを押しました",
+          "refused": "キー入力を拒否：このページでは操作が許可されていません",
+          "failed": "キーを押せませんでした"
+        },
+        "select": {
+          "done": "オプションを選択しました",
+          "refused": "選択を拒否：このページでは操作が許可されていません",
+          "failed": "オプションを選択できませんでした"
+        },
+        "capture": {
+          "done": "スクリーンショットを撮りました",
+          "refused": "スクリーンショットを拒否：このページは共有されていません",
+          "failed": "スクリーンショットを撮れませんでした"
+        },
+        "console": {
+          "done": "コンソールを読み取りました",
+          "refused": "コンソールの読み取りを拒否：このページは共有されていません",
+          "failed": "コンソールを読み取れませんでした"
+        },
+        "eval": {
+          "done": "ページでコードを実行しました",
+          "refused": "このページでのコード実行を拒否しました",
+          "failed": "コードを実行できませんでした"
+        },
+        "open": {
+          "done": "このページを開きました",
+          "refused": "タブを開くのを拒否しました",
+          "failed": "タブを開けませんでした"
+        },
+        "navigate": {
+          "done": "別のアドレスへ移動しました",
+          "refused": "移動を拒否：このページでは操作が許可されていません",
+          "failed": "アドレスを変更できませんでした"
+        },
+        "close": {
+          "done": "このタブを閉じました",
+          "refused": "閉じるのを拒否：このページでは操作が許可されていません",
+          "failed": "このタブを閉じられませんでした"
+        }
+      },
+      "activityCount": "{count} 回",
+      "activityTitle": "このページでのエージェントの操作",
+      "activityLabel": "エージェントの操作履歴：{entry}",
+      "eval": {
+        "title": "{site} でこのコードを実行しますか？",
+        "description": "エージェントがこのページで JavaScript を実行しようとしています。あなたが {site} でできる読み取りと変更は、このコードにもすべてできます。",
+        "descriptionWithTitle": "エージェントが「{title}」で JavaScript を実行しようとしています。あなたが {site} でできる読み取りと変更は、このコードにもすべてできます。",
+        "codeLabel": "実行されるコード",
+        "everyTime": "コードごとに毎回確認します。これを許可しても、次のコードを許可したことにはなりません。確認するかどうかは設定 → 内蔵ブラウザで決まります。",
+        "allow": "1 回だけ実行",
+        "deny": "実行しない"
+      }
+    },
+    "handoff": {
+      "send": "このページをチャットに送る",
+      "sendLabel": "チャットに送る",
+      "noConversation": "送り先の会話を開いてください",
+      "pickElement": "要素を選ぶ…",
+      "screenshot": "スクリーンショットを送る",
+      "markUp": "スクリーンショットに書き込む…",
+      "consoleErrors": "コンソールのエラーを送る",
+      "consoleClean": "このページでエラーは起きていません",
+      "picking": "選択中…",
+      "pickingHint": "ページ上の要素をクリック、または Esc で終了",
+      "pickingCancel": "選択をやめる",
+      "sent": "チャットに追加しました",
+      "failed": "このページを送れませんでした",
+      "noConsoleErrors": "このページはエラーを出力していません",
+      "chipElement": "ページ要素",
+      "chipScreenshot": "ページのスクリーンショット",
+      "chipMarkedScreenshot": "書き込み入りのスクリーンショット",
+      "chipConsole": "{count, plural, other {コンソールエラー # 件}}",
+      "gone": "その会話はもう開いていません",
+      "consoleErrorsCount": "{count, plural, other {コンソールのエラー # 件を送る}}",
+      "markupTitle": "スクリーンショットに書き込む",
+      "markupTools": "描画ツール",
+      "markupBox": "枠",
+      "markupArrow": "矢印",
+      "markupUndo": "元に戻す",
+      "markupClear": "消去",
+      "markupHint": "画像の上をドラッグして描きます。マークには番号が付くので、メッセージではその番号で指し示せます。",
+      "markupCount": "{count, plural, other {マーク # 個}}",
+      "markupCancel": "キャンセル",
+      "markupSend": "チャットに追加"
+    }
+  },
+  "browser": {
+    "agent": {
+      "error": {
+        "grantRequired": "このタブはエージェントと共有されていません。共有すると、エージェントがページを読み取れるようになります。"
+      }
+    },
+    "inspector": {
+      "error": {
+        "switchedOff": "このタブは Web インスペクタがオフの状態で開かれました。ブラウザ設定でオンにしてから、ページを開き直してください。"
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "リモートホストのアドレスを内蔵ブラウザで開くには macOS 14 以降が必要です。",
+        "unsupported": "リモートの codeg-server が古く、ブラウザーの通信を中継できません。ここでアドレスを開くには更新してください。",
+        "disabled": "リモートの codeg-server でブラウザートンネルがオフになっています（CODEG_BROWSER_TUNNEL）。",
+        "unreachable": "リモートの codeg-server のブラウザートンネルに接続できませんでした（{reason}）。",
+        "bypassed": "このコンピューターのブラウザーエンジンは一部のアドレスをトンネルを通さずに送るため、このコンピューターから読み込まないよう、リモートホストのページは開きません。",
+        "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
+      }
+    }
   }
 }

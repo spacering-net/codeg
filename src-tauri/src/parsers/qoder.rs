@@ -8,7 +8,8 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageRole, UnifiedMessage,
+    AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageRole, TurnUsage,
+    UnifiedMessage,
 };
 use crate::parsers::claude::{
     capture_title_record, extract_assistant_content, extract_usage, extract_user_content,
@@ -19,7 +20,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, latest_turn_prompt_usage_tokens, merge_context_window_stats,
     relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, AgentParser, ParseError,
+    title_from_user_text, with_reported_context_percent, AgentParser, ParseError,
 };
 
 /// Resolve Qoder's global config dir the way Qoder itself does.
@@ -44,11 +45,12 @@ use crate::parsers::{
 /// bare SUFFIXES, never the minified identifiers: they are renamed on most
 /// releases (`$t`/`b8A`/`L8A`/`H8A` at 1.1.23 became `ln`/`I1A`/`h1A`/`Q1A` at
 /// 1.1.28, then `on`/`F4A`/`U4A`/`N4A` at 1.1.31, then `Yi`/`JJA`/`YJA`/`WJA`
-/// at 1.1.33, then `Zn`/`MYA`/`FYA`/`UYA` at 1.1.40, which 1.1.41 happens to
-/// keep), so a grep written against the old names returns zero hits and reads
-/// as "the resolver is gone" when nothing moved. `GEMINI_CLI_HOME` really is a
+/// at 1.1.33, then `Zn`/`MYA`/`FYA`/`UYA` at 1.1.40–1.1.41, then
+/// `qn`/`A7A`/`t7A`/`n7A` at 1.1.44, then `Ai`/`d7A`/`g7A`/`f7A` at 1.1.45),
+/// so a grep written against the old names returns zero hits and reads as
+/// "the resolver is gone" when nothing moved. `GEMINI_CLI_HOME` really is a
 /// second key on the home lookup: qodercli carries its ancestry.
-/// Re-checked against the pinned 1.1.41 bundle: same precedence, same keys,
+/// Re-checked against the pinned 1.1.45 bundle: same precedence, same keys,
 /// same `.qoder` config-dir name.)
 ///
 /// Not mirrored, deliberately: the `--config-dir` FLAG, which codeg never
@@ -205,6 +207,129 @@ struct Transcript {
     reported_prompt_tokens: Option<u64>,
     /// Context window Qoder itself reported (`runtime-config.contextWindow`).
     reported_context_window: Option<u64>,
+    /// Occupancy from the newest response that stated one, if any.
+    reported_context: Option<ReportedContext>,
+}
+
+/// Qoder's own context-occupancy report, attached to every response's `usage`
+/// as `context_usage_ratio`.
+///
+/// Worth reading even though the same object carries token counters, because
+/// for Qoder's hosted models those counters are REDACTED to zero before they
+/// reach the transcript (the ratio is computed from the real figures first and
+/// copied onto the redacted usage, so it survives — see
+/// `acp::registry`'s `QODER_EXPOSE_TOKEN_USAGE` note). For a session recorded
+/// without that env this is the only occupancy signal in the file.
+///
+/// It also names the window, which nothing else here does: `token-stats` gives
+/// prompt tokens only, `runtime-config.contextWindow` is null even when Qoder
+/// writes the record, and the model ids are account-internal keys that
+/// [`infer_context_window_max_tokens`] cannot match.
+#[derive(Debug, Clone, Copy)]
+struct ReportedContext {
+    /// `0.0..=1.0`, as Qoder clamps it.
+    ratio: f64,
+    /// Raw `input_tokens` from the SAME usage object, i.e. the numerator of
+    /// Qoder's own `min(1, max(0, input_tokens / window))`. Zero when the
+    /// counters were redacted.
+    ///
+    /// This is the WHOLE prompt, cached prefix included (see
+    /// [`qoder_turn_usage`]), so after that normalization it equals the turn's
+    /// [`latest_turn_prompt_usage_tokens`] — which is what keeps the gauge's
+    /// percentage and its used/max pair from contradicting each other.
+    input_tokens: u64,
+}
+
+impl ReportedContext {
+    fn percent(self) -> f64 {
+        self.ratio * 100.0
+    }
+
+    /// The model's context window, recovered by inverting Qoder's own formula.
+    ///
+    /// Exact in practice — the ratio is written as a full-precision float, so
+    /// the division lands on the integer (verified against a live transcript:
+    /// `0.015572222222222222 × 180000 = 2803`, and `2803 / ratio` rounds back
+    /// to 180000).
+    ///
+    /// `None` unless the inversion is trustworthy. A redacted (zero) numerator
+    /// carries no information, and a ratio Qoder clamped to 1.0 means "full or
+    /// overflowing", where the quotient is the occupancy rather than the
+    /// window. Both would otherwise invent a number and show it as fact.
+    fn window(self) -> Option<u64> {
+        if self.input_tokens == 0 || self.ratio <= 0.0 || self.ratio >= 1.0 {
+            return None;
+        }
+        let window = (self.input_tokens as f64 / self.ratio).round();
+        if !window.is_finite() || window < self.input_tokens as f64 {
+            return None;
+        }
+        // Past 2^53 an f64 no longer holds every integer, and past `u64::MAX`
+        // the cast below SATURATES rather than failing — so a preposterous
+        // ratio (1 token at 5e-20) would otherwise be reported as a real
+        // window instead of no window at all. 2^53 is the boundary where the
+        // arithmetic itself stops being exact, which is the honest place to
+        // stop trusting it; every real context window is nine orders of
+        // magnitude below it.
+        const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_992.0; // 2^53
+        if window > MAX_EXACT_INTEGER {
+            return None;
+        }
+        Some(window as u64)
+    }
+}
+
+/// Qoder's `usage` as ANTHROPIC-shaped counters.
+///
+/// The field NAMES are Anthropic's, but the semantics behind them are OpenAI's
+/// — Qoder's own `model_config` says `"format":"openai"`, and its gateway fills
+/// `input_tokens` with the whole prompt, of which `cache_read_input_tokens` is
+/// a SUBSET rather than a second helping. Summing the two (which every shared
+/// helper does, because for Claude they really are disjoint) counts the cached
+/// prefix twice: a real session measured 20513 input / 18871 cache-read, so the
+/// gauge read 39384 against a 200000 window — 19.7% — while Qoder itself
+/// reported 10.26% for the same turn.
+///
+/// Splitting the cached part out restores the invariant the rest of the
+/// pipeline assumes, and makes `input + cache_read + cache_creation` come back
+/// out as the original `input_tokens` — the exact numerator of
+/// [`ReportedContext`]'s ratio, so the percentage and the used/max pair agree
+/// by construction.
+///
+/// Same correction `parsers::codex::codex_usage_counters` applies for the same
+/// reason. Deliberately NOT a `FACT_SCHEMA_VERSION` bump: the only transcripts
+/// that can carry non-zero counters are ones recorded with the launch env this
+/// release also introduces, so there are no stored rows computed the old way to
+/// rebuild.
+fn qoder_turn_usage(value: &Value) -> Option<TurnUsage> {
+    let mut usage = extract_usage(value)?;
+    let cached = usage
+        .cache_read_input_tokens
+        .saturating_add(usage.cache_creation_input_tokens);
+    // `saturating_sub` rather than an assertion: a payload where the cached
+    // part exceeds the prompt is nonsense, and clamping to zero degrades to
+    // "the prompt was entirely cache" instead of wrapping to ~1.8e19.
+    usage.input_tokens = usage.input_tokens.saturating_sub(cached);
+    Some(usage)
+}
+
+/// Read `message.usage.context_usage_ratio` off an assistant record.
+///
+/// Absent on every record Qoder wrote before it started reporting one, and on
+/// responses that never reached the model, so a missing field is ordinary.
+fn extract_reported_context(value: &Value) -> Option<ReportedContext> {
+    let usage = value.get("message")?.get("usage")?;
+    let ratio = usage.get("context_usage_ratio").and_then(Value::as_f64)?;
+    if !ratio.is_finite() || ratio < 0.0 {
+        return None;
+    }
+    Some(ReportedContext {
+        ratio: ratio.min(1.0),
+        input_tokens: usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
 }
 
 impl Transcript {
@@ -557,6 +682,10 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
     let mut first_prompt_title: Option<String> = None;
     let mut first_ts: Option<DateTime<Utc>> = None;
     let mut last_ts: Option<DateTime<Utc>> = None;
+    // Newest wins, and only over the ACTIVE branch: occupancy is a statement
+    // about the context the next prompt will carry, so a figure left behind by
+    // a rewound branch describes history that no longer exists.
+    let mut reported_context: Option<ReportedContext> = None;
 
     for index in active_branch(&records) {
         let value = &records[index];
@@ -668,9 +797,18 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                     &mut messages,
                     &mut usage_owner_by_message_id,
                     message_id.as_deref(),
-                    extract_usage(value),
+                    qoder_turn_usage(value),
                     owner_index,
                 );
+                // Read off the RAW record rather than the claimed usage: the
+                // claim exists to stop one response's counters being added up
+                // once per fragment, but occupancy is a level, not a sum, and
+                // every fragment repeats the same one. Taking it here keeps the
+                // figure even when the claim handed the usage to an earlier
+                // bubble.
+                if let Some(reported) = extract_reported_context(value) {
+                    reported_context = Some(reported);
+                }
 
                 if merges_into_pending {
                     let last = messages.last_mut().expect("checked non-empty");
@@ -720,6 +858,7 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
         last_ts,
         reported_prompt_tokens,
         reported_context_window,
+        reported_context,
     }
 }
 
@@ -870,11 +1009,23 @@ fn parse_detail(path: &Path, conversation_id: &str) -> Result<ConversationDetail
     let used_tokens = transcript
         .reported_prompt_tokens
         .or_else(|| latest_turn_prompt_usage_tokens(&turns));
+    // An explicit `runtime-config.contextWindow` first; then the window
+    // inverted out of Qoder's own occupancy ratio, which beats the id-prefix
+    // table because it is this account's actual limit for this model rather
+    // than a family default — and because the ids are internal keys
+    // (`qfmodel`) that the table cannot match at all.
     let max_tokens = transcript
         .reported_context_window
+        .or_else(|| transcript.reported_context.and_then(ReportedContext::window))
         .or_else(|| infer_context_window_max_tokens(transcript.model.as_deref()));
-    let session_stats =
-        merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens);
+    // The stated occupancy goes on LAST, over whatever the used/max division
+    // produced: for a session recorded before `QODER_EXPOSE_TOKEN_USAGE` there
+    // is no division to do, and where there is, Qoder's figure is the original
+    // and the division is a round-trip through a rounded window.
+    let session_stats = with_reported_context_percent(
+        merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens),
+        transcript.reported_context.map(ReportedContext::percent),
+    );
 
     Ok(ConversationDetail {
         summary: ConversationSummary {
@@ -1077,8 +1228,13 @@ mod tests {
         assert_eq!(charged, vec![2], "one claim per message.id");
         // Prompt occupancy excludes `output_tokens`, and the window comes from
         // `runtime-config` (no heuristic can size `qmodel_38max`).
+        //
+        // 10, not 15: the fixture's `input_tokens: 10` already CONTAINS its
+        // `cache_read_input_tokens: 5` (Qoder's counters are OpenAI-shaped —
+        // see `qoder_turn_usage`), so the prompt is ten tokens of which five
+        // came from cache, not fifteen.
         let stats = detail.session_stats.expect("session stats");
-        assert_eq!(stats.context_window_used_tokens, Some(15));
+        assert_eq!(stats.context_window_used_tokens, Some(10));
         assert_eq!(stats.context_window_max_tokens, Some(262_144));
     }
 
@@ -1555,5 +1711,226 @@ mod tests {
         let s = detail.session_stats.expect("session stats");
         assert_eq!(s.context_window_used_tokens, Some(4242));
         assert_eq!(s.context_window_max_tokens, Some(262_144));
+    }
+
+    // Byte-for-byte usage shapes from a real `entrypoint:"acp"` transcript.
+    // REDACTED is what Qoder writes for its own hosted models with no
+    // `QODER_EXPOSE_TOKEN_USAGE`: every counter zeroed, the ratio intact.
+    // EXPOSED is the same response with the env set.
+    fn answer_with_usage(uuid: &str, parent: &str, usage: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"2026-09-19T10:51:07.266Z","message":{{"id":"chatcmpl-{uuid}","type":"message","role":"assistant","model":"qfmodel","stop_reason":"end_turn","content":[{{"type":"text","text":"ok","citations":null}}],"usage":{usage}}},"parentUuid":"{parent}","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"unknown"}}"#
+        )
+    }
+
+    const REDACTED: &str = r#"{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"credits":0.269,"billable":false,"context_usage_ratio":0.16721666666666668}"#;
+    const EXPOSED: &str = r#"{"input_tokens":2803,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":19,"credits":0.025,"billable":false,"context_usage_ratio":0.015572222222222222}"#;
+
+    // The whole point of reading the ratio: these sessions have NO token
+    // counters at all, so the gauge used to have nothing to draw and sat dark
+    // at "0" forever.
+    #[test]
+    fn redacted_usage_still_yields_a_context_percentage() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, &answer_with_usage("a9", "u1", REDACTED)],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 16.721_666_666_666_668).abs() < 1e-9, "{percent}");
+        // Nothing to divide and nothing to invert, so neither figure is
+        // invented — the gauge shows a percentage with no "x / y".
+        assert_eq!(s.context_window_used_tokens, None);
+        assert_eq!(s.context_window_max_tokens, None);
+    }
+
+    // With the counters present the ratio also names the window, which no
+    // record in the file states and `qfmodel` matches no entry in the
+    // id-prefix table.
+    #[test]
+    fn exposed_usage_inverts_the_ratio_into_the_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, &answer_with_usage("a9", "u1", EXPOSED)],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        assert_eq!(s.context_window_used_tokens, Some(2803));
+        assert_eq!(s.context_window_max_tokens, Some(180_000));
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+    }
+
+    // Occupancy is a level, not a sum: the newest response describes the
+    // context the next prompt will carry.
+    #[test]
+    fn the_newest_reported_ratio_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(
+            tmp.path(),
+            "s1",
+            &[
+                USER_LINE,
+                &answer_with_usage("a8", "u1", REDACTED),
+                &answer_with_usage("a9", "a8", EXPOSED),
+            ],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+    }
+
+    // A rewound branch describes a context that no longer exists. `a8` stays in
+    // the file forever; the active leaf says `a9` is the live tail.
+    #[test]
+    fn a_rewound_branch_does_not_supply_the_ratio() {
+        let tmp = tempfile::tempdir().unwrap();
+        let leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"a9","explicit":true,"rewound":true,"timestamp":1789815619554}"#;
+        write_session(
+            tmp.path(),
+            "s1",
+            &[
+                USER_LINE,
+                &answer_with_usage("a9", "u1", EXPOSED),
+                &answer_with_usage("a8", "u1", REDACTED),
+                leaf,
+            ],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        assert_eq!(s.context_window_max_tokens, Some(180_000));
+    }
+
+    // An explicit `runtime-config.contextWindow` is Qoder stating the window
+    // outright; the inversion is a derivation and must not displace it.
+    #[test]
+    fn runtime_config_window_beats_the_inverted_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(
+            tmp.path(),
+            "s1",
+            &[
+                RUNTIME_CONFIG,
+                USER_LINE,
+                &answer_with_usage("a9", "u1", EXPOSED),
+            ],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        assert_eq!(s.context_window_max_tokens, Some(262_144));
+        // ...but the percentage is still Qoder's own, not 2803/262144.
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+    }
+
+    // A ratio Qoder clamped to 1.0 means "full or overflowing"; inverting it
+    // would report the occupancy AS the window and draw a gauge that can never
+    // move.
+    #[test]
+    fn a_saturated_ratio_names_no_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let full = r#"{"input_tokens":190000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5,"context_usage_ratio":1}"#;
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, &answer_with_usage("a9", "u1", full)],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        assert_eq!(s.context_window_max_tokens, None);
+        assert_eq!(s.context_window_usage_percent, Some(100.0));
+    }
+
+    // The gauge's three figures must agree. Qoder's `input_tokens` already
+    // CONTAINS its cache counters, so before the split the occupancy read
+    // `2803 + 900 + 100 = 3803` against a 180000 window (2.11%) while Qoder
+    // reported 1.56% for the same turn — a gauge contradicting its own caption.
+    // Measured on a real session at 20513 input / 18871 cache-read, where the
+    // error was nearly 2x.
+    #[test]
+    fn the_gauge_does_not_count_the_cached_prefix_twice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cached = r#"{"input_tokens":2803,"cache_creation_input_tokens":100,"cache_read_input_tokens":900,"output_tokens":19,"context_usage_ratio":0.015572222222222222}"#;
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, &answer_with_usage("a9", "u1", cached)],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        assert_eq!(s.context_window_max_tokens, Some(180_000));
+        // The whole prompt, cached part included exactly once — and therefore
+        // the very numerator Qoder divided to get its ratio.
+        assert_eq!(s.context_window_used_tokens, Some(2803));
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        // The stated percentage and the used/max pair now tell the same story.
+        let recomputed = 2803.0 / 180_000.0 * 100.0;
+        assert!((percent - recomputed).abs() < 1e-6, "{percent} vs {recomputed}");
+
+        // The split is a re-labelling, not a deduction: the turn's own counters
+        // still add back up to the prompt Qoder charged for.
+        let usage = detail.turns[1].usage.as_ref().expect("usage");
+        assert_eq!(usage.input_tokens, 1803);
+        assert_eq!(usage.cache_read_input_tokens, 900);
+        assert_eq!(usage.cache_creation_input_tokens, 100);
+        assert_eq!(
+            usage.input_tokens
+                + usage.cache_read_input_tokens
+                + usage.cache_creation_input_tokens,
+            2803
+        );
+    }
+
+    // A ratio small enough to blow the quotient past what an f64 holds exactly
+    // must yield NO window: `as u64` saturates instead of failing, so the
+    // alternative is reporting `u64::MAX` as this model's context window.
+    #[test]
+    fn an_absurd_ratio_names_no_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let absurd = r#"{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1,"context_usage_ratio":5e-20}"#;
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, &answer_with_usage("a9", "u1", absurd)],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        assert_eq!(s.context_window_max_tokens, None);
+        // The occupancy it stated is still its own statement, and still shown.
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - 5e-18).abs() < 1e-24, "{percent}");
+    }
+
+    // A transcript that states no ratio still gets a gauge, the old way: the
+    // window from `runtime-config` and the occupancy reconstructed from the
+    // counters (10 = the fixture's cache-inclusive `input_tokens`, not 10+5).
+    #[test]
+    fn a_transcript_without_a_ratio_falls_back_to_the_counters() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(tmp.path(), "s1", &[RUNTIME_CONFIG, USER_LINE, ANSWER_LINE]);
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let s = detail.session_stats.expect("session stats");
+        assert_eq!(s.context_window_used_tokens, Some(10));
+        assert_eq!(s.context_window_max_tokens, Some(262_144));
+        let percent = s.context_window_usage_percent.expect("percent");
+        assert!((percent - (10.0 / 262_144.0) * 100.0).abs() < 1e-9, "{percent}");
     }
 }

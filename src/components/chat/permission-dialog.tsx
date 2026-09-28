@@ -24,10 +24,19 @@ import {
   type PermissionChangeScope,
   type PermissionOptionChange,
 } from "@/lib/permission-request"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
+import type { AgentType } from "@/lib/types"
 
 interface PermissionDialogProps {
   permission: PendingPermission | null
   onRespond: (requestId: string, optionId: string) => void
+  /**
+   * Which agent asked. Only used to localise option labels an agent hardcodes
+   * in one language (`deepseek-acp` ships Simplified Chinese with no locale
+   * switch); optional so a caller with no agent in scope keeps today's verbatim
+   * rendering.
+   */
+  agentType?: AgentType | null
 }
 
 function formatKindLabel(kind: string, fallbackLabel: string): string {
@@ -52,11 +61,19 @@ const CHANGE_SCOPE_LABEL_KEYS = {
 export function PermissionDialog({
   permission,
   onRespond,
+  agentType,
 }: PermissionDialogProps) {
   const t = useTranslations("Folder.chat.permissionDialog")
+  const vocabulary = useAgentVocabulary(agentType)
   const parsed = useMemo(
     () => parsePermissionToolCall(permission?.tool_call),
     [permission?.tool_call]
+  )
+  // Both the grant list and the buttons below read this, so the two never
+  // disagree about what an option is called.
+  const options = useMemo(
+    () => vocabulary.permissionOptions(permission?.options ?? []),
+    [permission?.options, vocabulary]
   )
   // What each option would actually grant, keyed by option id. Empty for every
   // agent that ships no option-level `_meta.permission` — which, on the pinned
@@ -111,7 +128,9 @@ export function PermissionDialog({
                 0.63–0.72 `_meta.claudeCode.title`, else `_meta.permission.title`
                 — codex ≥1.7.0 and claude ≥0.73.0, whose permission tool calls
                 carry no `claudeCode` block at all) over the raw title (the
-                shell command, which the command block below already shows). */}
+                shell command, which the command block below already shows).
+                `parsePermissionToolCall` also drops a description that IS that
+                command, which is what claude-agent-acp ≥0.79.0 puts there. */}
             <span className="truncate">
               {parsed.description ?? parsed.title}
             </span>
@@ -271,7 +290,7 @@ export function PermissionDialog({
               <span>{t("optionGrants")}</span>
             </div>
             <div className="space-y-2 rounded-md bg-muted/40 p-2">
-              {permission.options.map((opt) => {
+              {options.map((opt) => {
                 const changes = optionChanges[opt.option_id] ?? []
                 if (changes.length === 0) return null
                 return (
@@ -324,13 +343,20 @@ export function PermissionDialog({
         )}
       </div>
 
+      {/* `_meta.permission.defaultToNo` (claude-agent-acp ≥0.77.0) marks an ask
+          that "must not be approvable by a stray keystroke". codeg pre-selects
+          nothing and binds no key, and the adapter already sends the reject
+          options first — so all that is left is the emphasis, which today puts
+          the single filled button on "Allow". Inverting it keeps every option
+          one click away while making the decline the one the eye lands on. */}
       <div className="mt-3 flex flex-wrap gap-2">
-        {permission.options.map((opt) => {
+        {options.map((opt) => {
           const isReject = opt.kind.startsWith("reject")
+          const emphasized = parsed.defaultToNo ? isReject : !isReject
           return (
             <Button
               key={opt.option_id}
-              variant={isReject ? "outline" : "default"}
+              variant={emphasized ? "default" : "outline"}
               className="h-auto min-h-9 whitespace-normal break-words text-left"
               onClick={() => onRespond(permission.request_id, opt.option_id)}
             >

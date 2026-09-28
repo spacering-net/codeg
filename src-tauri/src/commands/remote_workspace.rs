@@ -135,12 +135,16 @@ pub async fn create_remote_workspace_connection(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn update_remote_workspace_connection(
+    app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     id: i32,
     input: RemoteWorkspaceConnectionInput,
 ) -> Result<RemoteWorkspaceConnectionInfo, AppCommandError> {
     validate_remote_health(&input.base_url, &input.token, &input.headers).await?;
-    remote_workspace_connection_service::update(
+    let before = remote_workspace_connection_service::get(&db.conn, id)
+        .await
+        .map_err(AppCommandError::db)?;
+    let updated = remote_workspace_connection_service::update(
         &db.conn,
         id,
         &input.name,
@@ -148,18 +152,36 @@ pub async fn update_remote_workspace_connection(
         &input.token,
         &input.headers,
     )
-    .await
+    .await?;
+    // The built-in browser's tunnel follows the connection to where it now
+    // points, rather than staying on the old address until it drops. A
+    // rename leaves it be: closing it would cut every live stream of the
+    // connection's tabs (a dev server's reload socket among them).
+    let moved = before.is_none_or(|before| {
+        before.base_url != updated.base_url
+            || before.token != updated.token
+            || before.headers != updated.headers
+    });
+    if moved {
+        crate::browser::remote::connection_changed(&app, id).await;
+    }
+    Ok(updated)
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn delete_remote_workspace_connection(
+    app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     id: i32,
 ) -> Result<(), AppCommandError> {
     remote_workspace_connection_service::delete(&db.conn, id)
         .await
-        .map_err(AppCommandError::db)
+        .map_err(AppCommandError::db)?;
+    // What the remote host's pages stored in the built-in browser goes with
+    // the connection they were opened through.
+    crate::browser::remote::forget_connection(&app, id).await;
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]

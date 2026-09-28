@@ -31,6 +31,17 @@ pub struct ExternalSource {
     /// Live source path (a directory, or a single file when `is_file`).
     pub root: PathBuf,
     pub is_file: bool,
+    /// This source's `.db` files are SQLite databases owned by the agent CLI.
+    ///
+    /// Backup then snapshots each one with a read-only page copy — never
+    /// `VACUUM` (it renumbers implicit rowids, and we cannot audit a
+    /// third-party schema for tables that treat rowid as a key) and never a
+    /// read-write open (that runs WAL recovery inside someone else's live
+    /// store). Exactly one self-contained file per database enters the
+    /// archive, never a `-wal`/`-shm`; restore deletes the live sidecars
+    /// before the rename so a stale WAL can never be replayed onto a database
+    /// it does not belong to. See `commands::backup::external`.
+    pub sqlite: bool,
     /// When `Some`, only entries whose first path component (relative to
     /// `root`) is in this allowlist are archived. Used to keep the backup to
     /// transcript/session data and exclude sibling credential/config/cache
@@ -63,12 +74,14 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "claude",
             root: claude::resolve_claude_config_dir().join("projects"),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
             agent: "codex",
             root: codex::resolve_codex_home_dir().join("sessions"),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
@@ -77,30 +90,43 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "gemini",
             root: gemini::resolve_gemini_base_dir(),
             is_file: false,
+            sqlite: false,
             include_top: Some(&["tmp", "history", "projects.json"]),
         },
         ExternalSource {
+            // cline 3.x keeps transcripts in `sessions/` and indexes them in
+            // the live SQLite store `db/sessions.db`; `state/` + `tasks/` are
+            // the pre-3.x layout, still read by the parser. Everything else
+            // under the same base dir is credentials and machine state —
+            // `secrets.json`, `settings/`, `cache/`, `locks/` — so the
+            // allowlist is what keeps a backup from carrying API keys.
+            //
+            // `sqlite: true` because of `db/`: archiving a live store as plain
+            // files would pack its main file next to a `-wal` written at
+            // another moment, which is a corrupt store on restore.
             agent: "cline",
             root: cline::cline_data_dir(),
             is_file: false,
-            include_top: None,
+            sqlite: true,
+            include_top: Some(&["sessions", "db", "state", "tasks"]),
         },
         ExternalSource {
             agent: "opencode",
             root: opencode::resolve_opencode_base_dir().join("opencode.db"),
             is_file: true,
+            sqlite: true,
             include_top: None,
         },
         ExternalSource {
             // Hermes self-manages its session store at `~/.hermes/state.db`.
-            // WAL caveat: `is_file` archives only the main DB file, not the
-            // `-wal`/`-shm` sidecars, so a cold backup taken mid-write can miss
-            // the newest un-checkpointed frames (same known limitation as
-            // OpenCode). This does NOT affect live reads — the parser's `mode=ro`
-            // connection sees committed WAL frames.
+            // `sqlite: true` is what makes the backup carry the frames that
+            // only exist in the WAL: the store is page-copied through a
+            // read-only connection into one self-contained archive entry,
+            // rather than the raw main file being copied and its WAL dropped.
             agent: "hermes",
             root: hermes::resolve_hermes_home_dir().join("state.db"),
             is_file: true,
+            sqlite: true,
             include_top: None,
         },
         ExternalSource {
@@ -110,6 +136,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "codebuddy",
             root: codebuddy::resolve_codebuddy_config_dir().join("projects"),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
@@ -121,6 +148,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "kimi-code",
             root: kimi_code::resolve_kimi_code_home_dir(),
             is_file: false,
+            sqlite: false,
             include_top: Some(&["sessions", "session_index.jsonl"]),
         },
         ExternalSource {
@@ -132,6 +160,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "grok",
             root: grok::resolve_grok_home_dir().join("sessions"),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
@@ -144,6 +173,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "cursor",
             root: cursor::resolve_cursor_config_dir(),
             is_file: false,
+            sqlite: true,
             include_top: Some(&["chats", "acp-sessions"]),
         },
         ExternalSource {
@@ -155,6 +185,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "pi",
             root: pi::resolve_pi_sessions_dir(),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
@@ -166,6 +197,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "deepseek",
             root: deepseek::resolve_deepseek_sessions_root(),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
@@ -192,6 +224,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "deepseek-attachments",
             root: deepseek::resolve_deepseek_attachments_root(),
             is_file: false,
+            sqlite: false,
             include_top: Some(&["objects"]),
         },
         ExternalSource {
@@ -203,6 +236,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "qoder",
             root: qoder::resolve_qoder_config_dir().join("projects"),
             is_file: false,
+            sqlite: false,
             include_top: None,
         },
         ExternalSource {
@@ -215,6 +249,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "antigravity",
             root: antigravity::resolve_antigravity_sessions_dir(),
             is_file: false,
+            sqlite: true,
             include_top: None,
         },
     ];
@@ -223,6 +258,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "openclaw",
             root: home.join(".openclaw").join("agents"),
             is_file: false,
+            sqlite: false,
             include_top: None,
         });
     }
@@ -641,6 +677,38 @@ pub fn title_from_user_text(text: &str) -> String {
     truncate_str(&fold_reference_links(text), 100)
 }
 
+/// Widen one projected prompt block into a rendered turn's block type.
+///
+/// The projection itself is [`crate::acp::types::project_user_prompt_block`] —
+/// the SINGLE rule shared with the live broadcast. This only carries the result
+/// across into `models::message`, keeping the image `uri` that the live wire
+/// type has nowhere to put but the frontend uses for an image's display name.
+pub fn user_turn_block(block: &crate::acp::types::PromptInputBlock) -> ContentBlock {
+    match crate::acp::types::project_user_prompt_block(block) {
+        crate::acp::types::UserTurnBlock::Text { text } => ContentBlock::Text { text },
+        crate::acp::types::UserTurnBlock::Image {
+            data,
+            mime_type,
+            uri,
+        } => ContentBlock::Image {
+            data,
+            mime_type,
+            uri,
+        },
+    }
+}
+
+/// Read one recorded ACP content block off disk and project it the way the
+/// live path projects the same prompt. `None` when the block has nothing to
+/// render — see [`crate::acp::types::prompt_block_from_wire`].
+///
+/// Every history parser that reconstructs a user turn from raw ACP content
+/// goes through here, so "how an attachment appears in a user message" is
+/// decided once rather than per agent.
+pub fn user_turn_block_from_wire(item: &serde_json::Value) -> Option<ContentBlock> {
+    crate::acp::types::prompt_block_from_wire(item).map(|b| user_turn_block(&b))
+}
+
 /// Fill in `duration_ms` for assistant turns whose agent reports no timing of
 /// its own, by *tiling* the conversation timeline: a reply took as long as the
 /// span between the end of the previous activity and its own completion.
@@ -827,10 +895,29 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         }
         return Some(200_000);
     }
+    // gemini-cli's own `tokenLimit()` (packages/core/src/core/tokenLimits.ts,
+    // 0.60.0): 1 << 20 for every Gemini model, a separate 256K bucket for the
+    // Gemma family. The round 1_000_000 that used to sit here reported the
+    // gauge ~4.9% high.
     if normalized.starts_with("gemini") {
-        return Some(1_000_000);
+        return Some(1_048_576);
+    }
+    if normalized.starts_with("gemma") {
+        return Some(256_000);
     }
     if normalized.starts_with("kimi") {
+        // The k3 family is the 1M lane; k2.x and everything older is 256K.
+        // Source of truth is the models.dev catalog kimi-code bundles itself
+        // (`app/kosongConfig/builtInModelsDev.ts`): under Moonshot's own
+        // `moonshotai` provider, `kimi-k3` is 1048576 while `kimi-k2.6` /
+        // `kimi-k2.7-code` / `kimi-k2.7-code-highspeed` are all 262144, and
+        // across every third-party provider in that catalog the `kimi-k3*` ids
+        // cluster on 1048576 (a handful round it to 1000000). Only the HISTORY
+        // gauge lands here — a live Kimi session gets the real window from the
+        // agent's own `usage_update {used, size}` frame.
+        if normalized.starts_with("kimi-k3") {
+            return Some(1_048_576);
+        }
         return Some(262_144);
     }
     if normalized.starts_with("grok") {
@@ -875,7 +962,13 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         "gpt-4" => Some(8_192),
         "o3" | "o3-mini" | "o1" => Some(200_000),
         _ => {
-            if normalized.starts_with("gpt-5") {
+            // 258K is the *effective* window OpenAI's own catalog advertises for
+            // this whole generation: `context_window: 272000` with
+            // `effective_context_window_percent: 95`. gpt-6 shares that profile
+            // byte for byte (see `resources/codex/bundled-catalog.json`), so it
+            // rides the same lane rather than falling through to `None` and
+            // leaving those sessions with no context meter at all.
+            if normalized.starts_with("gpt-5") || normalized.starts_with("gpt-6") {
                 Some(258_000)
             } else if normalized.starts_with("gpt-4o")
                 || normalized.starts_with("gpt-4.1")
@@ -953,6 +1046,44 @@ pub fn merge_context_window_stats(
             context_window_used_tokens: used_tokens,
             context_window_max_tokens: max_tokens,
             context_window_usage_percent: usage_percent,
+        }),
+    }
+}
+
+/// Stamp a context-window occupancy the AGENT stated directly, overriding
+/// whatever [`merge_context_window_stats`] recomputed from used/max.
+///
+/// Most agents publish token counts and codeg derives the percentage. Qoder
+/// publishes the percentage (`usage.context_usage_ratio`) and, for its own
+/// hosted models, redacts the token counters to zero — so for those sessions
+/// the stated figure is the ONLY occupancy signal that exists, and
+/// `merge_context_window_stats` has nothing to divide. It wins even when the
+/// counters ARE present, because a recomputation would divide by a window this
+/// parser had to back-derive or guess.
+///
+/// `None` leaves `stats` untouched. A non-finite value is dropped and an
+/// out-of-range one is clamped rather than dropped: a gauge is drawn from this,
+/// and "no ring" is a worse answer than "pinned at 100%".
+pub fn with_reported_context_percent(
+    stats: Option<SessionStats>,
+    percent: Option<f64>,
+) -> Option<SessionStats> {
+    let Some(percent) = percent.filter(|p| p.is_finite()) else {
+        return stats;
+    };
+    let percent = percent.clamp(0.0, 100.0);
+    match stats {
+        Some(mut s) => {
+            s.context_window_usage_percent = Some(percent);
+            Some(s)
+        }
+        None => Some(SessionStats {
+            total_usage: None,
+            total_tokens: None,
+            total_duration_ms: 0,
+            context_window_used_tokens: None,
+            context_window_max_tokens: None,
+            context_window_usage_percent: Some(percent),
         }),
     }
 }
@@ -2036,9 +2167,14 @@ mod tests {
             infer_context_window_max_tokens(Some("claude-sonnet-4-6")),
             Some(200_000)
         );
+        // gemini-cli's `tokenLimit()` is 1 << 20, not a round million.
         assert_eq!(
             infer_context_window_max_tokens(Some("gemini-2.5-pro")),
-            Some(1_000_000)
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gemma-4-31b-it")),
+            Some(256_000)
         );
         assert_eq!(
             infer_context_window_max_tokens(Some("claude-sonnet-4-6 [1.5M]")),
@@ -2096,6 +2232,44 @@ mod tests {
         assert_eq!(
             infer_context_window_max_tokens(Some("grok-7-experimental")),
             Some(256_000)
+        );
+        // gpt-6 shares gpt-5's 272K/95% profile, so it takes the same effective
+        // window instead of falling through to `None`.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6-astra")),
+            Some(258_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-5.6-sol")),
+            Some(258_000)
+        );
+        // Kimi's k3 family is the 1M lane; k2.x stays on 256K. The provider
+        // prefix and the `:tag` suffix are stripped before matching, and the
+        // whole id is lowercased, so the catalog's `Kimi-K3-TEE` /
+        // `moonshotai/kimi-k3` / `kimi-k3:fast` spellings all land on 1M.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k3")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("moonshotai/kimi-k3")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k3:fast")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("Kimi-K3-TEE")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k2.7-code")),
+            Some(262_144)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k2.6")),
+            Some(262_144)
         );
         assert_eq!(infer_context_window_max_tokens(Some("unknown-model")), None);
     }

@@ -237,10 +237,9 @@ function labelEndInRaw(node: MdastNode, nodeStart: number): number | null {
  * out of a code span in the alt; either can rewrite a perfectly good REMOTE url
  * and point the image at a different file.
  *
- * There is nothing to gain in exchange: rehype-harden blocks every local image
- * and renders `[Image blocked: …]`, so a repaired local destination is never
- * used, and a remote one has no Windows path in it to repair. This matches the
- * decision already recorded in remark-file-uri-links.
+ * Local images are handled by remarkLocalImages using the parsed destination.
+ * Forward-slash paths and percent-encoded file URIs avoid these ambiguous
+ * backslash escapes without guessing where the image label ends.
  */
 
 /**

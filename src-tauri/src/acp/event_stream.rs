@@ -199,7 +199,10 @@ impl RecentEventsBuffer {
 /// because this feeds the per-event size cap: an escape-heavy payload (tool
 /// output full of quotes/newlines, say) serializes much larger than its raw byte
 /// length and must still be recognized as oversized.
-fn json_str_len(s: &str) -> usize {
+///
+/// Shared with `SessionState::snapshot_tool_calls`, which spends a byte budget
+/// over the same payloads and has to size them the same way.
+pub(super) fn json_str_len(s: &str) -> usize {
     let mut extra = 0usize;
     for b in s.bytes() {
         match b {
@@ -243,7 +246,7 @@ fn number_size(n: &serde_json::Number) -> usize {
 /// adds: brackets/braces, the `:` after each key, and the `,` BETWEEN elements.
 /// Computed without serializing and never undercounting, so it stays a safe
 /// proxy for the per-event size cap even for dense arrays/objects.
-fn json_value_size(value: &serde_json::Value) -> usize {
+pub(super) fn json_value_size(value: &serde_json::Value) -> usize {
     match value {
         serde_json::Value::Null => 4,
         serde_json::Value::Bool(b) => {
@@ -271,11 +274,11 @@ fn json_value_size(value: &serde_json::Value) -> usize {
     }
 }
 
-fn opt_str_size(s: &Option<String>) -> usize {
+pub(super) fn opt_str_size(s: &Option<String>) -> usize {
     s.as_ref().map_or(0, |v| json_str_len(v))
 }
 
-fn opt_json_size(v: &Option<serde_json::Value>) -> usize {
+pub(super) fn opt_json_size(v: &Option<serde_json::Value>) -> usize {
     v.as_ref().map_or(0, json_value_size)
 }
 
@@ -290,20 +293,27 @@ fn opt_json_size(v: &Option<serde_json::Value>) -> usize {
 /// allocation — far cheaper than the full-envelope `serde_json::to_vec` this
 /// replaced — and image events are infrequent (not on the per-token path).
 fn images_size(images: &Option<Vec<ToolCallImageInfo>>) -> usize {
-    images.as_ref().map_or(0, |imgs| {
-        // `PER_IMAGE_STRUCT` conservatively bounds each object's keys/braces and
-        // the trailing comma; `+ 2` is the array brackets.
-        const PER_IMAGE_STRUCT: usize = 48;
-        2 + imgs
-            .iter()
-            .map(|img| {
-                PER_IMAGE_STRUCT
-                    + json_str_len(&img.data)
-                    + json_str_len(&img.mime_type)
-                    + opt_str_size(&img.uri)
-            })
-            .sum::<usize>()
-    })
+    images
+        .as_ref()
+        .map_or(0, |imgs| images_slice_size(imgs.as_slice()))
+}
+
+/// [`images_size`] over a plain slice. Split out so
+/// `SessionState::snapshot_tool_calls`, whose `ToolCallState.images` is a bare
+/// `Vec`, sizes an image list exactly the way the per-event cap does.
+pub(super) fn images_slice_size(images: &[ToolCallImageInfo]) -> usize {
+    // `PER_IMAGE_STRUCT` conservatively bounds each object's keys/braces and
+    // the trailing comma; `+ 2` is the array brackets.
+    const PER_IMAGE_STRUCT: usize = 48;
+    2 + images
+        .iter()
+        .map(|img| {
+            PER_IMAGE_STRUCT
+                + json_str_len(&img.data)
+                + json_str_len(&img.mime_type)
+                + opt_str_size(&img.uri)
+        })
+        .sum::<usize>()
 }
 
 /// Byte size of a single user-message block, including its `{"type":..,..}`

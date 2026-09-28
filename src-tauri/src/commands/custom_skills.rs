@@ -1002,13 +1002,36 @@ mod tests {
     }
 
     #[tokio::test]
+    // The hydrate guard is held across awaits on purpose — see the identical
+    // note in `custom_agent_service`: it is a test-only mutex no production
+    // code takes, and `#[tokio::test]` runs this on a single-threaded runtime.
+    #[allow(clippy::await_holding_lock)]
     async fn list_all_install_statuses_is_wellformed() {
-        // Never panics; row count is a multiple of the supported-agent count.
-        let rows = custom_list_all_install_statuses()
-            .await
-            .expect("snapshot returns Ok");
-        let agents = supported_agents().len();
-        assert_eq!(rows.len() % agents, 0);
+        // A row per custom skill and skill-capable agent, and both halves are
+        // process-global: a test hydrating a custom agent that declares a store
+        // adds a column mid-snapshot, and the fs-mutation tests below point
+        // HOME at a temp tree of their own, which swaps the rows. So the
+        // registry is held still, and HOME is read under `temp_env`'s lock
+        // with nothing changed.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
+        let unchanged: [(&str, Option<&str>); 0] = [];
+        let (ids, agents, rows) = temp_env::async_with_vars(unchanged, async {
+            let rows = custom_list_all_install_statuses()
+                .await
+                .expect("snapshot returns Ok");
+            (collect_custom_ids().expect("ids"), supported_agents(), rows)
+        })
+        .await;
+        assert_eq!(rows.len(), ids.len() * agents.len());
+        for id in &ids {
+            for agent in &agents {
+                assert!(
+                    rows.iter()
+                        .any(|row| &row.expert_id == id && row.agent_type == *agent),
+                    "no row for {id} × {agent:?}"
+                );
+            }
+        }
     }
 
     #[test]

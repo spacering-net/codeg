@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 /// What a canvas node is bound to. The four binding kinds mirror the product
 /// requirement (a region shows a folder's conversations, a folder GROUP's
 /// conversations, one conversation, or one agent's conversations); `custom` is
-/// a hand-curated collection and `note` is a free-floating sticky. One enum —
-/// and one table — because every kind shares geometry, lifecycle and the
-/// `canvas://changed` side-channel.
+/// a hand-curated collection, `note` is a free-floating sticky, and `file` /
+/// `terminal` bind the board to a place on disk (a document to read, a shell to
+/// work in). One enum — and one table — because every kind shares geometry,
+/// lifecycle and the `canvas://changed` side-channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
@@ -25,12 +26,19 @@ pub enum CanvasNodeKind {
     Custom,
     #[sea_orm(string_value = "note")]
     Note,
+    /// A read-only view of one file on disk, bound by absolute `path`.
+    #[sea_orm(string_value = "file")]
+    File,
+    /// A shell running in `path` (its working directory). The PTY itself is
+    /// runtime state keyed off the row id — only the placement is persisted.
+    #[sea_orm(string_value = "terminal")]
+    Terminal,
 }
 
 impl CanvasNodeKind {
     /// Whether this kind renders a member grid (and therefore honours the
     /// `grid_columns` / `grid_rows` shape and accepts member drops). Pinned
-    /// cards and notes are single elements, not containers.
+    /// cards, notes, files and terminals are single elements, not containers.
     pub fn is_region(self) -> bool {
         matches!(
             self,
@@ -39,6 +47,12 @@ impl CanvasNodeKind {
                 | CanvasNodeKind::Agent
                 | CanvasNodeKind::Custom
         )
+    }
+
+    /// Whether this kind is bound to a filesystem `path` — required and
+    /// non-empty for these, forbidden for every other kind.
+    pub fn needs_path(self) -> bool {
+        matches!(self, CanvasNodeKind::File | CanvasNodeKind::Terminal)
     }
 }
 
@@ -66,6 +80,11 @@ pub struct Model {
     /// kind=note only.
     #[sea_orm(column_type = "Text", nullable)]
     pub content: Option<String>,
+    /// kind=file: the absolute path of the document shown on the card.
+    /// kind=terminal: the absolute working directory its shell is spawned in.
+    /// NULL for every other kind (see `CanvasNodeKind::needs_path`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub path: Option<String>,
     /// Theme-preset color name (FolderThemeColor vocabulary).
     #[sea_orm(column_type = "Text", nullable)]
     pub color: Option<String>,

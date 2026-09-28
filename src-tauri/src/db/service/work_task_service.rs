@@ -96,6 +96,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         latest_progress: None,
+        compacting: false,
         created_at: m.created_at,
         updated_at: m.updated_at,
         started_at: m.started_at,
@@ -181,14 +182,20 @@ pub async fn list(
         .await?;
     let mut infos: Vec<WorkTaskInfo> = rows.into_iter().map(to_info).collect();
 
-    // Realtime progress line for live cards: the latest `agent_progress`
-    // milestone of each running/awaiting/merging task, fetched in one sweep.
+    // What a live card says it is doing: the generation's latest
+    // `agent_progress` milestone, and whether it is currently parked on a
+    // pre-prompt context compaction. Both come from the same sweep.
+    //
+    // `preparing` is in the set because a round that resumes a session spends
+    // that status on a real agent turn — the compaction, which on a full
+    // context window runs for minutes with nothing else to show for it.
     let live_ids: Vec<i32> = infos
         .iter()
         .filter(|t| {
             matches!(
                 t.status,
-                WorkTaskStatus::Running
+                WorkTaskStatus::Preparing
+                    | WorkTaskStatus::Running
                     | WorkTaskStatus::AwaitingInput
                     | WorkTaskStatus::Merging
             )
@@ -198,25 +205,70 @@ pub async fn list(
     if !live_ids.is_empty() {
         let events = work_task_event::Entity::find()
             .filter(work_task_event::Column::TaskId.is_in(live_ids))
-            .filter(work_task_event::Column::Kind.eq("agent_progress"))
+            .filter(
+                work_task_event::Column::Kind.is_in(["agent_progress", "context_compact"]),
+            )
             .order_by_asc(work_task_event::Column::Id)
             .all(conn)
             .await?;
+        // Both readings are GENERATION-SCOPED, on the `run_seq` each event
+        // carries. A retry, a follow-up and a merge each bump `run_seq`, and
+        // without this the card kept showing the PREVIOUS round's last
+        // milestone — a merge in flight narrating the work round it is landing.
+        // An event from before this was stamped carries no `run_seq` and counts
+        // for no generation; only currently-live tasks lose anything by that,
+        // and only until their next milestone.
         let mut latest: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
+        let mut compacting: std::collections::HashMap<i32, bool> =
+            std::collections::HashMap::new();
+        let by_id: std::collections::HashMap<i32, i32> =
+            infos.iter().map(|t| (t.id, t.run_seq)).collect();
         for e in events {
-            let message = e
+            let payload = e
                 .payload
                 .as_deref()
-                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
-                .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from));
-            if let Some(message) = message {
-                latest.insert(e.task_id, message); // ascending id — last wins
+                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok());
+            let Some(payload) = payload else { continue };
+            let of_this_run = payload
+                .get("run_seq")
+                .and_then(serde_json::Value::as_i64)
+                .zip(by_id.get(&e.task_id))
+                .is_some_and(|(seq, run_seq)| seq == *run_seq as i64);
+            if !of_this_run {
+                continue;
+            }
+            match e.kind.as_str() {
+                "agent_progress" => {
+                    if let Some(m) = payload.get("message").and_then(|m| m.as_str()) {
+                        latest.insert(e.task_id, m.to_string()); // ascending id — last wins
+                    }
+                }
+                // A compaction announces itself when the turn goes out and
+                // again when it lands, so the LAST word on this generation is
+                // the answer: `started` with nothing after it is a turn still
+                // running.
+                //
+                // Two ways to be left holding a `started` that is over, both
+                // deliberately unguarded. A launch killed mid-compaction leaves
+                // one, but its row leaves this set before anything reads it
+                // (requeued, failed, or bounced back to review). And the events
+                // are best-effort writes, so a lost outcome insert strands the
+                // flag for the rest of that generation. Neither is worth a
+                // guard: the cost is one italic line claiming work that has
+                // finished, on a card whose status is still telling the truth.
+                "context_compact" => {
+                    let started =
+                        payload.get("status").and_then(|s| s.as_str()) == Some("started");
+                    compacting.insert(e.task_id, started);
+                }
+                _ => {}
             }
         }
         for t in &mut infos {
             if let Some(m) = latest.get(&t.id) {
                 t.latest_progress = Some(m.clone());
             }
+            t.compacting = compacting.get(&t.id).copied().unwrap_or(false);
         }
     }
     Ok(infos)
@@ -1161,11 +1213,15 @@ pub async fn claim_due_scheduled(
 }
 
 /// canceled → todo ("requeue"): back to the board, worktree (if any) reused at
-/// the next start.
-/// canceled → todo, optionally carrying the note the user attached to the
-/// requeue. The note is written in the SAME transaction as the CAS: the moment
-/// this commits the task is schedulable, and an `auto_process` folder's pump
-/// can claim and launch it — a note written afterwards would lose that race.
+/// the next start, optionally carrying the note the user attached to the
+/// requeue.
+///
+/// The SESSION is not reused: the conversation link is dropped so the next start
+/// runs the task from the top rather than resuming the run the user canceled.
+///
+/// The note is written in the SAME transaction as the CAS: the moment this
+/// commits the task is schedulable, and an `auto_process` folder's pump can
+/// claim and launch it — a note written afterwards would lose that race.
 pub async fn requeue_canceled(
     conn: &DatabaseConnection,
     id: i32,
@@ -1188,6 +1244,15 @@ pub async fn requeue_canceled(
             Expr::value(None::<chrono::DateTime<Utc>>),
         )
         .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
+        // Drop the link to the run the user just canceled. `launch_mode_for`
+        // reads exactly this column to decide `Retry` vs `Fresh`, so leaving it
+        // meant the next start silently RESUMED the canceled session instead of
+        // starting the task over, and handed the reconcile sweep a conversation
+        // row whose `cancelled` status belongs to the previous generation. The
+        // worktree is still reused; the old conversation still exists in its
+        // folder. Unlike `retry` (failed -> queued), which deliberately
+        // continues the same session, a requeue puts the task back on the board.
+        .col_expr(work_task::Column::ConversationId, Expr::value(None::<i32>))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Canceled))
@@ -1291,6 +1356,12 @@ pub async fn begin_setup(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Preparing)),
         )
+        // The previous generation's connection died with it, and this one has
+        // not spawned yet — a column still naming the dead one is what makes a
+        // `preparing` row unreadable to anything that streams from it (see
+        // `mark_preparing_live`, which publishes the live id as soon as there
+        // is one). `begin_merge` clears it for the same reason.
+        .col_expr(work_task::Column::ConnectionId, Expr::value(None::<String>))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Queued))
@@ -1352,6 +1423,47 @@ pub async fn abandon_setup(
     .await?;
     txn.commit().await?;
     Ok(true)
+}
+
+/// Record the live connection/conversation of a generation that is still
+/// SETTING UP — the status stays `preparing`, only the coordinates move.
+///
+/// The counterpart of [`mark_merging_live`] for every non-merge round, and it
+/// exists for the same reason: between the agent spawn and the round's own
+/// prompt a launch can spend minutes on the pre-prompt context compaction, and
+/// for all of that time the agent is really working in a session no surface can
+/// find. Publishing the pair here is what lets the board's session viewer
+/// attach to (and stream) that turn instead of showing the previous round's
+/// finished transcript.
+///
+/// Deliberately not a status change: `running` is the round's own turn, and
+/// the settle paths key off it. CAS'd on (preparing, run_seq) so a cancel or a
+/// newer generation that landed in between wins — a `false` return tells the
+/// launch to unwind rather than compact a session nobody is waiting on.
+pub async fn mark_preparing_live(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    conversation_id: i32,
+    connection_id: &str,
+) -> Result<bool, DbError> {
+    let res = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::ConversationId,
+            Expr::value(Some(conversation_id)),
+        )
+        .col_expr(
+            work_task::Column::ConnectionId,
+            Expr::value(Some(connection_id.to_string())),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Preparing))
+        .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
 }
 
 /// preparing → running for the given generation; binds conversation +
@@ -2763,6 +2875,110 @@ mod tests {
         assert_eq!(events[0].kind, "created");
     }
 
+    /// The card's live note line: whose news it is, and what it says while a
+    /// round is parked on its pre-prompt compaction.
+    #[tokio::test]
+    async fn the_live_note_belongs_to_the_current_generation() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-live-note").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let first = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_setup(&db.conn, t.id, first).await.unwrap());
+        assert!(mark_running(&db.conn, t.id, first, 7, "conn-1").await.unwrap());
+        record_event(
+            &db.conn,
+            t.id,
+            "agent_progress",
+            "agent",
+            Some(serde_json::json!({ "message": "installing deps", "run_seq": first })),
+        )
+        .await
+        .unwrap();
+        let one = |v: &Vec<WorkTaskInfo>| v.iter().find(|i| i.id == t.id).cloned().unwrap();
+        let row = one(&list(&db.conn, Some(folder_id)).await.unwrap());
+        assert_eq!(row.latest_progress.as_deref(), Some("installing deps"));
+        assert!(!row.compacting);
+
+        // A merge is a NEW generation. Its card used to inherit the work
+        // round's last milestone and narrate work it is not doing.
+        assert!(settle_review(&db.conn, t.id, first, None, None).await.unwrap());
+        let merge = begin_merge(
+            &db.conn,
+            t.id,
+            &WorkTaskMergeState::default(),
+            first,
+            false,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(merge, first);
+        let row = one(&list(&db.conn, Some(folder_id)).await.unwrap());
+        assert_eq!(row.latest_progress, None, "the previous round's news is not this one's");
+
+        // The compaction announces itself when the turn goes out…
+        let compact = |status: &str| {
+            record_event(
+                &db.conn,
+                t.id,
+                "context_compact",
+                "engine",
+                Some(serde_json::json!({ "status": status, "run_seq": merge })),
+            )
+        };
+        compact("started").await.unwrap();
+        assert!(one(&list(&db.conn, Some(folder_id)).await.unwrap()).compacting);
+        // …and the outcome retires it, whatever the outcome was.
+        compact("canceled").await.unwrap();
+        assert!(!one(&list(&db.conn, Some(folder_id)).await.unwrap()).compacting);
+    }
+
+    /// `preparing` is a live status for the note line: a resumed round spends
+    /// it on the compaction turn, which is the whole reason the line exists.
+    /// A generation that never compacted must not inherit the last one's
+    /// dangling `started` (a launch killed mid-compaction leaves one).
+    #[tokio::test]
+    async fn a_preparing_round_reports_its_own_compaction_only() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-preparing-note").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let first = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_setup(&db.conn, t.id, first).await.unwrap());
+        record_event(
+            &db.conn,
+            t.id,
+            "context_compact",
+            "engine",
+            Some(serde_json::json!({ "status": "started", "run_seq": first })),
+        )
+        .await
+        .unwrap();
+        let one = |v: &Vec<WorkTaskInfo>| v.iter().find(|i| i.id == t.id).cloned().unwrap();
+        let row = one(&list(&db.conn, Some(folder_id)).await.unwrap());
+        assert_eq!(row.status, WorkTaskStatus::Preparing);
+        assert!(row.compacting, "preparing is where a resumed round compacts");
+
+        // Killed mid-compaction; the sweep hands it back and the next run
+        // starts clean.
+        assert!(abandon_setup(&db.conn, t.id, first).await.unwrap());
+        let next = claim_for_run(&db.conn, t.id, WorkTaskStatus::Queued, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_setup(&db.conn, t.id, next).await.unwrap());
+        assert!(
+            !one(&list(&db.conn, Some(folder_id)).await.unwrap()).compacting,
+            "a dangling `started` answers only for the generation that wrote it"
+        );
+    }
+
     #[tokio::test]
     async fn claim_cas_is_exclusive_and_bumps_run_seq() {
         let db = fresh_in_memory_db().await;
@@ -2817,6 +3033,49 @@ mod tests {
             events.iter().filter(|e| e.kind == "status_changed").count(),
             3
         );
+    }
+
+    /// What a `preparing` row's `connection_id` is allowed to mean: the LIVE
+    /// connection of the setup in progress, or nothing at all. Never the
+    /// previous generation's, which is dead by the time a new one is claimed —
+    /// a viewer that streams this status (the pre-prompt compaction is a real
+    /// agent turn) would otherwise open onto a connection that is gone.
+    #[tokio::test]
+    async fn a_preparing_row_names_the_live_connection_or_none() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-preparing-live").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_setup(&db.conn, t.id, seq).await.unwrap());
+        assert!(mark_preparing_live(&db.conn, t.id, seq, 42, "conn-1").await.unwrap());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.connection_id.as_deref(), Some("conn-1"));
+        assert_eq!(row.conversation_id, Some(42));
+        // The coordinates move; the status does not — `running` is the round's
+        // own turn, and every settle path keys off it.
+        assert_eq!(row.status, WorkTaskStatus::Preparing);
+        assert!(row.started_at.is_none());
+
+        // A stale generation cannot repoint a live row.
+        assert!(!mark_preparing_live(&db.conn, t.id, seq + 1, 99, "conn-stale")
+            .await
+            .unwrap());
+        assert_eq!(
+            get_model(&db.conn, t.id).await.unwrap().connection_id.as_deref(),
+            Some("conn-1")
+        );
+
+        // Requeued and relaunched: the next setup starts with the dead
+        // connection cleared, and publishes its own when it has one.
+        let next = claim_for_run(&db.conn, t.id, WorkTaskStatus::Preparing, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_setup(&db.conn, t.id, next).await.unwrap());
+        assert!(get_model(&db.conn, t.id).await.unwrap().connection_id.is_none());
     }
 
     #[tokio::test]
@@ -2978,6 +3237,90 @@ mod tests {
             .filter_map(|e| e.payload.as_ref()?.get("action")?.as_str())
             .collect();
         assert_eq!(actions, vec!["schedule", "unschedule"]);
+    }
+
+    /// #649: start, cancel, requeue, start again used to land the task in
+    /// `canceled`. The requeue kept the conversation of the run the user had
+    /// just stopped, and `launch_mode_for` reads exactly that column to pick
+    /// `Retry` over `Fresh`, so the second start resumed the killed session
+    /// instead of running the task, on a conversation row still recorded as
+    /// `cancelled`, which the reconcile sweep then read as this generation's
+    /// verdict. A requeue puts the task back on the board, so it keeps the
+    /// worktree and drops the session.
+    #[tokio::test]
+    async fn a_requeue_drops_the_canceled_run_s_conversation() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-requeue-conversation").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        attach_worktree(&db.conn, t.id, folder_id, "main", "abc123", "task/t")
+            .await
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 41, "c1").await.unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
+        assert_eq!(
+            get_model(&db.conn, t.id).await.unwrap().conversation_id,
+            Some(41),
+            "cancel keeps the link so the stopped run stays reachable"
+        );
+
+        assert!(requeue_canceled(&db.conn, t.id, None, &[], false)
+            .await
+            .unwrap());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Todo);
+        assert_eq!(
+            row.conversation_id, None,
+            "a requeued task must start over, not resume the canceled session"
+        );
+        assert_eq!(
+            row.worktree_folder_id,
+            Some(folder_id),
+            "the worktree is still reused"
+        );
+        // …and `started_at` outlives the requeue, unlike `finished_at` beside
+        // it. `compose_prompt`'s fresh arm reads exactly this column to decide
+        // whether to warn the new session that the worktree already holds an
+        // earlier run's work: clearing it here for symmetry would silently send
+        // a re-queued task back in reading like a first run.
+        assert!(
+            row.started_at.is_some(),
+            "the fresh arm's 'this worktree is not empty' warning keys off it"
+        );
+        assert!(row.finished_at.is_none());
+
+        // Retry (failed -> queued) is the path that DOES continue the same
+        // session, and it is untouched.
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 42, "c2").await.unwrap());
+        assert!(fail(
+            &db.conn,
+            t.id,
+            &[WorkTaskStatus::Running],
+            Some(seq),
+            "agent_error",
+            Some("boom".to_string()),
+        )
+        .await
+        .unwrap());
+        assert!(
+            claim_for_run(&db.conn, t.id, WorkTaskStatus::Failed, "user")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            get_model(&db.conn, t.id).await.unwrap().conversation_id,
+            Some(42),
+            "retry continues the same session"
+        );
     }
 
     /// A plan must not outlive the task's stay in `todo`: cancel drops it, so

@@ -11,6 +11,8 @@ import {
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { cn } from "@/lib/utils"
 import {
+  isLiveStatus,
+  liveNote,
   MergeQueuedChip,
   ScheduleChip,
   statusAccent,
@@ -94,10 +96,6 @@ export function TaskRow({
 }: TaskRowProps) {
   const t = useTranslations("Tasks")
   const archived = task.archived_at != null
-  const live =
-    task.status === "running" ||
-    task.status === "awaiting_input" ||
-    task.status === "merging"
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
   // The filled primary is reserved for "this one is waiting on you". An
   // archived task is settled by definition, however it got there.
@@ -111,11 +109,8 @@ export function TaskRow({
     task.last_error && (task.status === "failed" || task.status === "review")
   const note = showError
     ? task.last_error
-    : live && task.latest_progress
-      ? task.latest_progress
-      : task.status === "review" && task.result_summary
-        ? task.result_summary
-        : null
+    : (liveNote(task, t) ??
+      (task.status === "review" ? task.result_summary : null))
 
   const when = formatRelative(
     task.finished_at ?? task.settled_at ?? task.started_at ?? task.created_at,
@@ -183,7 +178,7 @@ export function TaskRow({
               className={cn(
                 "flex min-w-0 items-center gap-1 text-[0.6875rem] leading-snug",
                 showError ? "text-destructive" : "text-muted-foreground",
-                !showError && live && "italic"
+                !showError && isLiveStatus(task) && "italic"
               )}
             >
               {showError ? (

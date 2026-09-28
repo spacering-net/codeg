@@ -50,13 +50,25 @@ const WorkbenchRouteContext = createContext<WorkbenchRouteContextValue | null>(
  * established pattern here is in-memory context rather than query params.
  */
 export function useWorkbenchRoute() {
-  const ctx = useContext(WorkbenchRouteContext)
+  const ctx = useOptionalWorkbenchRoute()
   if (!ctx) {
     throw new Error(
       "useWorkbenchRoute must be used within WorkbenchRouteProvider"
     )
   }
   return ctx
+}
+
+/**
+ * The route, or `null` outside the workspace layout.
+ *
+ * Null is a supported answer, not a failure: transcript surfaces also render
+ * in windows that have no workbench at all (the pet panel, the standalone
+ * commit / merge windows), and asking "is the file column reachable from
+ * here?" has to be answerable there too — see `use-open-file-target.ts`.
+ */
+export function useOptionalWorkbenchRoute(): WorkbenchRouteContextValue | null {
+  return useContext(WorkbenchRouteContext)
 }
 
 export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {

@@ -13,6 +13,11 @@ describe("classifyToolKind", () => {
     ["grep", "search"],
     ["GLOB", "search"],
     ["list_files", "search"],
+    // pi's built-in set is bash/edit/find/grep/ls/powershell/read/write; `ls`
+    // and `powershell` used to fall through to "other".
+    ["find", "search"],
+    ["ls", "search"],
+    ["powershell", "command"],
     ["bash", "command"],
     ["execute_command", "command"],
     ["read", "read"],

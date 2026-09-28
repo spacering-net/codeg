@@ -40,13 +40,6 @@ Codeg (Code Generation) هو مساحة عمل برمجية متعددة الو�
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE" target="_blank"><img src="../images/sui-xiang.jpg" alt="随想AI中转站" width="200" /></a><br/>
-      <strong><a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">随想AI中转站</a></strong>
-    </td>
-    <td>شكراً لـ 随想AI中转站 على رعاية هذا المشروع! 随想AI中转站 هي مزوّد موثوق وفعّال لخدمات ترحيل واجهات API، وتوفّر خدمات الترحيل لنماذج Claude وCodex وGemini وغيرها. تحصل الحسابات الجديدة بعد <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">التسجيل</a> على رصيد تجريبي بقيمة 0.5 يوان مقابل تسجيل الحضور اليومي؛ وتُضاف عمليات الشحن بنسبة 1:1، دون اشتراك وبالدفع حسب الاستخدام. خطوط متعددة متكرّرة، وتعافٍ من الكوارث عبر المناطق، وتبديل تلقائي عند الأعطال — لتبقى اتصالات SSE طويلة الأمد دون انقطاع.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
       <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
     </td>
@@ -54,17 +47,10 @@ Codeg (Code Generation) هو مساحة عمل برمجية متعددة الو�
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta" target="_blank"><img src="../images/onehop.jpg" alt="OneHop" width="120" /></a><br/>
-      <strong><a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">OneHop</a></strong>
-    </td>
-    <td>شكراً لـ OneHop على رعاية هذا المشروع! يمنح OneHop مستخدمي Codeg مفتاح API واحداً متوافقاً مع OpenAI للوصول إلى مئات النماذج الرائدة، بما في ذلك GPT وClaude وGemini وDeepSeek وKimi وQwen. بدّل بين النماذج دون إدارة حسابات مزوّدين متعددة أو تعديل التعليمات البرمجية مراراً وتكراراً، وادفع فقط مقابل ما تستخدمه. <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">سجّل عبر Codeg</a> للحصول على رصيد بقيمة 1 دولار، ثم انضم إلى مجتمع OneHop وشارك في نشاط الترحيب للحصول على 5 دولارات إضافية — بما يصل إلى 6 دولارات من الرصيد التجريبي إجمالاً.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
       <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
     </td>
-    <td>شكراً لخدمة الترحيل LQ router على رعاية هذا المشروع! LQ router هي بوابة مؤسسية لتجميع واجهات API، مصممة للمطورين المستقلين والفرق التقنية. تتيح الوصول إلى النماذج الرائدة مثل GPT وClaude وGrok وGemini، وتتوافق مع العملاء الحاليين وOpenAI SDK، وتستخدم مجموعة حسابات ديناميكية للتوجيه الذكي — نقطة دخول واحدة لجميع استدعاءات النماذج. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">سجّل عبر الموقع الرسمي واحصل على رصيد تجريبي بقيمة دولار واحد</a>.</td>
+    <td>شكراً لخدمة الترحيل LQ router على رعاية هذا المشروع! LQ router هي خدمة ترحيل احترافية للذكاء الاصطناعي بمستوى المؤسسات، توفّر للشركات والمطورين الأفراد وصولاً مستقراً وفعّالاً ومنخفض التكلفة إلى واجهات API لنماذج الذكاء الاصطناعي. تدعم المنصة النماذج الرائدة مثل GPT وClaude وGrok وGemini، بمعامل تسعير لـ GPT Pro يبدأ من 0.1 فقط. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">انضم إلى المجموعة عبر الموقع الرسمي واحصل على رصيد تجريبي بقيمة دولار واحد</a>.</td>
   </tr>
   <tr>
     <td align="center" width="220">
@@ -72,6 +58,31 @@ Codeg (Code Generation) هو مساحة عمل برمجية متعددة الو�
       <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
     </td>
     <td>شكراً لـ APIMart على رعاية هذا المشروع! APIMart منصة API منخفضة التكلفة متخصصة في توليد الصور والفيديو بالذكاء الاصطناعي — GPT-Image-2 ابتداءً من 0.006 دولار للصورة، أي أكثر من 160 صورة بالدولار الواحد. واجهة API واحدة غير متزامنة تغطي الصور والفيديو معاً: أرسل المهمة، واحصل على معرّف، ثم استرجع النتائج عبر الاستطلاع أو عبر رد النداء. عالج عشرات الآلاف من الصور دفعةً واحدة دون انتهاء المهلة، وبدّل النماذج دون تغيير الشيفرة. الدفع حسب الاستخدام دون رسوم شهرية — <a href="https://go.apimart.ai/gh-codeg">سجّل من هنا</a> للبدء.</td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="../images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
+      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
+    </td>
+    <td>
+      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
+      منصة النماذج الكبيرة AstraFlow من UCloud تتيح استدعاء أكثر من 200 نموذج بنقرة واحدة: تتضمّن نماذج مفتوحة المصدر رائدة عالمياً مثل Kimi K3 وDeepSeek V4/V3 وQwen 3 وGLM5.2 وhappyhorse، دون الحاجة إلى تدريب خاص بك، وجاهزة للاستخدام مباشرة.<br/>
+      سجّل عبر الرابط أعلاه باستخدام <strong>البريد الإلكتروني</strong>، وأكمل التحقق من الهوية، ثم <a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">احصل على 50 يواناً من رصيد الحوسبة</a>.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG" target="_blank"><img src="../images/fluxion-ai.png" alt="Fluxion AI" width="160" /></a><br/>
+      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">Fluxion AI</a></strong>
+    </td>
+    <td>شكراً لـ Fluxion AI على رعاية هذا المشروع! توفّر Fluxion AI وصولاً سريعاً وموثوقاً ومنخفض التكلفة عبر واجهة API موحّدة واحدة إلى GPT وClaude وGemini وغيرها من نماذج الذكاء الاصطناعي الرائدة. يمكن للمستخدمين الجدد الحصول على رصيد API بقيمة 3 دولارات عبر <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">رابطنا المخصّص</a>.</td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
+      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
+    </td>
+    <td>شكراً لـ <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> على رعاية هذا المشروع! BeeAPI هي منصة احترافية لتمرير وتجميع واجهات API لنماذج ذكاء اصطناعي متعددة، تجمع العديد من المزوّدين ومجموعة واسعة من نماذج الذكاء الاصطناعي الرائدة. وهي تدعم مقارنة الأسعار بين المزوّدين، والتوجيه الذكي عبر مجموعات متعددة، والوصول الموحّد عبر API مع فوترة موحّدة، مما يساعدك على استخدام خدمات الذكاء الاصطناعي بمرونة واستقرار وتكلفة أقل.</td>
   </tr>
 </table>
 

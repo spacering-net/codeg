@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   BookOpenText,
   Check,
   ChevronUp,
   ClipboardPaste,
+  Clock,
   Cog,
   Copy,
   MessageSquareText,
@@ -46,6 +48,11 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { imageFilesFromClipboardApi } from "@/lib/clipboard-images"
 import { toErrorMessage } from "@/lib/app-error"
 import { isNoActiveTurnRejection } from "@/lib/turn-busy"
+import { buildSteerPayload } from "@/lib/prompt-draft"
+import {
+  stepComposerHistory,
+  type HistoryDirection,
+} from "@/lib/composer-history"
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
 import { toast } from "sonner"
 import type {
@@ -60,9 +67,11 @@ import type {
 } from "@/lib/types"
 import {
   ATTACH_FILE_TO_SESSION_EVENT,
+  ATTACH_PAGE_TO_SESSION_EVENT,
   ATTACH_SESSION_TO_SESSION_EVENT,
   APPEND_TEXT_TO_SESSION_EVENT,
   type AttachFileToSessionDetail,
+  type AttachPageToSessionDetail,
   type AttachSessionToSessionDetail,
   type AppendTextToSessionDetail,
 } from "@/lib/session-attachment-events"
@@ -95,6 +104,7 @@ import {
 } from "@/lib/model-config-groups"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import {
   clearMessageInputDraftV2,
   loadMessageInputDraftV2,
@@ -111,19 +121,31 @@ import {
   serializeDocToDisplayText,
   serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
+import { textToInlineContent } from "@/components/chat/composer/plain-text-content"
 import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
-  isComposerChromeClick,
   isComposerEmpty,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
+import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
+  composerBoxMinHeight,
+  composerEditableMinHeight,
+} from "@/components/chat/composer/composer-sizing"
+import {
+  buildKnownInvocations,
   commandInvocationToken,
   commandToReference,
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
 import { cutSelectionToClipboard } from "@/components/chat/composer/clipboard-actions"
+import {
+  ComposerTokenAction,
+  composerTokenOpenTarget,
+} from "@/components/chat/composer/composer-token-action"
+import { selectTokenForContextMenu } from "@/components/chat/composer/token-selection"
+import type { TextToken } from "@/lib/text-token-at"
 import { sessionToSuggestion } from "@/components/chat/composer/suggestion/adapters"
 import { editorHasReference } from "@/components/chat/composer/attachment-files"
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
@@ -209,21 +231,49 @@ interface MessageInputProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  /** Inject the draft's TEXT into the RUNNING turn (native live-feedback
-   *  steering). Present only on sessions whose feedback channel is native —
-   *  when absent, the prompting branch renders its historical Stop-only form.
-   *  Awaited: resolve = injected + recorded (clear the draft); reject =
-   *  failure, where a turn-end `NoActiveTurn` race falls back to the queue
-   *  and anything else keeps the draft. */
-  onSteer?: (text: string) => Promise<void>
+  /** Send the draft into the RUNNING turn over the session's live-feedback
+   *  channel (see {@link steerChannel}). Present only on sessions with a
+   *  working delivery channel — when absent, the prompting branch renders its
+   *  historical Stop-only form. `text` is the recorded/display form; `blocks`
+   *  carries the full draft whenever it holds more than plain text (image
+   *  attachments, file badges), encoded exactly like a normal send. Awaited:
+   *  resolve = recorded (clear the draft); reject = failure, where a turn-end
+   *  `NoActiveTurn` race falls back to the queue and anything else keeps the
+   *  draft. */
+  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  /** Which channel {@link onSteer} rides (`useSessionFeedback().channel`).
+   *  Picks the honest copy for the mid-turn action: `native` = inserted into
+   *  the turn immediately, `pull` = recorded as a note the agent reads on its
+   *  next `check_user_feedback` call. Defaults to `pull` — the weaker promise
+   *  — so a caller that wires `onSteer` and forgets this understates delivery
+   *  rather than claiming an insert that never happened (same reason
+   *  `FeedbackDialog.channel` defaults to `pull`). */
+  steerChannel?: "native" | "pull"
   /** Open the live-feedback dialog (from the "+" menu). When omitted the entry
    *  is hidden (feature off). */
   onAddFeedback?: () => void
   /** Grey out the live-feedback "+" entry when a note can't be sent right now
    *  (no active turn / agent lacks the tool). */
   feedbackAddDisabled?: boolean
+  /**
+   * The current session's user prompts, oldest first — the ArrowUp/ArrowDown
+   * recall history. A GETTER rather than an array on purpose: prompts are
+   * append-only and the runtime store updates on every streaming token, so a
+   * reactive prop would recompute (and re-render the composer) per token for a
+   * list that is only read when the user presses Up/Down. Absent for a surface
+   * with no session, or a brand-new one — which then simply has no history.
+   */
+  getSentHistory?: () => string[]
   injectContent?: ComposerInjectContent | null
   onInjectConsumed?: () => void
+  /**
+   * Give the composer box the roomier floor, for the welcome (new-conversation)
+   * input; active and historical conversations keep the compact default. Owned
+   * here rather than passed as a `min-h-*` in `className` because the box's
+   * floor and the editable area's are two halves of one number, and only this
+   * component knows the action row that separates them.
+   */
+  tall?: boolean
 }
 
 // Non-image files attach as inline file badges in the editor (like `@`-file
@@ -231,7 +281,7 @@ interface MessageInputProps {
 // that uri directly (it serializes to a ResourceLink and round-trips through the
 // draft doc untouched). A path-less file (a local-desktop paste/drop carrying
 // inline bytes — an embedded resource or a `data:` link) can't live in the doc,
-// so its badge carries an inert `codeg://embedded/<uuid>` display uri
+// so its badge carries an inert `codeg://embedded/…` display uri
 // (`buildEmbeddedReferenceUri`) while the real bytes-bearing block is held in the
 // `embeddedPayloadsRef` map keyed by that uri. `docToPromptBlocks` drops the
 // embedded badge from the prose; `buildDraft` appends the mapped block for every
@@ -268,6 +318,30 @@ function SelectorLoadingChip({ label }: { label: string }) {
     <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
       <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
       <span>{label}</span>
+    </div>
+  )
+}
+
+/**
+ * Stand-in for the model / mode / config chips while the session is still being
+ * established. It holds the row open at the real chips' height (`h-6`, matching
+ * `Button size="xs"`) so nothing jumps when they arrive, and — unlike the
+ * loading row inside the collapsed cog popover, which only a user who opens the
+ * popover ever sees — it is visible where the chips themselves will be. Opening
+ * a historical conversation spends seconds in exactly this state, and showing
+ * nothing there made a live, still-connecting composer look like a dead one.
+ */
+function SelectorLoadingPlaceholder({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={label}
+      title={label}
+      className="flex h-6 shrink-0 items-center gap-1.5 px-1"
+    >
+      <Skeleton className="h-3 w-16 rounded-sm" />
+      <Skeleton className="h-3 w-10 rounded-sm" />
     </div>
   )
 }
@@ -321,10 +395,13 @@ export function MessageInput({
   onSaveQueueEdit,
   onCancelQueueEdit,
   onSteer,
+  steerChannel = "pull",
   onAddFeedback,
   feedbackAddDisabled,
   injectContent,
   onInjectConsumed,
+  getSentHistory,
+  tall = false,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
@@ -343,10 +420,51 @@ export function MessageInput({
   // only ever saw global skills in the `$` autocomplete.
   const availableSkills = useAgentSkills(skillAgentType, defaultPath ?? null)
   const skillPrefix = agentType === "codex" ? "$" : "/"
+  // Exactly what the `/`·`$` menu below can offer. Seeding or pasting text turns
+  // a bare `/cmd`·`$skill` token into a badge only when it is on this list, so
+  // prose the agent has no command for stays prose.
+  const knownInvocations = useMemo(
+    () =>
+      buildKnownInvocations(availableCommands, availableSkills, skillPrefix),
+    [availableCommands, availableSkills, skillPrefix]
+  )
+  // The hydration effects below read the list through this ref inside their
+  // deferred frame, never from their dependency array. `buildKnownInvocations`
+  // mints a fresh Set whenever the agent re-advertises (and on every render for
+  // a host that passes `availableCommands={conn.availableCommands ?? []}`), and
+  // those effects claim a one-shot guard synchronously but do the restore in a
+  // rAF whose cleanup cancels it: a new identity landing in that gap would
+  // cancel the frame and then bail on the already-claimed guard, dropping the
+  // draft entirely. Reading it late is also the more accurate answer — it is
+  // whatever the agent advertises at the moment the content is actually seeded.
+  const knownInvocationsRef = useRef(knownInvocations)
+  useEffect(() => {
+    knownInvocationsRef.current = knownInvocations
+  }, [knownInvocations])
   const { shortcuts } = useShortcutSettings()
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
   const editorRef = useRef<RichComposerHandle>(null)
+  // Prompt-history navigation. `historyRef` is seeded from `getSentHistory`
+  // lazily, the first time the user steps into history, so a session that never
+  // uses it pays nothing.
+  const historyRef = useRef<string[]>([])
+  const historyIndexRef = useRef<number | null>(null)
+  const historyDraftRef = useRef<{
+    json: JSONContent | null
+    text: string
+  } | null>(null)
+  // True while the history itself writes the document, so the resulting
+  // onChange is not mistaken for a user edit that ends navigation.
+  const applyingHistoryRef = useRef(false)
+  // A conversation switch ends navigation: the recalled entries and the stashed
+  // draft belong to the session that was on screen. The next Up re-seeds from
+  // the new session's own prompts.
+  useEffect(() => {
+    historyIndexRef.current = null
+    historyDraftRef.current = null
+    historyRef.current = []
+  }, [effectiveDraftStorageKey])
   const containerRef = useRef<HTMLDivElement>(null)
   // The editor owns the content now; this mirror of its empty state drives the
   // send button and `hasSendableContent`.
@@ -409,6 +527,10 @@ export function MessageInput({
   // ProseMirror state (not the DOM Selection) so it stays correct after the radix
   // menu takes focus.
   const [contextSelectionActive, setContextSelectionActive] = useState(false)
+  // The token the last right click landed on, selected before the menu opened
+  // so every item below acts on it. Null when the pointer found nothing to act
+  // on (whitespace, the chrome around the text); cleared when the menu closes.
+  const [contextToken, setContextToken] = useState<TextToken | null>(null)
   const isPromptingRef = useRef(isPrompting)
   const hydratedRef = useRef(false)
   // Tracks the last queue-item id hydrated, so a re-edit of the *same* item
@@ -448,6 +570,19 @@ export function MessageInput({
   // Markdown) ~300ms after the last change so inline reference badges survive a
   // reload — a Markdown round-trip would downgrade them to plain links.
   const draftSaveTimerRef = useRef<number | null>(null)
+  /** Persist (or clear) the draft from the document as it stands right now. */
+  const writeDraftNow = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed || !effectiveDraftStorageKey) return
+    if (ed.isEmpty()) {
+      clearMessageInputDraftV2(effectiveDraftStorageKey)
+    } else {
+      saveMessageInputDraftV2(
+        effectiveDraftStorageKey,
+        stripEmbeddedReferences(ed.getJSON())
+      )
+    }
+  }, [effectiveDraftStorageKey])
   const scheduleDraftSave = useCallback(() => {
     if (typeof window === "undefined") return
     if (!effectiveDraftStorageKey || isEditingQueueItem) return
@@ -456,18 +591,22 @@ export function MessageInput({
     }
     draftSaveTimerRef.current = window.setTimeout(() => {
       draftSaveTimerRef.current = null
-      const ed = editorRef.current
-      if (!ed || !effectiveDraftStorageKey) return
-      if (ed.isEmpty()) {
-        clearMessageInputDraftV2(effectiveDraftStorageKey)
-      } else {
-        saveMessageInputDraftV2(
-          effectiveDraftStorageKey,
-          stripEmbeddedReferences(ed.getJSON())
-        )
-      }
+      writeDraftNow()
     }, 300)
-  }, [effectiveDraftStorageKey, isEditingQueueItem])
+  }, [effectiveDraftStorageKey, isEditingQueueItem, writeDraftNow])
+  /**
+   * Land a *pending* debounced save immediately, before something other than
+   * the user replaces the document. A save scheduled by the keystrokes that
+   * preceded a prompt recall would otherwise fire ~300ms later — after the
+   * recall — and store the recalled prompt in place of the draft it replaced.
+   */
+  const flushDraftSave = useCallback(() => {
+    if (typeof window === "undefined") return
+    if (draftSaveTimerRef.current == null) return
+    window.clearTimeout(draftSaveTimerRef.current)
+    draftSaveTimerRef.current = null
+    writeDraftNow()
+  }, [writeDraftNow])
 
   useEffect(() => {
     return () => {
@@ -506,7 +645,11 @@ export function MessageInput({
         const editor = ed.getEditor()
         if (editingDraftBlocks && editingDraftBlocks.length > 0 && editor) {
           // Full fidelity: restore inline badges + images from the blocks.
-          hydrateFromBlocks(editor, editingDraftBlocks)
+          hydrateFromBlocks(
+            editor,
+            editingDraftBlocks,
+            knownInvocationsRef.current
+          )
         } else if (editingDraftText != null) {
           ed.setText(editingDraftText)
         }
@@ -567,7 +710,11 @@ export function MessageInput({
       const raf = requestAnimationFrame(() => {
         const editor = editorRef.current?.getEditor()
         if (editingDraftBlocks && editingDraftBlocks.length > 0 && editor) {
-          hydrateFromBlocks(editor, editingDraftBlocks)
+          hydrateFromBlocks(
+            editor,
+            editingDraftBlocks,
+            knownInvocationsRef.current
+          )
         } else if (editingDraftText != null) {
           editorRef.current?.setText(editingDraftText)
         }
@@ -662,19 +809,98 @@ export function MessageInput({
   }, [skillPrefix, composerReady])
 
   const handleComposerChange = useCallback(() => {
+    // The history's own writes are not edits. They must not end navigation, and
+    // they must not be saved as the draft: overwriting the stored draft with a
+    // recalled prompt would lose what the user had typed if they closed the tab
+    // without stepping back down. An actual edit falls into the branch below
+    // and saves normally.
+    if (!applyingHistoryRef.current) {
+      if (historyIndexRef.current !== null) {
+        historyIndexRef.current = null
+        historyDraftRef.current = null
+      }
+      scheduleDraftSave()
+    }
     syncComposerEmpty()
-    scheduleDraftSave()
     detectSlashTriggerRef.current?.()
   }, [syncComposerEmpty, scheduleDraftSave])
+
+  // Arrow-key prompt history. RichComposer only calls this from the document
+  // edge, so the caret keeps moving line by line inside a multi-line entry. A
+  // step lands on the edge it travelled FROM — the top for older, the bottom
+  // for newer — so pressing the same key again keeps going. Editing ends the
+  // navigation (see `handleComposerChange`); re-entry always starts at the
+  // newest prompt. Returns true to consume the key.
+  const handleHistoryKeyDown = useCallback(
+    (direction: HistoryDirection): boolean => {
+      // Queue-edit mode owns the composer's content: recalling a chat prompt
+      // would replace the queued message being edited.
+      if (isEditingQueueItem) return false
+      if (direction === "older" && historyIndexRef.current === null) {
+        // Fresh navigation: seed here so a prompt sent since the last one is
+        // included, then stash the box before the first recall replaces it.
+        historyRef.current = getSentHistory?.() ?? []
+      }
+      const step = stepComposerHistory(
+        historyRef.current,
+        historyIndexRef.current,
+        direction
+      )
+      if (step.action === "none") {
+        // Keep the key while a navigation is open; with nothing to recall, let
+        // it fall through to the editor's caret movement.
+        return historyIndexRef.current !== null
+      }
+      if (step.enters) {
+        historyDraftRef.current = {
+          json: editorRef.current?.getJSON() ?? null,
+          text: editorRef.current?.getText() ?? "",
+        }
+        // A save the typing just before this keypress scheduled would fire
+        // ~300ms from now, AFTER the recall, and persist the recalled prompt
+        // as the draft. Land it on the document it was scheduled for instead —
+        // the stash above only lives in memory, so storage is what survives a
+        // tab switch made while a recalled prompt is on screen.
+        flushDraftSave()
+      }
+      applyingHistoryRef.current = true
+      if (step.action === "show") {
+        editorRef.current?.setText(step.text ?? "")
+      } else {
+        const draft = historyDraftRef.current
+        if (draft?.json) editorRef.current?.setDoc(draft.json)
+        else editorRef.current?.setText(draft?.text ?? "")
+        historyDraftRef.current = null
+      }
+      // Land on the edge we travelled from, so the SAME key keeps stepping.
+      editorRef.current
+        ?.getEditor()
+        ?.commands.focus(direction === "older" ? "start" : "end")
+      applyingHistoryRef.current = false
+      historyIndexRef.current = step.index
+      return true
+    },
+    [flushDraftSave, getSentHistory, isEditingQueueItem]
+  )
 
   const handleComposerReady = useCallback(() => {
     setComposerReady(true)
   }, [])
 
-  const availableModes = useMemo(() => modes ?? [], [modes])
+  // Localised HERE, once, rather than at each selector: the composer renders
+  // this data through three independent paths (the searchable model picker,
+  // the inline dropdowns, and the collapsed panel's own projection), and a
+  // per-selector fix leaves whichever one the reader is not looking at in the
+  // agent's own language. Non-DeepSeek agents get their arrays back unchanged,
+  // identity included, so the memos below do not churn.
+  const vocabulary = useAgentVocabulary(agentType)
+  const availableModes = useMemo(
+    () => vocabulary.modes(modes ?? []),
+    [modes, vocabulary]
+  )
   const availableConfigOptions = useMemo(
-    () => configOptions ?? [],
-    [configOptions]
+    () => vocabulary.configOptions(configOptions ?? []),
+    [configOptions, vocabulary]
   )
   const hasConfigOptions = availableConfigOptions.length > 0
   const hasModes = availableModes.length > 0
@@ -693,9 +919,14 @@ export function MessageInput({
     hasModes && Boolean(effectiveModeId) && !hasConfigOptions
   const showModeLoading = modeLoading && !hasConfigOptions && !showModeSelector
   const showConfigLoading = configOptionsLoading && !hasConfigOptions
+  const showSelectorsLoading = showConfigLoading || showModeLoading
   const hasAnySelector =
-    showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
-  const hasInlineSelectors = hasConfigOptions || showModeSelector
+    hasConfigOptions || showModeSelector || showSelectorsLoading
+  // The loading placeholder takes the inline slot too, not just the collapsed
+  // popover's row: at composer widths the chips would occupy, "still loading"
+  // has to be visible without opening anything.
+  const hasInlineSelectors =
+    hasConfigOptions || showModeSelector || showSelectorsLoading
   const hasFolderBranchPicker = useConversationFolderBranchPickerVisible(
     attachmentTabId,
     folderPickerOverride
@@ -969,13 +1200,45 @@ export function MessageInput({
     editor.chain().focus().selectAll().run()
   }, [disabled])
 
+  // A right click over the text picks up the token under the pointer first — an
+  // address, a link, a path, a word — and selects it, so Cut/Copy and the
+  // token's own row act on it without the user highlighting anything by hand. A
+  // click inside a live selection leaves that selection alone, as a native text
+  // field does. Capture phase because both menus read the selection as they
+  // open: radix's on the way back up, and the native one (which takes over
+  // wherever the custom menu is disabled) right after. Clicks on the chrome
+  // around the editor — the action bar, the padding — are left alone; there is
+  // no text under those to mean anything.
+  const handleComposerContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const editor = editorRef.current?.getEditor()
+      const target = event.target
+      const overText =
+        editor && target instanceof Node && editor.view.dom.contains(target)
+      if (!editor || !overText) {
+        setContextToken(null)
+        return
+      }
+      setContextToken(
+        selectTokenForContextMenu(editor, event.clientX, event.clientY)
+      )
+    },
+    []
+  )
+
   // Opening the custom right-click menu: snapshot whether there's a selection
-  // (gates Cut/Copy) and refresh the quick-messages list. The editor keeps its
-  // selection while the menu is open, so Paste / a quick message lands back at
-  // the same caret.
+  // (gates Cut/Copy — the token selection above has usually just made one) and
+  // refresh the quick-messages list. The editor keeps its selection while the
+  // menu is open (`InactiveSelectionHighlight` keeps it painted too), so an
+  // insert lands back where the right click was. Note the token selection makes
+  // that an insert OVER the token: Paste and a quick message replace the
+  // highlighted run, the way typing over any selection does.
   const handleContextMenuOpenChange = useCallback(
     (open: boolean) => {
-      if (!open) return
+      if (!open) {
+        setContextToken(null)
+        return
+      }
       const editor = editorRef.current?.getEditor()
       setContextSelectionActive(editor ? !editor.state.selection.empty : false)
       menuShortcuts.refreshQuickMessages()
@@ -1110,6 +1373,70 @@ export function MessageInput({
     }
   }, [attachmentTabId])
 
+  // Built-in browser "send to chat": an element the person picked, a
+  // screenshot, the console. The block is page content — the backend already
+  // capped it and headed it "data, not instructions" — and it rides the same
+  // path a path-less pasted file takes: an inline badge whose bytes live in
+  // `embeddedPayloadsRef` until send. The badge also carries the page's
+  // address, so the message it is sent in can list the page under the bubble
+  // the way it does when read back from the agent's record. An agent that does
+  // not take embedded context gets the block as prose instead of silently
+  // getting nothing; the picture goes through the ordinary image path, which
+  // is capability-driven on its own.
+  useEffect(() => {
+    if (!attachmentTabId) return
+
+    const handleAttachPage = (event: Event) => {
+      const customEvent = event as CustomEvent<AttachPageToSessionDetail>
+      const detail = customEvent.detail
+      if (!detail) return
+      if (detail.tabId !== attachmentTabId) return
+      const editor = editorRef.current?.getEditor()
+      if (!editor) return
+      if (detail.text) {
+        if (promptCapabilities.embedded_context) {
+          attach.insertFileReferences(
+            [
+              {
+                name: detail.label,
+                ref: detail.uri,
+                realBlock: {
+                  type: "resource",
+                  uri: detail.uri,
+                  mime_type: "text/markdown",
+                  text: detail.text,
+                  blob: null,
+                },
+              },
+            ],
+            { atCaret: true }
+          )
+        } else {
+          // As LITERAL text, node by node: `insertContent(string)` parses its
+          // argument as HTML, and this block quotes the page's own markup —
+          // which would be parsed away, or would turn a `<span data-reference>`
+          // the page wrote into a real composer badge.
+          const needsSpace = editorRef.current?.isEmpty() === false
+          editor
+            .chain()
+            .focus("end")
+            .insertContent(
+              textToInlineContent(`${needsSpace ? "\n\n" : ""}${detail.text}`)
+            )
+            .run()
+        }
+      }
+      if (detail.image) void attach.appendFilesFromInput([detail.image])
+      // Read by the sender the moment `dispatchEvent` returns.
+      detail.accepted = true
+    }
+
+    window.addEventListener(ATTACH_PAGE_TO_SESSION_EVENT, handleAttachPage)
+    return () => {
+      window.removeEventListener(ATTACH_PAGE_TO_SESSION_EVENT, handleAttachPage)
+    }
+  }, [attach, attachmentTabId, promptCapabilities.embedded_context])
+
   useEffect(() => {
     if (!attachmentTabId) return
 
@@ -1199,6 +1526,8 @@ export function MessageInput({
     setComposerEmpty(true)
     clearAttachments()
     closeSlashMenu()
+    historyIndexRef.current = null
+    historyDraftRef.current = null
   }, [clearAttachments, closeSlashMenu])
 
   const handleSend = useCallback(() => {
@@ -1253,18 +1582,28 @@ export function MessageInput({
     resetComposer,
   ])
 
-  // Mid-turn "insert into current turn" (native steering). Awaited, unlike
-  // the synchronous send/enqueue/fork paths: the draft clears ONLY once the
-  // backend confirms the injection was recorded — a turn-end race falls back
-  // to the queue (the note is never lost), any other failure keeps the draft
-  // for retry. Steering is text-only: a draft carrying non-text blocks (file
-  // badges) is queued whole instead of being silently stripped; image
-  // attachments disable the menu entry at render (which also keeps unsettled
-  // uploads out of this path — the enqueue fallback below bypasses
-  // `handleSend`'s uploading gate).
+  // Mid-turn send over the session's live-feedback channel: a native push
+  // inserts into the running turn; a pull-tool session records a waiting note
+  // the agent reads on its next check (the copy is keyed on `steerChannel` so
+  // neither overpromises). Awaited, unlike the synchronous send/enqueue
+  // paths: the draft clears ONLY once the backend confirms the note was
+  // recorded — a turn-end race falls back to the queue (the note is never
+  // lost), any other failure keeps the draft for retry. A draft that holds
+  // more than plain text (image attachments, file badges) steers as its full
+  // block list — the same encoding a normal send uses, which the native wire
+  // carries verbatim — with the display text as the recorded note; nothing is
+  // silently stripped. Only the native wire takes blocks: the pull path
+  // rejects them as `NoActiveTurn`, which lands on the same enqueue fallback,
+  // so an attachment on a pull session goes to the queue whole. Unsettled
+  // uploads are gated here exactly like `handleSend` (no server-side uri to
+  // hydrate from yet), since the enqueue fallback below bypasses its gate.
   const [steering, setSteering] = useState(false)
   const handleSteerClick = useCallback(async () => {
     if (!onSteer || steering) return
+    if (hasUploadingImage) {
+      toast.error(tAttach("attachUploadInProgress"))
+      return
+    }
     const draft = buildDraft()
     if (!draft) return
     const enqueueInstead = () => {
@@ -1273,25 +1612,21 @@ export function MessageInput({
       resetComposer()
       toast.info(t("steerQueuedInstead"))
     }
-    if (draft.blocks.some((b) => b.type !== "text")) {
-      enqueueInstead()
-      return
-    }
-    const text = draft.blocks
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("\n")
-      .trim()
-    if (!text) return
+    const payload = buildSteerPayload(draft)
+    if (!payload) return
     setSteering(true)
     try {
-      await onSteer(text)
+      await onSteer(payload.text, payload.blocks)
       resetComposer()
     } catch (err) {
       if (isNoActiveTurnRejection(err)) {
         // The turn ended in the race window — reroute through the queue.
         enqueueInstead()
       } else {
-        toast.error(t("steerFailed"), { description: toErrorMessage(err) })
+        toast.error(
+          t(steerChannel === "pull" ? "steerNoteFailed" : "steerFailed"),
+          { description: toErrorMessage(err) }
+        )
       }
     } finally {
       setSteering(false)
@@ -1299,11 +1634,14 @@ export function MessageInput({
   }, [
     onSteer,
     steering,
+    hasUploadingImage,
+    tAttach,
     buildDraft,
     onEnqueue,
     showModeSelector,
     effectiveModeId,
     resetComposer,
+    steerChannel,
     t,
   ])
 
@@ -1384,32 +1722,28 @@ export function MessageInput({
     [isEditingQueueItem, slashMenuVisible, onCancelQueueEdit]
   )
 
-  // Clicking the input's empty chrome (its padding, the blank space below a
-  // short message, the gaps in the action bar) focuses the editor — previously
-  // only the editor surface itself was clickable. Interactive controls, inline
-  // badges and the editor surface handle their own clicks, so they're excluded;
-  // `preventDefault` keeps the editor from blurring before we refocus it. We
-  // focus *at the click point* (not the end of the document) so clicking the
-  // left/top padding next to existing text lands the caret there, like a native
-  // textarea, instead of always jumping to the end.
-  const handleChromeMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      // Not gated on `disabled`: the editor stays editable while connecting (see
-      // `handleSend`), so chrome clicks must focus too — else only the existing
-      // text line is clickable and the blank area below it is dead until ready.
-      if (!isComposerChromeClick(e.target)) return
-      // Keep the editor from blurring before we refocus it.
-      e.preventDefault()
-      editorRef.current?.focusAtCoords(e.clientX, e.clientY)
-    },
-    []
-  )
+  // Clicking (or tapping) the input's empty chrome — its padding, the blank
+  // space below a short message, the gaps in the action bar — focuses the
+  // editor at that point. See the hook for why it takes one event per pointer
+  // kind, and why it is not gated on `disabled`.
+  const chromeFocus = useComposerChromeFocus(editorRef)
 
   const hasImageAttachments = imageAttachments.length > 0
   const showDragActive = attach.isDragActive && !disabled
 
+  // The box's floor and the editable area's are two halves of one number — see
+  // composer-sizing.ts for the arithmetic and for why stating both is what
+  // keeps the layout off free-space distribution (#746).
+  const boxMinHeight = composerBoxMinHeight(tall)
+  const editableMinHeight = composerEditableMinHeight(tall, hasImageAttachments)
+
   const inlineSelectorItems = (
     <>
+      {showSelectorsLoading && (
+        <SelectorLoadingPlaceholder
+          label={showConfigLoading ? t("loadingSettings") : t("loadingMode")}
+        />
+      )}
       {hasConfigOptions &&
         availableConfigOptions.map((option) => {
           // On/off options flip in place — a dropdown for a binary choice is a
@@ -1448,6 +1782,7 @@ export function MessageInput({
               key={option.id}
               option={option}
               derivedGroups={deriveModelGroups(option)}
+              recommendedLabel={t("recommendedBadge")}
               onSelect={(configId, valueId) =>
                 onConfigOptionChange?.(configId, valueId)
               }
@@ -1549,6 +1884,7 @@ export function MessageInput({
           currentValue: kind.current_value,
           currentLabel: current?.name ?? kind.current_value,
           groups,
+          recommendedValue: option.recommended_value,
           onSelect: (value) => onConfigOptionChange?.(option.id, value),
           ...(searchable && {
             search: {
@@ -1619,11 +1955,14 @@ export function MessageInput({
     </div>
   ) : isPrompting && onCancel ? (
     onSteer && onEnqueue && hasSendableContent ? (
-      // Native-steering sessions surface the mid-turn actions that already
-      // exist but were keyboard-only/invisible: the primary half of the split
-      // queues the draft (what Enter has always done here), the dropdown
-      // injects it into the RUNNING turn. Without `onSteer` this branch stays
-      // pixel-identical to the historical Stop-only form below.
+      // Sessions with a working live-feedback channel surface the mid-turn
+      // actions that already exist but were keyboard-only/invisible: the
+      // primary half of the split queues the draft (what Enter has always
+      // done here), the dropdown sends it over the channel — a native push
+      // inserts into the RUNNING turn, a pull-tool session records a waiting
+      // note for the agent's next check (label keyed on `steerChannel`).
+      // Without `onSteer` this branch stays pixel-identical to the
+      // historical Stop-only form below.
       <div className="flex items-center gap-1">
         <Button
           onClick={onCancel}
@@ -1650,7 +1989,9 @@ export function MessageInput({
                 disabled={steering}
                 size="icon"
                 className="h-8 w-5 rounded-l-none border-l border-primary-foreground/20"
-                aria-label={t("steerIntoTurn")}
+                aria-label={t(
+                  steerChannel === "pull" ? "steerAsNote" : "steerIntoTurn"
+                )}
               >
                 <ChevronUp className="size-4" />
               </Button>
@@ -1658,15 +1999,17 @@ export function MessageInput({
             <DropdownMenuContent align="end" side="top">
               <DropdownMenuItem
                 onSelect={() => void handleSteerClick()}
-                disabled={steering || attachments.length > 0}
-                title={
-                  attachments.length > 0
-                    ? t("steerAttachmentsUnsupported")
-                    : undefined
-                }
+                disabled={steering}
               >
-                <Zap className="h-4 w-4" />
-                {t("steerIntoTurn")}
+                {/* Icon carries the same promise as the label: the bolt is
+                    the instant insert, the clock is the note that waits —
+                    the very glyph the notes strip uses for `pending`. */}
+                {steerChannel === "pull" ? (
+                  <Clock className="h-4 w-4" />
+                ) : (
+                  <Zap className="h-4 w-4" />
+                )}
+                {t(steerChannel === "pull" ? "steerAsNote" : "steerIntoTurn")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1783,15 +2126,21 @@ export function MessageInput({
           </div>
         </div>
       )}
-      {/* When the folder/branch row is attached below the composer, this group
-          clips both into one rounded box (`overflow-hidden rounded-xl`); the
-          drag-active ring rides the wrapper so it isn't clipped. Standalone
-          (no row) it's layout-neutral (`display:contents`). */}
+      {/* Attached, this group clips the composer and the folder/branch row
+          below it into one rounded box (`overflow-hidden rounded-xl`); the
+          drag-active ring rides the wrapper so it isn't clipped. Standalone it
+          stays a plain block, never `display:contents`, because the row comes
+          and goes under a mounted editor (on a cold start it appears once the
+          restored tab's folder loads): some Blink builds (Chromium 111,
+          WebView2 145; not Chrome 153) drop the layout boxes inside the chrome
+          below, a size container (`@container`), when this ancestor flips
+          between `contents` and a box in either direction, leaving the editor
+          0x0 and unable to take input. */}
       <div
         className={cn(
-          folderBranchPickerAttached
-            ? "overflow-hidden rounded-xl transition-colors"
-            : "contents",
+          "block",
+          folderBranchPickerAttached &&
+            "overflow-hidden rounded-xl transition-colors",
           folderBranchPickerAttached &&
             showDragActive &&
             "ring-1 ring-primary/40"
@@ -1803,7 +2152,8 @@ export function MessageInput({
               not suppressed. Desktop/secure-web get the full custom menu. */}
           <ContextMenuTrigger asChild disabled={!clipboardReadSupported}>
             <div
-              onMouseDown={handleChromeMouseDown}
+              {...chromeFocus}
+              onContextMenuCapture={handleComposerContextMenu}
               className={cn(
                 // `codeg-composer-chrome` paints the text I-beam across the box's
                 // blank areas (padding, the dead space below a short message, the
@@ -1815,6 +2165,7 @@ export function MessageInput({
                 // (dark ink in light mode, light ink in dark) and stays legible.
                 // Focus still swaps to `border-ring` below.
                 "codeg-composer-chrome @container relative flex flex-col rounded-xl border border-foreground/20 bg-transparent transition-colors",
+                boxMinHeight,
                 // Standard focus ring — always shown when the composer is
                 // focused (the plain default input style). `bg-background
                 // ws-transparent-bg`: opaque surface normally, but with a
@@ -1863,6 +2214,7 @@ export function MessageInput({
                 // the same box the `/` menu hangs off (this container), so the
                 // two read as one affordance.
                 mentionAnchorRef={containerRef}
+                knownInvocations={knownInvocations}
                 onChange={handleComposerChange}
                 onReady={handleComposerReady}
                 onSubmit={handleSend}
@@ -1874,7 +2226,14 @@ export function MessageInput({
                 newlineShortcut={shortcuts.newline_in_message}
                 isExternalMenuOpen={slashMenuVisible}
                 onExternalMenuKeyDown={handleExternalMenuKeyDown}
-                className="min-h-0 flex-1"
+                onHistoryKeyDown={handleHistoryKeyDown}
+                // `grow`, not `flex-1`: a content flex basis, so the editable
+                // area is always at least as tall as the text it holds even
+                // where no free space is handed out. A zero basis (`flex-1`)
+                // collapses it to 0px there and strands the action row at the
+                // top of the box (#746). `editableMinHeight` states its floor
+                // (see above); RichComposer explains the basis.
+                className={cn("grow", editableMinHeight)}
               />
               <div className="flex shrink-0 items-end justify-between gap-1 px-2 pb-2">
                 <div className="flex min-w-0 items-end gap-1">
@@ -1950,6 +2309,7 @@ export function MessageInput({
                             <SessionSelectorsPanel
                               settings={collapsedSettings}
                               settingsLabel={t("agentSettings")}
+                              recommendedLabel={t("recommendedBadge")}
                               onAfterSelect={() =>
                                 setCollapsedSelectorsOpen(false)
                               }
@@ -1970,6 +2330,12 @@ export function MessageInput({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
+            {contextToken && composerTokenOpenTarget(contextToken) !== null && (
+              <>
+                <ComposerTokenAction token={contextToken} />
+                <ContextMenuSeparator />
+              </>
+            )}
             <ContextMenuItem
               disabled={disabled || !contextSelectionActive}
               onSelect={() => void handleContextCut()}

@@ -53,8 +53,8 @@ describe("useMessageQueue bounce FIFO ordering", () => {
     const { result } = renderHook(() => useMessageQueue())
     // Multiple mutations within a single act() — getQueueLength must observe
     // each one immediately, without waiting for a React commit. This is what
-    // the fork-send guard relies on: a draft re-queued by a same-tick bounce
-    // is visible before the next render hides the fork affordance.
+    // the direct-send routing relies on: a draft re-queued by a same-tick
+    // bounce must be visible before the next send decides whether to tail-route.
     act(() => {
       expect(result.current.getQueueLength()).toBe(0)
       result.current.enqueue(draft("A"), null)

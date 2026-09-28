@@ -183,6 +183,7 @@ describe("image card heading — live/historical parity", () => {
       {
         attachedResources: "Attached resources",
         toolCallFailed: "Tool failed",
+        pageHandoffName: () => "",
       },
       false
     )

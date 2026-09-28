@@ -136,6 +136,7 @@ import {
   OpenCodeConnectDialog,
   OpenCodeCustomProviderDialog,
 } from "@/components/settings/opencode-connect-dialog"
+import { OpenCodeBehaviorSection } from "@/components/settings/opencode-behavior-section"
 import { OpenCodePermissionsSection } from "@/components/settings/opencode-permissions-section"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
 import {
@@ -162,6 +163,7 @@ import {
   DEEPSEEK_PANEL_ENV_KEYS,
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
+import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 import { QoderConfigPanel } from "./qoder-config-panel"
@@ -548,6 +550,56 @@ export function setHostToolsAgentMode(
   })
 }
 
+/**
+ * Per-agent `env_json` key that opts an npx agent into installing the
+ * package's `latest` npm dist-tag instead of the maintainer-reviewed pin.
+ * Same storage as pi's runtime override and the host-tools knob above. The
+ * backend reads it at install/upgrade time only: a launch always runs whatever
+ * is installed, nothing polls npm in the background, and a failed latest
+ * install falls back to the pinned version with a note in the install log.
+ */
+const ADAPTER_CHANNEL_ENV = "CODEG_ADAPTER_CHANNEL"
+const ADAPTER_CHANNEL_LATEST = "latest"
+
+export type AdapterChannel = "pinned" | "latest"
+
+/**
+ * Which adapter channel an env draft selects. Anything other than the exact
+ * (trimmed) `latest` sentinel reads as pinned, matching the Rust reader
+ * (`adapter_channel_is_latest`), which treats the pin as the only default.
+ */
+export function adapterChannelFromEnvText(envText: string): AdapterChannel {
+  return parseEnvText(envText)[ADAPTER_CHANNEL_ENV]?.trim() ===
+    ADAPTER_CHANNEL_LATEST
+    ? "latest"
+    : "pinned"
+}
+
+/** [`adapterChannelFromEnvText`] over the saved env map the backend reports. */
+export function adapterChannelFromEnv(
+  env: Record<string, string>
+): AdapterChannel {
+  return env[ADAPTER_CHANNEL_ENV]?.trim() === ADAPTER_CHANNEL_LATEST
+    ? "latest"
+    : "pinned"
+}
+
+/**
+ * Select the adapter channel in an env draft. Pinned DELETES the key: unlike
+ * the host-tools knob there is no process-env second layer that could make
+ * "absent" mean something else, so absent is unambiguously the pinned default
+ * on both sides, and the raw editor stays free of a key that only restates it.
+ */
+export function setAdapterChannel(
+  envText: string,
+  channel: AdapterChannel
+): string {
+  return patchEnvText(envText, {
+    [ADAPTER_CHANNEL_ENV]:
+      channel === "latest" ? ADAPTER_CHANNEL_LATEST : undefined,
+  })
+}
+
 interface ImportantEnvKeys {
   apiBaseUrl: string[]
   apiKey: string[]
@@ -613,19 +665,74 @@ const OPENCLAW_ENV_KEYS = {
   sessionKey: "OPENCLAW_SESSION_KEY",
 } as const
 
-const CLINE_PROVIDERS = [
+/** Cline provider ids, as the CLI's own registry keys them (`cline auth -p`).
+ *
+ * `openai-compatible` is NOT interchangeable with `openai`: the `auth`
+ * subcommand aliases the latter, but the ACP path does not, so an `openai`
+ * selection reaches `session/new` as an unknown provider with an empty model
+ * list. The backend's `normalize_cline_provider_id` maps the legacy value on
+ * read so an existing config still lands on the right row here. */
+/** Cline's own sign-in providers, labelled as its registry labels them. Their
+ * credential is an OAuth token cline obtains through a device-code flow and
+ * stores itself, so this panel shows the command that starts it rather than a
+ * key field — and the backend neither overwrites those entries nor exports
+ * `CLINE_PROVIDER`/`CLINE_API_KEY` for them (see `cline_provider_is_agent_managed`). */
+const CLINE_SIGNIN_PROVIDERS = [
+  { value: "cline", label: "Cline Usage-Billing" },
+  { value: "cline-pass", label: "ClinePass" },
+  { value: "openai-codex", label: "OpenAI ChatGPT Subscription" },
+] as const
+
+/** Bring-your-own providers this panel can actually configure — every one is
+ * authenticated by a single API key, which is all the three fields below can
+ * express.
+ *
+ * Deliberately a subset of cline's ~50-provider registry. AWS Bedrock and GCP
+ * Vertex used to be listed and never worked: cline authenticates them with
+ * `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` and
+ * `GOOGLE_VERTEX_PROJECT`/`GOOGLE_VERTEX_LOCATION`/`GOOGLE_APPLICATION_CREDENTIALS`
+ * respectively, none of which a lone `apiKey` string can carry. They are
+ * reachable through `cline auth bedrock`, and an entry made that way is read
+ * back and preserved here rather than clobbered.
+ *
+ * `openai-compatible` is NOT interchangeable with `openai`: the `auth`
+ * subcommand aliases the latter, but the ACP path does not, so an `openai`
+ * selection reaches `session/new` as an unknown provider with an empty model
+ * list. The backend's `normalize_cline_provider_id` maps the legacy value on
+ * read so an existing config still lands on the right row here. */
+const CLINE_BYO_PROVIDERS = [
   { value: "anthropic", label: "Anthropic" },
   { value: "openai-native", label: "OpenAI" },
-  { value: "openai", label: "OpenAI Compatible" },
+  { value: "openai-compatible", label: "OpenAI Compatible" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "gemini", label: "Gemini" },
   { value: "deepseek", label: "DeepSeek" },
-  { value: "bedrock", label: "AWS Bedrock" },
-  { value: "vertex", label: "GCP Vertex" },
   { value: "ollama", label: "Ollama" },
+  { value: "lmstudio", label: "LM Studio" },
 ] as const
 
-type ClineProvider = (typeof CLINE_PROVIDERS)[number]["value"]
+type ClineProvider =
+  | (typeof CLINE_SIGNIN_PROVIDERS)[number]["value"]
+  | (typeof CLINE_BYO_PROVIDERS)[number]["value"]
+  // A provider configured outside codeg (`cline auth bedrock`, a registry id
+  // this list does not carry) still has to select a row, or saving from this
+  // panel would silently retarget the user's store at whatever the dropdown
+  // fell back to.
+  | (string & {})
+
+/** Whether cline owns this provider's credential (OAuth), rather than codeg.
+ *  Mirrors the backend `cline_provider_is_agent_managed`. */
+function isClineSignInProvider(provider: string): boolean {
+  return CLINE_SIGNIN_PROVIDERS.some((p) => p.value === provider)
+}
+
+/** The terminal command that starts (or repairs) a sign-in. cline drives a
+ *  device-code flow: it prints a code and an `authkit.cline.bot/device` URL and
+ *  waits for the browser half, which is why this is a command to run rather
+ *  than a button to press. */
+function clineAuthCommand(provider: string): string {
+  return `cline auth ${provider}`
+}
 
 type ClaudeModelKey = keyof typeof CLAUDE_MODEL_ENV_KEYS
 type ImportantConfigKey = "apiBaseUrl" | "apiKey" | "model" | ClaudeModelKey
@@ -1112,13 +1219,22 @@ interface ClineImportantValues {
   baseUrl: string
 }
 
+/** Mirrors the backend `normalize_cline_provider_id`, so a legacy `"openai"`
+ * typed into the advanced JSON editor still selects a row instead of leaving the
+ * provider dropdown blank. */
+function normalizeClineProvider(provider: string): ClineProvider {
+  return provider === "openai" ? "openai-compatible" : provider
+}
+
 function extractClineImportantValues(configText: string): ClineImportantValues {
   const parseResult = parseConfigJsonText(configText)
   const config = parseResult.config
   return {
-    provider: (typeof config.apiProvider === "string" && config.apiProvider
-      ? config.apiProvider
-      : "anthropic") as ClineProvider,
+    provider: normalizeClineProvider(
+      typeof config.apiProvider === "string" && config.apiProvider
+        ? config.apiProvider
+        : "anthropic"
+    ),
     apiKey: typeof config.apiKey === "string" ? config.apiKey : "",
     model: typeof config.model === "string" ? config.model : "",
     baseUrl: typeof config.apiBaseUrl === "string" ? config.apiBaseUrl : "",
@@ -3930,6 +4046,12 @@ export function buildVersionCheck(
   const withCustomInstall = (fixes: UiFixAction[]): UiFixAction[] =>
     supportsCustomInstall ? [...fixes, customInstallFix] : fixes
 
+  // The opt-in "Adapter version: Latest" channel (npx agents only) — install
+  // and upgrade actions resolve the `latest` dist-tag instead of the pin.
+  const latestChannel =
+    agent.distribution_type === "npx" &&
+    adapterChannelFromEnv(agent.env) === "latest"
+
   if (!agent.installed_version) {
     return {
       check_id: "version_status",
@@ -4040,6 +4162,37 @@ export function buildVersionCheck(
         { versionText }
       ),
       fixes: withCustomInstall([
+        {
+          label: acpText("actions.uninstall", "Uninstall"),
+          kind: uninstallAction,
+          payload: agent.agent_type,
+        },
+      ]),
+    }
+  }
+
+  // A latest-channel agent's installed version normally sits AT or AHEAD of
+  // the pin, so the compare-to-pin branch above never offers an upgrade again
+  // — and codeg cannot know whether npm has something newer, because nothing
+  // polls in the background (by design). Keep the Upgrade action available:
+  // it resolves the `latest` dist-tag on demand, and "Already latest" would
+  // claim a comparison that was never made.
+  if (latestChannel) {
+    return {
+      check_id: "version_status",
+      label: acpText("version.statusLabel", "Version Status"),
+      status: "pass",
+      message: acpText(
+        "version.latestChannel",
+        "{versionText}. Latest channel is on; Upgrade installs the newest release.",
+        { versionText }
+      ),
+      fixes: withCustomInstall([
+        {
+          label: acpText("actions.upgrade", "Upgrade"),
+          kind: upgradeAction,
+          payload: agent.agent_type,
+        },
         {
           label: acpText("actions.uninstall", "Uninstall"),
           kind: uninstallAction,
@@ -7916,6 +8069,58 @@ export function AcpAgentSettings() {
                       aria-label={t("hostTools.label")}
                     />
                   </div>
+                  {/*
+                    Same contract as the host-tools switch above: backed by the
+                    `envText` draft, persisted by the one Save button. Npx
+                    agents only — a binary or uvx install has no npm dist-tag
+                    to track.
+                  */}
+                  {selectedAgent.distribution_type === "npx" && (
+                    <div className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3">
+                      <div className="min-w-0 space-y-1">
+                        <label className="text-xs font-medium">
+                          {t("adapterChannel.label")}
+                        </label>
+                        <p className="text-2xs text-muted-foreground">
+                          {t("adapterChannel.description")}
+                        </p>
+                        {adapterChannelFromEnvText(selectedDraft.envText) ===
+                          "latest" && (
+                          <p className="text-2xs text-yellow-600 dark:text-yellow-400">
+                            {t("adapterChannel.latestWarning")}
+                          </p>
+                        )}
+                      </div>
+                      <Select
+                        value={adapterChannelFromEnvText(selectedDraft.envText)}
+                        onValueChange={(value) => {
+                          updateSelectedDraft((current) => ({
+                            ...current,
+                            envText: setAdapterChannel(
+                              current.envText,
+                              value === "latest" ? "latest" : "pinned"
+                            ),
+                          }))
+                        }}
+                        disabled={selectedGrokSaving}
+                      >
+                        <SelectTrigger
+                          className="w-44 shrink-0"
+                          aria-label={t("adapterChannel.label")}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pinned">
+                            {t("adapterChannel.pinned")}
+                          </SelectItem>
+                          <SelectItem value="latest">
+                            {t("adapterChannel.latest")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className="flex justify-end">
                     <Button
                       size="sm"
@@ -8557,7 +8762,7 @@ export function AcpAgentSettings() {
                           handleCodexConfigTomlTextChange(event.target.value)
                         }}
                         placeholder={`disable_response_storage = true
-model = "gpt-5"
+model = "gpt-6-astra"
 model_reasoning_effort = "high"
 model_provider = "codeg"
 
@@ -9743,6 +9948,17 @@ supports_websockets = true`}
                       disabled={selectedIsSavingConfig}
                     />
 
+                    {/*
+                      Same contract as the permissions editor above: it owns a
+                      disjoint set of top-level keys, rewrites the whole
+                      document, and leaves the write to this card's Save button.
+                    */}
+                    <OpenCodeBehaviorSection
+                      configText={selectedDraft.configText}
+                      onChange={handleConfigTextChange}
+                      disabled={selectedIsSavingConfig}
+                    />
+
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
                         {t("openCode.nativeJsonConfig")}
@@ -9839,60 +10055,122 @@ supports_websockets = true`}
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {CLINE_PROVIDERS.map((p) => (
-                            <SelectItem key={p.value} value={p.value}>
-                              {p.label}
-                            </SelectItem>
-                          ))}
+                          <SelectGroup>
+                            <SelectLabel>{t("cline.signInGroup")}</SelectLabel>
+                            {CLINE_SIGNIN_PROVIDERS.map((p) => (
+                              <SelectItem key={p.value} value={p.value}>
+                                {p.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                          <SelectGroup>
+                            <SelectLabel>{t("cline.byoGroup")}</SelectLabel>
+                            {CLINE_BYO_PROVIDERS.map((p) => (
+                              <SelectItem key={p.value} value={p.value}>
+                                {p.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                          {/* A provider configured outside codeg (e.g. `cline
+                              auth bedrock`) keeps its own row, so opening this
+                              panel can't silently retarget the store. */}
+                          {!isClineSignInProvider(
+                            selectedDraft.clineProvider
+                          ) &&
+                            !CLINE_BYO_PROVIDERS.some(
+                              (p) => p.value === selectedDraft.clineProvider
+                            ) && (
+                              <SelectGroup>
+                                <SelectLabel>
+                                  {t("cline.externalGroup")}
+                                </SelectLabel>
+                                <SelectItem value={selectedDraft.clineProvider}>
+                                  {selectedDraft.clineProvider}
+                                </SelectItem>
+                              </SelectGroup>
+                            )}
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-2xs text-muted-foreground">
-                        API Key
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type={
-                            showApiKeys[selectedAgent.agent_type]
-                              ? "text"
-                              : "password"
-                          }
-                          value={selectedDraft.clineApiKey}
-                          onChange={(event) => {
-                            handleClineFieldChange(
-                              "clineApiKey",
-                              event.target.value
-                            )
-                          }}
-                          placeholder="sk-..."
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setShowApiKeys((prev) => ({
-                              ...prev,
-                              [selectedAgent.agent_type]:
-                                !prev[selectedAgent.agent_type],
-                            }))
-                          }}
-                          title={
-                            showApiKeys[selectedAgent.agent_type]
-                              ? t("actions.hideApiKey")
-                              : t("actions.showApiKey")
-                          }
-                        >
-                          {showApiKeys[selectedAgent.agent_type] ? (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Eye className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
+                    {isClineSignInProvider(selectedDraft.clineProvider) ? (
+                      // Sign-in: cline holds the credential, so there is nothing
+                      // here to fill in — only the command that obtains it. The
+                      // launch path deliberately exports no provider/key pair
+                      // for these, leaving `tryRestoreAuth` to find the token.
+                      <div className="space-y-1.5">
+                        <p className="text-2xs text-muted-foreground">
+                          {t("cline.signInHint")}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
+                            {clineAuthCommand(selectedDraft.clineProvider)}
+                          </code>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 shrink-0 p-0"
+                            onClick={async () => {
+                              const ok = await copyTextToClipboard(
+                                clineAuthCommand(selectedDraft.clineProvider)
+                              )
+                              if (ok) toast.success(t("grok.commandCopied"))
+                            }}
+                            title={t("grok.copyCommand")}
+                            aria-label={t("grok.copyCommand")}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <label className="text-2xs text-muted-foreground">
+                          API Key
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type={
+                              showApiKeys[selectedAgent.agent_type]
+                                ? "text"
+                                : "password"
+                            }
+                            value={selectedDraft.clineApiKey}
+                            onChange={(event) => {
+                              handleClineFieldChange(
+                                "clineApiKey",
+                                event.target.value
+                              )
+                            }}
+                            placeholder="sk-..."
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setShowApiKeys((prev) => ({
+                                ...prev,
+                                [selectedAgent.agent_type]:
+                                  !prev[selectedAgent.agent_type],
+                              }))
+                            }}
+                            title={
+                              showApiKeys[selectedAgent.agent_type]
+                                ? t("actions.hideApiKey")
+                                : t("actions.showApiKey")
+                            }
+                          >
+                            {showApiKeys[selectedAgent.agent_type] ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
@@ -9910,21 +10188,30 @@ supports_websockets = true`}
                       />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-2xs text-muted-foreground">
-                        API URL
-                      </label>
-                      <Input
-                        value={selectedDraft.clineBaseUrl}
-                        onChange={(event) => {
-                          handleClineFieldChange(
-                            "clineBaseUrl",
-                            event.target.value
-                          )
-                        }}
-                        placeholder="https://api.openai.com"
-                      />
-                    </div>
+                    {/* Endpoint, like the key, is cline's own for a sign-in
+                        provider — its account service, not something to point
+                        elsewhere. */}
+                    {!isClineSignInProvider(selectedDraft.clineProvider) && (
+                      <div className="space-y-1.5">
+                        <label className="text-2xs text-muted-foreground">
+                          API URL
+                        </label>
+                        {/* Cline stores this as `settings.baseUrl`, which its
+                            own schema validates as a full URL — and an
+                            OpenAI-compatible endpoint wants the version suffix,
+                            so the placeholder shows the whole shape. */}
+                        <Input
+                          value={selectedDraft.clineBaseUrl}
+                          onChange={(event) => {
+                            handleClineFieldChange(
+                              "clineBaseUrl",
+                              event.target.value
+                            )
+                          }}
+                          placeholder="https://api.openai.com/v1"
+                        />
+                      </div>
+                    )}
 
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
@@ -10491,29 +10778,39 @@ supports_websockets = true`}
                     onAffectedSessions={reportAffectedSessions}
                   />
                 ) : selectedAgent.agent_type === "deepseek" ? (
-                  <DeepSeekConfigPanel
-                    agent={selectedAgent}
-                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
-                    onSaveEnv={(env, enabled) =>
-                      persistEnv(
-                        selectedAgent.agent_type,
-                        enabled,
-                        envMapToText(env),
-                        selectedAgent.model_provider_id,
-                        // The keys this panel owns, folded into the raw
-                        // editor's draft (which the enable switch persists
-                        // wholesale) so the two can never disagree.
-                        // `DEEPSEEK_ACP_MODEL` is NOT one of them — the raw
-                        // editor owns it, and folding it in would overwrite a
-                        // model line being typed there.
-                        {
-                          DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
-                          DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL,
-                          DEEPSEEK_ACP_PROVIDER: env.DEEPSEEK_ACP_PROVIDER,
-                        }
-                      )
-                    }
-                  />
+                  <>
+                    <DeepSeekConfigPanel
+                      agent={selectedAgent}
+                      saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                      onSaveEnv={(env, enabled) =>
+                        persistEnv(
+                          selectedAgent.agent_type,
+                          enabled,
+                          envMapToText(env),
+                          selectedAgent.model_provider_id,
+                          // The keys this panel owns, folded into the raw
+                          // editor's draft (which the enable switch persists
+                          // wholesale) so the two can never disagree.
+                          // `DEEPSEEK_ACP_MODEL` is NOT one of them — the raw
+                          // editor owns it, and folding it in would overwrite a
+                          // model line being typed there.
+                          {
+                            DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
+                            DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL,
+                            DEEPSEEK_ACP_PROVIDER: env.DEEPSEEK_ACP_PROVIDER,
+                          }
+                        )
+                      }
+                    />
+                    {/* The deployment's model catalog. It lives in the harness'
+                      own `settings.yaml`, not in the agent env, so it has its
+                      own section and its own save — and it is what the
+                      composer's per-session model selector gets to choose
+                      from. */}
+                    <DeepSeekModelListEditor
+                      launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
+                    />
+                  </>
                 ) : selectedAgent.agent_type === "qoder" ? (
                   <QoderConfigPanel
                     agent={selectedAgent}
@@ -11418,7 +11715,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5"
+                              placeholder="claude-opus-5-5"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -11475,7 +11772,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5"
+                              placeholder="claude-opus-5-5"
                             />
                           </div>
                         </div>
@@ -11500,7 +11797,7 @@ supports_websockets = true`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="my-gateway/claude-opus-5"
+                                placeholder="my-gateway/claude-opus-5-5"
                               />
                             </div>
                             <div className="space-y-1.5">
@@ -11608,7 +11905,7 @@ supports_websockets = true`}
                                 event.target.value
                               )
                             }}
-                            placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                            placeholder="gpt-6-astra / claude-sonnet-5 / gemini-3.1-pro-preview"
                           />
                         </div>
                       )
@@ -11626,7 +11923,7 @@ supports_websockets = true`}
                         placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
-  "model": "gpt-5",
+  "model": "gpt-6-astra",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }

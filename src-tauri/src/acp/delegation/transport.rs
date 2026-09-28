@@ -244,6 +244,93 @@ pub struct BrokerCreateWorkTaskRequest {
     pub spec: NewWorkTaskSpec,
 }
 
+/// List the built-in browser's tabs as an agent may see them. Backs the
+/// `browser_list_tabs` MCP tool. Authenticated by the per-launch `token`, and
+/// — like [`BrokerSessionRequest`] and for the same single-tenant reason — not
+/// scoped to the caller's parent connection: a browser tab belongs to the user,
+/// not to a conversation, and the backend is not told which folder one was
+/// opened in. What any given agent may *read* of a tab is the per-tab grant,
+/// which is a decision the person makes tab by tab.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserTabsRequest {
+    pub token: String,
+}
+
+/// Read one shared page. Backs the `browser_snapshot` MCP tool; the grant check
+/// and the audit line both happen behind it, in `agent_snapshot_core`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserSnapshotRequest {
+    pub token: String,
+    pub tab_id: String,
+    /// Cap on the rendered tree, in characters. `None` →
+    /// [`crate::acp::browser_tools::DEFAULT_SNAPSHOT_MAX_CHARS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_chars: Option<usize>,
+}
+
+/// Act on one shared page. Backs the five action tools (`browser_click`,
+/// `browser_hover`, `browser_type`, `browser_press_key`,
+/// `browser_select_option`), which differ only in the action they carry; the
+/// `control` check, the ref check and the audit line all happen behind it, in
+/// `agent_act_core`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserActRequest {
+    pub token: String,
+    pub tab_id: String,
+    pub request: crate::browser::agent::ActionRequest,
+}
+
+/// What one shared page printed to its console. Backs the
+/// `browser_console_messages` MCP tool; the grant check and the audit line
+/// happen behind it, in `agent_console_core`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserConsoleRequest {
+    pub token: String,
+    pub tab_id: String,
+    #[serde(default)]
+    pub query: crate::browser::console::ConsoleQuery,
+}
+
+/// A screenshot of one shared page. Backs the `browser_screenshot` MCP tool;
+/// the grant check, the ref check for a crop and the audit line happen
+/// behind it, in `agent_capture_core`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserCaptureRequest {
+    pub token: String,
+    pub tab_id: String,
+    #[serde(default)]
+    pub request: crate::browser::capture::CaptureRequest,
+}
+
+/// Run the caller's own code on one shared page. Backs the `browser_eval` MCP
+/// tool; its own switch, the `control` check, the per-snippet confirmation and
+/// the audit line all happen behind it, in `agent_eval_core`.
+///
+/// The only browser round trip that waits on a person, so it can be in flight
+/// for as long as someone takes to read a screen of code — up to
+/// `browser::confirm::EVAL_CONFIRM_TIMEOUT`, which is what stops it waiting
+/// for one who never comes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserEvalRequest {
+    pub token: String,
+    pub tab_id: String,
+    pub request: crate::browser::eval::EvalRequest,
+}
+
+/// Open a tab, point one somewhere else, or close one. Backs
+/// `browser_open_tab` / `browser_navigate` / `browser_close_tab` — one
+/// variant for the three the way one `BrowserAct` backs the five action
+/// tools, because they share a gate, an answer shape and a renderer.
+///
+/// Waits for the page to settle, so this round trip is as long as a page
+/// load (`browser::open_request::SETTLE_TIMEOUT`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerBrowserTabOpRequest {
+    pub token: String,
+    #[serde(flatten)]
+    pub op: crate::acp::browser_tools::BrowserTabOp,
+}
+
 /// Tagged top-level message dispatched by the listener. Adding new variants
 /// is the wire-stable way to grow the broker protocol without touching the
 /// frame layer.
@@ -263,6 +350,22 @@ pub enum BrokerMessage {
     TaskComplete(BrokerTaskCompleteRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
+    BrowserTabs(BrokerBrowserTabsRequest),
+    BrowserSnapshot(BrokerBrowserSnapshotRequest),
+    BrowserAct(BrokerBrowserActRequest),
+    BrowserConsole(BrokerBrowserConsoleRequest),
+    BrowserCapture(BrokerBrowserCaptureRequest),
+    BrowserEval(BrokerBrowserEvalRequest),
+    BrowserTabOp(BrokerBrowserTabOpRequest),
+    /// Liveness probe. Unlike every other variant this one is NOT sent by a
+    /// companion — it comes from codeg's own service-status check
+    /// (`acp::delegation::service`), which is why it carries no `token`: a
+    /// `{"ok": true}` answer reveals nothing beyond "the socket is being
+    /// served", which the connect itself already proved. Answering it end to
+    /// end (accept → decode → dispatch → encode → write) is the point: it
+    /// distinguishes a live accept loop from a stale socket file left behind
+    /// by a dead one, which a bare `connect()` cannot.
+    Ping,
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -453,6 +556,78 @@ pub async fn client_create_work_task_round_trip(
     req: &BrokerCreateWorkTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
+}
+
+/// Dispatch a `browser_list_tabs` request and read back the serialized
+/// [`crate::acp::browser_tools::BrowserTabsOutcome`].
+pub async fn client_browser_tabs_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserTabsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserTabs(req.clone())).await
+}
+
+/// Dispatch a `browser_snapshot` request and read back the serialized
+/// [`crate::acp::browser_tools::BrowserSnapshotOutcome`].
+pub async fn client_browser_snapshot_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserSnapshotRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserSnapshot(req.clone())).await
+}
+
+/// Dispatch an action request and read back the serialized
+/// [`crate::acp::browser_tools::BrowserActOutcome`].
+pub async fn client_browser_act_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserActRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserAct(req.clone())).await
+}
+
+/// Dispatch a `browser_console_messages` request and read back the serialized
+/// [`crate::acp::browser_tools::BrowserConsoleOutcome`].
+pub async fn client_browser_console_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserConsoleRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserConsole(req.clone())).await
+}
+
+/// Dispatch a `browser_screenshot` request and read back the serialized
+/// [`crate::acp::browser_tools::BrowserCaptureOutcome`].
+pub async fn client_browser_capture_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserCaptureRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserCapture(req.clone())).await
+}
+
+/// Dispatch a `browser_eval` request and read back the serialized
+/// [`crate::acp::browser_tools::BrowserEvalOutcome`].
+pub async fn client_browser_eval_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserEvalRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserEval(req.clone())).await
+}
+
+/// Dispatch one of the three tab-lifecycle requests and read back the
+/// serialized [`crate::acp::browser_tools::BrowserTabOutcome`].
+pub async fn client_browser_tab_op_round_trip(
+    socket_path: &str,
+    req: &BrokerBrowserTabOpRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::BrowserTabOp(req.clone())).await
+}
+
+/// Probe the listener: write a [`BrokerMessage::Ping`] and read the
+/// `{"ok": true}` answer back. Used by the codeg-mcp service-status indicator
+/// to tell "listening" from "socket file exists but nobody is accepting".
+/// Callers should wrap this in their own timeout — a socket whose peer accepts
+/// but never answers would otherwise park here.
+pub async fn client_ping(socket_path: &str) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::Ping).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes. Has to be
@@ -688,7 +863,11 @@ mod tests {
     async fn uds_round_trip() {
         use tokio::net::UnixListener;
 
-        let dir = tempfile::tempdir().unwrap();
+        // `/tmp`, not `$TMPDIR`: a socket path has ~104 bytes of `sun_path` to
+        // live in, and codeg exports a 72-byte per-session `TMPDIR` to the
+        // agents it launches. Under `tempdir()` this lands at 99 bytes there —
+        // green, but one directory level from an unexplainable red.
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
         let path = dir.path().join("codeg-mcp.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let server_path = path.to_string_lossy().to_string();

@@ -52,6 +52,8 @@
       "science": "Ciência",
       "office_tools": "Ferramentas de escritório",
       "skill_packs": "Pacotes de habilidades",
+      "collaboration": "Colaboração",
+      "browser": "Navegador",
       "quick_messages": "Mensagens rápidas",
       "logs": "Registros de execução"
     }
@@ -196,7 +198,33 @@
       "panelOpacityHint": "O quão opacos são a barra lateral, os painéis e as barras de abas. Mais baixo deixa a imagem transparecer mais.",
       "errorTooLarge": "A imagem é muito grande (máx. 16 MB).",
       "errorUnsupportedFormat": "Formato de imagem não suportado. Escolha um PNG, JPEG, WebP ou GIF.",
-      "errorUploadFailed": "Falha ao definir a imagem de fundo."
+      "errorUploadFailed": "Falha ao definir a imagem de fundo.",
+      "market": {
+        "open": "Mercado de papéis",
+        "title": "Mercado de papéis de parede",
+        "description": "Navegue pela galeria pública do Wallhaven; clique para baixar e aplicar.",
+        "searchPlaceholder": "Pesquisar papéis…",
+        "categories": {
+          "all": "Tudo",
+          "general": "Paisagens",
+          "anime": "Anime",
+          "people": "Pessoas"
+        },
+        "pageInfo": "Página {page} de {lastPage}",
+        "prevPage": "Anterior",
+        "nextPage": "Próxima",
+        "refresh": "Atualizar",
+        "empty": "Nenhum papel de parede correspondente.",
+        "error": "Falha ao carregar o mercado de papéis.",
+        "retry": "Tentar novamente",
+        "cardLabel": "Aplicar o papel de parede {id}",
+        "applied": "Em uso",
+        "unavailable": "Indisponível",
+        "tooLarge": "Grande demais para um plano de fundo: {actual} (limite {limit})",
+        "downloadFailed": "Falha no download. Tente novamente.",
+        "appliedToast": "Papel de parede aplicado",
+        "credit": "Imagens de wallhaven.cc · apenas SFW"
+      }
     }
   },
   "SystemSettings": {
@@ -213,6 +241,8 @@
     "enableProxy": "Ativar proxy do sistema",
     "proxyAddress": "Endereço do proxy",
     "proxyHint": "Suporta http(s)/socks5, exemplo: {example}. Só funciona quando o proxy do sistema está ativado.",
+    "proxyBypass": "Ignorar o proxy para",
+    "proxyBypassHint": "Separe as entradas com vírgulas, sem espaços, por exemplo <code>{example}</code>. <code>example.com</code> corresponde a esse domínio e <code>.example.com</code> a todos os seus subdomínios; endereços IP também são aceitos. Os endereços locais <code>localhost,127.0.0.1,::1</code> sempre se conectam diretamente e não precisam ser adicionados. A lista é aplicada como a variável de ambiente NO_PROXY.",
     "save": "Salvar",
     "saving": "Salvando...",
     "proxyRequired": "A URL do proxy é obrigatória quando o proxy está ativado",
@@ -223,6 +253,8 @@
     "appLanguage": "Idioma do app",
     "languageSaveSuccess": "As configurações de idioma foram salvas",
     "languageSaveFailed": "Falha ao salvar as configurações de idioma: {message}",
+    "dataTitle": "Dados e sincronização",
+    "dataDescription": "A sincronização de configuração leva seus ajustes de uma máquina para outra; o backup empacota todos os dados do codeg desta máquina.",
     "updateTitle": "Atualização do app",
     "versionTitle": "Atualização de software",
     "updateDescription": "Verifique versões mais novas na fonte de releases configurada e instale diretamente quando disponíveis.",
@@ -270,6 +302,8 @@
     "rollbackSuccess": "Revertido para a versão anterior. Recarregando...",
     "rollbackFailed": "Falha ao reverter. Verifique os registros do servidor.",
     "updateErrors": {
+      "permissionDenied": "Não é possível gravar em {path}, então as atualizações não podem ser instaladas no local. Atualize manualmente com privilégios de administrador ou verifique as permissões da instalação.",
+      "targetWriteFailed": "Não é possível gravar em {path}, então as atualizações não podem ser instaladas no local: {reason}",
       "sourceUnavailable": "Não foi possível acessar a fonte de atualização. Verifique sua rede ou proxy e tente novamente.",
       "network": "Falha na conexão de rede. Verifique sua rede ou proxy e tente novamente.",
       "downloadFailed": "Falha ao baixar o pacote de atualização. Tente novamente mais tarde.",
@@ -304,6 +338,10 @@
     "gitlabDescription": "Gerencie contas do GitLab para autenticação. Os tokens são armazenados localmente.",
     "gitlabTokenHint": "Crie um token de acesso pessoal com o escopo api em GitLab → Preferences → Access tokens.",
     "gitlabNoAccounts": "Ainda não há conta do GitLab",
+    "giteaTitle": "Contas do Gitea",
+    "giteaDescription": "Gerencie contas do Gitea (e Forgejo) para autenticação. Os tokens são armazenados localmente.",
+    "giteaTokenHint": "Crie um token de acesso com os escopos write:repository, write:issue e read:user em Gitea → Settings → Applications.",
+    "giteaNoAccounts": "Ainda não há conta do Gitea",
     "noAccounts": "Nenhuma conta do GitHub configurada.",
     "addAccount": "Adicionar conta",
     "serverUrl": "URL do servidor",
@@ -336,7 +374,7 @@
     "loadFailed": "Falha ao carregar configurações: {message}",
     "gitAccount": {
       "sectionTitle": "Contas de servidor Git",
-      "sectionDescription": "Gerencie credenciais para servidores Git que não são GitHub (GitLab, Bitbucket, auto-hospedados, etc.).",
+      "sectionDescription": "Gerencie credenciais de servidores Git sem uma seção própria (Bitbucket, auto-hospedados, etc.).",
       "noAccounts": "Nenhuma conta de servidor Git configurada.",
       "addAccount": "Adicionar conta",
       "addTitle": "Adicionar conta Git",
@@ -397,7 +435,7 @@
       },
       "open_folder": {
         "title": "Abrir pasta",
-        "description": "Abre o seletor de pastas e abre em uma nova janela"
+        "description": "Abre o seletor de pastas e abre a pasta no espaço de trabalho"
       },
       "open_settings": {
         "title": "Abrir configurações",
@@ -636,12 +674,16 @@
     "local": {
       "filterPlaceholder": "Filtrar MCP local...",
       "loadFailed": "Falha ao carregar: {message}",
+      "sourceUnreadable": "Não foi possível ler a configuração MCP de {app}, portanto os seus servidores estão ocultos: {message}",
+      "saveBlockedByUnreadableSource": "Corrija ou remova esse ficheiro e atualize antes de guardar: as atribuições são calculadas a partir dos agentes que esta página conseguiu ler, pelo que guardar agora poderá remover este servidor de um que não conseguiu ler.",
       "empty": "Nenhum MCP local detectado.",
       "description": "A configuração local de MCP pode ser editada e salva diretamente.",
       "enabledApps": "Apps habilitados",
       "configJson": "Configuração MCP (JSON)",
       "draftTitle": "Novo MCP",
       "draftDescription": "Informe um Server ID e a configuração para criar um servidor MCP local.",
+      "suggestedLabel": "Começar a partir de um servidor conhecido",
+      "suggestedChromeNote": "Preenche o formulário com o chrome-devtools-mcp oficial do Google — o registro lista imitações com o mesmo nome, e isto fixa o verdadeiro. Ele controla um Chrome SEPARADO que o codeg não supervisiona: você ganha dados de rede e desempenho que as ferramentas do navegador integrado não oferecem, e nenhuma das proteções delas — sem compartilhamento por aba, sem barra de atividade, sem aprovação por trecho. O `npx` baixa o pacote do npm na primeira execução.",
       "serverIdLabel": "Server ID",
       "serverIdPlaceholder": "Server ID (ex.: my-mcp)",
       "typeHint": "Tipos suportados: stdio, http (aliases: streamable-http, streamableHttp), sse. env só é usado por stdio; para MCPs remotos use headers para transportar tokens de autenticação.",
@@ -680,6 +722,13 @@
     "emptyNoAgent": "Nenhum agente disponível.",
     "configManagement": "Gerenciamento de configuração",
     "envVars": "Variáveis de ambiente",
+    "adapterChannel": {
+      "label": "Versão do adaptador",
+      "description": "Instalar e Atualizar usam a versão que o codeg revisou e fixou. Com Mais recente, passa a ser instalada a versão de npm mais nova do pacote naquele momento; se essa instalação falhar, o codeg volta para a versão fixada e registra isso no log de instalação.",
+      "pinned": "Fixada (recomendada)",
+      "latest": "Mais recente (não revisada)",
+      "latestWarning": "As versões mais novas não são revisadas e podem quebrar este agente no codeg; às vezes uma versão é até sabidamente defeituosa. O status da versão mostra o que foi realmente instalado."
+    },
     "hostTools": {
       "label": "Deixar o agente cuidar de arquivos e comandos",
       "description": "O codeg deixa de atender o acesso a arquivos e os comandos de terminal, de modo que o agente os executa no próprio processo — onde o sandbox e as regras de permissão dele realmente se aplicam. A delegação a outros agentes também é desativada, pois levaria o mesmo trabalho de volta ao codeg. O codeg não adiciona sandbox algum, então ative isto apenas se o agente tiver um configurado."
@@ -819,7 +868,11 @@
       "authNotInstalled": "cursor-agent não está instalado",
       "authLoggedIn": "Conectado",
       "authNotLoggedIn": "Não conectado",
+      "authUnverified": "Sessão iniciada — credencial não verificada",
+      "authUnverifiedHint": "O cursor-agent ainda guarda um início de sessão, mas não foi possível usá-lo no Cursor agora — normalmente a sessão expirou. As sessões vão falhar com «Authentication required» até iniciares sessão de novo; a CLI não consegue renovar sozinha um início de sessão pelo navegador.",
+      "authUnverifiedHintApiKey": "O cursor-agent tem uma chave de API salva, mas o Cursor acabou de recusá-la — normalmente uma chave revogada, expirada ou digitada errado. As sessões falharão com \"Authentication required\" até você salvar uma chave válida abaixo.",
       "loginHint": "Execute isto em um terminal para entrar na sua conta Cursor (uma janela do navegador abre) e depois clique em atualizar:",
+      "loginHintRemote": "Execute isto no host do codeg onde o cursor-agent está instalado, não nesta máquina, e depois clique em atualizar. Esse host normalmente não tem navegador para abrir, então execute com NO_OPEN_BROWSER=1 — assim ele imprime uma URL de login para você abrir no seu próprio navegador. Para um servidor sem supervisão, troque o método acima para chave de API.",
       "apiKeyLabel": "Chave de API do Cursor",
       "apiKeyPlaceholder": "chave de cursor.com/dashboard",
       "apiKeyHint": "CURSOR_API_KEY — uma chave de conta do painel do Cursor, alternativa ao login pelo navegador para máquinas headless ou servidores. Não é uma chave de terceiros nem da OpenAI.",
@@ -922,7 +975,28 @@
         "failed": "O login não foi concluído.",
         "startFailed": "Não foi possível iniciar o login",
         "credentialHint": "O token fica em cache aqui. Copie este arquivo para outra máquina sem desktop para conectá-la também."
-      }
+      },
+      "signOut": {
+        "title": "Entrou com a conta errada?",
+        "description": "O Antigravity guarda em cache a conta Google usada para entrar e a reutiliza silenciosamente, então entrar de novo não chega a outra conta. Sair descarta a credencial armazenada; as sessões do Antigravity em andamento são encerradas antes, pois de outro modo gravariam a conta antiga de volta.",
+        "action": "Sair",
+        "done": "Sessão encerrada. Entre novamente para escolher outra conta.",
+        "failed": "Não foi possível sair"
+      },
+      "tempReclaimTitle": "Espaço temporário remanescente",
+      "tempReclaimHint": "Versões anteriores do codeg não conseguiam limpar o diretório temporário que este agente descompacta a cada inicialização. Isto verifica a pasta temporária do sistema em busca desses resíduos. Essa pasta é compartilhada com outros aplicativos, portanto nada é excluído até você confirmar, e tudo o que ainda estiver em uso é ignorado.",
+      "tempReclaimScan": "Verificar",
+      "tempReclaimDelete": "Excluir resíduos",
+      "tempReclaimNone": "Nada a recuperar.",
+      "tempReclaimFound": "{count} item(ns) remanescente(s), {size} recuperável(is).",
+      "tempReclaimSkipped": "{count} ignorado(s) (ainda em uso ou muito recente).",
+      "tempReclaimed": "Recuperado(s) {size} de {count} item(ns).",
+      "tempReclaimSelectAll": "Selecionar tudo",
+      "tempReclaimAgeHours": "{hours} h",
+      "tempReclaimConfirmTitle": "Excluir {count} item(ns)?",
+      "tempReclaimConfirmBody": "Isto exclui permanentemente {size}. A pasta temporária do sistema é compartilhada com outros aplicativos, então confira cada caminho antes de confirmar; o que ainda estiver em uso é ignorado.",
+      "tempReclaimConfirmAction": "Excluir",
+      "tempReclaimCancel": "Cancelar"
     },
     "deepseek": {
       "configManagement": "Configuração do DeepSeek Harness",
@@ -1130,6 +1204,46 @@
           "todowrite": "Escrever a lista de tarefas",
           "question": "Fazer uma pergunta a você",
           "doom_loop": "Dispara quando a mesma chamada se repete três vezes com a mesma entrada"
+        }
+      },
+      "behavior": {
+        "title": "Comportamento e compactação",
+        "description": "Padrões da sessão, compactação de contexto e limites de saída das ferramentas. Gravado em opencode.json e aplicado ao salvar abaixo.",
+        "docsLink": "Documentação de configuração",
+        "unset": "Não configurado",
+        "defaultAgent": "Agente padrão",
+        "defaultAgentHint": "Com qual agente principal uma nova sessão abre. Vazio ou desconhecido volta para build.",
+        "share": "Compartilhamento",
+        "shareHint": "Se uma sessão pode ser publicada como link compartilhado.",
+        "shareManual": "Manual (somente quando pedido)",
+        "shareAuto": "Automático (toda sessão nova)",
+        "shareDisabled": "Desativado",
+        "autoUpdate": "Atualização automática",
+        "autoUpdateHint": "Se o OpenCode se atualiza sozinho para a versão mais recente.",
+        "autoUpdateOn": "Atualizar automaticamente",
+        "autoUpdateNotify": "Apenas avisar",
+        "autoUpdateOff": "Nunca",
+        "snapshot": "Snapshots do sistema de arquivos",
+        "snapshotHint": "Registra um snapshot antes de cada passo. Desligado, desfazer e reverter não restauram mais arquivos.",
+        "compactionAuto": "Compactação automática",
+        "compactionAutoHint": "Resume a conversa automaticamente quando a janela de contexto enche.",
+        "compactionPrune": "Podar saída antiga de ferramentas",
+        "compactionPruneHint": "Descarta a saída de chamadas antigas durante a compactação em vez de resumi-la.",
+        "fields": {
+          "subagentDepth": "Profundidade de subagentes",
+          "tailTurns": "Turnos mantidos na íntegra",
+          "preserveRecentTokens": "Tokens mantidos na íntegra",
+          "reserved": "Tokens reservados",
+          "maxLines": "Limite de linhas da saída",
+          "maxBytes": "Limite de bytes da saída"
+        },
+        "hints": {
+          "subagentDepth": "Quantos níveis os subagentes podem aninhar. Com 1, um subagente não pode lançar outro.",
+          "tailTurns": "Quantos turnos recentes do usuário ficam fora da compactação. Sem valor, apenas o orçamento de tokens abaixo os limita.",
+          "preserveRecentTokens": "Orçamento de tokens dos turnos recentes mantidos na íntegra após uma compactação.",
+          "reserved": "Janela deixada livre para que a própria compactação não estoure o contexto.",
+          "maxLines": "Saída maior que isso vai para o disco e é substituída por uma prévia. Padrão 2000.",
+          "maxBytes": "Saída maior que isso vai para o disco e é substituída por uma prévia. Padrão 51200."
         }
       }
     },
@@ -1387,7 +1501,8 @@
       "localUnrecognized": "{versionText}. A versão local não é comparável; tente atualizar para sobrescrever a instalação.",
       "upgradeAvailable": "{versionText}. Atualização disponível.",
       "remoteUnavailable": "{versionText}. A versão remota está indisponível no momento.",
-      "latest": "{versionText}. Já está na versão mais recente."
+      "latest": "{versionText}. Já está na versão mais recente.",
+      "latestChannel": "{versionText}. Canal de versão mais recente ativo; Atualizar instala a versão mais nova."
     },
     "adapter": {
       "label": "Adaptador ACP",
@@ -1400,7 +1515,11 @@
       "ready": "O adaptador {adapterCmd} está instalado — é ele que o Codeg inicia. Ele traz o próprio runtime, então a {nativeLabel} não é necessária; se instalá-la depois, as duas coexistem e compartilham {configDir}."
     },
     "cline": {
-      "configDescription": "Configure o provedor de API e as credenciais do Cline. As configurações são salvas em ~/.cline/data/."
+      "configDescription": "Configure o provedor de API e as credenciais do Cline. As configurações são salvas em ~/.cline/data/.",
+      "signInGroup": "Entrar com o Cline",
+      "byoGroup": "Use seu próprio provedor",
+      "externalGroup": "Configurado fora do codeg",
+      "signInHint": "O Cline guarda esta credencial por conta própria. Execute o comando abaixo em um terminal para entrar: ele mostra um código e abre uma página do navegador para confirmá-lo."
     },
     "opencodePlugins": {
       "title": "Plugins do OpenCode",
@@ -1408,7 +1527,10 @@
       "noPlugins": "Nenhum plugin declarado em opencode.json",
       "status": {
         "installed": "Instalado",
-        "missing": "Não instalado"
+        "needs_migration": "Requer migração",
+        "missing": "Não instalado",
+        "path": "Plugin por caminho",
+        "path_missing": "Caminho não encontrado"
       },
       "installAll": "Instalar todos os ausentes",
       "pinVersions": "Fixar versões @latest",
@@ -1469,6 +1591,7 @@
       "installing": "Instalando…",
       "recheck": "Verificar novamente",
       "configDirSkillsNote": "Com um diretório de configuração personalizado, as habilidades, os especialistas e as ferramentas de escritório gerenciados nas Configurações não se aplicam a este pi — gerencie as habilidades dele diretamente nessa pasta.",
+      "dirHistoryNote": "Estes diretórios só chegam ao processo do pi. O histórico de conversas do codeg lê a localização padrão do pi, portanto sessões gravadas num diretório personalizado não aparecerão na lista.",
       "projectTrustTitle": "Confiança do projeto",
       "projectTrustDescription": "Pastas das quais você permitiu que o pi carregue arquivos do projeto. Uma pasta confiável permite que as .pi/extensions daquele repositório executem código ao iniciar o pi, vale para todas as pastas dentro dela e também é usada quando você executa o pi no terminal.",
       "projectTrustLoading": "Carregando…",
@@ -1538,16 +1661,64 @@
     "customAgentBadge": "Personalizado",
     "customAgentNotLaunchable": "Este agente não pode ser iniciado aqui: {reason}"
   },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "Normal",
+    "deepseekModeDefaultDescription": "Lê e edita arquivos e executa comandos diretamente para concluir a tarefa",
+    "deepseekModePlan": "Plano",
+    "deepseekModePlanDescription": "Investiga primeiro e apresenta um plano completo para você confirmar antes de agir. Isso orienta o modelo; o limite real continua sendo o do acesso a arquivos.",
+    "deepseekOptionModel": "Modelo",
+    "deepseekOptionReasoning": "Esforço de raciocínio",
+    "deepseekOptionReasoningDescription": "Quanto maior, mais lento e mais tokens consome, mas é mais estável em problemas difíceis",
+    "deepseekOptionSandbox": "Acesso a arquivos",
+    "deepseekOptionSandboxDescription": "Comandos e ferramentas de arquivo compartilham este único limite",
+    "deepseekReasoningOff": "Desligado",
+    "deepseekReasoningOffDescription": "Responde direto, sem raciocinar; o mais rápido",
+    "deepseekReasoningLow": "Baixo",
+    "deepseekReasoningLowDescription": "Raciocina brevemente; mais estável que desligado, mais rápido que alto",
+    "deepseekReasoningHigh": "Alto",
+    "deepseekReasoningHighDescription": "Raciocina antes de responder; o padrão para o dia a dia",
+    "deepseekReasoningMax": "Máximo",
+    "deepseekReasoningMaxDescription": "Raciocina por mais tempo; mais estável em problemas difíceis, porém mais lento e mais caro",
+    "deepseekSandboxReadOnly": "Somente leitura",
+    "deepseekSandboxReadOnlyDescription": "Executa com uma política somente de leitura; troque o acesso quando precisar gravar. Em algumas plataformas a aplicação é apenas parcial.",
+    "deepseekSandboxWorkspaceWrite": "Escrita no espaço de trabalho",
+    "deepseekSandboxWorkspaceWriteDescription": "As gravações devem ficar dentro do espaço de trabalho da sessão e dos diretórios temporários do sistema; uma chamada fora deles pede autorização pontual. Em algumas plataformas a aplicação é apenas parcial.",
+    "deepseekSandboxFullAccess": "Acesso total (sem sandbox)",
+    "deepseekSandboxFullAccessDescription": "Não aplica nenhuma restrição de arquivos. Escolha apenas se entender as consequências.",
+    "deepseekPermissionAllowOnce": "Permitir uma vez",
+    "deepseekPermissionRejectOnce": "Recusar"
+  },
   "SettingsPages": {
     "agentsLoading": "Carregando configurações de agentes...",
     "skillPacksLoading": "Carregando pacotes de habilidades…"
   },
+  "CloseBehaviorSettings": {
+    "title": "Comportamento do botão Fechar",
+    "description": "Escolha o que o botão Fechar da janela principal faz.",
+    "trayUnavailable": "Este sistema não tem uma bandeja utilizável, portanto o botão Fechar sempre encerra o codeg.",
+    "behaviorAsk": "Perguntar sempre",
+    "behaviorMinimize": "Minimizar para a bandeja",
+    "behaviorExit": "Sair do codeg",
+    "saveFailed": "Falha ao salvar o comportamento de fechamento: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "Fechar o codeg?",
+    "askDescription": "O codeg pode continuar em execução na bandeja para manter agentes e terminais ativos, ou encerrar por completo.",
+    "confirmExitTitle": "Sair do codeg?",
+    "confirmExitDescription": "Fechar a janela está configurado para encerrar o codeg.",
+    "runningTerminals": "{count, plural, one {# terminal ainda está em execução e será encerrado ao sair.} other {# terminais ainda estão em execução e serão encerrados ao sair.}}",
+    "remember": "Lembrar minha escolha",
+    "cancel": "Cancelar",
+    "minimize": "Minimizar para a bandeja",
+    "exit": "Sair do codeg",
+    "actionFailed": "Falha na ação: {message}"
+  },
   "GeneralSettings": {
     "loading": "Carregando...",
     "sectionTitle": "Geral",
-    "sectionDescription": "Preferências centralizadas para o terminal padrão, aceleração de renderização, sons de notificação e delegação multi-agente.",
+    "sectionDescription": "Preferências centralizadas para o terminal padrão, aceleração de renderização, comportamento ao fechar a janela, notificações e sons.",
     "terminalTitle": "Terminal padrão",
-    "terminalDescription": "Escolha o shell usado ao abrir novas abas de terminal pela barra de terminal ou pela árvore de arquivos. Os agentes também o usam quando pedem ao codeg para executar uma linha de comando inteira.",
+    "terminalDescription": "Escolha o shell que o codeg inicia para novas abas de terminal e para linhas de comando inteiras que um agente pede para executar. Agentes com shell próprio (Codex, Claude Code) executam os comandos dentro do próprio processo, então esta configuração não os alcança.",
     "terminalSystemDefault": "Padrão do sistema",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1561,13 +1732,19 @@
     "terminalShellNotInstalled": "não instalado",
     "terminalShellNotFoundWarning": "Este caminho não existe neste host.",
     "terminalCurrentShell": "Em uso: {path}",
-    "renderingDescription": "Desative a aceleração de hardware se o aplicativo apresentar tela preta ou falhas de renderização (comum em certas GPUs AMD ou GPUs Intel integradas). Aplica-se apenas à versão desktop do Windows.",
+    "colorizeCommandOutput": "Colorir a saída dos comandos",
+    "colorizeCommandOutputDescription": "Força cor ANSI nos comandos que os agentes executam, para que a saída apareça colorida na transcrição em vez de como texto simples. Vale para sessões novas.",
+    "renderingDescription": "Desative a aceleração de hardware se o aplicativo apresentar tela preta ou falhas de renderização (comum em certas GPUs AMD ou GPUs Intel integradas no Windows e com o driver proprietário da NVIDIA no Linux). Aplica-se apenas às versões desktop do Windows e do Linux.",
     "disableHardwareAcceleration": "Desativar aceleração de hardware",
     "renderingSaveFailed": "Falha ao salvar as configurações de renderização: {message}",
     "restartRequired": "Salvo. Reinicie o aplicativo para aplicar a alteração.",
     "restartNow": "Reiniciar agora",
     "restartFailed": "Falha ao reiniciar: {message}",
     "loadFailed": "Falha ao carregar: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "Colaboração",
+    "sectionDescription": "Como os agentes colaboram entre si e quais ferramentas do próprio codeg eles podem acessar dentro de uma conversa."
   },
   "LoginPage": {
     "documentTitle": "Entrar - codeg",
@@ -1625,6 +1802,9 @@
     "searchPlaceholder": "Pesquisar título ou caminho…",
     "allAgents": "Todos os agentes",
     "onlyImportable": "Somente importáveis",
+    "includeDeleted": "Incluir excluídas",
+    "includeDeletedWithCount": "Incluir excluídas ({count})",
+    "includeDeletedHint": "Excluir uma sessão no codeg apenas a oculta — a conversa e o histórico continuam aqui. Ative isto para selecionar sessões excluídas e restaurá-las no lugar.",
     "selectAll": "Selecionar tudo",
     "clearSelection": "Limpar",
     "expandAll": "Expandir tudo",
@@ -1637,6 +1817,7 @@
     "toggleSessionAria": "Selecionar a sessão {title}",
     "statusImported": "Importada",
     "statusDeleted": "Excluída",
+    "statusDeletedRestorable": "Excluída — importá-la restaura a conversa original",
     "untitled": "Sessão sem título",
     "messageCount": "{count} mensagens",
     "selectedCount": "{count} selecionadas",
@@ -1645,6 +1826,7 @@
     "close": "Fechar",
     "doneTitle": "Importação concluída",
     "doneImported": "Importadas",
+    "doneRestored": "Restauradas",
     "doneUpdated": "Atualizadas",
     "doneSkipped": "Ignoradas",
     "doneCreatedFolders": "Pastas criadas",
@@ -1986,7 +2168,8 @@
         "output": "Saída",
         "cacheRead": "Leitura de cache",
         "cacheWrite": "Gravação de cache",
-        "total": "Total de tokens"
+        "total": "Total de tokens",
+        "cacheHit": "Taxa de acerto de cache"
       },
       "quickActions": {
         "title": "Ações rápidas",
@@ -1995,7 +2178,38 @@
           "navigation": "Navegação",
           "more": "Mais"
         },
+        "browserTab": "Abrir aba do navegador",
         "showPet": "Mostrar pet"
+      },
+      "mcp": {
+        "title": "Serviço codeg-mcp",
+        "state": {
+          "running": "Em execução",
+          "stopped": "Parado",
+          "disabled": "Sem ferramentas ativas",
+          "unavailable": "Companion ausente",
+          "unknown": "Desconhecido"
+        },
+        "hint": {
+          "running": "Agentes iniciados aqui usam as ferramentas do codeg.",
+          "stopped": "O socket do broker não responde.",
+          "disabled": "Todos os grupos de ferramentas estão desativados.",
+          "unavailable": "O binário codeg-mcp não está no disco.",
+          "unknown": "Não foi possível ler o estado."
+        },
+        "socketPath": "Endereço",
+        "binary": "Companion",
+        "binaryMissing": "Não encontrado",
+        "sessions": "Sessões",
+        "activeDelegations": "Delegações",
+        "depthLimit": "Profundidade",
+        "start": "Iniciar serviço",
+        "starting": "Iniciando…",
+        "actionFailed": "Falhou: {message}",
+        "lastError": "Último erro: {message}",
+        "loadFailed": "Não foi possível ler o estado: {message}",
+        "openSettings": "Abrir configurações",
+        "refresh": "Atualizar"
       }
     },
     "auxPanel": {
@@ -2037,12 +2251,20 @@
     },
     "fileWorkspace": {
       "files": "Arquivos",
+      "newTab": "Nova aba",
+      "newBrowserTab": "Aba do navegador",
+      "openFile": "Abrir arquivo…",
+      "openFileTitle": "Abrir arquivo",
+      "localServices": "Servidores locais",
+      "localServiceFromAgent": "Agente",
       "closeFileTab": "Fechar aba de arquivo",
       "close": "Fechar",
       "closeOthers": "Fechar outros",
       "closeAll": "Fechar tudo",
       "preview": "Visualizar",
       "editSource": "Editar fonte",
+      "openInSystemBrowser": "Abrir no navegador do sistema",
+      "more": "Mais",
       "maximize": "Maximizar",
       "restore": "Restaurar",
       "emptyDirectory": "Pasta vazia"
@@ -2053,7 +2275,26 @@
       "closeOthers": "Fechar outros",
       "closeAll": "Fechar tudo",
       "hideTerminal": "Ocultar terminal ({shortcut})",
-      "openFolderFirst": "Abra primeiro uma pasta"
+      "openFolderFirst": "Abra primeiro uma pasta",
+      "keybar": {
+        "label": "Teclas virtuais do terminal",
+        "show": "Mostrar teclas virtuais",
+        "hide": "Ocultar teclas virtuais",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "Abrir pasta",
@@ -2149,7 +2390,6 @@
       "imageZoomOut": "Reduzir",
       "imageZoomReset": "Redefinir zoom",
       "htmlPreviewTitle": "Visualização HTML",
-      "htmlPreviewTrust": "Ativar scripts",
       "htmlPreviewTrustHint": "Executa os scripts deste arquivo e permite acesso à rede. Ative apenas para arquivos confiáveis.",
       "officePreviewTitle": "Pré-visualização de documento do Office",
       "officeFullRender": "Renderização completa",
@@ -2161,6 +2401,17 @@
       "officeWatchRetry": "Tentar novamente",
       "officeServerInstallHint": "O OfficeCLI precisa estar instalado no host do servidor. Execute este comando lá e tente novamente:",
       "officeRemoteDesktopUnsupported": "A pré-visualização ao vivo não está disponível em uma janela de área de trabalho remota. Abra este espaço de trabalho na interface web do servidor para visualizar arquivos do Office."
+    },
+    "fileViewer": {
+      "title": "Pré-visualização do ficheiro",
+      "description": "Um ficheiro referenciado nesta conversa, aberto ao lado.",
+      "openInWorkspace": "Abrir na área de trabalho",
+      "back": "Voltar",
+      "preview": "Pré-visualizar",
+      "source": "Código",
+      "loading": "A carregar...",
+      "cannotResolve": "Não é possível resolver este caminho de ficheiro.",
+      "tooLargeToPreview": "Este ficheiro é demasiado grande para pré-visualizar aqui. Abra-o na área de trabalho."
     },
     "branchDropdown": {
       "toasts": {
@@ -2565,7 +2816,13 @@
       "openInTerminal": "Terminal",
       "openInCode": "VS Code",
       "linkedFolder": "Pasta vinculada",
+      "moreActions": "Mais ações",
       "copyPath": "Copiar caminho",
+      "copy": "Copiar",
+      "copyRelativePath": "Caminho relativo",
+      "copyAbsolutePath": "Caminho absoluto",
+      "copyFileItself": "Arquivo",
+      "copyDirectoryItself": "Pasta",
       "upload": "Enviar arquivos/pasta",
       "download": "Baixar arquivo",
       "downloadAsZip": "Baixar como ZIP",
@@ -2603,7 +2860,9 @@
         "downloadFailed": "Falha ao baixar {name}",
         "downloadSaved": "{name} baixado",
         "pathCopied": "Caminho copiado",
-        "copyPathFailed": "Falha ao copiar o caminho"
+        "copyPathFailed": "Falha ao copiar o caminho",
+        "fileCopied": "{name} copiado",
+        "copyFileFailed": "Falha ao copiar {name}"
       },
       "createDialog": {
         "newFile": "Novo arquivo",
@@ -2751,8 +3010,6 @@
           "openAgentsSettings": "Abrir configurações de agentes",
           "retry": "Tentar novamente"
         },
-        "agentsSetupHint": "Abra Configurações > Agentes para gerenciar a instalação.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "Não foi possível ler a configuração atual do agente.",
           "disabled": "{agent} está desativado nas configurações de agentes. Ative-o antes de conectar.",
@@ -2774,18 +3031,25 @@
           "turnFailedMaxTokens": "{agent} atingiu o limite máximo de tokens para este turno.",
           "turnFailedMaxTurnRequests": "{agent} atingiu o número máximo de solicitações permitidas para este turno.",
           "turnFailedUnknown": "{agent} encerrou o turno com um motivo de parada desconhecido.",
+          "turnFailedAuthRequired": "O {agent} precisa que você entre novamente antes de executar este turno. Faça login nas Configurações e envie a mensagem de novo.",
+          "agentAuthRequired": "O {agent} não conseguiu iniciar uma sessão: não tem credenciais utilizáveis. Inicia sessão de novo em Definições → Agentes → {agent} e reabre esta conversa.",
           "grokModelSwitchIncompatibleAgent": "{agent} não pode mudar para esse modelo em uma conversa existente. Inicie uma nova sessão para usá-lo.",
+          "setModeFailed": "{agent} não conseguiu mudar de modo.",
+          "setConfigOptionFailed": "{agent} não conseguiu aplicar essa configuração.",
+          "goalControlFailed": "{agent} não conseguiu atualizar o objetivo.",
+          "imageDropped": "{agent} não recebeu uma imagem anexada.",
+          "sessionLoadFallback": "{agent} não conseguiu restaurar a sessão anterior e iniciou uma nova; o contexto anterior não está mais disponível.",
           "turnFailedEmpty": "{agent} encerrou o turno sem produzir nenhuma resposta.",
           "turnFailedEmptyProtocol": "{agent} produziu uma saída que o codeg não conseguiu analisar — a versão do agente pode não corresponder ao protocolo.",
-          "turnFailedEmptyMetadata": "{agent} enviou apenas atualizações de status neste turno (plano / modo / uso) e nenhuma resposta.",
-          "detailsInAlerts": "Abra os alertas na barra de status e expanda os detalhes para ver a saída do agente."
+          "turnFailedEmptyMetadata": "{agent} enviou apenas atualizações de status neste turno (plano / modo / uso) e nenhuma resposta."
         },
         "unableReadAgentConfig": "Não foi possível ler a configuração do agente: {message}",
         "connectFailedTitle": "Falha na conexão de {agent}",
         "toolFallbackTitle": "Ferramenta",
-        "eventErrorTitle": "Erro do agente",
         "notificationTurnComplete": "{agent} terminou de responder",
         "notificationError": "{agent} erro: {message}",
+        "notificationQuestion": "{agent} está aguardando sua resposta",
+        "notificationErrorRedacted": "{agent} encontrou um erro",
         "claudeApiRetry": {
           "fallbackError": "authentication_failed",
           "retryingWithMax": "tentando novamente {attempt}/{max}",
@@ -2798,12 +3062,15 @@
           "lineNoErrorWithDelay": "{retry}, {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "O {agent} definiu {option} como {actual} em vez de {requested}"
+        "configOptionAdjusted": "O {agent} definiu {option} como {actual} em vez de {requested}",
+        "noticeTitle": "{agent}: {title}"
       },
       "connectionLifecycle": {
         "tasks": {
           "connectingTitle": "Conectando a {agent}",
           "connectingDescription": "Estabelecendo conexão",
+          "preparingTitle": "Preparando a sessão de {agent}",
+          "preparingDescription": "Lendo o histórico da conversa",
           "loadingSelectorsTitle": "Carregando seletores de {agent}",
           "loadingSelectorsDescription": "Buscando opções de modo e configuração de sessão",
           "initSessionTitle": "Initializing {agent} session",
@@ -2839,6 +3106,9 @@
         "cut": "Cortar",
         "copy": "Copiar",
         "selectAll": "Selecionar tudo",
+        "openLink": "Abrir link",
+        "openFile": "Abrir arquivo",
+        "sendEmail": "Enviar e-mail",
         "pasteUnavailable": "Não foi possível ler a área de transferência. Use Ctrl/⌘V para colar.",
         "clipboardWriteFailed": "Não foi possível escrever na área de transferência. Use o atalho de teclado.",
         "quickMessageUntitled": "Sem título",
@@ -2854,14 +3124,16 @@
         "searchModel": "Buscar modelos...",
         "searchModelAria": "Buscar modelos",
         "modelListLabel": "Modelos",
+        "recommendedBadge": "Recomendado",
         "noModels": "Nenhum modelo encontrado",
         "cancel": "Cancelar",
         "send": "Enviar",
         "queueMessage": "Adicionar à fila",
         "steerIntoTurn": "Inserir no turno atual",
+        "steerAsNote": "Enviar nota para a próxima verificação",
         "steerQueuedInstead": "Adicionado à fila — será enviado no próximo turno.",
         "steerFailed": "Não foi possível inserir no turno atual",
-        "steerAttachmentsUnsupported": "Somente texto — rascunhos com anexos vão pela fila.",
+        "steerNoteFailed": "Não foi possível enviar a sua nota",
         "slashCommands": "Comandos de barra",
         "slashSearchPlaceholder": "Buscar comandos...",
         "slashSearchEmpty": "Nenhum comando correspondente",
@@ -2892,7 +3164,9 @@
         "saveEdit": "Salvar",
         "cancelEdit": "Cancelar edição",
         "editItem": "Editar",
-        "deleteItem": "Remover"
+        "deleteItem": "Remover",
+        "steerItemNow": "Inserir na vez atual",
+        "steerItemAsNote": "Enviar como nota para a próxima verificação"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Configurações > Agentes",
@@ -3113,13 +3387,17 @@
         "openInFileManager": "Abrir no gerenciador de arquivos",
         "copyRelativePath": "Copiar caminho relativo",
         "copyAbsolutePath": "Copiar caminho absoluto",
+        "download": "Baixar arquivo",
         "pathCopied": "Caminho copiado",
         "copyPathFailed": "Falha ao copiar o caminho",
-        "openFailed": "Falha ao abrir o arquivo local"
+        "openFailed": "Falha ao abrir o arquivo local",
+        "downloadSaved": "{name} baixado",
+        "downloadFailed": "Falha ao baixar {name}"
       },
       "messageList": {
         "attachedResources": "Recursos anexados",
         "loading": "Carregando...",
+        "loadBackgroundActivity": "Carregar atividade em segundo plano",
         "loadEarlier": "Carregar mensagens anteriores",
         "loadingEarlier": "Carregando mensagens anteriores…",
         "error": "Erro: {message}",
@@ -3132,6 +3410,8 @@
         "systemMessage": "Mensagem do sistema",
         "copyMessage": "Copiar",
         "forkFromHere": "Bifurcar a partir daqui",
+        "forkBusy": "Não é possível bifurcar enquanto há um turno em andamento",
+        "forkNotReady": "Ainda não é possível bifurcar a partir desta resposta; tente novamente em instantes",
         "copied": "Copiado",
         "selectionActions": "Ações de seleção",
         "selectionCopy": "Copiar texto",
@@ -3237,6 +3517,8 @@
             "child_max_tokens": "subagente: limite de tokens",
             "child_max_turn_requests": "subagente: limite de solicitações",
             "child_empty": "subagente sem saída",
+            "child_auth_required": "subagente exige login",
+            "child_rejected": "subagente rejeitou o pedido",
             "child_unknown": "subagente: erro",
             "unknown": "tarefa desconhecida"
           }
@@ -3282,7 +3564,10 @@
         "agentSessionLoading": "Carregando a transcrição do subagente…",
         "agentSessionEmpty": "O subagente ainda não escreveu nada.",
         "agentFallbackTitle": "Iniciando subagente…",
-        "agentCodexLaunchOnly": "Iniciado. O Codex não informa mais o progresso deste subagente — o resultado chega como uma mensagem nesta conversa.",
+        "agentCodexLaunchOnly": "Iniciado. O Codex ainda não informou o desfecho deste subagente — abra a sessão dele para acompanhar o trabalho.",
+        "agentSubagentDone": "Concluído",
+        "agentSubagentInterrupted": "Interrompido",
+        "agentSubagentUnknown": "Desfecho desconhecido",
         "agentStatsBash": "Comandos",
         "agentStatsRead": "Arquivos lidos",
         "agentStatsSearch": "Pesquisas",
@@ -3447,7 +3732,9 @@
         "skip": "Pular",
         "next": "Próxima",
         "submit": "Enviar",
-        "submitError": "Falha ao enviar. Tente novamente."
+        "submitError": "Falha ao enviar. Tente novamente.",
+        "collapse": "Recolher",
+        "expand": "Expandir"
       },
       "planApproval": {
         "title": "O agente tem um plano — revise",
@@ -3502,7 +3789,6 @@
         "reconnecting": "Reconectando…",
         "reconnectDisabledDuringTurn": "Disponível quando o turno atual terminar",
         "dismiss": "Dispensar",
-        "reconnectFailed": "Falha ao reconectar a sessão",
         "applied": "Nova configuração aplicada"
       },
       "piProjectTrust": {
@@ -3548,13 +3834,17 @@
         "opSpawn": "Iniciando subagente",
         "opWait": "Obtendo resultado do subagente",
         "opClose": "Encerrando subagente",
-        "opResume": "Retomando subagente"
+        "opResume": "Retomando subagente",
+        "opList": "Listando subagentes"
       },
       "contextCompaction": {
         "compacting": "Compactando o contexto…",
         "compacted": "Contexto compactado",
         "compactedTokens": "Contexto compactado · {before} → {after} tokens",
-        "failed": "Falha ao compactar o contexto"
+        "failed": "Falha ao compactar o contexto",
+        "summary": "Resumo",
+        "triggerManual": "Acionada manualmente",
+        "triggerAutomatic": "Acionada automaticamente"
       },
       "sessionFailure": {
         "category": {
@@ -3578,6 +3868,8 @@
       },
       "backgroundTasks": {
         "settledFallback": "Tarefa em segundo plano concluída ({status})",
+        "notifySettledOne": "{agent}: uma tarefa em segundo plano terminou",
+        "notifySettledMany": "{agent}: {count} tarefas em segundo plano terminaram",
         "cardRunning": "Executando em segundo plano",
         "cardLaunchedPending": "Tarefa iniciada em segundo plano",
         "cardCompleted": "Tarefa em segundo plano concluída",
@@ -3610,6 +3902,16 @@
       "viewMode": {
         "split": "Alternar para a visualização lado a lado",
         "unified": "Alternar para a visualização em linha"
+      },
+      "binaryFile": "Arquivo binário — conteúdo não exibido",
+      "image": {
+        "sideBySide": "Alternar para a visualização lado a lado",
+        "swipe": "Alternar para a visualização deslizante",
+        "swipeHandle": "Controle deslizante de comparação de imagens",
+        "noImage": "Nenhuma imagem nesta revisão",
+        "unavailable": "Não foi possível carregar este lado",
+        "tooLarge": "Imagem muito grande para pré-visualizar ({size})",
+        "loading": "Carregando imagens..."
       }
     },
     "conversationContextBar": {
@@ -3924,7 +4226,7 @@
     "agentTypeRequired": "O tipo de agente é obrigatório.",
     "agentTypeImmutableHint": "O tipo de agente não pode ser alterado após a criação.",
     "model": "Modelo",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modelo Principal",
     "claudeReasoningModel": "Modelo de Raciocínio (pensamento)",
@@ -4369,14 +4671,20 @@
     "errorLoadingDir": "Falha ao carregar o diretório",
     "selectedCount": "{count} selecionado(s)"
   },
+  "BranchPicker": {
+    "searchPlaceholder": "Pesquisar branches…",
+    "none": "Sem branches",
+    "local": "Local",
+    "remote": "Remoto",
+    "useCustom": "Usar \"{query}\""
+  },
   "BackupSettings": {
-    "title": "Backup e restauração",
-    "description": "Exporte um backup portátil dos seus dados do codeg ou restaure a partir de um.",
     "tabs": {
       "backup": "Backup",
       "restore": "Restauração"
     },
     "export": {
+      "description": "Empacota os dados do codeg desta máquina — banco de dados e arquivos enviados — em um único arquivo.",
       "includeExternal": "Incluir o conteúdo das conversas",
       "includeExternalHint": "Também arquiva as transcrições das CLIs (Claude, Codex, Gemini, …). Aumenta o tamanho.",
       "passphrase": "Senha (opcional)",
@@ -4388,9 +4696,18 @@
       "button": "Exportar backup",
       "inProgress": "Criando backup…",
       "success": "Backup criado.",
-      "started": "Download do backup iniciado."
+      "started": "Download do backup iniciado.",
+      "degradedTitle": "Alguns bancos de dados de sessões de agentes exigiram tratamento especial",
+      "degradedHint": "Esses agentes guardam as sessões em SQLite. Salvo indicação em contrário abaixo, o backup continua a contê-las.",
+      "degradedMore": "…e mais {count}.",
+      "degradedLevel": {
+        "recoveredOnCopy": "recuperado a partir de uma cópia privada — completo",
+        "bareFileOnly": "arquivado sem o registro de escrita antecipada — as mensagens mais recentes podem faltar",
+        "notArchived": "não arquivado — continuou mudando durante a cópia"
+      }
     },
     "restore": {
+      "description": "Substitui os dados do codeg desta máquina pelo conteúdo de um arquivo de backup.",
       "selectFile": "Selecionar arquivo de backup",
       "passphrasePrompt": "Este backup está criptografado. Digite a senha dele.",
       "unlock": "Desbloquear",
@@ -4426,11 +4743,136 @@
         "scanning": "Verificando conflitos…",
         "noConflicts": "Nenhum arquivo existente será sobrescrito.",
         "conflictCount": "{count} arquivo(s) existente(s) seriam afetados.",
-        "conflictSkipNote": "Os arquivos existentes são mantidos (ignorados) a menos que você ative a sobrescrita."
+        "conflictSkipNote": "Os arquivos existentes são mantidos (ignorados) a menos que você ative a sobrescrita.",
+        "agentsRunning": "{count} agente(s) em execução ({agents}). Feche-os primeiro, ou as transcrições ficarão em uma pasta à parte em vez de voltarem ao lugar de origem."
       },
-      "restartFailed": "Restauração preparada, mas o servidor não conseguiu reiniciar. Reinicie-o manualmente para aplicá-la."
+      "restartFailed": "Restauração preparada, mas o servidor não conseguiu reiniciar. Reinicie-o manualmente para aplicá-la.",
+      "discardPending": "Descartar a restauração preparada",
+      "discarded": "A restauração preparada foi descartada.",
+      "pendingBlockedHint": "Já há uma restauração preparada aguardando reinício. Descarte-a para preparar outra.",
+      "result": {
+        "title": "Restauração preparada",
+        "needsRestart": "Será aplicada no próximo início. Antes disso é feito um instantâneo dos seus dados atuais.",
+        "downgraded": "{agents} estava(m) em execução, então as transcrições não voltaram às suas localizações originais. Ficaram em {path}.",
+        "skipped": "{count} arquivo(s) existente(s) foram mantidos",
+        "refused": "{count} banco(s) de dados de sessão não foram regravados",
+        "refusedHint": "Vêm de um backup antigo que guardava o banco e o registro de escrita antecipada separadamente, e não é possível provar que correspondem. Seus bancos atuais ficaram intactos — restaure para uma pasta à parte para obter os arquivos originais.",
+        "restartNow": "Reiniciar agora",
+        "later": "Depois"
+      }
     },
-    "remoteUnsupported": "O backup e a restauração atuam sobre os dados da máquina que executa o codeg. Você está conectado a um espaço de trabalho remoto — gerencie os backups dele diretamente nesse servidor."
+    "remoteUnsupported": "O backup e a restauração atuam sobre os dados da máquina que executa o codeg. Você está conectado a um espaço de trabalho remoto — gerencie os backups dele diretamente nesse servidor.",
+    "progress": {
+      "cancel": "Cancelar"
+    },
+    "snapshots": {
+      "title": "Instantâneos anteriores à restauração",
+      "hint": "Cada restauração faz antes um instantâneo dos seus dados atuais. Os dois mais recentes são mantidos.",
+      "empty": "Ainda não há instantâneos.",
+      "rollback": "Voltar para este",
+      "unsupported": "Somente consulta",
+      "rollbackConfirmTitle": "Voltar para este instantâneo?",
+      "rollbackConfirmBody": "Isto substitui seus dados atuais pelo instantâneo e reinicia. Antes é feito um instantâneo dos dados substituídos."
+    }
+  },
+  "ConfigSyncSettings": {
+    "title": "Sincronização de configuração",
+    "scopeTitle": "O que é sincronizado",
+    "scopeIncludedTitle": "Incluído",
+    "scopeExcludedTitle": "Não incluído",
+    "scopeIncluded": {
+      "providers": "Provedores de modelos (com chaves de API)",
+      "agentSettings": "Configurações de agentes",
+      "customAgents": "Agentes personalizados",
+      "quickMessages": "Mensagens rápidas",
+      "taskTemplates": "Modelos de tarefa",
+      "preferences": "Preferências do app (idioma, aparência, opções)"
+    },
+    "scopeExcluded": {
+      "conversations": "Conversas e histórico",
+      "uploads": "Arquivos e imagens enviados",
+      "workspaces": "Projetos e caminhos do espaço de trabalho",
+      "mcp": "Servidores MCP (mantidos por cada CLI)",
+      "credentials": "Credenciais de login e tokens"
+    },
+    "fileTitle": "Arquivo de configuração",
+    "exportButton": "Exportar para arquivo",
+    "importButton": "Importar de arquivo",
+    "fileHint": "Grava um único arquivo JSON que você pode levar para outra máquina. A importação adiciona ou atualiza itens; os itens existentes que não estiverem no arquivo são mantidos.",
+    "webdavTitle": "Sincronização WebDAV",
+    "webdavHint": "Envia o instantâneo de configuração para o seu próprio servidor WebDAV.",
+    "presetLabel": "Servidor",
+    "preset": {
+      "jianguoyun": "Jianguoyun",
+      "nextcloud": "Nextcloud",
+      "synology": "NAS Synology",
+      "custom": "Personalizado"
+    },
+    "presetHint": {
+      "jianguoyun": "O Jianguoyun exige uma senha de aplicativo criada nas configurações de segurança, não a senha de login.",
+      "nextcloud": "Troque o domínio e o usuário e use uma senha de aplicativo em Configurações → Segurança.",
+      "synology": "Ative o WebDAV Server no Centro de Pacotes do DSM; as portas padrão são 5005 (HTTP) e 5006 (HTTPS)."
+    },
+    "serverUrl": "URL do servidor",
+    "username": "Usuário",
+    "password": "Senha",
+    "passwordKeep": "Deixe em branco para manter a senha salva",
+    "passwordPlaceholder": "Senha de aplicativo",
+    "remoteDir": "Pasta remota",
+    "profile": "Perfil",
+    "profileHint": "Máquinas com o mesmo perfil compartilham uma configuração. Use perfis diferentes para separar trabalho e uso pessoal.",
+    "autoSyncLabel": "Enviar automaticamente",
+    "autoSyncHint": "Verifica periodicamente e envia apenas quando a configuração muda.",
+    "intervalLabel": "Intervalo de verificação",
+    "intervalOption": "A cada {minutes} minutos",
+    "saveButton": "Salvar",
+    "testButton": "Testar conexão",
+    "uploadButton": "Sincronizar agora",
+    "restoreButton": "Restaurar do servidor",
+    "saved": "Ajustes de sincronização salvos",
+    "testSucceeded": "Conectado ao servidor WebDAV",
+    "uploaded": "Configuração enviada",
+    "exported": "Configuração exportada",
+    "restored": "{count, plural, one {# item aplicado} other {# itens aplicados}}",
+    "imported": "{count, plural, one {# item aplicado} other {# itens aplicados}}",
+    "noRemoteSnapshot": "Ainda não há instantâneo de configuração no servidor",
+    "lastSyncAt": "Última sincronização: {time}",
+    "neverSynced": "Ainda não sincronizado",
+    "lastError": "Último erro: {message}",
+    "working": "Processando…",
+    "plaintextWarning": "O instantâneo é enviado sem criptografia e contém chaves de API, então use um servidor WebDAV que só você acesse. As credenciais de sincronização nunca fazem parte do instantâneo.",
+    "importConfirmTitle": "Importar configuração?",
+    "importConfirmBody": "Os itens do arquivo serão adicionados ou atualizados nesta máquina. Os itens existentes que o arquivo não menciona são mantidos.",
+    "restartHint": "Algumas alterações (aparência, idioma e a lista de provedores) só têm efeito depois de reiniciar o codeg.",
+    "importConfirmAction": "Importar",
+    "restoreConfirmTitle": "Restaurar do servidor?",
+    "restoreConfirmBody": "O instantâneo de {device}, criado em {time}, será aplicado a esta máquina. Os itens existentes que o instantâneo não menciona são mantidos.",
+    "restoreConfirmAction": "Restaurar",
+    "cancel": "Cancelar",
+    "emptySnapshot": "Este instantâneo não contém itens de configuração.",
+    "domain": {
+      "modelProviders": "{count, plural, one {# provedor de modelos} other {# provedores de modelos}}",
+      "agentSettings": "{count, plural, one {# ajuste de agente} other {# ajustes de agentes}}",
+      "customAgents": "{count, plural, one {# agente personalizado} other {# agentes personalizados}}",
+      "quickMessages": "{count, plural, one {# mensagem rápida} other {# mensagens rápidas}}",
+      "taskTemplates": "{count, plural, one {# modelo de tarefa} other {# modelos de tarefa}}",
+      "preferences": "{count, plural, one {# preferência} other {# preferências}}"
+    },
+    "rollbackTitle": "Desfazer uma importação",
+    "rollbackHint": "Cada importação e cada restauração guardam antes o estado desta máquina. Os dez últimos são mantidos.",
+    "rollbackAction": "Desfazer",
+    "rollbackUnknownTime": "Hora desconhecida",
+    "rollbackConfirmTitle": "Voltar a esta configuração?",
+    "rollbackConfirmBody": "A configuração atual será substituída pela cópia guardada em {time}. A atual é guardada primeiro, por isso este passo também pode ser desfeito.",
+    "rollbackConfirmAction": "Desfazer",
+    "rolledBack": "{count, plural, one {# entrada restaurada} other {# entradas restauradas}}",
+    "encryptLabel": "Cifrar o snapshot",
+    "encryptHint": "Protege o ficheiro enviado com uma frase-passe. Todas as máquinas sincronizadas precisam da mesma.",
+    "encryptedNotice": "O snapshot é cifrado com a sua frase-passe antes do envio. Se a perder, a cópia no servidor não poderá ser recuperada.",
+    "passphrase": "Frase-passe",
+    "passphraseKeep": "Deixe vazio para manter a frase-passe guardada",
+    "passphrasePlaceholder": "Frase-passe de cifra",
+    "passphraseHint": "Fica no porta-chaves desta máquina e nunca é enviada. Introduza a mesma frase-passe nas suas outras máquinas."
   },
   "backup": {
     "restore": {
@@ -4445,6 +4887,27 @@
     "error": {
       "diskSpace": "Espaço em disco insuficiente para concluir a operação.",
       "cancelled": "A operação foi cancelada."
+    }
+  },
+  "configSync": {
+    "error": {
+      "newerSchema": "Este instantâneo foi criado por uma versão mais nova do codeg (formato {snapshotVersion}); esta versão suporta até o formato {appVersion}.",
+      "checksum": "O instantâneo não confere com sua soma de verificação e pode estar incompleto.",
+      "invalidSnapshot": "Este arquivo não é um instantâneo de configuração válido do codeg.",
+      "noRemoteSnapshot": "Ainda não há instantâneo de configuração no servidor.",
+      "notConfigured": "Configure o servidor WebDAV antes de sincronizar.",
+      "unauthorized": "O servidor WebDAV recusou o usuário ou a senha.",
+      "forbidden": "O servidor WebDAV negou acesso a esta pasta.",
+      "remotePath": "A pasta remota ou o nome do perfil não é válido.",
+      "quota": "O servidor WebDAV não tem mais espaço.",
+      "network": "Não foi possível alcançar o servidor WebDAV.",
+      "server": "O servidor WebDAV retornou um erro ({status}).",
+      "passphraseRequired": "Este snapshot está cifrado. Defina a frase-passe antes de sincronizar.",
+      "badPassphrase": "Não foi possível decifrar o snapshot. Verifique a frase-passe — o ficheiro também pode estar danificado.",
+      "badDomain": "Não foi possível ler a secção {domain} deste snapshot.",
+      "noRollback": "Essa configuração guardada já não está nesta máquina.",
+      "credentialsUnreadable": "Não foi possível ler as credenciais salvas. Desbloqueie o chaveiro do sistema e tente novamente.",
+      "notEncrypted": "O instantâneo no servidor não está criptografado, mas a criptografia está ativada neste dispositivo. Envie a partir deste dispositivo para substituí-lo ou desative a criptografia para usá-lo."
     }
   },
   "WebConnection": {
@@ -4477,21 +4940,92 @@
   "AgentToolsSettings": {
     "title": "Ferramentas na conversa",
     "description": "Ferramentas extras que o codeg dá a um agente dentro de uma conversa. Elas são injetadas quando o agente inicia, então a mudança vale para os agentes iniciados depois.",
-    "feedbackLabel": "Feedback ao vivo",
-    "feedbackHint": "Envie notas e correções a um agente enquanto ele trabalha. Se o agente oferecer inserção instantânea, sua nota entra imediatamente no turno em andamento; caso contrário, o agente recebe uma ferramenta para verificar seu feedback — esses agentes normalmente só verificam quando você menciona isso no prompt, por exemplo, adicione \"verifique meu feedback ao vivo regularmente\" à sua mensagem.",
-    "questionLabel": "Perguntar ao usuário",
-    "questionHint": "Permite que os agentes pausem e façam uma pergunta de múltipla escolha que aparece acima da caixa de entrada da conversa. O agente aguarda até você responder (ou pular).",
-    "sessionInfoLabel": "Obter informações da sessão",
-    "sessionInfoHint": "Permite que os agentes consultem uma sessão mencionada na sua mensagem (um selo de sessão) para ler o título, agente, status, espaço de trabalho, uso de tokens e mensagens recentes.",
-    "automationsLabel": "Criar automações",
-    "automationsHint": "Salva a conversa como uma automação que roda em um agendamento. Desativado por padrão — depois ela inicia agentes por conta própria.",
-    "workTasksLabel": "Criar tarefas a fazer",
-    "workTasksHint": "Coloca um cartão no quadro de tarefas a partir da conversa. Desativado por padrão — grava o estado do app.",
     "save": "Salvar",
     "saving": "Salvando…",
     "saved": "Configurações de ferramentas salvas",
     "saveFailed": "Falha ao salvar as configurações de ferramentas",
     "loadFailed": "Falha ao carregar: {detail}"
+  },
+  "AgentTools": {
+    "delegation": {
+      "label": "Delegação",
+      "short": "Passa uma tarefa para outro agente.",
+      "hint": "Permite que um agente passe uma subtarefa autônoma para outro agente, que a executa na própria sessão e devolve o resultado. O restante — quantos níveis de aninhamento, qual agente executa — está na seção logo acima."
+    },
+    "feedback": {
+      "label": "Feedback ao vivo",
+      "short": "Acrescenta notas sem interromper o turno.",
+      "hint": "Envie notas e correções a um agente enquanto ele trabalha. Se o agente oferecer inserção instantânea, sua nota entra imediatamente no turno em andamento; caso contrário, o agente recebe uma ferramenta para verificar seu feedback — esses agentes normalmente só verificam quando você menciona isso no prompt, por exemplo, adicione \"verifique meu feedback ao vivo regularmente\" à sua mensagem."
+    },
+    "ask": {
+      "label": "Perguntar ao usuário",
+      "short": "Deixa o agente perguntar antes de decidir.",
+      "hint": "Permite que os agentes pausem e façam uma pergunta de múltipla escolha que aparece acima da caixa de entrada da conversa. O agente aguarda até você responder (ou pular)."
+    },
+    "sessions": {
+      "label": "Obter informações da sessão",
+      "short": "Consulta sessões anteriores e seus resultados.",
+      "hint": "Permite que os agentes consultem uma sessão mencionada na sua mensagem (um selo de sessão) para ler o título, agente, status, espaço de trabalho, uso de tokens e mensagens recentes."
+    },
+    "browser": {
+      "label": "Ler e conduzir o navegador integrado",
+      "short": "Abre, lê e age sobre as páginas do navegador integrado.",
+      "hint": "Permite que um agente veja quais páginas estão abertas no navegador integrado, leia as que você compartilhar e clique e digite naquelas em que você permitir ações. Ele também pode abrir um endereço por conta própria, levar uma aba para outro lugar e fechar abas. Desativado por padrão. Qual página ele pode ler continua sendo decisão sua, na barra daquela aba — mas note que, com um nível de compartilhamento padrão definido, uma página que o agente abre para si fica compartilhada com ele assim que carrega. Desativar tem efeito imediato, inclusive sobre agentes já em execução."
+    },
+    "browserEval": {
+      "label": "Executar código no navegador integrado",
+      "short": "Executa o próprio código numa página compartilhada, sem perguntar.",
+      "hint": "Permite que os agentes executem o próprio JavaScript numa página que você compartilhou. Desativado por padrão e depende do interruptor acima. Ligá-lo significa que os trechos são executados sem perguntar, então a decisão é tomada neste interruptor; em Configurações → Navegador integrado dá para pedir que cada trecho seja mostrado a você."
+    },
+    "automations": {
+      "label": "Criar automações",
+      "short": "Cria e gere automações agendadas.",
+      "hint": "Salva a conversa como uma automação que roda em um agendamento. Desativado por padrão — depois ela inicia agentes por conta própria."
+    },
+    "taskboard": {
+      "label": "Criar tarefas a fazer",
+      "short": "Cria e gere tarefas de trabalho.",
+      "hint": "Coloca um cartão no quadro de tarefas a partir da conversa. Desativado por padrão — grava o estado do app."
+    }
+  },
+  "DesktopNotificationSettings": {
+    "title": "Notificações do sistema",
+    "description": "Mostra uma notificação do sistema quando um agente precisa de você. A configuração é por dispositivo — em outro navegador ou máquina ela é independente.",
+    "permissionTitle": "Permissão",
+    "permissionGranted": "Permitidas",
+    "permissionDenied": "Bloqueadas",
+    "permissionDefault": "Não solicitada",
+    "permissionUnsupported": "Indisponível",
+    "permissionManagedByOs": "Gerenciada pelo sistema",
+    "permissionGrantedHint": "Este navegador exibirá as notificações do Codeg.",
+    "permissionDeniedHint": "Este navegador está bloqueando as notificações do Codeg. Só as configurações do site no navegador podem reverter isso — uma página não pode perguntar de novo.",
+    "permissionDefaultHint": "Este navegador ainda não foi consultado. Não haverá notificações até que você permita.",
+    "permissionUnsupportedHint": "Notificações exigem um contexto seguro. Acesse este servidor por HTTPS ou em localhost.",
+    "permissionManagedByOsHint": "O app de desktop envia pela central de notificações do sistema, que não informa se o Codeg está permitido. Envie um teste para descobrir.",
+    "identityTitle": "Entregue como",
+    "identityHint": "O sistema registra estas notificações sob este app; valem os interruptores dele.",
+    "identityDegradedHint": "Não foi possível reivindicar o identificador do próprio Codeg, então o sistema as envia como {bundleId} e valem os interruptores desse app. Instale o Codeg na pasta Aplicativos para restaurar sua identidade.",
+    "requestPermission": "Permitir notificações",
+    "permissionGrantedToast": "Notificações permitidas.",
+    "permissionDeniedToast": "As notificações foram bloqueadas. Reative-as nas configurações do site no seu navegador.",
+    "openSystemSettings": "Abrir configurações do sistema",
+    "openSystemSettingsFailed": "Não foi possível abrir as configurações de notificação do sistema.",
+    "sendTest": "Enviar um teste",
+    "testTitle": "Codeg",
+    "testBody": "As notificações do sistema estão funcionando.",
+    "testSent": "Notificação de teste enviada.",
+    "testFailed": "Não foi possível enviar a notificação de teste.",
+    "whenTitle": "Notificar quando",
+    "whenHint": "Uma janela em um segundo monitor está visível, mas sem foco — escolha “A janela não está em foco” se as notificações nunca chegam.",
+    "whenAlways": "Sempre",
+    "whenUnfocused": "A janela não está em foco",
+    "whenHidden": "A janela não está visível",
+    "hideBody": "Ocultar o conteúdo",
+    "hideBodyHint": "Mostra uma linha genérica no lugar da saída do agente. A central de notificações guarda o conteúdo fora do app, mesmo depois de fechar a conversa. O título continua nomeando a pasta, para você saber a qual janela voltar.",
+    "eventsTitle": "Eventos",
+    "eventsHint": "Desligue os eventos que não devem interromper você. Repetições do mesmo evento em poucos segundos são agrupadas em uma notificação.",
+    "eventBackgroundTask": "Tarefa em segundo plano",
+    "eventWorkTask": "Tarefa de trabalho"
   },
   "NotificationSoundSettings": {
     "title": "Sons de notificação",
@@ -4511,6 +5045,100 @@
     "tonePop": "Pop",
     "toneAlert": "Alerta",
     "toneDescend": "Descendente"
+  },
+  "BrowserSettings": {
+    "title": "Navegador integrado",
+    "description": "Páginas web abertas a partir de conversas, resultados de ferramentas e do terminal podem aparecer como abas ao lado dos seus arquivos, sem sair do aplicativo.",
+    "descriptionWeb": "Em uma sessão de navegador, as páginas abrem no navegador que você já está usando. A exceção é um servidor em execução no host do codeg: ele é encaminhado para uma aba aqui. Estas são as configurações que ainda decidem algo.",
+    "defaultTargetTitle": "Onde os links abrem",
+    "defaultTargetHint": "Definido por origem. Use ⌘/Ctrl+clique em um link para usar a outra opção só desta vez.",
+    "sourceTranscript": "Mensagens da conversa",
+    "sourceToolCard": "Resultados de ferramentas",
+    "sourceTerminal": "Terminal",
+    "sourceEditor": "Editor",
+    "sourceNotification": "Notificações",
+    "targetBuiltin": "Navegador integrado",
+    "targetSystem": "Navegador do sistema",
+    "devtoolsTitle": "Inspetor web",
+    "devtoolsHint": "Oferece “Abrir o inspetor” no menu Mais de uma aba, e permite Inspecionar elemento na página. Ligado por padrão. Vale para as abas abertas a partir de agora.",
+    "surfaceTitle": "Superfície das abas",
+    "surfaceHint": "Como as páginas são hospedadas. Mantenha Automático, a menos que as abas incorporadas apresentem problemas neste sistema. Vale para abas abertas a partir de agora.",
+    "surfaceAuto": "Automático",
+    "surfaceChild": "Incorporada ao espaço de trabalho",
+    "surfaceWindow": "Janela separada",
+    "clearTitle": "Dados de navegação",
+    "clearHint": "Cookies, caches e armazenamento de sites compartilhados por todas as abas do navegador. Limpar encerra sua sessão nos sites.",
+    "clearAction": "Limpar…",
+    "clearConfirmTitle": "Limpar dados de navegação?",
+    "clearConfirmDescription": "Os cookies, caches e o armazenamento de sites do navegador integrado serão removidos. As abas abertas continuam abertas, mas sua sessão nos sites será encerrada.",
+    "clearConfirmAction": "Limpar",
+    "cancel": "Cancelar",
+    "cleared": "Dados de navegação limpos",
+    "clearFailed": "Não foi possível limpar os dados de navegação: {message}",
+    "proxyTitle": "Proxy de rede",
+    "proxyHint": "Os separadores do navegador usam o proxy das Definições do sistema. Os endereços desta máquina (localhost) nunca passam pelo proxy.",
+    "proxyOn": "A usar {url}",
+    "proxyOff": "Ligação direta",
+    "proxyNextTab": "Uma alteração de proxy aplica-se aos separadores abertos a partir de agora.",
+    "proxyRestart": "Reinicie o codeg para os separadores do navegador usarem o proxy alterado.",
+    "proxyUnsupported": "Indisponível nesta versão do macOS (é necessária a 14 ou posterior).",
+    "proxyUnusable": "O proxy configurado não é de um tipo que os separadores do navegador possam usar (apenas http e socks5).",
+    "suspendTitle": "Descarregar abas em segundo plano",
+    "suspendHint": "Libera a memória das abas do navegador que ficam 30 minutos em segundo plano. Elas recarregam quando você volta; a posição de rolagem e o histórico são perdidos.",
+    "downloadsTitle": "Downloads",
+    "downloadsHint": "Os arquivos baixados por uma página são salvos em {dir}. Nada é aberto automaticamente e um arquivo existente nunca é substituído.",
+    "rulesTitle": "Regras de site",
+    "rulesHint": "Por site: sempre o navegador integrado, sempre o navegador do sistema ou bloquear. Os padrões são um nome de host, *.example.com ou *, com :porta opcional; a correspondência mais específica vence.",
+    "rulesHintWeb": "Por site: bloquear. Onde um link abre não é uma escolha em uma sessão de navegador. Os padrões são um nome de host, *.example.com ou *, com :porta opcional; a correspondência mais específica vence.",
+    "serviceOpenTitle": "Servidores locais",
+    "serviceOpenHint": "Quando um servidor iniciado num terminal imprime o endereço, abri-lo numa aba do navegador. Apenas endereços desta máquina e só quando algo estiver a escutar neles.",
+    "serviceOpenOff": "Não fazer nada",
+    "serviceOpenNotify": "Avisar-me",
+    "serviceOpenOpen": "Abrir uma aba",
+    "rulePatternPlaceholder": "example.com ou *.example.com",
+    "rulePatternLabel": "Padrão de site",
+    "ruleActionLabel": "Ação",
+    "ruleActionFor": "Ação para {pattern}",
+    "ruleAdd": "Adicionar",
+    "ruleRemove": "Remover regra",
+    "ruleActionBlock": "Bloquear",
+    "ruleManaged": "Definida pelo seu administrador",
+    "ruleInvalid": "Não é um padrão válido",
+    "ruleDuplicate": "Já existe uma regra para este padrão",
+    "rulesEmpty": "Ainda não há regras.",
+    "agentGrantTitle": "Nível de compartilhamento padrão",
+    "agentGrantHint": "Com que nível cada site aberto por uma aba é compartilhado, sem perguntar. O controle da própria página continua alterando ou encerrando isso site a site; “Não compartilhar nada” deixa todas as decisões para esse controle.",
+    "agentGrantRead": "Apenas leitura",
+    "agentGrantControl": "Ler e interagir",
+    "agentGrantNone": "Não compartilhar nada",
+    "evalApprovalTitle": "Executar código numa página",
+    "evalApprovalHint": "O que acontece quando um agente pede para executar o próprio JavaScript numa página compartilhada como “Ler e interagir”. Ele executa, sem perguntar — a decisão está no interruptor “Executar código no navegador integrado”, que fica desligado até você ligá-lo, e no nível de compartilhamento da página; cada execução aparece na atividade do agente daquela aba. “Perguntar sempre” mostra cada trecho por inteiro e espera sua resposta.",
+    "evalApprovalAsk": "Perguntar sempre",
+    "evalApprovalSilent": "Executar sem perguntar",
+    "terminalMenuTitle": "Menu de links do terminal",
+    "terminalMenuHint": "Clicar em um link no terminal mostra um pequeno menu (navegador integrado, navegador do sistema, copiar link) em vez de abri-lo imediatamente. ⌘/Ctrl+clique continua abrindo o link diretamente.",
+    "htmlPreviewTitle": "Pré-visualização de arquivos HTML",
+    "htmlPreviewHint": "Mostra arquivos HTML pelo navegador integrado, em uma visualização de documento restrita: sem scripts até você ativá-los para um arquivo, e só a própria pasta é acessível. Desativado: usa a pré-visualização em linha, como no aplicativo web.",
+    "managedDisabled": "A política do seu administrador desativou o navegador integrado; os links abrem no navegador do sistema.",
+    "profilesTitle": "Perfis",
+    "profilesHint": "Cada perfil guarda seus próprios cookies, armazenamento de sites e logins. Novas abas abrem no perfil escolhido abaixo; a barra de uma aba pode abrir sua página em outro.",
+    "profileDefault": "Padrão",
+    "profileNewTabsTitle": "Novas abas abrem em",
+    "profileNamePlaceholder": "Nome do perfil, por ex. Trabalho",
+    "profileNameLabel": "Nome do perfil",
+    "profileAdd": "Adicionar perfil",
+    "profileNameRequired": "Digite um nome para o perfil",
+    "profileNameDuplicate": "Já existe um perfil com esse nome",
+    "profileClear": "Limpar os dados de navegação de {name}",
+    "profileDelete": "Excluir o perfil {name}",
+    "profileDeleteConfirmTitle": "Excluir o perfil {name}?",
+    "profileDeleteConfirmDescription": "Suas abas serão fechadas e seus cookies, caches e armazenamento de sites removidos. Isso não pode ser desfeito.",
+    "profileDeleteConfirmAction": "Excluir",
+    "profileDeleted": "Perfil excluído",
+    "profileDeleteFailed": "Não foi possível excluir o perfil: {message}",
+    "clearConfirmDescriptionProfile": "Os cookies, caches e armazenamento de sites do perfil {name} serão removidos. As abas abertas continuam abertas, mas você sairá dos sites.",
+    "signInUaTitle": "Compatibilidade com o login do Google",
+    "signInUaHint": "O Google recusa login a partir de navegadores incorporados. Quando ativado, as abas se apresentam como Firefox apenas às páginas de login do Google (accounts.google.com); em todo o resto elas se apresentam como o mecanismo em que são executadas, nunca como Firefox. Apenas em abas incorporadas, não na janela separada; quando uma página de login redireciona para outro site, a primeira solicitação a ele ainda leva a identidade de login."
   },
   "LogsSettings": {
     "loading": "Carregando…",
@@ -4690,12 +5318,7 @@
     "cronApply": "Aplicar",
     "cronPreviewLabel": "Pré-visualização",
     "cronOpenBuilder": "Abrir o gerador de agendamento",
-    "branchDefault": "Branch padrão",
-    "branchUseCustom": "Usar \"{query}\"",
-    "branchLocal": "Local",
-    "branchRemote": "Remoto",
-    "branchSearchPlaceholder": "Pesquisar branches…",
-    "branchNone": "Sem branches"
+    "branchDefault": "Branch padrão"
   },
   "Tasks": {
     "title": "Tarefas a fazer",
@@ -4804,6 +5427,8 @@
     "errorView": "Ver",
     "notifyReview": "Pronto para revisão: {title}",
     "notifyFailed": "A tarefa falhou: {title}",
+    "notifyReviewRedacted": "Há uma tarefa pronta para revisão",
+    "notifyFailedRedacted": "Uma tarefa falhou",
     "createFromMessage": "Criar tarefa a partir da mensagem",
     "detailTokens": "Total de tokens",
     "editorTitleNew": "Nova tarefa",
@@ -4818,11 +5443,16 @@
     "phaseRetry": "Nova tentativa",
     "phaseReturn": "Continuação",
     "phaseMerge": "Merge",
+    "phaseCompact": "Compactação de contexto",
     "titleLabel": "Título",
     "titlePlaceholder": "O que precisa ser feito?",
     "promptLabel": "Descrição da tarefa",
     "promptPlaceholder": "Descreva a tarefa para o agente — @ para referenciar arquivos, / para comandos",
     "folderPlaceholder": "Selecione uma pasta",
+    "baseBranch": "Branch base",
+    "baseBranchPlaceholder": "Branch atual",
+    "baseBranchDefault": "Branch atual quando a tarefa iniciar",
+    "baseBranchHint": "A tarefa parte deste branch e o merge a devolve para ele.",
     "agentInheritedHint": "Herdado das configurações de tarefas; altere para personalizar esta tarefa",
     "agentOverrideReset": "Voltar a herdar",
     "sectionTarget": "Destino",
@@ -4848,6 +5478,7 @@
     "mergeDeleteWorktree": "Excluir o worktree após o merge",
     "mergeSubmit": "Merge",
     "mergeSubmitQueue": "Adicionar à fila",
+    "mergeSubmitting": "Iniciando…",
     "mergeQueuedToast": "Adicionada à fila de merge — começa assim que o merge atual terminar.",
     "completeTitle": "Concluir tarefa",
     "completeDescription": "Esta tarefa não alterou nenhum arquivo, então não há nada para fazer merge: ela é marcada como concluída.",
@@ -4869,6 +5500,7 @@
     "settingsMaxConcurrentHint": "0 = ilimitado",
     "settingsAutoCompact": "Limite de compactação automática",
     "settingsAutoCompactHint": "Antes de uma rodada de continuação, nova tentativa ou merge, compacta a sessão se a janela de contexto estiver ao menos assim cheia. 0 = desativado.",
+    "compactingNote": "Compactando o contexto da sessão…",
     "settingsCompactCommand": "Comando de compactação",
     "settingsCompactCommandHint": "Deixe em branco para usar o que o agente oferece, ou o padrão conhecido dele.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -5112,6 +5744,47 @@
     "fieldDescription": "Descrição",
     "baseInstructions": "Prompt do sistema (base_instructions)"
   },
+  "DeepSeekModelEditor": {
+    "title": "Lista de modelos",
+    "description": "Os modelos entre os quais uma sessão do DeepSeek pode alternar. Ficam no documento de definições do harness, que o agente lê ao arrancar — guardar aplica-se às sessões iniciadas depois.",
+    "inheritedBadge": "Predefinições do agente",
+    "inheritedHint": "Ainda não há lista guardada, por isso estes são os modelos integrados do agente. Guardar fixa-os, e as versões seguintes do agente deixam de os alterar sozinhas. Ficheiro:",
+    "storedHint": "Guardada no documento de definições do harness. As chaves fora desta lista — e os comentários à volta delas — ficam intactas. Ficheiro:",
+    "unreadable": "Este documento de definições não pode ser editado aqui sem arriscar o que já contém. Edite-o à mão.",
+    "invalidStored": "O agente recusa esta lista guardada, por isso as sessões correm com os seus modelos integrados até ser corrigida:",
+    "loading": "A ler o documento de definições…",
+    "loadFailed": "Não foi possível ler o documento de definições.",
+    "empty": "Sem modelos. Adicione um, ou guarde para voltar à lista integrada do agente.",
+    "addModel": "Adicionar modelo",
+    "remove": "Remover modelo",
+    "advanced": "Mais",
+    "save": "Guardar lista de modelos",
+    "saving": "A guardar…",
+    "restoreDefaults": "Usar predefinições do agente",
+    "fieldId": "Id do modelo",
+    "fieldName": "Nome apresentado",
+    "fieldContextWindow": "Janela de contexto",
+    "fieldDescription": "Descrição",
+    "fieldMaxTokens": "Tokens de saída máx.",
+    "fieldAcceptsImages": "Aceita imagens",
+    "fieldImagePixelBudget": "Limite de píxeis",
+    "imageBudgetPixels": "Número de pixels",
+    "imageBudgetLow": "Detalhe baixo (512×512)",
+    "fieldImageMaxBytes": "Limite de bytes",
+    "placeholderId": "deepseek-flash",
+    "placeholderName": "Mostrado no seletor",
+    "placeholderInherit": "Predefinição do agente",
+    "errorMissingId": "Todos os modelos precisam de um id.",
+    "errorDuplicateId": "Dois modelos partilham o id “{id}”.",
+    "errorBadContextWindow": "A janela de contexto de “{id}” tem de ser um inteiro maior que zero.",
+    "errorBadMaxTokens": "Os tokens de saída máximos de “{id}” têm de ser um inteiro maior que zero.",
+    "errorBadImageLimit": "Os limites de imagem de “{id}” têm de ser inteiros maiores que zero.",
+    "warnSingleModel": "Com um único modelo, o agente deixa de oferecer seletor de modelo.",
+    "warnLaunchModelMissing": "As sessões novas começam em “{model}”, que não está nesta lista. Adicione-o, ou defina {variable} nas variáveis de ambiente acima.",
+    "toastSaved": "Lista de modelos guardada",
+    "toastRestored": "A usar a lista de modelos integrada do agente",
+    "toastSaveFailed": "Não foi possível guardar a lista de modelos"
+  },
   "DiagnosticsSettings": {
     "title": "Diagnóstico do ambiente",
     "description": "Verifica como este app resolve a CLI do agente no próprio processo, que pode diferir do seu terminal.",
@@ -5279,7 +5952,7 @@
     "noRemote": "Esta pasta não tem um remoto reconhecível (origin)",
     "errors": {
       "noAccount": "Nenhuma conta {provider} configurada para {host}. Adicione uma em Configurações → Controle de versão para carregar este repositório.",
-      "unsupportedHost": "O painel do repositório só oferece suporte a GitHub e GitLab, e {host} não é reconhecido como nenhum dos dois. Se for uma instância auto-hospedada do GitHub Enterprise ou do GitLab, adicione uma conta para ela em Configurações → Controle de versão.",
+      "unsupportedHost": "O painel do repositório só oferece suporte a GitHub, GitLab e Gitea, e {host} não é reconhecido como nenhum deles. Se for uma instância auto-hospedada do GitHub Enterprise, GitLab, Gitea ou Forgejo, adicione uma conta para ela em Configurações → Controle de versão.",
       "wrongForge": "{host} é um {provider}, não a forja com que estava classificado. A detecção foi corrigida — recarregue para tentar novamente."
     },
     "addAccount": "Adicionar uma conta",
@@ -5543,6 +6216,317 @@
     "confirmDeleteCancel": "Cancelar",
     "confirmDeleteConfirm": "Excluir",
     "canvasActions": "Ações do quadro",
-    "mergeIntoNewRegion": "Nova região"
+    "mergeIntoNewRegion": "Nova região",
+    "addFileCard": "Cartão de arquivo",
+    "addTerminalCard": "Cartão de terminal",
+    "searchFiles": "Pesquisar arquivos…",
+    "searchFilesIn": "Pesquisar em {folder}…",
+    "searchingFiles": "Pesquisando…",
+    "noFiles": "Nenhum arquivo encontrado",
+    "noOpenFiles": "Nenhum arquivo aberto — digite para pesquisar",
+    "browseForFile": "Procurar…",
+    "filePreview": "Pré-visualização",
+    "fileSource": "Código",
+    "reloadFile": "Recarregar",
+    "removeFileCard": "Remover cartão de arquivo",
+    "restartTerminal": "Reiniciar terminal",
+    "removeTerminalCard": "Remover cartão de terminal",
+    "terminalNoDirectory": "Este cartão não tem diretório de trabalho",
+    "confirmDeleteTerminals": "{count} terminal(is) em execução serão fechados e seus processos encerrados.",
+    "confirmDeleteNotesAndTerminals": "{notes} nota(s) que você escreveu serão excluídas permanentemente e {terminals} terminal(is) em execução serão encerrados."
+  },
+  "Browser": {
+    "toolbar": {
+      "back": "Voltar",
+      "forward": "Avançar",
+      "reload": "Recarregar",
+      "stop": "Parar",
+      "openInSystem": "Abrir no navegador do sistema",
+      "more": "Mais",
+      "copyUrl": "Copiar link",
+      "copied": "Link copiado",
+      "openInspector": "Abrir o inspetor",
+      "inspectorFailed": "Não foi possível abrir o inspetor",
+      "addressPlaceholder": "Digite um endereço",
+      "invalidUrl": "Endereço inválido",
+      "profile": "Perfil: {name}",
+      "profileMenuLabel": "Abrir esta página em outro perfil",
+      "profileDefault": "Padrão"
+    },
+    "status": {
+      "popupDenied": "Pop-up bloqueado: {host}",
+      "popupDeniedNoGesture": "não foi aberto por um clique",
+      "popupDeniedBlockedScheme": "tipo de endereço não permitido",
+      "popupOpenAnyway": "Abrir mesmo assim",
+      "dismiss": "Fechar",
+      "errorDns": "Este site não foi encontrado",
+      "errorTls": "Esta conexão não é segura",
+      "errorBlocked": "Este endereço está bloqueado no navegador integrado",
+      "errorPopupDenied": "Pop-up bloqueado",
+      "errorFailed": "Não foi possível carregar esta página",
+      "errorFailedHint": "A ligação ao site não foi estabelecida. Verifique a sua rede e o endereço; pode ser necessário um proxy.",
+      "retry": "Tentar novamente",
+      "openInSystem": "Abrir no navegador do sistema",
+      "ownedWindow": "Esta página é exibida em uma janela própria.",
+      "ownedWindowShow": "Mostrar janela",
+      "remoteBanner": "Aberto via {host}",
+      "remoteBannerDown": "A conexão com {host} caiu. Ela será tentada de novo na próxima solicitação.",
+      "navigationBlocked": "Navegação bloqueada: {host}",
+      "navigationBlockedRule": "bloqueada por uma regra de site",
+      "navigationBlockedScheme": "este tipo de endereço não pode ser aberto aqui",
+      "navigationBlockedOpenSystem": "Abrir com o app do sistema",
+      "errorBlockedHint": "Uma regra de site bloqueia este endereço. As regras são geridas em Configurações → Navegador integrado.",
+      "popupDeniedBlockedHost": "bloqueada por uma regra de site",
+      "channelDegraded": "Nesta aba, os pop-ups são bloqueados e a barra de endereços pode ficar desatualizada",
+      "channelDegradedHint": "O codeg não conseguiu instalar seu script de página. Os pop-ups que esta página abrir são bloqueados, a barra de endereço não acompanhará a navegação dentro da página e o atalho de busca pressionado na página não abrirá a barra de busca. Reabrir a aba tenta de novo.",
+      "downloadsDenied": "Downloads bloqueados: {host}",
+      "downloadsDeniedNoGesture": "vários arquivos, não iniciados por um clique",
+      "agentGrantLost": "Partilha terminada: a página saiu de {origin}",
+      "agentGrantLostShare": "Partilhar também {origin}",
+      "agentGrantReplaced": "Partilha terminada: outro programa serve agora {origin}",
+      "agentGrantReplacedShare": "Partilhar mesmo assim",
+      "errorRemoteRefused": "Nada está escutando neste endereço no host remoto",
+      "errorRemoteRefusedHint": "{host} recusou a conexão. Verifique se o servidor por trás deste endereço está em execução lá.",
+      "errorRemoteUnreachable": "O host remoto não consegue alcançar este endereço",
+      "errorRemoteUnreachableHint": "Visto de {host}, o nome não é resolvido ou não há rota até ele.",
+      "errorRemoteNotAllowed": "O servidor remoto não libera este endereço para o navegador",
+      "errorRemoteNotAllowedHint": "O codeg-server em {host} só permite que o túnel do navegador alcance endereços privados (CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "O host remoto demorou demais para conectar",
+      "errorRemoteTimeoutHint": "{host} não recebeu resposta deste endereço a tempo. O servidor pode estar ocupado ou atrás de um firewall.",
+      "errorTunnelDown": "A conexão com o host remoto caiu",
+      "errorTunnelDownHint": "O túnel até {host} não está transportando nada agora. Tente de novo quando ele voltar a ficar acessível."
+    },
+    "tab": {
+      "untitled": "Nova aba"
+    },
+    "drawer": {
+      "title": "Navegador integrado",
+      "description": "Uma página da web aberta a partir da conversa",
+      "openInWorkspace": "Abrir no espaço de trabalho",
+      "cannotOpen": "Este endereço não pode ser aberto aqui."
+    },
+    "bridge": {
+      "frameTitle": "Pré-visualização do servidor de desenvolvimento",
+      "opening": "Conectando através do servidor…",
+      "reload": "Recarregar",
+      "openExternal": "Abrir em uma nova aba",
+      "copyAddress": "Copiar endereço",
+      "copied": "Endereço copiado",
+      "unreachableTitle": "A porta da ponte não está acessível",
+      "unreachableHint": "O servidor do codeg colocou esta página em {origin}, mas seu navegador não consegue alcançá-la. Publique essa porta (veja CODEG_BRIDGE_PORTS) ou defina CODEG_BRIDGE_PUBLIC_HOST; se o codeg é servido por HTTPS, as portas da ponte também precisam de HTTPS.",
+      "unreachableHostHint": "O servidor do codeg colocou esta página em {origin}, mas o seu navegador não consegue acessá-la. Esse nome de host precisa resolver para o servidor do codeg e atravessar o proxy que estiver à frente: um registro DNS curinga e um vhost curinga (veja CODEG_BRIDGE_HOST_PATTERN).",
+      "errorTitle": "Esta página não pode ser exibida aqui"
+    },
+    "remote": {
+      "title": "Este endereço está em {host}",
+      "titleUnnamed": "Este endereço está no anfitrião remoto",
+      "description": "Ele aponta para a máquina onde este espaço de trabalho é executado, não para este computador.",
+      "copyAddress": "Copiar endereço",
+      "copied": "Endereço copiado",
+      "tryHost": "Experimentar {host}",
+      "tryHostHint": "Abre {address} num separador deste computador. Funciona se a página estiver à escuta em todas as interfaces de rede e este computador conseguir chegar à porta.",
+      "openHere": "Abrir neste computador",
+      "openHereHint": "Abre o endereço num separador deste computador. Funciona se este computador estiver na mesma rede.",
+      "retry": "Tentar novamente",
+      "connecting": "Conectando por {host}…",
+      "connectingUnnamed": "Conectando pelo host remoto…"
+    },
+    "download": {
+      "started": "Baixando…",
+      "completed": "Salvo",
+      "failed": "Falhou",
+      "reveal": "Mostrar na pasta",
+      "dismiss": "Dispensar"
+    },
+    "find": {
+      "placeholder": "Localizar na página",
+      "next": "Próxima",
+      "previous": "Anterior",
+      "noMatches": "Nenhum resultado",
+      "close": "Fechar"
+    },
+    "toast": {
+      "firstOpen": "Aberto no navegador integrado",
+      "firstOpenHint": "⌘/Ctrl+clique em um link para abri-lo no navegador do sistema. Altere o padrão em Configurações.",
+      "useSystemAlways": "Sempre usar o navegador do sistema",
+      "serviceDetected": "Há um servidor em {address}",
+      "serviceDetectedHint": "Iniciado num terminal. Em Definições → Navegador integrado pode abri-los automaticamente.",
+      "serviceOpen": "Abrir",
+      "blockedHost": "Bloqueado por uma regra de site: {host}"
+    },
+    "link": {
+      "openBuiltin": "Abrir no navegador integrado",
+      "openSystem": "Abrir no navegador do sistema",
+      "copy": "Copiar link"
+    },
+    "doc": {
+      "scriptsOff": "Ativar scripts",
+      "scriptsOn": "Scripts ativados",
+      "scriptsHint": "Executa os scripts deste documento. Eles só podem ler arquivos da sua pasta e não têm acesso à rede. Se algum desses arquivos mudar depois, os scripts são desativados novamente.",
+      "reload": "Recarregar",
+      "more": "Mais",
+      "copyPath": "Copiar caminho",
+      "useInline": "Usar pré-visualização em linha",
+      "useGuest": "Usar a pré-visualização do navegador integrado",
+      "unsaved": "Alterações não salvas não são exibidas",
+      "reset": "{file} mudou depois que os scripts foram ativados. Os scripts foram desativados novamente.",
+      "enableAgain": "Ativar novamente",
+      "dismiss": "Fechar",
+      "externalLink": "O link para {host} não foi seguido",
+      "openLink": "Abrir link",
+      "downloadRefused": "Downloads não são permitidos na pré-visualização de um documento",
+      "openWithSystem": "Abrir com o aplicativo do sistema",
+      "schemeBlocked": "{url} não pode ser aberto aqui",
+      "cannotShow": "Este documento não pode ser exibido"
+    },
+    "agent": {
+      "share": "Partilhar esta página com os agentes ({origin})",
+      "shareLabel": "Partilhar com os agentes",
+      "shareRead": "Apenas leitura",
+      "shareControl": "Ler e interagir",
+      "levelDefault": "Padrão",
+      "notShareable": "Esta página não tem um endereço web para partilhar com os agentes",
+      "remoteWindow": "Os agentes de um espaço de trabalho remoto correm no respetivo anfitrião e não podem usar o navegador deste computador",
+      "shared": "Partilhada",
+      "sharedControl": "Compartilhada · pode agir",
+      "sharedWith": "Os agentes podem ler {origin}",
+      "sharedWithControl": "Os agentes podem ler e agir em {origin}",
+      "sharedScope": "A partilha termina assim que a página sai deste site.",
+      "sharedScopeProgram": "Também termina se outro programa tomar esta porta a {program}.",
+      "sharedToast": "Os agentes já podem ler {origin}",
+      "sharedControlToast": "Os agentes agora podem ler e agir em {origin}",
+      "stopSharing": "Parar de partilhar",
+      "allowActions": "Permitir ações nesta página",
+      "readOnly": "Somente leitura",
+      "shareFailed": "Esta página não pode ser partilhada com os agentes",
+      "activity": {
+        "read": {
+          "done": "Leu a página",
+          "refused": "Recusado: esta página não está partilhada",
+          "failed": "Não foi possível ler a página"
+        },
+        "click": {
+          "done": "Clicou",
+          "refused": "Clique recusado: ações não são permitidas nesta página",
+          "failed": "Não foi possível clicar"
+        },
+        "hover": {
+          "done": "Passou o ponteiro",
+          "refused": "Hover recusado: ações não são permitidas nesta página",
+          "failed": "Não foi possível passar o ponteiro"
+        },
+        "type": {
+          "done": "Digitou em um campo",
+          "refused": "Digitação recusada: ações não são permitidas nesta página",
+          "failed": "Não foi possível digitar"
+        },
+        "press": {
+          "done": "Pressionou uma tecla",
+          "refused": "Tecla recusada: ações não são permitidas nesta página",
+          "failed": "Não foi possível pressionar a tecla"
+        },
+        "select": {
+          "done": "Escolheu uma opção",
+          "refused": "Seleção recusada: ações não são permitidas nesta página",
+          "failed": "Não foi possível escolher a opção"
+        },
+        "capture": {
+          "done": "Tirou uma captura de ecrã",
+          "refused": "Captura recusada: esta página não está partilhada",
+          "failed": "Não foi possível tirar a captura de ecrã"
+        },
+        "console": {
+          "done": "Leu a consola",
+          "refused": "Leitura da consola recusada: esta página não está partilhada",
+          "failed": "Não foi possível ler a consola"
+        },
+        "eval": {
+          "done": "Executou código na página",
+          "refused": "Execução de código recusada nesta página",
+          "failed": "Não foi possível executar o código"
+        },
+        "open": {
+          "done": "Abriu esta página",
+          "refused": "Recusou abrir uma aba",
+          "failed": "Não foi possível abrir uma aba"
+        },
+        "navigate": {
+          "done": "Foi para outro endereço",
+          "refused": "Recusado: esta página não permite ações",
+          "failed": "Não foi possível mudar o endereço"
+        },
+        "close": {
+          "done": "Fechou esta aba",
+          "refused": "Fechamento recusado: esta página não permite ações",
+          "failed": "Não foi possível fechar esta aba"
+        }
+      },
+      "activityCount": "{count}×",
+      "activityTitle": "O que os agentes fizeram aqui",
+      "activityLabel": "Atividade dos agentes: {entry}",
+      "eval": {
+        "title": "Executar este código em {site}?",
+        "description": "Um agente quer executar JavaScript nesta página. Ele pode ler e alterar tudo o que você pode em {site}.",
+        "descriptionWithTitle": "Um agente quer executar JavaScript em “{title}”. Ele pode ler e alterar tudo o que você pode em {site}.",
+        "codeLabel": "O código que será executado",
+        "everyTime": "Você será perguntado de novo a cada trecho — aprovar este não aprova o próximo. Se você é perguntado ou não se define em Configurações → Navegador integrado.",
+        "allow": "Executar uma vez",
+        "deny": "Não executar"
+      }
+    },
+    "handoff": {
+      "send": "Enviar esta página para a conversa",
+      "sendLabel": "Enviar para a conversa",
+      "noConversation": "Abre uma conversa para onde enviar esta página",
+      "pickElement": "Escolher um elemento…",
+      "screenshot": "Enviar uma captura",
+      "markUp": "Marcar uma captura…",
+      "consoleErrors": "Enviar os erros da consola",
+      "consoleClean": "Nada correu mal nesta página",
+      "picking": "A escolher…",
+      "pickingHint": "Clica em algo da página, ou carrega em Esc para terminar",
+      "pickingCancel": "Parar de escolher",
+      "sent": "Adicionado à conversa",
+      "failed": "Não foi possível enviar esta página para a conversa",
+      "noConsoleErrors": "Esta página não imprimiu nenhum erro",
+      "chipElement": "Elemento da página",
+      "chipScreenshot": "Captura da página",
+      "chipMarkedScreenshot": "Captura marcada",
+      "chipConsole": "{count, plural, one {# erro de consola} other {# erros de consola}}",
+      "gone": "Essa conversa já não está aberta",
+      "consoleErrorsCount": "{count, plural, one {Enviar o # erro de consola} other {Enviar os # erros de consola}}",
+      "markupTitle": "Marcar a captura",
+      "markupTools": "Ferramenta de desenho",
+      "markupBox": "Caixa",
+      "markupArrow": "Seta",
+      "markupUndo": "Desfazer",
+      "markupClear": "Limpar",
+      "markupHint": "Arraste sobre a imagem para desenhar. Cada marca recebe um número a que a sua mensagem pode fazer referência.",
+      "markupCount": "{count, plural, one {# marca} other {# marcas}}",
+      "markupCancel": "Cancelar",
+      "markupSend": "Adicionar à conversa"
+    }
+  },
+  "browser": {
+    "agent": {
+      "error": {
+        "grantRequired": "Esta aba não foi compartilhada com um agente. Compartilhe-a para que o agente possa ler a página."
+      }
+    },
+    "inspector": {
+      "error": {
+        "switchedOff": "Esta aba foi aberta com o inspetor web desligado. Ligue-o nas configurações do navegador e abra a página novamente."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "Abrir os endereços do host remoto no navegador integrado requer o macOS 14 ou posterior.",
+        "unsupported": "O codeg-server remoto é antigo demais para transportar o tráfego do navegador. Atualize-o para abrir os endereços dele aqui.",
+        "disabled": "O codeg-server remoto está com o túnel do navegador desativado (CODEG_BROWSER_TUNNEL).",
+        "unreachable": "Não foi possível alcançar o túnel do navegador do codeg-server remoto ({reason}).",
+        "bypassed": "O mecanismo do navegador deste computador envia alguns endereços por fora do túnel, então as páginas do host remoto não abrem para não serem carregadas deste computador.",
+        "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
+      }
+    }
   }
 }

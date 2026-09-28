@@ -151,10 +151,14 @@ describe("AgentToolCallPart title", () => {
     // No empty "Prompt" disclosure, and above all no base64 anywhere.
     expect(screen.queryByText("Prompt")).not.toBeInTheDocument()
     // The settled card must not read as "the sub-agent finished": codex only
-    // acknowledged the launch, and an async child may still be working.
-    // Completed capsules mount collapsed; expand to see the body.
+    // acknowledged the launch, and an async child may still be working. The
+    // chip says so without expanding…
+    expect(screen.getByText("Outcome unknown")).toBeInTheDocument()
+    // …and the caveat behind it is spelled out in the body.
     fireEvent.click(screen.getByRole("button", { name: "Completed" }))
-    expect(screen.getByText(/reports no further progress/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/hasn't reported how this sub-agent ended/)
+    ).toBeInTheDocument()
   })
 
   it("does not claim launch-only semantics for an ordinary sub-agent card", () => {
@@ -170,7 +174,7 @@ describe("AgentToolCallPart title", () => {
     fireEvent.click(screen.getByRole("button", { name: "Completed" }))
     expect(screen.getByText("Mapped 12 files.")).toBeInTheDocument()
     expect(
-      screen.queryByText(/reports no further progress/)
+      screen.queryByText(/hasn't reported how this sub-agent ended/)
     ).not.toBeInTheDocument()
   })
 
@@ -185,7 +189,101 @@ describe("AgentToolCallPart title", () => {
       )
     )
     expect(
-      screen.queryByText(/reports no further progress/)
+      screen.queryByText(/hasn't reported how this sub-agent ended/)
+    ).not.toBeInTheDocument()
+    // No outcome chip either — the spawn hasn't even been acknowledged yet.
+    expect(screen.queryByText("Outcome unknown")).not.toBeInTheDocument()
+  })
+
+  it("replaces the caveat with an outcome chip once codex reports one", () => {
+    // `SubAgentActivity{kind}` reaches the card as this key — live via
+    // `settle_codex_subagent_launch`, on reload via the rollout parser. Both
+    // write it onto the same launch capsule, so the two must agree.
+    for (const [state, expected] of [
+      ["completed", "Finished"],
+      ["interrupted", "Interrupted"],
+    ] as const) {
+      const { unmount } = renderCard(
+        basePart(
+          JSON.stringify({
+            subagent_type: "pnpm_build",
+            __codegCodexSubagentLaunch: true,
+            __codegCodexSubagentState: state,
+          }),
+          "output-available"
+        )
+      )
+      // Visible while COLLAPSED: the outcome is the one thing worth seeing
+      // without a click, which is why it moved out of the body.
+      expect(screen.getByText(expected)).toBeInTheDocument()
+      expect(
+        screen.queryByText(/hasn't reported how this sub-agent ended/)
+      ).not.toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it("draws no body at all for a settled codex launch with no result", () => {
+    // The live case: codex forwards the child's report over no wire, so the
+    // capsule has an outcome and nothing else. It must degrade to a bare pill
+    // rather than an empty bordered frame — hence no expand trigger.
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "pnpm_build",
+          agent_id: "01a08145-db62-78b3-9762-9cb2540216c2",
+          __codegCodexSubagentLaunch: true,
+          __codegCodexSubagentState: "completed",
+        }),
+        "output-available"
+      )
+    )
+    expect(screen.getByLabelText("Completed")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Completed" })
+    ).not.toBeInTheDocument()
+    // …and the session entry is still reachable, because it is not in the body.
+    expect(
+      screen.getByRole("button", { name: /View sub-agent session/ })
+    ).toBeInTheDocument()
+  })
+
+  it("offers the child's own session without expanding the capsule", () => {
+    // A codex sub-agent runs as a full rollout of its own and forwards none of
+    // it over ACP, so this entry point is the only way to see its work. The
+    // badge and the session key are the same string (`agent_id`).
+    renderCard({
+      ...basePart(
+        JSON.stringify({
+          subagent_type: "history_limits",
+          agent_id: "01a07fc2-db62-78b3-9762-9cb2540216c2",
+          __codegCodexSubagentLaunch: true,
+          __codegCodexSubagentState: "completed",
+        }),
+        "output-available"
+      ),
+      output: "Read 4 files.",
+    })
+    // The capsule has a body here (the child's report) and mounts collapsed —
+    // the action is in the header, so it is reachable without opening it.
+    expect(screen.queryByText("Read 4 files.")).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /View sub-agent session/ })
+    ).toBeInTheDocument()
+  })
+
+  it("offers no session for a sub-agent card that names no child", () => {
+    // Claude's Task and the legacy codex collab spawn have no standalone child
+    // session on disk — an entry point there would open nothing.
+    renderCard({
+      ...basePart(
+        JSON.stringify({ subagent_type: "Explore", description: "map" }),
+        "output-available"
+      ),
+      output: "Mapped 12 files.",
+    })
+    expect(
+      screen.queryByRole("button", { name: /View sub-agent session/ })
     ).not.toBeInTheDocument()
   })
 })

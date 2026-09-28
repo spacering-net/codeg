@@ -1,7 +1,8 @@
 "use client"
 
 /**
- * Owns the "查看会话" drawers for one transcript, ABOVE the virtual list.
+ * Owns the transcript's side-panel viewers — the "查看会话" drawers and the
+ * file viewer — ABOVE the virtual list.
  *
  * The cards that offer those viewers — `DelegatedSubThread` for a
  * `delegate_to_agent` call, `AgentToolCallPart` for a grok `spawn_subagent` —
@@ -18,69 +19,35 @@
  * ONE request slot, not one per kind. Two viewers open at the same level would
  * be same-width siblings with no stacking relationship between them — one
  * flatly covering the other, which reads as a glitch. Opening a second viewer
- * therefore replaces the first.
+ * therefore replaces the first. That is also why the FILE viewer lives here
+ * rather than in a host of its own: a file opened from a transcript is one
+ * more thing this transcript is showing off to the side, and it has to stack
+ * over (or replace) whatever else the transcript already put there.
  */
 
 import * as React from "react"
 
+import { BrowserViewerDrawer } from "@/components/browser/browser-viewer-drawer"
+import { FileViewerDrawer } from "@/components/files/file-viewer-drawer"
+import {
+  SessionViewerHostContext,
+  type SessionViewerHostValue,
+  type SessionViewerRequest,
+} from "@/components/message/session-viewer-host-context"
 import { SubAgentSessionDialog } from "@/components/message/sub-agent-session-dialog"
 import { SubagentSessionDialog } from "@/components/message/subagent-session-dialog"
 import {
   useDelegationCardModel,
   type DelegationCardSource,
 } from "@/hooks/use-delegation-card-model"
-import type { AgentType } from "@/lib/types"
 
-/** A sub-agent delegated with `delegate_to_agent`, viewed through its child
- *  conversation. Carries the card's raw SOURCE rather than the resolved ids —
- *  see `DelegationViewer` below. */
-interface DelegationRequest {
-  kind: "delegation"
-  source: DelegationCardSource
-}
-
-/** A sub-agent that ran as a standalone session of its own (grok
- *  `spawn_subagent`), viewed by re-reading its transcript from disk. */
-interface AgentSessionRequest {
-  kind: "agentSession"
-  sessionId: string
-  agentType: AgentType
-  subagentType?: string | null
-  description?: string | null
-  /**
-   * Whether to keep re-reading the child's transcript.
-   *
-   * A SNAPSHOT, taken when the card opened the viewer, and knowingly so: it is
-   * derived from the tool call's state inside the card, and the card is
-   * exactly what this host exists to stop depending on. The cost of it going
-   * stale is bounded and one-directional — a child that finishes after the
-   * card scrolls away keeps being re-read every couple of seconds until the
-   * user closes the drawer, which is a no-op parse of a file that stopped
-   * changing. The delegation branch has no equivalent problem (below).
-   */
-  live: boolean
-}
-
-export type SessionViewerRequest = DelegationRequest | AgentSessionRequest
-
-interface SessionViewerHostValue {
-  open: (request: SessionViewerRequest) => void
-}
-
-const SessionViewerHostContext =
-  React.createContext<SessionViewerHostValue | null>(null)
-
-/**
- * The host for the current transcript, or `null` when there is none.
- *
- * Null is a supported answer, not a failure: `ContentPartsRenderer` also
- * renders outside any `MessageListView` (the grok child transcript in
- * `subagent-session-dialog.tsx` renders parts directly), and those surfaces
- * are not virtualized, so a card there can keep owning its own viewer.
- */
-export function useSessionViewerHost(): SessionViewerHostValue | null {
-  return React.useContext(SessionViewerHostContext)
-}
+// The request shapes and `useSessionViewerHost` live in the leaf module beside
+// this one; re-exported here so the cards that already import them from this
+// path keep working.
+export {
+  useSessionViewerHost,
+  type SessionViewerRequest,
+} from "@/components/message/session-viewer-host-context"
 
 export function SessionViewerHost({ children }: { children: React.ReactNode }) {
   const [request, setRequest] = React.useState<SessionViewerRequest | null>(
@@ -125,6 +92,22 @@ export function SessionViewerHost({ children }: { children: React.ReactNode }) {
           subagentType={request.subagentType}
           description={request.description}
           live={request.live}
+        />
+      )}
+      {request?.kind === "file" && (
+        <FileViewerDrawer
+          request={request}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      )}
+      {request?.kind === "browser" && (
+        <BrowserViewerDrawer
+          key={`${request.remote ? "remote:" : ""}${request.url}`}
+          url={request.url}
+          remote={request.remote === true}
+          open={open}
+          onOpenChange={setOpen}
         />
       )}
     </SessionViewerHostContext.Provider>

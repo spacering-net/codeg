@@ -52,6 +52,8 @@
       "science": "Science",
       "office_tools": "Office Tools",
       "skill_packs": "Skill Packs",
+      "collaboration": "Collaboration",
+      "browser": "Browser",
       "quick_messages": "Quick Messages",
       "logs": "Runtime Logs"
     }
@@ -196,7 +198,33 @@
       "panelOpacityHint": "How opaque the sidebar, panels and tab bars are. Lower lets more of the image show through.",
       "errorTooLarge": "Image is too large (max 16 MB).",
       "errorUnsupportedFormat": "Unsupported image format. Choose a PNG, JPEG, WebP or GIF.",
-      "errorUploadFailed": "Failed to set the background image."
+      "errorUploadFailed": "Failed to set the background image.",
+      "market": {
+        "open": "Wallpaper market",
+        "title": "Wallpaper market",
+        "description": "Browse the public Wallhaven gallery; click to download and apply.",
+        "searchPlaceholder": "Search wallpapers…",
+        "categories": {
+          "all": "All",
+          "general": "General",
+          "anime": "Anime",
+          "people": "People"
+        },
+        "pageInfo": "Page {page} of {lastPage}",
+        "prevPage": "Previous",
+        "nextPage": "Next",
+        "refresh": "Refresh",
+        "empty": "No wallpapers matched.",
+        "error": "Failed to load the wallpaper market.",
+        "retry": "Retry",
+        "cardLabel": "Apply wallpaper {id}",
+        "applied": "In use",
+        "unavailable": "Unavailable",
+        "tooLarge": "Too large for a background: {actual} (limit {limit})",
+        "downloadFailed": "Download failed. Please retry.",
+        "appliedToast": "Wallpaper applied",
+        "credit": "Images from wallhaven.cc · SFW only"
+      }
     }
   },
   "SystemSettings": {
@@ -213,6 +241,8 @@
     "enableProxy": "Enable system proxy",
     "proxyAddress": "Proxy address",
     "proxyHint": "Supports http(s)/socks5, example: {example}. Only effective when system proxy is enabled.",
+    "proxyBypass": "Bypass proxy for",
+    "proxyBypassHint": "Separate entries with commas and no spaces, e.g. <code>{example}</code>. <code>example.com</code> matches that domain, <code>.example.com</code> matches all of its subdomains, and IP addresses work too. Local addresses <code>localhost,127.0.0.1,::1</code> always connect directly and do not need to be listed. The list takes effect as the NO_PROXY environment variable.",
     "save": "Save",
     "saving": "Saving...",
     "proxyRequired": "Proxy URL is required when proxy is enabled",
@@ -223,6 +253,8 @@
     "appLanguage": "App language",
     "languageSaveSuccess": "Language settings saved",
     "languageSaveFailed": "Failed to save language settings: {message}",
+    "dataTitle": "Data & sync",
+    "dataDescription": "Configuration sync carries your settings between machines; backup packs up all of this machine's codeg data.",
     "updateTitle": "App Update",
     "versionTitle": "Software Update",
     "updateDescription": "Check the configured release source for newer versions and install directly when available.",
@@ -270,6 +302,8 @@
     "rollbackSuccess": "Rolled back to the previous version. Reloading...",
     "rollbackFailed": "Rollback failed. Check the server logs.",
     "updateErrors": {
+      "permissionDenied": "Cannot write to {path}, so updates can't be installed in place. Update manually with administrator privileges or check installation permissions.",
+      "targetWriteFailed": "Cannot write to {path}, so updates can't be installed in place: {reason}",
       "sourceUnavailable": "Cannot reach the update source. Check your network or proxy and try again.",
       "network": "Network connection failed. Check your network or proxy and try again.",
       "downloadFailed": "Failed to download update package. Please try again later.",
@@ -304,6 +338,10 @@
     "gitlabDescription": "Manage GitLab accounts for authentication. Tokens are stored locally.",
     "gitlabTokenHint": "Create a personal access token with the api scope under GitLab → Preferences → Access tokens.",
     "gitlabNoAccounts": "No GitLab account yet",
+    "giteaTitle": "Gitea accounts",
+    "giteaDescription": "Manage Gitea (and Forgejo) accounts for authentication. Tokens are stored locally.",
+    "giteaTokenHint": "Create an access token with the write:repository, write:issue and read:user scopes under Gitea → Settings → Applications.",
+    "giteaNoAccounts": "No Gitea account yet",
     "noAccounts": "No GitHub accounts configured.",
     "addAccount": "Add Account",
     "serverUrl": "Server URL",
@@ -336,7 +374,7 @@
     "loadFailed": "Failed to load settings: {message}",
     "gitAccount": {
       "sectionTitle": "Git Accounts",
-      "sectionDescription": "Manage credentials for non-GitHub Git servers (GitLab, Bitbucket, self-hosted, etc.).",
+      "sectionDescription": "Manage credentials for Git servers with no section of their own (Bitbucket, self-hosted, etc.).",
       "noAccounts": "No Git server accounts configured.",
       "addAccount": "Add Account",
       "addTitle": "Add Git Account",
@@ -397,7 +435,7 @@
       },
       "open_folder": {
         "title": "Open Folder",
-        "description": "Open folder picker and open in a new window"
+        "description": "Open folder picker and open the folder in the workspace"
       },
       "open_settings": {
         "title": "Open Settings",
@@ -636,12 +674,16 @@
     "local": {
       "filterPlaceholder": "Filter local MCP...",
       "loadFailed": "Load failed: {message}",
+      "sourceUnreadable": "Could not read the MCP config for {app}, so its servers are hidden: {message}",
+      "saveBlockedByUnreadableSource": "Fix or remove that file and refresh before saving: assignments are computed from the agents this page could read, so saving now could drop this server from one it could not.",
       "empty": "No local MCP detected.",
       "description": "Local MCP configuration can be edited and saved directly.",
       "enabledApps": "Enabled Apps",
       "configJson": "MCP Config (JSON)",
       "draftTitle": "New MCP",
       "draftDescription": "Provide a Server ID and configuration to create a local MCP server.",
+      "suggestedLabel": "Start from a known server",
+      "suggestedChromeNote": "Fills the form with Google’s official chrome-devtools-mcp — the registry lists lookalikes under the same name, so this pins the real one. It drives a SEPARATE Chrome that codeg does not supervise: you get network and performance data the built-in browser tools do not offer, and none of their safeguards — no per-tab sharing, no activity strip, no approval per snippet. `npx` downloads the package from npm the first time it runs.",
       "serverIdLabel": "Server ID",
       "serverIdPlaceholder": "Server ID (e.g. my-mcp)",
       "typeHint": "Supported types: stdio, http (aliases: streamable-http, streamableHttp), sse. env is only used by stdio; for remote MCPs use headers to carry auth tokens.",
@@ -680,6 +722,13 @@
     "emptyNoAgent": "No available agent.",
     "configManagement": "Config Management",
     "envVars": "Environment Variables",
+    "adapterChannel": {
+      "label": "Adapter version",
+      "description": "Install and Upgrade use the version codeg has reviewed and pinned. Latest switches them to the package's newest npm release at that moment; if installing it fails, codeg falls back to the pinned version and notes it in the install log.",
+      "pinned": "Pinned (recommended)",
+      "latest": "Latest (unreviewed)",
+      "latestWarning": "Newest releases are unreviewed and can break this agent in codeg, and occasionally a release is known broken. Version Status shows what is actually installed."
+    },
     "hostTools": {
       "label": "Let the agent handle files and commands",
       "description": "codeg stops serving file access and terminal commands, so the agent runs them in its own process — where its own sandbox and permission rules apply. Delegating to other agents is also turned off, since that would route the same work back through codeg. codeg adds no sandbox itself, so turn this on only if the agent has one configured."
@@ -819,7 +868,11 @@
       "authNotInstalled": "cursor-agent is not installed",
       "authLoggedIn": "Logged in",
       "authNotLoggedIn": "Not logged in",
+      "authUnverified": "Signed in — credential not verified",
+      "authUnverifiedHint": "cursor-agent still has a login stored, but it could not be used against Cursor just now — usually an expired session. Sessions will fail with \"Authentication required\" until you sign in again; the CLI has no way to refresh a browser login on its own.",
+      "authUnverifiedHintApiKey": "cursor-agent has an API key stored, but Cursor rejected it just now — usually a revoked, expired, or mistyped key. Sessions will fail with \"Authentication required\" until you save a working key below.",
       "loginHint": "Run this in a terminal to sign in with your Cursor account (a browser window opens), then hit refresh:",
+      "loginHintRemote": "Run this on the codeg host where cursor-agent is installed, not on this machine, then hit refresh. That host usually has no browser to open, so run it with NO_OPEN_BROWSER=1 — it prints a sign-in URL for you to open in your own browser instead. For an unattended server, switch the method above to API key.",
       "apiKeyLabel": "Cursor API key",
       "apiKeyPlaceholder": "key from cursor.com/dashboard",
       "apiKeyHint": "CURSOR_API_KEY — a Cursor Dashboard account key, an alternative to browser login for headless/server machines. Not a third-party or OpenAI key.",
@@ -922,7 +975,28 @@
         "failed": "Sign-in did not complete.",
         "startFailed": "Could not start the sign-in",
         "credentialHint": "The token is cached here. Copy this file to another machine with no desktop to sign that one in too."
-      }
+      },
+      "signOut": {
+        "title": "Signed in as the wrong account?",
+        "description": "Antigravity caches the Google account it signed in as and reuses it silently, so signing in again cannot reach a different one. Signing out discards the stored credential; any running Antigravity sessions end first, because they would otherwise write the old account back.",
+        "action": "Sign out",
+        "done": "Signed out. Sign in again to pick a different account.",
+        "failed": "Could not sign out"
+      },
+      "tempReclaimTitle": "Leftover temp space",
+      "tempReclaimHint": "Older versions of codeg could not clean up the temporary directory this agent unpacks on every launch. This scans the system temp folder for those leftovers. That folder is shared with other applications, so nothing is deleted until you confirm, and anything still in use is skipped.",
+      "tempReclaimScan": "Scan",
+      "tempReclaimDelete": "Delete leftovers",
+      "tempReclaimNone": "Nothing to reclaim.",
+      "tempReclaimFound": "{count} leftover item(s), {size} reclaimable.",
+      "tempReclaimSkipped": "{count} skipped (still in use or too recent).",
+      "tempReclaimed": "Reclaimed {size} from {count} item(s).",
+      "tempReclaimSelectAll": "Select all",
+      "tempReclaimAgeHours": "{hours}h",
+      "tempReclaimConfirmTitle": "Delete {count} item(s)?",
+      "tempReclaimConfirmBody": "This permanently deletes {size}. The system temp folder is shared with other applications, so check each path before confirming — anything still in use is skipped.",
+      "tempReclaimConfirmAction": "Delete",
+      "tempReclaimCancel": "Cancel"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness Configuration",
@@ -1130,6 +1204,46 @@
           "todowrite": "Write the todo list",
           "question": "Ask you a question",
           "doom_loop": "Trips when the same call repeats three times with identical input"
+        }
+      },
+      "behavior": {
+        "title": "Behavior & compaction",
+        "description": "Session defaults, context compaction and tool-output limits. Written to opencode.json and applied once you save below.",
+        "docsLink": "Config docs",
+        "unset": "Not configured",
+        "defaultAgent": "Default agent",
+        "defaultAgentHint": "Which primary agent a new session opens in. Falls back to build when empty or unknown.",
+        "share": "Sharing",
+        "shareHint": "How a session may be published to a share link.",
+        "shareManual": "Manual (on request)",
+        "shareAuto": "Automatic (every new session)",
+        "shareDisabled": "Disabled",
+        "autoUpdate": "Auto-update",
+        "autoUpdateHint": "Whether OpenCode updates itself to the latest release.",
+        "autoUpdateOn": "Update automatically",
+        "autoUpdateNotify": "Notify only",
+        "autoUpdateOff": "Never",
+        "snapshot": "Filesystem snapshots",
+        "snapshotHint": "Records a snapshot before each step. Turning it off means undo and revert can no longer restore files.",
+        "compactionAuto": "Auto-compaction",
+        "compactionAutoHint": "Summarize the conversation automatically when the context window fills up.",
+        "compactionPrune": "Prune old tool output",
+        "compactionPruneHint": "Drop the output of older tool calls during compaction instead of summarizing it.",
+        "fields": {
+          "subagentDepth": "Sub-agent depth",
+          "tailTurns": "Turns kept verbatim",
+          "preserveRecentTokens": "Tokens kept verbatim",
+          "reserved": "Reserved tokens",
+          "maxLines": "Tool output line limit",
+          "maxBytes": "Tool output byte limit"
+        },
+        "hints": {
+          "subagentDepth": "How deep sub-agents may nest. 1 stops a sub-agent from launching another.",
+          "tailTurns": "Most recent user turns kept uncompacted. Unset means only the token budget below limits them.",
+          "preserveRecentTokens": "Token budget of recent turns kept uncompacted after a compaction.",
+          "reserved": "Window left free so a compaction itself never overflows the context.",
+          "maxLines": "Output longer than this is written to disk and replaced with a preview. Default 2000.",
+          "maxBytes": "Output larger than this is written to disk and replaced with a preview. Default 51200."
         }
       }
     },
@@ -1387,7 +1501,8 @@
       "localUnrecognized": "{versionText}. Local version is not comparable; try upgrade to overwrite install.",
       "upgradeAvailable": "{versionText}. Upgrade available.",
       "remoteUnavailable": "{versionText}. Remote version is currently unavailable.",
-      "latest": "{versionText}. Already latest."
+      "latest": "{versionText}. Already latest.",
+      "latestChannel": "{versionText}. Latest channel is on; Upgrade installs the newest release."
     },
     "adapter": {
       "label": "ACP adapter",
@@ -1400,7 +1515,11 @@
       "ready": "Adapter {adapterCmd} is installed — that is what Codeg launches. It ships its own runtime, so the {nativeLabel} is not required; install it later and the two coexist, sharing {configDir}."
     },
     "cline": {
-      "configDescription": "Configure Cline API provider and credentials. Settings are saved to ~/.cline/data/."
+      "configDescription": "Configure Cline API provider and credentials. Settings are saved to ~/.cline/data/.",
+      "signInGroup": "Sign in with Cline",
+      "byoGroup": "Bring your own provider",
+      "externalGroup": "Configured outside codeg",
+      "signInHint": "Cline holds this credential itself. Run the command below in a terminal to sign in — it prints a code and opens a browser page to confirm it."
     },
     "opencodePlugins": {
       "title": "OpenCode Plugins",
@@ -1408,7 +1527,10 @@
       "noPlugins": "No plugins declared.",
       "status": {
         "installed": "Installed",
-        "missing": "Missing"
+        "needs_migration": "Needs migration",
+        "missing": "Missing",
+        "path": "Path plugin",
+        "path_missing": "Path not found"
       },
       "installAll": "Install All Missing",
       "pinVersions": "Pin @latest Versions",
@@ -1469,6 +1591,7 @@
       "installing": "Installing…",
       "recheck": "Recheck",
       "configDirSkillsNote": "With a custom config directory, the Skills, Experts, and Office tools managed in Settings won't apply to this pi — manage its skills in that folder directly.",
+      "dirHistoryNote": "These directories reach the pi process only. codeg's conversation history reads pi's own default location, so sessions written to a custom directory here won't be listed.",
       "projectTrustTitle": "Project trust",
       "projectTrustDescription": "Folders you allowed pi to load project files from. A trusted folder lets that repository's .pi/extensions run code when pi starts, applies to every folder inside it, and is also used when you run pi in a terminal.",
       "projectTrustLoading": "Loading…",
@@ -1538,16 +1661,64 @@
     "customAgentBadge": "Custom",
     "customAgentNotLaunchable": "This agent cannot launch here: {reason}"
   },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "Normal",
+    "deepseekModeDefaultDescription": "Reads and edits files and runs commands directly to get the job done",
+    "deepseekModePlan": "Plan",
+    "deepseekModePlanDescription": "Investigates first and proposes a full plan for you to confirm before touching anything. This steers the model — the real boundary is still whatever File access allows.",
+    "deepseekOptionModel": "Model",
+    "deepseekOptionReasoning": "Reasoning effort",
+    "deepseekOptionReasoningDescription": "Higher is slower and costs more tokens, but steadier on hard problems",
+    "deepseekOptionSandbox": "File access",
+    "deepseekOptionSandboxDescription": "Commands and file tools share this one boundary",
+    "deepseekReasoningOff": "Off",
+    "deepseekReasoningOffDescription": "Answers directly with no reasoning; fastest",
+    "deepseekReasoningLow": "Low",
+    "deepseekReasoningLowDescription": "Reasons briefly; steadier than off, faster than high",
+    "deepseekReasoningHigh": "High",
+    "deepseekReasoningHighDescription": "Reasons before answering; the everyday coding default",
+    "deepseekReasoningMax": "Max",
+    "deepseekReasoningMaxDescription": "Reasons longer; steadier on hard problems, but slower and costs more tokens",
+    "deepseekSandboxReadOnly": "Read-only",
+    "deepseekSandboxReadOnlyDescription": "Runs under a read-only policy; switch access when a write is needed. Enforcement can be partial on some platforms.",
+    "deepseekSandboxWorkspaceWrite": "Workspace write",
+    "deepseekSandboxWorkspaceWriteDescription": "Writes are meant to stay inside the session workspace and the system temp directories; a call outside them asks for one-time approval. Enforcement can be partial on some platforms.",
+    "deepseekSandboxFullAccess": "Full access (no sandbox)",
+    "deepseekSandboxFullAccessDescription": "Applies no file restrictions at all. Choose it only when you understand the consequences.",
+    "deepseekPermissionAllowOnce": "Allow once",
+    "deepseekPermissionRejectOnce": "Reject"
+  },
   "SettingsPages": {
     "agentsLoading": "Loading agent settings...",
     "skillPacksLoading": "Loading skill packs…"
   },
+  "CloseBehaviorSettings": {
+    "title": "Close Button Behavior",
+    "description": "Choose what the main window's close button does.",
+    "trayUnavailable": "This system has no usable tray, so the close button always exits codeg.",
+    "behaviorAsk": "Ask every time",
+    "behaviorMinimize": "Minimize to tray",
+    "behaviorExit": "Exit codeg",
+    "saveFailed": "Failed to save close behavior: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "Close codeg?",
+    "askDescription": "codeg can keep running in the tray so agents and terminals stay alive, or exit completely.",
+    "confirmExitTitle": "Exit codeg?",
+    "confirmExitDescription": "Closing the window is set to exit codeg.",
+    "runningTerminals": "{count, plural, one {# terminal is still running and will be terminated on exit.} other {# terminals are still running and will be terminated on exit.}}",
+    "remember": "Remember my choice",
+    "cancel": "Cancel",
+    "minimize": "Minimize to tray",
+    "exit": "Exit codeg",
+    "actionFailed": "Action failed: {message}"
+  },
   "GeneralSettings": {
     "loading": "Loading...",
     "sectionTitle": "General",
-    "sectionDescription": "Centralized preferences for the default terminal, rendering acceleration, notification sounds, and multi-agent delegation.",
+    "sectionDescription": "Centralized preferences for the default terminal, rendering acceleration, window close behavior, notifications and sounds.",
     "terminalTitle": "Default Terminal",
-    "terminalDescription": "Choose the shell used when opening new terminal tabs from the terminal bar or file tree. Agents also use it when they ask codeg to run a whole command line for them.",
+    "terminalDescription": "Choose the shell codeg launches for new terminal tabs and for whole command lines an agent asks codeg to run. Agents with a shell of their own (Codex, Claude Code) run commands inside their own process, where this setting cannot reach them.",
     "terminalSystemDefault": "System default",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1561,13 +1732,19 @@
     "terminalShellNotInstalled": "not installed",
     "terminalShellNotFoundWarning": "This path doesn't exist on this host.",
     "terminalCurrentShell": "Currently using: {path}",
-    "renderingDescription": "Disable hardware acceleration if the app shows a black screen or rendering glitches (common on certain AMD GPUs or Intel integrated GPUs). Only takes effect on the Windows desktop build.",
+    "colorizeCommandOutput": "Colorize command output",
+    "colorizeCommandOutputDescription": "Force ANSI color out of the commands agents run, so their output renders in color in the transcript instead of as plain text. Takes effect on new sessions.",
+    "renderingDescription": "Disable hardware acceleration if the app shows a black screen or rendering glitches (common on certain AMD GPUs or Intel integrated GPUs on Windows, and with the proprietary NVIDIA driver on Linux). Only takes effect on the Windows and Linux desktop builds.",
     "disableHardwareAcceleration": "Disable hardware acceleration",
     "renderingSaveFailed": "Failed to save rendering settings: {message}",
     "restartRequired": "Saved. Restart the app for the change to take effect.",
     "restartNow": "Restart now",
     "restartFailed": "Failed to restart: {message}",
     "loadFailed": "Load failed: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "Collaboration",
+    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation."
   },
   "LoginPage": {
     "documentTitle": "Login - codeg",
@@ -1625,6 +1802,9 @@
     "searchPlaceholder": "Search title or path…",
     "allAgents": "All agents",
     "onlyImportable": "Importable only",
+    "includeDeleted": "Include deleted",
+    "includeDeletedWithCount": "Include deleted ({count})",
+    "includeDeletedHint": "Deleting a session in codeg only hides it — the conversation and its history are still here. Turn this on to select deleted sessions and restore them in place.",
     "selectAll": "Select all",
     "clearSelection": "Clear",
     "expandAll": "Expand all",
@@ -1637,6 +1817,7 @@
     "toggleSessionAria": "Select session {title}",
     "statusImported": "Imported",
     "statusDeleted": "Deleted",
+    "statusDeletedRestorable": "Deleted — importing it restores the original conversation",
     "untitled": "Untitled session",
     "messageCount": "{count} msgs",
     "selectedCount": "{count} selected",
@@ -1645,6 +1826,7 @@
     "close": "Close",
     "doneTitle": "Import finished",
     "doneImported": "Imported",
+    "doneRestored": "Restored",
     "doneUpdated": "Refreshed",
     "doneSkipped": "Skipped",
     "doneCreatedFolders": "Folders created",
@@ -1986,7 +2168,8 @@
         "output": "Output",
         "cacheRead": "Cache Read",
         "cacheWrite": "Cache Write",
-        "total": "Total"
+        "total": "Total",
+        "cacheHit": "Cache Hit Rate"
       },
       "quickActions": {
         "title": "Quick actions",
@@ -1995,7 +2178,38 @@
           "navigation": "Navigation",
           "more": "More"
         },
+        "browserTab": "Open browser tab",
         "showPet": "Show pet"
+      },
+      "mcp": {
+        "title": "codeg-mcp service",
+        "state": {
+          "running": "Running",
+          "stopped": "Not running",
+          "disabled": "No tools enabled",
+          "unavailable": "Companion missing",
+          "unknown": "Unknown"
+        },
+        "hint": {
+          "running": "Agents launched here can use codeg's own tools.",
+          "stopped": "The broker socket is not answering.",
+          "disabled": "Every tool group is off — nothing is injected.",
+          "unavailable": "The codeg-mcp binary is not on disk.",
+          "unknown": "The status could not be read."
+        },
+        "socketPath": "Address",
+        "binary": "Companion",
+        "binaryMissing": "Not found",
+        "sessions": "Sessions",
+        "activeDelegations": "Delegations",
+        "depthLimit": "Depth cap",
+        "start": "Start service",
+        "starting": "Starting…",
+        "actionFailed": "Failed: {message}",
+        "lastError": "Last error: {message}",
+        "loadFailed": "Could not read the status: {message}",
+        "openSettings": "Open full settings",
+        "refresh": "Refresh"
       }
     },
     "auxPanel": {
@@ -2037,12 +2251,20 @@
     },
     "fileWorkspace": {
       "files": "Files",
+      "newTab": "New tab",
+      "newBrowserTab": "Browser tab",
+      "openFile": "Open file…",
+      "openFileTitle": "Open file",
+      "localServices": "Local servers",
+      "localServiceFromAgent": "Agent",
       "closeFileTab": "Close file tab",
       "close": "Close",
       "closeOthers": "Close Others",
       "closeAll": "Close All",
       "preview": "Preview",
       "editSource": "Edit Source",
+      "openInSystemBrowser": "Open in system browser",
+      "more": "More",
       "maximize": "Maximize",
       "restore": "Restore",
       "emptyDirectory": "Empty folder"
@@ -2053,7 +2275,26 @@
       "closeOthers": "Close Others",
       "closeAll": "Close All",
       "hideTerminal": "Hide Terminal ({shortcut})",
-      "openFolderFirst": "Open a folder first"
+      "openFolderFirst": "Open a folder first",
+      "keybar": {
+        "label": "Terminal virtual keys",
+        "show": "Show virtual keys",
+        "hide": "Hide virtual keys",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "Open Folder",
@@ -2149,7 +2390,6 @@
       "imageZoomOut": "Zoom out",
       "imageZoomReset": "Reset zoom",
       "htmlPreviewTitle": "HTML preview",
-      "htmlPreviewTrust": "Enable scripts",
       "htmlPreviewTrustHint": "Run this file's scripts and allow network access. Enable only for files you trust.",
       "officePreviewTitle": "Office document preview",
       "officeFullRender": "Full render",
@@ -2161,6 +2401,17 @@
       "officeWatchRetry": "Retry",
       "officeServerInstallHint": "OfficeCLI must be installed on the server host. Run this command there, then retry:",
       "officeRemoteDesktopUnsupported": "Live preview isn't available in a remote-desktop window. Open this workspace in the server's web UI to preview Office files."
+    },
+    "fileViewer": {
+      "title": "File preview",
+      "description": "A file referenced in this conversation, opened beside it.",
+      "openInWorkspace": "Open in workspace",
+      "back": "Back",
+      "preview": "Preview",
+      "source": "Source",
+      "loading": "Loading...",
+      "cannotResolve": "Cannot resolve this file path.",
+      "tooLargeToPreview": "This file is too large to preview here. Open it in the workspace instead."
     },
     "branchDropdown": {
       "toasts": {
@@ -2565,7 +2816,13 @@
       "openInTerminal": "Terminal",
       "openInCode": "VS Code",
       "linkedFolder": "Linked folder",
+      "moreActions": "More actions",
       "copyPath": "Copy path",
+      "copy": "Copy",
+      "copyRelativePath": "Relative path",
+      "copyAbsolutePath": "Absolute path",
+      "copyFileItself": "File",
+      "copyDirectoryItself": "Folder",
       "upload": "Upload files/folder",
       "download": "Download file",
       "downloadAsZip": "Download as ZIP",
@@ -2603,7 +2860,9 @@
         "downloadFailed": "Failed to download {name}",
         "downloadSaved": "Downloaded {name}",
         "pathCopied": "Path copied",
-        "copyPathFailed": "Failed to copy path"
+        "copyPathFailed": "Failed to copy path",
+        "fileCopied": "Copied {name}",
+        "copyFileFailed": "Failed to copy {name}"
       },
       "createDialog": {
         "newFile": "New file",
@@ -2751,8 +3010,6 @@
           "openAgentsSettings": "Open Agents settings",
           "retry": "Retry"
         },
-        "agentsSetupHint": "Open Settings > Agents to manage installation.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "Unable to read current Agent configuration.",
           "disabled": "{agent} is disabled in Agents settings. Enable it before connecting.",
@@ -2774,18 +3031,25 @@
           "turnFailedMaxTokens": "{agent} reached the maximum token limit for this turn.",
           "turnFailedMaxTurnRequests": "{agent} reached the maximum number of allowed requests for this turn.",
           "turnFailedUnknown": "{agent} ended the turn with an unrecognized stop reason.",
+          "turnFailedAuthRequired": "{agent} needs you to sign in again before it can run this turn. Sign in from Settings, then send the message again.",
+          "agentAuthRequired": "{agent} could not start a session: it has no usable credential. Sign in again from Settings → Agents → {agent}, then reopen this conversation.",
           "grokModelSwitchIncompatibleAgent": "{agent} can't switch to that model in an existing conversation. Start a new session to use it.",
+          "setModeFailed": "{agent} couldn't switch modes.",
+          "setConfigOptionFailed": "{agent} couldn't apply that setting.",
+          "goalControlFailed": "{agent} couldn't update the goal.",
+          "imageDropped": "{agent} didn't receive an attached image.",
+          "sessionLoadFallback": "{agent} couldn't restore the previous session and started a new one — it no longer has the earlier context.",
           "turnFailedEmpty": "{agent} ended the turn without producing any response.",
           "turnFailedEmptyProtocol": "{agent} produced output that codeg could not parse — the agent version may not match the protocol.",
-          "turnFailedEmptyMetadata": "{agent} sent only status updates this turn (plan / mode / usage) and no reply.",
-          "detailsInAlerts": "Open Alerts in the status bar and expand the details to see the agent's output."
+          "turnFailedEmptyMetadata": "{agent} sent only status updates this turn (plan / mode / usage) and no reply."
         },
         "unableReadAgentConfig": "Unable to read Agent config: {message}",
         "connectFailedTitle": "{agent} connection failed",
         "toolFallbackTitle": "Tool",
-        "eventErrorTitle": "Agent Error",
         "notificationTurnComplete": "{agent} has finished responding",
         "notificationError": "{agent} error: {message}",
+        "notificationQuestion": "{agent} is waiting for your answer",
+        "notificationErrorRedacted": "{agent} ran into an error",
         "claudeApiRetry": {
           "fallbackError": "authentication_failed",
           "retryingWithMax": "retrying {attempt}/{max}",
@@ -2798,12 +3062,15 @@
           "lineNoErrorWithDelay": "{retry}, {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "{agent} set {option} to {actual} instead of {requested}"
+        "configOptionAdjusted": "{agent} set {option} to {actual} instead of {requested}",
+        "noticeTitle": "{agent}: {title}"
       },
       "connectionLifecycle": {
         "tasks": {
           "connectingTitle": "Connecting to {agent}",
           "connectingDescription": "Establishing connection",
+          "preparingTitle": "Preparing {agent} session",
+          "preparingDescription": "Reading the conversation history",
           "loadingSelectorsTitle": "Loading {agent} selectors",
           "loadingSelectorsDescription": "Fetching mode and session config options",
           "initSessionTitle": "Initializing {agent} session",
@@ -2841,6 +3108,9 @@
         "cut": "Cut",
         "copy": "Copy",
         "selectAll": "Select all",
+        "openLink": "Open link",
+        "openFile": "Open file",
+        "sendEmail": "Send email",
         "pasteUnavailable": "Couldn't read the clipboard. Press Ctrl/⌘V to paste instead.",
         "clipboardWriteFailed": "Couldn't write to the clipboard. Use the keyboard shortcut instead.",
         "quickMessageUntitled": "Untitled",
@@ -2856,14 +3126,16 @@
         "searchModel": "Search models...",
         "searchModelAria": "Search models",
         "modelListLabel": "Models",
+        "recommendedBadge": "Recommended",
         "noModels": "No models found",
         "cancel": "Cancel",
         "send": "Send",
         "queueMessage": "Queue message",
         "steerIntoTurn": "Insert into current turn",
+        "steerAsNote": "Send note for next check",
         "steerQueuedInstead": "Queued instead — it will be sent with the next turn.",
         "steerFailed": "Couldn't insert into the current turn",
-        "steerAttachmentsUnsupported": "Text only — drafts with attachments go through the queue.",
+        "steerNoteFailed": "Couldn't send your note",
         "slashCommands": "Slash commands",
         "slashSearchPlaceholder": "Search commands...",
         "slashSearchEmpty": "No matching commands",
@@ -2892,7 +3164,9 @@
         "saveEdit": "Save",
         "cancelEdit": "Cancel edit",
         "editItem": "Edit",
-        "deleteItem": "Remove"
+        "deleteItem": "Remove",
+        "steerItemNow": "Insert into current turn",
+        "steerItemAsNote": "Send as note for next check"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Settings > Agents",
@@ -3113,13 +3387,17 @@
         "openInFileManager": "Open in file manager",
         "copyRelativePath": "Copy relative path",
         "copyAbsolutePath": "Copy absolute path",
+        "download": "Download file",
         "pathCopied": "Path copied",
         "copyPathFailed": "Failed to copy path",
-        "openFailed": "Failed to open local file"
+        "openFailed": "Failed to open local file",
+        "downloadSaved": "Downloaded {name}",
+        "downloadFailed": "Failed to download {name}"
       },
       "messageList": {
         "attachedResources": "Attached resources",
         "loading": "Loading...",
+        "loadBackgroundActivity": "Load background activity",
         "loadEarlier": "Load earlier messages",
         "loadingEarlier": "Loading earlier messages…",
         "error": "Error: {message}",
@@ -3132,6 +3410,8 @@
         "systemMessage": "System message",
         "copyMessage": "Copy",
         "forkFromHere": "Fork from here",
+        "forkBusy": "Can't fork while a turn is running",
+        "forkNotReady": "Can't fork from this reply just yet — try again in a moment",
         "copied": "Copied",
         "selectionActions": "Selection actions",
         "selectionCopy": "Copy Text",
@@ -3237,6 +3517,8 @@
             "child_max_tokens": "subagent token limit",
             "child_max_turn_requests": "subagent request limit",
             "child_empty": "subagent no output",
+            "child_auth_required": "subagent needs sign-in",
+            "child_rejected": "subagent rejected",
             "child_unknown": "subagent unknown error",
             "unknown": "unknown task"
           }
@@ -3282,7 +3564,10 @@
         "agentSessionLoading": "Loading the sub-agent's transcript…",
         "agentSessionEmpty": "The sub-agent hasn't written anything yet.",
         "agentFallbackTitle": "Sub-agent starting…",
-        "agentCodexLaunchOnly": "Launched. Codex reports no further progress for this sub-agent — its result arrives as a message in this conversation.",
+        "agentCodexLaunchOnly": "Launched. Codex hasn't reported how this sub-agent ended — open its session to follow the work.",
+        "agentSubagentDone": "Finished",
+        "agentSubagentInterrupted": "Interrupted",
+        "agentSubagentUnknown": "Outcome unknown",
         "agentStatsBash": "Commands",
         "agentStatsRead": "Files read",
         "agentStatsSearch": "Searches",
@@ -3447,7 +3732,9 @@
         "skip": "Skip",
         "next": "Next",
         "submit": "Submit",
-        "submitError": "Couldn't submit. Please try again."
+        "submitError": "Couldn't submit. Please try again.",
+        "collapse": "Collapse",
+        "expand": "Expand"
       },
       "planApproval": {
         "title": "The agent has a plan — review it",
@@ -3502,7 +3789,6 @@
         "reconnecting": "Reconnecting…",
         "reconnectDisabledDuringTurn": "Available once the current turn finishes",
         "dismiss": "Dismiss",
-        "reconnectFailed": "Failed to reconnect session",
         "applied": "New configuration applied"
       },
       "piProjectTrust": {
@@ -3548,13 +3834,17 @@
         "opSpawn": "Starting sub-agent",
         "opWait": "Fetching sub-agent result",
         "opClose": "Closing sub-agent",
-        "opResume": "Resuming sub-agent"
+        "opResume": "Resuming sub-agent",
+        "opList": "Listing sub-agents"
       },
       "contextCompaction": {
         "compacting": "Compacting context…",
         "compacted": "Context compacted",
         "compactedTokens": "Context compacted · {before} → {after} tokens",
-        "failed": "Context compaction failed"
+        "failed": "Context compaction failed",
+        "summary": "Summary",
+        "triggerManual": "Manually triggered",
+        "triggerAutomatic": "Automatically triggered"
       },
       "sessionFailure": {
         "category": {
@@ -3578,6 +3868,8 @@
       },
       "backgroundTasks": {
         "settledFallback": "Background task finished ({status})",
+        "notifySettledOne": "{agent}: a background task finished",
+        "notifySettledMany": "{agent}: {count} background tasks finished",
         "cardRunning": "Running in background",
         "cardLaunchedPending": "Launched in background",
         "cardCompleted": "Background task completed",
@@ -3610,6 +3902,16 @@
       "viewMode": {
         "split": "Switch to side-by-side view",
         "unified": "Switch to inline view"
+      },
+      "binaryFile": "Binary file — content not shown",
+      "image": {
+        "sideBySide": "Switch to side-by-side view",
+        "swipe": "Switch to swipe view",
+        "swipeHandle": "Image comparison slider",
+        "noImage": "No image at this revision",
+        "unavailable": "Could not load this side",
+        "tooLarge": "Image too large to preview ({size})",
+        "loading": "Loading images..."
       }
     },
     "conversationContextBar": {
@@ -3782,6 +4084,13 @@
     "errorLoadingDir": "Failed to load directory",
     "selectedCount": "{count} selected"
   },
+  "BranchPicker": {
+    "searchPlaceholder": "Search branches…",
+    "none": "No branches",
+    "local": "Local",
+    "remote": "Remote",
+    "useCustom": "Use \"{query}\""
+  },
   "ChatChannelSettings": {
     "loading": "Loading...",
     "sectionTitle": "Chat Channels",
@@ -3936,7 +4245,7 @@
     "agentTypeRequired": "Agent type is required.",
     "agentTypeImmutableHint": "Agent type cannot be changed after creation.",
     "model": "Model",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Main Model",
     "claudeReasoningModel": "Reasoning Model (thinking)",
@@ -4370,13 +4679,12 @@
     "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
   },
   "BackupSettings": {
-    "title": "Backup & Restore",
-    "description": "Export a portable backup of your codeg data, or restore from one.",
     "tabs": {
       "backup": "Backup",
       "restore": "Restore"
     },
     "export": {
+      "description": "Packs this machine's codeg data — the database and uploaded files — into one archive.",
       "includeExternal": "Include conversation content",
       "includeExternalHint": "Also archive agent CLI transcripts (Claude, Codex, Gemini, …). Increases size.",
       "passphrase": "Passphrase (optional)",
@@ -4388,9 +4696,18 @@
       "button": "Export backup",
       "inProgress": "Creating backup…",
       "success": "Backup created.",
-      "started": "Backup download started."
+      "started": "Backup download started.",
+      "degradedTitle": "Some agent session databases needed special handling",
+      "degradedHint": "These agents keep their sessions in SQLite. The backup still contains them unless marked otherwise below.",
+      "degradedMore": "…and {count} more.",
+      "degradedLevel": {
+        "recoveredOnCopy": "recovered from a private copy — complete",
+        "bareFileOnly": "archived without its write-ahead log — the newest messages may be missing",
+        "notArchived": "not archived — it kept changing while being copied"
+      }
     },
     "restore": {
+      "description": "Replaces this machine's codeg data with the contents of a backup archive.",
       "selectFile": "Select backup file",
       "passphrasePrompt": "This backup is encrypted. Enter its passphrase.",
       "unlock": "Unlock",
@@ -4426,11 +4743,136 @@
         "scanning": "Checking for conflicts…",
         "noConflicts": "No existing files would be overwritten.",
         "conflictCount": "{count} existing file(s) would be affected.",
-        "conflictSkipNote": "Existing files are kept (skipped) unless you enable overwrite."
+        "conflictSkipNote": "Existing files are kept (skipped) unless you enable overwrite.",
+        "agentsRunning": "{count} agent(s) are running ({agents}). Close them first, or the transcripts will be kept in a side folder instead of written back."
       },
-      "restartFailed": "Restore staged, but the server couldn't restart. Restart it manually to apply the restore."
+      "restartFailed": "Restore staged, but the server couldn't restart. Restart it manually to apply the restore.",
+      "discardPending": "Discard staged restore",
+      "discarded": "The staged restore was discarded.",
+      "pendingBlockedHint": "A restore is already staged and waiting for a restart. Discard it to stage a different one.",
+      "result": {
+        "title": "Restore staged",
+        "needsRestart": "It will be applied on the next start. Your current data is snapshotted first.",
+        "downgraded": "{agents} were running, so conversation transcripts were not written back to their original locations. They were kept in {path}.",
+        "skipped": "{count} existing file(s) were kept",
+        "refused": "{count} session database(s) were not written back",
+        "refusedHint": "They come from an older backup that stored a database and its write-ahead log separately, and the two cannot be proven to match. Your existing databases were left untouched — restore to a side folder to get the raw files.",
+        "restartNow": "Restart now",
+        "later": "Later"
+      }
     },
-    "remoteUnsupported": "Backup & restore acts on the data of the machine running codeg. You're connected to a remote workspace — manage its backups from that server directly."
+    "remoteUnsupported": "Backup & restore acts on the data of the machine running codeg. You're connected to a remote workspace — manage its backups from that server directly.",
+    "progress": {
+      "cancel": "Cancel"
+    },
+    "snapshots": {
+      "title": "Pre-restore snapshots",
+      "hint": "Each restore snapshots your current data first. The two newest are kept.",
+      "empty": "No snapshots yet.",
+      "rollback": "Roll back to this",
+      "unsupported": "Inspect only",
+      "rollbackConfirmTitle": "Roll back to this snapshot?",
+      "rollbackConfirmBody": "This replaces your current data with the snapshot, then restarts. The data being replaced is snapshotted first."
+    }
+  },
+  "ConfigSyncSettings": {
+    "title": "Configuration sync",
+    "scopeTitle": "What gets synced",
+    "scopeIncludedTitle": "Included",
+    "scopeExcludedTitle": "Not included",
+    "scopeIncluded": {
+      "providers": "Model providers (with API keys)",
+      "agentSettings": "Agent settings",
+      "customAgents": "Custom agents",
+      "quickMessages": "Quick messages",
+      "taskTemplates": "Task templates",
+      "preferences": "App preferences (language, appearance, toggles)"
+    },
+    "scopeExcluded": {
+      "conversations": "Conversations and history",
+      "uploads": "Uploaded files and images",
+      "workspaces": "Workspace projects and paths",
+      "mcp": "MCP servers (owned by each CLI)",
+      "credentials": "Login credentials and tokens"
+    },
+    "fileTitle": "Configuration file",
+    "exportButton": "Export to file",
+    "importButton": "Import from file",
+    "fileHint": "Writes one JSON file you can carry to another machine. Importing adds or updates entries; existing ones that are missing from the file are kept.",
+    "webdavTitle": "WebDAV sync",
+    "webdavHint": "Upload the configuration snapshot to your own WebDAV server.",
+    "presetLabel": "Server",
+    "preset": {
+      "jianguoyun": "Jianguoyun",
+      "nextcloud": "Nextcloud",
+      "synology": "Synology NAS",
+      "custom": "Custom"
+    },
+    "presetHint": {
+      "jianguoyun": "Jianguoyun needs an app password created in Security settings, not your login password.",
+      "nextcloud": "Replace the domain and username, then use an app password from Settings → Security.",
+      "synology": "Enable WebDAV Server in DSM Package Center; default ports are 5005 (HTTP) and 5006 (HTTPS)."
+    },
+    "serverUrl": "Server URL",
+    "username": "Username",
+    "password": "Password",
+    "passwordKeep": "Leave empty to keep the saved password",
+    "passwordPlaceholder": "App password",
+    "remoteDir": "Remote folder",
+    "profile": "Profile",
+    "profileHint": "Machines that share a profile share one configuration. Use separate profiles to keep work and personal setups apart.",
+    "autoSyncLabel": "Upload automatically",
+    "autoSyncHint": "Checks periodically and uploads only when the configuration changed.",
+    "intervalLabel": "Check interval",
+    "intervalOption": "Every {minutes} minutes",
+    "saveButton": "Save",
+    "testButton": "Test connection",
+    "uploadButton": "Sync now",
+    "restoreButton": "Restore from remote",
+    "saved": "Sync settings saved",
+    "testSucceeded": "Connected to the WebDAV server",
+    "uploaded": "Configuration uploaded",
+    "exported": "Configuration exported",
+    "restored": "{count, plural, one {# entry applied} other {# entries applied}}",
+    "imported": "{count, plural, one {# entry applied} other {# entries applied}}",
+    "noRemoteSnapshot": "There is no configuration snapshot on the server yet",
+    "lastSyncAt": "Last synced {time}",
+    "neverSynced": "Not synced yet",
+    "lastError": "Last error: {message}",
+    "working": "Working…",
+    "plaintextWarning": "The snapshot is uploaded unencrypted and includes API keys, so use a WebDAV server only you can reach. The sync credentials themselves are never part of the snapshot.",
+    "importConfirmTitle": "Import configuration?",
+    "importConfirmBody": "Entries from this file will be added or updated on this machine. Existing entries that the file does not mention are kept.",
+    "restartHint": "Some changes — appearance, language, and the provider list — take effect after restarting codeg.",
+    "importConfirmAction": "Import",
+    "restoreConfirmTitle": "Restore from remote?",
+    "restoreConfirmBody": "The snapshot from {device}, taken {time}, will be applied to this machine. Existing entries that the snapshot does not mention are kept.",
+    "restoreConfirmAction": "Restore",
+    "cancel": "Cancel",
+    "emptySnapshot": "This snapshot contains no configuration entries.",
+    "domain": {
+      "modelProviders": "{count, plural, one {# model provider} other {# model providers}}",
+      "agentSettings": "{count, plural, one {# agent setting} other {# agent settings}}",
+      "customAgents": "{count, plural, one {# custom agent} other {# custom agents}}",
+      "quickMessages": "{count, plural, one {# quick message} other {# quick messages}}",
+      "taskTemplates": "{count, plural, one {# task template} other {# task templates}}",
+      "preferences": "{count, plural, one {# preference} other {# preferences}}"
+    },
+    "rollbackTitle": "Undo an import",
+    "rollbackHint": "Every import and every restore saves what this machine looked like beforehand. The last ten are kept.",
+    "rollbackAction": "Undo",
+    "rollbackUnknownTime": "Unknown time",
+    "rollbackConfirmTitle": "Go back to this configuration?",
+    "rollbackConfirmBody": "This replaces the current configuration with the copy saved on {time}. The current one is saved first, so this is itself undoable.",
+    "rollbackConfirmAction": "Undo",
+    "rolledBack": "{count, plural, one {# entry restored} other {# entries restored}}",
+    "encryptLabel": "Encrypt the snapshot",
+    "encryptHint": "Protect the uploaded file with a passphrase. Every machine you sync needs the same one.",
+    "encryptedNotice": "The snapshot is encrypted with your passphrase before it is uploaded. If you lose the passphrase, the copy on the server cannot be recovered.",
+    "passphrase": "Passphrase",
+    "passphraseKeep": "Leave empty to keep the saved passphrase",
+    "passphrasePlaceholder": "Encryption passphrase",
+    "passphraseHint": "Kept in this machine's keychain and never uploaded. Enter the same passphrase on your other machines."
   },
   "backup": {
     "restore": {
@@ -4445,6 +4887,27 @@
     "error": {
       "diskSpace": "Not enough disk space to complete the operation.",
       "cancelled": "The operation was cancelled."
+    }
+  },
+  "configSync": {
+    "error": {
+      "newerSchema": "This snapshot was created by a newer version of codeg (format {snapshotVersion}); this version understands up to format {appVersion}.",
+      "checksum": "The snapshot does not match its checksum and may be incomplete.",
+      "invalidSnapshot": "This file is not a valid codeg configuration snapshot.",
+      "noRemoteSnapshot": "There is no configuration snapshot on the server yet.",
+      "notConfigured": "Set up the WebDAV server before syncing.",
+      "unauthorized": "The WebDAV server rejected the username or password.",
+      "forbidden": "The WebDAV server denied access to this folder.",
+      "remotePath": "The remote folder or profile name is not valid.",
+      "quota": "The WebDAV server has no space left.",
+      "network": "Could not reach the WebDAV server.",
+      "server": "The WebDAV server returned an error ({status}).",
+      "passphraseRequired": "This snapshot is encrypted. Set the encryption passphrase before syncing.",
+      "badPassphrase": "The snapshot could not be decrypted. Check the passphrase — or the file may be damaged.",
+      "badDomain": "The {domain} section of this snapshot could not be read.",
+      "noRollback": "That saved configuration is no longer on this machine.",
+      "credentialsUnreadable": "Could not read the saved credentials. Unlock the system keychain, then try again.",
+      "notEncrypted": "The snapshot on the server is not encrypted, but encryption is turned on here. Upload from this device to replace it, or turn encryption off to use it."
     }
   },
   "WebConnection": {
@@ -4477,21 +4940,92 @@
   "AgentToolsSettings": {
     "title": "In-conversation tools",
     "description": "Extra tools codeg gives an agent inside a conversation. Each is injected when the agent starts, so a change applies to agents started afterwards.",
-    "feedbackLabel": "Live Feedback",
-    "feedbackHint": "Send notes and corrections to an agent while it's working. When the agent supports instant steering, your note is inserted into the running turn immediately; otherwise the agent gets a tool to check for your feedback — those agents typically only check when you mention it in your prompt, for example add \"check my live feedback regularly\" to your message.",
-    "questionLabel": "Ask user question",
-    "questionHint": "Let agents pause and ask you a multiple-choice question that appears above the conversation input box. The agent waits until you answer (or skip).",
-    "sessionInfoLabel": "Get session info",
-    "sessionInfoHint": "Let agents look up a session you reference in your message (a session badge) to read its title, agent, status, workspace, token usage, and recent messages.",
-    "automationsLabel": "Create automations",
-    "automationsHint": "Save the conversation as an automation that runs on a schedule. Off by default — it goes on to start agents on its own.",
-    "workTasksLabel": "Create to-do tasks",
-    "workTasksHint": "Queue a card on the to-do board from the conversation. Off by default — it writes app state.",
     "save": "Save",
     "saving": "Saving…",
     "saved": "Tool settings saved",
     "saveFailed": "Failed to save tool settings",
     "loadFailed": "Failed to load: {detail}"
+  },
+  "AgentTools": {
+    "delegation": {
+      "label": "Delegation",
+      "short": "Hand a task to another agent.",
+      "hint": "Lets an agent hand a self-contained sub-task to another agent, which runs in its own session and reports back. The rest of it — how deep delegations may nest, which agent runs them — is the section just above."
+    },
+    "feedback": {
+      "label": "Live Feedback",
+      "short": "Add notes mid-turn without interrupting.",
+      "hint": "Send notes and corrections to an agent while it's working. When the agent supports instant steering, your note is inserted into the running turn immediately; otherwise the agent gets a tool to check for your feedback — those agents typically only check when you mention it in your prompt, for example add \"check my live feedback regularly\" to your message."
+    },
+    "ask": {
+      "label": "Ask user question",
+      "short": "Let the agent ask you before it decides.",
+      "hint": "Let agents pause and ask you a multiple-choice question that appears above the conversation input box. The agent waits until you answer (or skip)."
+    },
+    "sessions": {
+      "label": "Get session info",
+      "short": "Look up past sessions and their results.",
+      "hint": "Let agents look up a session you reference in your message (a session badge) to read its title, agent, status, workspace, token usage, and recent messages."
+    },
+    "browser": {
+      "label": "Read and drive the built-in browser",
+      "short": "Open, read and act on pages in the built-in browser.",
+      "hint": "Lets an agent see which pages are open in the built-in browser, read the ones you share, and click and type on the ones you allow actions on. It can also open an address itself, point a tab somewhere else and close tabs. Off by default. Which page it may read is still yours to decide in that tab's toolbar — but note that with a standing sharing level set, a page the agent opens for itself is shared with it the moment that page loads. Turning this off takes effect at once, on agents already running too."
+    },
+    "browserEval": {
+      "label": "Run code in the built-in browser",
+      "short": "Run its own code on a page you shared — without asking, unless you ask it to.",
+      "hint": "Let agents run their own JavaScript on a page you’ve shared. Off by default, and needs the switch above. Turning it on means snippets run without asking, so this switch is where the decision is made; Settings → Built-in browser can put each snippet in front of you instead."
+    },
+    "automations": {
+      "label": "Create automations",
+      "short": "Create and manage scheduled automations.",
+      "hint": "Save the conversation as an automation that runs on a schedule. Off by default — it goes on to start agents on its own."
+    },
+    "taskboard": {
+      "label": "Create to-do tasks",
+      "short": "Create and manage work tasks.",
+      "hint": "Queue a card on the to-do board from the conversation. Off by default — it writes app state."
+    }
+  },
+  "DesktopNotificationSettings": {
+    "title": "Desktop notifications",
+    "description": "Raise an OS notification when an agent needs you. Configured per device — the same setting on another browser or machine is separate.",
+    "permissionTitle": "Permission",
+    "permissionGranted": "Allowed",
+    "permissionDenied": "Blocked",
+    "permissionDefault": "Not requested",
+    "permissionUnsupported": "Unavailable",
+    "permissionManagedByOs": "Managed by the system",
+    "permissionGrantedHint": "This browser will show notifications from Codeg.",
+    "permissionDeniedHint": "This browser is blocking notifications from Codeg. Only the browser's own site settings can undo that — a page cannot ask again.",
+    "permissionDefaultHint": "This browser has not been asked yet. Notifications stay silent until you allow them.",
+    "permissionUnsupportedHint": "Notifications need a secure context. Reach this server over HTTPS or on localhost.",
+    "permissionManagedByOsHint": "The desktop app posts through the system notification centre, which does not report back whether Codeg is allowed. Send a test to find out.",
+    "identityTitle": "Delivered as",
+    "identityHint": "The system files these notifications under this app — its own switches are the ones that apply.",
+    "identityDegradedHint": "Codeg's own identifier could not be claimed, so the system posts these as {bundleId} and that app's switches apply instead. Installing Codeg to your Applications folder restores its own identity.",
+    "requestPermission": "Allow notifications",
+    "permissionGrantedToast": "Notifications allowed.",
+    "permissionDeniedToast": "Notifications were blocked. Re-enable them in your browser's site settings.",
+    "openSystemSettings": "Open system settings",
+    "openSystemSettingsFailed": "Could not open the system notification settings.",
+    "sendTest": "Send a test",
+    "testTitle": "Codeg",
+    "testBody": "Desktop notifications are working.",
+    "testSent": "Test notification sent.",
+    "testFailed": "The test notification could not be sent.",
+    "whenTitle": "Notify when",
+    "whenHint": "A window on a second monitor is visible but not focused — pick “Window is not focused” if notifications never seem to arrive.",
+    "whenAlways": "Always",
+    "whenUnfocused": "Window is not focused",
+    "whenHidden": "Window is not visible",
+    "hideBody": "Hide notification contents",
+    "hideBodyHint": "Show a generic line instead of agent output. A notification centre keeps its payload outside the app, after the conversation is closed. The title still names the folder, so you can tell which window to go back to.",
+    "eventsTitle": "Events",
+    "eventsHint": "Turn off any event that should not interrupt you. Repeats of the same event within a few seconds collapse into one notification.",
+    "eventBackgroundTask": "Background task",
+    "eventWorkTask": "Work task"
   },
   "NotificationSoundSettings": {
     "title": "Notification sounds",
@@ -4511,6 +5045,100 @@
     "tonePop": "Pop",
     "toneAlert": "Alert",
     "toneDescend": "Descending"
+  },
+  "BrowserSettings": {
+    "title": "Built-in browser",
+    "description": "Web pages opened from conversations, tool results and the terminal can appear as tabs next to your files instead of leaving the app.",
+    "descriptionWeb": "In a browser session pages open in the browser you are already in. The exception is a server running on the codeg host, which is forwarded into a tab here. These are the settings that still decide something.",
+    "defaultTargetTitle": "Where links open",
+    "defaultTargetHint": "Set per source. ⌘/Ctrl-click a link to use the other one just this once.",
+    "sourceTranscript": "Conversation messages",
+    "sourceToolCard": "Tool results",
+    "sourceTerminal": "Terminal",
+    "sourceEditor": "Editor",
+    "sourceNotification": "Notifications",
+    "targetBuiltin": "Built-in browser",
+    "targetSystem": "System browser",
+    "devtoolsTitle": "Web inspector",
+    "devtoolsHint": "Offer “Open inspector” in a tab’s More menu, and Inspect Element on the page. On by default. Applies to tabs opened from now on.",
+    "surfaceTitle": "Tab surface",
+    "surfaceHint": "How pages are hosted. Keep Automatic unless embedded tabs misbehave on this system. Applies to tabs opened from now on.",
+    "surfaceAuto": "Automatic",
+    "surfaceChild": "Embedded in the workspace",
+    "surfaceWindow": "Separate window",
+    "clearTitle": "Browsing data",
+    "clearHint": "Cookies, caches and site storage shared by every browser tab. Clearing signs you out of sites.",
+    "clearAction": "Clear…",
+    "clearConfirmTitle": "Clear browsing data?",
+    "clearConfirmDescription": "Cookies, caches and site storage of the built-in browser will be removed. Open tabs stay open, but you will be signed out of sites.",
+    "clearConfirmAction": "Clear",
+    "cancel": "Cancel",
+    "cleared": "Browsing data cleared",
+    "clearFailed": "Could not clear browsing data: {message}",
+    "proxyTitle": "Network proxy",
+    "proxyHint": "Browser tabs use the proxy from System settings. Addresses on this machine (localhost) are never proxied.",
+    "proxyOn": "Using {url}",
+    "proxyOff": "Direct connection",
+    "proxyNextTab": "A changed proxy applies to tabs opened from now on.",
+    "proxyRestart": "Restart codeg for browser tabs to use the changed proxy.",
+    "proxyUnsupported": "Not available on this version of macOS (14 or later is needed).",
+    "proxyUnusable": "The configured proxy is not one browser tabs can use (http and socks5 only).",
+    "suspendTitle": "Unload background tabs",
+    "suspendHint": "Release the memory of browser tabs that stay in the background for 30 minutes. They load again when you switch back; scroll position and history are lost.",
+    "downloadsTitle": "Downloads",
+    "downloadsHint": "Files a page downloads are saved to {dir}. Nothing is opened automatically, and an existing file is never replaced.",
+    "rulesTitle": "Site rules",
+    "rulesHint": "Per site: always the built-in browser, always the system browser, or block. Patterns are a hostname, *.example.com or *, with an optional :port; the most specific match wins.",
+    "rulesHintWeb": "Per site: block. Where a link opens is not a choice in a browser session. Patterns are a hostname, *.example.com or *, with an optional :port; the most specific match wins.",
+    "serviceOpenTitle": "Local servers",
+    "serviceOpenHint": "When a server started in a terminal prints its address, open it in a browser tab. Addresses on this machine only, and only once something is listening on them.",
+    "serviceOpenOff": "Do nothing",
+    "serviceOpenNotify": "Notify me",
+    "serviceOpenOpen": "Open a tab",
+    "rulePatternPlaceholder": "example.com or *.example.com",
+    "rulePatternLabel": "Site pattern",
+    "ruleActionLabel": "Action",
+    "ruleActionFor": "Action for {pattern}",
+    "ruleAdd": "Add",
+    "ruleRemove": "Remove rule",
+    "ruleActionBlock": "Block",
+    "ruleManaged": "Set by your administrator",
+    "ruleInvalid": "Not a valid pattern",
+    "ruleDuplicate": "There is already a rule for this pattern",
+    "rulesEmpty": "No rules yet.",
+    "agentGrantTitle": "Default sharing level",
+    "agentGrantHint": "What every site a tab opens is shared at, with nobody asked. The page’s own control still changes or ends it site by site; “Share nothing” leaves every decision to that control.",
+    "agentGrantRead": "Read only",
+    "agentGrantControl": "Read and act",
+    "agentGrantNone": "Share nothing",
+    "evalApprovalTitle": "Running code on a page",
+    "evalApprovalHint": "What happens when an agent asks to run its own JavaScript on a page shared at “Read and act”. It runs, without asking — the decision is the “Run code in the built-in browser” switch, which is off until you turn it on, and the page’s sharing level; every run is listed in that tab’s agent activity. “Ask me every time” puts each snippet in front of you in full and waits for an answer.",
+    "evalApprovalAsk": "Ask me every time",
+    "evalApprovalSilent": "Run without asking",
+    "terminalMenuTitle": "Terminal link menu",
+    "terminalMenuHint": "Clicking a link in the terminal shows a small menu (built-in browser, system browser, copy link) instead of opening it right away. ⌘/Ctrl-click still opens the link directly.",
+    "htmlPreviewTitle": "HTML file previews",
+    "htmlPreviewHint": "Show HTML files through the built-in browser, in a locked-down document view: no scripts until you enable them for a file, and only its own folder is reachable. Off: the inline preview is used, as in the web app.",
+    "managedDisabled": "The built-in browser is turned off by your administrator's policy; links open in the system browser.",
+    "profilesTitle": "Profiles",
+    "profilesHint": "Each profile keeps its own cookies, site storage and sign-ins. New tabs open in the profile chosen below; a tab's toolbar can open its page in another one.",
+    "profileDefault": "Default",
+    "profileNewTabsTitle": "New tabs open in",
+    "profileNamePlaceholder": "Profile name, e.g. Work",
+    "profileNameLabel": "Profile name",
+    "profileAdd": "Add profile",
+    "profileNameRequired": "Enter a name for the profile",
+    "profileNameDuplicate": "There is already a profile with this name",
+    "profileClear": "Clear browsing data of {name}",
+    "profileDelete": "Delete profile {name}",
+    "profileDeleteConfirmTitle": "Delete profile {name}?",
+    "profileDeleteConfirmDescription": "Its tabs will be closed and its cookies, caches and site storage removed. This cannot be undone.",
+    "profileDeleteConfirmAction": "Delete",
+    "profileDeleted": "Profile deleted",
+    "profileDeleteFailed": "Could not delete the profile: {message}",
+    "clearConfirmDescriptionProfile": "Cookies, caches and site storage of the profile {name} will be removed. Open tabs stay open, but you will be signed out of sites.",
+    "signInUaTitle": "Google sign-in compatibility",
+    "signInUaHint": "Google refuses to sign in from embedded browsers. When on, tabs present a Firefox identity to Google's sign-in pages only (accounts.google.com); everywhere else they identify as the engine they run in, never as Firefox. Embedded tabs only, not the separate-window surface; when a sign-in page redirects you to another site, the first request there still carries the sign-in identity."
   },
   "LogsSettings": {
     "loading": "Loading…",
@@ -4690,12 +5318,7 @@
     "cronApply": "Apply",
     "cronPreviewLabel": "Preview",
     "cronOpenBuilder": "Open schedule builder",
-    "branchDefault": "Default branch",
-    "branchUseCustom": "Use \"{query}\"",
-    "branchLocal": "Local",
-    "branchRemote": "Remote",
-    "branchSearchPlaceholder": "Search branches…",
-    "branchNone": "No branches"
+    "branchDefault": "Default branch"
   },
   "Tasks": {
     "title": "To-dos",
@@ -4804,6 +5427,8 @@
     "errorView": "View",
     "notifyReview": "Ready for review: {title}",
     "notifyFailed": "Task failed: {title}",
+    "notifyReviewRedacted": "A task is ready for review",
+    "notifyFailedRedacted": "A task failed",
     "createFromMessage": "Create task from message",
     "detailTokens": "Total tokens",
     "editorTitleNew": "New task",
@@ -4818,11 +5443,16 @@
     "phaseRetry": "Retry run",
     "phaseReturn": "Follow-up",
     "phaseMerge": "Merge",
+    "phaseCompact": "Context compaction",
     "titleLabel": "Title",
     "titlePlaceholder": "What needs to be done?",
     "promptLabel": "Task description",
     "promptPlaceholder": "Describe the task for the agent — @ to reference files, / for commands",
     "folderPlaceholder": "Select a folder",
+    "baseBranch": "Base branch",
+    "baseBranchPlaceholder": "Current branch",
+    "baseBranchDefault": "Current branch when the task starts",
+    "baseBranchHint": "The task branches from here, and merging lands it back on this branch.",
     "agentInheritedHint": "Inherited from task settings — change it to override for this task",
     "agentOverrideReset": "Reset to inherited",
     "sectionTarget": "Target",
@@ -4848,6 +5478,7 @@
     "mergeDeleteWorktree": "Delete worktree after merge",
     "mergeSubmit": "Merge",
     "mergeSubmitQueue": "Add to merge queue",
+    "mergeSubmitting": "Starting…",
     "mergeQueuedToast": "Added to the merge queue — it starts as soon as the current merge finishes.",
     "completeTitle": "Complete task",
     "completeDescription": "This task changed no files, so there is nothing to merge — it is marked as done directly.",
@@ -4869,6 +5500,7 @@
     "settingsMaxConcurrentHint": "0 = unlimited",
     "settingsAutoCompact": "Auto-compact threshold",
     "settingsAutoCompactHint": "Before a follow-up, retry or merge round, compact the session when its context window is at least this full. 0 = off.",
+    "compactingNote": "Compacting the session context…",
     "settingsCompactCommand": "Compact command",
     "settingsCompactCommandHint": "Leave blank to use what the agent offers, or its known default.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -5112,6 +5744,47 @@
     "fieldDescription": "Description",
     "baseInstructions": "System prompt (base_instructions)"
   },
+  "DeepSeekModelEditor": {
+    "title": "Model list",
+    "description": "The models a DeepSeek session can be switched between. Stored in the harness settings document, which the agent reads at launch — a save reaches sessions started after it.",
+    "inheritedBadge": "Agent defaults",
+    "inheritedHint": "No list is stored yet, so these are the agent's built-in models. Saving pins them, and later agent versions will no longer change them on their own. File:",
+    "storedHint": "Stored in your harness settings document. Keys outside this list — and the comments around them — are left untouched. File:",
+    "unreadable": "This settings document cannot be edited from here without risking what it already holds. Edit it by hand instead.",
+    "invalidStored": "This stored list is one the agent refuses, so sessions are running on its built-in models until it is fixed:",
+    "loading": "Reading the settings document…",
+    "loadFailed": "Could not read the settings document.",
+    "empty": "No models. Add one, or save to fall back to the agent's built-in list.",
+    "addModel": "Add model",
+    "remove": "Remove model",
+    "advanced": "More",
+    "save": "Save model list",
+    "saving": "Saving…",
+    "restoreDefaults": "Use agent defaults",
+    "fieldId": "Model id",
+    "fieldName": "Display name",
+    "fieldContextWindow": "Context window",
+    "fieldDescription": "Description",
+    "fieldMaxTokens": "Max output tokens",
+    "fieldAcceptsImages": "Accepts images",
+    "fieldImagePixelBudget": "Image pixel budget",
+    "imageBudgetPixels": "Pixel count",
+    "imageBudgetLow": "Low detail (512×512)",
+    "fieldImageMaxBytes": "Image byte cap",
+    "placeholderId": "deepseek-flash",
+    "placeholderName": "Shown in the picker",
+    "placeholderInherit": "Agent default",
+    "errorMissingId": "Every model needs an id.",
+    "errorDuplicateId": "Two models share the id “{id}”.",
+    "errorBadContextWindow": "The context window of “{id}” must be a whole number above zero.",
+    "errorBadMaxTokens": "The max output tokens of “{id}” must be a whole number above zero.",
+    "errorBadImageLimit": "The image limits of “{id}” must be whole numbers above zero.",
+    "warnSingleModel": "With a single model the agent stops offering a model picker at all.",
+    "warnLaunchModelMissing": "New sessions start on “{model}”, which is not in this list. Add it, or set {variable} in the environment variables above.",
+    "toastSaved": "Model list saved",
+    "toastRestored": "Using the agent's built-in model list",
+    "toastSaveFailed": "Could not save the model list"
+  },
   "DiagnosticsSettings": {
     "title": "Environment diagnostics",
     "description": "Checks how this app resolves the agent CLI inside its own process, which can differ from your terminal.",
@@ -5279,7 +5952,7 @@
     "noRemote": "This folder has no recognizable forge remote (origin)",
     "errors": {
       "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository.",
-      "unsupportedHost": "The repository panel supports GitHub and GitLab only, and {host} is not recognized as either. If it is a self-hosted GitHub Enterprise or GitLab instance, add an account for it under Settings → Version Control.",
+      "unsupportedHost": "The repository panel supports GitHub, GitLab and Gitea only, and {host} is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea or Forgejo instance, add an account for it under Settings → Version Control.",
       "wrongForge": "{host} is a {provider}, not the forge codeg had it classified as. The detection has been corrected — reload to retry."
     },
     "addAccount": "Add an account",
@@ -5543,6 +6216,317 @@
     "confirmDeleteCancel": "Cancel",
     "confirmDeleteConfirm": "Delete",
     "canvasActions": "Canvas actions",
-    "mergeIntoNewRegion": "New region"
+    "mergeIntoNewRegion": "New region",
+    "addFileCard": "File card",
+    "addTerminalCard": "Terminal card",
+    "searchFiles": "Search files…",
+    "searchFilesIn": "Search in {folder}…",
+    "searchingFiles": "Searching…",
+    "noFiles": "No files found",
+    "noOpenFiles": "No files open — type to search",
+    "browseForFile": "Browse…",
+    "filePreview": "Preview",
+    "fileSource": "Source",
+    "reloadFile": "Reload",
+    "removeFileCard": "Remove file card",
+    "restartTerminal": "Restart terminal",
+    "removeTerminalCard": "Remove terminal card",
+    "terminalNoDirectory": "This card has no working directory",
+    "confirmDeleteTerminals": "{count} running terminal(s) will be closed and their processes stopped.",
+    "confirmDeleteNotesAndTerminals": "{notes} note(s) you wrote will be permanently deleted, and {terminals} running terminal(s) will be stopped."
+  },
+  "Browser": {
+    "toolbar": {
+      "back": "Back",
+      "forward": "Forward",
+      "reload": "Reload",
+      "stop": "Stop",
+      "openInSystem": "Open in system browser",
+      "more": "More",
+      "copyUrl": "Copy link",
+      "copied": "Link copied",
+      "openInspector": "Open inspector",
+      "inspectorFailed": "Couldn't open the inspector",
+      "addressPlaceholder": "Enter an address",
+      "invalidUrl": "Not a valid address",
+      "profile": "Profile: {name}",
+      "profileMenuLabel": "Open this page in another profile",
+      "profileDefault": "Default"
+    },
+    "status": {
+      "popupDenied": "Pop-up blocked: {host}",
+      "popupDeniedNoGesture": "opened without a click",
+      "popupDeniedBlockedScheme": "address type not allowed",
+      "popupOpenAnyway": "Open anyway",
+      "dismiss": "Dismiss",
+      "errorDns": "This site can't be found",
+      "errorTls": "This connection is not secure",
+      "errorBlocked": "This address is blocked in the built-in browser",
+      "errorPopupDenied": "Pop-up blocked",
+      "errorFailed": "This page can't be loaded",
+      "errorFailedHint": "The connection didn't reach the site. Check your network and the address; a proxy may be required.",
+      "retry": "Retry",
+      "openInSystem": "Open in system browser",
+      "ownedWindow": "This page is shown in its own window.",
+      "ownedWindowShow": "Show window",
+      "remoteBanner": "Opened through {host}",
+      "remoteBannerDown": "Lost the connection to {host}. It is tried again on the next request.",
+      "navigationBlocked": "Navigation blocked: {host}",
+      "navigationBlockedRule": "blocked by a site rule",
+      "navigationBlockedScheme": "address type not allowed here",
+      "navigationBlockedOpenSystem": "Open with system app",
+      "errorBlockedHint": "A site rule blocks this address. Rules are managed in Settings → Built-in browser.",
+      "popupDeniedBlockedHost": "blocked by a site rule",
+      "channelDegraded": "Pop-ups are blocked in this tab and the address bar can fall behind the page",
+      "channelDegradedHint": "codeg could not install its page script. Pop-ups this page opens are blocked, the address bar will not follow navigation inside the page, and the find shortcut pressed in the page will not open the find bar. Reopening the tab tries again.",
+      "downloadsDenied": "Downloads blocked: {host}",
+      "downloadsDeniedNoGesture": "several files, not started by a click",
+      "agentGrantLost": "Sharing ended: the page left {origin}",
+      "agentGrantLostShare": "Share {origin} too",
+      "agentGrantReplaced": "Sharing ended: a different program is serving {origin} now",
+      "agentGrantReplacedShare": "Share it anyway",
+      "errorRemoteRefused": "Nothing is listening at this address on the remote host",
+      "errorRemoteRefusedHint": "{host} refused the connection. Check that the server behind this address is running there.",
+      "errorRemoteUnreachable": "The remote host can't reach this address",
+      "errorRemoteUnreachableHint": "Seen from {host}, the name doesn't resolve or there is no route to it.",
+      "errorRemoteNotAllowed": "The remote server doesn't open this address for the browser",
+      "errorRemoteNotAllowedHint": "The codeg-server on {host} only lets its browser tunnel reach private addresses (CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "The remote host took too long to connect",
+      "errorRemoteTimeoutHint": "{host} got no answer from this address in time. The server there may be busy or behind a firewall.",
+      "errorTunnelDown": "The connection to the remote host is down",
+      "errorTunnelDownHint": "The tunnel to {host} isn't carrying anything right now. Retry once it's reachable again."
+    },
+    "tab": {
+      "untitled": "New tab"
+    },
+    "drawer": {
+      "title": "Built-in browser",
+      "description": "A web page opened from the conversation",
+      "openInWorkspace": "Open in workspace",
+      "cannotOpen": "This address can't be opened here."
+    },
+    "bridge": {
+      "frameTitle": "Dev server preview",
+      "opening": "Connecting through the server…",
+      "reload": "Reload",
+      "openExternal": "Open in a new tab",
+      "copyAddress": "Copy address",
+      "copied": "Address copied",
+      "unreachableTitle": "The bridge port can't be reached",
+      "unreachableHint": "codeg's server put this page on {origin}, but your browser can't reach it. Publish that port (see CODEG_BRIDGE_PORTS) or set CODEG_BRIDGE_PUBLIC_HOST; if codeg is served over HTTPS, the bridge ports need HTTPS too.",
+      "unreachableHostHint": "codeg's server put this page on {origin}, but your browser can't reach it. That hostname has to resolve to the codeg server and reach it through whatever proxy is in front — a wildcard DNS record and a wildcard vhost (see CODEG_BRIDGE_HOST_PATTERN).",
+      "errorTitle": "This page can't be shown here"
+    },
+    "remote": {
+      "title": "This address is on {host}",
+      "titleUnnamed": "This address is on the remote host",
+      "description": "It points at the machine this workspace runs on, not at this computer.",
+      "copyAddress": "Copy address",
+      "copied": "Address copied",
+      "tryHost": "Try {host}",
+      "tryHostHint": "Opens {address} in a tab on this computer. It works if the page there listens on every network interface and this computer can reach its port.",
+      "openHere": "Open on this computer",
+      "openHereHint": "Opens the address in a tab on this computer. It works if this computer is on the same network.",
+      "retry": "Try again",
+      "connecting": "Connecting through {host}…",
+      "connectingUnnamed": "Connecting through the remote host…"
+    },
+    "download": {
+      "started": "Downloading…",
+      "completed": "Saved",
+      "failed": "Failed",
+      "reveal": "Show in folder",
+      "dismiss": "Dismiss"
+    },
+    "find": {
+      "placeholder": "Find in page",
+      "next": "Next match",
+      "previous": "Previous match",
+      "noMatches": "No matches",
+      "close": "Close"
+    },
+    "toast": {
+      "firstOpen": "Opened in the built-in browser",
+      "firstOpenHint": "⌘/Ctrl-click a link to open it in your system browser instead. Change the default in Settings.",
+      "useSystemAlways": "Always use system browser",
+      "serviceDetected": "A server is running at {address}",
+      "serviceDetectedHint": "Started in a terminal. Settings → Built-in browser can open these on their own.",
+      "serviceOpen": "Open",
+      "blockedHost": "Blocked by a site rule: {host}"
+    },
+    "link": {
+      "openBuiltin": "Open in built-in browser",
+      "openSystem": "Open in system browser",
+      "copy": "Copy link"
+    },
+    "doc": {
+      "scriptsOff": "Enable scripts",
+      "scriptsOn": "Scripts on",
+      "scriptsHint": "Run this document's scripts. They can only read files in its folder and cannot reach the network. If any of those files changes later, scripts turn off again.",
+      "reload": "Reload",
+      "more": "More",
+      "copyPath": "Copy path",
+      "useInline": "Use inline preview",
+      "useGuest": "Use built-in browser preview",
+      "unsaved": "Unsaved changes are not shown",
+      "reset": "{file} changed after scripts were enabled. Scripts are off again.",
+      "enableAgain": "Enable again",
+      "dismiss": "Dismiss",
+      "externalLink": "Link to {host} was not followed",
+      "openLink": "Open link",
+      "downloadRefused": "Downloads are not allowed in a document preview",
+      "openWithSystem": "Open with system app",
+      "schemeBlocked": "{url} can't be opened here",
+      "cannotShow": "This document can't be shown"
+    },
+    "agent": {
+      "share": "Share this page with agents ({origin})",
+      "shareLabel": "Share with agents",
+      "shareRead": "Read only",
+      "shareControl": "Read and act",
+      "levelDefault": "Default",
+      "notShareable": "This page has no web address to share with agents",
+      "remoteWindow": "Agents of a remote workspace run on its host and can't use this computer's browser",
+      "shared": "Shared",
+      "sharedControl": "Shared · can act",
+      "sharedWith": "Agents can read {origin}",
+      "sharedWithControl": "Agents can read and act on {origin}",
+      "sharedScope": "Sharing ends as soon as the page leaves this site.",
+      "sharedScopeProgram": "It also ends if another program takes this port from {program}.",
+      "sharedToast": "Agents can now read {origin}",
+      "sharedControlToast": "Agents can now read and act on {origin}",
+      "stopSharing": "Stop sharing",
+      "allowActions": "Allow actions on this page",
+      "readOnly": "Reading only",
+      "shareFailed": "This page can't be shared with agents",
+      "activity": {
+        "read": {
+          "done": "Read the page",
+          "refused": "Refused: this page isn't shared",
+          "failed": "Couldn't read the page"
+        },
+        "click": {
+          "done": "Clicked",
+          "refused": "Refused to click: actions aren't allowed on this page",
+          "failed": "Couldn't click"
+        },
+        "hover": {
+          "done": "Hovered",
+          "refused": "Refused to hover: actions aren't allowed on this page",
+          "failed": "Couldn't hover"
+        },
+        "type": {
+          "done": "Typed into a field",
+          "refused": "Refused to type: actions aren't allowed on this page",
+          "failed": "Couldn't type"
+        },
+        "press": {
+          "done": "Pressed a key",
+          "refused": "Refused to press a key: actions aren't allowed on this page",
+          "failed": "Couldn't press the key"
+        },
+        "select": {
+          "done": "Chose an option",
+          "refused": "Refused to choose an option: actions aren't allowed on this page",
+          "failed": "Couldn't choose the option"
+        },
+        "capture": {
+          "done": "Took a screenshot",
+          "refused": "Refused a screenshot: this page isn't shared",
+          "failed": "Couldn't take a screenshot"
+        },
+        "console": {
+          "done": "Read the console",
+          "refused": "Refused to read the console: this page isn't shared",
+          "failed": "Couldn't read the console"
+        },
+        "eval": {
+          "done": "Ran code on the page",
+          "refused": "Refused to run code on this page",
+          "failed": "Couldn’t run the code"
+        },
+        "open": {
+          "done": "Opened this page",
+          "refused": "Refused to open a tab",
+          "failed": "Could not open a tab"
+        },
+        "navigate": {
+          "done": "Went to another address",
+          "refused": "Refused: this page does not allow actions",
+          "failed": "Could not change the address"
+        },
+        "close": {
+          "done": "Closed this tab",
+          "refused": "Refused to close: this page does not allow actions",
+          "failed": "Could not close this tab"
+        }
+      },
+      "activityCount": "{count}×",
+      "activityTitle": "What agents did here",
+      "activityLabel": "Agent activity: {entry}",
+      "eval": {
+        "title": "Run this code on {site}?",
+        "description": "An agent wants to run JavaScript on this page. It can read and change anything on {site} that you can.",
+        "descriptionWithTitle": "An agent wants to run JavaScript on “{title}”. It can read and change anything on {site} that you can.",
+        "codeLabel": "The code it will run",
+        "everyTime": "You’ll be asked again for every snippet — approving this one does not approve the next. Whether you’re asked at all is set in Settings → Built-in browser.",
+        "allow": "Run it once",
+        "deny": "Don’t run it"
+      }
+    },
+    "handoff": {
+      "send": "Send this page to the chat",
+      "sendLabel": "Send to chat",
+      "noConversation": "Open a conversation to send this page to",
+      "pickElement": "Pick an element…",
+      "screenshot": "Send a screenshot",
+      "markUp": "Mark up a screenshot…",
+      "consoleErrors": "Send the console errors",
+      "consoleClean": "Nothing has gone wrong on this page",
+      "picking": "Picking…",
+      "pickingHint": "Click something on the page, or press Esc to stop",
+      "pickingCancel": "Stop picking",
+      "sent": "Added to the chat",
+      "failed": "This page could not be sent to the chat",
+      "noConsoleErrors": "This page has printed no errors",
+      "chipElement": "Page element",
+      "chipScreenshot": "Page screenshot",
+      "chipMarkedScreenshot": "Marked-up screenshot",
+      "chipConsole": "{count, plural, one {# console error} other {# console errors}}",
+      "gone": "That conversation is no longer open",
+      "consoleErrorsCount": "{count, plural, one {Send the # console error} other {Send the # console errors}}",
+      "markupTitle": "Mark up the screenshot",
+      "markupTools": "Drawing tool",
+      "markupBox": "Box",
+      "markupArrow": "Arrow",
+      "markupUndo": "Undo",
+      "markupClear": "Clear",
+      "markupHint": "Drag across the picture to draw. Each mark gets a number your message can refer to.",
+      "markupCount": "{count, plural, one {# mark} other {# marks}}",
+      "markupCancel": "Cancel",
+      "markupSend": "Add to chat"
+    }
+  },
+  "browser": {
+    "agent": {
+      "error": {
+        "grantRequired": "This tab has not been shared with an agent. Share it to let the agent read the page."
+      }
+    },
+    "inspector": {
+      "error": {
+        "switchedOff": "This tab was opened with the web inspector switched off. Turn it on in the browser settings, then open the page again."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "Opening the remote host's addresses in the built-in browser needs macOS 14 or later.",
+        "unsupported": "The remote codeg-server is too old to carry browser traffic. Update it to open its addresses here.",
+        "disabled": "The remote codeg-server has its browser tunnel switched off (CODEG_BROWSER_TUNNEL).",
+        "unreachable": "Couldn't reach the remote codeg-server's browser tunnel ({reason}).",
+        "bypassed": "This computer's browser engine sends some addresses around the tunnel, so the remote host's pages stay closed rather than load from this computer.",
+        "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
+      }
+    }
   }
 }

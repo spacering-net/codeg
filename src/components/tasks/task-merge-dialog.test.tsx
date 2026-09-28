@@ -254,7 +254,12 @@ describe("TaskMergeDialog", () => {
 
     rerender(view(true))
     expect(screen.queryByText(/joins the queue/)).toBeNull()
-    expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument()
+    // The button says what it is doing rather than going quietly disabled: the
+    // dispatch is short but not instant (it waits for the agent to come up).
+    expect(
+      screen.getByRole("button", { name: "Starting…" })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /queue/ })).toBeNull()
 
     // And the dispatch still lands as a dispatch.
     settle(false)
