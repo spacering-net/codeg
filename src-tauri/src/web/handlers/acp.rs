@@ -71,6 +71,8 @@ pub struct AcpConnectParams {
     pub working_dir: Option<String>,
     pub session_id: Option<String>,
     #[serde(default)]
+    pub conversation_id: Option<i32>,
+    #[serde(default)]
     pub preferred_mode_id: Option<String>,
     #[serde(default)]
     pub preferred_config_values: Option<BTreeMap<String, String>>,
@@ -99,9 +101,18 @@ pub async fn acp_connect(
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
+    let pending_error_conversation_id =
+        acp_commands::resolve_acp_connect_error_hint_core(
+            db,
+            params.agent_type,
+            params.conversation_id,
+            params.session_id.as_deref(),
+        )
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     let emitter = state.emitter.clone();
     let connection_id = manager
-        .spawn_agent(
+        .spawn_agent_with_error_hint(
             params.agent_type,
             params.working_dir,
             params.session_id,
@@ -110,6 +121,7 @@ pub async fn acp_connect(
             emitter,
             params.preferred_mode_id,
             params.preferred_config_values.unwrap_or_default(),
+            pending_error_conversation_id,
         )
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;

@@ -22,7 +22,7 @@ use crate::acp::delegation::broker::{DelegationBroker, DelegationMatchKey};
 use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
 use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
-use crate::acp::session_state::SessionState;
+use crate::acp::session_state::{SessionLastError, SessionState};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
 use crate::db::entities::conversation::ConversationStatus;
 use crate::db::error::DbError;
@@ -39,7 +39,7 @@ use tokio::sync::RwLock;
 /// of times per turn, so 64 slots is comfortable headroom for a sustained
 /// SQLite stall without forcing the dispatcher to block on `send`.
 /// (SessionStarted, TurnComplete, ConversationLinked, NativeSessionTitle,
-/// TranscriptRolledOver, Disconnected, Error.)
+/// TranscriptRolledOver, Prompting, Disconnected, Error.)
 const WORKER_QUEUE_CAPACITY: usize = 64;
 
 /// Whether an event needs to reach the per-connection worker. Mirrors the
@@ -73,6 +73,9 @@ fn is_lifecycle_relevant(event: &AcpEvent) -> bool {
                 status: ConnectionStatus::Disconnected
             }
             | AcpEvent::Error { .. }
+            | AcpEvent::StatusChanged {
+                status: ConnectionStatus::Prompting
+            }
     )
 }
 
@@ -1508,6 +1511,12 @@ mod delegation_registration_tests {
     }
 }
 
+struct LifecycleWork {
+    envelope: Arc<EventEnvelope>,
+    /// Assigned by the single dispatcher before workers can reorder DB writes.
+    scope_sequence: i64,
+}
+
 /// Per-connection worker that owns the cache for one connection and
 /// serializes its DB writes. Multiple connections run in parallel; within a
 /// connection, ordering is preserved by the mpsc FIFO. Decouples the bus
@@ -1519,7 +1528,7 @@ async fn connection_worker_loop(
     db: DatabaseConnection,
     manager: ConnectionManager,
     broker: Option<Arc<DelegationBroker>>,
-    mut rx: mpsc::Receiver<Arc<EventEnvelope>>,
+    mut rx: mpsc::Receiver<LifecycleWork>,
 ) {
     // 1-entry HashMap so we can reuse `handle_terminal_event` (also keeps the
     // existing test surface intact — tests still drive a `&mut HashMap`).
@@ -1535,13 +1544,79 @@ async fn connection_worker_loop(
     // the terminal work; the second one is a no-op so the broker / DB
     // aren't double-touched.
     let mut terminal_dispatched = false;
-    while let Some(envelope_arc) = rx.recv().await {
-        let envelope: &EventEnvelope = envelope_arc.as_ref();
+    // Captured from SessionStarted in this FIFO, rather than reading the
+    // mutable SessionState later: another session can start before a queued
+    // Error reaches this worker.
+    let mut event_session: Option<crate::acp::manager::ErrorSessionHint> = None;
+    let mut observed_session_id: Option<String> = None;
+    let mut linked_conversation_id: Option<i32> = None;
+    while let Some(work) = rx.recv().await {
+        let envelope: &EventEnvelope = work.envelope.as_ref();
         match &envelope.payload {
+            AcpEvent::SessionStarted { session_id } => {
+                observed_session_id = Some(session_id.clone());
+                let state = if let Some(entry) = cache.get(&connection_id) {
+                    Some(entry.state.clone())
+                } else {
+                    manager.get_state(&connection_id).await
+                };
+                let agent_type = if let Some(state) = state {
+                    Some(state.read().await.agent_type)
+                } else if let Some(hint) = manager.error_session_hint(&connection_id).await {
+                    Some(hint.agent_type)
+                } else if let Some(cid) = linked_conversation_id {
+                    conversation_service::get_by_id(&db, cid)
+                        .await
+                        .ok()
+                        .map(|row| row.agent_type)
+                } else {
+                    None
+                };
+                if let Some(agent_type) = agent_type {
+                    event_session = Some(crate::acp::manager::ErrorSessionHint {
+                        agent_type,
+                        session_id: session_id.clone(),
+                    });
+                }
+                handle_event_with_retry(&db, &manager, envelope, broker.as_ref()).await;
+            }
             AcpEvent::ConversationLinked {
                 conversation_id, ..
             } => {
+                linked_conversation_id = Some(*conversation_id);
                 try_cache_link(&mut cache, &manager, &connection_id, *conversation_id).await;
+                if event_session.is_none() {
+                    if let Some(session_id) = observed_session_id.as_ref() {
+                        if let Ok(row) = conversation_service::get_by_id(&db, *conversation_id).await {
+                            event_session = Some(crate::acp::manager::ErrorSessionHint {
+                                agent_type: row.agent_type,
+                                session_id: session_id.clone(),
+                            });
+                        }
+                    }
+                }
+                // Linking alone does not begin a new turn. A history fork can
+                // link before attempting fork; leave its old error intact if
+                // that attempt fails. Prompting is the clear boundary.
+            }
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Prompting,
+            } => {
+                // Prompting begins a new error scope. This worker serializes
+                // the clear after any earlier Error from the same connection.
+                persist_last_error_for_connection(
+                    &db,
+                    &cache,
+                    &manager,
+                    &connection_id,
+                    ErrorWriteIdentity {
+                        linked_conversation_id,
+                        event_session: event_session.as_ref(),
+                    },
+                    work.scope_sequence,
+                    None,
+                )
+                .await;
             }
             AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected,
@@ -1560,9 +1635,27 @@ async fn connection_worker_loop(
             AcpEvent::Error {
                 message,
                 code,
+                details,
                 terminal,
                 ..
             } => {
+                persist_last_error_for_connection(
+                    &db,
+                    &cache,
+                    &manager,
+                    &connection_id,
+                    ErrorWriteIdentity {
+                        linked_conversation_id,
+                        event_session: event_session.as_ref(),
+                    },
+                    work.scope_sequence,
+                    Some(&SessionLastError {
+                        message: message.clone(),
+                        code: code.clone(),
+                        details: details.clone(),
+                    }),
+                )
+                .await;
                 // Non-terminal Errors (`turn_failure_error_event`,
                 // `session/load` fallback, empty-prompt rejection, SetMode
                 // / SetConfigOption failures) leave the connection alive:
@@ -1605,6 +1698,96 @@ async fn connection_worker_loop(
             }
         }
     }
+    // The manager entry may already be gone when the terminal Error arrives,
+    // but the immutable session hint lives until this worker has drained it.
+    manager.forget_error_session_hint(&connection_id).await;
+}
+
+#[derive(Default)]
+struct ErrorWriteIdentity<'a> {
+    linked_conversation_id: Option<i32>,
+    event_session: Option<&'a crate::acp::manager::ErrorSessionHint>,
+}
+
+/// Persist every Error (including non-terminal ones) using the session
+/// identity observed in event order. A connect-time hint survives manager
+/// cleanup for failures before SessionStarted or ConversationLinked. Only
+/// still-unbound rows use their numeric id as a final fallback.
+async fn persist_last_error_for_connection(
+    db: &DatabaseConnection,
+    cache: &HashMap<String, CachedConn>,
+    manager: &ConnectionManager,
+    connection_id: &str,
+    identity: ErrorWriteIdentity<'_>,
+    scope_sequence: i64,
+    error: Option<&SessionLastError>,
+) {
+    let ErrorWriteIdentity {
+        linked_conversation_id,
+        event_session,
+    } = identity;
+    let state = if let Some(entry) = cache.get(connection_id) {
+        Some(entry.state.clone())
+    } else {
+        manager.get_state(connection_id).await
+    };
+    let cid = if let Some(entry) = cache.get(connection_id) {
+        Some(entry.conversation_id)
+    } else if let Some(state) = state {
+        state.read().await.conversation_id.or(linked_conversation_id)
+    } else {
+        linked_conversation_id
+    };
+    let session_hint = if let Some(identity) = event_session {
+        Some(identity.clone())
+    } else {
+        // A historical fork can emit ConversationLinked before SessionStarted.
+        // Its validated original-session hint still wins over the numeric row.
+        manager.error_session_hint(connection_id).await
+    };
+    if cid.is_none() && session_hint.is_none() {
+        return;
+    }
+    let mut retry_backoffs = HANDLE_EVENT_RETRY_BACKOFFS.iter();
+    loop {
+        let result = if let Some(hint) = session_hint.as_ref() {
+            // Use the session observed in event order. A second connection
+            // may have rebound the linked numeric row to another session.
+            conversation_service::persist_last_error_for_agent_session(
+                db,
+                hint.agent_type,
+                &hint.session_id,
+                connection_id,
+                scope_sequence,
+                error,
+            )
+            .await
+            .map(|_| ())
+        } else if let Some(cid) = cid {
+            // No session identity has been emitted yet. Claim only while this
+            // numeric row is still unbound; a different client's bind makes
+            // the event stale rather than a write to its new session.
+            conversation_service::persist_last_error_for_unbound_row(
+                db, cid, connection_id, scope_sequence, error,
+            )
+            .await
+            .map(|_| ())
+        } else {
+            return;
+        };
+        match result {
+            Ok(()) => return,
+            Err(e) => match retry_backoffs.next() {
+                Some(backoff) => tokio::time::sleep(*backoff).await,
+                None => {
+                    tracing::error!(
+                        "[lifecycle][ERROR] persist last_error for connection {connection_id}: {e}"
+                    );
+                    return;
+                }
+            },
+        }
+    }
 }
 
 /// Subscribe to the in-process bus synchronously and return the dispatcher
@@ -1615,7 +1798,7 @@ async fn connection_worker_loop(
 /// connections, workers run independently so a slow SQLite write on one
 /// connection doesn't backpressure the others.
 ///
-/// All forwarded events (the 7 types in `is_lifecycle_relevant`) use
+/// All forwarded events (the types in `is_lifecycle_relevant`) use
 /// blocking `send().await` to guarantee delivery even when the worker
 /// mailbox is full — `SessionStarted` (writes external_id) and
 /// `TurnComplete` (writes terminal status) are correctness-critical and
@@ -1635,10 +1818,20 @@ pub fn lifecycle_subscriber_task(
     let mut rx = bus.subscribe();
     let metrics = Arc::clone(bus.metrics());
     async move {
+        // Persisted maximum prevents sequence reuse after a backend restart.
+        // CodeG's data-root contract assumes one backend process per database.
+        let mut next_scope_sequence =
+            match conversation_service::max_last_error_scope_sequence(&db_conn).await {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::error!("[lifecycle][ERROR] load error scope sequence: {error}");
+                    return;
+                }
+            };
         // connection_id → worker mailbox. Workers are spawned lazily on the
         // connection's first relevant event and torn down after a terminal
         // event by dropping the sender (worker drains its queue and exits).
-        let mut workers: HashMap<String, mpsc::Sender<Arc<EventEnvelope>>> = HashMap::new();
+        let mut workers: HashMap<String, mpsc::Sender<LifecycleWork>> = HashMap::new();
         let mut lag_throttle = LagLogThrottle::new(LAG_LOG_WINDOW);
         loop {
             match rx.recv().await {
@@ -1676,7 +1869,7 @@ pub fn lifecycle_subscriber_task(
 
                     let tx = workers.entry(conn_id.clone()).or_insert_with(|| {
                         let (tx, worker_rx) =
-                            mpsc::channel::<Arc<EventEnvelope>>(WORKER_QUEUE_CAPACITY);
+                            mpsc::channel::<LifecycleWork>(WORKER_QUEUE_CAPACITY);
                         let db_clone = db_conn.clone();
                         let mgr_clone = manager.clone_ref();
                         let broker_clone = broker.clone();
@@ -1696,7 +1889,14 @@ pub fn lifecycle_subscriber_task(
                     // Counts queue-full as back-pressure observation rather
                     // than a drop event — nothing is dropped, the dispatcher
                     // just waits for the worker to make room.
-                    let send_result = match tx.try_send(envelope_arc) {
+                    next_scope_sequence = next_scope_sequence
+                        .checked_add(1)
+                        .expect("lifecycle error scope sequence exhausted");
+                    let work = LifecycleWork {
+                        envelope: envelope_arc,
+                        scope_sequence: next_scope_sequence,
+                    };
+                    let send_result = match tx.try_send(work) {
                         Ok(()) => Ok(()),
                         Err(mpsc::error::TrySendError::Full(env)) => {
                             metrics
@@ -1768,7 +1968,7 @@ pub fn lifecycle_subscriber_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::session_state::SessionState;
+    use crate::acp::session_state::{SessionLastError, SessionState};
     use crate::db::test_helpers;
     use crate::models::agent::AgentType;
     use crate::web::event_bridge::EventEmitter;
@@ -2324,6 +2524,785 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worker_persists_pre_prompt_load_error_for_known_history_row() {
+        use crate::db::test_helpers::fresh_disk_db;
+        use sea_orm::Database;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_disk_db(dir.path()).await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-history-load").await;
+        let conv = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, conv.id, "session-old", &[])
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        assert_eq!(
+            conversation_service::resolve_error_conversation_hint(
+                &db.conn, Some(conv.id), AgentType::ClaudeCode, Some("session-old")
+            )
+            .await
+            .unwrap(),
+            Some(conv.id)
+        );
+        mgr.register_error_session_hint(
+            "history-load",
+            AgentType::ClaudeCode,
+            "session-old".into(),
+        )
+        .await;
+        mgr.connections.lock().await.insert(
+            "history-load".into(),
+            fake_connection_with_state("history-load", None),
+        );
+        // Simulate ConnectionCleanupGuard running after the driver emits
+        // terminal Error but before the lifecycle worker receives it.
+        mgr.connections.lock().await.remove("history-load");
+
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "history-load".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 1,
+                connection_id: "history-load".into(),
+                payload: AcpEvent::Error {
+                    message: "Failed to load session, starting new".into(),
+                    agent_type: "claude_code".into(),
+                    code: Some("load_failed".into()),
+                    details: None,
+                    terminal: true,
+                },
+            }),
+            scope_sequence: 1,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        assert!(mgr.get_state("history-load").await.is_none());
+        assert!(mgr.error_session_hint("history-load").await.is_none());
+        db.conn.close().await.unwrap();
+
+        let reopened = Database::connect(format!(
+            "sqlite:{}?mode=rw",
+            dir.path().join("source.db").display()
+        ))
+        .await
+        .unwrap();
+        let (error, _, _) = conversation_service::get_last_error(&reopened, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            error.unwrap().message,
+            "Failed to load session, starting new"
+        );
+        reopened.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_prompt_terminal_error_drains_after_manager_cleanup() {
+        use crate::db::test_helpers::fresh_disk_db;
+        use sea_orm::Database;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_disk_db(dir.path()).await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-first-prompt").await;
+        let row = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        // The first prompt binds the new row synchronously before publishing
+        // its link. The driver then dies before this queued worker starts.
+        conversation_service::bind_external_id(&db.conn, row.id, "fresh-session", &[])
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        mgr.connections.lock().await.insert(
+            "fresh-terminal".into(),
+            fake_connection_with_state("fresh-terminal", Some(row.id)),
+        );
+        let (tx, rx) = mpsc::channel(8);
+        for (seq, payload) in [
+            (
+                1,
+                AcpEvent::SessionStarted {
+                    session_id: "fresh-session".into(),
+                },
+            ),
+            (
+                2,
+                AcpEvent::ConversationLinked {
+                    conversation_id: row.id,
+                    folder_id: folder,
+                    parent_conversation_id: None,
+                    parent_tool_use_id: None,
+                },
+            ),
+            (
+                3,
+                AcpEvent::StatusChanged {
+                    status: ConnectionStatus::Prompting,
+                },
+            ),
+            (
+                4,
+                AcpEvent::Error {
+                    message: "first prompt crashed".into(),
+                    agent_type: "claude_code".into(),
+                    code: Some("startup_failed".into()),
+                    details: None,
+                    terminal: true,
+                },
+            ),
+        ] {
+            tx.send(LifecycleWork {
+                envelope: Arc::new(EventEnvelope {
+                    seq: seq as u64,
+                    connection_id: "fresh-terminal".into(),
+                    payload,
+                }),
+                scope_sequence: seq,
+            })
+            .await
+            .unwrap();
+        }
+        mgr.connections.lock().await.remove("fresh-terminal");
+        let worker = tokio::spawn(connection_worker_loop(
+            "fresh-terminal".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        drop(tx);
+        worker.await.unwrap();
+        db.conn.close().await.unwrap();
+
+        let reopened = Database::connect(format!(
+            "sqlite:{}?mode=rw",
+            dir.path().join("source.db").display()
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            conversation_service::get_last_error(&reopened, row.id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "first prompt crashed"
+        );
+        reopened.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn alias_normalization_keeps_live_error_on_the_same_history_row() {
+        use crate::db::test_helpers::fresh_disk_db;
+        use sea_orm::Database;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_disk_db(dir.path()).await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-alias-error").await;
+        let row = conversation_service::create(
+            &db.conn, folder, AgentType::Gemini, None, None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, row.id, "acp-uuid", &[])
+            .await
+            .unwrap();
+        conversation_service::renormalize_external_id_alias(
+            &db.conn, row.id, Some("acp-uuid"), "parser-branch".into(),
+        )
+        .await
+        .unwrap();
+
+        let mgr = ConnectionManager::new();
+        let mut conn = fake_connection_with_state("alias-live", None);
+        conn.agent_type = AgentType::Gemini;
+        conn.state.write().await.agent_type = AgentType::Gemini;
+        mgr.connections.lock().await.insert("alias-live".into(), conn);
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "alias-live".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 1,
+                connection_id: "alias-live".into(),
+                payload: AcpEvent::SessionStarted {
+                    session_id: "acp-uuid".into(),
+                },
+            }),
+            scope_sequence: 1,
+        })
+        .await
+        .unwrap();
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 2,
+                connection_id: "alias-live".into(),
+                payload: AcpEvent::ConversationLinked {
+                    conversation_id: row.id,
+                    folder_id: folder,
+                    parent_conversation_id: None,
+                    parent_tool_use_id: None,
+                },
+            }),
+            scope_sequence: 2,
+        })
+        .await
+        .unwrap();
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 3,
+                connection_id: "alias-live".into(),
+                payload: AcpEvent::Error {
+                    message: "Gemini failed after alias normalization".into(),
+                    agent_type: "gemini".into(),
+                    code: None,
+                    details: None,
+                    terminal: false,
+                },
+            }),
+            scope_sequence: 3,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        db.conn.close().await.unwrap();
+
+        let reopened = Database::connect(format!(
+            "sqlite:{}?mode=rw",
+            dir.path().join("source.db").display()
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            conversation_service::get_last_error(&reopened, row.id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "Gemini failed after alias normalization"
+        );
+        reopened.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delayed_load_error_follows_original_session_after_rebind() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-error-rebind").await;
+        let active = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, active.id, "session-S1", &[])
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        assert_eq!(
+            conversation_service::resolve_error_conversation_hint(
+                &db.conn, Some(active.id), AgentType::ClaudeCode, Some("session-S1")
+            )
+            .await
+            .unwrap(),
+            Some(active.id)
+        );
+        mgr.register_error_session_hint(
+            "delayed-S1",
+            AgentType::ClaudeCode,
+            "session-S1".into(),
+        )
+        .await;
+        conversation_service::begin_error_scope(&db.conn, active.id, "earlier-S1", 1)
+            .await
+            .unwrap();
+        conversation_service::set_last_error(
+            &db.conn,
+            active.id,
+            "earlier-S1",
+            1,
+            &SessionLastError {
+                message: "earlier S1 failure".into(),
+                code: None,
+                details: None,
+            },
+        )
+        .await
+        .unwrap();
+        // Another client starts an unrelated session on the former row. The
+        // binder moves S1 to a preserving row before this worker gets Error.
+        let preserved_id = conversation_service::bind_external_id(
+            &db.conn, active.id, "session-S2", &[],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(preserved_id, active.id);
+
+        mgr.connections.lock().await.insert(
+            "delayed-S1".into(),
+            fake_connection_with_state("delayed-S1", None),
+        );
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "delayed-S1".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 1,
+                connection_id: "delayed-S1".into(),
+                payload: AcpEvent::ConversationLinked {
+                    conversation_id: active.id,
+                    folder_id: folder,
+                    parent_conversation_id: None,
+                    parent_tool_use_id: None,
+                },
+            }),
+            scope_sequence: 4,
+        })
+        .await
+        .unwrap();
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 2,
+                connection_id: "delayed-S1".into(),
+                payload: AcpEvent::Error {
+                    message: "S1 load failed".into(),
+                    agent_type: "claude_code".into(),
+                    code: Some("load_failed".into()),
+                    details: None,
+                    terminal: false,
+                },
+            }),
+            scope_sequence: 5,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        assert!(
+            conversation_service::get_last_error(&db.conn, active.id)
+                .await
+                .unwrap()
+                .0
+                .is_none(),
+            "S2 must not receive S1's delayed error"
+        );
+        assert_eq!(
+            conversation_service::get_last_error(&db.conn, preserved_id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "S1 load failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn linked_connection_error_uses_session_seen_before_other_client_rebinds_row() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-linked-rebind").await;
+        let active = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        mgr.connections.lock().await.insert(
+            "linked-S1".into(),
+            fake_connection_with_state("linked-S1", Some(active.id)),
+        );
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "linked-S1".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 1,
+                connection_id: "linked-S1".into(),
+                payload: AcpEvent::ConversationLinked {
+                    conversation_id: active.id,
+                    folder_id: folder,
+                    parent_conversation_id: None,
+                    parent_tool_use_id: None,
+                },
+            }),
+            scope_sequence: 1,
+        })
+        .await
+        .unwrap();
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 2,
+                connection_id: "linked-S1".into(),
+                payload: AcpEvent::SessionStarted {
+                    session_id: "session-S1".into(),
+                },
+            }),
+            scope_sequence: 2,
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let row = conversation_service::get_by_id(&db.conn, active.id)
+                    .await
+                    .unwrap();
+                if row.external_id.as_deref() == Some("session-S1") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let preserved_id = conversation_service::bind_external_id(
+            &db.conn, active.id, "session-S2", &[],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 3,
+                connection_id: "linked-S1".into(),
+                payload: AcpEvent::Error {
+                    message: "late S1 failure".into(),
+                    agent_type: "claude_code".into(),
+                    code: None,
+                    details: None,
+                    terminal: false,
+                },
+            }),
+            scope_sequence: 3,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        assert!(
+            conversation_service::get_last_error(&db.conn, active.id)
+                .await
+                .unwrap()
+                .0
+                .is_none(),
+            "new S2 row must stay clean"
+        );
+        assert_eq!(
+            conversation_service::get_last_error(&db.conn, preserved_id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "late S1 failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_link_without_prompt_preserves_previous_error() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-failed-fork").await;
+        let conv = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        conversation_service::begin_error_scope(&db.conn, conv.id, "previous", 1)
+            .await
+            .unwrap();
+        conversation_service::set_last_error(
+            &db.conn,
+            conv.id,
+            "previous",
+            1,
+            &SessionLastError {
+                message: "previous failure".into(),
+                code: None,
+                details: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mgr = ConnectionManager::new();
+        mgr.connections.lock().await.insert(
+            "failed-fork".into(),
+            fake_connection_with_state("failed-fork", None),
+        );
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "failed-fork".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq: 1,
+                connection_id: "failed-fork".into(),
+                payload: AcpEvent::ConversationLinked {
+                    conversation_id: conv.id,
+                    folder_id: folder,
+                    parent_conversation_id: None,
+                    parent_tool_use_id: None,
+                },
+            }),
+            scope_sequence: 2,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        assert_eq!(
+            conversation_service::get_last_error(&db.conn, conv.id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "previous failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_persists_nonterminal_error_and_clears_it_on_next_prompt() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-error-worker").await;
+        let conv = conversation_service::create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        mgr.connections.lock().await.insert(
+            "error-worker".into(),
+            fake_connection_with_state("error-worker", Some(conv.id)),
+        );
+        let work = |seq, payload| LifecycleWork {
+            envelope: Arc::new(EventEnvelope {
+                seq,
+                connection_id: "error-worker".into(),
+                payload,
+            }),
+            scope_sequence: seq as i64,
+        };
+        let linked = || AcpEvent::ConversationLinked {
+            conversation_id: conv.id,
+            folder_id: folder,
+            parent_conversation_id: None,
+            parent_tool_use_id: None,
+        };
+        let prompt = || AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        };
+        assert!(is_lifecycle_relevant(&prompt()));
+
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "error-worker".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(work(1, linked())).await.unwrap();
+        tx.send(work(2, prompt())).await.unwrap();
+        tx.send(work(
+            3,
+            AcpEvent::Error {
+                message: "rejected prompt".into(),
+                agent_type: "claude_code".into(),
+                code: Some("rejected".into()),
+                details: Some("redacted evidence".into()),
+                terminal: false,
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        let (error, revision, _) = conversation_service::get_last_error(&db.conn, conv.id)
+            .await
+            .unwrap();
+        let error = error.unwrap();
+        assert_eq!(error.message, "rejected prompt");
+        assert_eq!(error.code.as_deref(), Some("rejected"));
+        assert_eq!(error.details, None);
+
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(connection_worker_loop(
+            "error-worker".into(),
+            db.conn.clone(),
+            mgr.clone_ref(),
+            None,
+            rx,
+        ));
+        tx.send(work(4, linked())).await.unwrap();
+        tx.send(work(5, prompt())).await.unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        let (error, cleared_revision, _) = conversation_service::get_last_error(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert!(error.is_none());
+        assert!(cleared_revision > revision);
+    }
+
+    #[tokio::test]
+    async fn older_connection_later_prompt_wins_over_delayed_error() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-error-order").await;
+        let conv = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        for id in ["older-tab", "newer-tab"] {
+            mgr.connections.lock().await.insert(
+                id.into(),
+                fake_connection_with_state(id, Some(conv.id)),
+            );
+        }
+        let mut cache = HashMap::new();
+        seed_cache(&mut cache, &mgr, "older-tab", conv.id).await;
+        seed_cache(&mut cache, &mgr, "newer-tab", conv.id).await;
+        let stale = SessionLastError {
+            message: "stale".into(),
+            code: None,
+            details: None,
+        };
+        let fresh = SessionLastError {
+            message: "fresh".into(),
+            code: None,
+            details: None,
+        };
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "older-tab", ErrorWriteIdentity::default(), 1, Some(&stale),
+        )
+        .await;
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "newer-tab", ErrorWriteIdentity::default(), 2, None,
+        )
+        .await;
+        // A queued old event finishes after the newer tab started its prompt.
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "older-tab", ErrorWriteIdentity::default(), 1, Some(&stale),
+        )
+        .await;
+        assert!(conversation_service::get_last_error(&db.conn, conv.id)
+            .await
+            .unwrap()
+            .0
+            .is_none());
+
+        // The original tab remains usable and may start a genuinely later turn.
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "older-tab", ErrorWriteIdentity::default(), 3, None,
+        )
+        .await;
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "older-tab", ErrorWriteIdentity::default(), 4, Some(&fresh),
+        )
+        .await;
+        // Even an old event from the same connection cannot overwrite scope 4.
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "older-tab", ErrorWriteIdentity::default(), 1, Some(&stale),
+        )
+        .await;
+        assert_eq!(
+            conversation_service::get_last_error(&db.conn, conv.id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "fresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_error_can_persist_after_manager_removes_connection() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/acp-error-terminal").await;
+        let conv = conversation_service::create(
+            &db.conn, folder, AgentType::ClaudeCode, None, None,
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        mgr.connections.lock().await.insert(
+            "terminal-error".into(),
+            fake_connection_with_state("terminal-error", Some(conv.id)),
+        );
+        let mut cache = HashMap::new();
+        seed_cache(&mut cache, &mgr, "terminal-error", conv.id).await;
+        persist_last_error_for_connection(
+            &db.conn, &cache, &mgr, "terminal-error", ErrorWriteIdentity::default(), 1, None,
+        )
+        .await;
+        mgr.connections.lock().await.remove("terminal-error");
+        persist_last_error_for_connection(
+            &db.conn,
+            &cache,
+            &mgr,
+            "terminal-error",
+            ErrorWriteIdentity::default(), 2,
+            Some(&SessionLastError {
+                message: "transport failed".into(),
+                code: None,
+                details: None,
+            }),
+        )
+        .await;
+        assert_eq!(
+            conversation_service::get_last_error(&db.conn, conv.id)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .message,
+            "transport failed"
+        );
+    }
+
+    #[tokio::test]
     async fn handle_terminal_event_writes_cancelled_when_in_progress() {
         let db = test_helpers::fresh_in_memory_db().await;
         let folder_id = test_helpers::seed_folder(&db, "/tmp/term-cancel").await;
@@ -2613,7 +3592,7 @@ mod tests {
         assert!(!is_lifecycle_relevant(&AcpEvent::StatusChanged {
             status: ConnectionStatus::Connected,
         }));
-        assert!(!is_lifecycle_relevant(&AcpEvent::StatusChanged {
+        assert!(is_lifecycle_relevant(&AcpEvent::StatusChanged {
             status: ConnectionStatus::Prompting,
         }));
         // ToolCall / ToolCallUpdate are NO LONGER worker-relevant: delegation

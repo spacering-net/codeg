@@ -45,6 +45,8 @@ mod m20260829_000001_folder_group;
 mod m20260830_000001_canvas_node;
 mod m20260831_000001_canvas_node_group_grid;
 mod m20260907_000001_canvas_node_path;
+mod m20260924_000001_conversation_last_error;
+mod m20260924_000002_conversation_external_alias;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -96,6 +98,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260830_000001_canvas_node::Migration),
             Box::new(m20260831_000001_canvas_node_group_grid::Migration),
             Box::new(m20260907_000001_canvas_node_path::Migration),
+            Box::new(m20260924_000001_conversation_last_error::Migration),
+            Box::new(m20260924_000002_conversation_external_alias::Migration),
         ]
     }
 }

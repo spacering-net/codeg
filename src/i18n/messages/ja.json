@@ -2011,6 +2011,7 @@
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
+      "lastError": "前回のエラー: {message}",
       "reloaded": "会話を再読み込みしました",
       "reload": "再読み込み",
       "activeConversationIndicator": "アクティブな会話",

@@ -19,6 +19,7 @@
 import { toast } from "sonner"
 
 import { recordAlert, type AlertAction } from "@/contexts/alert-context"
+import { persistedConversationErrorAlertTracker } from "@/lib/persisted-conversation-error-alert"
 
 export type NotifyLevel = "error" | "warning" | "info"
 
@@ -93,7 +94,7 @@ export function notify(input: NotifyInput): void {
   const alertActions: AlertAction[] = actions
     .filter((action) => !action.toastOnly)
     .map((action) => ({ label: action.label, run: action.onClick }))
-  recordAlert({
+  const recorded = recordAlert({
     key: input.key,
     level: input.level,
     message: input.title,
@@ -101,6 +102,14 @@ export function notify(input: NotifyInput): void {
     ...(evidence ? { evidence } : {}),
     ...(alertActions.length > 0 ? { actions: alertActions } : {}),
   })
+  if (
+    recorded &&
+    !input.bellOnly &&
+    (input.key.startsWith("acp-error:") ||
+      input.key.startsWith("acp-turn-failure:"))
+  ) {
+    persistedConversationErrorAlertTracker.markLiveKey(input.key)
+  }
 }
 
 /** Take a notification's toast off the screen (its list entry stays) — for a

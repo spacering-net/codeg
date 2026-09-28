@@ -101,8 +101,10 @@ let alertSink: ((input: AlertInput) => void) | null = null
  * `AlertProvider` is the store; with none mounted (another window, a test) it
  * is a no-op, the way `toast()` is without a `<Toaster>`.
  */
-export function recordAlert(input: AlertInput): void {
-  alertSink?.(input)
+export function recordAlert(input: AlertInput): boolean {
+  if (!alertSink) return false
+  alertSink(input)
+  return true
 }
 
 const AlertContext = createContext<AlertContextValue | null>(null)

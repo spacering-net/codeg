@@ -6578,7 +6578,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           workingDir,
           sessionId,
           savedPrefs.modeId,
-          savedPrefs.configValues
+          savedPrefs.configValues,
+          conversationId
         )
 
         // If disconnect was requested while connect was in flight, tear down

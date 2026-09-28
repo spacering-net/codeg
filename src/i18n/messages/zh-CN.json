@@ -2011,6 +2011,7 @@
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
+      "lastError": "上次错误：{message}",
       "reloaded": "当前会话已重新加载",
       "reload": "重新加载",
       "activeConversationIndicator": "当前激活会话",

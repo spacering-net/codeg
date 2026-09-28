@@ -1,6 +1,16 @@
 import { useEffect } from "react"
 import { act, render } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import type { DbConversationDetail } from "@/lib/types"
+import { notify } from "@/lib/notify"
+import {
+  persistedConversationErrorAlertTracker,
+  selectPersistedConversationErrorAlert,
+} from "@/lib/persisted-conversation-error-alert"
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+}))
 
 import {
   AlertProvider,
@@ -14,13 +24,15 @@ import {
 const probe = {
   alerts: [] as Alert[],
   push: null as ReturnType<typeof useAlertContext>["pushAlert"] | null,
+  dismiss: null as ReturnType<typeof useAlertContext>["dismissAlert"] | null,
 }
 function Probe() {
-  const { alerts, pushAlert } = useAlertContext()
+  const { alerts, pushAlert, dismissAlert } = useAlertContext()
   useEffect(() => {
     probe.alerts = alerts
     probe.push = pushAlert
-  }, [alerts, pushAlert])
+    probe.dismiss = dismissAlert
+  }, [alerts, pushAlert, dismissAlert])
   return null
 }
 
@@ -94,6 +106,144 @@ describe("recordAlert", () => {
     })
     expect(probe.alerts).toHaveLength(2)
     expect(probe.alerts[0]).toMatchObject({ detail: "rejected" })
+    unmount()
+  })
+})
+
+describe("persisted ACP error alert reconciliation", () => {
+  function savedError(
+    revision: number,
+    connectionId: string,
+    message: string
+  ): DbConversationDetail {
+    return {
+      summary: { id: 17 } as DbConversationDetail["summary"],
+      last_error: { message, code: "process_exited", details: null },
+      last_error_revision: revision,
+      last_error_connection_id: connectionId,
+      turns: [],
+    }
+  }
+
+  it("keeps one Alert through live error, S1 split, detail refetch, dismissal, and reconnect", () => {
+    const { unmount } = mount()
+    const tracker = persistedConversationErrorAlertTracker
+    act(() =>
+      notify({
+        key: "acp-error:live-conn:process_exited",
+        level: "error",
+        title: "transport stopped",
+        description: "live diagnostic",
+      })
+    )
+    const detail = savedError(4, "live-conn", "transport stopped")
+    const preservedDetail = {
+      ...detail,
+      summary: { id: 18 } as DbConversationDetail["summary"],
+    }
+    expect(
+      selectPersistedConversationErrorAlert({
+        conversationId: 17,
+        detail,
+        liveError: "transport stopped",
+        status: "connected",
+        retiredRevision: null,
+      })
+    ).toBeNull()
+    const recovered = selectPersistedConversationErrorAlert({
+      conversationId: 18,
+      detail: preservedDetail,
+      liveError: null,
+      status: "connected",
+      retiredRevision: null,
+    })!
+    expect(tracker.claim(recovered.revisionKey)).toBe(true)
+    expect(tracker.wasLiveNotified(recovered)).toBe(true)
+    // The view claims this revision but must not replace the live row.
+    if (!tracker.wasLiveNotified(recovered)) {
+      act(() =>
+        notify({
+          level: recovered.level,
+          key: recovered.key,
+          title: recovered.message,
+          bellOnly: true,
+        })
+      )
+    }
+    expect(probe.alerts).toHaveLength(1)
+    expect(probe.alerts[0]).toMatchObject({
+      key: "acp-error:live-conn:process_exited",
+      detail: "live diagnostic",
+    })
+    expect(tracker.claim(recovered.revisionKey)).toBe(false)
+    act(() =>
+      recordAlert({ key: "unrelated", level: "warning", message: "other" })
+    )
+    // Dismissing the live alert does not allow a reconnect to resurrect it.
+    const liveId = probe.alerts[0].id
+    act(() => probe.dismiss?.(liveId))
+    expect(probe.alerts.map((a) => a.key)).toEqual(["unrelated"])
+    const afterDismiss = selectPersistedConversationErrorAlert({
+      conversationId: 18,
+      detail: preservedDetail,
+      liveError: null,
+      status: "connected",
+      retiredRevision: null,
+    })!
+    expect(afterDismiss.key).toBe("acp-error:live-conn:process_exited")
+    expect(tracker.claim(afterDismiss.revisionKey)).toBe(false)
+    expect(tracker.wasLiveNotified(afterDismiss)).toBe(true)
+
+    const otherClient = selectPersistedConversationErrorAlert({
+      conversationId: 18,
+      detail: {
+        ...savedError(5, "other-conn", "other client failed"),
+        summary: { id: 18 } as DbConversationDetail["summary"],
+      },
+      liveError: null,
+      status: "connected",
+      retiredRevision: null,
+    })!
+    act(() =>
+      notify({
+        level: otherClient.level,
+        key: otherClient.key,
+        title: otherClient.message,
+        bellOnly: true,
+      })
+    )
+    expect(probe.alerts.map((a) => a.key)).toEqual([
+      "unrelated",
+      "acp-error:other-conn:process_exited",
+    ])
+    unmount()
+  })
+
+  it("restores one historical Alert on cold load without replaying a toast", () => {
+    const { unmount } = mount()
+    const preservedDetail = {
+      ...savedError(6, "previous-process", "previous failure"),
+      summary: { id: 18 } as DbConversationDetail["summary"],
+    }
+    const alert = selectPersistedConversationErrorAlert({
+      conversationId: 18,
+      detail: preservedDetail,
+      liveError: null,
+      status: "disconnected",
+      retiredRevision: null,
+    })!
+    act(() =>
+      notify({
+        level: alert.level,
+        key: alert.key,
+        title: alert.message,
+        bellOnly: true,
+      })
+    )
+    expect(probe.alerts).toHaveLength(1)
+    expect(probe.alerts[0].key).toBe(
+      "acp-error:previous-process:process_exited"
+    )
     unmount()
   })
 })

@@ -1496,14 +1496,22 @@ pub async fn get_folder_conversation_core(
                 }
             }
         } else {
-            let _ = conversation_service::renormalize_external_id_alias(
+            match conversation_service::renormalize_external_id_alias(
                 conn,
                 conversation_id,
                 summary.external_id.as_deref(),
                 new_ext_id.clone(),
             )
-            .await;
-            summary.external_id = Some(new_ext_id);
+            .await
+            {
+                Ok(true) => summary.external_id = Some(new_ext_id),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    conversation_id,
+                    error = %error,
+                    "[conversations] could not persist parser session alias"
+                ),
+            }
         }
     }
     summary.message_count = turns.len() as u32;
@@ -1534,9 +1542,17 @@ pub async fn get_folder_conversation_core(
         .unwrap_or_default();
     inject_delegation_meta(&mut turns, &children);
 
+    let (last_error, last_error_revision, last_error_connection_id) =
+        conversation_service::get_last_error(conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+
     Ok((
         DbConversationDetail {
             summary,
+            last_error,
+            last_error_revision,
+            last_error_connection_id,
             turns,
             session_stats,
             transcript_watermark,
@@ -3688,6 +3704,76 @@ mod tests {
             .expect("load");
         assert_eq!(detail.summary.id, parent_id);
         assert!(detail.turns.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reopened_conversation_detail_exposes_persisted_acp_error() {
+        use crate::acp::session_state::SessionLastError;
+        use crate::db::test_helpers::fresh_disk_db;
+        use sea_orm::Database;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = fresh_disk_db(dir.path()).await;
+        let folder = seed_folder(&db, "/tmp/codeg-detail-last-error").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            None,
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let error = SessionLastError {
+            message: "agent failed while phone was offline".into(),
+            code: Some("transport_closed".into()),
+            details: Some("redacted detail".into()),
+        };
+        conversation_service::begin_error_scope(
+            &db.conn,
+            row.id,
+            "failed-connection",
+            1,
+        )
+        .await
+        .expect("start scope");
+        conversation_service::set_last_error(
+            &db.conn,
+            row.id,
+            "failed-connection",
+            1,
+            &error,
+        )
+        .await
+        .expect("persist error");
+        db.conn.close().await.expect("close db");
+
+        let path = dir.path().join("source.db");
+        let reopened = Database::connect(format!("sqlite:{}?mode=rw", path.display()))
+            .await
+            .expect("reopen db");
+        let (detail, _) = get_folder_conversation_core(&reopened, row.id)
+            .await
+            .expect("fetch detail through shared API core");
+        assert_eq!(
+            detail.last_error,
+            Some(SessionLastError {
+                details: None,
+                ..error
+            })
+        );
+        assert!(detail.last_error_revision > 0);
+        assert_eq!(
+            detail.last_error_connection_id.as_deref(),
+            Some("failed-connection")
+        );
+        let wire = serde_json::to_value(&detail).expect("serialize API response");
+        assert_eq!(wire["last_error_connection_id"], "failed-connection");
+        assert_eq!(
+            wire["last_error"]["message"],
+            "agent failed while phone was offline"
+        );
+        reopened.close().await.expect("close db");
     }
 
     #[tokio::test]
@@ -6655,6 +6741,9 @@ mod tests {
                 delegation_call_id: None,
                 origin_cwd: None,
             },
+            last_error: None,
+            last_error_revision: 0,
+            last_error_connection_id: None,
             turns,
             session_stats: None,
             transcript_watermark: Some(123),

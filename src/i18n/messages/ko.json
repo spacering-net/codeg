@@ -2011,6 +2011,7 @@
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
+      "lastError": "마지막 오류: {message}",
       "reloaded": "대화를 다시 불러왔습니다",
       "reload": "다시 불러오기",
       "activeConversationIndicator": "활성 대화",

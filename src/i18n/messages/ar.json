@@ -2011,6 +2011,7 @@
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
+      "lastError": "آخر خطأ: {message}",
       "reloaded": "تمت إعادة تحميل المحادثة",
       "reload": "إعادة تحميل",
       "activeConversationIndicator": "المحادثة النشطة",

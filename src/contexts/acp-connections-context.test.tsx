@@ -1048,7 +1048,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1072,7 +1073,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1099,7 +1101,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -1145,7 +1148,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -1264,7 +1268,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1353,7 +1358,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "snapshot-session",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -1393,7 +1399,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "minted-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 })
@@ -1450,7 +1457,8 @@ describe("AcpConnectionsProvider disconnect teardown confirmation", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      undefined
     )
     // ...but the caller must not show an "applied" confirmation for a restart
     // that may have landed right back on the process it meant to replace.

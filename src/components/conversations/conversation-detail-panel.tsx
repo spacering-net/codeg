@@ -1,4 +1,8 @@
 "use client"
+import {
+  persistedConversationErrorAlertTracker,
+  selectPersistedConversationErrorAlert,
+} from "@/lib/persisted-conversation-error-alert"
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -646,6 +650,57 @@ const ConversationTabView = memo(function ConversationTabView({
     ),
   })
   const { status: connStatus, sessionId: connSessionId } = conn
+  // Historical tabs cannot start ACP while their first detail is loading:
+  // `canAutoConnect` is gated by `awaitingHistoricalSessionId`, and refetches
+  // retain the existing detail. Thus the revision is available at prompt start.
+  // A fetched detail can predate a new prompt. Record its saved error in
+  // Alerts after cold open, then retire that copy when this view sees a new
+  // turn. Live errors from the new turn still come from conn.error.
+  const [retiredDetailError, setRetiredDetailError] = useState<{
+    conversationId: number
+    revision: number
+  } | null>(null)
+  useEffect(() => {
+    if (connStatus === "prompting" && dbConversationId != null) {
+      setRetiredDetailError({
+        conversationId: dbConversationId,
+        revision: detail?.last_error_revision ?? 0,
+      })
+    }
+    // Capture the revision at the prompt-start edge only. A later detail
+    // fetch can contain a NEW error from another client, which must show.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connStatus, dbConversationId])
+  useEffect(() => {
+    const alert = selectPersistedConversationErrorAlert({
+      conversationId: dbConversationId,
+      detail,
+      liveError: conn.error,
+      status: connStatus,
+      retiredRevision:
+        retiredDetailError?.conversationId === dbConversationId
+          ? retiredDetailError.revision
+          : null,
+    })
+    if (
+      !alert ||
+      !persistedConversationErrorAlertTracker.claim(alert.revisionKey)
+    ) {
+      return
+    }
+    // The live notifier may already have told this error, including when
+    // its Alert was dismissed. Claim the revision without replacing that row
+    // or resurrecting a dismissed message after reconnect.
+    if (persistedConversationErrorAlertTracker.wasLiveNotified(alert)) return
+    // A recovered error is history, not a new event. Put it in the Alerts
+    // record without replaying a toast or desktop notification.
+    notify({
+      level: alert.level,
+      key: alert.key,
+      title: t("lastError", { message: alert.message }),
+      bellOnly: true,
+    })
+  }, [conn.error, connStatus, dbConversationId, detail, retiredDetailError, t])
   const messageQueue = useMessageQueue()
   const {
     queue: msgQueue,

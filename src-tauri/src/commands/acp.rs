@@ -10602,6 +10602,24 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
     Ok(refresh_config_staleness(manager, db, data_dir, &[agent_type], ConfigStaleKind::AgentConfig).await)
 }
 
+/// Validate the historical row before letting a pre-prompt session/load
+/// failure write to it. Desktop and Web use the same identity rule.
+pub async fn resolve_acp_connect_error_hint_core(
+    db: &AppDatabase,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+) -> Result<Option<i32>, AcpError> {
+    crate::db::service::conversation_service::resolve_error_conversation_hint(
+        &db.conn,
+        conversation_id,
+        agent_type,
+        session_id,
+    )
+    .await
+    .map_err(|e| AcpError::protocol(format!("resolve conversation hint: {e}")))
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -10609,6 +10627,7 @@ pub async fn acp_connect(
     agent_type: AgentType,
     working_dir: Option<String>,
     session_id: Option<String>,
+    conversation_id: Option<i32>,
     preferred_mode_id: Option<String>,
     preferred_config_values: Option<BTreeMap<String, String>>,
     manager: State<'_, ConnectionManager>,
@@ -10634,9 +10653,16 @@ pub async fn acp_connect(
     // can prompt the user to install it from Agent Settings.
     verify_agent_installed(agent_type).await?;
 
+    let pending_error_conversation_id = resolve_acp_connect_error_hint_core(
+        &db,
+        agent_type,
+        conversation_id,
+        session_id.as_deref(),
+    )
+    .await?;
     let emitter = EventEmitter::Tauri(app_handle);
     manager
-        .spawn_agent(
+        .spawn_agent_with_error_hint(
             agent_type,
             working_dir,
             session_id,
@@ -10645,6 +10671,7 @@ pub async fn acp_connect(
             emitter,
             preferred_mode_id,
             preferred_config_values.unwrap_or_default(),
+            pending_error_conversation_id,
         )
         .await
 }

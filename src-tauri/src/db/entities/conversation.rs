@@ -72,6 +72,12 @@ pub struct Model {
     /// Gemini/Cline/OpenClaw stale-external-id fallback matches on
     /// `origin_cwd ?? folder.path`. Always NULL for ordinary conversations.
     pub origin_cwd: Option<String>,
+    /// JSON-encoded SessionLastError for recovery after the ACP process exits.
+    pub last_error: Option<String>,
+    /// Connection that owns the current error scope; rejects late old-worker writes.
+    pub last_error_connection_id: Option<String>,
+    pub last_error_scope_sequence: i64,
+    pub last_error_revision: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

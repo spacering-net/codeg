@@ -2011,6 +2011,7 @@
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",
+      "lastError": "Último error: {message}",
       "reloaded": "Conversación recargada",
       "reload": "Recargar",
       "activeConversationIndicator": "Conversación activa",

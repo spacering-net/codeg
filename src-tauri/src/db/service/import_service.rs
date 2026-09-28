@@ -500,6 +500,10 @@ async fn import_one(
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        last_error: Set(None),
+        last_error_connection_id: Set(None),
+        last_error_scope_sequence: Set(0),
+        last_error_revision: Set(0),
     };
     conv.insert(conn).await?;
     Ok(ImportOutcome::Imported)
@@ -947,6 +951,10 @@ mod tests {
             deleted_at: Set(Some(now)),
             pinned_at: Set(None),
             origin_cwd: Set(None),
+            last_error: Set(None),
+            last_error_connection_id: Set(None),
+            last_error_scope_sequence: Set(0),
+            last_error_revision: Set(0),
         }
         .insert(&db.conn)
         .await
@@ -1234,6 +1242,10 @@ mod tests {
             deleted_at: Set(None),
             pinned_at: Set(None),
             origin_cwd: Set(None),
+            last_error: Set(None),
+            last_error_connection_id: Set(None),
+            last_error_scope_sequence: Set(0),
+            last_error_revision: Set(0),
         }
         .insert(&db.conn)
         .await
