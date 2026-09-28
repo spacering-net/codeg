@@ -80,13 +80,24 @@ export function compareByChildCreatedAtDesc(
 }
 
 /**
- * Most-recently-pinned first. Only ever applied to rows with a non-null
- * `pinned_at` (the pinned bucket), so the empty-string fallback is just a guard.
+ * The Pinned section's order. Rows the user has placed by dragging carry a
+ * `pin_order` and keep that order; rows without one — every pin until the
+ * section is first reordered, and each pin made since — sort above them, most
+ * recently pinned first, so a fresh pin still lands on top. Only ever applied
+ * to rows with a non-null `pinned_at` (the pinned bucket), so the empty-string
+ * fallback is just a guard.
  */
-export function compareByPinnedAtDesc(
+export function compareByPinOrder(
   left: DbConversationSummary,
   right: DbConversationSummary
 ): number {
+  const leftOrder = left.pin_order ?? null
+  const rightOrder = right.pin_order ?? null
+  if (leftOrder !== rightOrder) {
+    if (leftOrder == null) return -1
+    if (rightOrder == null) return 1
+    return leftOrder - rightOrder
+  }
   const diff =
     parseTimestamp(right.pinned_at ?? "") - parseTimestamp(left.pinned_at ?? "")
   if (diff !== 0) return diff
@@ -223,9 +234,9 @@ export function groupByFolderWithReuse(
 }
 
 /**
- * Select the pinned conversations (those with a non-null `pinned_at`), sorted
- * most-recently-pinned first, reusing the previous array reference when the
- * sorted membership is referentially unchanged.
+ * Select the pinned conversations (those with a non-null `pinned_at`), in the
+ * section's order ({@link compareByPinOrder}), reusing the previous array
+ * reference when the sorted membership is referentially unchanged.
  *
  * Same reference-stability motivation as {@link groupByFolderWithReuse}: a
  * single status event replaces exactly one summary object, so this would
@@ -245,7 +256,7 @@ export function selectPinnedWithReuse(
   for (const conv of conversations) {
     if (conv.pinned_at != null) next.push(conv)
   }
-  next.sort(compareByPinnedAtDesc)
+  next.sort(compareByPinOrder)
   return arraysShallowEqual(prev, next) ? prev : next
 }
 
@@ -916,6 +927,13 @@ export interface ConversationRow {
    * Absent — never `false` — so existing row-shape assertions are unaffected.
    */
   recent?: true
+  /**
+   * Set (only) on the top-level rows of the "Pinned" section: those are the
+   * rows that can be dragged to reorder the section. The same conversation
+   * re-listed by Recent, and a pinned row's delegation children, never carry
+   * it. Absent — never `false` — matching {@link ConversationRow.recent}.
+   */
+  pinned?: true
 }
 
 export interface EmptyHintRow {
@@ -1121,10 +1139,14 @@ function pushConversationRow(
   childrenLoading: ReadonlySet<number>,
   // Tags this row — and its whole subtree — as a Recent-section copy. See
   // {@link ConversationRow.recent}.
-  recent = false
+  recent = false,
+  // Tags this row alone (not its subtree) as a draggable Pinned-section row.
+  // See {@link ConversationRow.pinned}.
+  pinned = false
 ): void {
   const row: ConversationRow = { kind: "conversation", conversation, depth }
   if (recent) row.recent = true
+  if (pinned) row.pinned = true
   rows.push(row)
   if (
     depth >= MAX_RENDER_DEPTH ||
@@ -1317,7 +1339,9 @@ export function buildRows(args: {
           0,
           conversationExpanded,
           childrenByParent,
-          childrenLoading
+          childrenLoading,
+          false,
+          true
         )
       }
     }

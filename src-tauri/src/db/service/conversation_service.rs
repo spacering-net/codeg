@@ -119,6 +119,7 @@ async fn create_inner(
         updated_at: Set(now),
         deleted_at: Set(None),
         pinned_at: Set(None),
+        pin_order: Set(None),
         origin_cwd: Set(None),
     };
     Ok(model.insert(conn).await?)
@@ -541,12 +542,14 @@ pub async fn refresh_external_activity(
 }
 
 /// Pin or unpin a conversation. Sets `pinned_at = now()` when pinning, `NULL`
-/// when unpinning. Only the `pinned_at` column is written — `updated_at` is
-/// deliberately left untouched (SeaORM updates only the `Set` field), because
-/// pinning is a view preference, not conversation activity, and must not float
-/// the row to the top of a recency-sorted sidebar (same reasoning as
-/// [`refresh_auto_title`]). The sidebar's "Pinned" section orders by `pinned_at`
-/// descending, so a freshly pinned conversation jumps to the top.
+/// when unpinning, and clears `pin_order` either way. Nothing else is written —
+/// `updated_at` is deliberately left untouched (SeaORM updates only the `Set`
+/// fields), because pinning is a view preference, not conversation activity,
+/// and must not float the row to the top of a recency-sorted sidebar (same
+/// reasoning as [`refresh_auto_title`]). The sidebar's "Pinned" section puts
+/// rows without a `pin_order` on top, by `pinned_at` descending, so a freshly
+/// (re-)pinned conversation jumps to the top instead of into a slot left over
+/// from an earlier drag.
 pub async fn update_pin(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -558,7 +561,35 @@ pub async fn update_pin(
         .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
     let mut active: conversation::ActiveModel = conv.into();
     active.pinned_at = Set(pinned.then(Utc::now));
+    active.pin_order = Set(None);
     active.update(conn).await?;
+    Ok(())
+}
+
+/// Persist a manual order for the sidebar's "Pinned" section: `pin_order =
+/// index` for each id in `ordered_ids` (top to bottom, 0-based). The frontend
+/// sends the section's full order, so every pinned row it shows is written.
+///
+/// Only live, pinned rows are written: an id unpinned or deleted since the
+/// frontend took its snapshot has no place in the section and is skipped.
+/// `updated_at` is left alone for the same reason as [`update_pin`]. One
+/// statement per id inside a single transaction, so a failure part-way through
+/// never leaves a half-applied order behind.
+pub async fn reorder_pins(conn: &DatabaseConnection, ordered_ids: &[i32]) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::TransactionTrait;
+
+    let txn = conn.begin().await?;
+    for (index, id) in ordered_ids.iter().enumerate() {
+        conversation::Entity::update_many()
+            .col_expr(conversation::Column::PinOrder, Expr::value(index as i32))
+            .filter(conversation::Column::Id.eq(*id))
+            .filter(conversation::Column::PinnedAt.is_not_null())
+            .filter(conversation::Column::DeletedAt.is_null())
+            .exec(&txn)
+            .await?;
+    }
+    txn.commit().await?;
     Ok(())
 }
 
@@ -967,6 +998,7 @@ impl CarriedOverRow {
             // Pinning is a view preference attached to the row the user pinned,
             // not to the history.
             pinned_at: Set(None),
+            pin_order: Set(None),
             origin_cwd: Set(self.origin_cwd),
         }
     }
@@ -1139,6 +1171,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         created_at: r.created_at,
         updated_at: r.updated_at,
         pinned_at: r.pinned_at,
+        pin_order: r.pin_order,
         parent_id: r.parent_id,
         parent_tool_use_id: r.parent_tool_use_id,
         delegation_call_id: r.delegation_call_id,
@@ -1773,6 +1806,48 @@ mod tests {
             unpinned.updated_at, updated_at_before,
             "unpinning must not bump updated_at"
         );
+    }
+
+    async fn pin_order_of(conn: &DatabaseConnection, id: i32) -> Option<i32> {
+        get_by_id(conn, id).await.expect("get").pin_order
+    }
+
+    #[tokio::test]
+    async fn reorder_pins_positions_pinned_rows_and_pin_toggles_clear_them() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-reorder-pins").await;
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let row = create(&db.conn, folder, AgentType::Codex, None, None)
+                .await
+                .expect("create");
+            ids.push(row.id);
+        }
+        let (a, b, never_pinned) = (ids[0], ids[1], ids[2]);
+        update_pin(&db.conn, a, true).await.expect("pin a");
+        update_pin(&db.conn, b, true).await.expect("pin b");
+        let updated_at_before = get_by_id(&db.conn, a).await.expect("get").updated_at;
+
+        // The frontend sends the section's full order, top to bottom. An id that
+        // is not pinned (any more) has no place in the section and is skipped.
+        reorder_pins(&db.conn, &[b, a, never_pinned])
+            .await
+            .expect("reorder");
+        assert_eq!(pin_order_of(&db.conn, b).await, Some(0));
+        assert_eq!(pin_order_of(&db.conn, a).await, Some(1));
+        assert_eq!(pin_order_of(&db.conn, never_pinned).await, None);
+        assert_eq!(
+            get_by_id(&db.conn, a).await.expect("get").updated_at,
+            updated_at_before,
+            "reordering must not bump updated_at"
+        );
+
+        // Every pin toggle clears the position, so a (re-)pinned conversation
+        // starts over at the top of the section instead of in an old slot.
+        update_pin(&db.conn, b, false).await.expect("unpin b");
+        assert_eq!(pin_order_of(&db.conn, b).await, None);
+        update_pin(&db.conn, a, true).await.expect("pin a again");
+        assert_eq!(pin_order_of(&db.conn, a).await, None);
     }
 
     #[tokio::test]

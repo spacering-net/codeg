@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "그룹 업데이트 실패: {message}",
         "deleteGroupFailed": "그룹 삭제 실패: {message}",
         "moveToGroupFailed": "폴더 이동 실패: {message}",
-        "applyLayoutFailed": "폴더 순서 저장 실패: {message}"
+        "applyLayoutFailed": "폴더 순서 저장 실패: {message}",
+        "reorderPinsFailed": "고정된 대화 순서 변경 실패: {message}"
       },
       "statsLabel": "{folders}개 폴더 · {convos}개 대화",
       "reorderHandle": "드래그하여 순서 변경",

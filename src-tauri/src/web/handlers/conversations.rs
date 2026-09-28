@@ -381,6 +381,23 @@ pub async fn update_conversation_pinned(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReorderConversationPinsParams {
+    pub ordered_ids: Vec<i32>,
+}
+
+pub async fn reorder_conversation_pins(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ReorderConversationPinsParams>,
+) -> Result<Json<()>, AppCommandError> {
+    conv_commands::reorder_conversation_pins_core(&state.db.conn, &params.ordered_ids).await?;
+    for id in params.ordered_ids {
+        conv_commands::emit_conversation_upsert(&state.emitter, &state.db.conn, id).await;
+    }
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteConversationParams {
     pub conversation_id: i32,
 }

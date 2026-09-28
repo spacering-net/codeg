@@ -57,6 +57,7 @@ import {
   updateConversationTitle,
   updateConversationStatus,
   updateConversationPinned,
+  reorderConversationPins,
   updateFolderColor,
   updateFolderAlias,
   updateFolderDefaultAgent,
@@ -141,6 +142,10 @@ import {
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import { useSubsessionSync } from "@/hooks/use-subsession-sync"
 import { SidebarSectionHeader } from "./sidebar-section-header"
+import {
+  PINNED_ROW_ATTR,
+  usePinnedPointerReorder,
+} from "./use-pinned-pointer-reorder"
 import { SidebarFolderGroupHeader } from "./sidebar-folder-group-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import { CloneDialog } from "@/components/layout/clone-dialog"
@@ -1331,8 +1336,9 @@ export function SidebarConversationList({
   }, [conversations, showCompleted])
 
   // Pinned bucket: the FULL conversation list (ignores "Show completed" — a
-  // pinned conversation stays visible regardless), sorted most-recently-pinned
-  // first, with reference reuse so an unrelated status event doesn't rebuild it.
+  // pinned conversation stays visible regardless), in the section's order (the
+  // user's drag order, newer unplaced pins on top), with reference reuse so an
+  // unrelated status event doesn't rebuild it.
   const pinnedRef = useRef<DbConversationSummary[]>([])
   const pinned = useMemo(() => {
     const next = selectPinnedWithReuse(conversations, pinnedRef.current)
@@ -2092,13 +2098,77 @@ export function SidebarConversationList({
       // `pinned_at`; on failure the next refresh / WS reconnect corrects it
       // (mirrors handleStatusChange's lenient pattern). Stable callback — only
       // `updateConversationLocal` as a dep — so the card memo keeps bailing out.
+      // Like the backend, a pin toggle drops any manual Pinned-section position.
       updateConversationLocal(id, {
         pinned_at: nextPinned ? new Date().toISOString() : null,
+        pin_order: null,
       })
       await updateConversationPinned(id, nextPinned)
     },
     [updateConversationLocal]
   )
+
+  // ── Pinned-section drag reorder ──────────────────────────────────────────
+  // Pointer-driven (see `usePinnedPointerReorder` for why not HTML5 drag):
+  // press a pinned row, move it, release. The new order applies locally at once
+  // and is then persisted; the server echoes an upsert per conversation, so
+  // every other client re-sorts too.
+  const pinnedIds = useMemo(() => pinned.map((c) => c.id), [pinned])
+  const pinnedIndexById = useMemo(
+    () => new Map(pinnedIds.map((id, index) => [id, index])),
+    [pinnedIds]
+  )
+  const applyPinOrderLocal = useCallback(
+    (orderedIds: number[]) =>
+      orderedIds.forEach((id, index) =>
+        updateConversationLocal(id, { pin_order: index })
+      ),
+    [updateConversationLocal]
+  )
+  // Saves go out one at a time. Each one rewrites the whole section, so two in
+  // flight could commit out of order: the older order would win in the
+  // database, and the upserts it echoes would move the rows back. A drop made
+  // while a save is in flight waits for it, and drops that pile up meanwhile
+  // collapse into the newest order.
+  const pinSaveQueueRef = useRef<{ saving: boolean; next: number[] | null }>({
+    saving: false,
+    next: null,
+  })
+  const drainPinSaves = useCallback(async () => {
+    const queue = pinSaveQueueRef.current
+    if (queue.saving) return
+    queue.saving = true
+    let waited = false
+    while (queue.next) {
+      const orderedIds = queue.next
+      queue.next = null
+      // The save that just finished may already have echoed its older order
+      // back through upserts: show this one again before it goes out.
+      if (waited) applyPinOrderLocal(orderedIds)
+      try {
+        await reorderConversationPins(orderedIds)
+      } catch (err) {
+        toast.error(
+          t("toasts.reorderPinsFailed", { message: toErrorMessage(err) })
+        )
+      }
+      waited = true
+    }
+    queue.saving = false
+  }, [applyPinOrderLocal, t])
+  const commitPinOrder = useCallback(
+    (orderedIds: number[]) => {
+      applyPinOrderLocal(orderedIds)
+      pinSaveQueueRef.current.next = orderedIds
+      void drainPinSaves()
+    },
+    [applyPinOrderLocal, drainPinSaves]
+  )
+  const {
+    draggingId: draggingPinId,
+    dropIndex: pinDropIndex,
+    beginPinDrag,
+  } = usePinnedPointerReorder({ pinnedIds, onCommit: commitPinOrder })
 
   const handleNewConversation = useCallback(() => {
     // Starting a conversation returns to the conversation workspace if a
@@ -3026,7 +3096,7 @@ export function SidebarConversationList({
     // No folder tint reaches this row: a card always renders in the app theme,
     // whichever colour its folder carries. The colour is a label for the FOLDER,
     // not a skin for the sessions inside it.
-    return (
+    const card = (
       <SidebarConversationCard
         conversation={conv}
         isSelected={
@@ -3050,6 +3120,40 @@ export function SidebarConversationList({
         expanded={conversationExpanded.has(conv.id)}
         onToggleExpand={toggleConversation}
       />
+    )
+    if (!row.pinned) return card
+    // A Pinned-section row is also the handle that drags it to a new place in
+    // the section (see `usePinnedPointerReorder`). During a drag, a line marks
+    // where the row will land: above this row, or below the last one.
+    const pinIndex = pinnedIndexById.get(conv.id) ?? -1
+    const pinDragging = draggingPinId != null
+    const lineAbove = pinDragging && pinDropIndex === pinIndex
+    const lineBelow =
+      pinDragging &&
+      pinIndex === pinnedIds.length - 1 &&
+      pinDropIndex === pinnedIds.length
+    return (
+      <div
+        {...{ [PINNED_ROW_ATTR]: conv.id }}
+        onPointerDown={(e) => beginPinDrag(conv.id, e)}
+        className={cn(
+          "relative",
+          pinDragging && "cursor-grabbing",
+          draggingPinId === conv.id && "opacity-50"
+        )}
+      >
+        {(lineAbove || lineBelow) && (
+          <span
+            aria-hidden
+            data-pin-drop-line
+            className={cn(
+              "pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-primary",
+              lineAbove ? "-top-px" : "-bottom-px"
+            )}
+          />
+        )}
+        {card}
+      </div>
     )
   }
 

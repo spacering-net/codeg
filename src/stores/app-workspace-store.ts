@@ -95,7 +95,10 @@ export interface AppWorkspaceStoreState {
   updateConversationLocal: (
     id: number,
     patch: Partial<
-      Pick<DbConversationSummary, "status" | "title" | "pinned_at">
+      Pick<
+        DbConversationSummary,
+        "status" | "title" | "pinned_at" | "pin_order"
+      >
     >
   ) => void
   applyConversationUpsert: (summary: DbConversationSummary) => void
@@ -418,10 +421,11 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       // don't re-render on a logical no-op.
       if (idx < 0) return
       const next = prev.slice()
-      // A pin toggle is a view preference, not activity — mirror the backend
-      // (`update_pin`) and leave `updated_at` untouched so an updated-sorted
-      // folder doesn't briefly float the row. Status/title patches still bump.
-      const bumpUpdatedAt = !("pinned_at" in patch)
+      // A pin toggle or a pin reorder is a view preference, not activity —
+      // mirror the backend (`update_pin` / `reorder_pins`) and leave
+      // `updated_at` untouched so an updated-sorted folder doesn't briefly
+      // float the row. Status/title patches still bump.
+      const bumpUpdatedAt = !("pinned_at" in patch) && !("pin_order" in patch)
       next[idx] = {
         ...next[idx],
         ...patch,
@@ -429,8 +433,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       }
       // `stats` (computeStats) depends ONLY on the conversation count and each
       // row's agent_type/message_count. This path replaces a row IN PLACE (count
-      // never changes), and the patch type is restricted to status/title/pinned_at
-      // — none of which is a stat input — so a patch here can never move a stat.
+      // never changes), and the patch type is restricted to status/title/
+      // pinned_at/pin_order — none of which is a stat input — so a patch here
+      // can never move a stat.
       // Reuse the existing `stats` reference instead of recomputing O(n) and
       // minting a fresh object: otherwise every turn-boundary
       // `conversation_status_changed` tick (one per turn start/stop, per running

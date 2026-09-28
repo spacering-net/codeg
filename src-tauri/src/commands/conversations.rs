@@ -2664,6 +2664,33 @@ pub async fn update_conversation_pinned(
     Ok(())
 }
 
+pub async fn reorder_conversation_pins_core(
+    conn: &sea_orm::DatabaseConnection,
+    ordered_ids: &[i32],
+) -> Result<(), AppCommandError> {
+    conversation_service::reorder_pins(conn, ordered_ids)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+/// Persist a manual order for the sidebar's "Pinned" section. `ordered_ids` is
+/// the section's full order, top to bottom. Emits an upsert per conversation so
+/// every client re-sorts the section from the stored `pin_order`.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn reorder_conversation_pins(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    ordered_ids: Vec<i32>,
+) -> Result<(), AppCommandError> {
+    reorder_conversation_pins_core(&db.conn, &ordered_ids).await?;
+    let emitter = EventEmitter::Tauri(app);
+    for id in ordered_ids {
+        emit_conversation_upsert(&emitter, &db.conn, id).await;
+    }
+    Ok(())
+}
+
 pub async fn delete_conversation_core(
     conn: &sea_orm::DatabaseConnection,
     conversation_id: i32,
@@ -2849,6 +2876,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             pinned_at: None,
+            pin_order: None,
             parent_id: Some(1),
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
@@ -6650,6 +6678,7 @@ mod tests {
                 created_at: at(-100),
                 updated_at: at(0),
                 pinned_at: None,
+                pin_order: None,
                 parent_id: None,
                 parent_tool_use_id: None,
                 delegation_call_id: None,

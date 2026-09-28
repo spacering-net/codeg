@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "فشل تحديث المجموعة: {message}",
         "deleteGroupFailed": "فشل حذف المجموعة: {message}",
         "moveToGroupFailed": "فشل نقل المجلد: {message}",
-        "applyLayoutFailed": "فشل حفظ ترتيب المجلدات: {message}"
+        "applyLayoutFailed": "فشل حفظ ترتيب المجلدات: {message}",
+        "reorderPinsFailed": "فشل إعادة ترتيب المحادثات المثبّتة: {message}"
       },
       "statsLabel": "{folders} مجلدات · {convos} محادثة",
       "reorderHandle": "اسحب لإعادة الترتيب",

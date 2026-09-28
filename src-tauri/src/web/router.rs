@@ -180,6 +180,10 @@ pub fn build_router(
             post(handlers::conversations::update_conversation_pinned),
         )
         .route(
+            "/reorder_conversation_pins",
+            post(handlers::conversations::reorder_conversation_pins),
+        )
+        .route(
             "/delete_conversation",
             post(handlers::conversations::delete_conversation),
         )

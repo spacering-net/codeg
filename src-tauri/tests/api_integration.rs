@@ -427,6 +427,63 @@ async fn get_folder_conversation_accepts_turn_window_params() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Pinned-section reorder
+// ────────────────────────────────────────────────────────────────────────────
+
+async fn pin_order_of(state: &AppState, conversation_id: i32) -> Option<i32> {
+    codeg_lib::db::service::conversation_service::get_by_id(&state.db.conn, conversation_id)
+        .await
+        .expect("conversation")
+        .pin_order
+}
+
+#[tokio::test]
+async fn reorder_conversation_pins_persists_the_dragged_order() {
+    let (server, state, _data, _static) = build_test_server_with_state().await;
+    let folder_id = codeg_lib::db::service::folder_service::add_folder(
+        &state.db.conn,
+        "/tmp/codeg-pin-order-test",
+    )
+    .await
+    .expect("seed folder")
+    .id;
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let id = codeg_lib::commands::conversations::create_conversation_core(
+            &state.db.conn,
+            folder_id,
+            codeg_lib::models::AgentType::Codex,
+            None,
+        )
+        .await
+        .expect("create conversation");
+        ids.push(id);
+    }
+    let (a, b, unpinned) = (ids[0], ids[1], ids[2]);
+    for id in [a, b] {
+        codeg_lib::commands::conversations::update_conversation_pinned_core(
+            &state.db.conn,
+            id,
+            true,
+        )
+        .await
+        .expect("pin");
+    }
+
+    let resp = server
+        .post("/api/reorder_conversation_pins")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "orderedIds": [b, a, unpinned] }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    assert_eq!(pin_order_of(&state, b).await, Some(0));
+    assert_eq!(pin_order_of(&state, a).await, Some(1));
+    // Only pinned rows take a position.
+    assert_eq!(pin_order_of(&state, unpinned).await, None);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // codeg-mcp service status
 // ────────────────────────────────────────────────────────────────────────────
 

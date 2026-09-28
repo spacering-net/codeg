@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "更新分組失敗：{message}",
         "deleteGroupFailed": "刪除分組失敗：{message}",
         "moveToGroupFailed": "移動資料夾失敗：{message}",
-        "applyLayoutFailed": "儲存資料夾順序失敗：{message}"
+        "applyLayoutFailed": "儲存資料夾順序失敗：{message}",
+        "reorderPinsFailed": "置頂會話排序失敗：{message}"
       },
       "statsLabel": "{folders} 個資料夾 · {convos} 個對話",
       "reorderHandle": "拖拽排序",

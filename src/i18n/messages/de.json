@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "Gruppe konnte nicht aktualisiert werden: {message}",
         "deleteGroupFailed": "Gruppe konnte nicht gelöscht werden: {message}",
         "moveToGroupFailed": "Ordner konnte nicht verschoben werden: {message}",
-        "applyLayoutFailed": "Ordnerreihenfolge konnte nicht gespeichert werden: {message}"
+        "applyLayoutFailed": "Ordnerreihenfolge konnte nicht gespeichert werden: {message}",
+        "reorderPinsFailed": "Angeheftete Konversationen konnten nicht neu angeordnet werden: {message}"
       },
       "statsLabel": "{folders} Ordner · {convos} Konversationen",
       "reorderHandle": "Zum Neuordnen ziehen",

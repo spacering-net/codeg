@@ -57,6 +57,10 @@ pub struct DbConversationSummary {
     /// folder group. Serialized as `null` when absent so the frontend's
     /// `pinned_at: string | null` always sees the field.
     pub pinned_at: Option<DateTime<Utc>>,
+    /// Mirror of `conversation.pin_order`: the row's manual position within the
+    /// "Pinned" section, when the user has placed it there by dragging.
+    /// Serialized as `null` when absent, like `pinned_at`.
+    pub pin_order: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -246,6 +246,13 @@ vi.mock("@/components/layout/clone-dialog", () => ({ CloneDialog: () => null }))
 // The sub-session realtime sync hook reaches @/lib/platform (transport), which
 // these tests don't load; stub it to a no-op — it has its own unit tests.
 vi.mock("@/hooks/use-subsession-sync", () => ({ useSubsessionSync: () => {} }))
+// The pinned-drag suite asserts what a drop persists; every other api call
+// stays real.
+const pinReorder = vi.hoisted(() => vi.fn(() => Promise.resolve()))
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  reorderConversationPins: pinReorder,
+}))
 vi.mock("@/components/shared/directory-browser-dialog", () => ({
   DirectoryBrowserDialog: () => null,
 }))
@@ -455,6 +462,169 @@ describe("SidebarConversationList — Pinned section (migration semantics)", () 
     const text = document.body.textContent ?? ""
     expect(text).not.toContain("Pinned")
     expect(text).toContain("Folders")
+  })
+})
+
+describe("SidebarConversationList — pinned drag gesture", () => {
+  // Most recently pinned first, so the section starts out as 11, 12, 13.
+  const PINNED = [11, 12, 13]
+  let rectSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    localStorage.clear()
+    pinReorder.mockClear()
+    store.activeTabId = null
+    store.tabSpec = []
+    const folders = [folder(1, "F1")]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: PINNED.map((id, i) =>
+        conv(id, 1, { pinned_at: new Date(FIXED - i * MINUTE).toISOString() })
+      ),
+      // The real action, so the drop's local re-sort shows up on screen.
+      updateConversationLocal:
+        useAppWorkspaceStore.getInitialState().updateConversationLocal,
+    })
+    // Pinned rows stacked 32px apart from y=0 in their starting order; any
+    // other element gets a tall box clear of them.
+    rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const index = PINNED.indexOf(
+          Number(this.getAttribute("data-pinned-row-id"))
+        )
+        const top = index === -1 ? 0 : index * 32
+        const height = index === -1 ? 600 : 32
+        return {
+          top,
+          bottom: top + height,
+          left: 0,
+          right: 200,
+          width: 200,
+          height,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        } as DOMRect
+      })
+  })
+
+  afterEach(() => {
+    // Drain the one-shot click swallower a finished drag leaves behind.
+    window.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    rectSpy.mockRestore()
+  })
+
+  const pinnedOrder = () =>
+    Array.from(document.querySelectorAll("[data-pinned-row-id]"), (row) =>
+      Number(row.getAttribute("data-pinned-row-id"))
+    )
+
+  it("moves the row, shows the drop line, and persists the new order", async () => {
+    render(tree())
+    expect(pinnedOrder()).toEqual([11, 12, 13])
+    const rowBody = document.querySelector(
+      '[data-pinned-row-id="11"] [data-conversation-id="11"]'
+    )
+    if (!rowBody) throw new Error("pinned row 11 not found")
+
+    act(() => firePointer(rowBody, "pointerdown", { clientY: 16 }))
+    act(() => firePointer(window, "pointermove", { clientY: 90 }))
+    // Below every row's midpoint: one line, under the last row.
+    const lines = document.querySelectorAll("[data-pin-drop-line]")
+    expect(lines).toHaveLength(1)
+    expect(lines[0].closest("[data-pinned-row-id]")).toBe(
+      document.querySelector('[data-pinned-row-id="13"]')
+    )
+
+    await act(async () => {
+      firePointer(window, "pointerup", { clientY: 90 })
+    })
+    expect(pinReorder).toHaveBeenCalledTimes(1)
+    expect(pinReorder).toHaveBeenCalledWith([12, 13, 11])
+    // Applied locally at once, not after a round trip.
+    expect(pinnedOrder()).toEqual([12, 13, 11])
+    expect(document.querySelector("[data-pin-drop-line]")).toBeNull()
+  })
+
+  /** Press pinned row `id` and drop it at `toY`: 0 lands above every row, 90
+   *  below every row (the mocked boxes span y 0–96). */
+  const dragPinned = async (id: number, toY: number) => {
+    const rowBody = document.querySelector(
+      `[data-pinned-row-id="${id}"] [data-conversation-id="${id}"]`
+    )
+    if (!rowBody) throw new Error(`pinned row ${id} not found`)
+    act(() => firePointer(rowBody, "pointerdown", { clientY: 48 }))
+    act(() => firePointer(window, "pointermove", { clientY: toY }))
+    await act(async () => {
+      firePointer(window, "pointerup", { clientY: toY })
+    })
+  }
+
+  /** What the server broadcasts after saving `orderedIds`: one upsert per row. */
+  const echoSavedOrder = (orderedIds: number[]) =>
+    act(() => {
+      const { conversations, applyConversationUpsert } =
+        useAppWorkspaceStore.getState()
+      orderedIds.forEach((id, index) => {
+        const row = conversations.find((c) => c.id === id)
+        if (row) applyConversationUpsert({ ...row, pin_order: index })
+      })
+    })
+
+  it("saves one order at a time, and only the newest drop made meanwhile", async () => {
+    const finishSave: (() => void)[] = []
+    const deferredSave = () =>
+      new Promise<void>((resolve) => finishSave.push(resolve))
+    pinReorder
+      .mockImplementationOnce(deferredSave)
+      .mockImplementationOnce(deferredSave)
+    render(tree())
+
+    await dragPinned(11, 90) // 12, 13, 11
+    expect(pinReorder).toHaveBeenCalledTimes(1)
+    expect(pinReorder).toHaveBeenNthCalledWith(1, [12, 13, 11])
+
+    // Two more drops while that save is in flight: both show at once, neither
+    // is sent yet, so the older save can never land after a newer one.
+    await dragPinned(12, 90) // 13, 11, 12
+    await dragPinned(11, 0) // 11, 13, 12
+    expect(pinnedOrder()).toEqual([11, 13, 12])
+    expect(pinReorder).toHaveBeenCalledTimes(1)
+
+    // The first save's upserts arrive ahead of its response and carry its
+    // older order.
+    echoSavedOrder([12, 13, 11])
+    expect(pinnedOrder()).toEqual([12, 13, 11])
+
+    // Once it is done, only the newest order goes out, and it is shown again.
+    await act(async () => finishSave[0]())
+    expect(pinReorder).toHaveBeenCalledTimes(2)
+    expect(pinReorder).toHaveBeenNthCalledWith(2, [11, 13, 12])
+    expect(pinnedOrder()).toEqual([11, 13, 12])
+
+    await act(async () => finishSave[1]())
+    echoSavedOrder([11, 13, 12])
+    expect(pinReorder).toHaveBeenCalledTimes(2)
+    expect(pinnedOrder()).toEqual([11, 13, 12])
+  })
+
+  it("leaves the order alone when the press never becomes a drag", async () => {
+    render(tree())
+    const rowBody = document.querySelector(
+      '[data-pinned-row-id="11"] [data-conversation-id="11"]'
+    )
+    if (!rowBody) throw new Error("pinned row 11 not found")
+
+    act(() => firePointer(rowBody, "pointerdown", { clientY: 16 }))
+    act(() => firePointer(window, "pointermove", { clientY: 18 })) // 2px < 4px
+    expect(document.querySelector("[data-pin-drop-line]")).toBeNull()
+    await act(async () => {
+      firePointer(window, "pointerup", { clientY: 18 })
+    })
+    expect(pinReorder).not.toHaveBeenCalled()
+    expect(pinnedOrder()).toEqual([11, 12, 13])
   })
 })
 

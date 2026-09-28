@@ -474,6 +474,8 @@ describe("buildRows", () => {
       kind: "conversation",
       conversation: p1,
       depth: 0,
+      // Pinned-section rows are the ones that can be dragged to reorder it.
+      pinned: true,
     })
     expect(rows[2]).toEqual({
       kind: "section",
@@ -1477,6 +1479,23 @@ describe("selectPinnedWithReuse", () => {
     expect(second).not.toBe(first)
     // newest pin (b @ 2000) first, then a (@ 1000)
     expect(second.map((p) => p.id)).toEqual([2, 1])
+  })
+
+  it("keeps a dragged order, with newer unplaced pins above it", () => {
+    const pin = (id: number, at: number, pinOrder: number | null = null) =>
+      conv(id, 10, {
+        pinned_at: new Date(at).toISOString(),
+        pin_order: pinOrder,
+      })
+    const order = (list: DbConversationSummary[]) =>
+      selectPinnedWithReuse(list, []).map((p) => p.id)
+    // 1, 2, 3 were dragged into the order 3, 1, 2; 4 and 5 were pinned since.
+    const placed = [pin(3, 3000, 0), pin(1, 1000, 1), pin(2, 2000, 2)]
+    expect(order([...placed, pin(4, 4000)])).toEqual([4, 3, 1, 2])
+    // Unplaced pins stack most-recent-first, as the section always did.
+    expect(order([pin(4, 4000), ...placed, pin(5, 5000)])).toEqual([
+      5, 4, 3, 1, 2,
+    ])
   })
 })
 

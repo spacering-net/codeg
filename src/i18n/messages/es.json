@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "Error al actualizar el grupo: {message}",
         "deleteGroupFailed": "Error al eliminar el grupo: {message}",
         "moveToGroupFailed": "Error al mover la carpeta: {message}",
-        "applyLayoutFailed": "Error al guardar el orden de las carpetas: {message}"
+        "applyLayoutFailed": "Error al guardar el orden de las carpetas: {message}",
+        "reorderPinsFailed": "Error al reordenar las conversaciones fijadas: {message}"
       },
       "statsLabel": "{folders} carpetas · {convos} conversaciones",
       "reorderHandle": "Arrastrar para reordenar",

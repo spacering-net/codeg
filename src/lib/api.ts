@@ -3417,6 +3417,15 @@ export async function updateConversationPinned(
   })
 }
 
+/** Persist a manual order for the sidebar's "Pinned" section. `orderedIds` is
+ *  the section's full order, top to bottom; each id's index becomes its
+ *  `pin_order`. */
+export async function reorderConversationPins(
+  orderedIds: number[]
+): Promise<void> {
+  return getTransport().call("reorder_conversation_pins", { orderedIds })
+}
+
 export async function deleteConversation(
   conversationId: number
 ): Promise<void> {

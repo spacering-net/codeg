@@ -155,6 +155,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     // the server `pinned_at` (mirrors sidebar card handleTogglePin).
     updateConversationLocal(conversationId, {
       pinned_at: next ? new Date().toISOString() : null,
+      pin_order: null,
     })
     updateConversationPinned(conversationId, next).catch((err) => {
       console.error("[ConversationDetailHeader] toggle pin:", err)

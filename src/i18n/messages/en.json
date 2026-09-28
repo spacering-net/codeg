@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "Failed to update group: {message}",
         "deleteGroupFailed": "Failed to delete group: {message}",
         "moveToGroupFailed": "Failed to move folder: {message}",
-        "applyLayoutFailed": "Failed to save the folder order: {message}"
+        "applyLayoutFailed": "Failed to save the folder order: {message}",
+        "reorderPinsFailed": "Failed to reorder pinned conversations: {message}"
       },
       "statsLabel": "{folders} folders · {convos} conversations",
       "reorderHandle": "Drag to reorder",

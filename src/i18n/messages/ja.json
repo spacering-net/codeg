@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "グループの更新に失敗しました: {message}",
         "deleteGroupFailed": "グループの削除に失敗しました: {message}",
         "moveToGroupFailed": "フォルダの移動に失敗しました: {message}",
-        "applyLayoutFailed": "フォルダの並び順の保存に失敗しました: {message}"
+        "applyLayoutFailed": "フォルダの並び順の保存に失敗しました: {message}",
+        "reorderPinsFailed": "ピン留めした会話の並べ替えに失敗しました: {message}"
       },
       "statsLabel": "{folders} フォルダ · {convos} 会話",
       "reorderHandle": "ドラッグして並べ替え",

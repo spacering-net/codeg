@@ -63,9 +63,15 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
     pub deleted_at: Option<DateTimeUtc>,
     /// When the user pinned this conversation; `None` means not pinned. Drives
-    /// the sidebar's "Pinned" section (sorted by this timestamp descending).
-    /// Pinning never bumps `updated_at` — it is a view preference, not activity.
+    /// the sidebar's "Pinned" section (sorted by this timestamp descending,
+    /// except for rows placed by hand — see `pin_order`). Pinning never bumps
+    /// `updated_at` — it is a view preference, not activity.
     pub pinned_at: Option<DateTimeUtc>,
+    /// Manual position within the "Pinned" section (0 = top), written when the
+    /// user drags the section into an order of their own. `None` until then,
+    /// and cleared again by every pin / unpin; such rows sort above the placed
+    /// ones, most recently pinned first.
+    pub pin_order: Option<i32>,
     /// The working directory this conversation actually ran in, when that
     /// differs from its (current) folder's path — written when a deleted task
     /// worktree's conversations are re-parented to the project folder. The

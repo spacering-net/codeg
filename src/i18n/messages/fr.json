@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "Échec de la mise à jour du groupe : {message}",
         "deleteGroupFailed": "Échec de la suppression du groupe : {message}",
         "moveToGroupFailed": "Échec du déplacement du dossier : {message}",
-        "applyLayoutFailed": "Échec de l'enregistrement de l'ordre des dossiers : {message}"
+        "applyLayoutFailed": "Échec de l'enregistrement de l'ordre des dossiers : {message}",
+        "reorderPinsFailed": "Échec de la réorganisation des conversations épinglées : {message}"
       },
       "statsLabel": "{folders} dossiers · {convos} conversations",
       "reorderHandle": "Glisser pour réorganiser",

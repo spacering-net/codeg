@@ -1915,7 +1915,8 @@
         "updateGroupFailed": "Falha ao atualizar o grupo: {message}",
         "deleteGroupFailed": "Falha ao excluir o grupo: {message}",
         "moveToGroupFailed": "Falha ao mover a pasta: {message}",
-        "applyLayoutFailed": "Falha ao salvar a ordem das pastas: {message}"
+        "applyLayoutFailed": "Falha ao salvar a ordem das pastas: {message}",
+        "reorderPinsFailed": "Falha ao reordenar as conversas fixadas: {message}"
       },
       "statsLabel": "{folders} pastas · {convos} conversas",
       "reorderHandle": "Arraste para reordenar",

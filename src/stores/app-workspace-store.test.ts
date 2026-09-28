@@ -101,6 +101,24 @@ describe("updateConversationLocal — stats reference stability", () => {
     expect(after.conversations.find((c) => c.id === 2)?.title).toBe("Renamed")
   })
 
+  it("leaves updated_at alone for a pin toggle or a pin reorder", () => {
+    seedTwo()
+    const { updateConversationLocal } = useAppWorkspaceStore.getState()
+    const row = (id: number) =>
+      useAppWorkspaceStore.getState().conversations.find((c) => c.id === id)
+
+    // A view preference, not activity: an updated-sorted folder must not float
+    // the row (mirrors the backend's update_pin / reorder_pins).
+    updateConversationLocal(1, { pinned_at: "2026-02-01T00:00:00.000Z" })
+    updateConversationLocal(1, { pin_order: 0 })
+    expect(row(1)?.pin_order).toBe(0)
+    expect(row(1)?.updated_at).toBe("2026-01-01T00:00:00.000Z")
+
+    // A status patch is activity and still bumps it.
+    updateConversationLocal(2, { status: "completed" })
+    expect(row(2)?.updated_at).not.toBe("2026-01-01T00:00:00.000Z")
+  })
+
   it("leaves state untouched (stable refs) for an unknown id", () => {
     seedTwo()
     const before = useAppWorkspaceStore.getState()
