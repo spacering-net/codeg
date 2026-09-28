@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react"
 import {
+  AudioLines,
   Bot,
   BookOpenText,
   Boxes,
@@ -45,6 +46,7 @@ interface SettingsNavItem {
   href: string
   labelKey:
     | "general"
+    | "speech"
     | "appearance"
     | "agents"
     | "model_providers"
@@ -73,6 +75,11 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     href: "/settings/general",
     labelKey: "general",
     icon: SlidersHorizontal,
+  },
+  {
+    href: "/settings/speech",
+    labelKey: "speech",
+    icon: AudioLines,
   },
   {
     href: "/settings/mcp",

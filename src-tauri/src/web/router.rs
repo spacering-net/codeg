@@ -604,6 +604,23 @@ pub fn build_router(
         // tens of KB, so it travels in the JSON body rather than through the
         // upload-staging machinery above.
         .route(
+            "/speech_get_settings",
+            post(handlers::speech::speech_get_settings),
+        )
+        .route(
+            "/speech_update_settings",
+            post(handlers::speech::speech_update_settings),
+        )
+        .route(
+            "/speech_transcribe",
+            post(handlers::speech::speech_transcribe)
+                .layer(DefaultBodyLimit::max(36 * 1024 * 1024)),
+        )
+        .route(
+            "/speech_synthesize",
+            post(handlers::speech::speech_synthesize),
+        )
+        .route(
             "/config_sync_get_settings",
             post(handlers::config_sync::config_sync_get_settings),
         )

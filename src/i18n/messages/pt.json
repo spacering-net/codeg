@@ -38,6 +38,7 @@
     "preferences": "Preferências",
     "nav": {
       "general": "Geral",
+      "speech": "Voz",
       "appearance": "Aparência",
       "agents": "Agentes",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "Suspender/retomar estilo personalizado",
         "description": "Saída de emergência: desliga todas as cores e o CSS personalizados e volta a ligá-los"
+      },
+      "toggle_voice_input": {
+        "title": "Entrada de voz",
+        "description": "Iniciar ou parar o ditado na caixa de mensagem"
       },
       "zoom_in": {
         "title": "Aumentar zoom",
@@ -3157,7 +3162,18 @@
         "mentionGroupAgent": "Agentes",
         "mentionGroupSession": "Sessões",
         "mentionGroupCommit": "Commits",
-        "mentionGroupSkill": "Habilidades"
+        "mentionGroupSkill": "Habilidades",
+        "speechStart": "Iniciar entrada de voz",
+        "speechStop": "Parar e inserir",
+        "speechTranscribing": "Transcrevendo...",
+        "speechCancelHint": "Esc para cancelar",
+        "speechMicDenied": "O acesso ao microfone foi negado",
+        "speechUnavailableNoEngine": "Entrada de voz indisponível: este navegador não tem reconhecimento de voz",
+        "speechUnavailableInsecure": "A entrada de voz exige uma conexão segura (HTTPS ou localhost)",
+        "speechUnavailableNoMic": "Entrada de voz indisponível: nenhum microfone encontrado",
+        "speechUnavailableCloud": "A entrada de voz precisa de uma chave de API em nuvem (Configurações → Voz)",
+        "speechCloudAuthFailed": "O serviço de voz rejeitou a chave de API",
+        "speechFailed": "Falha na entrada de voz"
       },
       "messageQueue": {
         "addToQueue": "Adicionar à fila",
@@ -3444,7 +3460,13 @@
         "completedAt": "Concluído às",
         "jumpToPreviousUserMessage": "Ir para a mensagem do usuário",
         "showMore": "Mostrar mais",
-        "showLess": "Mostrar menos"
+        "showLess": "Mostrar menos",
+        "readAloud": "Ler em voz alta",
+        "stopReading": "Parar leitura",
+        "readAloudLoading": "Preparando áudio...",
+        "readAloudFailed": "Não foi possível ler esta resposta em voz alta",
+        "speechCodeOmitted": "Bloco de código omitido",
+        "speechTableOmitted": "Tabela omitida"
       },
       "liveTurnStats": {
         "thinking": "Pensando...",
@@ -6528,5 +6550,52 @@
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "Voz",
+    "sectionDescription": "Dite prompts com a sua voz e configure o serviço de voz.",
+    "loading": "Carregando configurações de voz...",
+    "loadFailed": "Falha ao carregar as configurações de voz: {message}",
+    "inputTitle": "Entrada de voz",
+    "inputDescription": "Mostra um botão de microfone no campo do chat que transforma a fala em texto do prompt.",
+    "engineLabel": "Mecanismo de reconhecimento",
+    "engineAuto": "Automático",
+    "engineBrowser": "Navegador",
+    "engineCloud": "Nuvem",
+    "engineUsing": "Em uso: {engine}",
+    "reasonNoMic": "Indisponível: nenhum microfone encontrado.",
+    "reasonInsecure": "Indisponível: o microfone exige uma conexão segura (HTTPS ou localhost).",
+    "reasonNoEngine": "Indisponível: este navegador não tem reconhecimento de voz. Configure o serviço em nuvem abaixo.",
+    "reasonCloudNotConfigured": "Indisponível: o serviço em nuvem ainda não tem chave de API.",
+    "languageLabel": "Idioma de reconhecimento",
+    "languageDescription": "O idioma que você fala ao ditar.",
+    "languageFollowApp": "Seguir o idioma do app",
+    "languageCustom": "Tag personalizada",
+    "languageCustomPlaceholder": "Tag BCP-47, ex.: en-GB",
+    "cloudTitle": "Serviço de voz em nuvem",
+    "cloudDescription": "Um endpoint compatível com OpenAI. O áudio só é enviado quando o mecanismo em nuvem está em uso.",
+    "baseUrl": "URL base",
+    "apiKey": "Chave de API",
+    "apiKeyDescription": "Armazenada no chaveiro do sistema e nunca mais exibida após salvar.",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "Salva",
+    "removeKey": "Remover chave",
+    "keyRemoved": "Chave de API removida",
+    "sttModel": "Modelo de fala para texto",
+    "save": "Salvar",
+    "saving": "Salvando...",
+    "saved": "Configurações de voz salvas",
+    "saveFailed": "Falha ao salvar as configurações de voz: {message}",
+    "outputTitle": "Ler em voz alta",
+    "outputDescription": "Mostra um botão de alto-falante nas respostas do agente para lê-las.",
+    "outputEngineLabel": "Mecanismo de voz",
+    "reasonNoVoices": "Indisponível: este navegador não tem vozes. Configure o serviço em nuvem abaixo.",
+    "voiceLabel": "Voz",
+    "voiceDefault": "Voz padrão do idioma",
+    "rateLabel": "Velocidade de leitura",
+    "autoReadLabel": "Ler respostas automaticamente",
+    "autoReadDescription": "Lê em voz alta cada resposta concluída na aba ativa.",
+    "ttsModel": "Modelo de texto para fala",
+    "ttsVoice": "Voz de texto para fala"
   }
 }

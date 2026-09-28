@@ -122,6 +122,9 @@ import {
   serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
 import { textToInlineContent } from "@/components/chat/composer/plain-text-content"
+import { ComposerSpeechControl } from "@/components/chat/composer/composer-speech-button"
+import { useSpeechPrefs } from "@/lib/speech-prefs"
+import { getSpeechPlayerState, stopSpeech } from "@/lib/speech-player"
 import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
@@ -442,6 +445,7 @@ export function MessageInput({
     knownInvocationsRef.current = knownInvocations
   }, [knownInvocations])
   const { shortcuts } = useShortcutSettings()
+  const speechEnabled = useSpeechPrefs().input.enabled
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
   const editorRef = useRef<RichComposerHandle>(null)
@@ -809,6 +813,8 @@ export function MessageInput({
   }, [skillPrefix, composerReady])
 
   const handleComposerChange = useCallback(() => {
+    // Typing means the user has moved on from the reply being read out.
+    if (getSpeechPlayerState().status !== "idle") stopSpeech()
     // The history's own writes are not edits. They must not end navigation, and
     // they must not be saved as the draft: overwriting the stored draft with a
     // recalled prompt would lose what the user had typed if they closed the tab
@@ -1531,6 +1537,7 @@ export function MessageInput({
   }, [clearAttachments, closeSlashMenu])
 
   const handleSend = useCallback(() => {
+    stopSpeech()
     // The editor stays editable while `disabled` (the agent is busy) so the user
     // can keep typing, but a plain send is blocked — only enqueue / queue-edit
     // save go through. Mirrors the legacy textarea's keydown guard.
@@ -2320,7 +2327,21 @@ export function MessageInput({
                     </div>
                   )}
                 </div>
-                <div className="shrink-0">{actionButtons}</div>
+                <div className="shrink-0">
+                  {speechEnabled ? (
+                    <div className="flex items-center gap-1">
+                      <ComposerSpeechControl
+                        editorRef={editorRef}
+                        isActive={isActive}
+                        shortcut={shortcuts.toggle_voice_input}
+                        onInserted={syncComposerEmpty}
+                      />
+                      {actionButtons}
+                    </div>
+                  ) : (
+                    actionButtons
+                  )}
+                </div>
               </div>
               {showDragActive && (
                 <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-md border border-dashed border-primary/50 bg-background/80 text-xs text-muted-foreground">

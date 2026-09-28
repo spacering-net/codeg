@@ -38,6 +38,7 @@
     "preferences": "환경설정",
     "nav": {
       "general": "일반",
+      "speech": "음성",
       "appearance": "외관",
       "agents": "에이전트",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "사용자 지정 스타일 중지/재개",
         "description": "비상 탈출구: 모든 사용자 지정 색상과 CSS를 끄고, 다시 누르면 되돌립니다"
+      },
+      "toggle_voice_input": {
+        "title": "음성 입력",
+        "description": "메시지 입력란에 받아쓰기를 시작하거나 중지합니다"
       },
       "zoom_in": {
         "title": "확대",
@@ -3157,7 +3162,18 @@
         "mentionGroupAgent": "에이전트",
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
-        "mentionGroupSkill": "스킬"
+        "mentionGroupSkill": "스킬",
+        "speechStart": "음성 입력 시작",
+        "speechStop": "중지하고 삽입",
+        "speechTranscribing": "변환 중...",
+        "speechCancelHint": "Esc로 취소",
+        "speechMicDenied": "마이크 접근이 거부되었습니다",
+        "speechUnavailableNoEngine": "음성 입력 불가: 이 브라우저는 음성 인식을 지원하지 않습니다",
+        "speechUnavailableInsecure": "음성 입력에는 보안 연결(HTTPS 또는 localhost)이 필요합니다",
+        "speechUnavailableNoMic": "음성 입력 불가: 마이크를 찾을 수 없습니다",
+        "speechUnavailableCloud": "음성 입력에는 클라우드 API 키가 필요합니다(설정 → 음성)",
+        "speechCloudAuthFailed": "음성 서비스가 API 키를 거부했습니다",
+        "speechFailed": "음성 입력에 실패했습니다"
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",
@@ -3444,7 +3460,13 @@
         "completedAt": "완료 시각",
         "jumpToPreviousUserMessage": "이전 사용자 메시지로 이동",
         "showMore": "더보기",
-        "showLess": "접기"
+        "showLess": "접기",
+        "readAloud": "소리 내어 읽기",
+        "stopReading": "읽기 중지",
+        "readAloudLoading": "오디오 준비 중...",
+        "readAloudFailed": "이 답변을 읽을 수 없습니다",
+        "speechCodeOmitted": "코드 블록 생략",
+        "speechTableOmitted": "표 생략"
       },
       "liveTurnStats": {
         "thinking": "생각 중...",
@@ -6528,5 +6550,52 @@
         "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "음성",
+    "sectionDescription": "음성으로 프롬프트를 입력하고 음성 서비스를 설정합니다.",
+    "loading": "음성 설정을 불러오는 중...",
+    "loadFailed": "음성 설정을 불러오지 못했습니다: {message}",
+    "inputTitle": "음성 입력",
+    "inputDescription": "채팅 입력창에 마이크 버튼을 표시하여 음성을 프롬프트 텍스트로 변환합니다.",
+    "engineLabel": "인식 엔진",
+    "engineAuto": "자동",
+    "engineBrowser": "브라우저",
+    "engineCloud": "클라우드",
+    "engineUsing": "사용 중: {engine}",
+    "reasonNoMic": "사용 불가: 마이크를 찾을 수 없습니다.",
+    "reasonInsecure": "사용 불가: 마이크를 사용하려면 보안 연결(HTTPS 또는 localhost)이 필요합니다.",
+    "reasonNoEngine": "사용 불가: 이 브라우저는 음성 인식을 지원하지 않습니다. 아래에서 클라우드 서비스를 설정하세요.",
+    "reasonCloudNotConfigured": "사용 불가: 클라우드 서비스에 API 키가 없습니다.",
+    "languageLabel": "인식 언어",
+    "languageDescription": "받아쓰기할 때 말하는 언어입니다.",
+    "languageFollowApp": "앱 언어 따르기",
+    "languageCustom": "사용자 지정 태그",
+    "languageCustomPlaceholder": "BCP-47 태그, 예: en-GB",
+    "cloudTitle": "클라우드 음성 서비스",
+    "cloudDescription": "OpenAI 호환 엔드포인트입니다. 클라우드 엔진을 사용할 때만 오디오가 전송됩니다.",
+    "baseUrl": "기본 URL",
+    "apiKey": "API 키",
+    "apiKeyDescription": "시스템 키체인에 저장되며 저장 후에는 다시 표시되지 않습니다.",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "저장됨",
+    "removeKey": "키 삭제",
+    "keyRemoved": "API 키가 삭제되었습니다",
+    "sttModel": "음성-텍스트 변환 모델",
+    "save": "저장",
+    "saving": "저장 중...",
+    "saved": "음성 설정이 저장되었습니다",
+    "saveFailed": "음성 설정을 저장하지 못했습니다: {message}",
+    "outputTitle": "소리 내어 읽기",
+    "outputDescription": "에이전트 답변에 스피커 버튼을 표시해 답변을 읽어 줍니다.",
+    "outputEngineLabel": "음성 엔진",
+    "reasonNoVoices": "사용 불가: 이 브라우저에 음성이 없습니다. 아래에서 클라우드 서비스를 구성하세요.",
+    "voiceLabel": "음성",
+    "voiceDefault": "언어 기본 음성",
+    "rateLabel": "읽기 속도",
+    "autoReadLabel": "답변 자동 읽기",
+    "autoReadDescription": "활성 탭에서 완료된 답변을 자동으로 읽어 줍니다.",
+    "ttsModel": "텍스트 음성 변환 모델",
+    "ttsVoice": "텍스트 음성 변환 음성"
   }
 }

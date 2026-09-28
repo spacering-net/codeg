@@ -5074,3 +5074,19 @@ export interface DeepSeekModelCatalog {
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
 }
+export interface SpeechCloudSettings {
+  baseUrl: string
+  sttModel: string
+  ttsModel: string
+  ttsVoice: string
+}
+
+export interface SpeechCloudSettingsView {
+  settings: SpeechCloudSettings
+  apiKeySet: boolean
+}
+
+export interface SpeechAudio {
+  audioBase64: string
+  mimeType: string
+}
