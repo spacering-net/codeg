@@ -90,7 +90,7 @@ Il regroupe les sessions de toutes les CLI d'agents supportées dans un espace d
 
 ## 🤖 Agents supportés
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity · Devin
 
 Codeg installe, épingle et met à jour la plupart d'entre eux pour vous. Voir [Agents supportés](https://docs.codeg.app/guide/supported-agents) pour la liste complète, les prérequis d'exécution de chacun et l'emplacement de ses sessions sur le disque.
 

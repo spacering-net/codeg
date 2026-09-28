@@ -694,6 +694,11 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 default_rel: &[".pi", "agent", "sessions"],
             },
         ],
+        // Devin is import-only (no built-in ACP launch), so no sandbox is
+        // ever built for it; mirrors the `Custom` arm below. The store codeg
+        // READS (`parsers::devin::resolve_devin_sessions_db`) is deliberately
+        // not a writable root.
+        AgentType::Devin => &[],
         // A custom ACP agent has no codeg-known private directory layout —
         // codeg never reads its store (history comes from codeg's own ACP
         // transcript), so there is nothing to widen the sandbox roots for.

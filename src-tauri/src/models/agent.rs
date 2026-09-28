@@ -8,7 +8,7 @@ pub const CUSTOM_AGENT_WIRE_PREFIX: &str = "custom:";
 
 /// Which agent backs a conversation.
 ///
-/// The fifteen named variants are compile-time built-ins with hand-written
+/// The sixteen named variants are compile-time built-ins with hand-written
 /// launch metadata (`acp::registry`) and a dedicated transcript parser
 /// (`parsers::*`). [`AgentType::Custom`] is the open end: a user-registered
 /// ACP agent whose launch metadata lives in the database
@@ -36,12 +36,16 @@ pub enum AgentType {
     DeepSeek,
     Qoder,
     Antigravity,
+    /// Devin CLI. Import-only: its local sessions can be imported from the
+    /// SQLite store (`parsers::devin`), but it has no built-in ACP launch
+    /// metadata — a live Devin agent is registered as a custom ACP agent.
+    Devin,
     /// A user-registered ACP agent, identified by its ACP-registry id
     /// (interned). Ordered last so built-ins keep their relative order.
     Custom(&'static str),
 }
 
-/// The fifteen compile-time agents, in declaration order. Does NOT include
+/// The sixteen compile-time agents, in declaration order. Does NOT include
 /// custom agents — use [`crate::acp::registry::all_acp_agents`] for the live
 /// set that includes them.
 pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
@@ -60,6 +64,7 @@ pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
     AgentType::DeepSeek,
     AgentType::Qoder,
     AgentType::Antigravity,
+    AgentType::Devin,
 ];
 
 impl AgentType {
@@ -107,6 +112,7 @@ impl AgentType {
             AgentType::DeepSeek => Cow::Borrowed("deepseek"),
             AgentType::Qoder => Cow::Borrowed("qoder"),
             AgentType::Antigravity => Cow::Borrowed("antigravity"),
+            AgentType::Devin => Cow::Borrowed("devin"),
             AgentType::Custom(id) => Cow::Owned(format!("{CUSTOM_AGENT_WIRE_PREFIX}{id}")),
         }
     }
@@ -130,6 +136,7 @@ impl AgentType {
             "deepseek" => Some(AgentType::DeepSeek),
             "qoder" => Some(AgentType::Qoder),
             "antigravity" => Some(AgentType::Antigravity),
+            "devin" => Some(AgentType::Devin),
             other => other
                 .strip_prefix(CUSTOM_AGENT_WIRE_PREFIX)
                 .and_then(AgentType::custom),
@@ -172,6 +179,14 @@ pub fn is_valid_custom_agent_id(id: &str) -> bool {
                 | "deepseek"
                 | "qoder"
                 | "antigravity"
+            // NOT `"devin"`: Devin is an import-only built-in, and the way a
+            // user runs Devin LIVE is precisely a custom ACP agent registered
+            // under the id `devin` (wire `custom:devin`) — rows that already
+            // exist in real databases. `from_wire` is unambiguous regardless
+            // (the bare name and the `custom:`-prefixed form are distinct
+            // strings), and the ACP registry never lists the built-in
+            // (`registry_id_for(Devin)` is `devin-cli`), so nothing can be
+            // shadowed. Reserving it would orphan those conversations.
         )
 }
 
@@ -207,6 +222,7 @@ impl fmt::Display for AgentType {
             AgentType::DeepSeek => write!(f, "DeepSeek Harness"),
             AgentType::Qoder => write!(f, "Qoder"),
             AgentType::Antigravity => write!(f, "Google Antigravity"),
+            AgentType::Devin => write!(f, "Devin"),
             // Prefer the registered display name; fall back to the raw id when
             // the registry has not been hydrated (or the agent was deleted
             // while conversations still reference it).
@@ -242,6 +258,7 @@ mod tests {
             (AgentType::DeepSeek, "deepseek"),
             (AgentType::Qoder, "qoder"),
             (AgentType::Antigravity, "antigravity"),
+            (AgentType::Devin, "devin"),
         ];
         for (agent, wire) in expected {
             assert_eq!(agent.as_wire(), wire);
@@ -320,6 +337,13 @@ mod tests {
             assert_eq!(AgentType::custom(bad), None);
         }
         assert!(is_valid_custom_agent_id("goose"));
+        // The live-Devin custom agent (see `is_valid_custom_agent_id`).
+        assert!(is_valid_custom_agent_id("devin"));
+        assert_eq!(
+            AgentType::from_wire("custom:devin"),
+            AgentType::custom("devin")
+        );
+        assert_eq!(AgentType::from_wire("devin"), Some(AgentType::Devin));
         assert!(is_valid_custom_agent_id("qwen-code"));
         assert!(is_valid_custom_agent_id("github-copilot-cli"));
         assert!(is_valid_custom_agent_id("my_agent.v2"));
@@ -330,11 +354,12 @@ mod tests {
 
     #[test]
     fn ordering_places_custom_after_builtins() {
-        assert!(AgentType::Antigravity < AgentType::custom("goose").unwrap());
+        assert!(AgentType::Devin < AgentType::custom("goose").unwrap());
         assert!(AgentType::ClaudeCode < AgentType::Cursor);
         assert!(AgentType::Cursor < AgentType::DeepSeek);
         assert!(AgentType::DeepSeek < AgentType::Qoder);
         assert!(AgentType::Qoder < AgentType::Antigravity);
+        assert!(AgentType::Antigravity < AgentType::Devin);
         // Custom agents order lexicographically among themselves.
         assert!(AgentType::custom("aaa").unwrap() < AgentType::custom("bbb").unwrap());
     }

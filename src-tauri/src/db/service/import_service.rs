@@ -10,7 +10,7 @@ use crate::models::{AgentType, ConversationSummary, ImportResult};
 use crate::parsers::{build_agent_parser, path_eq_for_matching, AgentParser};
 
 /// Every locally-parsable agent, in the canonical parser order.
-const ALL_PARSER_AGENTS: [AgentType; 15] = [
+const ALL_PARSER_AGENTS: [AgentType; 16] = [
     AgentType::ClaudeCode,
     AgentType::Codex,
     AgentType::OpenCode,
@@ -26,6 +26,7 @@ const ALL_PARSER_AGENTS: [AgentType; 15] = [
     AgentType::DeepSeek,
     AgentType::Qoder,
     AgentType::Antigravity,
+    AgentType::Devin,
 ];
 
 fn build_parser(agent_type: AgentType) -> Box<dyn AgentParser> {

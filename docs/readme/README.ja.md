@@ -90,7 +90,7 @@ Codeg（Code Generation）はマルチエージェント・コーディングワ
 
 ## 🤖 対応エージェント
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity · Devin
 
 その多くは Codeg がインストール・バージョン固定・更新まで面倒を見ます。全リスト、各エージェントの実行環境要件、セッションの保存場所は [対応エージェント](https://docs.codeg.app/guide/supported-agents) を参照してください。
 

@@ -90,7 +90,7 @@ Codeg（Code Generation）是一个多智能体编码工作台：把所有 AI �
 
 ## 🤖 支持的 Agent
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity · Devin
 
 其中大部分 Codeg 都能替你安装、锁定版本并更新。完整名单、各自的运行环境要求以及会话在磁盘上的存放位置，见 [支持的智能体](https://docs.codeg.app/zh/guide/supported-agents)。
 

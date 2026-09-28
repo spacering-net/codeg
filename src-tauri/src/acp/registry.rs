@@ -271,6 +271,14 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::DeepSeek => "deepseek-acp",
         AgentType::Qoder => "qoder-cli",
         AgentType::Antigravity => "antigravity-acp",
+        // Import-only: Devin has no built-in ACP launch and is NOT in
+        // `builtin_acp_agents()`, so this id is never installed, launched or
+        // matched against the ACP registry. It is deliberately distinct from
+        // the plain `devin` a user registers as a CUSTOM agent to run Devin
+        // live, so the two can never share a transcript directory or a binary
+        // cache key; `from_registry_id` does not resolve it (see
+        // `get_agent_meta`).
+        AgentType::Devin => "devin-cli",
         // A custom agent's registry id IS its identity.
         AgentType::Custom(id) => id,
     }
@@ -497,6 +505,28 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
         return crate::acp::custom_registry::get(id)
             .cloned()
             .unwrap_or_else(|| crate::acp::custom_registry::unregistered_meta(id));
+    }
+    // Import-only agent: there is no launch metadata to return, and its
+    // registry id intentionally does not round-trip through `from_registry_id`
+    // (see `registry_id_for`), so it must not reach the assertion below. The
+    // inert entry mirrors `custom_registry::unregistered_meta` (an empty npx
+    // distribution that can never be installed) with MCP forwarding off — the
+    // most conservative shape a caller can be handed.
+    if agent_type == AgentType::Devin {
+        return AcpAgentMeta {
+            agent_type,
+            supports_mcp: false,
+            name: "Devin",
+            description: "Devin CLI (import-only; register Devin as a custom ACP agent to run it)",
+            distribution: AgentDistribution::Npx {
+                version: "0.0.0",
+                package: "",
+                cmd: "",
+                args: &[],
+                env: &[],
+                node_required: None,
+            },
+        };
     }
     debug_assert_eq!(
         from_registry_id(registry_id_for(agent_type)),
@@ -3031,6 +3061,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
         },
         // Handled by the early return above; kept so the match stays
         // exhaustive without a catch-all that could swallow a new built-in.
+        AgentType::Devin => unreachable!("Devin is import-only; handled above"),
         AgentType::Custom(_) => unreachable!("custom agents resolve via custom_registry"),
     }
 }

@@ -90,7 +90,7 @@ Reúne las sesiones de todas las CLI de agentes compatibles en un único espacio
 
 ## 🤖 Agentes compatibles
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity · Devin
 
 Codeg instala, fija la versión y actualiza la mayoría de ellos por ti. Consulta [Agentes compatibles](https://docs.codeg.app/guide/supported-agents) para ver la lista completa, los requisitos de ejecución de cada uno y dónde guarda sus sesiones en disco.
 

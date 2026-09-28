@@ -7,6 +7,7 @@ pub mod codex;
 pub mod codex_code_mode;
 pub mod cursor;
 pub mod deepseek;
+pub mod devin;
 pub mod gemini;
 pub mod grok;
 pub mod hermes;
@@ -252,6 +253,21 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             sqlite: true,
             include_top: None,
         },
+        ExternalSource {
+            // Devin CLI keeps every session in ONE live WAL store,
+            // `~/.local/share/devin/cli/sessions.db` (`XDG_DATA_HOME` /
+            // `DEVIN_SESSIONS_DB` aware). `sqlite: true` page-copies it through
+            // a read-only connection so the WAL-resident frames land in the
+            // archive without codeg ever writing to Devin's store. The source
+            // is the single file, not the `cli/` directory: Devin's
+            // credentials and config live elsewhere under its data dir, so
+            // nothing else is archived.
+            agent: "devin",
+            root: devin::resolve_devin_sessions_db(),
+            is_file: true,
+            sqlite: true,
+            include_top: None,
+        },
     ];
     if let Some(home) = dirs::home_dir() {
         sources.push(ExternalSource {
@@ -316,6 +332,7 @@ pub fn build_agent_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
         AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::new()),
         AgentType::Qoder => Box::new(qoder::QoderParser::new()),
         AgentType::Antigravity => Box::new(antigravity::AntigravityParser::new()),
+        AgentType::Devin => Box::new(devin::DevinParser::new()),
         // Custom ACP agents have no native store to reverse-engineer; their
         // history is codeg's own ACP transcript.
         AgentType::Custom(_) => Box::new(acp_native::AcpNativeParser::new(agent_type)),

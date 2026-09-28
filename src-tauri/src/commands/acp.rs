@@ -8954,6 +8954,11 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".gemini/skills", ".agents/skills"],
         }),
+        // Devin is import-only: codeg never launches it, so it installs no
+        // skills for it either — the same `None` an undeclared custom agent
+        // gets, which also keeps it out of the experts / office / science
+        // matrices (`supported_agents` derives from this function).
+        AgentType::Devin => None,
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -10683,6 +10688,10 @@ fn cascade_update_agent_config(
             // `sync_antigravity_settings_file`); that file carries the chosen
             // METHOD, never a credential, so there is nothing here to
             // reconcile either.
+        }
+        AgentType::Devin => {
+            // Import-only: codeg never launches Devin and manages no config
+            // file for it, so there is nothing to cascade — same as `Custom`.
         }
         AgentType::Custom(_) => {
             // Custom agents are deliberately configuration-free: codeg writes

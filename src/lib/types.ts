@@ -15,6 +15,10 @@ export type BuiltinAgentType =
   | "deepseek"
   | "qoder"
   | "antigravity"
+  // Import-only: Devin CLI sessions can be imported from its local store, but
+  // codeg does not launch Devin as a built-in (a live Devin is a custom ACP
+  // agent), so this value stays out of the ACP / MCP / delegation pickers.
+  | "devin"
 
 /**
  * Which agent backs a conversation.
@@ -935,6 +939,7 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "deepseek",
   "qoder",
   "antigravity",
+  "devin",
 ]
 
 const AGENT_DISPLAY_ORDER_INDEX = new Map<AgentType, number>(
@@ -969,6 +974,7 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "deepseek",
   "qoder",
   "antigravity",
+  "devin",
 ]
 
 export const MODEL_PROVIDER_AGENT_TYPES: BuiltinAgentType[] = [
@@ -1280,6 +1286,7 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   deepseek: "DeepSeek Harness",
   qoder: "Qoder",
   antigravity: "Google Antigravity",
+  devin: "Devin",
 }
 
 export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
@@ -1298,6 +1305,7 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   deepseek: "bg-[#4D6BFE]",
   qoder: "bg-[#6C4CF1]",
   antigravity: "bg-[#1A73E8]",
+  devin: "bg-[#2563EB]",
 }
 
 // ACP connection status (matches Rust ConnectionStatus)

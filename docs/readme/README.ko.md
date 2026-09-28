@@ -90,7 +90,7 @@ Codeg(Code Generation)는 멀티 에이전트 코딩 워크스페이스입니다
 
 ## 🤖 지원 에이전트
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity · Devin
 
 이 중 대부분은 Codeg가 대신 설치하고, 버전을 고정하고, 업데이트합니다. 전체 목록과 각 에이전트의 실행 환경 요구 사항, 세션이 디스크에 저장되는 위치는 [지원 에이전트](https://docs.codeg.app/guide/supported-agents)를 참고하세요.
 
