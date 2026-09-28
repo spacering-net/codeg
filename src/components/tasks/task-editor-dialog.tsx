@@ -46,6 +46,73 @@ import type {
   WorkTaskTemplate,
 } from "@/lib/types"
 
+function briefTitle(text: string): string {
+  const firstLine =
+    text
+      .split("\n")
+      .find((line) => line.trim())
+      ?.trim() ?? ""
+  return Array.from(firstLine).slice(0, 80).join("")
+}
+
+// Only a verified generated title block may be hidden on edit. A stale or
+// inconsistent marker must leave real stored prose alone.
+function hasGeneratedTitlePrompt(
+  config: WorkTaskConfig | null | undefined,
+  storedTitle: string | undefined
+): boolean {
+  const firstBlock = config?.prompt_blocks?.[0]
+  return (
+    config?.brief_origin === "title" &&
+    !!storedTitle &&
+    config.display_text === storedTitle &&
+    firstBlock?.type === "text" &&
+    firstBlock.text === storedTitle
+  )
+}
+
+function isAttachmentOnlyBrief(
+  config: WorkTaskConfig | null | undefined
+): boolean {
+  return (
+    !config?.display_text?.trim() &&
+    !!config?.prompt_blocks?.some((block) => block.type !== "text") &&
+    !config.prompt_blocks.some(
+      (block) => block.type === "text" && block.text.trim()
+    )
+  )
+}
+
+function editorBriefOrigin(
+  config: WorkTaskConfig | null | undefined,
+  storedTitle: string | undefined
+): WorkTaskConfig["brief_origin"] | null {
+  if (config?.brief_origin === "title") {
+    return hasGeneratedTitlePrompt(config, storedTitle) ? "title" : null
+  }
+  if (config?.brief_origin === "description") {
+    return storedTitle && storedTitle === briefTitle(config.display_text)
+      ? "description"
+      : null
+  }
+  if (config?.brief_origin === "attachment") {
+    return isAttachmentOnlyBrief(config) ? "attachment" : null
+  }
+  // Legacy image-only tasks and templates stored no provenance, but an empty
+  // body plus only attachment blocks is enough to preserve their prompt.
+  return isAttachmentOnlyBrief(config) ? "attachment" : null
+}
+
+function editorBlocks(
+  config: WorkTaskConfig | null | undefined,
+  storedTitle: string | undefined
+) {
+  const blocks = config?.prompt_blocks ?? null
+  return hasGeneratedTitlePrompt(config, storedTitle)
+    ? (blocks?.slice(1) ?? null)
+    : blocks
+}
+
 interface TaskEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -118,10 +185,22 @@ function TaskEditorBody({
   // A create seeded from a chat message: the text becomes the description and
   // its first line (trimmed) the suggested title.
   const seededText = task == null ? (prefillText ?? "") : ""
+  const titlePromptIsGenerated = hasGeneratedTitlePrompt(
+    task?.config,
+    task?.title
+  )
+  const storedBriefOrigin = editorBriefOrigin(task?.config, task?.title)
   const [title, setTitle] = useState(
     task?.title ?? seededText.split("\n")[0]?.trim().slice(0, 80) ?? ""
   )
-  const [prompt, setPrompt] = useState(task?.config?.display_text ?? seededText)
+  const [prompt, setPrompt] = useState(
+    titlePromptIsGenerated ? "" : (task?.config?.display_text ?? seededText)
+  )
+  const [briefOrigin, setBriefOrigin] = useState(storedBriefOrigin)
+  const [titleEdited, setTitleEdited] = useState(false)
+  const [attachmentSeedTitle, setAttachmentSeedTitle] = useState(
+    task?.title ?? ""
+  )
   const [folderId, setFolderId] = useState<number | null>(
     task?.folder_id ?? defaultFolderId ?? projectFolders[0]?.id ?? null
   )
@@ -157,8 +236,10 @@ function TaskEditorBody({
   // them. A `key` bump remounts the box to apply a template.
   const [composerSeed, setComposerSeed] = useState(() => ({
     key: 0,
-    text: task?.config?.display_text ?? seededText,
-    blocks: task?.config?.prompt_blocks ?? null,
+    text: titlePromptIsGenerated
+      ? ""
+      : (task?.config?.display_text ?? seededText),
+    blocks: editorBlocks(task?.config, task?.title),
   }))
   // Mirrors the composer's attached-file count, so a brief that is only a
   // screenshot still passes the "say something" gate below.
@@ -223,13 +304,28 @@ function TaskEditorBody({
 
   // The captured composer + agent state as a `WorkTaskConfig` — the shared
   // payload of both the task draft and a saved template.
-  const buildConfig = async (): Promise<WorkTaskConfig> => {
-    const displayText = (composerRef.current?.getText() ?? prompt).trim()
+  const buildConfig = async (
+    fallbackPrompt?: string,
+    origin?: WorkTaskConfig["brief_origin"]
+  ): Promise<WorkTaskConfig> => {
+    const composerText = (composerRef.current?.getText() ?? prompt).trim()
     // Prose + inline references + attached images, exactly as a chat send
     // composes them; the engine replays these blocks when the task launches.
-    const blocks = composerRef.current?.getPromptBlocks() ?? [
-      { type: "text", text: displayText },
-    ]
+    const composerBlocks: WorkTaskConfig["prompt_blocks"] =
+      composerRef.current?.getPromptBlocks() ??
+      (composerText ? [{ type: "text", text: composerText }] : [])
+    // A title-only brief still needs a real work order at launch. Keep any
+    // attachments, but discard empty prose from a blank composer.
+    const displayText = composerText || fallbackPrompt || ""
+    const blocks =
+      !composerText && fallbackPrompt
+        ? [
+            { type: "text" as const, text: fallbackPrompt },
+            ...composerBlocks.filter(
+              (block) => block.type !== "text" || block.text.trim()
+            ),
+          ]
+        : composerBlocks
     // Explicitly null rather than absent when nothing is picked: clearing the
     // choice has to travel, and the save replaces the stored config wholesale.
     const base_branch = baseBranch.trim() || null
@@ -237,6 +333,7 @@ function TaskEditorBody({
       return {
         prompt_blocks: blocks,
         display_text: displayText,
+        ...(origin ? { brief_origin: origin } : {}),
         agent_type: null,
         mode_id: null,
         config_values: {},
@@ -252,6 +349,7 @@ function TaskEditorBody({
     return {
       prompt_blocks: blocks,
       display_text: displayText,
+      ...(origin ? { brief_origin: origin } : {}),
       agent_type: agentType,
       mode_id,
       config_values,
@@ -266,10 +364,21 @@ function TaskEditorBody({
   const submit = async () => {
     setError(null)
     const displayText = (composerRef.current?.getText() ?? prompt).trim()
+    const enteredTitle = title.trim()
     const hasAttachments = composerRef.current?.hasAttachments() ?? false
-    if (!title.trim()) return setError(t("errorTitle"))
-    // A brief that is only a screenshot is still a brief.
-    if (!displayText && !hasAttachments) return setError(t("errorPrompt"))
+    // The attachment-only title is a generated label. Removing its last
+    // attachment must not turn that label into a meaningless agent instruction.
+    if (
+      briefOrigin === "attachment" &&
+      !titleEdited &&
+      !displayText &&
+      !hasAttachments
+    ) {
+      return setError(t("errorAttachmentMissing"))
+    }
+    if (!enteredTitle && !displayText && !hasAttachments) {
+      return setError(t("errorBrief"))
+    }
     if (folderId == null) return setError(t("errorFolder"))
     // An unsettled upload has no server-side uri yet, so the stored block would
     // carry nothing for the launch to hydrate from.
@@ -277,12 +386,36 @@ function TaskEditorBody({
       return setError(tChat("attachUploadInProgress"))
     }
 
+    // Only a marked, untouched auto title may follow a changed description
+    // or remain a label for an attachment-only brief. Legacy tasks have no
+    // marker, so an identical title/body pair is still treated as explicit.
+    const autoTitle =
+      !titleEdited &&
+      (briefOrigin === "description" || briefOrigin === "attachment")
+    let draftTitle: string
+    let origin: WorkTaskConfig["brief_origin"]
+    let fallbackPrompt: string | undefined
+    if (displayText) {
+      if (!enteredTitle || autoTitle) {
+        draftTitle = briefTitle(displayText)
+        origin = "description"
+      } else {
+        draftTitle = enteredTitle
+      }
+    } else if (enteredTitle && (!autoTitle || !hasAttachments)) {
+      draftTitle = enteredTitle
+      origin = "title"
+      fallbackPrompt = enteredTitle
+    } else {
+      draftTitle = enteredTitle || t("attachmentTaskTitle")
+      origin = "attachment"
+    }
     setSaving(true)
     try {
       const draft: WorkTaskDraft = {
         folder_id: folderId,
-        title: title.trim(),
-        config: await buildConfig(),
+        title: draftTitle,
+        config: await buildConfig(fallbackPrompt, origin),
       }
       await onSubmit(draft)
     } catch (e) {
@@ -294,13 +427,19 @@ function TaskEditorBody({
 
   const applyTemplate = (tpl: WorkTaskTemplate) => {
     const cfg = tpl.config
-    const text = cfg?.display_text ?? ""
+    // Older image-only templates predate provenance. Their empty text and
+    // non-text blocks still mean the template's title is a label, not prose.
+    const origin = editorBriefOrigin(cfg, tpl.title)
+    const text = origin === "title" ? "" : (cfg?.display_text ?? "")
+    setBriefOrigin(origin)
+    setTitleEdited(false)
+    setAttachmentSeedTitle(tpl.title)
     setTitle(tpl.title)
     setPrompt(text)
     setComposerSeed((s) => ({
       key: s.key + 1,
       text,
-      blocks: cfg?.prompt_blocks ?? null,
+      blocks: editorBlocks(cfg, tpl.title),
     }))
     if (cfg?.agent_type != null) {
       setAgentDirty(true)
@@ -369,7 +508,10 @@ function TaskEditorBody({
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
         <input
           value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={(e) => {
+            setTitleEdited(true)
+            setTitle(e.target.value)
+          }}
           placeholder={t("titlePlaceholder")}
           aria-label={t("titleLabel")}
           className="w-full bg-transparent text-lg font-semibold tracking-tight outline-none placeholder:font-normal placeholder:text-muted-foreground/50"
@@ -418,7 +560,15 @@ function TaskEditorBody({
           defaultBlocks={composerSeed.blocks}
           placeholder={t("promptPlaceholder")}
           ariaLabel={t("promptLabel")}
-          onChange={setPrompt}
+          onChange={(text) => {
+            setPrompt(text)
+            if (titleEdited) return
+            if (briefOrigin === "description") {
+              setTitle(briefTitle(text))
+            } else if (briefOrigin === "attachment") {
+              setTitle(briefTitle(text) || attachmentSeedTitle)
+            }
+          }}
           onAttachmentsChange={setAttachmentCount}
           editorClassName="max-h-[14rem] min-h-[6rem]"
           bottomBarExtra={

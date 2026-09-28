@@ -1611,6 +1611,9 @@ export type WorkTaskStatus =
 export interface WorkTaskConfig {
   prompt_blocks: PromptInputBlock[]
   display_text: string
+  /** Editor provenance for generated task fields. Absent on older and
+   *  externally created tasks, whose title/body must stay independent. */
+  brief_origin?: "title" | "description" | "attachment"
   agent_type?: AgentType | null
   mode_id?: string | null
   config_values: Record<string, string>
