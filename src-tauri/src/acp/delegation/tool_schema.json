@@ -655,5 +655,111 @@
         }
       }
     }
+  },
+  {
+    "name": "list_sessions",
+    "description": "List all active sessions in the workspace, excluding the current one.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "focus_session",
+    "description": "Focus a specific session in the workspace, bringing the app to the foreground. Shows the user a confirmation and returns declined if the user says no.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    }
+  },
+  {
+    "name": "send_to_session",
+    "description": "Send a message to another session. Shows the user a confirmation and returns declined if the user says no.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        }
+      },
+      "required": [
+        "session_id",
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "cancel_session",
+    "description": "Cancel the current turn of another session. Shows the user a confirmation and returns declined if the user says no.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    }
+  },
+  {
+    "name": "answer_permission",
+    "description": "Answer a pending permission prompt in another session. Shows the user a confirmation and returns declined if the user says no.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "deny"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "decision"
+      ]
+    }
+  },
+  {
+    "name": "start_session",
+    "description": "Start a new session in a specific folder. Shows the user a confirmation and returns declined if the user says no.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "folder_id": {
+          "type": "integer"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "folder_id",
+        "agent_type",
+        "task"
+      ]
+    }
   }
 ]

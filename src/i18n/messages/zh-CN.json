@@ -38,6 +38,7 @@
     "preferences": "偏好设置",
     "nav": {
       "general": "常规",
+      "speech": "语音",
       "appearance": "外观",
       "agents": "智能体",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "停用/恢复自定义样式",
         "description": "逃生舱：一键关闭全部自定义配色与 CSS，再按一次恢复"
+      },
+      "toggle_voice_input": {
+        "title": "语音输入",
+        "description": "开始或停止向输入框口述"
       },
       "zoom_in": {
         "title": "放大",
@@ -3157,7 +3162,18 @@
         "mentionGroupAgent": "智能体",
         "mentionGroupSession": "会话",
         "mentionGroupCommit": "提交",
-        "mentionGroupSkill": "技能"
+        "mentionGroupSkill": "技能",
+        "speechStart": "开始语音输入",
+        "speechStop": "停止并插入",
+        "speechTranscribing": "正在转写...",
+        "speechCancelHint": "按 Esc 取消",
+        "speechMicDenied": "麦克风权限被拒绝",
+        "speechUnavailableNoEngine": "语音输入不可用：此浏览器不支持语音识别",
+        "speechUnavailableInsecure": "语音输入需要安全连接（HTTPS 或 localhost）",
+        "speechUnavailableNoMic": "语音输入不可用：未找到麦克风",
+        "speechUnavailableCloud": "语音输入需要云端 API 密钥（设置 → 语音）",
+        "speechCloudAuthFailed": "语音服务拒绝了该 API 密钥",
+        "speechFailed": "语音输入失败"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -3444,7 +3460,13 @@
         "completedAt": "完成时间",
         "jumpToPreviousUserMessage": "跳转到上一条用户消息",
         "showMore": "展开",
-        "showLess": "收起"
+        "showLess": "收起",
+        "readAloud": "朗读",
+        "stopReading": "停止朗读",
+        "readAloudLoading": "正在准备音频...",
+        "readAloudFailed": "无法朗读此回复",
+        "speechCodeOmitted": "已省略代码块",
+        "speechTableOmitted": "已省略表格"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -6528,5 +6550,52 @@
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "语音",
+    "sectionDescription": "用语音口述提示词，并配置语音服务。",
+    "loading": "正在加载语音设置...",
+    "loadFailed": "加载语音设置失败：{message}",
+    "inputTitle": "语音输入",
+    "inputDescription": "在聊天输入框中显示麦克风按钮，将语音转换为提示词文本。",
+    "engineLabel": "识别引擎",
+    "engineAuto": "自动",
+    "engineBrowser": "浏览器",
+    "engineCloud": "云端",
+    "engineUsing": "当前使用：{engine}",
+    "reasonNoMic": "不可用：未找到麦克风。",
+    "reasonInsecure": "不可用：麦克风需要安全连接（HTTPS 或 localhost）。",
+    "reasonNoEngine": "不可用：此浏览器不支持语音识别。请在下方配置云端服务。",
+    "reasonCloudNotConfigured": "不可用：云端服务尚未设置 API 密钥。",
+    "languageLabel": "识别语言",
+    "languageDescription": "口述时所说的语言。",
+    "languageFollowApp": "跟随应用语言",
+    "languageCustom": "自定义标签",
+    "languageCustomPlaceholder": "BCP-47 标签，例如 en-GB",
+    "cloudTitle": "云端语音服务",
+    "cloudDescription": "兼容 OpenAI 的接口。仅在使用云端引擎时才会向其发送音频。",
+    "baseUrl": "基础 URL",
+    "apiKey": "API 密钥",
+    "apiKeyDescription": "保存在系统钥匙串中，保存后不再显示。",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "已保存",
+    "removeKey": "移除密钥",
+    "keyRemoved": "API 密钥已移除",
+    "sttModel": "语音转文本模型",
+    "save": "保存",
+    "saving": "正在保存...",
+    "saved": "语音设置已保存",
+    "saveFailed": "保存语音设置失败：{message}",
+    "outputTitle": "朗读",
+    "outputDescription": "在智能体回复上显示扬声器按钮，用于朗读回复。",
+    "outputEngineLabel": "语音引擎",
+    "reasonNoVoices": "不可用：此浏览器没有语音。请在下方配置云端服务。",
+    "voiceLabel": "声音",
+    "voiceDefault": "该语言的默认声音",
+    "rateLabel": "语速",
+    "autoReadLabel": "自动朗读回复",
+    "autoReadDescription": "在当前标签页中自动朗读每条完成的回复。",
+    "ttsModel": "文本转语音模型",
+    "ttsVoice": "文本转语音声音"
   }
 }

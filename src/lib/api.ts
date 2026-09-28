@@ -28,6 +28,11 @@ import type {
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  SpeechCloudSettings,
+  SpeechAudio,
+  SpeechCloudSettingsView,
+  AssistantSettings,
+  AssistantSession,
   ForgeChangeDetail,
   ForgeChangedFileList,
   ForgeComment,
@@ -5959,4 +5964,54 @@ export async function forgeSettingsSet(
   settings: ForgePanelSettings | null
 ): Promise<ForgeSettingsStore> {
   return getTransport().call("forge_settings_set", { folderId, settings })
+}
+export async function speechGetSettings(): Promise<SpeechCloudSettingsView> {
+  return getTransport().call<SpeechCloudSettingsView>("speech_get_settings", {})
+}
+
+export async function speechUpdateSettings(
+  settings: SpeechCloudSettings,
+  apiKey: string | null
+): Promise<SpeechCloudSettingsView> {
+  return getTransport().call<SpeechCloudSettingsView>(
+    "speech_update_settings",
+    { settings, apiKey }
+  )
+}
+
+export async function speechTranscribe(
+  audioBase64: string,
+  mimeType: string,
+  language: string | null
+): Promise<string> {
+  return getTransport().call<string>("speech_transcribe", {
+    audioBase64,
+    mimeType,
+    language,
+  })
+}
+
+export async function speechSynthesize(
+  text: string,
+  speed: number
+): Promise<SpeechAudio> {
+  return getTransport().call<SpeechAudio>("speech_synthesize", { text, speed })
+}
+
+export async function assistantEnsure(): Promise<AssistantSession> {
+  return getTransport().call<AssistantSession>("assistant_ensure", {})
+}
+
+export async function assistantReset(): Promise<void> {
+  return getTransport().call<void>("assistant_reset", {})
+}
+
+export async function assistantGetSettings(): Promise<AssistantSettings> {
+  return getTransport().call<AssistantSettings>("assistant_get_settings", {})
+}
+
+export async function assistantSetSettings(
+  settings: AssistantSettings
+): Promise<void> {
+  return getTransport().call<void>("assistant_set_settings", { settings })
 }

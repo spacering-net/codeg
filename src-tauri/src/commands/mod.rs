@@ -55,5 +55,9 @@ pub mod turn_window;
 pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
+pub mod speech;
 pub mod work_task;
 pub mod workspace_state;
+pub mod assistant;
+
+pub mod assistant_tools;

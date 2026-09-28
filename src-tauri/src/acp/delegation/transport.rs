@@ -357,6 +357,12 @@ pub enum BrokerMessage {
     BrowserCapture(BrokerBrowserCaptureRequest),
     BrowserEval(BrokerBrowserEvalRequest),
     BrowserTabOp(BrokerBrowserTabOpRequest),
+    AssistantListSessions(BrokerAssistantListSessionsRequest),
+    AssistantFocusSession(BrokerAssistantFocusSessionRequest),
+    AssistantSendToSession(BrokerAssistantSendToSessionRequest),
+    AssistantCancelSession(BrokerAssistantCancelSessionRequest),
+    AssistantAnswerPermission(BrokerAssistantAnswerPermissionRequest),
+    AssistantStartSession(BrokerAssistantStartSessionRequest),
     /// Liveness probe. Unlike every other variant this one is NOT sent by a
     /// companion — it comes from codeg's own service-status check
     /// (`acp::delegation::service`), which is why it carries no `token`: a
@@ -619,6 +625,84 @@ pub async fn client_browser_tab_op_round_trip(
     req: &BrokerBrowserTabOpRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::BrowserTabOp(req.clone())).await
+}
+
+/// Dispatch an `assistant_list_sessions` request and read back the serialized
+/// [`AssistantSessionList`].
+pub async fn client_assistant_list_sessions_round_trip(
+    socket_path: &str,
+    req: &BrokerAssistantListSessionsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::AssistantListSessions(req.clone()),
+    )
+    .await
+}
+
+/// Dispatch an `assistant_focus_session` request and read back the serialized
+/// [`AssistantActionResult`].
+pub async fn client_assistant_focus_session_round_trip(
+    socket_path: &str,
+    req: &BrokerAssistantFocusSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::AssistantFocusSession(req.clone()),
+    )
+    .await
+}
+
+/// Dispatch an `assistant_send_to_session` request and read back the serialized
+/// [`AssistantActionResult`].
+pub async fn client_assistant_send_to_session_round_trip(
+    socket_path: &str,
+    req: &BrokerAssistantSendToSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::AssistantSendToSession(req.clone()),
+    )
+    .await
+}
+
+/// Dispatch an `assistant_cancel_session` request and read back the serialized
+/// [`AssistantActionResult`].
+pub async fn client_assistant_cancel_session_round_trip(
+    socket_path: &str,
+    req: &BrokerAssistantCancelSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::AssistantCancelSession(req.clone()),
+    )
+    .await
+}
+
+/// Dispatch an `assistant_answer_permission` request and read back the serialized
+/// [`AssistantActionResult`].
+pub async fn client_assistant_answer_permission_round_trip(
+    socket_path: &str,
+    req: &BrokerAssistantAnswerPermissionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::AssistantAnswerPermission(req.clone()),
+    )
+    .await
+}
+
+/// Dispatch an `assistant_start_session` request and read back the serialized
+/// [`AssistantActionResult`].
+pub async fn client_assistant_start_session_round_trip(
+    socket_path: &str,
+    req: &BrokerAssistantStartSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::AssistantStartSession(req.clone()),
+    )
+    .await
 }
 
 /// Probe the listener: write a [`BrokerMessage::Ping`] and read the
@@ -897,4 +981,73 @@ mod tests {
         assert_eq!(resp.outcome["text"], "hello");
         server.await.unwrap();
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerAssistantListSessionsRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerAssistantFocusSessionRequest {
+    pub token: String,
+    pub session_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerAssistantSendToSessionRequest {
+    pub token: String,
+    pub session_id: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerAssistantCancelSessionRequest {
+    pub token: String,
+    pub session_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerAssistantAnswerPermissionRequest {
+    pub token: String,
+    pub session_id: i64,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerAssistantStartSessionRequest {
+    pub token: String,
+    pub folder_id: i64,
+    pub agent_type: String,
+    pub task: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantSessionEntry {
+    pub session_id: i64,
+    pub title: String,
+    pub agent_type: String,
+    pub folder_id: i64,
+    pub folder_name: String,
+    pub status: String,
+    pub pending_action: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantFolderEntry {
+    pub folder_id: i64,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantSessionList {
+    pub sessions: Vec<AssistantSessionEntry>,
+    pub folders: Vec<AssistantFolderEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantActionResult {
+    pub outcome: String,
+    pub message: String,
 }

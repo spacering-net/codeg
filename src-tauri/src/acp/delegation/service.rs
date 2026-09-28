@@ -434,6 +434,75 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl crate::acp::assistant_tools::AssistantToolAccess for Stub {
+        async fn is_assistant_connection(&self, _conn_id: &str) -> bool {
+            false
+        }
+        async fn list_sessions(
+            &self,
+            _exclude_conn_id: &str,
+        ) -> crate::acp::delegation::transport::AssistantSessionList {
+            crate::acp::delegation::transport::AssistantSessionList {
+                sessions: vec![],
+                folders: vec![],
+            }
+        }
+        async fn focus_session(
+            &self,
+            _session_id: i64,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "not_found".to_string(),
+                message: String::new(),
+            }
+        }
+        async fn send_to_session(
+            &self,
+            _requester_conn_id: &str,
+            _session_id: i64,
+            _text: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: "not implemented yet".to_string(),
+            }
+        }
+        async fn cancel_session(
+            &self,
+            _requester_conn_id: &str,
+            _session_id: i64,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: "not implemented yet".to_string(),
+            }
+        }
+        async fn answer_permission(
+            &self,
+            _requester_conn_id: &str,
+            _session_id: i64,
+            _decision: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: "not implemented yet".to_string(),
+            }
+        }
+        async fn start_session(
+            &self,
+            _requester_conn_id: &str,
+            _folder_id: i64,
+            _agent_type: String,
+            _task: String,
+        ) -> crate::acp::delegation::transport::AssistantActionResult {
+            crate::acp::delegation::transport::AssistantActionResult {
+                outcome: "disabled".to_string(),
+                message: "not implemented yet".to_string(),
+            }
+        }
+    }
+
     /// A temp directory short enough to bind a socket inside, whatever the
     /// ambient `$TMPDIR` happens to be.
     ///
@@ -490,6 +559,7 @@ mod tests {
         let listener = DelegationListener::new(
             broker,
             Arc::new(TokenRegistry::default()),
+            Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),

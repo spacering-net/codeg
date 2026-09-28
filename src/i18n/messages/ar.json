@@ -38,6 +38,7 @@
     "preferences": "التفضيلات",
     "nav": {
       "general": "عام",
+      "speech": "الصوت",
       "appearance": "المظهر",
       "agents": "الوكلاء",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "إيقاف/استئناف النمط المخصص",
         "description": "مخرج طوارئ: يوقف كل الألوان المخصصة وCSS، ويعيد تفعيلها"
+      },
+      "toggle_voice_input": {
+        "title": "الإدخال الصوتي",
+        "description": "بدء الإملاء في مربع الرسالة أو إيقافه"
       },
       "zoom_in": {
         "title": "تكبير",
@@ -3157,7 +3162,18 @@
         "mentionGroupAgent": "الوكلاء",
         "mentionGroupSession": "الجلسات",
         "mentionGroupCommit": "عمليات الإيداع",
-        "mentionGroupSkill": "المهارات"
+        "mentionGroupSkill": "المهارات",
+        "speechStart": "بدء الإدخال الصوتي",
+        "speechStop": "إيقاف وإدراج",
+        "speechTranscribing": "جارٍ النسخ...",
+        "speechCancelHint": "Esc للإلغاء",
+        "speechMicDenied": "تم رفض الوصول إلى الميكروفون",
+        "speechUnavailableNoEngine": "الإدخال الصوتي غير متاح: لا يدعم هذا المتصفح التعرّف على الكلام",
+        "speechUnavailableInsecure": "يتطلب الإدخال الصوتي اتصالًا آمنًا (HTTPS أو localhost)",
+        "speechUnavailableNoMic": "الإدخال الصوتي غير متاح: لم يُعثر على ميكروفون",
+        "speechUnavailableCloud": "يتطلب الإدخال الصوتي مفتاح API سحابيًا (الإعدادات ← الصوت)",
+        "speechCloudAuthFailed": "رفضت خدمة الصوت مفتاح API",
+        "speechFailed": "فشل الإدخال الصوتي"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -3444,7 +3460,13 @@
         "completedAt": "وقت الإنجاز",
         "jumpToPreviousUserMessage": "الانتقال إلى رسالة المستخدم",
         "showMore": "عرض المزيد",
-        "showLess": "طي"
+        "showLess": "طي",
+        "readAloud": "قراءة بصوت عالٍ",
+        "stopReading": "إيقاف القراءة",
+        "readAloudLoading": "جارٍ تجهيز الصوت...",
+        "readAloudFailed": "تعذّرت قراءة هذا الرد بصوت عالٍ",
+        "speechCodeOmitted": "تم حذف كتلة التعليمات البرمجية",
+        "speechTableOmitted": "تم حذف الجدول"
       },
       "liveTurnStats": {
         "thinking": "جارٍ التفكير...",
@@ -6528,5 +6550,52 @@
         "probeFailed": "تعذّر على المتصفح المدمج التأكد من أنه يصل إلى المضيف البعيد عبر النفق. حاول مرة أخرى بعد قليل."
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "الصوت",
+    "sectionDescription": "أملِ المطالبات بصوتك واضبط خدمة الصوت.",
+    "loading": "جارٍ تحميل إعدادات الصوت...",
+    "loadFailed": "تعذّر تحميل إعدادات الصوت: {message}",
+    "inputTitle": "الإدخال الصوتي",
+    "inputDescription": "يعرض زر ميكروفون في محرّر الدردشة يحوّل الكلام إلى نص المطالبة.",
+    "engineLabel": "محرّك التعرّف",
+    "engineAuto": "تلقائي",
+    "engineBrowser": "المتصفح",
+    "engineCloud": "السحابة",
+    "engineUsing": "قيد الاستخدام: {engine}",
+    "reasonNoMic": "غير متاح: لم يُعثر على ميكروفون.",
+    "reasonInsecure": "غير متاح: يتطلب الميكروفون اتصالًا آمنًا (HTTPS أو localhost).",
+    "reasonNoEngine": "غير متاح: لا يدعم هذا المتصفح التعرّف على الكلام. اضبط الخدمة السحابية أدناه.",
+    "reasonCloudNotConfigured": "غير متاح: لا يوجد مفتاح API للخدمة السحابية بعد.",
+    "languageLabel": "لغة التعرّف",
+    "languageDescription": "اللغة التي تتحدث بها أثناء الإملاء.",
+    "languageFollowApp": "اتباع لغة التطبيق",
+    "languageCustom": "وسم مخصص",
+    "languageCustomPlaceholder": "وسم BCP-47، مثل en-GB",
+    "cloudTitle": "خدمة الصوت السحابية",
+    "cloudDescription": "نقطة نهاية متوافقة مع OpenAI. لا يُرسل الصوت إليها إلا عند استخدام المحرّك السحابي.",
+    "baseUrl": "عنوان URL الأساسي",
+    "apiKey": "مفتاح API",
+    "apiKeyDescription": "يُخزَّن في سلسلة مفاتيح النظام ولا يُعرض مجددًا بعد الحفظ.",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "محفوظ",
+    "removeKey": "إزالة المفتاح",
+    "keyRemoved": "تمت إزالة مفتاح API",
+    "sttModel": "نموذج تحويل الكلام إلى نص",
+    "save": "حفظ",
+    "saving": "جارٍ الحفظ...",
+    "saved": "تم حفظ إعدادات الصوت",
+    "saveFailed": "تعذّر حفظ إعدادات الصوت: {message}",
+    "outputTitle": "القراءة بصوت عالٍ",
+    "outputDescription": "إظهار زر مكبّر صوت على ردود الوكيل لقراءتها.",
+    "outputEngineLabel": "محرك الصوت",
+    "reasonNoVoices": "غير متاح: لا توجد أصوات في هذا المتصفح. اضبط الخدمة السحابية أدناه.",
+    "voiceLabel": "الصوت",
+    "voiceDefault": "الصوت الافتراضي للغة",
+    "rateLabel": "سرعة القراءة",
+    "autoReadLabel": "قراءة الردود تلقائيًا",
+    "autoReadDescription": "قراءة كل رد مكتمل في علامة التبويب النشطة بصوت عالٍ.",
+    "ttsModel": "نموذج تحويل النص إلى كلام",
+    "ttsVoice": "صوت تحويل النص إلى كلام"
   }
 }

@@ -392,6 +392,20 @@ async fn async_main() -> ExitCode {
             // "browser tab" is an iframe their own browser renders, which
             // nothing here can reach.
             Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs),
+            Arc::new(
+                codeg_lib::commands::assistant_tools::DbAssistantToolAccess {
+                    manager: Arc::new(state.connection_manager.clone_ref()),
+                    db: Arc::new(codeg_lib::db::AppDatabase {
+                        conn: state.db.conn.clone(),
+                    }),
+                    emitter: Arc::new(state.emitter.clone()),
+                    questions: Arc::new(
+                        codeg_lib::commands::assistant_tools::ManagerQuestions(
+                            Arc::new(state.connection_manager.clone_ref()),
+                        ),
+                    ),
+                },
+            ),
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so

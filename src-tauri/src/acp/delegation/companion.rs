@@ -45,22 +45,27 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
 };
 use crate::acp::delegation::transport::{
-    client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
-    client_browser_console_round_trip, client_browser_eval_round_trip,
-    client_browser_snapshot_round_trip, client_browser_tab_op_round_trip,
-    client_browser_tabs_round_trip,
-    client_cancel, client_cancel_task_round_trip, client_commit_feedback,
-    client_create_automation_round_trip, client_create_work_task_round_trip,
-    client_feedback_round_trip, client_resume_task_round_trip, client_round_trip,
-    client_session_round_trip, client_status_round_trip, client_task_complete_round_trip,
-    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
+    client_ask_round_trip, client_assistant_answer_permission_round_trip,
+    client_assistant_cancel_session_round_trip, client_assistant_focus_session_round_trip,
+    client_assistant_list_sessions_round_trip, client_assistant_send_to_session_round_trip,
+    client_assistant_start_session_round_trip, client_browser_act_round_trip,
+    client_browser_capture_round_trip, client_browser_console_round_trip,
+    client_browser_eval_round_trip, client_browser_snapshot_round_trip,
+    client_browser_tab_op_round_trip, client_browser_tabs_round_trip, client_cancel,
+    client_cancel_task_round_trip, client_commit_feedback, client_create_automation_round_trip,
+    client_create_work_task_round_trip, client_feedback_round_trip, client_resume_task_round_trip,
+    client_round_trip, client_session_round_trip, client_status_round_trip,
+    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
+    BrokerAssistantAnswerPermissionRequest, BrokerAssistantCancelSessionRequest,
+    BrokerAssistantFocusSessionRequest, BrokerAssistantListSessionsRequest,
+    BrokerAssistantSendToSessionRequest, BrokerAssistantStartSessionRequest,
+    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
     BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
-    BrokerBrowserTabsRequest,
-    BrokerCancelRequest,
-    BrokerCancelTaskRequest, BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest,
-    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerRequest, BrokerResponse,
-    BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
+    BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
+    BrokerFeedbackRequest, BrokerRequest, BrokerResponse, BrokerResumeTaskRequest,
+    BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
@@ -181,6 +186,9 @@ pub struct CompanionFeatures {
     /// tab can picture, and this is not one of them. Never on with `browser`
     /// off; the parent will not emit it, and `allows_tool` requires both.
     pub browser_eval: bool,
+    /// Workspace-assistant tools — injected only into the backend-owned
+    /// assistant connection.
+    pub assistant: bool,
 }
 
 impl CompanionFeatures {
@@ -202,6 +210,7 @@ impl CompanionFeatures {
                 taskboard: false,
                 browser: false,
                 browser_eval: false,
+                assistant: false,
             };
         };
         let mut f = Self {
@@ -214,6 +223,7 @@ impl CompanionFeatures {
             taskboard: false,
             browser: false,
             browser_eval: false,
+            assistant: false,
         };
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
@@ -226,6 +236,7 @@ impl CompanionFeatures {
                 "taskboard" => f.taskboard = true,
                 "browser" => f.browser = true,
                 "browser_eval" => f.browser_eval = true,
+                "assistant" => f.assistant = true,
                 _ => {}
             }
         }
@@ -249,7 +260,11 @@ impl CompanionFeatures {
             // parent bug, or someone editing the agent's MCP config by hand —
             // cannot leave the strongest tool as the only one present.
             "browser_eval" => self.browser && self.browser_eval,
-            "delegate_to_agent" | "get_delegation_status" | "cancel_delegation"
+            "list_sessions" | "focus_session" | "send_to_session" | "cancel_session"
+            | "answer_permission" | "start_session" => self.assistant,
+            "delegate_to_agent"
+            | "get_delegation_status"
+            | "cancel_delegation"
             | "resume_delegation" => self.delegation,
             _ => false,
         }
@@ -852,6 +867,152 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_browser_tab_op_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_browser_tab_op_result).await
         }
+        "list_sessions" => {
+            let req = BrokerAssistantListSessionsRequest {
+                token: ctx.token.clone(),
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_assistant_list_sessions_round_trip(&socket, &req).await },
+                );
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_assistant_list_sessions_result,
+            )
+            .await
+        }
+        "focus_session" => {
+            let session_id = match arguments.get("session_id").and_then(|v| v.as_i64()) {
+                Some(v) => v,
+                None => return LineAction::Respond(err(id, -32602, "Missing session_id")),
+            };
+            let req = BrokerAssistantFocusSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_assistant_focus_session_round_trip(&socket, &req).await },
+                );
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_assistant_action_result,
+            )
+            .await
+        }
+        "send_to_session" => {
+            let session_id = match arguments.get("session_id").and_then(|v| v.as_i64()) {
+                Some(v) => v,
+                None => return LineAction::Respond(err(id, -32602, "Missing session_id")),
+            };
+            let text = match arguments.get("text").and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => return LineAction::Respond(err(id, -32602, "Missing text")),
+            };
+            let req = BrokerAssistantSendToSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+                text,
+            };
+            let round_trip = Box::pin(async move {
+                client_assistant_send_to_session_round_trip(&socket, &req).await
+            });
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_assistant_action_result,
+            )
+            .await
+        }
+        "cancel_session" => {
+            let session_id = match arguments.get("session_id").and_then(|v| v.as_i64()) {
+                Some(v) => v,
+                None => return LineAction::Respond(err(id, -32602, "Missing session_id")),
+            };
+            let req = BrokerAssistantCancelSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_assistant_cancel_session_round_trip(&socket, &req).await },
+                );
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_assistant_action_result,
+            )
+            .await
+        }
+        "answer_permission" => {
+            let session_id = match arguments.get("session_id").and_then(|v| v.as_i64()) {
+                Some(v) => v,
+                None => return LineAction::Respond(err(id, -32602, "Missing session_id")),
+            };
+            let decision = match arguments.get("decision").and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => return LineAction::Respond(err(id, -32602, "Missing decision")),
+            };
+            let req = BrokerAssistantAnswerPermissionRequest {
+                token: ctx.token.clone(),
+                session_id,
+                decision,
+            };
+            let round_trip = Box::pin(async move {
+                client_assistant_answer_permission_round_trip(&socket, &req).await
+            });
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_assistant_action_result,
+            )
+            .await
+        }
+        "start_session" => {
+            let folder_id = match arguments.get("folder_id").and_then(|v| v.as_i64()) {
+                Some(v) => v,
+                None => return LineAction::Respond(err(id, -32602, "Missing folder_id")),
+            };
+            let agent_type = match arguments.get("agent_type").and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => return LineAction::Respond(err(id, -32602, "Missing agent_type")),
+            };
+            let task = match arguments.get("task").and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => return LineAction::Respond(err(id, -32602, "Missing task")),
+            };
+            let req = BrokerAssistantStartSessionRequest {
+                token: ctx.token.clone(),
+                folder_id,
+                agent_type,
+                task,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_assistant_start_session_round_trip(&socket, &req).await },
+                );
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_assistant_action_result,
+            )
+            .await
+        }
+
         "task_progress" => {
             let message = arguments
                 .get("message")
@@ -2570,6 +2731,38 @@ pub fn render_task_report(report: &Value) -> Value {
     })
 }
 
+/// Map the `list_sessions` round-trip outcome (a serialized
+/// `AssistantSessionList`) into an MCP `tools/call` result. MCP hosts hand the
+/// model only the `content` blocks, so the list is serialized there as JSON
+/// text; the same envelope rides along in `structuredContent`.
+fn render_assistant_list_sessions_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": outcome.to_string() }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+/// Map an assistant action round-trip outcome (a serialized
+/// `AssistantActionResult`) into an MCP `tools/call` result. A refused or
+/// failed action is readable text with `isError: false` (the model reports it
+/// and moves on), never a protocol error.
+fn render_assistant_action_result(outcome: &Value) -> Value {
+    let text = match (
+        outcome.get("outcome").and_then(|v| v.as_str()),
+        outcome.get("message").and_then(|v| v.as_str()),
+    ) {
+        (Some(o), Some(m)) if !m.is_empty() => format!("{o}: {m}"),
+        (Some(o), _) => o.to_string(),
+        _ => outcome.to_string(),
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2587,6 +2780,7 @@ mod tests {
             taskboard: false,
             browser: false,
             browser_eval: false,
+            assistant: false,
         })
     }
 
@@ -3180,6 +3374,7 @@ mod tests {
         taskboard: false,
         browser: false,
     browser_eval: false,
+    assistant: false,
     };
     const BOTH: CompanionFeatures = CompanionFeatures {
         delegation: true,
@@ -3191,6 +3386,7 @@ mod tests {
         taskboard: false,
         browser: false,
     browser_eval: false,
+    assistant: false,
     };
     const ASK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -3202,6 +3398,7 @@ mod tests {
         taskboard: false,
         browser: false,
     browser_eval: false,
+    assistant: false,
     };
     const SESSIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -3213,6 +3410,7 @@ mod tests {
         taskboard: false,
         browser: false,
     browser_eval: false,
+    assistant: false,
     };
 
     fn list_tool_names(action: LineAction) -> Vec<String> {
@@ -3241,6 +3439,9 @@ mod tests {
         assert!(!ask.delegation && !ask.feedback && ask.ask);
         let sessions = CompanionFeatures::parse(Some("sessions"));
         assert!(!sessions.delegation && !sessions.feedback && !sessions.ask && sessions.sessions);
+        let assistant = CompanionFeatures::parse(Some("assistant"));
+        assert!(assistant.assistant && !assistant.delegation && !assistant.sessions);
+        assert!(!def.assistant && !all.assistant);
         // Empty string → nothing enabled.
         let none = CompanionFeatures::parse(Some(""));
         assert!(!none.delegation && !none.feedback && !none.ask && !none.sessions);
@@ -3480,6 +3681,66 @@ mod tests {
         assert_eq!(names, vec!["get_session_info".to_string()]);
     }
 
+    const ASSISTANT_TOOL_NAMES: [&str; 6] = [
+        "list_sessions",
+        "focus_session",
+        "send_to_session",
+        "cancel_session",
+        "answer_permission",
+        "start_session",
+    ];
+
+    const ASSISTANT_ONLY: CompanionFeatures = CompanionFeatures {
+        delegation: false,
+        feedback: false,
+        ask: false,
+        sessions: false,
+        tasks: false,
+        automations: false,
+        taskboard: false,
+        browser: false,
+        browser_eval: false,
+        assistant: true,
+    };
+
+    #[test]
+    fn allows_tool_gates_all_six_assistant_tools_on_the_assistant_switch() {
+        for name in ASSISTANT_TOOL_NAMES {
+            assert!(ASSISTANT_ONLY.allows_tool(name), "{name} with assistant on");
+            assert!(
+                !SESSIONS_ONLY.allows_tool(name),
+                "{name} with assistant off"
+            );
+        }
+    }
+
+    /// The schema carries each assistant tool exactly once, and the listing
+    /// shows all six only when the assistant group is on.
+    #[tokio::test]
+    async fn tools_list_includes_assistant_tools_only_when_enabled() {
+        let all: Vec<Value> = serde_json::from_str(TOOL_SCHEMA_JSON).unwrap();
+        for name in ASSISTANT_TOOL_NAMES {
+            let count = all.iter().filter(|t| t["name"] == name).count();
+            assert_eq!(count, 1, "{name} in tool_schema.json");
+        }
+
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let names = list_tool_names(dispatch_for_test(list).await);
+        assert!(ASSISTANT_TOOL_NAMES
+            .iter()
+            .all(|n| !names.contains(&n.to_string())));
+        let names = list_tool_names(dispatch_with_features(SESSIONS_ONLY, list).await);
+        assert!(!names.contains(&"list_sessions".to_string()));
+
+        let names = list_tool_names(dispatch_with_features(ASSISTANT_ONLY, list).await);
+        let mut sorted = names.clone();
+        sorted.sort();
+        let mut expected: Vec<String> =
+            ASSISTANT_TOOL_NAMES.iter().map(|n| n.to_string()).collect();
+        expected.sort();
+        assert_eq!(sorted, expected);
+    }
+
     #[tokio::test]
     async fn get_session_info_spawns_when_valid_and_enabled() {
         let line = json!({
@@ -3553,6 +3814,7 @@ mod tests {
         taskboard: false,
         browser: false,
     browser_eval: false,
+    assistant: false,
     };
     const TASKBOARD_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -3564,6 +3826,7 @@ mod tests {
         taskboard: true,
         browser: false,
     browser_eval: false,
+    assistant: false,
     };
 
     /// The two authoring groups gate independently: enabling one must not
@@ -3810,6 +4073,35 @@ mod tests {
         assert_eq!(parse_max_messages(&json!({ "max_messages": -5 })), 20);
         assert_eq!(parse_max_messages(&json!({ "max_messages": 5.5 })), 20);
         assert_eq!(parse_max_messages(&json!({ "max_messages": true })), 20);
+    }
+
+    /// MCP hosts hand the model only `content`, so the session list must be
+    /// there: a bare `{ "result": .. }` reached opencode's model as `null`.
+    #[test]
+    fn render_assistant_list_sessions_result_puts_the_list_in_content() {
+        let outcome = json!({
+            "sessions": [{ "session_id": 14, "title": "QA tab", "status": "idle" }],
+            "folders": [{ "folder_id": 1, "name": "ws" }]
+        });
+        let rendered = render_assistant_list_sessions_result(&outcome);
+        assert_eq!(rendered["isError"], false);
+        let text = rendered["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["sessions"][0]["session_id"], 14);
+        assert_eq!(rendered["structuredContent"], outcome);
+    }
+
+    #[test]
+    fn render_assistant_action_result_is_soft_text_with_outcome() {
+        let outcome = json!({ "outcome": "unsupported", "message": "not an assistant connection" });
+        let rendered = render_assistant_action_result(&outcome);
+        assert_eq!(rendered["isError"], false);
+        assert_eq!(rendered["content"][0]["type"], "text");
+        assert!(rendered["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("unsupported"));
+        assert_eq!(rendered["structuredContent"]["outcome"], "unsupported");
     }
 
     #[test]
@@ -4087,12 +4379,14 @@ mod tests {
         taskboard: false,
         browser: true,
         browser_eval: false,
+        assistant: false,
     };
 
     /// The browser group with `browser_eval` on top, which is the only way
     /// that tool is ever advertised.
     const BROWSER_WITH_EVAL: CompanionFeatures = CompanionFeatures {
         browser_eval: true,
+        assistant: false,
         ..BROWSER_ONLY
     };
 
@@ -4148,6 +4442,7 @@ mod tests {
         const EVAL_WITHOUT_GROUP: CompanionFeatures = CompanionFeatures {
             browser: false,
             browser_eval: true,
+            assistant: false,
             ..BROWSER_ONLY
         };
         let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
@@ -4874,5 +5169,4 @@ mod tests {
         // Being refused is not a failed tool call: the turn carries on.
         assert_eq!(refused["isError"], false);
     }
-
 }

@@ -16,6 +16,16 @@ import {
 import { parsePermissionToolCall } from "@/lib/permission-request"
 import { subscribe } from "@/lib/platform"
 import { saveConfigPreference } from "@/lib/selector-prefs-storage"
+import {
+  getSpeechPlayerState,
+  resetSpeechPlayerForTests,
+} from "@/lib/speech-player"
+import {
+  DEFAULT_SPEECH_PREFS,
+  resetSpeechPrefsCacheForTests,
+  saveSpeechPrefs,
+} from "@/lib/speech-prefs"
+import { useTabStore } from "@/stores/tab-store"
 import type { AttachHandlers } from "@/lib/transport/types"
 import type {
   EventEnvelope,
@@ -70,6 +80,7 @@ const h = vi.hoisted(() => {
 })
 
 vi.mock("next-intl", () => ({
+  useLocale: () => "en",
   useTranslations: () => (key: string, values?: Record<string, unknown>) => {
     h.tCalls.push([key, values])
     return key
@@ -6376,5 +6387,114 @@ describe("AIR session failures are told as notifications", () => {
     // …without a burst of stale notifications.
     expect(h.toastError).not.toHaveBeenCalled()
     expect(h.recordAlert).not.toHaveBeenCalled()
+  })
+})
+
+describe("AcpConnectionsProvider auto-read", () => {
+  let spoken: string[] = []
+  let onSpoken: () => void = () => {}
+  const nextSpoken = () =>
+    new Promise<void>((resolve) => {
+      onSpoken = resolve
+    })
+
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  function turn(
+    handlers: AttachHandlers,
+    seq: number,
+    stop_reason: string,
+    text = "All done."
+  ) {
+    emitAcpEvent(handlers, {
+      seq,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    emitAcpEvent(handlers, {
+      seq: seq + 1,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text,
+    })
+    emitAcpEvent(handlers, {
+      seq: seq + 2,
+      connection_id: "spawned-conn",
+      type: "turn_complete",
+      session_id: "sess-1",
+      stop_reason,
+    })
+  }
+
+  beforeEach(() => {
+    spoken = []
+    localStorage.clear()
+    resetSpeechPrefsCacheForTests()
+    resetSpeechPlayerForTests()
+    vi.stubGlobal("speechSynthesis", {
+      getVoices: () => [{ voiceURI: "v", lang: "en-US" }],
+      speak: (u: { text: string }) => {
+        spoken.push(u.text)
+        onSpoken()
+      },
+      cancel: vi.fn(),
+    })
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        constructor(public text: string) {}
+      }
+    )
+    saveSpeechPrefs({
+      output: {
+        ...DEFAULT_SPEECH_PREFS.output,
+        enabled: true,
+        engine: "browser",
+        autoRead: true,
+      },
+    })
+    useTabStore.setState({ activeTabId: TAB })
+  })
+
+  afterEach(() => {
+    resetSpeechPlayerForTests()
+    vi.unstubAllGlobals()
+    useTabStore.setState({ activeTabId: null })
+  })
+
+  it("reads a clean reply on the active tab once, and never a cancelled one", async () => {
+    const handlers = await connectOwner()
+    turn(handlers, 1, "cancelled")
+    // A skipped auto-read never leaves idle; a started one is "loading" at once.
+    expect(getSpeechPlayerState().status).toBe("idle")
+
+    const said = nextSpoken()
+    turn(handlers, 4, "end_turn")
+    await said
+    expect(spoken).toEqual(["All done."])
+    expect(getSpeechPlayerState().playingId).toBe(`auto:${TAB}`)
+  })
+
+  it("stays silent for a background tab and stops when the tab changes", async () => {
+    const handlers = await connectOwner()
+    act(() => useTabStore.setState({ activeTabId: "other-tab" }))
+    turn(handlers, 1, "end_turn")
+    expect(getSpeechPlayerState().status).toBe("idle")
+
+    act(() => useTabStore.setState({ activeTabId: TAB }))
+    const said = nextSpoken()
+    turn(handlers, 4, "end_turn")
+    await said
+    expect(getSpeechPlayerState().status).not.toBe("idle")
+    act(() => useTabStore.setState({ activeTabId: "other-tab" }))
+    expect(getSpeechPlayerState().status).toBe("idle")
   })
 })

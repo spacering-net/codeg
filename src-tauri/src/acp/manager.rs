@@ -802,6 +802,11 @@ impl ConnectionManager {
     /// open). Silently no-ops if the connection is missing or already
     /// in a terminal state — touch must never resurrect a dead
     /// connection or contend with the spawn/disconnect paths.
+        pub async fn get_owner_window_label(&self, conn_id: &str) -> Option<String> {
+        let connections = self.connections.lock().await;
+        connections.get(conn_id).map(|c| c.owner_window_label.clone())
+    }
+
     pub async fn touch(&self, conn_id: &str) -> bool {
         let state_arc = {
             let connections = self.connections.lock().await;
@@ -2865,6 +2870,107 @@ impl ConnectionManager {
     /// it. Lock discipline mirrors `find_connection_by_conversation_id`: hold
     /// the connections mutex while taking each per-session read lock (the
     /// reads are microseconds and released each iteration).
+    pub async fn list_linked_sessions(
+        &self,
+        exclude_conn_id: &str,
+        db: &crate::db::AppDatabase,
+    ) -> crate::acp::delegation::transport::AssistantSessionList {
+        use crate::acp::delegation::transport::{AssistantFolderEntry, AssistantSessionEntry};
+        use crate::acp::types::ConnectionStatus;
+        use crate::db::service::{conversation_service, folder_service};
+
+        let mut out = Vec::new();
+        {
+            let connections = self.connections.lock().await;
+            for (id, conn) in connections.iter() {
+                if id == exclude_conn_id
+                    || conn.owner_window_label == "work_task"
+                    || conn.owner_window_label == crate::commands::assistant::ASSISTANT_OWNER_LABEL
+                {
+                    continue;
+                }
+                let state = conn.state.read().await;
+                let (Some(conversation_id), Some(folder_id)) =
+                    (state.conversation_id, state.folder_id)
+                else {
+                    continue;
+                };
+
+                let mut status = "idle";
+                let mut pending_action = None;
+                if let Some(ref p) = state.pending_permission {
+                    status = "needs_approval";
+                    // Extract a human-readable label from the tool_call JSON
+                    let action_str = p
+                        .tool_call
+                        .get("name")
+                        .or_else(|| p.tool_call.get("type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown action")
+                        .to_string();
+                    pending_action = Some(action_str.chars().take(160).collect());
+                } else if state.pending_question.is_some() {
+                    status = "needs_answer";
+                } else if matches!(state.status, ConnectionStatus::Prompting) {
+                    status = "working";
+                } else if matches!(state.status, ConnectionStatus::Error) {
+                    status = "error";
+                }
+
+                out.push(AssistantSessionEntry {
+                    session_id: conversation_id as i64,
+                    title: String::new(),
+                    agent_type: state.agent_type.to_string(),
+                    folder_id: folder_id as i64,
+                    folder_name: String::new(),
+                    status: status.to_string(),
+                    pending_action,
+                });
+            }
+        }
+
+        let db_conn = &db.conn;
+        let mut folders_map = std::collections::HashMap::new();
+
+        // Fill titles and folders
+        for entry in out.iter_mut() {
+            if let Ok(conv) =
+                conversation_service::get_by_id(db_conn, entry.session_id as i32).await
+            {
+                if let Some(t) = conv.title {
+                    entry.title = t;
+                }
+            }
+            if let std::collections::hash_map::Entry::Vacant(e) = folders_map.entry(entry.folder_id)
+            {
+                if let Ok(Some(f)) =
+                    folder_service::get_folder_by_id(db_conn, entry.folder_id as i32).await
+                {
+                    e.insert(f);
+                }
+            }
+            if let Some(f) = folders_map.get(&entry.folder_id) {
+                entry.folder_name = f.name.clone();
+            }
+        }
+
+        let mut all_folders = Vec::new();
+        if let Ok(fs) = folder_service::list_folders(db_conn).await {
+            for f in fs {
+                all_folders.push(AssistantFolderEntry {
+                    folder_id: f.id as i64,
+                    name: f.name,
+                    path: f.path,
+                });
+            }
+        }
+
+        crate::acp::delegation::transport::AssistantSessionList {
+            sessions: out,
+            folders: all_folders,
+        }
+    }
+
     pub async fn list_active_sessions(&self) -> Vec<crate::models::pet::PetSessionEntry> {
         let connections = self.connections.lock().await;
         let mut out = Vec::new();
@@ -4373,6 +4479,54 @@ mod tests {
             last_observed_fingerprint: String::new(),
             child_pid: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
+    }
+
+    /// The assistant sees the workspace's tabs, not itself or work-task
+    /// runners: both live in the connection map but are not sessions the
+    /// user would ask about.
+    #[tokio::test]
+    async fn list_linked_sessions_excludes_the_assistant_and_work_task_connections() {
+        use crate::db::service::{conversation_service, folder_service};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = folder_service::add_folder(&db.conn, "/tmp/qa-app")
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        {
+            let mut map = mgr.connections.lock().await;
+            for (id, label) in [
+                ("tab", "main"),
+                (
+                    "assistant",
+                    crate::commands::assistant::ASSISTANT_OWNER_LABEL,
+                ),
+                ("runner", "work_task"),
+            ] {
+                let conv = conversation_service::create(
+                    &db.conn,
+                    folder.id,
+                    AgentType::Codex,
+                    Some(format!("{id} chat")),
+                    None,
+                )
+                .await
+                .unwrap();
+                let mut conn = fake_connection(id, Some(conv.id));
+                conn.owner_window_label = label.to_string();
+                conn.state.write().await.folder_id = Some(folder.id);
+                map.insert(id.to_string(), conn);
+            }
+        }
+
+        let list = mgr.list_linked_sessions("assistant", &db).await;
+        let titles: Vec<&str> = list.sessions.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, vec!["tab chat"]);
+        assert_eq!(list.sessions[0].folder_name, folder.name);
+        assert_eq!(list.folders.len(), 1);
+
+        // Excluded by owner label, not only because it is the caller.
+        let list = mgr.list_linked_sessions("someone-else", &db).await;
+        assert_eq!(list.sessions.len(), 1);
     }
 
     /// Spawn a two-level process tree: `sh` (the stand-in for the agent CLI)

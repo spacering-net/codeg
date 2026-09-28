@@ -704,6 +704,38 @@ pub fn is_codeg_ask_tool_name(name: &str) -> bool {
     normalized.ends_with("ask_user_question") && normalized.contains("codeg_mcp")
 }
 
+/// True when `name` is one of codeg's own assistant mutating tool names as
+/// exposed by `codeg-mcp` (the six that the assistant connection's companion
+/// advertises). Used by [`crate::acp::connection`] to auto-allow permission
+/// requests from ASSISTANT_OWNER_LABEL connections so the confirmation card
+/// codeg itself registers is the only thing the user ever sees.
+///
+/// Normalises the same way as [`is_codeg_ask_tool_name`]: every agent host
+/// mangles MCP tool names slightly, so we strip punctuation to a canonical
+/// `codeg_mcp__<tool>` shape before comparing. We check both the `codeg_mcp`
+/// server token AND the tool name so a same-named tool on a different server
+/// never matches.
+pub fn is_codeg_assistant_tool_name(name: &str) -> bool {
+    let normalized = name
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' ', '.', '/', ':'], "_");
+    if !normalized.contains("codeg_mcp") {
+        return false;
+    }
+    matches!(
+        normalized
+            .split("codeg_mcp")
+            .last()
+            .unwrap_or("")
+            .trim_matches('_'),
+        "send_to_session"
+            | "cancel_session"
+            | "answer_permission"
+            | "start_session"
+    )
+}
+
 /// Serialize a resolved [`QuestionOutcome`] into grok's `AskUserQuestionExtResponse`
 /// — the reply to a `_x.ai/ask_user_question` ext request. Verified against grok
 /// 0.2.101 on a real run: the response is internally tagged by `outcome`; the
@@ -3157,6 +3189,40 @@ mod tests {
             assert!(
                 !is_codeg_ask_tool_name(other),
                 "{other} must keep its approval card"
+            );
+        }
+    }
+
+    #[test]
+    fn is_codeg_assistant_tool_name_accepts_mutating_assistant_tools() {
+        for spelling in [
+            "mcp__codeg-mcp__send_to_session",
+            "codeg-mcp/cancel_session",
+            "mcp__codeg-mcp__answer_permission",
+            "codeg-mcp: start_session",
+            "  MCP__Codeg-MCP__Send_To_Session  ",
+        ] {
+            assert!(
+                is_codeg_assistant_tool_name(spelling),
+                "{spelling} is a codeg assistant tool"
+            );
+        }
+    }
+
+    #[test]
+    fn is_codeg_assistant_tool_name_rejects_non_assistant_and_wrong_server() {
+        for other in [
+            "mcp__other-server__send_to_session",
+            "send_to_session",
+            "mcp__codeg-mcp__ask_user_question",
+            "mcp__codeg-mcp__list_sessions",
+            "mcp__codeg-mcp__focus_session",
+            "mcp__codeg-mcp__delegate_to_agent",
+            "",
+        ] {
+            assert!(
+                !is_codeg_assistant_tool_name(other),
+                "{other} must not match as assistant tool"
             );
         }
     }
