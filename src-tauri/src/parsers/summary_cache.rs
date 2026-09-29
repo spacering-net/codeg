@@ -23,6 +23,11 @@
 //! cache returns, on the returned clone — it's deterministic given the file's
 //! location and never mutates the cached entry, so it doesn't affect validity.
 //!
+//! A summary that is a pure function of a FIXED set of sibling files may route
+//! through [`get_or_parse_with_companions`], which folds every file's token
+//! into the fingerprint: Kiro's `<id>.jsonl` event log plus its `<id>.json`
+//! metadata, which are written at different moments of a turn.
+//!
 //! The key is namespaced by `AgentType`, not path alone: the cache is shared by
 //! every parser, and a value depends on WHICH parser produced it. If two agents'
 //! roots are configured to overlap (distinct env overrides normally keep them
@@ -61,10 +66,18 @@ use std::time::SystemTime;
 use super::ParseError;
 use crate::models::{AgentType, ConversationSummary};
 
-/// File-content fingerprint: `(mtime, size)`. `mtime` is `Option` because a
+/// One file's content token: `(mtime, size)`. `mtime` is `Option` because a
 /// platform may not report it; a `None`/`None` comparison then falls back to
 /// size-only.
-type Fingerprint = (Option<SystemTime>, u64);
+type FileToken = (Option<SystemTime>, u64);
+
+/// The keyed file's token plus one per companion file (`None` = the companion
+/// does not exist, which is itself a state a later write can change).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Fingerprint {
+    primary: FileToken,
+    companions: Vec<Option<FileToken>>,
+}
 
 struct CacheEntry {
     fingerprint: Fingerprint,
@@ -82,11 +95,19 @@ fn cache() -> &'static Mutex<Cache> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Stat the file for its `(mtime, size)` fingerprint. Returns `None` (⇒ bypass
-/// the cache) when the file can't be stat'd.
-fn fingerprint(path: &Path) -> Option<Fingerprint> {
+fn file_token(path: &Path) -> Option<FileToken> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().ok(), meta.len()))
+}
+
+/// Stat the keyed file (and its companions) for the fingerprint. Returns `None`
+/// (⇒ bypass the cache) when the KEYED file can't be stat'd; a missing
+/// companion is recorded, not fatal.
+fn fingerprint(path: &Path, companions: &[&Path]) -> Option<Fingerprint> {
+    Some(Fingerprint {
+        primary: file_token(path)?,
+        companions: companions.iter().map(|c| file_token(c)).collect(),
+    })
 }
 
 /// Return the cached summary for `(agent_type, path)` if the file is unchanged
@@ -121,9 +142,29 @@ pub(crate) fn get_or_parse<F>(
 where
     F: FnOnce() -> Result<Option<ConversationSummary>, ParseError>,
 {
+    get_or_parse_with_companions(agent_type, path, &[], parse)
+}
+
+/// [`get_or_parse`] for a summary that is a pure function of a FIXED SET of
+/// files rather than one: the entry is keyed by `path` and invalidated when
+/// `path` or any of `companions` changes (or appears, or disappears).
+///
+/// For agents that split one session across sibling files — Kiro writes the
+/// event log to `<id>.jsonl` as a turn streams and rewrites the metadata in
+/// `<id>.json` (title, working directory, model) when it ends — so neither file
+/// alone decides the summary.
+pub(crate) fn get_or_parse_with_companions<F>(
+    agent_type: AgentType,
+    path: &Path,
+    companions: &[&Path],
+    parse: F,
+) -> Result<Option<ConversationSummary>, ParseError>
+where
+    F: FnOnce() -> Result<Option<ConversationSummary>, ParseError>,
+{
     // Can't fingerprint (file vanished, permission error, …) ⇒ bypass the cache:
     // parse fresh and store nothing, since there's no token to validate against.
-    let Some(fp_before) = fingerprint(path) else {
+    let Some(fp_before) = fingerprint(path, companions) else {
         return parse();
     };
 
@@ -145,7 +186,7 @@ where
     // concurrent write raced the read (or this is the streaming file); leave it
     // uncached so the next list re-parses the settled content.
     if let Some(summary) = &parsed {
-        if fingerprint(path) == Some(fp_before) {
+        if fingerprint(path, companions).as_ref() == Some(&fp_before) {
             if let Ok(mut map) = cache().lock() {
                 map.entry(agent_type).or_default().insert(
                     path.to_path_buf(),
@@ -381,5 +422,46 @@ mod tests {
         .unwrap();
         assert_eq!(cb2.id, "cb"); // served from cache, closure not run
         assert_eq!(cb_calls.get(), 0);
+    }
+
+    // A companion is part of the key: rewriting it (Kiro's metadata file at
+    // the end of a turn), creating it, or deleting it must each invalidate the
+    // entry even though the keyed file never changed.
+    #[test]
+    fn a_companion_change_invalidates_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("s.jsonl");
+        let meta = dir.path().join("s.json");
+        write(&log, b"event\n");
+
+        let calls = Cell::new(0);
+        let run = || {
+            get_or_parse_with_companions(AgentType::Kiro, &log, &[&meta], || {
+                calls.set(calls.get() + 1);
+                Ok(Some(dummy_agent(AgentType::Kiro, "k")))
+            })
+            .unwrap()
+        };
+
+        assert!(run().is_some());
+        assert!(run().is_some());
+        assert_eq!(calls.get(), 1, "unchanged pair is a hit");
+
+        // Companion appears.
+        write(&meta, b"{}");
+        assert!(run().is_some());
+        assert_eq!(calls.get(), 2);
+        assert!(run().is_some());
+        assert_eq!(calls.get(), 2);
+
+        // Companion rewritten with a different size.
+        write(&meta, b"{\"title\":\"renamed\"}");
+        assert!(run().is_some());
+        assert_eq!(calls.get(), 3);
+
+        // Companion removed.
+        std::fs::remove_file(&meta).unwrap();
+        assert!(run().is_some());
+        assert_eq!(calls.get(), 4);
     }
 }

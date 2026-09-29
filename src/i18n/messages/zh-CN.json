@@ -773,6 +773,7 @@
       "install": "安装",
       "upgrade": "升级",
       "uninstall": "卸载",
+      "installGuide": "安装指南",
       "uninstalling": "卸载中...",
       "saveEnvVars": "保存环境变量",
       "saving": "保存中...",
@@ -997,6 +998,19 @@
       "tempReclaimConfirmBody": "将永久删除 {size}。系统临时目录与其他应用共用，确认前请先核对每条路径；仍在使用中的项会被跳过。",
       "tempReclaimConfirmAction": "删除",
       "tempReclaimCancel": "取消"
+    },
+    "kiro": {
+      "configManagement": "配置管理",
+      "configDescription": "Kiro CLI 的登录状态、agent 与 MCP 服务器都保存在 ~/.kiro。模型、agent、thinking 与思考等级不在这里：Kiro 通过 ACP 上报它们，由输入框的选择器按会话管理。",
+      "permissionsTitle": "权限",
+      "permissionModeLabel": "权限模式",
+      "permissionModeAsk": "运行工具前询问（默认）",
+      "permissionModeTrustAll": "信任所有工具（--trust-all-tools）",
+      "permissionModeAskHint": "需要确认的工具调用（执行命令、写文件等）会先交给你确认；只读工具直接运行。",
+      "permissionModeTrustAllHint": "以 --trust-all-tools 启动会话：所有工具调用都不再弹确认，包括执行命令和写文件。对新会话生效。",
+      "apiKeyLabel": "API Key（可选）",
+      "apiKeyHint": "以 KIRO_API_KEY 传给 CLI。留空则使用 kiro-cli login 登录的账号；只有无法用浏览器登录的环境（服务器、Docker）才需要 API Key。",
+      "saveConfig": "保存 Kiro 配置"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 配置",
@@ -1488,7 +1502,13 @@
       "saveQoderConfigFailed": "保存 Qoder 配置失败",
       "antigravitySaved": "已保存 Antigravity 配置",
       "antigravitySyncSkipped": "已保存，但没有改动 Antigravity 的 settings.json",
-      "saveAntigravityConfigFailed": "保存 Antigravity 配置失败"
+      "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
+      "kiroSaved": "Kiro 配置已保存",
+      "saveKiroFailed": "保存 Kiro 配置失败",
+      "systemAgentAlreadyLatest": "{name} 已是最新版本（{version}）"
+    },
+    "distribution": {
+      "system": "官方安装"
     },
     "version": {
       "statusLabel": "版本状态",
@@ -1496,6 +1516,9 @@
       "remoteLocal": "远程：{remoteVersion} · 本地：{localVersion}",
       "localOnly": "本地：{localVersion}",
       "localInstalled": "{versionText}。已安装。",
+      "systemInstalled": "{versionText}。由其官方安装程序安装和更新，Codeg 直接启动这份安装。",
+      "systemInstalledUpdatable": "{versionText}。通过官方安装程序安装；点击「升级」会运行它自带的更新程序。",
+      "systemMissing": "本机未找到。请用官方安装程序安装后再刷新。",
       "platformUnsupported": "{versionText}。当前平台不支持该 Agent。",
       "uvxNotReady": "{versionText}。uv 运行时未安装——请在下方 uv 预检项中安装后再使用该 Agent。",
       "clickInstall": "{versionText}。请点击右侧安装。",

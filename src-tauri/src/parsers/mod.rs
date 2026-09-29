@@ -11,6 +11,7 @@ pub mod gemini;
 pub mod grok;
 pub mod hermes;
 pub mod kimi_code;
+pub mod kiro;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
@@ -252,6 +253,18 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             sqlite: true,
             include_top: None,
         },
+        ExternalSource {
+            // Kiro keeps each session as `<id>.jsonl` (event log) + `<id>.json`
+            // (metadata) under `<KIRO_HOME>/sessions/cli/` (default
+            // `~/.kiro/...`). The root is the `sessions/` subtree, never
+            // `<KIRO_HOME>` itself, whose `settings/`, `agents/` and MCP config
+            // are the user's configuration, not conversation content.
+            agent: "kiro",
+            root: kiro::resolve_kiro_sessions_root(),
+            is_file: false,
+            sqlite: false,
+            include_top: None,
+        },
     ];
     if let Some(home) = dirs::home_dir() {
         sources.push(ExternalSource {
@@ -316,6 +329,7 @@ pub fn build_agent_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
         AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::new()),
         AgentType::Qoder => Box::new(qoder::QoderParser::new()),
         AgentType::Antigravity => Box::new(antigravity::AntigravityParser::new()),
+        AgentType::Kiro => Box::new(kiro::KiroParser::new()),
         // Custom ACP agents have no native store to reverse-engineer; their
         // history is codeg's own ACP transcript.
         AgentType::Custom(_) => Box::new(acp_native::AcpNativeParser::new(agent_type)),

@@ -773,6 +773,7 @@
       "install": "Installer",
       "upgrade": "Mettre à niveau",
       "uninstall": "Désinstaller",
+      "installGuide": "Guide d'installation",
       "uninstalling": "Désinstallation...",
       "saveEnvVars": "Enregistrer les variables d’environnement",
       "saving": "Enregistrement...",
@@ -997,6 +998,19 @@
       "tempReclaimConfirmBody": "Cette action supprime définitivement {size}. Le dossier temporaire du système est partagé avec d'autres applications : vérifiez chaque chemin avant de confirmer. Les éléments encore utilisés sont ignorés.",
       "tempReclaimConfirmAction": "Supprimer",
       "tempReclaimCancel": "Annuler"
+    },
+    "kiro": {
+      "configManagement": "Configuration",
+      "configDescription": "Kiro CLI conserve sa connexion, ses agents et ses serveurs MCP dans ~/.kiro. Le modèle, l'agent, la réflexion et l'effort ne sont pas ici : Kiro les signale via ACP, donc les sélecteurs de la zone de saisie les gèrent par session.",
+      "permissionsTitle": "Autorisations",
+      "permissionModeLabel": "Mode d'autorisation",
+      "permissionModeAsk": "Demander avant d'exécuter les outils (par défaut)",
+      "permissionModeTrustAll": "Faire confiance à tous les outils (--trust-all-tools)",
+      "permissionModeAskHint": "Kiro vous soumet d'abord chaque appel qui demande une approbation (commandes, écriture de fichiers, …). Les outils en lecture seule s'exécutent sans demander.",
+      "permissionModeTrustAllHint": "Les sessions démarrent avec --trust-all-tools : chaque appel d'outil s'exécute sans confirmation, y compris les commandes et l'écriture de fichiers. S'applique aux nouvelles sessions.",
+      "apiKeyLabel": "Clé d'API (facultative)",
+      "apiKeyHint": "Transmise à la CLI en tant que KIRO_API_KEY. Laissez vide pour utiliser le compte connecté via kiro-cli login ; nécessaire seulement là où la connexion par navigateur est impossible (serveurs, Docker).",
+      "saveConfig": "Enregistrer la configuration Kiro"
     },
     "deepseek": {
       "configManagement": "Configuration de DeepSeek Harness",
@@ -1488,7 +1502,13 @@
       "saveQoderConfigFailed": "Échec de l'enregistrement de la configuration Qoder",
       "antigravitySaved": "Antigravity config saved",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config",
+      "kiroSaved": "Configuration Kiro enregistrée",
+      "saveKiroFailed": "Impossible d'enregistrer la configuration Kiro",
+      "systemAgentAlreadyLatest": "{name} est déjà à jour ({version})"
+    },
+    "distribution": {
+      "system": "installateur officiel"
     },
     "version": {
       "statusLabel": "Statut de version",
@@ -1496,6 +1516,9 @@
       "remoteLocal": "Distant : {remoteVersion} · Local : {localVersion}",
       "localOnly": "Local : {localVersion}",
       "localInstalled": "{versionText}. Installé.",
+      "systemInstalled": "{versionText}. Installé et mis à jour par son propre programme d'installation ; Codeg le lance tel quel.",
+      "systemInstalledUpdatable": "{versionText}. Installé avec le programme d'installation officiel ; Mettre à niveau lance son propre outil de mise à jour.",
+      "systemMissing": "Introuvable sur cette machine. Installez-le avec le programme d'installation officiel, puis actualisez.",
       "platformUnsupported": "{versionText}. La plateforme actuelle ne prend pas en charge cet agent.",
       "uvxNotReady": "{versionText}. Le runtime uv n'est pas installé — installez-le depuis la vérification uv ci-dessous pour utiliser cet agent.",
       "clickInstall": "{versionText}. Cliquez sur Installer à droite.",

@@ -773,6 +773,7 @@
       "install": "تثبيت",
       "upgrade": "ترقية",
       "uninstall": "إزالة التثبيت",
+      "installGuide": "دليل التثبيت",
       "uninstalling": "جارٍ إزالة التثبيت...",
       "saveEnvVars": "حفظ متغيرات البيئة",
       "saving": "جارٍ الحفظ...",
@@ -997,6 +998,19 @@
       "tempReclaimConfirmBody": "سيؤدي هذا إلى حذف {size} نهائيًا. مجلد النظام المؤقت مشترك مع تطبيقات أخرى، لذا تحقّق من كل مسار قبل التأكيد؛ وسيتم تخطّي أي عنصر قيد الاستخدام.",
       "tempReclaimConfirmAction": "حذف",
       "tempReclaimCancel": "إلغاء"
+    },
+    "kiro": {
+      "configManagement": "إدارة الإعدادات",
+      "configDescription": "يحفظ Kiro CLI تسجيل الدخول والوكلاء وخوادم MCP في ‎~/.kiro. النموذج والوكيل والتفكير ومستوى الجهد ليست هنا: يُبلغ Kiro عنها عبر ACP، لذا تديرها محددات مربع الإدخال لكل جلسة.",
+      "permissionsTitle": "الأذونات",
+      "permissionModeLabel": "وضع الأذونات",
+      "permissionModeAsk": "السؤال قبل تشغيل الأدوات (الافتراضي)",
+      "permissionModeTrustAll": "الوثوق بكل الأدوات (‎--trust-all-tools)",
+      "permissionModeAskHint": "يعرض Kiro عليك أولاً كل استدعاء أداة يحتاج إلى موافقة (تشغيل الأوامر، كتابة الملفات، …). أدوات القراءة فقط تعمل دون سؤال.",
+      "permissionModeTrustAllHint": "تبدأ الجلسات مع ‎--trust-all-tools: يعمل كل استدعاء أداة دون تأكيد، بما في ذلك الأوامر وكتابة الملفات. يسري على الجلسات الجديدة.",
+      "apiKeyLabel": "مفتاح API (اختياري)",
+      "apiKeyHint": "يُمرَّر إلى CLI باسم KIRO_API_KEY. اتركه فارغاً لاستخدام الحساب الذي سجلت الدخول به عبر kiro-cli login؛ لا يلزم إلا حيث يتعذر تسجيل الدخول بالمتصفح (الخوادم، Docker).",
+      "saveConfig": "حفظ إعدادات Kiro"
     },
     "deepseek": {
       "configManagement": "إعدادات DeepSeek Harness",
@@ -1488,7 +1502,13 @@
       "saveQoderConfigFailed": "تعذّر حفظ إعدادات Qoder",
       "antigravitySaved": "Antigravity config saved",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config",
+      "kiroSaved": "تم حفظ إعدادات Kiro",
+      "saveKiroFailed": "تعذّر حفظ إعدادات Kiro",
+      "systemAgentAlreadyLatest": "{name} محدَّث بالفعل ({version})"
+    },
+    "distribution": {
+      "system": "المثبّت الرسمي"
     },
     "version": {
       "statusLabel": "حالة الإصدار",
@@ -1496,6 +1516,9 @@
       "remoteLocal": "البعيد: {remoteVersion} · المحلي: {localVersion}",
       "localOnly": "المحلي: {localVersion}",
       "localInstalled": "{versionText}. مثبت.",
+      "systemInstalled": "{versionText}. يثبّته ويحدّثه مثبّته الرسمي، ويشغّله Codeg كما هو.",
+      "systemInstalledUpdatable": "{versionText}. مثبَّت بالمثبّت الرسمي؛ يشغّل «ترقية» أداة التحديث الخاصة به.",
+      "systemMissing": "غير موجود على هذا الجهاز. ثبّته باستخدام المثبّت الرسمي ثم حدّث الصفحة.",
       "platformUnsupported": "{versionText}. المنصة الحالية لا تدعم هذا الوكيل.",
       "uvxNotReady": "{versionText}. وقت تشغيل uv غير مثبّت — ثبّته من فحص uv بالأسفل لاستخدام هذا الوكيل.",
       "clickInstall": "{versionText}. انقر تثبيت في الجهة اليمنى.",

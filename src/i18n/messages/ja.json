@@ -773,6 +773,7 @@
       "install": "インストール",
       "upgrade": "アップグレード",
       "uninstall": "アンインストール",
+      "installGuide": "インストールガイド",
       "uninstalling": "アンインストール中...",
       "saveEnvVars": "環境変数を保存",
       "saving": "保存中...",
@@ -997,6 +998,19 @@
       "tempReclaimConfirmBody": "{size} を完全に削除します。システムの一時フォルダーは他のアプリと共有されるため、確認する前に各パスをご確認ください。使用中のものはスキップされます。",
       "tempReclaimConfirmAction": "削除",
       "tempReclaimCancel": "キャンセル"
+    },
+    "kiro": {
+      "configManagement": "設定管理",
+      "configDescription": "Kiro CLI のサインイン状態、agent、MCP サーバーは ~/.kiro に保存されます。モデル、agent、thinking、思考レベルはここにはありません。Kiro が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "permissionsTitle": "権限",
+      "permissionModeLabel": "権限モード",
+      "permissionModeAsk": "ツール実行前に確認（既定）",
+      "permissionModeTrustAll": "すべてのツールを信頼（--trust-all-tools）",
+      "permissionModeAskHint": "承認が必要なツール呼び出し（コマンド実行、ファイル書き込みなど）は先に確認を求めます。読み取り専用ツールは確認なしで実行されます。",
+      "permissionModeTrustAllHint": "--trust-all-tools でセッションを起動します。コマンド実行やファイル書き込みを含め、すべてのツール呼び出しが確認なしで実行されます。新しいセッションから適用されます。",
+      "apiKeyLabel": "API キー（任意）",
+      "apiKeyHint": "KIRO_API_KEY として CLI に渡されます。空欄なら kiro-cli login でサインインしたアカウントを使います。ブラウザでサインインできない環境（サーバー、Docker）でのみ必要です。",
+      "saveConfig": "Kiro 設定を保存"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness の設定",
@@ -1488,7 +1502,13 @@
       "saveQoderConfigFailed": "Qoder の設定の保存に失敗しました",
       "antigravitySaved": "Antigravity config saved",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config",
+      "kiroSaved": "Kiro 設定を保存しました",
+      "saveKiroFailed": "Kiro 設定の保存に失敗しました",
+      "systemAgentAlreadyLatest": "{name} は最新です（{version}）"
+    },
+    "distribution": {
+      "system": "公式インストーラー"
     },
     "version": {
       "statusLabel": "バージョン状態",
@@ -1496,6 +1516,9 @@
       "remoteLocal": "リモート: {remoteVersion} · ローカル: {localVersion}",
       "localOnly": "ローカル：{localVersion}",
       "localInstalled": "{versionText}。インストール済みです。",
+      "systemInstalled": "{versionText}。公式インストーラーでインストール・更新され、Codeg はそのまま起動します。",
+      "systemInstalledUpdatable": "{versionText}。公式インストーラーでインストール済み。「アップグレード」で同梱のアップデーターを実行します。",
+      "systemMissing": "このマシンに見つかりません。公式インストーラーでインストールしてから更新してください。",
       "platformUnsupported": "{versionText}。現在のプラットフォームではこのエージェントをサポートしていません。",
       "uvxNotReady": "{versionText}。uv ランタイムが未インストールです。下の uv チェックからインストールするとこのエージェントを使用できます。",
       "clickInstall": "{versionText}。右側の「インストール」をクリックしてください。",

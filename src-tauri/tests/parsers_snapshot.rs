@@ -15,7 +15,7 @@ use std::path::Path;
 
 use codeg_lib::parsers::{
     claude::ClaudeParser, cline::ClineParser, codex::CodexParser, gemini::GeminiParser,
-    hermes::HermesParser, kimi_code::KimiCodeParser, openclaw::OpenClawParser,
+    hermes::HermesParser, kimi_code::KimiCodeParser, kiro::KiroParser, openclaw::OpenClawParser,
     opencode::OpenCodeParser, AgentParser,
 };
 use insta::assert_json_snapshot;
@@ -1484,6 +1484,84 @@ fn kimi_code_minimal_session_snapshot() {
         ".**.ended_at" => "[ts]",
     });
     assert_json_snapshot!("kimi_code_detail", detail, {
+        ".**.started_at" => "[ts]",
+        ".**.ended_at" => "[ts]",
+        ".**.timestamp" => "[ts]",
+        ".**.completed_at" => "[ts]",
+    });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Kiro CLI
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn kiro_minimal_session_snapshot() {
+    let temp = tempfile::tempdir().expect("create tempdir");
+    // `<KIRO_HOME>/sessions/cli/<id>.jsonl` (event log) + `<id>.json` (metadata).
+    let base = temp.path().join("sessions").join("cli");
+    let session_id = "0b6c1f7e-4d2a-4c5e-9a55-3f1e2d7c8b90";
+
+    // The event log, in the shapes kiro-cli 2.24.1 writes: prompt → thinking +
+    // tool call → tool result (text + json parts) → answer; then a /compact
+    // summary, a /clear marker, and one more prompt/answer.
+    let log = [
+        json!({"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"list the repo"}],"meta":{"timestamp":1772359201}}}),
+        json!({"version":"v1","kind":"AssistantMessage","data":{"message_id":"m2","content":[
+            {"kind":"thinking","data":{"text":"Look at the tree first.","signature":"sig","redactedContent":[],"modelId":"claude-opus-5.5","toolsDigest":"d"}},
+            {"kind":"text","data":""},
+            {"kind":"toolUse","data":{"toolUseId":"tooluse_1","name":"read","input":{"operations":[{"mode":"Directory","path":"/tmp/demo"}]}}}
+        ]}}),
+        json!({"version":"v1","kind":"ToolResults","data":{"message_id":"m3","content":[
+            {"kind":"toolResult","data":{"toolUseId":"tooluse_1","content":[{"kind":"text","data":"src\nREADME.md"},{"kind":"json","data":{"entries":2}}],"status":"success"}}
+        ],"results":{}}}),
+        json!({"version":"v1","kind":"AssistantMessage","data":{"message_id":"m4","content":[{"kind":"text","data":"Two entries: src and README.md."}]}}),
+        json!({"version":"v1","kind":"Compaction","data":{"summary":"The user listed the repo.","strategy":{"message_pairs_to_exclude":2},"messages_snapshot":[]}}),
+        json!({"version":"v1","kind":"Clear","data":{}}),
+        json!({"version":"v1","kind":"Prompt","data":{"message_id":"m5","content":[{"kind":"text","data":"thanks"}],"meta":{"timestamp":1772359300}}}),
+        json!({"version":"v1","kind":"AssistantMessage","data":{"message_id":"m6","content":[{"kind":"text","data":"Anytime."}]}}),
+    ];
+    let log_text = log
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(
+        &base.join(format!("{session_id}.jsonl")),
+        &format!("{log_text}\n"),
+    );
+    write(
+        &base.join(format!("{session_id}.json")),
+        &json!({
+            "session_id": session_id,
+            "cwd": "/tmp/demo",
+            "created_at": "2026-03-01T10:00:00Z",
+            "updated_at": "2026-03-01T10:01:45Z",
+            "title": "list the repo",
+            "session_state": {
+                "version": "v1",
+                "conversation_metadata": {
+                    "user_turn_metadatas": [
+                        {"message_ids": ["m1", "m2", "m3", "m4"], "end_reason": "UserTurnEnd", "end_timestamp": "2026-03-01T10:00:09Z"},
+                        {"message_ids": ["m5", "m6"], "end_reason": "UserTurnEnd", "end_timestamp": "2026-03-01T10:01:44Z"}
+                    ],
+                    "last_context_usage": {"percentage": 2.5, "model_id": "claude-opus-5.5"}
+                },
+                "rts_model_state": {"model_info": {"model_id": "claude-opus-5.5", "context_window_tokens": 200000}}
+            }
+        })
+        .to_string(),
+    );
+
+    let parser = KiroParser::with_base_dir(base);
+    let summaries = parser.list_conversations().expect("list kiro");
+    let detail = parser.get_conversation(session_id).expect("detail kiro");
+
+    assert_json_snapshot!("kiro_list", summaries, {
+        ".**.started_at" => "[ts]",
+        ".**.ended_at" => "[ts]",
+    });
+    assert_json_snapshot!("kiro_detail", detail, {
         ".**.started_at" => "[ts]",
         ".**.ended_at" => "[ts]",
         ".**.timestamp" => "[ts]",

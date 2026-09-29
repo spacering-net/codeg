@@ -25,7 +25,8 @@ use agent_client_protocol::schema::v1::{
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::v1::{
-    HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio, AGENT_METHOD_NAMES,
+    HttpHeader, LoadSessionResponse, McpServer, McpServerHttp, McpServerSse, McpServerStdio,
+    AGENT_METHOD_NAMES,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::util::MatchDispatch;
@@ -57,11 +58,13 @@ use crate::acp::terminal_runtime::{
 };
 use crate::acp::types::{
     AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionInfo,
-    ConnectionStatus, GrokModelSpec, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure,
-    PromptCapabilitiesInfo, PromptInputBlock, SessionConfigBooleanInfo, SessionConfigKindInfo,
-    SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
-    SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
-    SessionNotice, ToolCallImageInfo, UserMessageBlock,
+    ConnectionStatus, GrokModelSpec, KiroReasoning, PermissionOptionInfo, PlanEntryInfo,
+    PluginLoadFailure,
+    PromptCapabilitiesInfo, PromptInputBlock,
+    SessionConfigBooleanInfo, SessionConfigKindInfo, SessionConfigOptionInfo,
+    SessionConfigSelectGroupInfo, SessionConfigSelectInfo, SessionConfigSelectOptionInfo,
+    SessionFailureRecord, SessionModeInfo, SessionModeStateInfo, SessionNotice,
+    ToolCallImageInfo, UserMessageBlock,
 };
 use crate::logging::throttle::LeadingEdgeThrottle;
 use crate::models::agent::AgentType;
@@ -247,6 +250,16 @@ fn merge_agent_env_with_color(
 /// silently loses its confirmation prompts; `--force` also turns cursor's own
 /// sandbox off (`approvalMode: unrestricted` → `insecure_none`), which is not
 /// something to switch on for someone who never asked.
+/// The Kiro panel's permission-mode knob (see the `System` launch branch).
+pub(crate) const KIRO_TRUST_ALL_TOOLS_ENV: &str = "KIRO_TRUST_ALL_TOOLS";
+
+/// Whether the knob asks for `--trust-all-tools`. Same reading as
+/// [`cursor_force_enabled`]: `"1"` / `"true"` turn it on; unset, `"0"` and
+/// anything unrecognized leave the CLI asking — the safe side.
+pub(crate) fn kiro_trust_all_tools_enabled(value: Option<&str>) -> bool {
+    cursor_force_enabled(value)
+}
+
 pub(crate) fn cursor_force_enabled(value: Option<&str>) -> bool {
     let Some(value) = value.map(str::trim) else {
         return false;
@@ -2243,6 +2256,76 @@ async fn build_agent(
                 })
                 .map_err(|e| AcpError::SpawnFailed(e.to_string()))
         }
+        AgentDistribution::System { cmd, args, env, .. } => {
+            // Nothing is ever cached for a system agent, so the user's own
+            // install is the only candidate — resolved the same way the Binary
+            // branch's fallback resolves one (PATH, `~/.local/bin`, the
+            // vendor's installer dirs), because a desktop app launched from
+            // Finder or the Dock rarely inherits the PATH line the vendor's
+            // installer appended to the shell rc.
+            //
+            // INVARIANT: the substring "is not installed" is matched verbatim
+            // by the frontend catch block in
+            // `src/contexts/acp-connections-context.tsx` to surface a
+            // localized install prompt. Do not change the wording.
+            let binary_path =
+                crate::commands::acp::resolve_system_agent_binary_for(agent_type, cmd)
+                    .ok_or_else(|| {
+                        AcpError::SdkNotInstalled(format!(
+                            "{} is not installed. Please install it in Agent Settings.",
+                            meta.name
+                        ))
+                    })?;
+            let binary_str = binary_path.to_string_lossy().to_string();
+            let mut cmd_args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+            // Kiro's permission mode: `acp --trust-all-tools` auto-approves
+            // every tool call instead of sending each one to the permission
+            // card. Sourced from the Kiro panel's permission-mode control
+            // (env_json key KIRO_TRUST_ALL_TOOLS — a codeg-side knob; the CLI
+            // reads no such env var). Unset means ask, the CLI's own default.
+            if agent_type == AgentType::Kiro
+                && kiro_trust_all_tools_enabled(
+                    runtime_env.get(KIRO_TRUST_ALL_TOOLS_ENV).map(String::as_str),
+                )
+            {
+                cmd_args.push("--trust-all-tools".to_string());
+            }
+            let mut server = McpServerStdio::new(meta.name, &binary_str);
+            if !cmd_args.is_empty() {
+                server = server.args(cmd_args.clone());
+            }
+            let mut merged_env = merge_agent_env(env, runtime_env, scratch);
+            prepend_agent_install_dirs_path(&mut merged_env, agent_type);
+            let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
+            // Same spawn-time dump as the Binary branch: which binary, which
+            // args, which env KEYS (never values — they may hold API keys).
+            tracing::info!(
+                "[ACP][{}] system binary_path={} args={:?} env_keys={:?}",
+                meta.name,
+                binary_str,
+                cmd_args,
+                env_key_list
+            );
+            if !merged_env.is_empty() {
+                let env_vars: Vec<agent_client_protocol::schema::v1::EnvVariable> = merged_env
+                    .iter()
+                    .map(|(k, v)| agent_client_protocol::schema::v1::EnvVariable::new(k, v))
+                    .collect();
+                server = server.env(env_vars);
+            }
+            // stdin/stdout carry user content; dumped only under
+            // CODEG_ACP_DEBUG, exactly like the Binary branch.
+            let stdio_debug_enabled = std::env::var("CODEG_ACP_DEBUG")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let agent_name = meta.name.to_string();
+            let tail = Arc::clone(stderr_tail);
+            Ok(
+                AcpAgent::new(agent_client_protocol::schema::v1::McpServer::Stdio(server)).with_debug(
+                    agent_debug_callback(agent_name, tail, stdio_debug_enabled),
+                ),
+            )
+        }
     }?;
 
     // Run the agent subprocess in the session's working directory rather than
@@ -3911,6 +3994,575 @@ async fn set_grok_model(
     Ok(())
 }
 
+/// Kiro's model selector id — the shared `model` id, so the composer's saved
+/// per-agent preference and `order_preferred_config_values` treat it like every
+/// other agent's model selector.
+const KIRO_MODEL_OPTION_ID: &str = MODEL_CONFIG_OPTION_ID;
+
+/// Kiro CLI publishes its models only in the session reply's top-level
+/// `models` — the pre-config-options ACP session-model API:
+/// `{"currentModelId": "auto", "availableModels": [{"modelId", "name",
+/// "description"}, …]}` (verified against 2.24.1 on `session/new` and
+/// `session/load`; it sends no `configOptions` at all). That field is behind the
+/// `unstable_session_model` feature codeg keeps off, so the typed response drops
+/// it and the composer showed no model picker. Fold it into the same
+/// `SessionConfigOptionInfo` every other agent's model selector flows through.
+///
+/// `None` when the reply names no usable model; an unknown `currentModelId`
+/// falls back to the first model rather than naming one the list lacks.
+fn synthesize_kiro_model_option(
+    models: Option<&serde_json::Value>,
+) -> Option<SessionConfigOptionInfo> {
+    let models = models?;
+    let mut seen = HashSet::new();
+    let options: Vec<SessionConfigSelectOptionInfo> = models
+        .get("availableModels")?
+        .as_array()?
+        .iter()
+        .filter_map(|model| {
+            let id = model.get("modelId")?.as_str()?.trim();
+            if id.is_empty() || !seen.insert(id.to_string()) {
+                return None;
+            }
+            let name = model
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(id);
+            Some(SessionConfigSelectOptionInfo {
+                value: id.to_string(),
+                name: name.to_string(),
+                description: model
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+            })
+        })
+        .collect();
+    let first = options.first()?.value.clone();
+    let current_value = models
+        .get("currentModelId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|current| options.iter().any(|o| o.value == *current))
+        .map(str::to_string)
+        .unwrap_or(first);
+    Some(SessionConfigOptionInfo {
+        id: KIRO_MODEL_OPTION_ID.to_string(),
+        name: "Model".to_string(),
+        description: None,
+        category: Some("model".to_string()),
+        kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+            current_value,
+            options,
+            groups: Vec::new(),
+        }),
+        recommended_value: None,
+    })
+}
+
+/// Switch Kiro's model with `session/set_model {sessionId, modelId}` — listed in
+/// Kiro's own ACP method table and answered `{}` by 2.24.1. Untyped for the same
+/// reason as [`set_grok_model`]: the stable schema no longer carries the method.
+async fn set_kiro_model(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    model_id: &str,
+) -> Result<(), agent_client_protocol::Error> {
+    let params = serde_json::json!({
+        "sessionId": session_id.0.as_ref(),
+        "modelId": model_id,
+    });
+    let untyped_req = UntypedMessage::new("session/set_model", params).map_err(|e| {
+        agent_client_protocol::util::internal_error(format!("Failed to build set_model request: {e}"))
+    })?;
+    cx.send_request_to(Agent, untyped_req).block_task().await?;
+    Ok(())
+}
+
+/// Kiro's mode selector id: the id the composer and `order_preferred_config_values`
+/// already treat as the session mode.
+const KIRO_MODE_OPTION_ID: &str = "mode";
+
+/// Kiro's reasoning-effort selector id — Grok's id for the same control, so a
+/// saved effort means the same thing across agents.
+const KIRO_EFFORT_OPTION_ID: &str = GROK_EFFORT_OPTION_ID;
+
+/// Kiro's thinking on/off selector id.
+const KIRO_THINKING_OPTION_ID: &str = "thinking";
+
+/// What a Kiro reasoning selector shows before anything was set in the
+/// session: the model runs at its own default, which Kiro does not name —
+/// its own `/model` panel says `default` in the same spot.
+const KIRO_DEFAULT_VALUE: &str = "default";
+
+/// The selectors codeg builds for Kiro itself; none is a Kiro config option.
+const KIRO_SYNTHESIZED_OPTION_IDS: &[&str] = &[
+    KIRO_MODEL_OPTION_ID,
+    KIRO_MODE_OPTION_ID,
+    KIRO_THINKING_OPTION_ID,
+    KIRO_EFFORT_OPTION_ID,
+];
+
+/// Kiro's ACP modes (its agent configs: `kiro_default`, `kiro_planner`,
+/// `kiro_guide`, plus the user's own under `~/.kiro/agents`) as a selector.
+fn kiro_mode_option(modes: &SessionModeState) -> Option<SessionConfigOptionInfo> {
+    let options: Vec<SessionConfigSelectOptionInfo> = modes
+        .available_modes
+        .iter()
+        .map(|mode| SessionConfigSelectOptionInfo {
+            value: mode.id.to_string(),
+            name: mode.name.clone(),
+            description: mode.description.clone(),
+        })
+        .collect();
+    if options.is_empty() {
+        return None;
+    }
+    let current = modes.current_mode_id.to_string();
+    let current_value = if options.iter().any(|o| o.value == current) {
+        current
+    } else {
+        options[0].value.clone()
+    };
+    Some(SessionConfigOptionInfo {
+        id: KIRO_MODE_OPTION_ID.to_string(),
+        name: "Agent".to_string(),
+        description: None,
+        category: Some("mode".to_string()),
+        kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+            current_value,
+            options,
+            groups: Vec::new(),
+        }),
+        recommended_value: None,
+    })
+}
+
+/// Read `_kiro.dev/metadata.reasoning`.
+///
+/// `effortLevels` alone decides whether the model takes an effort. `support`
+/// is about the model's THINKING, not its effort: Kiro 2.24.1 reports the GPT
+/// models as `support: "unavailable"` while listing six levels
+/// (`none` … `max`) that `/effort` accepts and then reports back as `effort`.
+/// A model with no effort at all (`auto`) sends an empty list.
+fn parse_kiro_reasoning(reasoning: &serde_json::Value) -> KiroReasoning {
+    let levels: Vec<String> = reasoning
+        .get("effortLevels")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+        .map(str::to_string)
+        .collect();
+    let current = reasoning
+        .get("effort")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .map(str::to_string);
+    KiroReasoning {
+        levels,
+        current,
+        thinking_toggleable: reasoning.get("support").and_then(serde_json::Value::as_str)
+            == Some("toggleable"),
+        thinking: reasoning
+            .get("thinkingEnabled")
+            .and_then(serde_json::Value::as_bool),
+    }
+}
+
+/// The thinking on/off selector, for a model whose thinking can be toggled.
+/// Until the session (or the model's saved default) sets it, Kiro reports no
+/// state, and the selector says `default` rather than guessing.
+fn kiro_thinking_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionInfo> {
+    if !reasoning.thinking_toggleable {
+        return None;
+    }
+    let current_value = match reasoning.thinking {
+        Some(true) => "on",
+        Some(false) => "off",
+        None => KIRO_DEFAULT_VALUE,
+    };
+    let choice = |value: &str| SessionConfigSelectOptionInfo {
+        value: value.to_string(),
+        name: value.to_string(),
+        description: None,
+    };
+    Some(SessionConfigOptionInfo {
+        id: KIRO_THINKING_OPTION_ID.to_string(),
+        name: "Thinking".to_string(),
+        description: Some("Shows reasoning before answering".to_string()),
+        category: Some("thought_level".to_string()),
+        kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+            current_value: current_value.to_string(),
+            options: vec![choice("on"), choice("off")],
+            groups: Vec::new(),
+        }),
+        recommended_value: None,
+    })
+}
+
+/// The effort selector for the current model, or `None` when it takes none.
+///
+/// Kiro names the running level only once one has been set — in the session,
+/// or as the model's saved default; until then the selector says `default`,
+/// as Kiro's own `/model` panel does, rather than naming a level the model may
+/// not be running at.
+fn kiro_effort_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionInfo> {
+    if reasoning.levels.is_empty() {
+        return None;
+    }
+    let current_value = reasoning
+        .current
+        .clone()
+        .filter(|c| reasoning.levels.contains(c))
+        .unwrap_or_else(|| KIRO_DEFAULT_VALUE.to_string());
+    Some(SessionConfigOptionInfo {
+        id: KIRO_EFFORT_OPTION_ID.to_string(),
+        name: "Reasoning effort".to_string(),
+        description: None,
+        category: Some("thought_level".to_string()),
+        kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+            current_value,
+            options: reasoning
+                .levels
+                .iter()
+                .map(|level| SessionConfigSelectOptionInfo {
+                    value: level.clone(),
+                    name: level.clone(),
+                    description: None,
+                })
+                .collect(),
+            groups: Vec::new(),
+        }),
+        recommended_value: None,
+    })
+}
+
+/// The selector value for a thinking state, back to the state.
+fn kiro_thinking_value(value: &str) -> Option<bool> {
+    match value {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Switch thinking on or off for the session — Kiro's `/reasoning` command,
+/// whose args take `thinkingEnabled` (verified against 2.24.1: the next
+/// `_kiro.dev/metadata` reports the new `thinkingEnabled`).
+async fn set_kiro_thinking(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    enabled: bool,
+) -> Result<(), agent_client_protocol::Error> {
+    execute_kiro_command(
+        cx,
+        session_id,
+        "reasoning",
+        serde_json::json!({ "thinkingEnabled": enabled }),
+    )
+    .await
+}
+
+/// Run one of Kiro's commands through `_kiro.dev/commands/execute`, whose
+/// `command` is an adjacently tagged `{command, args}`. A reply with
+/// `success: false` is an error.
+async fn execute_kiro_command(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    command: &str,
+    args: serde_json::Value,
+) -> Result<(), agent_client_protocol::Error> {
+    let params = serde_json::json!({
+        "sessionId": session_id.0.as_ref(),
+        "command": {"command": command, "args": args},
+    });
+    let untyped_req = UntypedMessage::new("_kiro.dev/commands/execute", params).map_err(|e| {
+        agent_client_protocol::util::internal_error(format!("Failed to build /{command} request: {e}"))
+    })?;
+    let reply = cx.send_request_to(Agent, untyped_req).block_task().await?;
+    if reply.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
+        let message = reply
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Kiro rejected the command");
+        return Err(agent_client_protocol::util::internal_error(message.to_string()));
+    }
+    Ok(())
+}
+
+/// Switch Kiro's agent config with the standard `session/set_mode`.
+async fn set_kiro_mode(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    mode_id: &str,
+) -> Result<(), agent_client_protocol::Error> {
+    let req = SetSessionModeRequest::new(session_id.clone(), mode_id.to_string());
+    cx.send_request_to(Agent, req).block_task().await?;
+    Ok(())
+}
+
+/// Set Kiro's reasoning effort. There is no ACP method for it: Kiro takes it
+/// as its `/effort` command through `_kiro.dev/commands/execute`, whose
+/// `command` is an adjacently tagged `{command, args}` — `args.level` for this
+/// one (verified against 2.24.1: `{"success":true,"message":"Effort set to
+/// high"}`, followed by a `_kiro.dev/metadata` carrying the new `effort`).
+/// An unknown level still answers `success`, with the list of valid ones — the
+/// following metadata, not the reply, is what says which level is in force.
+async fn set_kiro_effort(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    level: &str,
+) -> Result<(), agent_client_protocol::Error> {
+    execute_kiro_command(cx, session_id, "effort", serde_json::json!({ "level": level })).await
+}
+
+/// Point one of the selectors in `opts` at `value` (a no-op when absent).
+fn set_select_current(opts: &mut [SessionConfigOptionInfo], id: &str, value: &str) {
+    if let Some(SessionConfigKindInfo::Select(sel)) =
+        opts.iter_mut().find(|o| o.id == id).map(|o| &mut o.kind)
+    {
+        sel.current_value = value.to_string();
+    }
+}
+
+/// Update one selector of the session's emitted options and re-emit them.
+/// Clones out of the read guard first — the emit helpers take the same
+/// state's write lock (see `emit_grok_incompatible_agent_switch`).
+async fn update_emitted_option(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    id: &str,
+    value: &str,
+) {
+    let current = state.read().await.config_options.clone();
+    if let Some(mut opts) = current {
+        if opts.iter().any(|o| o.id == id) {
+            set_select_current(&mut opts, id, value);
+            emit_session_config_options_info(state, emitter, opts).await;
+        }
+    }
+}
+
+/// On connect, re-apply the agent, model, thinking and effort the user last
+/// picked for Kiro (saved per agent by the composer), each only when it
+/// differs from what the session already runs and is still offered. Model
+/// before the reasoning settings: which of those exist depends on it.
+async fn apply_kiro_preferred_options(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    opts: &mut [SessionConfigOptionInfo],
+    preferred_config_values: &BTreeMap<String, String>,
+    preferred_mode: Option<&str>,
+) {
+    let wanted = |id: &str, pref: &str, opts: &[SessionConfigOptionInfo]| {
+        opts.iter().find(|o| o.id == id).is_some_and(|o| {
+            let SessionConfigKindInfo::Select(sel) = &o.kind else {
+                return false;
+            };
+            sel.current_value != pref && sel.options.iter().any(|x| x.value == pref)
+        })
+    };
+    if let Some(pref) = preferred_config_values.get(KIRO_MODEL_OPTION_ID) {
+        if wanted(KIRO_MODEL_OPTION_ID, pref, opts) {
+            match set_kiro_model(cx, session_id, pref).await {
+                Ok(()) => set_select_current(opts, KIRO_MODEL_OPTION_ID, pref),
+                Err(e) => tracing::error!("[ACP] failed to apply preferred kiro model '{pref}': {e}"),
+            }
+        }
+    }
+    if let Some(pref) = preferred_mode {
+        if wanted(KIRO_MODE_OPTION_ID, pref, opts) {
+            match set_kiro_mode(cx, session_id, pref).await {
+                Ok(()) => {
+                    set_select_current(opts, KIRO_MODE_OPTION_ID, pref);
+                    emit_with_state(
+                        state,
+                        emitter,
+                        AcpEvent::ModeChanged {
+                            mode_id: pref.to_string(),
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => tracing::error!("[ACP] failed to apply preferred kiro agent '{pref}': {e}"),
+            }
+        }
+    }
+    // The reasoning state arrives in a notification that may not have landed
+    // yet, so a saved value is sent whenever the known state does not already
+    // rule it out; Kiro's next metadata is the authority either way.
+    if let Some(enabled) = preferred_config_values
+        .get(KIRO_THINKING_OPTION_ID)
+        .and_then(|pref| kiro_thinking_value(pref))
+    {
+        let known = state.read().await.kiro_reasoning.clone();
+        let applicable = known
+            .as_ref()
+            .is_none_or(|r| r.thinking_toggleable && r.thinking != Some(enabled));
+        if applicable {
+            match set_kiro_thinking(cx, session_id, enabled).await {
+                Ok(()) => {
+                    if let Some(r) = state.write().await.kiro_reasoning.as_mut() {
+                        r.thinking = Some(enabled);
+                    }
+                }
+                Err(e) => tracing::error!("[ACP] failed to apply preferred kiro thinking: {e}"),
+            }
+        }
+    }
+    if let Some(pref) = preferred_config_values.get(KIRO_EFFORT_OPTION_ID) {
+        let known = state.read().await.kiro_reasoning.clone();
+        let applicable = known.as_ref().is_none_or(|r| {
+            r.levels.contains(pref) && r.current.as_deref() != Some(pref.as_str())
+        });
+        if applicable {
+            match set_kiro_effort(cx, session_id, pref).await {
+                Ok(()) => {
+                    if let Some(r) = state.write().await.kiro_reasoning.as_mut() {
+                        r.current = Some(pref.clone());
+                    }
+                }
+                Err(e) => tracing::error!("[ACP] failed to apply preferred kiro effort '{pref}': {e}"),
+            }
+        }
+    }
+}
+
+/// Fold a `_kiro.dev/metadata` into the session: remember the reasoning state,
+/// and — once the selectors exist — rebuild the effort selector for it (a
+/// model switch changes which levels exist, or whether any do).
+async fn apply_kiro_metadata(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    reasoning: KiroReasoning,
+) {
+    {
+        let mut guard = state.write().await;
+        if guard.kiro_reasoning.as_ref() == Some(&reasoning) {
+            return;
+        }
+        guard.kiro_reasoning = Some(reasoning.clone());
+    }
+    rebuild_kiro_reasoning_selectors(state, emitter, &reasoning).await;
+}
+
+/// Put the reasoning selectors in their slot — right after the model
+/// selector, thinking then effort (the order of Kiro's own `/model` panel) —
+/// replacing any already there. The ones `reasoning` does not offer are
+/// removed: which exist depends on the model.
+fn place_kiro_reasoning_selectors(opts: &mut Vec<SessionConfigOptionInfo>, reasoning: &KiroReasoning) {
+    opts.retain(|o| o.id != KIRO_THINKING_OPTION_ID && o.id != KIRO_EFFORT_OPTION_ID);
+    let at = opts
+        .iter()
+        .position(|o| o.id == KIRO_MODEL_OPTION_ID)
+        .map_or(opts.len(), |pos| pos + 1);
+    opts.splice(
+        at..at,
+        [kiro_thinking_option(reasoning), kiro_effort_option(reasoning)]
+            .into_iter()
+            .flatten(),
+    );
+}
+
+/// Rebuild the reasoning selectors in the emitted options from `reasoning`.
+/// A no-op until codeg has emitted Kiro's own selectors.
+async fn rebuild_kiro_reasoning_selectors(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    reasoning: &KiroReasoning,
+) {
+    let current = state.read().await.config_options.clone();
+    let Some(mut opts) = current else {
+        return;
+    };
+    // Only a session whose selectors codeg built itself has an effort slot.
+    if !opts.iter().any(|o| o.id == KIRO_MODEL_OPTION_ID) {
+        return;
+    }
+    place_kiro_reasoning_selectors(&mut opts, reasoning);
+    emit_session_config_options_info(state, emitter, opts).await;
+}
+
+/// Apply a composer selector change, on whichever channel this agent really
+/// takes it. The ONE dispatcher both the in-turn and the idle loop call —
+/// they used to carry a copy each, and an agent routed in one and not the
+/// other silently ignored every pick made between turns.
+async fn set_config_option_for_agent(
+    agent_type: AgentType,
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    config_id: String,
+    value_id: String,
+) -> Result<(), agent_client_protocol::Error> {
+    match agent_type {
+        AgentType::Grok => {
+            set_grok_config_option(cx, session_id, state, emitter, config_id, value_id).await
+        }
+        AgentType::Kiro => {
+            set_kiro_config_option(cx, session_id, state, emitter, config_id, value_id).await
+        }
+        _ => set_session_config_option(cx, session_id, state, emitter, config_id, value_id).await,
+    }
+}
+
+/// Apply a composer selector change for Kiro. Each synthesized selector goes
+/// out on the channel Kiro really takes it on; anything else is a standard
+/// config option (none today) and takes the shared path.
+async fn set_kiro_config_option(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    config_id: String,
+    value_id: String,
+) -> Result<(), agent_client_protocol::Error> {
+    match config_id.as_str() {
+        KIRO_MODEL_OPTION_ID => set_kiro_model(cx, session_id, &value_id).await?,
+        KIRO_MODE_OPTION_ID => {
+            set_kiro_mode(cx, session_id, &value_id).await?;
+            emit_with_state(
+                state,
+                emitter,
+                AcpEvent::ModeChanged {
+                    mode_id: value_id.clone(),
+                },
+            )
+            .await;
+        }
+        KIRO_EFFORT_OPTION_ID => {
+            set_kiro_effort(cx, session_id, &value_id).await?;
+            if let Some(r) = state.write().await.kiro_reasoning.as_mut() {
+                r.current = Some(value_id.clone());
+            }
+        }
+        KIRO_THINKING_OPTION_ID => {
+            // `default` is what an unset toggle shows; it is not a setting.
+            let Some(enabled) = kiro_thinking_value(&value_id) else {
+                return Ok(());
+            };
+            set_kiro_thinking(cx, session_id, enabled).await?;
+            if let Some(r) = state.write().await.kiro_reasoning.as_mut() {
+                r.thinking = Some(enabled);
+            }
+        }
+        _ => {
+            return set_session_config_option(cx, session_id, state, emitter, config_id, value_id)
+                .await
+        }
+    }
+    update_emitted_option(state, emitter, &config_id, &value_id).await;
+    Ok(())
+}
+
 /// Build the `session/set_model` params. A reasoning-effort override rides in
 /// `_meta.reasoningEffort` (the exact key grok's sampling layer reads — verified
 /// against 0.2.99); `None` omits `_meta` for a pure model switch.
@@ -4338,6 +4990,9 @@ async fn apply_and_emit_session_config_options(
     agent_type: AgentType,
     grok_meta: Option<&serde_json::Map<String, serde_json::Value>>,
     grok_model_specs: Option<&HashMap<String, GrokModelSpec>>,
+    // The reply's raw top-level `models`, when the send captured one. Only
+    // Kiro reads it here (Grok's per-model data arrives pre-parsed above).
+    session_models_raw: Option<&serde_json::Value>,
     preferred_mode_id: Option<&str>,
     preferred_config_values: &BTreeMap<String, String>,
     initial_config_options: Vec<SessionConfigOption>,
@@ -4370,6 +5025,74 @@ async fn apply_and_emit_session_config_options(
         }
         // No x.ai/sessionConfig (unexpected): fall through to the standard path,
         // which for Grok emits an empty list (no selectors) — same as before.
+    }
+    if agent_type == AgentType::Kiro {
+        if let Some(model) = synthesize_kiro_model_option(session_models_raw) {
+            // The composer shows the legacy mode selector only when an agent
+            // has NO config options, so once Kiro has a model selector its
+            // modes (agent configs) and reasoning effort have to be config
+            // options too, or they vanish. None of the three is a Kiro config
+            // option on the wire, so their saved values are restored here on
+            // their own channels rather than by the shared pipeline — which
+            // would send each as a `session/set_config_option` Kiro rejects.
+            let standard_prefs: BTreeMap<String, String> = preferred_config_values
+                .iter()
+                .filter(|(id, _)| !KIRO_SYNTHESIZED_OPTION_IDS.contains(&id.as_str()))
+                .map(|(id, value)| (id.clone(), value.clone()))
+                .collect();
+            let updated = apply_preferred_session_options(
+                cx,
+                session,
+                state,
+                emitter,
+                None,
+                &standard_prefs,
+                initial_config_options,
+            )
+            .await;
+            let session_id = session.session_id().clone();
+            // Composer order is this list's order: agent, model, then the
+            // reasoning selectors — which of those exist depends on the model.
+            let mut synthesized = Vec::with_capacity(3);
+            if let Some(mode) = session.modes().as_ref().and_then(kiro_mode_option) {
+                synthesized.push(mode);
+            }
+            synthesized.push(model);
+            let preferred_mode = preferred_config_values
+                .get(KIRO_MODE_OPTION_ID)
+                .map(String::as_str)
+                .or(preferred_mode_id);
+            apply_kiro_preferred_options(
+                cx,
+                &session_id,
+                state,
+                emitter,
+                &mut synthesized,
+                preferred_config_values,
+                preferred_mode,
+            )
+            .await;
+            let reasoning = state.read().await.kiro_reasoning.clone();
+            if let Some(reasoning) = reasoning.as_ref() {
+                place_kiro_reasoning_selectors(&mut synthesized, reasoning);
+            }
+            let pinned = state.read().await.env_pinned_config_option_ids.clone();
+            let mut infos = map_session_config_options(&visible_config_options(&pinned, updated));
+            infos.retain(|o| !KIRO_SYNTHESIZED_OPTION_IDS.contains(&o.id.as_str()));
+            synthesized.extend(infos);
+            emit_session_config_options_info(state, emitter, synthesized).await;
+            // A metadata that landed between the read above and this emit found
+            // no selectors to update and was only stored; apply it now.
+            let latest = state.read().await.kiro_reasoning.clone();
+            if latest != reasoning {
+                if let Some(latest) = latest {
+                    rebuild_kiro_reasoning_selectors(state, emitter, &latest).await;
+                }
+            }
+            return;
+        }
+        // No `models` in the reply: the standard path, which is what an older
+        // or future Kiro that speaks config options would want anyway.
     }
     let updated = apply_preferred_session_options(
         cx,
@@ -4993,6 +5716,12 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     // winning — so forwarding would not actually double-mount. It is skipped
     // anyway because defining one server through two channels is noise, and
     // because the `codeg-mcp` companion is injected separately regardless.
+    //
+    // Kiro joins it: `kiro-cli acp` loads `<KIRO_HOME>/settings/mcp.json`
+    // (default `~/.kiro/settings/mcp.json`) for its default agent — verified
+    // against 2.24.1, a stdio server declared only there is initialized and
+    // listed (`_kiro.dev/mcp/server_initialized`) on a `session/new` that
+    // carries `mcpServers: []`. codeg's MCP settings UI manages that file.
     if matches!(
         agent_type,
         AgentType::Hermes
@@ -5001,6 +5730,7 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
             | AgentType::Cursor
             | AgentType::Qoder
             | AgentType::Antigravity
+            | AgentType::Kiro
     ) {
         return Vec::new();
     }
@@ -6037,6 +6767,76 @@ async fn run_connection(
             },
             on_receive_notification!(),
         )
+        .on_receive_notification(
+            {
+                // Kiro's slash-command list. Claimed here, in the builder
+                // chain, because Kiro sends it right after `session/new`
+                // answers — before the session router exists.
+                let state_inner = Arc::clone(&state);
+                let emitter_inner = emitter_clone.clone();
+                async move |notif: KiroCommandsAvailableNotification, _cx: ConnectionTo<Agent>| {
+                    let commands = kiro_available_commands(&notif);
+                    emit_with_state(
+                        &state_inner,
+                        &emitter_inner,
+                        AcpEvent::AvailableCommands { commands },
+                    )
+                    .await;
+                    Ok(())
+                }
+            },
+            on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                // Kiro's agent configs are its ACP modes, and `/plan`, `/guide`
+                // and `/agent swap` switch them from inside a prompt. It reports
+                // that here rather than as a `current_mode_update`, so without
+                // this the composer's mode selector would keep the old one.
+                let state_inner = Arc::clone(&state);
+                let emitter_inner = emitter_clone.clone();
+                async move |notif: KiroAgentSwitchedNotification, _cx: ConnectionTo<Agent>| {
+                    if let Some(mode_id) = notif.agent_name.filter(|name| !name.trim().is_empty()) {
+                        update_emitted_option(
+                            &state_inner,
+                            &emitter_inner,
+                            KIRO_MODE_OPTION_ID,
+                            &mode_id,
+                        )
+                        .await;
+                        emit_with_state(
+                            &state_inner,
+                            &emitter_inner,
+                            AcpEvent::ModeChanged { mode_id },
+                        )
+                        .await;
+                    }
+                    Ok(())
+                }
+            },
+            on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                // Kiro's per-session status: reasoning-effort support and the
+                // running level. Claimed here for the same reason as the
+                // command list — the first one races the `session/new` reply.
+                let state_inner = Arc::clone(&state);
+                let emitter_inner = emitter_clone.clone();
+                async move |notif: KiroMetadataNotification, _cx: ConnectionTo<Agent>| {
+                    if let Some(reasoning) = notif.reasoning.as_ref() {
+                        apply_kiro_metadata(
+                            &state_inner,
+                            &emitter_inner,
+                            parse_kiro_reasoning(reasoning),
+                        )
+                        .await;
+                    }
+                    Ok(())
+                }
+            },
+            on_receive_notification!(),
+        )
         .connect_with(agent, async move |cx| -> Result<(), agent_client_protocol::Error> {
             let state = state_outer;
             let agent_name_for_log = registry::get_agent_meta(agent_type).name;
@@ -6363,6 +7163,7 @@ async fn run_connection(
                                 agent_type,
                                 grok_meta.as_ref(),
                                 grok_model_specs.as_ref(),
+                                grok_models_raw.as_ref(),
                                 preferred_mode_id.as_deref(),
                                 &preferred_config_values,
                                 initial_config_options.unwrap_or_default(),
@@ -6448,6 +7249,11 @@ async fn run_connection(
                 // "Method not found" are real, so the whole error ladder below
                 // stays exactly as it was.
                 let attempted_load = init_resp.agent_capabilities.load_session;
+                // Kiro reports its model catalog only in the reply's top-level
+                // `models` (see `synthesize_kiro_model_option`), which the typed
+                // response drops — so its load goes out untyped and keeps it.
+                // Every other agent keeps the plain typed send.
+                let mut load_models_raw: Option<serde_json::Value> = None;
                 let load_result = if attempted_load {
                     let load_req = build_load_session_request(
                         agent_type,
@@ -6455,7 +7261,20 @@ async fn run_connection(
                         &cwd,
                         mcp_servers.clone(),
                     );
-                    cx.send_request_to(Agent, load_req).block_task().await
+                    if agent_type == AgentType::Kiro {
+                        send_capturing_models::<LoadSessionResponse>(
+                            &cx,
+                            AGENT_METHOD_NAMES.session_load,
+                            load_req,
+                        )
+                        .await
+                        .map(|(resp, models)| {
+                            load_models_raw = models;
+                            resp
+                        })
+                    } else {
+                        cx.send_request_to(Agent, load_req).block_task().await
+                    }
                 } else {
                     Err(agent_client_protocol::Error::method_not_found()
                         .data("agent does not advertise the loadSession capability"))
@@ -6631,6 +7450,7 @@ async fn run_connection(
                             // `session/load` is a typed send with no raw `models`
                             // capture, so effort stays on the flat fallback.
                             None,
+                            load_models_raw.as_ref(),
                             preferred_mode_id.as_deref(),
                             &preferred_config_values,
                             initial_config_options.unwrap_or_default(),
@@ -6825,6 +7645,7 @@ async fn run_connection(
                             agent_type,
                             grok_meta.as_ref(),
                             grok_model_specs.as_ref(),
+                            grok_models_raw.as_ref(),
                             preferred_mode_id.as_deref(),
                             &preferred_config_values,
                             initial_config_options.unwrap_or_default(),
@@ -6911,6 +7732,7 @@ async fn run_connection(
                     agent_type,
                     grok_meta.as_ref(),
                     grok_model_specs.as_ref(),
+                    grok_models_raw.as_ref(),
                     preferred_mode_id.as_deref(),
                     &preferred_config_values,
                     initial_config_options.unwrap_or_default(),
@@ -7937,6 +8759,20 @@ async fn handle_permission_request(
         .collect();
 
     let mut tool_call_value = serde_json::to_value(&req.tool_call).unwrap_or_default();
+
+    // Kiro's permission `toolCall` names no tool (no `_meta`), and in its raw
+    // shape a `write` reads as the shell command `create` / `strReplace` and
+    // shows no diff. Rewrite it like the live frames (see `kiro_live_tool`),
+    // telling the tool by its arguments.
+    if agent_type == AgentType::Kiro {
+        if let Some(raw_input) = tool_call_value.get_mut("rawInput") {
+            let canonical = crate::parsers::kiro::tool_name_from_input(raw_input)
+                .and_then(|name| crate::parsers::kiro::canonical_tool(name, raw_input));
+            if let Some(tool) = canonical {
+                *raw_input = tool.input;
+            }
+        }
+    }
 
     // Resolve line numbers in rawInput for edit tool permission requests
     if let Some(obj) = tool_call_value.as_object_mut() {
@@ -9616,6 +10452,7 @@ async fn handle_fork_or_exit(
         agent_type,
         grok_meta.as_ref(),
         grok_model_specs.as_ref(),
+        models_raw.as_ref(),
         inherited_mode_id.as_deref(),
         &inherited_config_values,
         initial_config_options.unwrap_or_default(),
@@ -10647,6 +11484,7 @@ async fn run_conversation_loop(
                 // out-of-turn pump and its calls settle on the update that
                 // immediately follows, before any turn starts.
                 cb_state.hosted_terminal_calls.clear();
+                cb_state.kiro_calls.clear();
                 // A stashed claude result is consumed by the completion that
                 // follows it on the wire; one still waiting here belongs to a
                 // call the canceled turn never completed.
@@ -11170,17 +12008,11 @@ async fn run_conversation_loop(
                                     config_id,
                                     value_id,
                                 }) => {
-                                    let set_result = if agent_type == AgentType::Grok {
-                                        set_grok_config_option(
-                                            &cx, &sid, state, emitter, config_id, value_id,
-                                        )
-                                        .await
-                                    } else {
-                                        set_session_config_option(
-                                            &cx, &sid, state, emitter, config_id, value_id,
-                                        )
-                                        .await
-                                    };
+                                    let set_result = set_config_option_for_agent(
+                                        agent_type, &cx, &sid, state, emitter, config_id,
+                                        value_id,
+                                    )
+                                    .await;
                                     if let Err(e) = set_result {
                                         emit_with_state(
                                             state,
@@ -11472,11 +12304,10 @@ async fn run_conversation_loop(
             }) => {
                 let cx = session.connection();
                 let sid = session.session_id().clone();
-                let set_result = if agent_type == AgentType::Grok {
-                    set_grok_config_option(&cx, &sid, state, emitter, config_id, value_id).await
-                } else {
-                    set_session_config_option(&cx, &sid, state, emitter, config_id, value_id).await
-                };
+                let set_result = set_config_option_for_agent(
+                    agent_type, &cx, &sid, state, emitter, config_id, value_id,
+                )
+                .await;
                 if let Err(e) = set_result {
                     emit_with_state(
                         state,
@@ -14296,6 +15127,103 @@ fn tool_call_raw_input_text(
     json_value_to_text(raw_input)
 }
 
+/// The canonical form of a live Kiro tool call (see
+/// [`crate::parsers::kiro::canonical_tool`]), shared by every frame of it.
+///
+/// Kiro names the tool in `_meta.kiro.toolName` on the opening `tool_call`
+/// only, while its updates re-send `rawInput` in Kiro's own shape — so the name
+/// is remembered by id, and each frame that carries input is rewritten from
+/// it. A frame without input gets the last canonical form back (its output may
+/// still need it), and emits no input of its own: the reducer keeps the prior
+/// one. `None` for every other agent, for MCP tools, and for tools with no
+/// canonical form.
+fn kiro_live_tool(
+    agent_type: AgentType,
+    calls: &mut HashMap<String, KiroLiveCall>,
+    tool_call_id: &str,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    raw_input: Option<&serde_json::Value>,
+) -> Option<crate::parsers::kiro::CanonicalTool> {
+    if agent_type != AgentType::Kiro {
+        return None;
+    }
+    let call = calls.entry(tool_call_id.to_string()).or_default();
+    if let Some(kiro) = meta.and_then(|m| m.get(KIRO_META_KEY)) {
+        if let Some(name) = kiro.get("toolName").and_then(serde_json::Value::as_str) {
+            call.name = Some(name.to_string());
+        }
+        call.mcp |= kiro.get("mcpServerName").is_some();
+    }
+    if call.mcp {
+        return None;
+    }
+    if let Some(input) = raw_input.filter(|input| !input.is_null()) {
+        let name = call
+            .name
+            .as_deref()
+            .or_else(|| crate::parsers::kiro::tool_name_from_input(input));
+        call.tool = name.and_then(|name| crate::parsers::kiro::canonical_tool(name, input));
+    }
+    call.tool.clone()
+}
+
+/// `_meta` namespace Kiro stamps on its tool calls (`{"toolName", "mcpServerName"?}`).
+const KIRO_META_KEY: &str = "kiro";
+
+/// Add `canonicalToolName` to a Kiro opening frame's `_meta.kiro`: the name the
+/// frontend classifies the call by (`extractKiroToolName`), ahead of its
+/// input-shape rules — which cannot tell `glob`'s `{pattern}` from `grep`'s, or
+/// a directory listing's `{path}` from a file read. An MCP call gets the
+/// `mcp__<server>__<tool>` form the frontend already resolves (codeg-mcp's
+/// companions included), since its title — `Running: @<server>/<tool>` — names
+/// no tool any rule can recover.
+fn stamp_kiro_tool_name(
+    agent_type: AgentType,
+    tool: Option<&crate::parsers::kiro::CanonicalTool>,
+    meta: Option<serde_json::Map<String, serde_json::Value>>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if agent_type != AgentType::Kiro {
+        return meta;
+    }
+    let mcp_name = || {
+        let kiro = meta.as_ref()?.get(KIRO_META_KEY)?;
+        let server = kiro.get("mcpServerName")?.as_str()?;
+        let tool = kiro.get("toolName")?.as_str()?;
+        Some(format!("mcp__{server}__{tool}"))
+    };
+    let Some(name) = tool.map(|t| t.name.to_string()).or_else(mcp_name) else {
+        return meta;
+    };
+    let mut meta = meta.unwrap_or_default();
+    let kiro = meta
+        .entry(KIRO_META_KEY)
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(kiro) = kiro.as_object_mut() {
+        kiro.insert("canonicalToolName".to_string(), name.into());
+    }
+    Some(meta)
+}
+
+/// Resolve the live `raw_output` string for a Kiro tool call.
+///
+/// Kiro wraps every result as `{"items":[{"Text":…} | {"Json":…}]}`, which no
+/// card reads — a finished `read` showed that envelope as its body. Unwrap it
+/// into the same text the history parser gives the result, and number a read
+/// that started past line 1. An empty result emits nothing, so a shell's
+/// streamed `content` is not replaced by a blank; anything else stringifies as
+/// before.
+fn kiro_live_tool_output(
+    raw_output: &Option<serde_json::Value>,
+    tool: Option<&crate::parsers::kiro::CanonicalTool>,
+) -> Option<String> {
+    let raw = raw_output.as_ref()?;
+    match crate::parsers::kiro::live_tool_output_text(raw) {
+        Some(text) if text.trim().is_empty() => None,
+        Some(text) => Some(crate::parsers::kiro::structure_tool_output(tool, text)),
+        None => json_value_to_text(raw_output).map(|text| structurize_live_output(&text)),
+    }
+}
+
 /// Antigravity 1.2's live MCP `rawInput`, folded back into the shape its
 /// history takes.
 ///
@@ -14541,6 +15469,11 @@ struct CodeBuddyLiveState {
     /// turn start — a shell call whose turn was canceled never sees a final
     /// status, and its lifecycle cannot span turns anyway.
     hosted_terminal_calls: HashMap<String, bool>,
+    /// Kiro: tool_call_id → which tool the call is (see [`kiro_live_tool`]).
+    /// Only the opening frame names it, and every later frame re-sends the
+    /// raw arguments, which must be rewritten the same way. Dropped at a final
+    /// status and cleared at turn start, like `hosted_terminal_calls`.
+    kiro_calls: HashMap<String, KiroLiveCall>,
     /// The merged `_meta` of every claude / codex tool call on this connection
     /// — the AIR contract (claude-agent-acp 0.82.0, codex-acp 2.0.0) sends each
     /// `_meta` key once and expects the client to merge. See
@@ -14576,6 +15509,18 @@ struct CodeBuddyLiveState {
     /// turns — only a CHANGED list is news — and cleared by an init that lists
     /// none, so a failure that went away and came back is reported again.
     claude_reported_plugin_failures: Option<Vec<PluginLoadFailure>>,
+}
+
+/// What [`kiro_live_tool`] remembers about one live Kiro tool call.
+#[derive(Debug, Default)]
+struct KiroLiveCall {
+    /// `_meta.kiro.toolName` from the opening frame.
+    name: Option<String>,
+    /// Set by `_meta.kiro.mcpServerName`: an MCP tool is never one of Kiro's
+    /// own, whatever it is called.
+    mcp: bool,
+    /// The last frame's canonical form, for a frame that carries no input.
+    tool: Option<crate::parsers::kiro::CanonicalTool>,
 }
 
 /// One announced-but-unpaired Grok `spawn_subagent` call. `description` /
@@ -15423,6 +16368,627 @@ fn has_null_session_id(message: &UntypedMessage) -> bool {
 #[serde(rename_all = "camelCase")]
 struct AuthStatusUpdateNotification {
     auth_status: serde_json::Value,
+}
+
+/// Kiro CLI's slash-command list: `_kiro.dev/commands/available
+/// {sessionId, commands: [{name: "/compact", description, meta?}, …]}`, sent in
+/// place of the standard `available_commands_update` (verified against 2.24.1).
+/// Kiro runs a command it receives as prompt TEXT (`/usage`, `/model <id>`,
+/// `/compact`, … each answer with an `agent_message_chunk` and `end_turn`), so
+/// listing them is all the composer's `/` menu needs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification)]
+#[notification(method = "_kiro.dev/commands/available")]
+#[serde(rename_all = "camelCase")]
+struct KiroCommandsAvailableNotification {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    commands: Vec<serde_json::Value>,
+}
+
+/// `_kiro.dev/metadata {sessionId, contextUsagePercentage, reasoning}` — sent
+/// after `session/new` and after every model or effort change.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification)]
+#[notification(method = "_kiro.dev/metadata")]
+#[serde(rename_all = "camelCase")]
+struct KiroMetadataNotification {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    reasoning: Option<serde_json::Value>,
+}
+
+/// `_kiro.dev/agent/switched {sessionId, agentName, previousAgentName, …}` —
+/// Kiro's report that the session's agent config (its ACP mode) changed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification)]
+#[notification(method = "_kiro.dev/agent/switched")]
+#[serde(rename_all = "camelCase")]
+struct KiroAgentSwitchedNotification {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    agent_name: Option<String>,
+}
+
+/// Commands the composer should offer for Kiro, named WITHOUT the leading `/`
+/// (the standard ACP spelling the `/` menu prefixes itself).
+///
+/// Left out: the ones only Kiro's own terminal UI can carry out — `local`
+/// commands (`/chat`, `/quit`: they act on the TUI process), the few that open
+/// an editor, the clipboard or the microphone of the machine Kiro runs on, and
+/// the two that answer a prompt with nothing (checked against 2.24.1):
+/// `/prompts` needs the TUI's selection menu, and `/rewind` forks into a new
+/// Kiro session codeg would never see. Everything else answers in the
+/// conversation.
+///
+/// The hint is Kiro's own when it has one, else its subcommand list — the
+/// commands that take one (`/code`, `/knowledge`, …) print nothing bare, so the
+/// menu should say what to type after them.
+fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<AvailableCommandInfo> {
+    const TUI_ONLY: &[&str] = &["reply", "paste", "voice", "quit", "prompts", "rewind"];
+    let mut seen = HashSet::new();
+    notif
+        .commands
+        .iter()
+        .filter_map(|command| {
+            let raw = command.get("name")?.as_str()?.trim();
+            let name = raw.strip_prefix('/').unwrap_or(raw).trim();
+            let meta = command.get("meta");
+            let local = meta
+                .and_then(|m| m.get("local"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if name.is_empty() || local || TUI_ONLY.contains(&name) || !seen.insert(name.to_string()) {
+                return None;
+            }
+            let input_hint = meta
+                .and_then(|m| m.get("hint"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|hint| !hint.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    let subcommands: Vec<&str> = meta?
+                        .get("subcommands")?
+                        .as_array()?
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect();
+                    (!subcommands.is_empty()).then(|| subcommands.join(" | "))
+                });
+            Some(AvailableCommandInfo {
+                name: name.to_string(),
+                description: command
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                input_hint,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod kiro_ext_tests {
+    use super::*;
+
+    // Shape of `session/new`'s `models` from kiro-cli 2.24.1 (trimmed).
+    fn kiro_models() -> serde_json::Value {
+        serde_json::json!({
+            "currentModelId": "claude-opus-5.5",
+            "availableModels": [
+                {"modelId": "auto", "name": "auto", "description": "Models chosen by task"},
+                {"modelId": "claude-opus-5.5", "name": "claude-opus-5.5", "description": "1M context"},
+                {"modelId": "claude-sonnet-5", "name": "claude-sonnet-5"},
+                {"modelId": "claude-sonnet-5", "name": "duplicate"},
+                {"modelId": "", "name": "blank"}
+            ]
+        })
+    }
+
+    #[test]
+    fn kiro_models_become_the_model_selector() {
+        let option = synthesize_kiro_model_option(Some(&kiro_models())).expect("selector");
+        assert_eq!(option.id, "model");
+        assert_eq!(option.category.as_deref(), Some("model"));
+        let SessionConfigKindInfo::Select(sel) = option.kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "claude-opus-5.5");
+        let values: Vec<_> = sel.options.iter().map(|o| o.value.as_str()).collect();
+        assert_eq!(values, ["auto", "claude-opus-5.5", "claude-sonnet-5"]);
+        assert_eq!(sel.options[0].description.as_deref(), Some("Models chosen by task"));
+    }
+
+    #[test]
+    fn an_unknown_current_model_falls_back_to_the_first() {
+        let mut models = kiro_models();
+        models["currentModelId"] = serde_json::json!("retired-model");
+        let option = synthesize_kiro_model_option(Some(&models)).unwrap();
+        let SessionConfigKindInfo::Select(sel) = option.kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "auto");
+    }
+
+    #[test]
+    fn no_usable_models_means_no_selector() {
+        assert!(synthesize_kiro_model_option(None).is_none());
+        assert!(synthesize_kiro_model_option(Some(&serde_json::json!({}))).is_none());
+        assert!(
+            synthesize_kiro_model_option(Some(&serde_json::json!({"availableModels": []})))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn kiro_commands_map_to_the_slash_menu() {
+        let notif: KiroCommandsAvailableNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "commands": [
+                {"name": "/compact", "description": "Compact conversation history"},
+                {"name": "/context", "description": "Manage context files",
+                 "meta": {"inputType": "panel", "hint": "add <path>, remove <path>, clear"}},
+                {"name": "/model", "description": "Select a model", "meta": {"hint": ""}},
+                {"name": "/code", "description": "Code intelligence",
+                 "meta": {"inputType": "panel", "subcommands": ["status", "init"]}},
+                {"name": "/chat", "description": "Load a session", "meta": {"local": true}},
+                {"name": "/paste", "description": "Paste image from clipboard"},
+                {"name": "/rewind", "description": "Rewind (forks into a new session)"},
+                {"name": "/compact", "description": "duplicate"},
+                {"description": "nameless"}
+            ]
+        }))
+        .unwrap();
+        let commands = kiro_available_commands(&notif);
+        let names: Vec<_> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["compact", "context", "model", "code"]);
+        assert_eq!(commands[0].description, "Compact conversation history");
+        assert_eq!(
+            commands[1].input_hint.as_deref(),
+            Some("add <path>, remove <path>, clear")
+        );
+        assert_eq!(commands[2].input_hint, None, "an empty hint is no hint");
+        assert_eq!(commands[3].input_hint.as_deref(), Some("status | init"));
+    }
+
+    #[test]
+    fn kiro_modes_become_the_agent_selector() {
+        let modes: SessionModeState = serde_json::from_value(serde_json::json!({
+            "currentModeId": "kiro_default",
+            "availableModes": [
+                {"id": "kiro_default", "name": "kiro_default", "description": "The default agent"},
+                {"id": "kiro_planner", "name": "kiro_planner"}
+            ]
+        }))
+        .unwrap();
+        let option = kiro_mode_option(&modes).expect("selector");
+        assert_eq!(option.id, "mode");
+        assert_eq!(option.category.as_deref(), Some("mode"));
+        let SessionConfigKindInfo::Select(sel) = option.kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "kiro_default");
+        assert_eq!(sel.options.len(), 2);
+        assert_eq!(sel.options[0].description.as_deref(), Some("The default agent"));
+    }
+
+    // The three shapes kiro-cli 2.24.1 sends: a model without effort, one with
+    // levels but none set yet, and one after `/effort` set a level.
+    #[test]
+    fn kiro_reasoning_reads_every_support_state() {
+        let unavailable = parse_kiro_reasoning(&serde_json::json!({
+            "support": "unavailable", "effortLevels": []
+        }));
+        assert_eq!(unavailable, KiroReasoning::default());
+        assert!(kiro_effort_option(&unavailable).is_none());
+
+        let unset = parse_kiro_reasoning(&serde_json::json!({
+            "support": "alwaysOn", "effortLevels": ["low", "medium", "high", "xhigh", "max"]
+        }));
+        assert_eq!(unset.current, None);
+        let option = kiro_effort_option(&unset).expect("selector");
+        assert_eq!(option.id, "reasoning_effort");
+        assert_eq!(option.category.as_deref(), Some("thought_level"));
+        let SessionConfigKindInfo::Select(sel) = option.kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "default", "nothing set yet: Kiro's own label");
+        assert_eq!(sel.options.len(), 5);
+
+        let set = parse_kiro_reasoning(&serde_json::json!({
+            "support": "toggleable", "effort": "xhigh",
+            "effortLevels": ["low", "medium", "high", "xhigh", "max"]
+        }));
+        let SessionConfigKindInfo::Select(sel) = kiro_effort_option(&set).unwrap().kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "xhigh");
+
+        // GPT models: no thinking support, but a real effort control.
+        let gpt = parse_kiro_reasoning(&serde_json::json!({
+            "support": "unavailable", "effort": "high",
+            "effortLevels": ["none", "low", "medium", "high", "xhigh", "max"]
+        }));
+        let SessionConfigKindInfo::Select(sel) = kiro_effort_option(&gpt).unwrap().kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "high");
+        assert_eq!(sel.options.len(), 6);
+    }
+
+    // The composer renders selectors in list order, which for Kiro is agent,
+    // model, effort — also after a model switch rebuilds the effort selector.
+    #[test]
+    fn kiro_effort_goes_right_after_the_model() {
+        let levels = KiroReasoning {
+            levels: vec!["low".into(), "high".into()],
+            current: Some("high".into()),
+            ..KiroReasoning::default()
+        };
+        let modes: SessionModeState = serde_json::from_value(serde_json::json!({
+            "currentModeId": "kiro_default",
+            "availableModes": [{"id": "kiro_default", "name": "kiro_default"}]
+        }))
+        .unwrap();
+        let mut opts = vec![
+            kiro_mode_option(&modes).unwrap(),
+            synthesize_kiro_model_option(Some(&kiro_models())).unwrap(),
+        ];
+        let ids = |o: &[SessionConfigOptionInfo]| o.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+
+        place_kiro_reasoning_selectors(&mut opts, &levels);
+        assert_eq!(ids(&opts), ["mode", "model", "reasoning_effort"]);
+        // A toggleable model adds thinking ahead of effort — rebuilt, not
+        // duplicated.
+        let toggleable = KiroReasoning {
+            thinking_toggleable: true,
+            ..levels.clone()
+        };
+        place_kiro_reasoning_selectors(&mut opts, &toggleable);
+        assert_eq!(ids(&opts), ["mode", "model", "thinking", "reasoning_effort"]);
+        place_kiro_reasoning_selectors(&mut opts, &toggleable);
+        assert_eq!(ids(&opts), ["mode", "model", "thinking", "reasoning_effort"]);
+        // A model with neither drops both; a later one puts them back in place.
+        place_kiro_reasoning_selectors(&mut opts, &KiroReasoning::default());
+        assert_eq!(ids(&opts), ["mode", "model"]);
+        place_kiro_reasoning_selectors(&mut opts, &toggleable);
+        assert_eq!(ids(&opts), ["mode", "model", "thinking", "reasoning_effort"]);
+    }
+
+    // `toggleable` (claude-opus-5 / sonnet-5 on 2.24.1) is the only support
+    // level with a switch; `thinkingEnabled` appears once it has been set.
+    #[test]
+    fn kiro_thinking_is_a_switch_only_where_kiro_allows_one() {
+        let unset = parse_kiro_reasoning(&serde_json::json!({
+            "support": "toggleable", "effortLevels": ["low", "high"]
+        }));
+        let SessionConfigKindInfo::Select(sel) = kiro_thinking_option(&unset).unwrap().kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "default");
+        assert_eq!(sel.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(), ["on", "off"]);
+
+        let off = parse_kiro_reasoning(&serde_json::json!({
+            "support": "toggleable", "thinkingEnabled": false, "effortLevels": []
+        }));
+        let SessionConfigKindInfo::Select(sel) = kiro_thinking_option(&off).unwrap().kind else {
+            panic!("select expected");
+        };
+        assert_eq!(sel.current_value, "off");
+
+        for support in ["alwaysOn", "unavailable"] {
+            let fixed = parse_kiro_reasoning(&serde_json::json!({
+                "support": support, "effortLevels": ["low"]
+            }));
+            assert!(kiro_thinking_option(&fixed).is_none(), "{support} has no switch");
+        }
+        assert_eq!(kiro_thinking_value("on"), Some(true));
+        assert_eq!(kiro_thinking_value("off"), Some(false));
+        assert_eq!(kiro_thinking_value("default"), None);
+    }
+
+    #[test]
+    fn kiro_trusts_all_tools_only_when_asked() {
+        assert!(kiro_trust_all_tools_enabled(Some("1")));
+        assert!(kiro_trust_all_tools_enabled(Some(" true ")));
+        for value in [None, Some("0"), Some(""), Some("yes please")] {
+            assert!(!kiro_trust_all_tools_enabled(value), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_kiro_agent_switch_names_the_new_mode() {
+        let notif: KiroAgentSwitchedNotification = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "agentName": "kiro_planner",
+            "previousAgentName": "kiro_default",
+            "welcomeMessage": "hi"
+        }))
+        .unwrap();
+        assert_eq!(notif.agent_name.as_deref(), Some("kiro_planner"));
+    }
+
+    /// Run Kiro wire frames through the live emit path, in order, and return
+    /// every emitted tool-call event as `(kind, raw_input, raw_output, content,
+    /// meta)`.
+    async fn kiro_emit(
+        frames: Vec<serde_json::Value>,
+    ) -> Vec<(
+        &'static str,
+        Option<serde_json::Value>,
+        Option<String>,
+        Option<String>,
+        Option<serde_json::Value>,
+    )> {
+        let st = SessionState::new(
+            "conn-kiro".to_string(),
+            AgentType::Kiro,
+            None,
+            "win".to_string(),
+            None,
+        );
+        let state = Arc::new(RwLock::new(st));
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        for frame in frames {
+            let update: SessionUpdate = serde_json::from_value(frame).expect("valid wire shape");
+            emit_conversation_update(
+                &state,
+                &EventEmitter::Noop,
+                AgentType::Kiro,
+                update,
+                None,
+                &mut cache,
+                &mut cb,
+            )
+            .await;
+        }
+        let parse = |text: &Option<String>| {
+            text.as_deref()
+                .map(|t| serde_json::from_str(t).expect("raw_input is JSON"))
+        };
+        let guard = state.read().await;
+        guard
+            .recent_events_after(0)
+            .expect("events recorded")
+            .iter()
+            .filter_map(|e| match &e.payload {
+                AcpEvent::ToolCall {
+                    raw_input,
+                    raw_output,
+                    content,
+                    meta,
+                    ..
+                } => Some((
+                    "call",
+                    parse(raw_input),
+                    raw_output.clone(),
+                    content.clone(),
+                    meta.clone(),
+                )),
+                AcpEvent::ToolCallUpdate {
+                    raw_input,
+                    raw_output,
+                    content,
+                    meta,
+                    ..
+                } => Some((
+                    "update",
+                    parse(raw_input),
+                    raw_output.clone(),
+                    content.clone(),
+                    meta.clone(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // Frames below are kiro-cli 2.24.1's, captured over real ACP.
+
+    #[tokio::test]
+    async fn a_kiro_str_replace_becomes_an_edit_not_a_shell_command() {
+        let events = kiro_emit(vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t1",
+                "title": "Editing a.txt",
+                "kind": "edit",
+                "content": [{"type": "diff", "path": "/w/a.txt", "oldText": "line two", "newText": "line 2"}],
+                "locations": [{"path": "/w/a.txt", "line": 2}],
+                "rawInput": {"__tool_use_purpose": "Fix it", "command": "strReplace", "path": "/w/a.txt", "oldStr": "line two", "newStr": "line 2"},
+                "_meta": {"kiro": {"toolName": "write"}}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t1",
+                "kind": "edit",
+                "status": "completed",
+                "rawInput": {"__tool_use_purpose": "Fix it", "command": "strReplace", "path": "/w/a.txt", "oldStr": "line two", "newStr": "line 2"},
+                "rawOutput": {"items": [{"Text": "Successfully replaced 1 occurrence(s) in /w/a.txt."}]}
+            }),
+        ])
+        .await;
+        let canonical = serde_json::json!({
+            "file_path": "/w/a.txt",
+            "old_string": "line two",
+            "new_string": "line 2",
+            "description": "Fix it"
+        });
+        let (_, input, _, content, meta) = &events[0];
+        assert_eq!(input.as_ref(), Some(&canonical));
+        // The Diff is the same edit again; it must not double up in `content`.
+        assert_eq!(content, &None);
+        assert_eq!(
+            meta.as_ref().and_then(|m| m.pointer("/kiro/canonicalToolName")),
+            Some(&serde_json::json!("edit"))
+        );
+        // Kiro's own key is left alone.
+        assert_eq!(
+            meta.as_ref().and_then(|m| m.pointer("/kiro/toolName")),
+            Some(&serde_json::json!("write"))
+        );
+        // The update names no tool, but re-sends the raw input: rewritten too,
+        // or it would replace the canonical one in the reducer.
+        let (_, input, output, _, _) = &events[1];
+        assert_eq!(input.as_ref(), Some(&canonical));
+        assert_eq!(
+            output.as_deref(),
+            Some("Successfully replaced 1 occurrence(s) in /w/a.txt.")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kiro_read_past_line_one_is_numbered_from_its_offset() {
+        let raw_input = serde_json::json!({
+            "__tool_use_purpose": "Read the block",
+            "operations": [{"mode": "Line", "path": "/w/c.rs", "offset": 6396, "limit": 30}]
+        });
+        let events = kiro_emit(vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t2",
+                "title": "Reading c.rs:6397-6426",
+                "kind": "read",
+                "rawInput": raw_input,
+                "_meta": {"kiro": {"toolName": "read"}}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t2",
+                "status": "completed",
+                "rawInput": raw_input,
+                "rawOutput": {"items": [{"Text": "fn a() {}\nfn b() {}"}]}
+            }),
+        ])
+        .await;
+        assert_eq!(
+            events[0].1,
+            Some(serde_json::json!({
+                "file_path": "/w/c.rs",
+                "offset": 6397,
+                "limit": 30,
+                "description": "Read the block"
+            }))
+        );
+        let output: serde_json::Value =
+            serde_json::from_str(events[1].2.as_deref().expect("output")).unwrap();
+        assert_eq!(
+            output,
+            serde_json::json!({"start_line": 6397, "content": "fn a() {}\nfn b() {}"})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kiro_shell_result_is_what_the_terminal_printed() {
+        let raw_input =
+            serde_json::json!({"__tool_use_purpose": "Fail loudly", "command": "echo hi >&2; exit 3"});
+        let events = kiro_emit(vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t3",
+                "title": "Running: echo hi >&2; exit 3",
+                "kind": "execute",
+                "rawInput": raw_input,
+                "_meta": {"kiro": {"toolName": "shell"}}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t3",
+                "content": [{"type": "content", "content": {"type": "text", "text": "hi\n"}}]
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t3",
+                "kind": "execute",
+                "status": "completed",
+                "rawInput": raw_input,
+                "rawOutput": {"items": [{"Json": {"exit_status": "exit status: 3", "stdout": "", "stderr": "hi\n"}}]}
+            }),
+        ])
+        .await;
+        assert_eq!(
+            events[0].1,
+            Some(serde_json::json!({"command": "echo hi >&2; exit 3", "description": "Fail loudly"}))
+        );
+        // The streamed chunk carries no input: the reducer keeps the prior one.
+        assert_eq!(events[1].1, None);
+        assert_eq!(events[1].3.as_deref(), Some("hi\n"));
+        assert_eq!(events[2].2.as_deref(), Some("hi\nexit status: 3"));
+    }
+
+    #[tokio::test]
+    async fn a_kiro_glob_and_an_mcp_call_are_named_for_the_frontend() {
+        let events = kiro_emit(vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "g1",
+                "title": "Finding *.txt in ws",
+                "kind": "search",
+                "rawInput": {"__tool_use_purpose": "Find", "pattern": "*.txt", "path": "/w"},
+                "_meta": {"kiro": {"toolName": "glob"}}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "m1",
+                "title": "Running: @codeg-mcp/get_session_info",
+                "rawInput": {"__tool_use_purpose": "Look up", "session_id": 7},
+                "_meta": {"kiro": {"toolName": "get_session_info", "mcpServerName": "codeg-mcp"}}
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "m1",
+                "status": "completed",
+                "rawInput": {"__tool_use_purpose": "Look up", "session_id": 7},
+                "rawOutput": {"items": [{"Json": {"content": [{"type": "text", "text": "{\"found\":false}"}]}}]}
+            }),
+        ])
+        .await;
+        assert_eq!(
+            events[0].4.as_ref().and_then(|m| m.pointer("/kiro/canonicalToolName")),
+            Some(&serde_json::json!("glob"))
+        );
+        // An MCP tool's arguments are its own: passed through untouched.
+        assert_eq!(
+            events[1].1,
+            Some(serde_json::json!({"__tool_use_purpose": "Look up", "session_id": 7}))
+        );
+        assert_eq!(
+            events[1].4.as_ref().and_then(|m| m.pointer("/kiro/canonicalToolName")),
+            Some(&serde_json::json!("mcp__codeg-mcp__get_session_info"))
+        );
+        // The MCP text result, not its `{content:[…]}` envelope — the
+        // companion cards parse it.
+        assert_eq!(events[2].2.as_deref(), Some(r#"{"found":false}"#));
+    }
+
+    #[test]
+    fn an_mcp_tool_named_like_a_builtin_is_not_rewritten() {
+        let mut calls = HashMap::new();
+        let meta = serde_json::json!({"kiro": {"toolName": "read", "mcpServerName": "fs"}});
+        let tool = kiro_live_tool(
+            AgentType::Kiro,
+            &mut calls,
+            "x",
+            meta.as_object(),
+            Some(&serde_json::json!({"operations": [{"mode": "Line", "path": "/a"}]})),
+        );
+        assert_eq!(tool, None);
+    }
+
+    #[test]
+    fn only_kiro_calls_are_rewritten() {
+        let mut calls = HashMap::new();
+        let meta = serde_json::json!({"kiro": {"toolName": "write"}});
+        let input = serde_json::json!({"command": "create", "path": "/a", "content": "x"});
+        assert_eq!(
+            kiro_live_tool(AgentType::Cursor, &mut calls, "x", meta.as_object(), Some(&input)),
+            None
+        );
+        assert!(calls.is_empty());
+    }
 }
 
 /// Claim `_auth/status_update` and drop it, loudly enough to be greppable.
@@ -16496,6 +18062,13 @@ async fn emit_conversation_update(
                     return;
                 }
             };
+            let kiro_tool = kiro_live_tool(
+                agent_type,
+                &mut cb_state.kiro_calls,
+                &tool_call_id,
+                tc.meta.as_ref(),
+                tc.raw_input.as_ref(),
+            );
             // Remember which capsule owns this child, so its eventual
             // `completed` / `interrupted` (announced under a synthetic id of its
             // own) can be routed back here.
@@ -16552,8 +18125,11 @@ async fn emit_conversation_update(
                 Some((_, inner)) => {
                     json_value_to_text(&Some(inner.clone())).filter(|t| !t.trim().is_empty())
                 }
-                None => tool_call_raw_input_text(agent_type, tc.meta.as_ref(), &tc.raw_input)
-                    .filter(|t| !t.trim().is_empty()),
+                None => match &kiro_tool {
+                    Some(tool) => Some(tool.input.to_string()),
+                    None => tool_call_raw_input_text(agent_type, tc.meta.as_ref(), &tc.raw_input),
+                }
+                .filter(|t| !t.trim().is_empty()),
             };
             let synthesized_edit = if own_raw_input.is_none() {
                 synthesize_edit_input_from_diffs(content_blocks)
@@ -16591,8 +18167,13 @@ async fn emit_conversation_update(
             } else {
                 None
             };
+            // Kiro's `write` ships the edit as a `Diff` too (a create's with
+            // old == new); the canonical input already carries it.
             let content =
-                serialize_tool_call_content(content_blocks, synthesized_edit.is_none())
+                serialize_tool_call_content(
+                    content_blocks,
+                    synthesized_edit.is_none() && kiro_tool.is_none(),
+                )
                     .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c))
                     // pi announces a command with an empty result, which pi-acp
                     // renders as JSON source (see fn doc).
@@ -16622,6 +18203,8 @@ async fn emit_conversation_update(
                 // around the SAME text `content` already carries; shipping it
                 // shadows the clean text (see opencode_live_tool_output).
                 opencode_live_tool_output(&content, &tc.raw_output)
+            } else if matches!(agent_type, AgentType::Kiro) {
+                kiro_live_tool_output(&tc.raw_output, kiro_tool.as_ref())
             } else {
                 json_value_to_text(&tc.raw_output)
                     .map(|text| unwrap_codebuddy_deferred_output(agent_type, &text).unwrap_or(text))
@@ -16659,6 +18242,7 @@ async fn emit_conversation_update(
                 tc.meta,
             );
             let meta = stamp_codex_search_action(agent_type, &tc.kind, hosted_shell, meta);
+            let meta = stamp_kiro_tool_name(agent_type, kiro_tool.as_ref(), meta);
             // Later frames hand the frontend the MERGED `_meta`, which it takes
             // whole — so codeg's own stamps must be part of the record, or the
             // first update carrying any `_meta` would wipe them.
@@ -16795,6 +18379,13 @@ async fn emit_conversation_update(
                 }
                 CodexSubagentActivity::Other => return,
             };
+            let kiro_tool = kiro_live_tool(
+                agent_type,
+                &mut cb_state.kiro_calls,
+                &tool_call_id,
+                tcu.meta.as_ref(),
+                tcu.fields.raw_input.as_ref(),
+            );
             if let (Some(thread_id), Some(input)) = (codex_subagent_thread, codex_subagent.as_ref())
             {
                 cb_state
@@ -16845,10 +18436,16 @@ async fn emit_conversation_update(
                 Some((_, inner)) => {
                     json_value_to_text(&Some(inner.clone())).filter(|t| !t.trim().is_empty())
                 }
-                None => {
-                    tool_call_raw_input_text(agent_type, tcu.meta.as_ref(), &tcu.fields.raw_input)
-                        .filter(|t| !t.trim().is_empty())
+                // A Kiro frame without input keeps the reducer's prior one.
+                None => match (&kiro_tool, &tcu.fields.raw_input) {
+                    (Some(tool), Some(_)) => Some(tool.input.to_string()),
+                    _ => tool_call_raw_input_text(
+                        agent_type,
+                        tcu.meta.as_ref(),
+                        &tcu.fields.raw_input,
+                    ),
                 }
+                .filter(|t| !t.trim().is_empty()),
             };
             let synthesized_edit = if own_raw_input.is_none() {
                 content_blocks.and_then(synthesize_edit_input_from_diffs)
@@ -16902,7 +18499,9 @@ async fn emit_conversation_update(
                 None
             };
             let content = content_blocks
-                .and_then(|c| serialize_tool_call_content(c, synthesized_edit.is_none()))
+                .and_then(|c| {
+                    serialize_tool_call_content(c, synthesized_edit.is_none() && kiro_tool.is_none())
+                })
                 .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c))
                 // Symmetric with the ToolCall arm — and the arm that matters:
                 // pi's empty opening frame is a `tool_call_update`.
@@ -16960,6 +18559,9 @@ async fn emit_conversation_update(
                 // OpenCode delivers every result on the completion update (see
                 // opencode_live_tool_output).
                 opencode_live_tool_output(&content, &tcu.fields.raw_output)
+            } else if matches!(agent_type, AgentType::Kiro) {
+                // Kiro delivers every result on the completion update.
+                kiro_live_tool_output(&tcu.fields.raw_output, kiro_tool.as_ref())
             } else {
                 json_value_to_text(&tcu.fields.raw_output)
                     .or(viewed_result)
@@ -17018,6 +18620,7 @@ async fn emit_conversation_update(
                 Some("completed" | "failed" | "cancelled" | "error")
             ) {
                 cb_state.hosted_terminal_calls.remove(&tool_call_id);
+                cb_state.kiro_calls.remove(&tool_call_id);
             }
             // Symmetric with the ToolCall arm: an update may carry the terminal
             // status (and, on grok, usually re-carries the `x.ai/tool` meta).

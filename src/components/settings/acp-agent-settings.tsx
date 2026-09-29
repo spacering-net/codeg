@@ -92,6 +92,7 @@ import {
   acpClearBinaryCache,
   acpDetectAgentLocalVersion,
   acpDownloadAgentBinary,
+  acpUpdateSystemAgent,
   acpInstallUvTool,
   acpGetAgentStatus,
   acpListAgents,
@@ -157,6 +158,7 @@ import {
   ANTIGRAVITY_ENV_KEYS,
   AntigravityConfigPanel,
 } from "./antigravity-config-panel"
+import { KiroConfigPanel } from "./kiro-config-panel"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
 import {
@@ -289,6 +291,7 @@ type RunningActionKind =
   | "redownload_binary"
   | "custom_install"
   | "install_uv"
+  | "upgrade_system"
 
 type UiFixAction =
   | FixAction
@@ -303,6 +306,7 @@ type UiFixAction =
         | "uninstall_npx"
         | "install_opencode_plugins"
         | "custom_install"
+        | "upgrade_system"
       payload: string
       // When true, the fix renders as a greyed-out button (e.g. the uvx
       // agent-install action while the uv runtime isn't ready yet).
@@ -334,6 +338,7 @@ const PACKAGE_ACTION_FIX_KINDS: ReadonlyArray<UiFixAction["kind"]> = [
   "install_opencode_plugins",
   "custom_install",
   "install_uv",
+  "upgrade_system",
 ]
 
 type AcpTranslator = (
@@ -367,6 +372,18 @@ function publishAgentDisplay(list: AcpAgentInfo[]): void {
       iconUrl: agent.icon_url,
     }))
   )
+}
+
+/**
+ * The distribution badge. `npx`, `binary` and `uvx` are the channels' own
+ * names and stay as they are; `system` is codeg's internal word for "the
+ * vendor's installer put it there", which reads as noise next to them.
+ */
+function distributionLabel(distributionType: string): string {
+  if (distributionType === "system") {
+    return acpText("distribution.system", "official installer")
+  }
+  return distributionType
 }
 
 function statusTone(status: CheckStatus): string {
@@ -863,6 +880,18 @@ export function importantEnvKeysByAgent(
       apiBaseUrl: [],
       apiKey: ["QODER_PERSONAL_ACCESS_TOKEN"],
       model: ["QODER_MODEL"],
+    }
+  }
+  if (agentType === "kiro") {
+    // `KIRO_API_KEY` is Kiro CLI's non-interactive sign-in (its headless mode
+    // requires it; an interactive `kiro-cli login` covers the desktop). There
+    // is no endpoint or model env — the model is picked per session over ACP —
+    // so both lists stay empty and the panel shows only the key. Mirrors the
+    // backend `agent_env_keys(Kiro)`.
+    return {
+      apiBaseUrl: [],
+      apiKey: ["KIRO_API_KEY"],
+      model: [],
     }
   }
   return {
@@ -3989,6 +4018,61 @@ export function buildVersionCheck(
   agent: AcpAgentInfo,
   uvReady: boolean = true
 ): UiCheckItem | null {
+  // An agent codeg launches but never installs (Kiro CLI): no pin to compare
+  // against, and installing or removing it is its own installer's job. The
+  // card says whether the user's install was found — where to get it when it
+  // was not — and upgrades it in place through the vendor's own updater, so
+  // the copy the terminal runs and the one Codeg launches stay the same.
+  if (agent.distribution_type === "system") {
+    const installed = agent.installed_version
+    if (installed) {
+      return {
+        check_id: "version_status",
+        label: acpText("version.statusLabel", "Version Status"),
+        status: "pass",
+        message: acpText(
+          agent.supports_self_update
+            ? "version.systemInstalledUpdatable"
+            : "version.systemInstalled",
+          agent.supports_self_update
+            ? "{versionText}. Installed with the official installer; Upgrade runs its own updater."
+            : "{versionText}. Installed and updated by its own installer; Codeg launches it as-is.",
+          {
+            versionText: acpText("version.localOnly", "Local: {localVersion}", {
+              localVersion: installed,
+            }),
+          }
+        ),
+        fixes: agent.supports_self_update
+          ? [
+              {
+                label: acpText("actions.upgrade", "Upgrade"),
+                kind: "upgrade_system",
+                payload: agent.agent_type,
+              },
+            ]
+          : [],
+      }
+    }
+    return {
+      check_id: "version_status",
+      label: acpText("version.statusLabel", "Version Status"),
+      status: "fail",
+      message: acpText(
+        "version.systemMissing",
+        "Not found on this machine. Install it with the official installer, then refresh."
+      ),
+      fixes: agent.install_url
+        ? [
+            {
+              label: acpText("actions.installGuide", "Install guide"),
+              kind: "open_url",
+              payload: agent.install_url,
+            },
+          ]
+        : [],
+    }
+  }
   if (
     agent.distribution_type !== "binary" &&
     agent.distribution_type !== "npx" &&
@@ -5310,6 +5394,77 @@ export function AcpAgentSettings() {
     [runPreflight, t, installStream.start]
   )
 
+  // Upgrade an agent Codeg does not install (Kiro CLI) through its own
+  // updater. The updater succeeds whether or not a newer build existed, so the
+  // toast compares the version before and after instead of always claiming an
+  // upgrade.
+  const runSystemUpdate = useCallback(
+    async (agent: AcpAgentInfo) => {
+      if (busyActionRef.current.has(agent.agent_type)) return
+      busyActionRef.current.add(agent.agent_type)
+      setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: true }))
+      setRunningActionKind((prev) => ({
+        ...prev,
+        [agent.agent_type]: "upgrade_system",
+      }))
+      const actionLabel = t("actions.upgrade")
+      const previous = agent.installed_version
+      const taskId = randomUUID()
+      setStreamAgentType(agent.agent_type)
+      await installStream.start(taskId)
+      try {
+        const version = await acpUpdateSystemAgent(agent.agent_type, taskId)
+        setAgents((prev) =>
+          prev.map((item) =>
+            item.agent_type === agent.agent_type
+              ? { ...item, installed_version: version }
+              : item
+          )
+        )
+        await runPreflight(agent.agent_type)
+        if (version && version === previous) {
+          toast.success(
+            t("toasts.systemAgentAlreadyLatest", {
+              name: agent.name,
+              version,
+            })
+          )
+        } else {
+          toast.success(
+            t("toasts.agentActionCompleted", {
+              name: agent.name,
+              action: actionLabel,
+            }),
+            {
+              description: version
+                ? t("toasts.localVersion", { version })
+                : t("toasts.installCompletedVersionLater"),
+            }
+          )
+        }
+      } catch (err) {
+        const message = toErrorMessage(err)
+        toast.error(
+          t("toasts.agentActionFailed", {
+            name: agent.name,
+            action: actionLabel,
+          }),
+          { description: message }
+        )
+        throw err
+      } finally {
+        busyActionRef.current.delete(agent.agent_type)
+        setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: false }))
+        setRunningActionKind((prev) => ({
+          ...prev,
+          [agent.agent_type]: undefined,
+        }))
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runPreflight, t, installStream.start]
+  )
+
   const handleFixAction = async (agent: AcpAgentInfo, action: UiFixAction) => {
     if (
       busyBinaryAction[agent.agent_type] ||
@@ -5352,6 +5507,10 @@ export function AcpAgentSettings() {
     }
     if (action.kind === "install_uv") {
       await runUvInstall(agent)
+      return
+    }
+    if (action.kind === "upgrade_system") {
+      await runSystemUpdate(agent)
       return
     }
     if (action.kind === "custom_install") {
@@ -5522,7 +5681,8 @@ export function AcpAgentSettings() {
                         <Download className="h-3 w-3" />
                       ) : fix.kind === "upgrade_binary" ||
                         fix.kind === "upgrade_npx" ||
-                        fix.kind === "redownload_binary" ? (
+                        fix.kind === "redownload_binary" ||
+                        fix.kind === "upgrade_system" ? (
                         <Wrench className="h-3 w-3" />
                       ) : fix.kind === "uninstall_binary" ||
                         fix.kind === "uninstall_npx" ? (
@@ -7948,7 +8108,7 @@ export function AcpAgentSettings() {
                       {selectedAgent.name}
                     </h3>
                     <Badge variant="outline" className="shrink-0">
-                      {selectedAgent.distribution_type}
+                      {distributionLabel(selectedAgent.distribution_type)}
                     </Badge>
                     {/* Names the thing codeg actually installs, right next to
                         the vendor's name — so the split is visible even before
@@ -10808,6 +10968,19 @@ supports_websockets = true`}
                   </div>
                 ) : selectedAgent.agent_type === "code_buddy" ? (
                   <CodeBuddyConfigPanel
+                    agent={selectedAgent}
+                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                    onSave={(env, enabled) =>
+                      persistEnv(
+                        selectedAgent.agent_type,
+                        enabled,
+                        envMapToText(env),
+                        selectedAgent.model_provider_id
+                      )
+                    }
+                  />
+                ) : selectedAgent.agent_type === "kiro" ? (
+                  <KiroConfigPanel
                     agent={selectedAgent}
                     saving={Boolean(savingEnv[selectedAgent.agent_type])}
                     onSave={(env, enabled) =>

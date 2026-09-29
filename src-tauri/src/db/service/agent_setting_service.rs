@@ -43,6 +43,7 @@ fn default_enabled(agent_type: AgentType) -> bool {
             | AgentType::DeepSeek
             | AgentType::Qoder
             | AgentType::Antigravity
+            | AgentType::Kiro
             // A user who just registered a custom agent wants to use it.
             | AgentType::Custom(_)
     )
@@ -230,4 +231,19 @@ pub async fn find_by_model_provider_id(
 fn is_sqlite_full_error(err: &DbError) -> bool {
     let message = err.to_string();
     message.contains("database or disk is full") || message.contains("(code: 13)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every built-in starts enabled. The match above has no catch-all arm for
+    // "the rest", so a newly added agent missing from it silently ships
+    // disabled — which is how Kiro would have arrived.
+    #[test]
+    fn every_builtin_defaults_to_enabled() {
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            assert!(default_enabled(*agent), "{agent:?} defaults to disabled");
+        }
+    }
 }

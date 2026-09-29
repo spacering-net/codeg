@@ -100,6 +100,13 @@ pub async fn run_preflight(agent_type: AgentType) -> PreflightResult {
             system_cmd,
             ..
         } => check_uv_environment(*uv_required, *system_cmd).await,
+        AgentDistribution::System {
+            cmd, install_url, ..
+        } => vec![build_system_cli_check(
+            cmd,
+            install_url,
+            crate::commands::acp::resolve_system_agent_binary_for(agent_type, cmd).as_deref(),
+        )],
     };
 
     let passed = checks
@@ -444,6 +451,42 @@ async fn check_uv_environment(
             payload: String::new(),
         }],
     }]
+}
+
+/// Preflight for a [`AgentDistribution::System`] agent: the user's own install
+/// is the only one there is, so the single question is whether it resolves.
+/// Pure over the resolution result so both outcomes are unit-tested without
+/// touching PATH.
+///
+/// A miss is a `Fail` with the vendor's install page as the fix — there is no
+/// codeg-side Install to offer, and a `Warn` would read as "connect anyway".
+fn build_system_cli_check(
+    cmd: &str,
+    install_url: &str,
+    resolved: Option<&std::path::Path>,
+) -> CheckItem {
+    match resolved {
+        Some(path) => CheckItem {
+            check_id: "system_cli".into(),
+            label: cmd.to_string(),
+            status: CheckStatus::Pass,
+            message: format!("Using the system-installed {cmd} at {}", path.display()),
+            fixes: vec![],
+        },
+        None => CheckItem {
+            check_id: "system_cli".into(),
+            label: cmd.to_string(),
+            status: CheckStatus::Fail,
+            message: format!(
+                "{cmd} was not found on PATH or in ~/.local/bin. Install it with the official installer, then refresh."
+            ),
+            fixes: vec![FixAction {
+                label: "Install guide".into(),
+                kind: FixActionKind::OpenUrl,
+                payload: install_url.to_string(),
+            }],
+        },
+    }
 }
 
 /// Run `<uvx> --version` and extract the version token (output looks like
@@ -830,5 +873,47 @@ mod adapter_tests {
                 "unexpected adapter info for {agent_type:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod system_cli_tests {
+    use super::*;
+
+    #[test]
+    fn a_resolved_system_cli_passes_and_names_its_path() {
+        let check = build_system_cli_check(
+            "kiro-cli",
+            "https://kiro.dev/docs/getting-started/installation/",
+            Some(std::path::Path::new("/Users/me/.local/bin/kiro-cli")),
+        );
+        assert_eq!(check.check_id, "system_cli");
+        assert!(matches!(check.status, CheckStatus::Pass));
+        assert!(check.message.contains("/Users/me/.local/bin/kiro-cli"));
+        assert!(check.fixes.is_empty());
+    }
+
+    // There is no codeg-side install for a system agent, so a miss must FAIL
+    // (a warn would let the user connect into a spawn error) and hand over the
+    // vendor's own install page as the one fix.
+    #[test]
+    fn a_missing_system_cli_fails_with_the_install_guide() {
+        let url = "https://kiro.dev/docs/getting-started/installation/";
+        let check = build_system_cli_check("kiro-cli", url, None);
+        assert!(matches!(check.status, CheckStatus::Fail));
+        assert!(check.message.contains("kiro-cli"));
+        assert_eq!(check.fixes.len(), 1);
+        assert!(matches!(check.fixes[0].kind, FixActionKind::OpenUrl));
+        assert_eq!(check.fixes[0].payload, url);
+    }
+
+    // Whatever the machine has installed, a system agent's preflight is ONE
+    // check: nothing is cached, pinned or downloadable to report on.
+    #[tokio::test]
+    async fn kiro_preflight_is_the_single_system_check() {
+        let result = run_preflight(AgentType::Kiro).await;
+        assert_eq!(result.checks.len(), 1);
+        assert_eq!(result.checks[0].check_id, "system_cli");
+        assert!(result.adapter.is_none());
     }
 }

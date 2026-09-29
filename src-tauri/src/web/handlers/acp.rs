@@ -1149,6 +1149,29 @@ pub async fn acp_download_agent_binary(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpUpdateSystemAgentParams {
+    pub agent_type: AgentType,
+    pub task_id: String,
+}
+
+pub async fn acp_update_system_agent(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateSystemAgentParams>,
+) -> Result<Json<Option<String>>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    let version = acp_commands::acp_update_system_agent_core(
+        params.agent_type,
+        params.task_id,
+        &state.db,
+        &emitter,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(version))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpInstallUvToolParams {
     pub task_id: String,
 }

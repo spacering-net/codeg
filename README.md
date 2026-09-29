@@ -19,7 +19,7 @@
 
 Codeg (Code Generation) is a multi-agent coding workspace: run every AI coding agent in one place — and let them work together.
 
-It aggregates your sessions from every supported agent CLI into one searchable workspace, and lets a main agent delegate to sub-agents of other types within a single task. Work you'd rather not sit through goes on a to-do board instead — each task in its own branch, running unattended, waiting for your review before it lands. Codeg runs as a desktop app, a standalone server, or a Docker container, with native iOS and Android clients for when you're away from your desk; fifteen agents come built in, and you can register any other ACP-compatible agent yourself.
+It aggregates your sessions from every supported agent CLI into one searchable workspace, and lets a main agent delegate to sub-agents of other types within a single task. Work you'd rather not sit through goes on a to-do board instead — each task in its own branch, running unattended, waiting for your review before it lands. Codeg runs as a desktop app, a standalone server, or a Docker container, with native iOS and Android clients for when you're away from your desk; sixteen agents come built in, and you can register any other ACP-compatible agent yourself.
 
 ![workspace](./docs/images/workspace-light.png#gh-light-mode-only)
 ![workspace](./docs/images/workspace-dark.png#gh-dark-mode-only)
@@ -90,7 +90,7 @@ It aggregates your sessions from every supported agent CLI into one searchable w
 
 ## 🤖 Supported Agents
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity · Kiro CLI
 
 Codeg installs, pins, and updates most of them for you. See [Supported Agents](https://docs.codeg.app/guide/supported-agents) for the full roster, each agent's runtime requirements, and where it keeps its sessions on disk.
 

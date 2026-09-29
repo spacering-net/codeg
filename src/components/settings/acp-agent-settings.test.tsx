@@ -952,6 +952,57 @@ describe("buildVersionCheck", () => {
       false
     )
   })
+
+  // A system agent (Kiro CLI) is installed and updated by its own installer:
+  // the card reports what was found and never offers install/upgrade/
+  // uninstall, which the backend would refuse.
+  it("reports a found system agent without any install action", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: "2.24.1",
+        install_url: "https://kiro.dev/docs/getting-started/installation/",
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("own installer")
+    expect(check?.fixes).toEqual([])
+  })
+
+  // With a vendor updater, the found install gets an Upgrade that runs it —
+  // still no install, uninstall or custom version.
+  it("offers the vendor updater as Upgrade when the agent has one", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: "2.24.1",
+        supports_self_update: true,
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("its own updater")
+    expect(check?.fixes.map((fix) => fix.kind)).toEqual(["upgrade_system"])
+  })
+
+  it("points a missing system agent at its install guide", () => {
+    const url = "https://kiro.dev/docs/getting-started/installation/"
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: null,
+        install_url: url,
+      })
+    )
+    expect(check?.status).toBe("fail")
+    expect(check?.fixes).toHaveLength(1)
+    expect(check?.fixes[0]).toMatchObject({ kind: "open_url", payload: url })
+  })
 })
 
 describe("getAgentChecks uv gating", () => {
@@ -2156,6 +2207,26 @@ describe("important env keys", () => {
         "qmodel_38max"
       )
     ).toContain("QODER_MODEL=qmodel_38max")
+  })
+})
+
+describe("Kiro env keys", () => {
+  // KIRO_API_KEY is the only env Kiro CLI reads for sign-in; there is no
+  // endpoint or model variable, so only the key field is offered.
+  it("offers only the API key, under the name Kiro reads", () => {
+    expect(importantEnvKeysByAgent("kiro" as AgentType)).toEqual({
+      apiBaseUrl: [],
+      apiKey: ["KIRO_API_KEY"],
+      model: [],
+    })
+    expect(importantFieldsFor("kiro" as AgentType)).toEqual({
+      apiBaseUrl: false,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("kiro" as AgentType, "", "apiKey", "ksk_1")
+    ).toBe("KIRO_API_KEY=ksk_1")
   })
 })
 

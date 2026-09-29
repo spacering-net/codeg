@@ -26,7 +26,8 @@
             "cursor",
             "deepseek",
             "qoder",
-            "antigravity"
+            "antigravity",
+            "kiro"
           ],
           "description": "Which local agent runs the sub-task. Pick the one best suited to the work — or, when the user's message names an agent via `@AgentName` / `codeg://agent/<agent_type>`, use that exact `<agent_type>` slug (e.g. `codeg://agent/claude_code` means `claude_code`)."
         },

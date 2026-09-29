@@ -1,4 +1,4 @@
-/** The fifteen agents codeg ships hand-written support for. */
+/** The sixteen agents codeg ships hand-written support for. */
 export type BuiltinAgentType =
   | "claude_code"
   | "codex"
@@ -15,6 +15,7 @@ export type BuiltinAgentType =
   | "deepseek"
   | "qoder"
   | "antigravity"
+  | "kiro"
 
 /**
  * Which agent backs a conversation.
@@ -935,6 +936,7 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "deepseek",
   "qoder",
   "antigravity",
+  "kiro",
 ]
 
 const AGENT_DISPLAY_ORDER_INDEX = new Map<AgentType, number>(
@@ -969,6 +971,7 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "deepseek",
   "qoder",
   "antigravity",
+  "kiro",
 ]
 
 export const MODEL_PROVIDER_AGENT_TYPES: BuiltinAgentType[] = [
@@ -1280,6 +1283,7 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   deepseek: "DeepSeek Harness",
   qoder: "Qoder",
   antigravity: "Google Antigravity",
+  kiro: "Kiro CLI",
 }
 
 export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
@@ -1298,6 +1302,7 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   deepseek: "bg-[#4D6BFE]",
   qoder: "bg-[#6C4CF1]",
   antigravity: "bg-[#1A73E8]",
+  kiro: "bg-[#9046FF]",
 }
 
 // ACP connection status (matches Rust ConnectionStatus)
@@ -3311,6 +3316,15 @@ export interface AcpAgentInfo {
    */
   is_acp_adapter: boolean
   /**
+   * The vendor's install page for an agent codeg launches but never installs
+   * (`distribution_type === "system"`, e.g. Kiro CLI). Absent for every agent
+   * codeg installs itself.
+   */
+  install_url?: string | null
+  /** Whether that install can be upgraded from Settings through the vendor's
+   * own updater (`acpUpdateSystemAgent`). */
+  supports_self_update?: boolean
+  /**
    * For custom agents, where the definition came from ("registry" | "manual");
    * null for built-ins. A manual definition's registry_version is user-typed,
    * so the version-status check shows only the local version for those.
@@ -4011,6 +4025,7 @@ export type McpAppType =
   | "deepseek"
   | "qoder"
   | "antigravity"
+  | "kiro"
   | "pi"
 
 export interface LocalMcpServer {

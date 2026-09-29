@@ -1,0 +1,123 @@
+---
+source: tests/parsers_snapshot.rs
+assertion_line: 1561
+expression: detail
+---
+{
+  "summary": {
+    "id": "0b6c1f7e-4d2a-4c5e-9a55-3f1e2d7c8b90",
+    "agent_type": "kiro",
+    "folder_path": "/tmp/demo",
+    "folder_name": "demo",
+    "title": "list the repo",
+    "started_at": "[ts]",
+    "ended_at": "[ts]",
+    "message_count": 7,
+    "model": "claude-opus-5.5",
+    "git_branch": null
+  },
+  "turns": [
+    {
+      "id": "turn-0",
+      "role": "user",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "list the repo"
+        }
+      ],
+      "timestamp": "[ts]"
+    },
+    {
+      "id": "turn-1",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "thinking",
+          "text": "Look at the tree first."
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "tooluse_1",
+          "tool_name": "ls",
+          "input_preview": "{\n  \"path\": \"/tmp/demo\"\n}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "tooluse_1",
+          "output_preview": "src\nREADME.md\n{\n  \"entries\": 2\n}",
+          "is_error": false
+        }
+      ],
+      "timestamp": "[ts]",
+      "model": "claude-opus-5.5"
+    },
+    {
+      "id": "turn-2",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Two entries: src and README.md."
+        }
+      ],
+      "timestamp": "[ts]",
+      "duration_ms": 8000,
+      "completed_at": "[ts]"
+    },
+    {
+      "id": "turn-3",
+      "role": "system",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "The user listed the repo."
+        }
+      ],
+      "timestamp": "[ts]"
+    },
+    {
+      "id": "turn-4",
+      "role": "user",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/clear"
+        }
+      ],
+      "timestamp": "[ts]"
+    },
+    {
+      "id": "turn-5",
+      "role": "user",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "thanks"
+        }
+      ],
+      "timestamp": "[ts]"
+    },
+    {
+      "id": "turn-6",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Anytime."
+        }
+      ],
+      "timestamp": "[ts]",
+      "duration_ms": 4000,
+      "completed_at": "[ts]"
+    }
+  ],
+  "session_stats": {
+    "total_usage": null,
+    "total_duration_ms": 12000,
+    "context_window_used_tokens": 5000,
+    "context_window_max_tokens": 200000,
+    "context_window_usage_percent": 2.5
+  },
+  "transcript_watermark": 1364
+}

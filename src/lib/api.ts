@@ -535,6 +535,21 @@ export async function acpDownloadAgentBinary(
   })
 }
 
+/**
+ * Upgrade an agent codeg launches but does not install (Kiro CLI) through the
+ * vendor's own updater, streaming its output on the install topic. Resolves to
+ * the version found afterwards — the same one when nothing newer existed.
+ */
+export async function acpUpdateSystemAgent(
+  agentType: AgentType,
+  taskId: string
+): Promise<string | null> {
+  return getTransport().call("acp_update_system_agent", {
+    agentType,
+    taskId,
+  })
+}
+
 export async function acpInstallUvTool(taskId: string): Promise<void> {
   // uv install downloads + extracts the toolchain from GitHub; allow well
   // beyond the default 60s web-call timeout so slow networks don't surface a
