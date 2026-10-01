@@ -38,6 +38,7 @@
     "preferences": "Preferencias",
     "nav": {
       "general": "General",
+      "speech": "Voz",
       "appearance": "Apariencia",
       "agents": "Agentes",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "Suspender/reanudar estilo personalizado",
         "description": "Vía de escape: desactiva todos los colores y el CSS personalizados, y los vuelve a activar"
+      },
+      "toggle_voice_input": {
+        "title": "Entrada de voz",
+        "description": "Iniciar o detener el dictado en el cuadro de mensaje"
       },
       "zoom_in": {
         "title": "Acercar",
@@ -3171,7 +3176,18 @@
         "mentionGroupAgent": "Agentes",
         "mentionGroupSession": "Sesiones",
         "mentionGroupCommit": "Commits",
-        "mentionGroupSkill": "Habilidades"
+        "mentionGroupSkill": "Habilidades",
+        "speechStart": "Iniciar entrada de voz",
+        "speechStop": "Detener e insertar",
+        "speechTranscribing": "Transcribiendo...",
+        "speechCancelHint": "Esc para cancelar",
+        "speechMicDenied": "Se denegó el acceso al micrófono",
+        "speechUnavailableNoEngine": "Entrada de voz no disponible: este navegador no tiene reconocimiento de voz",
+        "speechUnavailableInsecure": "La entrada de voz requiere una conexión segura (HTTPS o localhost)",
+        "speechUnavailableNoMic": "Entrada de voz no disponible: no se encontró micrófono",
+        "speechUnavailableCloud": "La entrada de voz necesita una clave de API en la nube (Ajustes → Voz)",
+        "speechCloudAuthFailed": "El servicio de voz rechazó la clave de API",
+        "speechFailed": "Falló la entrada de voz"
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",
@@ -6590,5 +6606,41 @@
         "probeFailed": "El navegador integrado no pudo confirmar que llega al host remoto a través del túnel. Vuelve a intentarlo en un momento."
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "Voz",
+    "sectionDescription": "Dicta prompts con tu voz y configura el servicio de voz.",
+    "loading": "Cargando ajustes de voz...",
+    "loadFailed": "No se pudieron cargar los ajustes de voz: {message}",
+    "inputTitle": "Entrada de voz",
+    "inputDescription": "Muestra un botón de micrófono en el editor del chat que convierte la voz en texto del prompt.",
+    "engineLabel": "Motor de reconocimiento",
+    "engineAuto": "Automático",
+    "engineBrowser": "Navegador",
+    "engineCloud": "Nube",
+    "engineUsing": "En uso: {engine}",
+    "reasonNoMic": "No disponible: no se encontró ningún micrófono.",
+    "reasonInsecure": "No disponible: el micrófono requiere una conexión segura (HTTPS o localhost).",
+    "reasonNoEngine": "No disponible: este navegador no tiene reconocimiento de voz. Configura el servicio en la nube abajo.",
+    "reasonCloudNotConfigured": "No disponible: el servicio en la nube aún no tiene clave de API.",
+    "languageLabel": "Idioma de reconocimiento",
+    "languageDescription": "El idioma en el que hablas al dictar.",
+    "languageFollowApp": "Seguir el idioma de la app",
+    "languageCustom": "Etiqueta personalizada",
+    "languageCustomPlaceholder": "Etiqueta BCP-47, p. ej. en-GB",
+    "cloudTitle": "Servicio de voz en la nube",
+    "cloudDescription": "Un endpoint compatible con OpenAI. El audio solo se envía cuando se usa el motor en la nube.",
+    "baseUrl": "URL base",
+    "apiKey": "Clave de API",
+    "apiKeyDescription": "Se guarda en el llavero del sistema y no se vuelve a mostrar.",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "Guardada",
+    "removeKey": "Eliminar clave",
+    "keyRemoved": "Clave de API eliminada",
+    "sttModel": "Modelo de voz a texto",
+    "save": "Guardar",
+    "saving": "Guardando...",
+    "saved": "Ajustes de voz guardados",
+    "saveFailed": "No se pudieron guardar los ajustes de voz: {message}"
   }
 }

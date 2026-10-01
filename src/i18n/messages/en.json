@@ -38,6 +38,7 @@
     "preferences": "Preferences",
     "nav": {
       "general": "General",
+      "speech": "Speech",
       "appearance": "Appearance",
       "agents": "Agents",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "Suspend/resume custom style",
         "description": "Escape hatch: turns all custom colors and CSS off, and back on"
+      },
+      "toggle_voice_input": {
+        "title": "Voice Input",
+        "description": "Start or stop dictating into the message box"
       },
       "zoom_in": {
         "title": "Zoom in",
@@ -3171,7 +3176,18 @@
         "mentionGroupAgent": "Agents",
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
-        "mentionGroupSkill": "Skills"
+        "mentionGroupSkill": "Skills",
+        "speechStart": "Start voice input",
+        "speechStop": "Stop and insert",
+        "speechTranscribing": "Transcribing...",
+        "speechCancelHint": "Esc to cancel",
+        "speechMicDenied": "Microphone access was denied",
+        "speechUnavailableNoEngine": "Voice input unavailable: this browser has no speech recognition",
+        "speechUnavailableInsecure": "Voice input needs a secure connection (HTTPS or localhost)",
+        "speechUnavailableNoMic": "Voice input unavailable: no microphone found",
+        "speechUnavailableCloud": "Voice input needs a cloud API key (Settings → Speech)",
+        "speechCloudAuthFailed": "The speech service rejected the API key",
+        "speechFailed": "Voice input failed"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -6590,5 +6606,41 @@
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "Speech",
+    "sectionDescription": "Dictate prompts with your voice and configure the speech service.",
+    "loading": "Loading speech settings...",
+    "loadFailed": "Failed to load speech settings: {message}",
+    "inputTitle": "Voice input",
+    "inputDescription": "Show a microphone button in the chat composer that turns speech into prompt text.",
+    "engineLabel": "Recognition engine",
+    "engineAuto": "Auto",
+    "engineBrowser": "Browser",
+    "engineCloud": "Cloud",
+    "engineUsing": "Using: {engine}",
+    "reasonNoMic": "Unavailable: no microphone was found.",
+    "reasonInsecure": "Unavailable: the microphone needs a secure (HTTPS or localhost) connection.",
+    "reasonNoEngine": "Unavailable: this browser has no speech recognition. Configure the cloud service below.",
+    "reasonCloudNotConfigured": "Unavailable: the cloud service has no API key yet.",
+    "languageLabel": "Recognition language",
+    "languageDescription": "The language you speak when dictating.",
+    "languageFollowApp": "Follow app language",
+    "languageCustom": "Custom tag",
+    "languageCustomPlaceholder": "BCP-47 tag, e.g. en-GB",
+    "cloudTitle": "Cloud speech service",
+    "cloudDescription": "An OpenAI-compatible endpoint. Audio is sent to it only when the Cloud engine is in use.",
+    "baseUrl": "Base URL",
+    "apiKey": "API key",
+    "apiKeyDescription": "Stored in the system keychain, never shown again after saving.",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "Saved",
+    "removeKey": "Remove key",
+    "keyRemoved": "API key removed",
+    "sttModel": "Speech-to-text model",
+    "save": "Save",
+    "saving": "Saving...",
+    "saved": "Speech settings saved",
+    "saveFailed": "Failed to save speech settings: {message}"
   }
 }

@@ -38,6 +38,7 @@
     "preferences": "環境設定",
     "nav": {
       "general": "一般",
+      "speech": "音声",
       "appearance": "外観",
       "agents": "エージェント",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "カスタムスタイルの停止/再開",
         "description": "緊急脱出用: カスタム配色と CSS をすべてオフにし、再度押すと元に戻します"
+      },
+      "toggle_voice_input": {
+        "title": "音声入力",
+        "description": "メッセージ欄への音声入力を開始・停止します"
       },
       "zoom_in": {
         "title": "拡大",
@@ -3171,7 +3176,18 @@
         "mentionGroupAgent": "エージェント",
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
-        "mentionGroupSkill": "スキル"
+        "mentionGroupSkill": "スキル",
+        "speechStart": "音声入力を開始",
+        "speechStop": "停止して挿入",
+        "speechTranscribing": "文字起こし中...",
+        "speechCancelHint": "Esc でキャンセル",
+        "speechMicDenied": "マイクへのアクセスが拒否されました",
+        "speechUnavailableNoEngine": "音声入力は利用できません: このブラウザは音声認識に対応していません",
+        "speechUnavailableInsecure": "音声入力には安全な接続（HTTPS または localhost）が必要です",
+        "speechUnavailableNoMic": "音声入力は利用できません: マイクが見つかりません",
+        "speechUnavailableCloud": "音声入力にはクラウドの API キーが必要です（設定 → 音声）",
+        "speechCloudAuthFailed": "音声サービスが API キーを拒否しました",
+        "speechFailed": "音声入力に失敗しました"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -6590,5 +6606,41 @@
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "音声",
+    "sectionDescription": "音声でプロンプトを入力し、音声サービスを設定します。",
+    "loading": "音声設定を読み込み中...",
+    "loadFailed": "音声設定の読み込みに失敗しました: {message}",
+    "inputTitle": "音声入力",
+    "inputDescription": "チャット入力欄にマイクボタンを表示し、音声をプロンプトのテキストに変換します。",
+    "engineLabel": "認識エンジン",
+    "engineAuto": "自動",
+    "engineBrowser": "ブラウザ",
+    "engineCloud": "クラウド",
+    "engineUsing": "使用中: {engine}",
+    "reasonNoMic": "利用不可: マイクが見つかりません。",
+    "reasonInsecure": "利用不可: マイクには安全な接続（HTTPS または localhost）が必要です。",
+    "reasonNoEngine": "利用不可: このブラウザは音声認識に対応していません。下のクラウドサービスを設定してください。",
+    "reasonCloudNotConfigured": "利用不可: クラウドサービスに API キーが設定されていません。",
+    "languageLabel": "認識言語",
+    "languageDescription": "音声入力で話す言語。",
+    "languageFollowApp": "アプリの言語に従う",
+    "languageCustom": "カスタムタグ",
+    "languageCustomPlaceholder": "BCP-47 タグ（例: en-GB）",
+    "cloudTitle": "クラウド音声サービス",
+    "cloudDescription": "OpenAI 互換のエンドポイント。クラウドエンジン使用時のみ音声が送信されます。",
+    "baseUrl": "ベース URL",
+    "apiKey": "API キー",
+    "apiKeyDescription": "システムのキーチェーンに保存され、保存後は表示されません。",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "保存済み",
+    "removeKey": "キーを削除",
+    "keyRemoved": "API キーを削除しました",
+    "sttModel": "音声認識モデル",
+    "save": "保存",
+    "saving": "保存中...",
+    "saved": "音声設定を保存しました",
+    "saveFailed": "音声設定の保存に失敗しました: {message}"
   }
 }

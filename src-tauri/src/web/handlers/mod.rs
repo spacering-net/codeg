@@ -39,6 +39,7 @@ pub mod terminal;
 pub mod token_usage;
 mod upload_jail;
 pub mod version_control;
+pub mod speech;
 pub mod web_server;
 pub mod work_task;
 pub mod workspace_files;

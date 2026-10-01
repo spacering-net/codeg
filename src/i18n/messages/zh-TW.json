@@ -38,6 +38,7 @@
     "preferences": "偏好設定",
     "nav": {
       "general": "一般",
+      "speech": "語音",
       "appearance": "外觀",
       "agents": "智能體",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "停用/恢復自訂樣式",
         "description": "逃生艙：一鍵關閉全部自訂配色與 CSS，再按一次恢復"
+      },
+      "toggle_voice_input": {
+        "title": "語音輸入",
+        "description": "開始或停止向輸入框口述"
       },
       "zoom_in": {
         "title": "放大",
@@ -3171,7 +3176,18 @@
         "mentionGroupAgent": "智能體",
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
-        "mentionGroupSkill": "技能"
+        "mentionGroupSkill": "技能",
+        "speechStart": "開始語音輸入",
+        "speechStop": "停止並插入",
+        "speechTranscribing": "正在轉寫...",
+        "speechCancelHint": "按 Esc 取消",
+        "speechMicDenied": "麥克風權限遭拒",
+        "speechUnavailableNoEngine": "語音輸入無法使用：此瀏覽器不支援語音辨識",
+        "speechUnavailableInsecure": "語音輸入需要安全連線（HTTPS 或 localhost）",
+        "speechUnavailableNoMic": "語音輸入無法使用：找不到麥克風",
+        "speechUnavailableCloud": "語音輸入需要雲端 API 金鑰（設定 → 語音）",
+        "speechCloudAuthFailed": "語音服務拒絕了此 API 金鑰",
+        "speechFailed": "語音輸入失敗"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -6590,5 +6606,41 @@
         "probeFailed": "內建瀏覽器無法確認它能透過通道連到遠端主機。請稍後再試。"
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "語音",
+    "sectionDescription": "用語音口述提示詞，並設定語音服務。",
+    "loading": "正在載入語音設定...",
+    "loadFailed": "載入語音設定失敗：{message}",
+    "inputTitle": "語音輸入",
+    "inputDescription": "在聊天輸入框中顯示麥克風按鈕，將語音轉換為提示詞文字。",
+    "engineLabel": "辨識引擎",
+    "engineAuto": "自動",
+    "engineBrowser": "瀏覽器",
+    "engineCloud": "雲端",
+    "engineUsing": "目前使用：{engine}",
+    "reasonNoMic": "無法使用：找不到麥克風。",
+    "reasonInsecure": "無法使用：麥克風需要安全連線（HTTPS 或 localhost）。",
+    "reasonNoEngine": "無法使用：此瀏覽器不支援語音辨識。請在下方設定雲端服務。",
+    "reasonCloudNotConfigured": "無法使用：雲端服務尚未設定 API 金鑰。",
+    "languageLabel": "辨識語言",
+    "languageDescription": "口述時所說的語言。",
+    "languageFollowApp": "跟隨應用程式語言",
+    "languageCustom": "自訂標籤",
+    "languageCustomPlaceholder": "BCP-47 標籤，例如 en-GB",
+    "cloudTitle": "雲端語音服務",
+    "cloudDescription": "相容 OpenAI 的端點。僅在使用雲端引擎時才會傳送音訊。",
+    "baseUrl": "基礎 URL",
+    "apiKey": "API 金鑰",
+    "apiKeyDescription": "儲存在系統鑰匙圈中，儲存後不再顯示。",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "已儲存",
+    "removeKey": "移除金鑰",
+    "keyRemoved": "API 金鑰已移除",
+    "sttModel": "語音轉文字模型",
+    "save": "儲存",
+    "saving": "正在儲存...",
+    "saved": "語音設定已儲存",
+    "saveFailed": "儲存語音設定失敗：{message}"
   }
 }

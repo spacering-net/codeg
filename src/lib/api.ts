@@ -28,6 +28,8 @@ import type {
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  SpeechCloudSettings,
+  SpeechCloudSettingsView,
   ForgeChangeDetail,
   ForgeChangedFileList,
   ForgeComment,
@@ -6060,4 +6062,29 @@ export async function forgeSettingsSet(
   settings: ForgePanelSettings | null
 ): Promise<ForgeSettingsStore> {
   return getTransport().call("forge_settings_set", { folderId, settings })
+}
+export async function speechGetSettings(): Promise<SpeechCloudSettingsView> {
+  return getTransport().call<SpeechCloudSettingsView>("speech_get_settings", {})
+}
+
+export async function speechUpdateSettings(
+  settings: SpeechCloudSettings,
+  apiKey: string | null
+): Promise<SpeechCloudSettingsView> {
+  return getTransport().call<SpeechCloudSettingsView>(
+    "speech_update_settings",
+    { settings, apiKey }
+  )
+}
+
+export async function speechTranscribe(
+  audioBase64: string,
+  mimeType: string,
+  language: string | null
+): Promise<string> {
+  return getTransport().call<string>("speech_transcribe", {
+    audioBase64,
+    mimeType,
+    language,
+  })
 }

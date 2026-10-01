@@ -203,7 +203,31 @@ vi.mock("@/hooks/use-appearance", async (importOriginal) => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
 }))
 
+// The dictation engine itself is covered in use-speech-input.test.ts; here the
+// hook is a stub whose captured `onFinalText` stands in for a finished take.
+const speechHook = vi.hoisted(() => ({
+  onFinalText: null as ((text: string) => void) | null,
+}))
+vi.mock("./composer/use-speech-input", () => ({
+  useSpeechInput: (opts: { onFinalText: (text: string) => void }) => {
+    speechHook.onFinalText = opts.onFinalText
+    return {
+      status: "idle",
+      interimText: "",
+      unavailableReason: null,
+      start: () => {},
+      stop: () => {},
+      cancel: () => {},
+      toggle: () => {},
+    }
+  },
+}))
+
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetSpeechPrefsCacheForTests,
+  saveSpeechPrefs,
+} from "@/lib/speech-prefs"
 import type {
   PromptCapabilitiesInfo,
   SessionConfigOptionInfo,
@@ -2566,5 +2590,57 @@ describe("MessageInput folder data arriving after mount", () => {
     expect(handle.getText()).toBe("keep this draft")
     act(() => editor.commands.undo())
     expect(handle.getText()).toBe("")
+  })
+})
+
+describe("MessageInput voice input", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    speechHook.onFinalText = null
+    localStorage.clear()
+    resetSpeechPrefsCacheForTests()
+  })
+
+  function enableSpeech(enabled: boolean) {
+    localStorage.clear()
+    resetSpeechPrefsCacheForTests()
+    saveSpeechPrefs({ input: { enabled, engine: "auto", language: "" } })
+  }
+
+  const startLabel = enMessages.Folder.chat.messageInput.speechStart
+
+  it("hides the mic button while voice input is off", async () => {
+    enableSpeech(false)
+    renderInput({})
+    await waitFor(() =>
+      expect(composerHandle.current?.getEditor()).toBeTruthy()
+    )
+    expect(
+      screen.queryByRole("button", { name: startLabel })
+    ).not.toBeInTheDocument()
+  })
+
+  it("inserts a transcript as literal text at the caret without sending", async () => {
+    enableSpeech(true)
+    const onSend = vi.fn()
+    renderInput({ onSend })
+    expect(
+      await screen.findByRole("button", { name: startLabel })
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(composerHandle.current?.getEditor()).toBeTruthy()
+    )
+    const editor = composerHandle.current!.getEditor()!
+    act(() => {
+      editor.commands.setContent("note:")
+      editor.commands.focus("end")
+    })
+
+    act(() => speechHook.onFinalText?.("<b>x</b>"))
+
+    expect(serializeDocToText(editor.state.doc)).toBe("note: <b>x</b>")
+    expect(editor.getHTML()).not.toContain("<b>")
+    expect(onSend).not.toHaveBeenCalled()
   })
 })

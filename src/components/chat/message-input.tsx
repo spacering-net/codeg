@@ -123,6 +123,8 @@ import {
   serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
 import { textToInlineContent } from "@/components/chat/composer/plain-text-content"
+import { ComposerSpeechControl } from "@/components/chat/composer/composer-speech-button"
+import { useSpeechPrefs } from "@/lib/speech-prefs"
 import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
@@ -443,6 +445,7 @@ export function MessageInput({
     knownInvocationsRef.current = knownInvocations
   }, [knownInvocations])
   const { shortcuts } = useShortcutSettings()
+  const speechEnabled = useSpeechPrefs().input.enabled
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
   const editorRef = useRef<RichComposerHandle>(null)
@@ -2335,7 +2338,21 @@ export function MessageInput({
                     </div>
                   )}
                 </div>
-                <div className="shrink-0">{actionButtons}</div>
+                <div className="shrink-0">
+                  {speechEnabled ? (
+                    <div className="flex items-center gap-1">
+                      <ComposerSpeechControl
+                        editorRef={editorRef}
+                        isActive={isActive}
+                        shortcut={shortcuts.toggle_voice_input}
+                        onInserted={syncComposerEmpty}
+                      />
+                      {actionButtons}
+                    </div>
+                  ) : (
+                    actionButtons
+                  )}
+                </div>
               </div>
               {showDragActive && (
                 <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-md border border-dashed border-primary/50 bg-background/80 text-xs text-muted-foreground">

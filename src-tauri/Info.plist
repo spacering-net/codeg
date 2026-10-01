@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Codeg uses the microphone to turn your speech into chat prompts.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Codeg uses speech recognition to turn your speech into chat prompts.</string>
+</dict>
+</plist>

@@ -38,6 +38,7 @@
     "preferences": "Préférences",
     "nav": {
       "general": "Général",
+      "speech": "Voix",
       "appearance": "Apparence",
       "agents": "Agents IA",
       "mcp": "MCP",
@@ -508,6 +509,10 @@
       "toggle_custom_style": {
         "title": "Suspendre/réactiver le style personnalisé",
         "description": "Issue de secours : désactive toutes les couleurs et le CSS personnalisés, puis les réactive"
+      },
+      "toggle_voice_input": {
+        "title": "Saisie vocale",
+        "description": "Démarrer ou arrêter la dictée dans la zone de message"
       },
       "zoom_in": {
         "title": "Zoom avant",
@@ -3171,7 +3176,18 @@
         "mentionGroupAgent": "Agents",
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
-        "mentionGroupSkill": "Compétences"
+        "mentionGroupSkill": "Compétences",
+        "speechStart": "Démarrer la saisie vocale",
+        "speechStop": "Arrêter et insérer",
+        "speechTranscribing": "Transcription...",
+        "speechCancelHint": "Échap pour annuler",
+        "speechMicDenied": "L'accès au micro a été refusé",
+        "speechUnavailableNoEngine": "Saisie vocale indisponible : ce navigateur n'a pas de reconnaissance vocale",
+        "speechUnavailableInsecure": "La saisie vocale nécessite une connexion sécurisée (HTTPS ou localhost)",
+        "speechUnavailableNoMic": "Saisie vocale indisponible : aucun micro détecté",
+        "speechUnavailableCloud": "La saisie vocale nécessite une clé API cloud (Paramètres → Voix)",
+        "speechCloudAuthFailed": "Le service vocal a refusé la clé API",
+        "speechFailed": "Échec de la saisie vocale"
       },
       "messageQueue": {
         "addToQueue": "Mettre en file",
@@ -6590,5 +6606,41 @@
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
     }
+  },
+  "SpeechSettings": {
+    "sectionTitle": "Voix",
+    "sectionDescription": "Dictez vos prompts à la voix et configurez le service vocal.",
+    "loading": "Chargement des paramètres vocaux...",
+    "loadFailed": "Échec du chargement des paramètres vocaux : {message}",
+    "inputTitle": "Saisie vocale",
+    "inputDescription": "Affiche un bouton micro dans la zone de saisie du chat pour transformer la voix en texte de prompt.",
+    "engineLabel": "Moteur de reconnaissance",
+    "engineAuto": "Automatique",
+    "engineBrowser": "Navigateur",
+    "engineCloud": "Cloud",
+    "engineUsing": "Utilisé : {engine}",
+    "reasonNoMic": "Indisponible : aucun micro détecté.",
+    "reasonInsecure": "Indisponible : le micro nécessite une connexion sécurisée (HTTPS ou localhost).",
+    "reasonNoEngine": "Indisponible : ce navigateur ne propose pas de reconnaissance vocale. Configurez le service cloud ci-dessous.",
+    "reasonCloudNotConfigured": "Indisponible : le service cloud n'a pas encore de clé API.",
+    "languageLabel": "Langue de reconnaissance",
+    "languageDescription": "La langue que vous parlez pendant la dictée.",
+    "languageFollowApp": "Suivre la langue de l'app",
+    "languageCustom": "Balise personnalisée",
+    "languageCustomPlaceholder": "Balise BCP-47, p. ex. en-GB",
+    "cloudTitle": "Service vocal cloud",
+    "cloudDescription": "Un endpoint compatible OpenAI. L'audio n'y est envoyé que lorsque le moteur cloud est utilisé.",
+    "baseUrl": "URL de base",
+    "apiKey": "Clé API",
+    "apiKeyDescription": "Stockée dans le trousseau du système, jamais réaffichée après l'enregistrement.",
+    "apiKeyPlaceholder": "sk-...",
+    "apiKeySaved": "Enregistrée",
+    "removeKey": "Supprimer la clé",
+    "keyRemoved": "Clé API supprimée",
+    "sttModel": "Modèle de transcription",
+    "save": "Enregistrer",
+    "saving": "Enregistrement...",
+    "saved": "Paramètres vocaux enregistrés",
+    "saveFailed": "Échec de l'enregistrement des paramètres vocaux : {message}"
   }
 }

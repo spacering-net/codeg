@@ -283,6 +283,41 @@ fn ensure_windows_undecorated(_window: &tauri::WebviewWindow) {}
 /// Apply platform-specific post-creation setup.
 pub(crate) fn post_window_setup(window: &tauri::WebviewWindow) {
     ensure_windows_undecorated(window);
+    #[cfg(target_os = "linux")]
+    enable_linux_audio_capture(window);
+}
+
+/// WebKitGTK ships with media capture off and denies every permission request
+/// nobody answers, so `getUserMedia({ audio: true })` fails in app windows until
+/// both are enabled here. Only microphone requests are granted; camera and any
+/// other request keep WebKit's default handling.
+#[cfg(target_os = "linux")]
+fn enable_linux_audio_capture(window: &tauri::WebviewWindow) {
+    use gtk::prelude::*;
+    use webkit2gtk::{
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt,
+    };
+
+    let result = window.with_webview(|platform| {
+        let webview = platform.inner();
+        if let Some(settings) = WebViewExt::settings(&webview) {
+            settings.set_enable_media_stream(true);
+            settings.set_enable_mediasource(true);
+        }
+        webview.connect_permission_request(|_, request| {
+            match request.downcast_ref::<UserMediaPermissionRequest>() {
+                Some(media) if media.is_for_audio_device() && !media.is_for_video_device() => {
+                    request.allow();
+                    true
+                }
+                _ => false,
+            }
+        });
+    });
+    if let Err(err) = result {
+        tracing::warn!("[windows] microphone capture not enabled: {err}");
+    }
 }
 
 impl SettingsWindowState {
