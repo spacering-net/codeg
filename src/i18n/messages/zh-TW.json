@@ -766,6 +766,7 @@
       "install": "安裝",
       "upgrade": "升級",
       "uninstall": "卸載",
+      "installGuide": "安裝指南",
       "uninstalling": "卸載中...",
       "saveEnvVars": "儲存環境變數",
       "saving": "儲存中...",
@@ -991,6 +992,19 @@
       "tempReclaimConfirmBody": "將永久刪除 {size}。系統暫存目錄與其他應用共用，確認前請先核對每條路徑；仍在使用中的項目會被略過。",
       "tempReclaimConfirmAction": "刪除",
       "tempReclaimCancel": "取消"
+    },
+    "kiro": {
+      "configManagement": "設定管理",
+      "configDescription": "Kiro CLI 的登入狀態、agent 與 MCP 伺服器都保存在 ~/.kiro。模型、agent、thinking 與思考等級不在這裡：Kiro 透過 ACP 回報它們，由輸入框的選擇器按工作階段管理。",
+      "permissionsTitle": "權限",
+      "permissionModeLabel": "權限模式",
+      "permissionModeAsk": "執行工具前詢問（預設）",
+      "permissionModeTrustAll": "信任所有工具（--trust-all-tools）",
+      "permissionModeAskHint": "需要確認的工具呼叫（執行指令、寫入檔案等）會先交給你確認；唯讀工具直接執行。",
+      "permissionModeTrustAllHint": "以 --trust-all-tools 啟動工作階段：所有工具呼叫都不再跳出確認，包括執行指令與寫入檔案。對新工作階段生效。",
+      "apiKeyLabel": "API Key（選填）",
+      "apiKeyHint": "以 KIRO_API_KEY 傳給 CLI。留空則使用 kiro-cli login 登入的帳號；只有無法用瀏覽器登入的環境（伺服器、Docker）才需要 API Key。",
+      "saveConfig": "儲存 Kiro 設定"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 設定",
@@ -1484,7 +1498,13 @@
       "saveQoderConfigFailed": "儲存 Qoder 設定失敗",
       "antigravitySaved": "已保存 Antigravity 配置",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "保存 Antigravity 配置失败"
+      "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
+      "kiroSaved": "Kiro 設定已儲存",
+      "saveKiroFailed": "儲存 Kiro 設定失敗",
+      "systemAgentAlreadyLatest": "{name} 已是最新版本（{version}）"
+    },
+    "distribution": {
+      "system": "官方安裝"
     },
     "version": {
       "statusLabel": "版本狀態",
@@ -1492,6 +1512,9 @@
       "recommendedLocal": "建議：{recommendedVersion} · 本地：{localVersion}",
       "localOnly": "本機：{localVersion}",
       "localInstalled": "{versionText}。已安裝。",
+      "systemInstalled": "{versionText}。由其官方安裝程式安裝與更新，Codeg 直接啟動這份安裝。",
+      "systemInstalledUpdatable": "{versionText}。透過官方安裝程式安裝；點擊「升級」會執行它內建的更新程式。",
+      "systemMissing": "本機未找到。請用官方安裝程式安裝後再重新整理。",
       "platformUnsupported": "{versionText}。目前平台不支援該 Agent。",
       "uvxNotReady": "{versionText}。uv 執行階段未安裝——請在下方 uv 預檢項中安裝後再使用該 Agent。",
       "clickInstall": "{versionText}。請點擊右側安裝。",

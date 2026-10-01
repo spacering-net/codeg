@@ -53,6 +53,29 @@ pub enum AgentDistribution {
         /// install`, an official installer) launch it without `uv`.
         system_cmd: Option<(&'static str, &'static [&'static str])>,
     },
+    /// An agent codeg never installs or pins: the vendor ships it only through
+    /// an installer of its own (a signed `.dmg`, an `.msi`, a shell script that
+    /// also wires up shell integrations), which the binary cache cannot
+    /// reproduce. The one supported install is the user's, found on PATH the
+    /// way [`AgentDistribution::Binary`]'s system fallback finds a CLI — PATH,
+    /// then `~/.local/bin`, then [`binary_system_dirs`] — and the Settings page
+    /// points at `install_url` instead of offering an Install button. Its
+    /// version is whatever `<cmd> --version` reports.
+    ///
+    /// UPGRADES go through the vendor's own updater when it has one
+    /// (`update_args`), so the copy the user's terminal runs and the copy codeg
+    /// launches stay one and the same install.
+    System {
+        /// Command name on PATH.
+        cmd: &'static str,
+        args: &'static [&'static str],
+        env: &'static [(&'static str, &'static str)],
+        /// The vendor's own install instructions.
+        install_url: &'static str,
+        /// Arguments that make `cmd` update ITSELF in place without prompting,
+        /// or `None` when the CLI has no such command (no Upgrade button then).
+        update_args: Option<&'static [&'static str]>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +166,8 @@ impl AcpAgentMeta {
             AgentDistribution::Npx { version, .. }
             | AgentDistribution::Binary { version, .. }
             | AgentDistribution::Uvx { version, .. } => Some(*version),
+            // Nothing is pinned: the user's own install is the only version.
+            AgentDistribution::System { .. } => None,
         }
     }
 
@@ -172,7 +197,7 @@ impl AcpAgentMeta {
     pub fn supports_custom_version(&self) -> bool {
         match &self.distribution {
             AgentDistribution::Npx { .. } => true,
-            AgentDistribution::Uvx { .. } => false,
+            AgentDistribution::Uvx { .. } | AgentDistribution::System { .. } => false,
             AgentDistribution::Binary {
                 version, platforms, ..
             } => platforms
@@ -196,6 +221,10 @@ const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
 } else {
     &[]
 };
+
+/// Where the Settings page sends a user who has no `kiro-cli` yet. The CLI's
+/// own `/docs/cli/installation/` redirects here.
+const KIRO_INSTALL_URL: &str = "https://kiro.dev/docs/getting-started/installation/";
 
 pub fn current_platform() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -224,7 +253,7 @@ pub fn current_platform() -> &'static str {
     }
 }
 
-/// The fifteen built-in agents. Excludes user-registered custom agents — use
+/// The sixteen built-in agents. Excludes user-registered custom agents — use
 /// [`all_acp_agents`] for the live set.
 pub fn builtin_acp_agents() -> Vec<AgentType> {
     vec![
@@ -243,10 +272,11 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
         AgentType::DeepSeek,
         AgentType::Qoder,
         AgentType::Antigravity,
+        AgentType::Kiro,
     ]
 }
 
-/// Every agent codeg can currently drive: the fifteen built-ins followed by
+/// Every agent codeg can currently drive: the sixteen built-ins followed by
 /// the user's registered custom ACP agents (sorted by id).
 pub fn all_acp_agents() -> Vec<AgentType> {
     let mut agents = builtin_acp_agents();
@@ -271,6 +301,7 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::DeepSeek => "deepseek-acp",
         AgentType::Qoder => "qoder-cli",
         AgentType::Antigravity => "antigravity-acp",
+        AgentType::Kiro => "kiro-cli",
         // A custom agent's registry id IS its identity.
         AgentType::Custom(id) => id,
     }
@@ -293,6 +324,7 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "deepseek-acp" => Some(AgentType::DeepSeek),
         "qoder-cli" => Some(AgentType::Qoder),
         "antigravity-acp" => Some(AgentType::Antigravity),
+        "kiro-cli" => Some(AgentType::Kiro),
         // Only ids the user has actually registered resolve. An unregistered
         // id must stay `None` so the ACP-registry picker still offers it as
         // "addable" rather than treating it as already supported.
@@ -466,9 +498,9 @@ pub fn uses_cursor_acp_backend(agent_type: AgentType) -> bool {
 
 fn distribution_uses_cursor_acp(distribution: &AgentDistribution) -> bool {
     match distribution {
-        AgentDistribution::Npx { cmd, args, .. } | AgentDistribution::Binary { cmd, args, .. } => {
-            launch_spec_uses_cursor_acp(cmd, args)
-        }
+        AgentDistribution::Npx { cmd, args, .. }
+        | AgentDistribution::Binary { cmd, args, .. }
+        | AgentDistribution::System { cmd, args, .. } => launch_spec_uses_cursor_acp(cmd, args),
         AgentDistribution::Uvx {
             cmd,
             args,
@@ -3384,6 +3416,55 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 }),
             },
         },
+        AgentType::Kiro => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "Kiro CLI",
+            description: "Amazon's Kiro agent in the terminal (native ACP via kiro-cli acp)",
+            // `kiro-cli acp` is the CLI's OWN ACP server. Verified handshake
+            // against 2.24.1: `agentInfo.name = "Kiro CLI Agent"`,
+            // `loadSession: true`, empty `sessionCapabilities`, image prompts
+            // (no embeddedContext), MCP http but NOT sse, and no
+            // `authMethods` — sign-in is the CLI's own `kiro-cli login`, which
+            // the ACP server reuses. `session/new` answers with standard
+            // `modes` (the agent configs: kiro_default / kiro_planner /
+            // kiro_guide, plus any user agent under `~/.kiro/agents`) and
+            // `models`, so the composer selectors need no per-agent code.
+            //
+            // SYSTEM, NOT BINARY. Kiro ships only through its own installers:
+            // a universal `Kiro CLI.dmg` on macOS (an app bundle that links
+            // its binaries into `~/.local/bin` on first launch), an `.msi` on
+            // Windows, and Linux archives whose bundled `install.sh` places
+            // them in `~/.local/bin`. The binary cache can do none of the
+            // first two, and `kiro-cli` is a dispatcher that execs a sibling
+            // `kiro-cli-chat` (the ACP server itself), so it is not a
+            // single-file install either. A codeg-managed copy would also
+            // diverge from the one the user's terminal runs, while both share
+            // `~/.kiro` (sessions, settings, agents, sign-in) and the CLI
+            // updates itself in place (`kiro-cli update`). So codeg launches
+            // the user's install and never pins one; `~/.local/bin` is probed
+            // by the system resolver even when a Finder-launched app's PATH
+            // lacks it.
+            //
+            // Sessions land in `~/.kiro/sessions/cli/<id>.json` (metadata) +
+            // `<id>.jsonl` (the event log) for every entrypoint, ACP included,
+            // which `parsers::kiro` reads for history. MCP servers come from
+            // `~/.kiro/settings/mcp.json`, which the CLI loads natively, so
+            // codeg manages that file and does not forward the same servers
+            // over `session/new` (see `load_mcp_servers_for_agent`).
+            distribution: AgentDistribution::System {
+                cmd: "kiro-cli",
+                args: &["acp"],
+                env: &[],
+                install_url: KIRO_INSTALL_URL,
+                // `kiro-cli update --non-interactive` checks Kiro's release
+                // channel and installs a newer build without asking (2.24.1:
+                // "No updates available, 2.24.1 is the latest version." when
+                // current, exit 0) — the same updater `kiro-cli update` runs
+                // in the terminal, so the install stays the vendor's.
+                update_args: Some(&["update", "--non-interactive"]),
+            },
+        },
         // Handled by the early return above; kept so the match stays
         // exhaustive without a catch-all that could swallow a new built-in.
         AgentType::Custom(_) => unreachable!("custom agents resolve via custom_registry"),
@@ -3614,6 +3695,46 @@ mod tests {
         match get_agent_meta(AgentType::OpenCode).distribution {
             AgentDistribution::Binary { dir_entry, .. } => assert!(dir_entry.is_none()),
             other => panic!("expected binary distribution for OpenCode, got {other:?}"),
+        }
+    }
+
+    // Kiro is the one SYSTEM agent: its installers (a .dmg, an .msi, a Linux
+    // install.sh) are nothing the binary cache can replay, so there is no pin,
+    // no custom version, and the launch is the user's own `kiro-cli acp` —
+    // upgraded in place by the CLI's own updater.
+    #[test]
+    fn kiro_launches_the_system_cli_without_a_pin() {
+        let meta = get_agent_meta(AgentType::Kiro);
+        assert_eq!(registry_id_for(AgentType::Kiro), "kiro-cli");
+        assert_eq!(from_registry_id("kiro-cli"), Some(AgentType::Kiro));
+        assert_eq!(meta.registry_version(), None);
+        assert!(!meta.supports_custom_version());
+        assert!(!uses_cursor_acp_backend(AgentType::Kiro));
+        match meta.distribution {
+            AgentDistribution::System {
+                cmd,
+                args,
+                env,
+                install_url,
+                update_args,
+            } => {
+                assert_eq!(cmd, "kiro-cli");
+                assert_eq!(args, &["acp"]);
+                assert!(env.is_empty());
+                assert!(install_url.starts_with("https://kiro.dev/"));
+                assert_eq!(update_args, Some(&["update", "--non-interactive"][..]));
+            }
+            other => panic!("expected system distribution for Kiro, got {other:?}"),
+        }
+        // No other built-in rides the system distribution: every one of them
+        // has a pinned version codeg installs itself.
+        for agent_type in builtin_acp_agents() {
+            if agent_type != AgentType::Kiro {
+                assert!(
+                    get_agent_meta(agent_type).registry_version().is_some(),
+                    "{agent_type:?} lost its pin"
+                );
+            }
         }
     }
 

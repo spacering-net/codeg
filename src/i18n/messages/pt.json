@@ -766,6 +766,7 @@
       "install": "Instalar",
       "upgrade": "Atualizar",
       "uninstall": "Desinstalar",
+      "installGuide": "Guia de instalação",
       "uninstalling": "Desinstalando...",
       "saveEnvVars": "Salvar variáveis de ambiente",
       "saving": "Salvando...",
@@ -991,6 +992,19 @@
       "tempReclaimConfirmBody": "Isto exclui permanentemente {size}. A pasta temporária do sistema é compartilhada com outros aplicativos, então confira cada caminho antes de confirmar; o que ainda estiver em uso é ignorado.",
       "tempReclaimConfirmAction": "Excluir",
       "tempReclaimCancel": "Cancelar"
+    },
+    "kiro": {
+      "configManagement": "Configuração",
+      "configDescription": "O Kiro CLI guarda o login, os agentes e os servidores MCP em ~/.kiro. Modelo, agente, raciocínio e esforço não ficam aqui: o Kiro os informa via ACP, então os seletores do compositor os gerenciam por sessão.",
+      "permissionsTitle": "Permissões",
+      "permissionModeLabel": "Modo de permissão",
+      "permissionModeAsk": "Perguntar antes de executar ferramentas (padrão)",
+      "permissionModeTrustAll": "Confiar em todas as ferramentas (--trust-all-tools)",
+      "permissionModeAskHint": "O Kiro envia a você primeiro cada chamada que precisa de aprovação (comandos, gravação de arquivos, …). Ferramentas somente leitura rodam sem perguntar.",
+      "permissionModeTrustAllHint": "As sessões iniciam com --trust-all-tools: toda chamada de ferramenta roda sem confirmação, inclusive comandos e gravação de arquivos. Vale para novas sessões.",
+      "apiKeyLabel": "Chave de API (opcional)",
+      "apiKeyHint": "Passada à CLI como KIRO_API_KEY. Deixe vazia para usar a conta conectada via kiro-cli login; só é necessária onde não há login pelo navegador (servidores, Docker).",
+      "saveConfig": "Salvar configuração do Kiro"
     },
     "deepseek": {
       "configManagement": "Configuração do DeepSeek Harness",
@@ -1484,7 +1498,13 @@
       "saveQoderConfigFailed": "Falha ao salvar a configuração do Qoder",
       "antigravitySaved": "Antigravity config saved",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config",
+      "kiroSaved": "Configuração do Kiro salva",
+      "saveKiroFailed": "Falha ao salvar a configuração do Kiro",
+      "systemAgentAlreadyLatest": "{name} já está atualizado ({version})"
+    },
+    "distribution": {
+      "system": "instalador oficial"
     },
     "version": {
       "statusLabel": "Status da versão",
@@ -1492,6 +1512,9 @@
       "recommendedLocal": "Recomendada: {recommendedVersion} · Local: {localVersion}",
       "localOnly": "Local: {localVersion}",
       "localInstalled": "{versionText}. Instalado.",
+      "systemInstalled": "{versionText}. Instalado e atualizado pelo próprio instalador; o Codeg o executa como está.",
+      "systemInstalledUpdatable": "{versionText}. Instalado com o instalador oficial; Atualizar executa o próprio atualizador.",
+      "systemMissing": "Não encontrado nesta máquina. Instale com o instalador oficial e depois atualize.",
       "platformUnsupported": "{versionText}. A plataforma atual não suporta este agente.",
       "uvxNotReady": "{versionText}. O runtime do uv não está instalado — instale-o na verificação do uv abaixo para usar este agente.",
       "clickInstall": "{versionText}. Clique em Instalar à direita.",

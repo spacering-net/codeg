@@ -766,6 +766,7 @@
       "install": "Install",
       "upgrade": "Upgrade",
       "uninstall": "Uninstall",
+      "installGuide": "Install guide",
       "uninstalling": "Uninstalling...",
       "saveEnvVars": "Save environment variables",
       "saving": "Saving...",
@@ -991,6 +992,19 @@
       "tempReclaimConfirmBody": "This permanently deletes {size}. The system temp folder is shared with other applications, so check each path before confirming — anything still in use is skipped.",
       "tempReclaimConfirmAction": "Delete",
       "tempReclaimCancel": "Cancel"
+    },
+    "kiro": {
+      "configManagement": "Configuration",
+      "configDescription": "Kiro CLI keeps its sign-in, agents and MCP servers in ~/.kiro. Model, agent, thinking and effort are not here: Kiro reports them over ACP, so the composer's own selectors own them per session.",
+      "permissionsTitle": "Permissions",
+      "permissionModeLabel": "Permission mode",
+      "permissionModeAsk": "Ask before running tools (default)",
+      "permissionModeTrustAll": "Trust all tools (--trust-all-tools)",
+      "permissionModeAskHint": "Kiro sends each tool call that needs approval (shell commands, file writes, …) to you first. Read-only tools run without asking.",
+      "permissionModeTrustAllHint": "Sessions launch with --trust-all-tools: every tool call runs without a confirmation prompt, including shell commands and file writes. Takes effect for new sessions.",
+      "apiKeyLabel": "API key (optional)",
+      "apiKeyHint": "Passed to the CLI as KIRO_API_KEY. Leave empty to use the account you signed in with via kiro-cli login; an API key is only needed where no browser sign-in is possible (servers, Docker).",
+      "saveConfig": "Save Kiro Config"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness Configuration",
@@ -1484,7 +1498,13 @@
       "saveQoderConfigFailed": "Failed to save Qoder config",
       "antigravitySaved": "Antigravity config saved",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config",
+      "kiroSaved": "Kiro config saved",
+      "saveKiroFailed": "Failed to save Kiro config",
+      "systemAgentAlreadyLatest": "{name} is already up to date ({version})"
+    },
+    "distribution": {
+      "system": "official installer"
     },
     "version": {
       "statusLabel": "Version Status",
@@ -1492,6 +1512,9 @@
       "recommendedLocal": "Recommended: {recommendedVersion} · Local: {localVersion}",
       "localOnly": "Local: {localVersion}",
       "localInstalled": "{versionText}. Installed.",
+      "systemInstalled": "{versionText}. Installed and updated by its own installer; Codeg launches it as-is.",
+      "systemInstalledUpdatable": "{versionText}. Installed with the official installer; Upgrade runs its own updater.",
+      "systemMissing": "Not found on this machine. Install it with the official installer, then refresh.",
       "platformUnsupported": "{versionText}. Current platform does not support this agent.",
       "uvxNotReady": "{versionText}. The uv runtime isn't installed — install it from the uv check below to use this agent.",
       "clickInstall": "{versionText}. Click Install on the right.",

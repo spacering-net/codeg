@@ -1411,6 +1411,25 @@ pub struct GrokModelSpec {
     pub context_window: Option<u64>,
 }
 
+/// Kiro CLI's reasoning-effort state, from `_kiro.dev/metadata.reasoning`:
+/// `{"support": "alwaysOn" | "toggleable" | "unavailable", "effort"?: "high",
+/// "effortLevels": ["low", …, "max"]}` (verified against 2.24.1). `support`
+/// describes thinking, not effort, so only `effortLevels` is read; `effort` is
+/// absent until one is set in the session. Backend-internal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KiroReasoning {
+    /// Levels the CURRENT model accepts; empty when it takes none.
+    pub levels: Vec<String>,
+    /// The level the session runs at, when Kiro reports one.
+    pub current: Option<String>,
+    /// Whether the current model's thinking can be switched on and off
+    /// (`support: "toggleable"`; `alwaysOn` and `unavailable` models cannot).
+    pub thinking_toggleable: bool,
+    /// Whether thinking is on (`thinkingEnabled`), when Kiro reports it — only
+    /// once it has been set, in the session or as the model's saved default.
+    pub thinking: Option<bool>,
+}
+
 /// Read-only snapshot of the modes + config_options an agent advertises
 /// when it opens a new session. Used by `ConnectionManager::probe_agent_options`
 /// to give the delegation settings UI an authoritative view of what an
@@ -1506,6 +1525,16 @@ pub struct AcpAgentInfo {
     /// "the adapter isn't installed" instead of "the agent isn't", without
     /// hardcoding a second copy of the agent list frontend-side.
     pub is_acp_adapter: bool,
+    /// The vendor's install page for an agent codeg does not install itself
+    /// (`AgentDistribution::System`, i.e. `distribution_type == "system"`):
+    /// the Settings page links it where other agents get an Install button.
+    /// `None` for every agent codeg installs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_url: Option<String>,
+    /// Whether that install can be upgraded from the Settings page through the
+    /// vendor's own updater (`acp_update_system_agent`). Always `false` for
+    /// agents codeg installs itself — they upgrade through their own actions.
+    pub supports_self_update: bool,
     /// For custom agents, where the definition came from (`registry` |
     /// `manual`); `None` for built-ins. A manual definition's
     /// `registry_version` is user-typed, so the version-status display shows

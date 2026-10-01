@@ -766,6 +766,7 @@
       "install": "설치",
       "upgrade": "업그레이드",
       "uninstall": "제거",
+      "installGuide": "설치 가이드",
       "uninstalling": "제거 중...",
       "saveEnvVars": "환경 변수 저장",
       "saving": "저장 중...",
@@ -991,6 +992,19 @@
       "tempReclaimConfirmBody": "{size}를 영구적으로 삭제합니다. 시스템 임시 폴더는 다른 앱과 공유되므로 확인하기 전에 각 경로를 확인하세요. 사용 중인 항목은 건너뜁니다.",
       "tempReclaimConfirmAction": "삭제",
       "tempReclaimCancel": "취소"
+    },
+    "kiro": {
+      "configManagement": "구성 관리",
+      "configDescription": "Kiro CLI의 로그인 상태, agent, MCP 서버는 ~/.kiro에 저장됩니다. 모델, agent, thinking, 추론 수준은 여기에 없습니다. Kiro가 ACP로 알려 주므로 입력창의 선택기가 세션별로 관리합니다.",
+      "permissionsTitle": "권한",
+      "permissionModeLabel": "권한 모드",
+      "permissionModeAsk": "도구 실행 전에 확인(기본값)",
+      "permissionModeTrustAll": "모든 도구 신뢰(--trust-all-tools)",
+      "permissionModeAskHint": "승인이 필요한 도구 호출(명령 실행, 파일 쓰기 등)은 먼저 확인을 요청합니다. 읽기 전용 도구는 확인 없이 실행됩니다.",
+      "permissionModeTrustAllHint": "--trust-all-tools로 세션을 시작합니다. 명령 실행과 파일 쓰기를 포함한 모든 도구 호출이 확인 없이 실행됩니다. 새 세션부터 적용됩니다.",
+      "apiKeyLabel": "API 키(선택)",
+      "apiKeyHint": "KIRO_API_KEY로 CLI에 전달됩니다. 비워 두면 kiro-cli login으로 로그인한 계정을 사용합니다. 브라우저 로그인이 불가능한 환경(서버, Docker)에서만 필요합니다.",
+      "saveConfig": "Kiro 구성 저장"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 구성",
@@ -1484,7 +1498,13 @@
       "saveQoderConfigFailed": "Qoder 설정 저장에 실패했습니다",
       "antigravitySaved": "Antigravity config saved",
       "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config",
+      "kiroSaved": "Kiro 구성을 저장했습니다",
+      "saveKiroFailed": "Kiro 구성을 저장하지 못했습니다",
+      "systemAgentAlreadyLatest": "{name}은(는) 이미 최신 버전입니다({version})"
+    },
+    "distribution": {
+      "system": "공식 설치 프로그램"
     },
     "version": {
       "statusLabel": "버전 상태",
@@ -1492,6 +1512,9 @@
       "recommendedLocal": "권장: {recommendedVersion} · 로컬: {localVersion}",
       "localOnly": "로컬: {localVersion}",
       "localInstalled": "{versionText}. 설치되어 있습니다.",
+      "systemInstalled": "{versionText}. 공식 설치 프로그램으로 설치·업데이트되며 Codeg는 그대로 실행합니다.",
+      "systemInstalledUpdatable": "{versionText}. 공식 설치 프로그램으로 설치됨. 「업그레이드」는 자체 업데이트 프로그램을 실행합니다.",
+      "systemMissing": "이 컴퓨터에서 찾을 수 없습니다. 공식 설치 프로그램으로 설치한 뒤 새로고침하세요.",
       "platformUnsupported": "{versionText}. 현재 플랫폼에서는 이 에이전트를 지원하지 않습니다.",
       "uvxNotReady": "{versionText}. uv 런타임이 설치되지 않았습니다. 아래 uv 검사에서 설치하면 이 에이전트를 사용할 수 있습니다.",
       "clickInstall": "{versionText}. 오른쪽의 설치를 클릭하세요.",

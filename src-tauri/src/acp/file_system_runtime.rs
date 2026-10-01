@@ -599,6 +599,15 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             trims: false,
             default_rel: &[".gemini"],
         }],
+        // `KIRO_HOME` names the `.kiro` directory ITSELF (agents, prompts,
+        // skills, steering, settings and sessions all hang off it), the same
+        // shape `GEMINI_HOME` has for Antigravity — see
+        // `parsers::kiro::resolve_kiro_home_dir`.
+        AgentType::Kiro => &[RootSlot {
+            candidates: &[("KIRO_HOME", "", VERBATIM)],
+            trims: false,
+            default_rel: &[".kiro"],
+        }],
         AgentType::ClaudeCode => &[RootSlot {
             candidates: &[("CLAUDE_CONFIG_DIR", "", VERBATIM)],
             trims: false,
@@ -2114,8 +2123,9 @@ mod tests {
     fn root_slots_match_parser_resolvers() {
         use crate::parsers;
 
-        let expected: [(AgentType, PathBuf); 12] = [
+        let expected: [(AgentType, PathBuf); 13] = [
             (AgentType::Grok, parsers::grok::resolve_grok_home_dir()),
+            (AgentType::Kiro, parsers::kiro::resolve_kiro_home_dir()),
             (
                 AgentType::ClaudeCode,
                 parsers::claude::resolve_claude_config_dir(),

@@ -973,14 +973,18 @@ mod tests {
     // A custom definition must not claim a BUILT-IN registry id: it would be
     // shadowed by `from_registry_id`'s built-in arms and double-listed by
     // `all_acp_agents`. This is also the hydration path that retires a
-    // pre-integration `deepseek-acp` / `qoder-cli` / `antigravity-acp` custom
-    // entry (kept in the DB, never published) once the id became a built-in.
+    // pre-integration `deepseek-acp` / `qoder-cli` / `antigravity-acp` /
+    // `kiro-cli` custom entry (kept in the DB, never published) once the id
+    // became a built-in. (Kiro's is also migrated away by
+    // `m20261001_000001_kiro_builtin_agent`, so this is the backstop for a
+    // database that re-grows one.)
     #[test]
     fn rejects_builtin_registry_id_collisions() {
         for id in [
             "deepseek-acp",
             "qoder-cli",
             "antigravity-acp",
+            "kiro-cli",
             "claude-acp",
             "cursor",
         ] {

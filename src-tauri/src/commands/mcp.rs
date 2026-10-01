@@ -71,6 +71,8 @@ pub enum McpAppType {
     Qoder,
     /// Serializes as `antigravity`, matching `AgentType::as_wire`.
     Antigravity,
+    /// Serializes as `kiro`, matching `AgentType::as_wire`.
+    Kiro,
     /// Serializes as `pi`, matching `AgentType::as_wire`. Scan-only: codeg
     /// reads and round-trips the pi MCP EXTENSION's config, but pi is not an
     /// assignable target and gets no MCP over the ACP wire. See the pi section
@@ -88,7 +90,7 @@ pub enum McpAppType {
 /// server come back on the next refresh. Both used to keep their own hand-typed
 /// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
 /// (which fails to compile when a variant is added) is what keeps them honest.
-const ALL_MCP_APPS: [McpAppType; 15] = [
+const ALL_MCP_APPS: [McpAppType; 16] = [
     McpAppType::ClaudeCode,
     McpAppType::Codex,
     McpAppType::Gemini,
@@ -103,6 +105,7 @@ const ALL_MCP_APPS: [McpAppType; 15] = [
     McpAppType::DeepSeek,
     McpAppType::Qoder,
     McpAppType::Antigravity,
+    McpAppType::Kiro,
     McpAppType::Pi,
 ];
 
@@ -575,11 +578,13 @@ fn normalize_apps(apps: Vec<McpAppType>) -> Vec<McpAppType> {
 /// config.toml has only stdio and streamable-HTTP transports, so it cannot host an
 /// SSE server — writing one would persist a url-only entry that Codex loads as HTTP
 /// and codeg then reads back as `http`, silently reclassifying the shared canonical
-/// spec. Write paths preflight-exclude such (app, spec) pairs instead of writing a
-/// misrepresented entry or aborting the whole multi-agent operation. See issue #325.
+/// spec. Kiro is the same case (its config knows `stdio`/`http`/`registry` and its
+/// client speaks only streamable HTTP). Write paths preflight-exclude such (app,
+/// spec) pairs instead of writing a misrepresented entry or aborting the whole
+/// multi-agent operation. See issue #325.
 fn app_can_host_spec(app: McpAppType, canonical_spec: &Value) -> bool {
     let is_sse = canonical_spec.get("type").and_then(Value::as_str) == Some("sse");
-    !(matches!(app, McpAppType::Codex | McpAppType::DeepSeek) && is_sse)
+    !(matches!(app, McpAppType::Codex | McpAppType::DeepSeek | McpAppType::Kiro) && is_sse)
 }
 
 #[derive(Debug, Clone)]
@@ -3074,7 +3079,7 @@ impl LocalMcpReader {
     }
 }
 
-fn local_mcp_readers() -> [LocalMcpReader; 15] {
+fn local_mcp_readers() -> [LocalMcpReader; 16] {
     [
         LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, read_claude_servers),
         LocalMcpReader::new("Codex", McpAppType::Codex, read_codex_servers),
@@ -3094,6 +3099,7 @@ fn local_mcp_readers() -> [LocalMcpReader; 15] {
             read_antigravity_servers,
         ),
         LocalMcpReader::new("Qoder", McpAppType::Qoder, read_qoder_servers),
+        LocalMcpReader::new("Kiro CLI", McpAppType::Kiro, read_kiro_servers),
         LocalMcpReader::new("pi", McpAppType::Pi, read_pi_servers),
     ]
 }
@@ -3169,6 +3175,11 @@ fn scan_local_servers_from_readers(readers: &[LocalMcpReader]) -> LocalMcpScan {
                 let owner_values = openclaw_declares.remove(&id).unwrap_or_default();
                 merge_kimi_extension_fields(&mut entry.0, &spec, &owner_values);
             }
+            if reader.app == McpAppType::Kiro {
+                // Same first-writer-wins hazard for Kiro's own fields
+                // (`disabled`, `autoApprove`, …). See `merge_kiro_extension_fields`.
+                merge_kiro_extension_fields(&mut entry.0, &spec, &entry.1);
+            }
             entry.1.insert(reader.app);
         }
     }
@@ -3238,6 +3249,7 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
         McpAppType::DeepSeek => upsert_deepseek_server(id, spec),
         McpAppType::Qoder => upsert_qoder_server(id, spec),
         McpAppType::Antigravity => upsert_antigravity_server(id, spec),
+        McpAppType::Kiro => upsert_kiro_server(id, spec),
         McpAppType::Pi => upsert_pi_server(id, spec),
     }
 }
@@ -3276,6 +3288,9 @@ pub fn read_servers_for_agent_type(
         // itself at session setup — see the Antigravity section above for why
         // it rides the forward skip list rather than the wire.
         AgentType::Antigravity => read_antigravity_servers(),
+        // Kiro loads `<KIRO_HOME>/settings/mcp.json` natively — see the Kiro
+        // section below for why it rides the forward skip list.
+        AgentType::Kiro => read_kiro_servers(),
         // Custom agents get MCP purely over the ACP wire (`session/new`'s
         // `mcpServers`); codeg deliberately knows nothing about their native
         // config files, so there is no per-agent store to read back here.
@@ -4074,6 +4089,230 @@ fn remove_cursor_server_at(path: &Path, id: &str) -> Result<bool, AppCommandErro
 }
 
 // ---------------------------------------------------------------------------
+// Kiro CLI  (<KIRO_HOME>/settings/mcp.json  →  top-level `mcpServers`)
+//
+// Kiro reads its user-global MCP config from `<KIRO_HOME>/settings/mcp.json`
+// (default `~/.kiro/settings/mcp.json`; a workspace `.kiro/settings/mcp.json`
+// and the agent config's own `mcpServers` layer over it by name). Entries are
+// Claude-shaped — `command`/`args`/`env` for stdio, `url`/`headers` for remote
+// — with an optional `type` that the 2.24.1 schema documents as `"stdio"`,
+// `"http"` or `"registry"`. Its client is rmcp's streamable-HTTP one: there
+// is no SSE transport to write, so an SSE server is preflight-excluded like it
+// is for Codex (`app_can_host_spec`), and a `registry` entry — a name looked up
+// in an MCP registry, not a server spec — is skipped by the reader because
+// codeg cannot represent it.
+//
+// Kiro also models per-server fields no canonical spec carries: `disabled`,
+// `autoApprove`, `disabledTools`, `timeout` (ms), and for remote servers
+// `oauth` / `oauthScopes`. The writer emits the canonical fields plus those
+// (validated to the shape Kiro expects), and the scan folds Kiro's own copies
+// back into a server another agent claimed first
+// (`merge_kiro_extension_fields`), so editing a server in codeg never silently
+// re-enables it or drops its approvals.
+//
+// Because Kiro loads this file natively at session start, `Kiro` is on the
+// ACP forward skip list in `connection.rs`; the built-in `codeg-mcp` companion
+// is injected separately by `inject_codeg_mcp`, so it still reaches Kiro.
+// ---------------------------------------------------------------------------
+
+fn kiro_mcp_json_path() -> PathBuf {
+    crate::parsers::kiro::resolve_kiro_home_dir()
+        .join("settings")
+        .join("mcp.json")
+}
+
+fn read_kiro_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+    read_kiro_servers_at(&kiro_mcp_json_path())
+}
+
+fn read_kiro_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCommandError> {
+    let root = read_json_file(path)?;
+    let mut out = BTreeMap::new();
+
+    let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else {
+        return Ok(out);
+    };
+
+    for (id, spec) in servers {
+        match canonicalize_spec(spec, &format!("Kiro config '{id}'")) {
+            Ok(normalized) => {
+                out.insert(id.to_string(), normalized);
+            }
+            Err(err) => {
+                tracing::warn!("[MCP] skip invalid Kiro MCP entry id={id}: {err}");
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// A Kiro-only field, validated to the shape Kiro's `CustomToolConfig` takes.
+///
+/// A wrong-typed value is dropped rather than written: Kiro deserializes the
+/// whole file, so one malformed entry would cost the user every server in it.
+/// `oauth` / `oauthScopes` exist only on the remote branch.
+fn is_kiro_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
+    let is_string_array =
+        |v: &Value| v.as_array().is_some_and(|items| items.iter().all(Value::is_string));
+    match key {
+        "disabled" => value.is_boolean(),
+        "autoApprove" | "disabledTools" => is_string_array(value),
+        "timeout" => value.as_u64().is_some(),
+        "oauth" => !stdio && value.is_object(),
+        "oauthScopes" => !stdio && is_string_array(value),
+        _ => false,
+    }
+}
+
+/// The per-server fields Kiro models beyond the canonical spec.
+const KIRO_EXTENSION_KEYS: &[&str] = &[
+    "disabled",
+    "autoApprove",
+    "disabledTools",
+    "timeout",
+    "oauth",
+    "oauthScopes",
+];
+
+/// Whether an agent OTHER than Kiro reads `key` from its own MCP config, so
+/// its copy is a genuine setting rather than an echo of Kiro's that codeg
+/// once wrote there (canonical writers pass unknown keys through). Cline's
+/// `mcpServers` entries carry `disabled` / `autoApprove` / `timeout`, Gemini's
+/// carry `timeout`, and Kimi's carry `disabledTools`.
+fn kiro_key_native_elsewhere(key: &str, holders: &BTreeSet<McpAppType>) -> bool {
+    match key {
+        "disabled" | "autoApprove" => holders.contains(&McpAppType::Cline),
+        "timeout" => {
+            holders.contains(&McpAppType::Cline) || holders.contains(&McpAppType::Gemini)
+        }
+        "disabledTools" => holders.contains(&McpAppType::KimiCode),
+        _ => false,
+    }
+}
+
+/// Resolve Kiro's extension fields on the spec the scan resolved a server to.
+///
+/// The scan is first-writer-wins, so a server another agent also holds
+/// surfaces as THAT agent's copy. Its value for a Kiro field is either the
+/// other agent's own setting — when that agent reads the field natively (see
+/// [`kiro_key_native_elsewhere`]), in which case it stands — or a stale echo
+/// of an earlier save, in which case Kiro's copy is authoritative, its
+/// ABSENCE included. Without that, a change the user made in Kiro's own file
+/// would be masked by the echo and written back over on the next save.
+fn merge_kiro_extension_fields(
+    resolved: &mut Value,
+    kiro_spec: &Value,
+    earlier_holders: &BTreeSet<McpAppType>,
+) {
+    let stdio = resolved.get("type").and_then(Value::as_str) == Some("stdio");
+    let Some(target) = resolved.as_object_mut() else {
+        return;
+    };
+    let source = kiro_spec.as_object();
+    for key in KIRO_EXTENSION_KEYS {
+        let kiro_value = source
+            .and_then(|obj| obj.get(*key))
+            .filter(|value| is_kiro_extension_field(key, value, stdio));
+        if kiro_key_native_elsewhere(key, earlier_holders) {
+            if let Some(value) = kiro_value {
+                target
+                    .entry((*key).to_string())
+                    .or_insert_with(|| value.clone());
+            }
+            continue;
+        }
+        match kiro_value {
+            Some(value) => {
+                target.insert((*key).to_string(), value.clone());
+            }
+            None => {
+                target.remove(*key);
+            }
+        }
+    }
+}
+
+/// Convert codeg's canonical spec into a Kiro `mcpServers` entry: the shape
+/// Kiro's docs write (no `type`; Kiro infers stdio from `command` and http from
+/// `url`), plus the Kiro fields that pass [`is_kiro_extension_field`].
+/// Anything else — `cwd`, which Kiro does not model, and whatever foreign keys
+/// canonicalize passed through from another agent's file — stays off disk.
+fn canonical_to_kiro_entry(spec: &Value) -> Result<Value, AppCommandError> {
+    let canonical = canonicalize_spec(spec, "Kiro write")?;
+    let Some(obj) = canonical.as_object() else {
+        return Ok(canonical);
+    };
+    let stdio = obj.get("type").and_then(Value::as_str) == Some("stdio");
+    let mut out = Map::new();
+    for (key, value) in obj {
+        let base = if stdio {
+            matches!(key.as_str(), "command" | "args" | "env")
+        } else {
+            matches!(key.as_str(), "url" | "headers")
+        };
+        if base || is_kiro_extension_field(key, value, stdio) {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(Value::Object(out))
+}
+
+fn upsert_kiro_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    upsert_kiro_server_at(&kiro_mcp_json_path(), id, spec)
+}
+
+fn upsert_kiro_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
+    if !root.is_object() {
+        root = json!({});
+    }
+
+    let entry = canonical_to_kiro_entry(spec)?;
+
+    let obj = root.as_object_mut().ok_or_else(|| {
+        mcp_configuration_invalid(format!("invalid JSON root in {}", path.display()))
+    })?;
+    if !obj.get("mcpServers").map(Value::is_object).unwrap_or(false) {
+        obj.insert("mcpServers".to_string(), Value::Object(Map::new()));
+    }
+
+    let map = obj
+        .get_mut("mcpServers")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            mcp_configuration_invalid(format!("invalid mcpServers in {}", path.display()))
+        })?;
+    map.insert(id.to_string(), entry);
+
+    write_json_file(path, &root)
+}
+
+fn remove_kiro_server(id: &str) -> Result<bool, AppCommandError> {
+    remove_kiro_server_at(&kiro_mcp_json_path(), id)
+}
+
+fn remove_kiro_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let mut root = read_json_file(path)?;
+    let Some(obj) = root.as_object_mut() else {
+        return Ok(false);
+    };
+    let Some(servers) = obj.get_mut("mcpServers").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+
+    let removed = servers.remove(id).is_some();
+    if removed {
+        write_json_file(path, &root)?;
+    }
+    Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
 // Hermes Agent  (~/.hermes/config.yaml  →  mcp_servers)
 //
 // Hermes reads the `mcp_servers` section of its own config.yaml natively at
@@ -4342,6 +4581,7 @@ fn remove_server_for_app(app: McpAppType, id: &str) -> Result<bool, AppCommandEr
         McpAppType::DeepSeek => remove_deepseek_server(id),
         McpAppType::Qoder => remove_qoder_server(id),
         McpAppType::Antigravity => remove_antigravity_server(id),
+        McpAppType::Kiro => remove_kiro_server(id),
         McpAppType::Pi => remove_pi_server(id),
     }
 }
@@ -7148,6 +7388,97 @@ mod tests {
         assert_eq!(root.pointer("/model/name"), Some(&json!("qmodel_38max")));
     }
 
+    // Kiro's `settings/mcp.json`: Claude-shaped entries without a `type`,
+    // plus Kiro-only fields. A round trip through codeg must keep the user's
+    // `disabled` / `autoApprove` / `timeout`, drop what Kiro does not model
+    // (`cwd`), and leave the file's other servers alone.
+    #[test]
+    fn kiro_mcp_json_round_trips_its_own_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings").join("mcp.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            json!({"mcpServers": {
+                "fetch": {
+                    "command": "uvx",
+                    "args": ["mcp-server-fetch"],
+                    "env": {"LOG": "1"},
+                    "disabled": true,
+                    "autoApprove": ["fetch"],
+                    "timeout": 120000
+                },
+                "remote": {"url": "https://h/mcp", "headers": {"A": "b"}, "oauthScopes": ["s"]},
+                "reg": {"type": "registry"}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+
+        let servers = read_kiro_servers_at(&path).unwrap();
+        // A registry reference names no server codeg could represent.
+        assert_eq!(servers.keys().collect::<Vec<_>>(), ["fetch", "remote"]);
+        assert_eq!(servers["fetch"]["type"], json!("stdio"));
+        assert_eq!(servers["remote"]["type"], json!("http"));
+
+        // Re-save `fetch` with a foreign field and a wrong-typed Kiro one.
+        let mut edited = servers["fetch"].clone();
+        edited["cwd"] = json!("/somewhere");
+        edited["timeout"] = json!("soon");
+        upsert_kiro_server_at(&path, "fetch", &edited).unwrap();
+        let root: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let fetch = &root["mcpServers"]["fetch"];
+        assert_eq!(fetch["command"], json!("uvx"));
+        assert_eq!(fetch["disabled"], json!(true));
+        assert_eq!(fetch["autoApprove"], json!(["fetch"]));
+        assert!(fetch.get("type").is_none(), "Kiro infers the transport");
+        assert!(fetch.get("cwd").is_none(), "Kiro does not model cwd");
+        assert!(fetch.get("timeout").is_none(), "wrong-typed field dropped");
+        // Untouched neighbours, including the one codeg cannot read.
+        assert_eq!(root["mcpServers"]["reg"], json!({"type": "registry"}));
+        assert_eq!(root["mcpServers"]["remote"]["oauthScopes"], json!(["s"]));
+
+        assert!(remove_kiro_server_at(&path, "fetch").unwrap());
+        assert!(!remove_kiro_server_at(&path, "fetch").unwrap());
+    }
+
+    // Kiro's client speaks streamable HTTP only, so an SSE server is excluded
+    // from it the same way it is from Codex.
+    #[test]
+    fn kiro_cannot_host_sse() {
+        let sse = json!({"type": "sse", "url": "https://h/sse"});
+        let http = json!({"type": "http", "url": "https://h/mcp"});
+        assert!(!app_can_host_spec(McpAppType::Kiro, &sse));
+        assert!(app_can_host_spec(McpAppType::Kiro, &http));
+    }
+
+    // First-writer-wins must not strip Kiro's own fields from a server that
+    // another agent also holds, nor let a stale echo in that agent's file
+    // mask what Kiro's own file says — unless that agent reads the field
+    // itself, in which case its value is a real setting and stands.
+    #[test]
+    fn kiro_extension_fields_resolve_by_ownership() {
+        let claude_only: BTreeSet<McpAppType> = [McpAppType::ClaudeCode].into();
+        let with_cline: BTreeSet<McpAppType> = [McpAppType::Cline].into();
+        let kiro = json!({"type": "stdio", "command": "x", "disabled": false, "autoApprove": ["t"], "oauth": {}});
+
+        // Claude does not read `disabled`: its `true` is an echo; Kiro wins,
+        // and a field Kiro no longer has (`timeout`) goes too.
+        let mut resolved = json!({"type": "stdio", "command": "x", "disabled": true, "timeout": 5});
+        merge_kiro_extension_fields(&mut resolved, &kiro, &claude_only);
+        assert_eq!(resolved["disabled"], json!(false));
+        assert_eq!(resolved["autoApprove"], json!(["t"]));
+        assert!(resolved.get("timeout").is_none());
+        assert!(resolved.get("oauth").is_none(), "oauth is remote-only");
+
+        // Cline reads `disabled` natively: its value stands; Kiro only fills gaps.
+        let mut resolved = json!({"type": "stdio", "command": "x", "disabled": true});
+        merge_kiro_extension_fields(&mut resolved, &kiro, &with_cline);
+        assert_eq!(resolved["disabled"], json!(true));
+        assert_eq!(resolved["autoApprove"], json!(["t"]));
+    }
+
     #[test]
     fn all_mcp_apps_is_exhaustive() {
         // `ALL_MCP_APPS` drives BOTH write paths' "and no others" semantics:
@@ -7178,6 +7509,7 @@ mod tests {
                 | McpAppType::DeepSeek
                 | McpAppType::Qoder
                 | McpAppType::Antigravity
+                | McpAppType::Kiro
                 | McpAppType::Pi => {}
             }
         }
@@ -7232,6 +7564,7 @@ mod tests {
             (McpAppType::DeepSeek, AgentType::DeepSeek),
             (McpAppType::Qoder, AgentType::Qoder),
             (McpAppType::Antigravity, AgentType::Antigravity),
+            (McpAppType::Kiro, AgentType::Kiro),
             (McpAppType::Pi, AgentType::Pi),
         ] {
             let wire = serde_json::to_value(app).expect("serialize app type");
