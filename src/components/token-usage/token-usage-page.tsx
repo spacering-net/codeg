@@ -42,6 +42,7 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
+import { SubscriptionQuotaPanel } from "@/components/token-usage/subscription-quota-panel"
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { formatFolderLabelWithAlias } from "@/lib/folder-display"
 import {
@@ -808,6 +809,11 @@ export function TokenUsagePage() {
             as segments, the long tail folded into one pill), the dimension
             filters, and a single overflow menu carrying every data action.
             Absent entirely on the first-run empty state — see `showToolbar`. */}
+      <div className="shrink-0 px-4 pt-4">
+        <div className="mx-auto w-full max-w-6xl">
+          <SubscriptionQuotaPanel />
+        </div>
+      </div>
       {showToolbar && (
         <div className="shrink-0 p-4">
           <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-2.5 gap-y-2">

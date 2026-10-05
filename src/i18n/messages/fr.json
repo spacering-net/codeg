@@ -6093,6 +6093,13 @@
   },
   "TokenUsage": {
     "title": "Consommation de tokens",
+    "quotaTitle": "Reste d’abonnement",
+    "quotaHint": "Codeg compte les tokens sur cette page. Le quota restant n’apparaît que si le CLI du fournisseur le publie. L’usage ACP est l’occupation du contexte, pas le reste d’abonnement.",
+    "quotaRemaining": "{remaining} sur {limit} restants",
+    "quotaProviderLink": "Page d’usage du fournisseur",
+    "quotaLoading": "Lecture du quota officiel…",
+    "quotaResets": "Réinitialisation {when}",
+    "quotaExtraRemaining": "{name} : {remaining} restants",
     "rangeLabel": "Période",
     "range7d": "7 jours",
     "range30d": "30 jours",

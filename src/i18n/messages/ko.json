@@ -6093,6 +6093,13 @@
   },
   "TokenUsage": {
     "title": "토큰 사용량",
+    "quotaTitle": "구독 잔여량",
+    "quotaHint": "이 페이지는 Codeg가 측정한 토큰입니다. 플랜 잔여량은 제공자 CLI가 공개할 때만 표시됩니다. ACP usage는 컨텍스트 점유이며 구독 잔여량이 아닙니다.",
+    "quotaRemaining": "{limit} 중 {remaining} 남음",
+    "quotaProviderLink": "제공자 사용량 페이지",
+    "quotaLoading": "공식 할당량 읽는 중…",
+    "quotaResets": "{when}에 재설정",
+    "quotaExtraRemaining": "{name}: {remaining} 남음",
     "rangeLabel": "기간",
     "range7d": "7일",
     "range30d": "30일",
