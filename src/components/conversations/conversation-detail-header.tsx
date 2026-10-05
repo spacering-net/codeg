@@ -62,6 +62,8 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
+import { SessionQuotaChip } from "./session-quota-chip"
+import type { AgentType } from "@/lib/types"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -75,6 +77,7 @@ interface ConversationDetailHeaderProps {
   folderPath: string | undefined
   title: string
   status: ConversationStatus | undefined
+  agentType: AgentType
 }
 
 /**
@@ -99,6 +102,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   folderPath,
   title,
   status,
+  agentType,
 }: ConversationDetailHeaderProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
@@ -260,7 +264,8 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           {displayTitle}
         </span>
       </div>
-      <div className="flex shrink-0 items-center">
+      <div className="flex shrink-0 items-center gap-0.5">
+        <SessionQuotaChip agentType={agentType} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
