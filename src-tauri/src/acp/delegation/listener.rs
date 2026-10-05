@@ -815,6 +815,7 @@ impl DelegationListener {
                 task_id: req.task_id,
                 reason: req.reason,
                 external_handle: req.external_handle,
+                overrides: None,
             })
             .await
     }
@@ -1243,6 +1244,7 @@ impl DelegationListener {
             working_dir,
             requested_working_dir,
             external_handle: req.external_handle,
+            overrides: None,
         };
         self.broker.start_delegation(delegation_req).await
     }
@@ -2287,6 +2289,7 @@ mod tests {
                 working_dir: None,
                 requested_working_dir: None,
                 external_handle: None,
+                overrides: None,
             })
             .await;
         let task_id = ack.task_id.clone().expect("running task carries an id");
@@ -2440,6 +2443,7 @@ mod tests {
                         working_dir: None,
                         requested_working_dir: None,
                         external_handle: None,
+                        overrides: None,
                     })
                     .await
                     .task_id
@@ -2542,6 +2546,7 @@ mod tests {
                 working_dir: None,
                 requested_working_dir: None,
                 external_handle: None,
+                overrides: None,
             })
             .await;
         let task_id = ack.task_id.clone().unwrap();
@@ -2593,6 +2598,7 @@ mod tests {
                     working_dir: None,
                     requested_working_dir: None,
                     external_handle: Some("h-1".into()),
+                    overrides: None,
                 };
                 broker.handle_request(req).await
             })

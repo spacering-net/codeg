@@ -217,6 +217,27 @@ impl Default for DelegationConfig {
     }
 }
 
+/// The `(preferred_mode_id, preferred_config_values)` a delegation child is
+/// spawned with: the agent's configured defaults, with the request's own
+/// overrides (if any) laid on top. Shared by fresh spawns and resumes so the
+/// two can never disagree on precedence.
+fn effective_spawn_options(
+    cfg: &DelegationConfig,
+    agent_type: AgentType,
+    overrides: Option<&AgentDelegationDefaults>,
+) -> (Option<String>, BTreeMap<String, String>) {
+    let defaults = cfg
+        .agent_defaults
+        .get(&agent_type)
+        .cloned()
+        .unwrap_or_default();
+    let effective = match overrides {
+        Some(o) => defaults.merged_with(o),
+        None => defaults,
+    };
+    (effective.mode_id, effective.config_values)
+}
+
 /// A delegation task running in the background after `start_delegation`
 /// returned its `Running` ack. The async redesign drops the parked
 /// `oneshot::Sender` the old `PendingCall` carried: the parent's
@@ -2460,14 +2481,8 @@ impl DelegationBroker {
         }
 
         // --- Spawn child connection --------------------------------------------
-        // Pull per-agent overrides from the broker config (defaults to empty).
-        // Cloning is cheap — `AgentDelegationDefaults` is at most one Option<String>
-        // and a small BTreeMap, and the spawner consumes both fields by value.
-        let (preferred_mode_id, preferred_config_values) = cfg
-            .agent_defaults
-            .get(&req.agent_type)
-            .map(|d: &AgentDelegationDefaults| (d.mode_id.clone(), d.config_values.clone()))
-            .unwrap_or((None, BTreeMap::new()));
+        let (preferred_mode_id, preferred_config_values) =
+            effective_spawn_options(&cfg, req.agent_type, req.overrides.as_ref());
         // Checkpoint #1 (opportunistic): if a parent cancel already landed
         // during the claim/depth phase, bail before spawning a child the parent
         // has abandoned. No child exists yet, so there's nothing to tear down.
@@ -4035,11 +4050,8 @@ impl DelegationBroker {
         // --- Re-spawn the child, resuming its agent session --------------------
         // Same per-agent defaults as a fresh spawn; no depth re-check — the
         // child row already exists at its chain position, resume adds no node.
-        let (preferred_mode_id, preferred_config_values) = cfg
-            .agent_defaults
-            .get(&ctx.agent_type)
-            .map(|d: &AgentDelegationDefaults| (d.mode_id.clone(), d.config_values.clone()))
-            .unwrap_or((None, BTreeMap::new()));
+        let (preferred_mode_id, preferred_config_values) =
+            effective_spawn_options(&cfg, ctx.agent_type, req.overrides.as_ref());
         // Checkpoint #1: a parent cancel during the gates — nothing spawned yet.
         if self.take_inflight_cancel(inflight_id).await {
             return report_from_outcome(
@@ -4657,6 +4669,7 @@ mod tests {
             working_dir: None,
             requested_working_dir: None,
             external_handle: None,
+            overrides: None,
         }
     }
 
@@ -5414,6 +5427,87 @@ mod tests {
         assert_eq!(args[0].agent_type, AgentType::Codex);
         assert!(args[0].preferred_mode_id.is_none());
         assert!(args[0].preferred_config_values.is_empty());
+    }
+
+    fn config_values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    async fn set_claude_defaults(broker: &DelegationBroker) {
+        let mut agent_defaults = BTreeMap::new();
+        agent_defaults.insert(
+            AgentType::ClaudeCode,
+            AgentDelegationDefaults {
+                mode_id: Some("auto".into()),
+                config_values: config_values(&[("model", "sonnet"), ("effort", "high")]),
+            },
+        );
+        broker
+            .set_config(DelegationConfig {
+                enabled: true,
+                depth_limit: 8,
+                agent_defaults,
+                ..DelegationConfig::default()
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn request_overrides_are_laid_over_agent_defaults() {
+        // An override that pins only the model keeps the configured mode and
+        // every other configured option.
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Err(SpawnerError::Send("stop after spawn".into())))
+            .await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        set_claude_defaults(&broker).await;
+
+        let mut req = request(1, "pt-1");
+        req.overrides = Some(AgentDelegationDefaults {
+            mode_id: None,
+            config_values: config_values(&[("model", "opus")]),
+        });
+        let _ = broker.handle_request(req).await;
+
+        let args = mock.spawn_args.lock().await;
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].preferred_mode_id.as_deref(), Some("auto"));
+        assert_eq!(
+            args[0].preferred_config_values,
+            config_values(&[("model", "opus"), ("effort", "high")])
+        );
+    }
+
+    #[tokio::test]
+    async fn request_overrides_apply_without_agent_defaults() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Err(SpawnerError::Send("stop after spawn".into())))
+            .await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+
+        let mut req = request(1, "pt-1");
+        req.agent_type = AgentType::Codex;
+        req.overrides = Some(AgentDelegationDefaults {
+            mode_id: Some("plan".into()),
+            config_values: config_values(&[("model", "gpt-5")]),
+        });
+        let _ = broker.handle_request(req).await;
+
+        let args = mock.spawn_args.lock().await;
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].preferred_mode_id.as_deref(), Some("plan"));
+        assert_eq!(
+            args[0].preferred_config_values,
+            config_values(&[("model", "gpt-5")])
+        );
     }
 
     #[tokio::test]
@@ -9427,6 +9521,7 @@ mod tests {
             task_id: task_id.into(),
             reason: None,
             external_handle: None,
+            overrides: None,
         }
     }
 
@@ -9460,6 +9555,30 @@ mod tests {
         let huge = "x".repeat(10 * 1024);
         let capped = build_resume_prompt(Some(&huge));
         assert!(capped.len() < bare.len() + RESUME_REASON_CAP + 128);
+    }
+
+    #[tokio::test]
+    async fn resume_overrides_are_laid_over_agent_defaults() {
+        let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
+        set_claude_defaults(&broker).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_send(Ok(())).await;
+
+        let mut req = resume_request("task-1");
+        req.overrides = Some(AgentDelegationDefaults {
+            mode_id: Some("plan".into()),
+            config_values: config_values(&[("model", "opus")]),
+        });
+        let ack = broker.resume_delegation(req).await;
+        assert_eq!(ack.status, TaskStatus::Running);
+
+        let spawns = mock.resume_spawn_args.lock().await;
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].preferred_mode_id.as_deref(), Some("plan"));
+        assert_eq!(
+            spawns[0].preferred_config_values,
+            config_values(&[("model", "opus"), ("effort", "high")])
+        );
     }
 
     /// A crash-interrupted task (nothing in memory, DB row `cancelled`) resumes:
