@@ -17,6 +17,10 @@ import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
+  HERMES_MODEL_CONFIG_ID,
+  useHermesModelOption,
+} from "@/hooks/use-hermes-model-option"
+import {
   acpStopAsyncTask,
   createChatConversation,
   createConversation,
@@ -720,9 +724,36 @@ export function CanvasConversationSurface({
     () => conn.modes?.available_modes ?? [],
     [conn.modes]
   )
-  const connectionConfigOptions = useMemo(
+  const acpConfigOptions = useMemo(
     () => conn.configOptions ?? [],
     [conn.configOptions]
+  )
+  // Same synthetic Hermes model option as the detail panel — the canvas surface
+  // hosts the same composer, so it must offer the same picker.
+  const { option: hermesModelOption, selectModel: selectHermesModel } =
+    useHermesModelOption({
+      agentType,
+      configOptions: acpConfigOptions,
+      status: conn.status,
+      reapplyConfig: conn.reapplyConfig,
+      canReconnect: !conn.isViewer && !conn.isDelegationChild,
+    })
+  const connectionConfigOptions = useMemo(
+    () =>
+      hermesModelOption
+        ? [...acpConfigOptions, hermesModelOption]
+        : acpConfigOptions,
+    [acpConfigOptions, hermesModelOption]
+  )
+  const handleConfigOptionChange = useCallback(
+    (configId: string, valueId: string) => {
+      if (configId === HERMES_MODEL_CONFIG_ID) {
+        selectHermesModel(valueId)
+        return
+      }
+      handleSetConfigOption(configId, valueId)
+    },
+    [handleSetConfigOption, selectHermesModel]
   )
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
@@ -780,7 +811,7 @@ export function CanvasConversationSurface({
           selectorsLoading={selectorsLoading}
           selectedModeId={selectedModeId}
           onModeChange={handleModeChange}
-          onConfigOptionChange={handleSetConfigOption}
+          onConfigOptionChange={handleConfigOptionChange}
           agentType={agentType}
           availableCommands={conn.availableCommands ?? []}
           draftStorageKey={`canvas-draft:${contextKey}`}

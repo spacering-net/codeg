@@ -3821,6 +3821,13 @@
         "dismiss": "閉じる",
         "applied": "新しい設定を適用しました"
       },
+      "hermesModel": {
+        "label": "モデル",
+        "applied": "モデルを適用しました（セッションを再接続しました）",
+        "appliesAfterTurn": "モデルを保存しました。現在のターンの終了後に適用されます",
+        "applyFailed": "セッションの再接続に失敗しました",
+        "saveFailed": "モデルの保存に失敗しました"
+      },
       "piProjectTrust": {
         "title": "このプロジェクトには pi リソースが含まれています",
         "description": "pi はリポジトリ自身の .pi ファイルを読み込んでいません。確認して判断してください。",

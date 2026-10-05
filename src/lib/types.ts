@@ -1315,6 +1315,23 @@ export interface HermesLocalConfig {
   modelCommand?: string
 }
 
+/**
+ * What the composer's Hermes model picker binds to. Mirrors the Rust
+ * `HermesModelOptions` (commands/acp.rs).
+ *
+ * Hermes does not advertise a model selector over ACP — its model lives in
+ * `model.default` of the profile's own `config.yaml` — so codeg reads it from
+ * disk and lists the provider's catalogue itself.
+ */
+export interface HermesModelOptions {
+  /** `model.default` from the agent's config.yaml. */
+  current_model: string | null
+  /** Model ids the provider reports, sorted. Empty when `error` is set. */
+  models: string[]
+  /** Why the listing failed, shown inline in the picker. Null on success. */
+  error: string | null
+}
+
 export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   claude_code: "Claude Code",
   codex: "Codex",

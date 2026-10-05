@@ -7846,6 +7846,10 @@ enum InlineApiKeyWrite<'a> {
     /// endpoint so it can't bleed into the newly selected provider — mirroring
     /// Hermes' own `auth.py` cleanup on a provider switch.
     Clear,
+    /// Leave `model.api_key` / `model.api_mode` exactly as they are. Used by the
+    /// model-only write, which never learns the provider's credentials and so
+    /// must neither write nor scrub them.
+    Preserve,
 }
 
 /// Set `model.{provider,default,base_url}` in a Hermes config.yaml document,
@@ -7928,6 +7932,8 @@ fn merge_hermes_model_config(
             model_map.remove(Value::String("api_key".to_string()));
             model_map.remove(Value::String("api_mode".to_string()));
         }
+        // Model-only write: the credentials are none of its business.
+        InlineApiKeyWrite::Preserve => {}
     }
 
     serde_yaml::to_string(&root)
@@ -8140,6 +8146,387 @@ async fn load_hermes_local_config_json() -> Option<String> {
     );
 
     serde_json::to_string_pretty(&serde_json::Value::Object(merged)).ok()
+}
+
+/// The console scripts a Hermes install exposes. `hermes` is the ACP entry point
+/// codeg's built-in entry launches; `hermes-agent` is the other script the same
+/// package ships. A user who wants a SECOND Hermes profile registers a custom
+/// agent pointing at one of these with its own `HERMES_HOME`, so anything
+/// Hermes-specific has to recognize those entries too — the built-in
+/// `AgentType::Hermes` check alone leaves every custom profile behind.
+const HERMES_COMMANDS: &[&str] = &["hermes", "hermes-agent"];
+
+/// Whether `agent_type` runs Hermes: the built-in entry, or a custom agent whose
+/// launch command is one of Hermes' own console scripts. An unregistered custom
+/// id (deleted while a conversation still points at it) is not Hermes — there is
+/// no definition left to judge, and guessing would target the wrong config dir.
+pub(crate) fn is_hermes_agent(agent_type: AgentType) -> bool {
+    if agent_type == AgentType::Hermes {
+        return true;
+    }
+    let Some(registry_id) = agent_type.custom_id() else {
+        return false;
+    };
+    let Some(meta) = custom_registry::get(registry_id) else {
+        return false;
+    };
+    let cmd = match &meta.distribution {
+        registry::AgentDistribution::Npx { cmd, .. }
+        | registry::AgentDistribution::Binary { cmd, .. }
+        | registry::AgentDistribution::Uvx { cmd, .. } => *cmd,
+    };
+    HERMES_COMMANDS.contains(&cmd)
+}
+
+/// The Hermes home `agent_type` actually reads, or `None` when it is not Hermes.
+///
+/// A custom Hermes profile carries its `HERMES_HOME` in the agent's stored env,
+/// which `merge_agent_env` gives highest precedence at launch — so it must be
+/// resolved here exactly as the launched process would (see
+/// [`hermes_home_for_launch`]), not through codeg's own `HERMES_HOME`. Getting
+/// this wrong is silent and destructive: the model would be written into the
+/// DEFAULT profile's config.yaml while the agent keeps reading its own.
+pub(crate) async fn hermes_home_for_agent(
+    agent_type: AgentType,
+    db: &AppDatabase,
+) -> Option<PathBuf> {
+    if !is_hermes_agent(agent_type) {
+        return None;
+    }
+    let env = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|m| m.env_json)
+        .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+        .unwrap_or_default();
+    Some(hermes_home_for_launch(&env))
+}
+
+/// What the chat-side Hermes model picker needs, in one round trip.
+///
+/// `error` rather than a hard failure: the picker must still render the model
+/// the agent is actually on when the provider can't be listed (no API key yet,
+/// an OAuth provider, a network blip). Losing the list is a degraded picker;
+/// losing the current value would make the composer claim the wrong model.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HermesModelOptions {
+    /// `model.default` from the agent's own config.yaml.
+    pub current_model: Option<String>,
+    /// Model ids the provider reports, sorted. Empty when `error` is set.
+    pub models: Vec<String>,
+    /// Why the listing failed, for the picker to show inline. `None` on success.
+    pub error: Option<String>,
+}
+
+/// How a Hermes provider's `/models` endpoint is authenticated. Hermes' own
+/// provider table (`HERMES_PROVIDERS`) says where the credentials live; this
+/// says how to present them to an OpenAI-compatible listing call.
+enum HermesModelAuth {
+    /// `Authorization: Bearer <key>` — the OpenAI-compatible majority.
+    Bearer,
+    /// `x-api-key` + `anthropic-version` — Anthropic's own listing endpoint.
+    Anthropic,
+}
+
+/// Resolve how to list models for `provider`, or `None` when codeg cannot.
+///
+/// Deliberately conservative. OAuth and AWS-Bedrock providers hold no API key
+/// codeg can present, and Gemini is not OpenAI-compatible at `/models`, so for
+/// those the honest answer is "no list" — inventing an endpoint would produce a
+/// picker full of models the agent cannot actually run.
+fn hermes_model_auth_in(home: &Path, provider: &str) -> Option<HermesModelAuth> {
+    if let Some(name) = named_custom_provider_id(provider) {
+        let root = fs::read_to_string(home.join("config.yaml"))
+            .ok()
+            .and_then(|raw| serde_yaml::from_str::<serde_yaml::Value>(&raw).ok());
+        // A user-supplied OpenAI-compatible endpoint — the same shape as the
+        // bare `custom` provider, so the same Bearer listing works.
+        if named_custom_provider_entry(root.as_ref(), name).is_some() {
+            return Some(HermesModelAuth::Bearer);
+        }
+    }
+    hermes_model_auth(provider)
+}
+
+fn hermes_model_auth(provider: &str) -> Option<HermesModelAuth> {
+    match provider {
+        "anthropic" => Some(HermesModelAuth::Anthropic),
+        "gemini" | "vertex" | "bedrock" => None,
+        other => hermes_provider(other).and_then(|p| {
+            // OAuth providers carry no key var; AWS resolves from the SDK chain.
+            let keyed = !p.key_env_var.is_empty() || hermes_inlines_api_key(other);
+            keyed.then_some(HermesModelAuth::Bearer)
+        }),
+    }
+}
+
+/// Read a Hermes home's `config.yaml` + `.env` into `(provider, model, base_url,
+/// api_key)`, reusing the same projection the settings panel binds to so the
+/// picker and the panel can never disagree about which endpoint is in effect.
+fn read_hermes_model_config(
+    home: &Path,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let env_map = fs::read_to_string(home.join(".env"))
+        .ok()
+        .map(|raw| parse_env_file(&raw))
+        .unwrap_or_default();
+
+    let root = fs::read_to_string(home.join("config.yaml"))
+        .ok()
+        .and_then(|raw| serde_yaml::from_str::<serde_yaml::Value>(&raw).ok());
+
+    let mut provider = None;
+    let mut model = None;
+    let mut yaml_base_url = None;
+    let mut yaml_api_key = None;
+    if let Some(model_section) = root.as_ref().and_then(|v| v.get("model")) {
+        provider = yaml_str(model_section, "provider");
+        model = yaml_str(model_section, "default");
+        yaml_base_url = yaml_str(model_section, "base_url");
+        yaml_api_key = yaml_str(model_section, "api_key");
+    }
+
+    // A NAMED custom provider resolves through the top-level `providers:` map,
+    // which the curated-table projection below knows nothing about. Checked
+    // first so a profile using one is not silently left with no endpoint.
+    if let Some(entry) = provider
+        .as_deref()
+        .and_then(named_custom_provider_id)
+        .and_then(|name| named_custom_provider_entry(root.as_ref(), name))
+    {
+        let base_url = yaml_str(entry, "base_url").or(yaml_base_url);
+        let api_key = named_custom_provider_key(entry, &env_map).or(yaml_api_key);
+        return (provider, model, base_url, api_key);
+    }
+
+    let (api_key, base_url) = match provider.as_deref() {
+        Some(p) => project_hermes_key_and_base(
+            p,
+            &env_map,
+            yaml_base_url.as_deref(),
+            yaml_api_key.as_deref(),
+        ),
+        None => (None, yaml_base_url),
+    };
+    (provider, model, base_url, api_key)
+}
+
+/// The `<name>` of a named custom provider (`model.provider: custom:<name>`), or
+/// `None` for every other provider — including the bare `custom` provider, whose
+/// endpoint and inline key live in the `model:` section instead.
+fn named_custom_provider_id(provider: &str) -> Option<&str> {
+    let name = provider.strip_prefix("custom:")?.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The `providers:` entry defining `name`. That map is TOP-LEVEL in config.yaml
+/// — a sibling of `model:`, not a child of it.
+fn named_custom_provider_entry<'a>(
+    root: Option<&'a serde_yaml::Value>,
+    name: &str,
+) -> Option<&'a serde_yaml::Value> {
+    root?.get("providers")?.get(name)
+}
+
+/// The API key of a named custom provider.
+///
+/// `key_env` holds the NAME of a `.env` variable, not the key itself — reading it
+/// as the key would send the literal string `CUSTOM_…_API_KEY` as the credential
+/// and every request would come back 401. An inline `api_key` is honored too, for
+/// a profile that stores the secret in config.yaml directly.
+fn named_custom_provider_key(
+    entry: &serde_yaml::Value,
+    env_map: &BTreeMap<String, String>,
+) -> Option<String> {
+    if let Some(var) = yaml_str(entry, "key_env") {
+        if let Some(value) = env_map.get(&var).filter(|v| !v.trim().is_empty()) {
+            return Some(value.clone());
+        }
+    }
+    yaml_str(entry, "api_key")
+}
+
+/// GET `<base>/models` and return the reported ids, sorted and de-duplicated.
+/// Mirrors [`acp_fetch_kimi_models_core`], differing only in how the credential
+/// is presented (see [`HermesModelAuth`]).
+async fn list_openai_compatible_models(
+    base_url: &str,
+    api_key: &str,
+    auth: HermesModelAuth,
+) -> Result<Vec<String>, AcpError> {
+    let base = base_url.trim().trim_end_matches('/');
+    let url = format!("{base}/models");
+    let request = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(20));
+    let request = match auth {
+        HermesModelAuth::Bearer => request.bearer_auth(api_key),
+        HermesModelAuth::Anthropic => request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
+    };
+    let resp = request
+        .send()
+        .await
+        .map_err(|e| AcpError::protocol(format!("list models request failed: {e}")))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AcpError::protocol(format!("list models returned invalid JSON: {e}")))?;
+    if !status.is_success() {
+        let msg = body
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("request rejected");
+        return Err(AcpError::protocol(format!("{status}: {msg}")));
+    }
+    let mut ids: Vec<String> = body
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    m.get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Current model + the provider's model list for the chat-side Hermes picker,
+/// or `None` when `agent_type` is not Hermes.
+///
+/// `None` rather than an error because the composer asks this of whatever agent
+/// it is bound to: "not Hermes" is the ordinary answer for most agents, and an
+/// error would put a failure on screen for a question that was answered fine.
+///
+/// A LISTING problem is not a failure either — the reason lands in `error` so
+/// the picker degrades to "current model only" instead of vanishing. Dropping
+/// the list costs the user a convenience; dropping `current_model` would make
+/// the composer claim the wrong model.
+pub(crate) async fn acp_hermes_model_options_core(
+    agent_type: AgentType,
+    db: &AppDatabase,
+) -> Result<Option<HermesModelOptions>, AcpError> {
+    let Some(home) = hermes_home_for_agent(agent_type, db).await else {
+        return Ok(None);
+    };
+    let (provider, current_model, base_url, api_key) = read_hermes_model_config(&home);
+
+    let fail = |error: String| HermesModelOptions {
+        current_model: current_model.clone(),
+        models: Vec::new(),
+        error: Some(error),
+    };
+
+    let Some(provider) = provider else {
+        return Ok(Some(fail(
+            "hermes config.yaml has no model.provider".to_string(),
+        )));
+    };
+    let Some(auth) = hermes_model_auth_in(&home, &provider) else {
+        return Ok(Some(fail(format!(
+            "provider `{provider}` cannot be listed over an API — set the model in agent settings"
+        ))));
+    };
+    let Some(base_url) = base_url.filter(|v| !v.trim().is_empty()) else {
+        return Ok(Some(fail(format!(
+            "provider `{provider}` has no base URL — set one in agent settings"
+        ))));
+    };
+    let Some(api_key) = api_key.filter(|v| !v.trim().is_empty()) else {
+        return Ok(Some(fail(format!(
+            "provider `{provider}` has no API key — set one in agent settings"
+        ))));
+    };
+
+    match list_openai_compatible_models(&base_url, &api_key, auth).await {
+        Ok(models) => Ok(Some(HermesModelOptions {
+            current_model,
+            models,
+            error: None,
+        })),
+        Err(e) => Ok(Some(fail(e.to_string()))),
+    }
+}
+
+/// Point `agent_type`'s Hermes profile at `model` by rewriting `model.default`
+/// in its own config.yaml, leaving every other key (provider, base_url, inline
+/// key, mcp_servers, …) exactly as it was.
+///
+/// Hermes reads config.yaml at process start, so this cannot reach a running
+/// session; the caller reconnects to apply it.
+pub(crate) async fn acp_set_hermes_model_core(
+    agent_type: AgentType,
+    model: &str,
+    db: &AppDatabase,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AcpError::protocol("model is required"));
+    }
+    let Some(home) = hermes_home_for_agent(agent_type, db).await else {
+        return Err(AcpError::protocol("agent is not a Hermes agent"));
+    };
+    let config_path = home.join("config.yaml");
+    let existing = fs::read_to_string(&config_path).ok();
+    // The provider is whatever the profile already declares: this call only
+    // switches models. An absent provider means the profile was never set up,
+    // and writing a bare `model.default` would leave a config Hermes can't use.
+    let (provider, ..) = read_hermes_model_config(&home);
+    let Some(provider) = provider else {
+        return Err(AcpError::protocol(
+            "hermes config.yaml has no model.provider — set up the agent first",
+        ));
+    };
+    let merged = merge_hermes_model_config(
+        existing.as_deref(),
+        &provider,
+        model,
+        BaseUrlWrite::Preserve,
+        InlineApiKeyWrite::Preserve,
+    )?;
+    ensure_hermes_home_secure(&home)?;
+    write_hermes_secret_file(&config_path, &merged, "config.yaml")?;
+    emit_acp_agents_updated(emitter, "config_updated", Some(agent_type));
+    Ok(())
+}
+
+/// `acp_set_hermes_model_core` followed by a session staleness refresh. Shared
+/// by the Tauri command and the web handler; returns the count of running
+/// sessions of that agent left on stale (launch-time) config — including the
+/// caller's own, which reconnects to apply the new model.
+pub(crate) async fn acp_set_hermes_model_and_refresh(
+    agent_type: AgentType,
+    model: &str,
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    data_dir: &Path,
+    emitter: &EventEmitter,
+) -> Result<usize, AcpError> {
+    acp_set_hermes_model_core(agent_type, model, db, emitter).await?;
+    Ok(refresh_config_staleness(
+        manager,
+        db,
+        data_dir,
+        &[agent_type],
+        ConfigStaleKind::AgentConfig,
+    )
+    .await)
 }
 
 /// Structured Hermes config update from the settings UI.
@@ -11018,6 +11405,18 @@ pub(crate) fn fingerprint_config(
             hasher.update(json.as_bytes());
         }
     }
+    // Same again for Hermes' config.yaml, which carries the model, provider and
+    // endpoint and is read once at process start. Without this, switching the
+    // model leaves every OTHER running session of that agent silently on the old
+    // one with nothing on screen to say so. Keyed on the home the launch will
+    // actually use, so each custom Hermes profile is fingerprinted separately.
+    if is_hermes_agent(agent_type) {
+        hasher.update(b"\x01hermes_yaml\x01");
+        if let Ok(yaml) = fs::read_to_string(hermes_home_for_launch(runtime_env).join("config.yaml"))
+        {
+            hasher.update(yaml.as_bytes());
+        }
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -12618,6 +13017,41 @@ pub async fn acp_update_kimi_code_config(
         &emitter,
     )
     .await
+}
+
+/// Current model + the provider's model list for a Hermes agent's chat-side
+/// model picker. Desktop command; the web handler calls
+/// `acp_hermes_model_options_core` directly.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_hermes_model_options(
+    agent_type: AgentType,
+    db: State<'_, AppDatabase>,
+) -> Result<Option<HermesModelOptions>, AcpError> {
+    acp_hermes_model_options_core(agent_type, &db).await
+}
+
+/// Switch a Hermes agent's model by rewriting `model.default` in its own
+/// config.yaml, then report how many running sessions that left on stale
+/// (launch-time) config. Desktop command; the web handler calls
+/// `acp_set_hermes_model_and_refresh` directly.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_set_hermes_model(
+    agent_type: AgentType,
+    model: String,
+    manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<usize, AcpError> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| crate::paths::resolve_effective_data_dir(&p))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let emitter = EventEmitter::Tauri(app);
+    acp_set_hermes_model_and_refresh(agent_type, &model, &db, &manager, &app_data_dir, &emitter)
+        .await
 }
 
 /// List the models an API key + endpoint can access (validates the key and
@@ -18952,6 +19386,237 @@ wire_api = "chat"
             raw.to_vec(),
             "an unreadable .env must be left byte-identical, never clobbered"
         );
+    }
+
+    #[test]
+    fn a_custom_hermes_profile_is_recognized_as_hermes() {
+        use crate::acp::custom_registry::{
+            hydrate, hydrate_test_guard, CustomAgentDef, CustomAgentSpec, CustomDistributionKind,
+            NpxSpec,
+        };
+        let _guard = hydrate_test_guard();
+
+        // WHY this matters: a second Hermes profile is registered as a CUSTOM
+        // agent pointing at Hermes' own `hermes` bin with its own HERMES_HOME.
+        // If only `AgentType::Hermes` counted as Hermes, that profile would get
+        // no model picker and — worse — a model write aimed at it would land in
+        // the DEFAULT profile's config.yaml while the agent kept reading its own.
+        let hermes_profile = CustomAgentDef {
+            registry_id: "hermes-work".into(),
+            name: "Hermes (work)".into(),
+            description: String::new(),
+            version: "0.21.3".into(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: "hermes-agent@0.21.3".into(),
+                    cmd: Some("hermes".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        };
+        // A custom agent that is NOT Hermes must stay out: giving it a Hermes
+        // picker would write a `model.default` into a config it never reads.
+        let other = CustomAgentDef {
+            registry_id: "qwen-code".into(),
+            name: "Qwen Code".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: "qwen-code@1.0.0".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        };
+        assert!(hydrate(&[hermes_profile, other]).is_empty());
+
+        assert!(is_hermes_agent(AgentType::Hermes));
+        assert!(is_hermes_agent(
+            AgentType::custom("hermes-work").expect("custom id")
+        ));
+        assert!(!is_hermes_agent(
+            AgentType::custom("qwen-code").expect("custom id")
+        ));
+        assert!(!is_hermes_agent(AgentType::Codex));
+        // An id deleted while a conversation still points at it has no
+        // definition left to judge — guessing would target the wrong config dir.
+        assert!(!is_hermes_agent(
+            AgentType::custom("hermes-gone").expect("custom id")
+        ));
+
+        assert!(hydrate(&[]).is_empty());
+    }
+
+    #[test]
+    fn hermes_model_listing_is_offered_only_where_codeg_can_actually_list() {
+        // WHY: an unlistable provider must degrade to "no list", never to a
+        // guessed endpoint — a picker full of models the agent cannot run is
+        // worse than no picker, because the user only finds out at send time.
+        assert!(matches!(
+            hermes_model_auth("openrouter"),
+            Some(HermesModelAuth::Bearer)
+        ));
+        assert!(matches!(
+            hermes_model_auth("custom"),
+            Some(HermesModelAuth::Bearer)
+        ));
+        // Anthropic lists over `x-api-key` + `anthropic-version`, not Bearer.
+        assert!(matches!(
+            hermes_model_auth("anthropic"),
+            Some(HermesModelAuth::Anthropic)
+        ));
+        // Gemini is not OpenAI-compatible at `/models`; OAuth and AWS providers
+        // hold no key codeg can present; an unknown provider is undiscoverable.
+        assert!(hermes_model_auth("gemini").is_none());
+        assert!(hermes_model_auth("qwen-oauth").is_none());
+        assert!(hermes_model_auth("bedrock").is_none());
+        assert!(hermes_model_auth("unknown-provider").is_none());
+    }
+
+    #[test]
+    fn reading_a_profile_reports_its_model_provider_and_endpoint() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        fs::write(
+            home.join("config.yaml"),
+            "model:\n  provider: openai-api\n  default: gpt-4o\n",
+        )
+        .unwrap();
+        // The endpoint lives only in `.env` here — the settings panel already
+        // treats that as authoritative, and the picker must agree with it or the
+        // two would disagree about which account is being listed.
+        fs::write(
+            home.join(".env"),
+            "OPENAI_API_KEY=sk-test\nOPENAI_BASE_URL=https://gw.example/v1\n",
+        )
+        .unwrap();
+
+        let (provider, model, base_url, api_key) = read_hermes_model_config(home);
+        assert_eq!(provider.as_deref(), Some("openai-api"));
+        assert_eq!(model.as_deref(), Some("gpt-4o"));
+        assert_eq!(base_url.as_deref(), Some("https://gw.example/v1"));
+        assert_eq!(api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn a_named_custom_provider_resolves_through_the_providers_map() {
+        // WHY: Hermes lets a user define NAMED custom providers — `model.provider:
+        // custom:<name>`, whose endpoint and key-var name live in the TOP-LEVEL
+        // `providers:` map, not in the `model:` section and not in codeg's
+        // curated provider table. Resolving only against that table leaves the
+        // model picker with no endpoint and no key, so it silently degrades to
+        // "current model only" — which is exactly what a real 9router profile hit.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        fs::write(
+            home.join("config.yaml"),
+            concat!(
+                "model:\n",
+                "  default: ocg/deepseek-flash\n",
+                "  provider: custom:9router\n",
+                "providers:\n",
+                "  9router:\n",
+                "    name: 9router\n",
+                "    base_url: http://127.0.0.1:20128/v1\n",
+                "    key_env: CUSTOM_9ROUTER_API_KEY\n",
+                "    default_model: ocg/deepseek-flash\n",
+            ),
+        )
+        .unwrap();
+        fs::write(home.join(".env"), "CUSTOM_9ROUTER_API_KEY=sk-9r\n").unwrap();
+
+        let (provider, model, base_url, api_key) = read_hermes_model_config(home);
+        assert_eq!(provider.as_deref(), Some("custom:9router"));
+        assert_eq!(model.as_deref(), Some("ocg/deepseek-flash"));
+        assert_eq!(
+            base_url.as_deref(),
+            Some("http://127.0.0.1:20128/v1"),
+            "the endpoint comes from providers.<name>.base_url"
+        );
+        assert_eq!(
+            api_key.as_deref(),
+            Some("sk-9r"),
+            "`key_env` names the .env variable holding the key, it is not the key"
+        );
+        // And such a provider IS listable: it is an OpenAI-compatible endpoint.
+        assert!(matches!(
+            hermes_model_auth_in(home, "custom:9router"),
+            Some(HermesModelAuth::Bearer)
+        ));
+    }
+
+    #[test]
+    fn switching_the_model_leaves_the_rest_of_the_profile_alone() {
+        // WHY: the chat-side picker only ever means "use this model". If the
+        // model-only write also touched the endpoint or the inline key, picking
+        // a model from the composer would silently break a working `custom`
+        // provider — and the user would have no reason to suspect the picker.
+        let existing = "model:\n  provider: custom\n  default: old-model\n  base_url: https://local/v1\n  api_key: sk-inline\n  api_mode: anthropic_messages\nmcp_servers:\n  fs:\n    command: mcp-fs\n";
+        let merged = merge_hermes_model_config(
+            Some(existing),
+            "custom",
+            "new-model",
+            BaseUrlWrite::Preserve,
+            InlineApiKeyWrite::Preserve,
+        )
+        .expect("merge");
+
+        let value: serde_yaml::Value = serde_yaml::from_str(&merged).expect("yaml");
+        let model = value.get("model").expect("model section");
+        assert_eq!(yaml_str(model, "default").as_deref(), Some("new-model"));
+        assert_eq!(yaml_str(model, "provider").as_deref(), Some("custom"));
+        assert_eq!(
+            yaml_str(model, "base_url").as_deref(),
+            Some("https://local/v1")
+        );
+        assert_eq!(yaml_str(model, "api_key").as_deref(), Some("sk-inline"));
+        assert_eq!(
+            yaml_str(model, "api_mode").as_deref(),
+            Some("anthropic_messages")
+        );
+        assert!(
+            value.get("mcp_servers").is_some(),
+            "unrelated top-level sections must survive a model switch"
+        );
+    }
+
+    #[test]
+    fn a_hermes_config_change_marks_running_sessions_stale() {
+        // WHY: Hermes reads config.yaml at process start. Without the config in
+        // the fingerprint, switching the model would leave every other running
+        // session of that agent on the old model with nothing on screen saying
+        // so — the exact failure the stale banner exists to prevent.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let mut env = BTreeMap::new();
+        env.insert("HERMES_HOME".to_string(), home.display().to_string());
+
+        fs::write(home.join("config.yaml"), "model:\n  default: model-a\n").unwrap();
+        let before = fingerprint_config(AgentType::Hermes, &env);
+        fs::write(home.join("config.yaml"), "model:\n  default: model-b\n").unwrap();
+        let after = fingerprint_config(AgentType::Hermes, &env);
+        assert_ne!(before, after, "a model switch must change the fingerprint");
+
+        // And an agent that never reads this file must not be perturbed by it.
+        let codex_before = fingerprint_config(AgentType::Codex, &env);
+        fs::write(home.join("config.yaml"), "model:\n  default: model-c\n").unwrap();
+        assert_eq!(codex_before, fingerprint_config(AgentType::Codex, &env));
     }
 
     #[test]

@@ -886,6 +886,47 @@ pub async fn acp_update_kimi_code_config(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpHermesModelOptionsParams {
+    pub agent_type: AgentType,
+}
+
+pub async fn acp_hermes_model_options(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpHermesModelOptionsParams>,
+) -> Result<Json<Option<acp_commands::HermesModelOptions>>, AppCommandError> {
+    let options = acp_commands::acp_hermes_model_options_core(params.agent_type, &state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(options))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpSetHermesModelParams {
+    pub agent_type: AgentType,
+    pub model: String,
+}
+
+pub async fn acp_set_hermes_model(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpSetHermesModelParams>,
+) -> Result<Json<usize>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    let affected = acp_commands::acp_set_hermes_model_and_refresh(
+        params.agent_type,
+        &params.model,
+        &state.db,
+        &state.connection_manager,
+        &state.data_dir,
+        &emitter,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(affected))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpFetchKimiModelsParams {
     pub base_url: String,
     pub api_key: String,

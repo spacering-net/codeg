@@ -76,6 +76,7 @@ import type {
   CursorStructuredConfig,
   CursorAuthStatus,
   CursorModelsResult,
+  HermesModelOptions,
   QoderAuthStatus,
   CodexModelInfo,
   AgentSkillScope,
@@ -721,6 +722,35 @@ export async function acpUpdateHermesConfig(params: {
     model: params.model ?? null,
     baseUrl: params.baseUrl ?? null,
     rawConfigYaml: params.rawConfigYaml ?? null,
+  })
+}
+
+/**
+ * Read a Hermes agent's current model and list the models its provider offers,
+ * for the composer's model picker. Returns `null` when `agentType` is not a
+ * Hermes agent (the composer asks this of whatever agent it is bound to), and a
+ * populated `error` when the listing itself failed — the current model is still
+ * reported in that case so the picker never claims the wrong one.
+ */
+export async function acpHermesModelOptions(
+  agentType: AgentType
+): Promise<HermesModelOptions | null> {
+  return getTransport().call("acp_hermes_model_options", { agentType })
+}
+
+/**
+ * Point a Hermes agent at `model` by rewriting `model.default` in its own
+ * config.yaml. Hermes reads that file at process start, so this only reaches a
+ * session on its next connect; the returned count is how many running sessions
+ * of that agent are now on stale (launch-time) config.
+ */
+export async function acpSetHermesModel(params: {
+  agentType: AgentType
+  model: string
+}): Promise<number> {
+  return getTransport().call("acp_set_hermes_model", {
+    agentType: params.agentType,
+    model: params.model,
   })
 }
 

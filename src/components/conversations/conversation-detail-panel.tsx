@@ -114,6 +114,10 @@ import {
 import { useShallow } from "zustand/react/shallow"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
+  HERMES_MODEL_CONFIG_ID,
+  useHermesModelOption,
+} from "@/hooks/use-hermes-model-option"
+import {
   buildSteerPayload,
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
@@ -724,9 +728,39 @@ const ConversationTabView = memo(function ConversationTabView({
     () => effectiveModes?.available_modes ?? [],
     [effectiveModes]
   )
-  const connectionConfigOptions = useMemo(
+  const acpConfigOptions = useMemo(
     () => effectiveConfigOptions ?? [],
     [effectiveConfigOptions]
+  )
+  // Hermes publishes no model selector over ACP, so codeg synthesizes one from
+  // the profile's own config.yaml (see `useHermesModelOption`). Null for every
+  // other agent, and for a Hermes build that ever starts advertising its own.
+  const { option: hermesModelOption, selectModel: selectHermesModel } =
+    useHermesModelOption({
+      agentType: selectedAgent,
+      configOptions: acpConfigOptions,
+      status: connStatus,
+      reapplyConfig: conn.reapplyConfig,
+      canReconnect: !conn.isViewer && !conn.isDelegationChild,
+    })
+  const connectionConfigOptions = useMemo(
+    () =>
+      hermesModelOption
+        ? [...acpConfigOptions, hermesModelOption]
+        : acpConfigOptions,
+    [acpConfigOptions, hermesModelOption]
+  )
+  // The synthetic option is codeg's, not the agent's: routing it to the ACP
+  // `session/set_config_option` would hand Hermes an id it never advertised.
+  const handleConfigOptionChange = useCallback(
+    (configId: string, valueId: string) => {
+      if (configId === HERMES_MODEL_CONFIG_ID) {
+        selectHermesModel(valueId)
+        return
+      }
+      handleSetConfigOption(configId, valueId)
+    },
+    [handleSetConfigOption, selectHermesModel]
   )
   const connectionCommands = useMemo(
     () => (connIsForOtherAgent ? [] : (conn.availableCommands ?? [])),
@@ -2269,7 +2303,7 @@ const ConversationTabView = memo(function ConversationTabView({
       selectorsLoading={selectorsLoading}
       selectedModeId={selectedModeId}
       onModeChange={handleModeChange}
-      onConfigOptionChange={handleSetConfigOption}
+      onConfigOptionChange={handleConfigOptionChange}
       agentType={selectedAgent}
       availableCommands={connectionCommands}
       attachmentTabId={tabId}
@@ -2406,7 +2440,7 @@ const ConversationTabView = memo(function ConversationTabView({
                 selectorsLoading={selectorsLoading}
                 selectedModeId={selectedModeId}
                 onModeChange={handleModeChange}
-                onConfigOptionChange={handleSetConfigOption}
+                onConfigOptionChange={handleConfigOptionChange}
                 agentType={selectedAgent}
                 availableCommands={connectionCommands}
                 attachmentTabId={tabId}

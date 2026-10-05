@@ -3821,6 +3821,13 @@
         "dismiss": "Dismiss",
         "applied": "New configuration applied"
       },
+      "hermesModel": {
+        "label": "Model",
+        "applied": "Model applied — session reconnected",
+        "appliesAfterTurn": "Model saved — applies once the current turn finishes",
+        "applyFailed": "Failed to reconnect the session",
+        "saveFailed": "Failed to save the model"
+      },
       "piProjectTrust": {
         "title": "This project ships pi resources",
         "description": "pi is not loading the repository's own .pi files. Review them to decide.",

@@ -3821,6 +3821,13 @@
         "dismiss": "Schließen",
         "applied": "Neue Konfiguration angewendet"
       },
+      "hermesModel": {
+        "label": "Modell",
+        "applied": "Modell übernommen – Sitzung neu verbunden",
+        "appliesAfterTurn": "Modell gespeichert – wird nach dem aktuellen Zug übernommen",
+        "applyFailed": "Sitzung konnte nicht neu verbunden werden",
+        "saveFailed": "Modell konnte nicht gespeichert werden"
+      },
       "piProjectTrust": {
         "title": "Dieses Projekt enthält pi-Ressourcen",
         "description": "pi lädt die .pi-Dateien des Repositorys nicht. Prüfe sie, um zu entscheiden.",

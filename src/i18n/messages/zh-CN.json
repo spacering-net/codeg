@@ -3821,6 +3821,13 @@
         "dismiss": "忽略",
         "applied": "新配置已应用"
       },
+      "hermesModel": {
+        "label": "模型",
+        "applied": "模型已生效 —— 会话已重连",
+        "appliesAfterTurn": "模型已保存 —— 当前轮次结束后自动生效",
+        "applyFailed": "会话重连失败",
+        "saveFailed": "模型保存失败"
+      },
       "piProjectTrust": {
         "title": "该项目自带 pi 资源",
         "description": "pi 未加载仓库自带的 .pi 文件。请查看后决定。",

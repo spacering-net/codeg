@@ -1011,6 +1011,14 @@ pub fn build_router(
             post(handlers::acp::acp_update_kimi_code_config),
         )
         .route(
+            "/acp_hermes_model_options",
+            post(handlers::acp::acp_hermes_model_options),
+        )
+        .route(
+            "/acp_set_hermes_model",
+            post(handlers::acp::acp_set_hermes_model),
+        )
+        .route(
             "/acp_fetch_kimi_models",
             post(handlers::acp::acp_fetch_kimi_models),
         )

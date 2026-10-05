@@ -3821,6 +3821,13 @@
         "dismiss": "닫기",
         "applied": "새 설정이 적용되었습니다"
       },
+      "hermesModel": {
+        "label": "모델",
+        "applied": "모델이 적용되었습니다 — 세션을 다시 연결했습니다",
+        "appliesAfterTurn": "모델을 저장했습니다 — 현재 턴이 끝나면 적용됩니다",
+        "applyFailed": "세션을 다시 연결하지 못했습니다",
+        "saveFailed": "모델을 저장하지 못했습니다"
+      },
       "piProjectTrust": {
         "title": "이 프로젝트에 pi 리소스가 포함되어 있습니다",
         "description": "pi가 저장소 자체의 .pi 파일을 불러오지 않고 있습니다. 확인 후 결정하세요.",

@@ -3821,6 +3821,13 @@
         "dismiss": "忽略",
         "applied": "已套用新設定"
       },
+      "hermesModel": {
+        "label": "模型",
+        "applied": "模型已生效 —— 工作階段已重新連線",
+        "appliesAfterTurn": "模型已儲存 —— 目前回合結束後自動生效",
+        "applyFailed": "工作階段重新連線失敗",
+        "saveFailed": "模型儲存失敗"
+      },
       "piProjectTrust": {
         "title": "此專案自帶 pi 資源",
         "description": "pi 未載入儲存庫自帶的 .pi 檔案。請檢視後決定。",

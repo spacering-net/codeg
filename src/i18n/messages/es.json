@@ -3821,6 +3821,13 @@
         "dismiss": "Descartar",
         "applied": "Nueva configuración aplicada"
       },
+      "hermesModel": {
+        "label": "Modelo",
+        "applied": "Modelo aplicado: sesión reconectada",
+        "appliesAfterTurn": "Modelo guardado: se aplicará cuando termine el turno actual",
+        "applyFailed": "No se pudo reconectar la sesión",
+        "saveFailed": "No se pudo guardar el modelo"
+      },
       "piProjectTrust": {
         "title": "Este proyecto incluye recursos de pi",
         "description": "pi no está cargando los archivos .pi del propio repositorio. Revísalos para decidir.",

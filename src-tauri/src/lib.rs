@@ -1950,6 +1950,8 @@ mod tauri_app {
                 acp_commands::acp_update_agent_config,
                 acp_commands::acp_update_hermes_config,
                 acp_commands::acp_update_kimi_code_config,
+                acp_commands::acp_hermes_model_options,
+                acp_commands::acp_set_hermes_model,
                 acp_commands::acp_fetch_kimi_models,
                 deepseek_settings_commands::acp_load_deepseek_model_catalog,
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
