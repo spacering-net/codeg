@@ -56,6 +56,9 @@ vi.mock("./session-details-dialog", () => ({
 vi.mock("@/components/chat/conversation-context-bar", () => ({
   ConversationHeaderFolderPicker: () => null,
 }))
+vi.mock("./session-quota-chip", () => ({
+  SessionQuotaChip: () => null,
+}))
 
 import { ConversationDetailHeader } from "./conversation-detail-header"
 
@@ -69,6 +72,7 @@ const A: Props = {
   folderPath: "/a",
   title: "conv-a",
   status: "in_progress",
+  agentType: "claude_code",
 }
 const B: Props = {
   ...A,

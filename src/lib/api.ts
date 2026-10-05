@@ -3608,6 +3608,33 @@ export async function tokenUsageSync(
   return getTransport().call("token_usage_sync", { mode })
 }
 
+export type OfficialQuotaSlot = {
+  label: string
+  payload: unknown
+}
+
+export type OfficialQuotaRead = {
+  family: string
+  payload: unknown | null
+  extraSlots?: OfficialQuotaSlot[]
+  unavailableReason?: string | null
+}
+
+/** Official Codex app-server `account/rateLimits/read`. Missing CLI is null. */
+export async function subscriptionQuotaCodex(): Promise<OfficialQuotaRead> {
+  return getTransport().call("subscription_quota_codex")
+}
+
+/** Claude Code `/usage` via local OAuth `GET /api/oauth/usage`. */
+export async function subscriptionQuotaClaude(): Promise<OfficialQuotaRead> {
+  return getTransport().call("subscription_quota_claude")
+}
+
+/** Grok CLI-proxy `/v1/billing?format=credits`. */
+export async function subscriptionQuotaGrok(): Promise<OfficialQuotaRead> {
+  return getTransport().call("subscription_quota_grok")
+}
+
 // Automations
 
 export async function automationList(): Promise<Automation[]> {
