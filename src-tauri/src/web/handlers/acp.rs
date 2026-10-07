@@ -922,7 +922,7 @@ pub async fn acp_update_pi_config(
     Json(params): Json<AcpUpdatePiConfigParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let emitter = state.emitter.clone();
-    acp_commands::acp_update_pi_config_core(
+    acp_commands::acp_update_pi_config_and_refresh(
         acp_commands::PiConfigUpdate {
             provider: params.provider,
             model: params.model,
@@ -933,6 +933,8 @@ pub async fn acp_update_pi_config(
             model_reasoning: params.model_reasoning,
         },
         &state.db,
+        &state.connection_manager,
+        &state.data_dir,
         &emitter,
     )
     .await

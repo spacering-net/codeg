@@ -7165,6 +7165,28 @@ pub(crate) async fn acp_update_pi_config_core(
     Ok(())
 }
 
+/// Apply a Pi native-config update and mark running Pi sessions that still use
+/// the old files as stale. Pi reads `settings.json`, `auth.json`, and
+/// `models.json` only when its process starts, so a live ACP process cannot
+/// discover a newly-added model until it is reconnected.
+pub(crate) async fn acp_update_pi_config_and_refresh(
+    update: PiConfigUpdate,
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    data_dir: &Path,
+    emitter: &EventEmitter,
+) -> Result<usize, AcpError> {
+    acp_update_pi_config_core(update, db, emitter).await?;
+    Ok(refresh_config_staleness(
+        manager,
+        db,
+        data_dir,
+        &[AgentType::Pi],
+        ConfigStaleKind::AgentConfig,
+    )
+    .await)
+}
+
 /// Projection of pi's current native config for the settings panel: the three
 /// `settings.json` model keys plus the provider names present in `auth.json`
 /// (sorted). Missing files surface as all-`None` / empty.
@@ -11018,6 +11040,28 @@ pub(crate) fn fingerprint_config(
             hasher.update(json.as_bytes());
         }
     }
+    // Pi keeps its provider/model registry and credentials in three native
+    // files outside codeg's generic local-config path. They are all read at
+    // pi process startup, so changes must make an existing session stale. Hash
+    // the raw bytes (including an explicit missing-file marker) rather than
+    // parsing them; this tracks additions/removals and custom fields while
+    // keeping secrets out of the fingerprint itself.
+    if agent_type == AgentType::Pi {
+        let pi_dir = pi_agent_dir_for_env(runtime_env);
+        for file in ["settings.json", "auth.json", "models.json"] {
+            hasher.update(b"\x01pi_native_file\x01");
+            hasher.update(file.as_bytes());
+            hasher.update([0u8]);
+            match fs::read(pi_dir.join(file)) {
+                Ok(raw) => {
+                    hasher.update([1u8]);
+                    hasher.update(raw);
+                }
+                Err(_) => hasher.update([0u8]),
+            }
+            hasher.update([0u8]);
+        }
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -12634,7 +12678,7 @@ pub async fn acp_fetch_kimi_models(
 
 /// Apply a structured Pi config update, writing pi's native `settings.json`
 /// (provider/model/thinking level) and `auth.json` (when an API key is given).
-/// Desktop command; the web handler calls `acp_update_pi_config_core` directly.
+/// Desktop and web saves share the native write and staleness refresh.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -12646,11 +12690,17 @@ pub async fn acp_update_pi_config(
     custom_base_url: Option<String>,
     custom_api: Option<String>,
     model_reasoning: Option<PiModelReasoningSpec>,
+    manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| crate::paths::resolve_effective_data_dir(&p))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let emitter = EventEmitter::Tauri(app);
-    acp_update_pi_config_core(
+    acp_update_pi_config_and_refresh(
         PiConfigUpdate {
             provider,
             model,
@@ -12661,9 +12711,12 @@ pub async fn acp_update_pi_config(
             model_reasoning,
         },
         &db,
+        &manager,
+        &app_data_dir,
         &emitter,
     )
     .await
+    .map(|_| ())
 }
 
 /// Read pi's current native config from the same per-agent directory that
@@ -17355,6 +17408,34 @@ wire_api = "chat"
                 low_fp, high_fp,
                 "changing default_reasoning_effort must change the fingerprint"
             );
+        });
+    }
+
+    #[test]
+    fn pi_fingerprint_tracks_native_model_files_and_custom_agent_dir() {
+        // Pi's provider/model registry lives outside the generic local-config
+        // path. A custom PI_CODING_AGENT_DIR must be hashed too, because that is
+        // the directory the spawned pi process actually reads.
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let env: BTreeMap<String, String> = BTreeMap::new();
+            let empty_fp = fingerprint_config(AgentType::Pi, &env);
+
+            std::fs::write(
+                dir.path().join("models.json"),
+                r#"{"providers":{"tokenkey":{"models":[{"id":"gpt-6"}]}}}"#,
+            )
+            .expect("write models");
+            let models_fp = fingerprint_config(AgentType::Pi, &env);
+            assert_ne!(empty_fp, models_fp);
+
+            std::fs::write(
+                dir.path().join("settings.json"),
+                r#"{"defaultProvider":"tokenkey","defaultModel":"gpt-6"}"#,
+            )
+            .expect("write settings");
+            let settings_fp = fingerprint_config(AgentType::Pi, &env);
+            assert_ne!(models_fp, settings_fp);
         });
     }
 
