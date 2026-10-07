@@ -41,6 +41,31 @@ const WS_BACKOFF_MAX_MS = 32_000
 // unreachable (keep retrying). Bounded so a SYN black-hole (dead server still
 // completing the TCP handshake) can't hang the "Reconnect now" button.
 const HEALTH_PROBE_TIMEOUT_MS = 8_000
+// Application-level heartbeat. A socket that died while the machine slept
+// (lid closed, phone locked) can sit in OPEN state for minutes: no close
+// frame ever arrives, the browser only notices once the OS times the TCP
+// connection out, and until then every event the server streams goes into
+// a black hole while the UI still says "connected". The server answers
+// `{action:"ping"}` with `{type:"pong"}` (see `ws_attach.rs`). We ping only
+// after WS_HEARTBEAT_INTERVAL_MS of silence — any inbound frame is proof of
+// life, so a busy stream never pays for it — and declare the socket dead
+// once the pong is WS_PONG_TIMEOUT_MS overdue. Ticks are coarse on purpose:
+// this is the safety net; the fast path on wake is `probeLiveness()`.
+const WS_HEARTBEAT_INTERVAL_MS = 15_000
+const WS_PONG_TIMEOUT_MS = 10_000
+const WS_HEARTBEAT_TICK_MS = 5_000
+// Pong deadline for a wake-time probe. Tight: the user is looking at the
+// screen, and a live link answers a ping well within a second even over a
+// WAN. A false positive only costs one reconnect + re-attach.
+const WS_WAKE_PONG_TIMEOUT_MS = 4_000
+// Upper bound on a socket's opening handshake. A 200 from `/api/health` says
+// the server is reachable, not that the upgrade gets through: right after a
+// wake it can black-hole (Wi-Fi half up, a NAT still mapping the old flow),
+// and a socket stuck in CONNECTING has no deadline of its own until the OS
+// abandons the TCP connect, minutes later. The heartbeat only starts in
+// `onopen`, so nothing else would ever replace it. Same bound as the desktop
+// proxy's handshake (`remote_proxy.rs`).
+const WS_OPEN_TIMEOUT_MS = 10_000
 
 // Connection health of the web transport, surfaced to React via
 // `subscribeConnection`/`getConnectionSnapshot` so a single global dialog can
@@ -98,6 +123,18 @@ export class WebTransport implements Transport {
   // a late 200 can't reopen the socket behind the session-expired dialog.
   private probeEpoch = 0
   private probeController: AbortController | null = null
+  // Heartbeat state (see WS_HEARTBEAT_INTERVAL_MS). `lastInboundAt` is bumped
+  // by every frame; `pingSentAt` is set when a ping goes out and cleared by
+  // the next inbound frame of any kind. `wakeProbeTimer` is the one-shot
+  // deadline armed by `probeLiveness()`.
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private wakeProbeTimer: ReturnType<typeof setTimeout> | null = null
+  private lastInboundAt = 0
+  private pingSentAt: number | null = null
+  // Opening deadline of the socket in CONNECTING (see WS_OPEN_TIMEOUT_MS):
+  // when it was created, and the timer that gives up on it.
+  private openStartedAt = 0
+  private openTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl
@@ -360,9 +397,16 @@ export class WebTransport implements Transport {
 
     const wsUrl = this.baseUrl.replace(/^http/, "ws") + "/ws/events"
     this.ws = new WebSocket(wsUrl, buildCodegWebSocketProtocols(token))
+    this.openStartedAt = Date.now()
+    this.openTimer = setTimeout(() => {
+      this.openTimer = null
+      this.onOpenTimeout()
+    }, WS_OPEN_TIMEOUT_MS)
 
     this.ws.onopen = () => {
+      this.clearOpenTimer()
       this.wsOpen = true
+      this.startHeartbeat()
       // NB: connection health is NOT flipped to "connected" here. `onopen`
       // only means the socket is physically up; the application-level
       // "ready" signal is the server's `__ready__` frame (see onmessage),
@@ -385,6 +429,8 @@ export class WebTransport implements Transport {
     }
 
     this.ws.onmessage = (msg) => {
+      // Before parsing: any frame at all is proof the link is alive.
+      this.noteInbound()
       try {
         const parsed = JSON.parse(msg.data) as unknown
         // Attach-protocol frames carry a `type` discriminator; legacy
@@ -438,6 +484,8 @@ export class WebTransport implements Transport {
     this.ws.onclose = () => {
       this.ws = null
       this.wsOpen = false
+      this.clearOpenTimer()
+      this.stopHeartbeat()
       // New subscribers (and any concurrent subscribe() calls in flight)
       // must wait for the next connection's `__ready__` before resolving.
       this.resetReady()
@@ -555,6 +603,140 @@ export class WebTransport implements Transport {
       this.ws = null
     }
     this.wsOpen = false
+    this.clearOpenTimer()
+    this.stopHeartbeat()
+  }
+
+  private clearOpenTimer() {
+    if (this.openTimer) {
+      clearTimeout(this.openTimer)
+      this.openTimer = null
+    }
+  }
+
+  // The socket did not open within WS_OPEN_TIMEOUT_MS. Fail the attempt as
+  // the browser eventually would — drop it, back off, probe again — only now
+  // rather than when the OS gives up on the connect.
+  private onOpenTimeout() {
+    if (this.destroyed || this.ws?.readyState !== WebSocket.CONNECTING) return
+    console.warn(
+      `[WebTransport] socket did not open within ${WS_OPEN_TIMEOUT_MS}ms; retrying`
+    )
+    this.teardownWs()
+    this.setConnState("reconnecting")
+    this.scheduleReconnect()
+  }
+
+  // ── Heartbeat ────────────────────────────────────────────────────────────
+
+  private startHeartbeat() {
+    this.stopHeartbeat()
+    this.lastInboundAt = Date.now()
+    this.heartbeatTimer = setInterval(
+      () => this.heartbeatTick(),
+      WS_HEARTBEAT_TICK_MS
+    )
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+    if (this.wakeProbeTimer) {
+      clearTimeout(this.wakeProbeTimer)
+      this.wakeProbeTimer = null
+    }
+    this.pingSentAt = null
+  }
+
+  // Every inbound frame — event, `__ready__`, pong, even a malformed one —
+  // proves the link is alive and settles any outstanding ping.
+  private noteInbound() {
+    this.lastInboundAt = Date.now()
+    this.pingSentAt = null
+  }
+
+  private heartbeatTick() {
+    if (this.destroyed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return
+    }
+    const now = Date.now()
+    if (this.pingSentAt !== null) {
+      if (now - this.pingSentAt >= WS_PONG_TIMEOUT_MS) {
+        this.onSocketDead(`no pong within ${WS_PONG_TIMEOUT_MS}ms`)
+      }
+      return
+    }
+    if (now - this.lastInboundAt >= WS_HEARTBEAT_INTERVAL_MS) {
+      this.sendPing(now)
+    }
+  }
+
+  // False when the frame could not be handed to the socket: it is CLOSING or
+  // CLOSED, so `onclose` is about to drive recovery and the heartbeat must
+  // not double up on it.
+  private sendPing(now: number): boolean {
+    if (!this.sendWsFrame({ action: "ping" })) return false
+    this.pingSentAt = now
+    return true
+  }
+
+  // A socket the browser still reports as OPEN but that no longer carries
+  // traffic. Drop it and reconnect at once: `reconnectNow` resets the
+  // backoff, the new socket's `onopen` re-attaches every live subscription
+  // with its running cursor (replay or snapshot), and its `__ready__` fires
+  // the reconnect callbacks that re-fetch whatever the dead socket swallowed.
+  // `onclose` never runs for this socket (`reconnectNow` detaches it first),
+  // so reset the ready gate here as `onclose` would: `waitForReady()` callers
+  // must wait for the replacement, not pass on the dead socket's `__ready__`.
+  private onSocketDead(reason: string) {
+    console.warn(
+      `[WebTransport] socket presumed dead (${reason}); reconnecting`
+    )
+    this.resetReady()
+    this.reconnectNow()
+  }
+
+  /**
+   * Wake-time liveness check (see `Transport.probeLiveness`). Already
+   * reconnecting → skip the remaining backoff and probe the server now. A
+   * socket that looks open → ping it under a short deadline; nothing back in
+   * time means it died during sleep, so replace it. A handshake in flight
+   * is left to finish on its own, unless it is past its opening deadline.
+   */
+  probeLiveness(): void {
+    if (this.destroyed || this.connState === "unauthorized") return
+    if (this.ws?.readyState === WebSocket.CONNECTING) {
+      // Restarting a handshake that may still complete would only repeat the
+      // work. One past WS_OPEN_TIMEOUT_MS is dead, though, and its own timer
+      // can run late: timers are frozen while the machine sleeps and
+      // throttled in a background page.
+      if (Date.now() - this.openStartedAt >= WS_OPEN_TIMEOUT_MS) {
+        this.reconnectNow()
+      }
+      return
+    }
+    if (this.connState === "reconnecting") {
+      // Open and waiting for `__ready__`: the heartbeat already watches it.
+      if (this.ws) return
+      this.reconnectNow()
+      return
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    if (this.pingSentAt === null && !this.sendPing(Date.now())) return
+    const stamp = this.pingSentAt
+    if (this.wakeProbeTimer) clearTimeout(this.wakeProbeTimer)
+    this.wakeProbeTimer = setTimeout(() => {
+      this.wakeProbeTimer = null
+      if (this.destroyed) return
+      // Still waiting on the very ping we armed for: nothing came back.
+      if (this.pingSentAt === stamp && this.ws?.readyState === WebSocket.OPEN) {
+        this.onSocketDead(
+          `wake probe: no pong within ${WS_WAKE_PONG_TIMEOUT_MS}ms`
+        )
+      }
+    }, WS_WAKE_PONG_TIMEOUT_MS)
   }
 
   destroy() {

@@ -25,6 +25,7 @@ const store = vi.hoisted(() => {
     },
     reconnectWebNow: vi.fn(),
     redirectToCodegLogin: vi.fn(),
+    probeTransportLiveness: vi.fn(),
   }
 })
 
@@ -39,6 +40,10 @@ vi.mock("@/lib/transport/web-connection-store", () => ({
 vi.mock("@/lib/transport/web-auth", () => ({
   redirectToCodegLogin: store.redirectToCodegLogin,
   getCodegToken: () => "tok",
+}))
+
+vi.mock("@/lib/platform", () => ({
+  probeTransportLiveness: store.probeTransportLiveness,
 }))
 
 import { WebConnectionGuard } from "./web-connection-guard"
@@ -57,6 +62,7 @@ beforeEach(() => {
   store.reset()
   store.reconnectWebNow.mockClear()
   store.redirectToCodegLogin.mockClear()
+  store.probeTransportLiveness.mockClear()
 })
 
 afterEach(() => {
@@ -117,22 +123,44 @@ describe("WebConnectionGuard", () => {
     expect(screen.queryByText("Connection lost")).not.toBeInTheDocument()
   })
 
-  it("probes immediately on network restore while reconnecting", () => {
+  it("probes transport liveness on network restore while reconnecting", () => {
     renderGuard()
     act(() => store.setState("reconnecting"))
-    store.reconnectWebNow.mockClear()
 
     act(() => {
       window.dispatchEvent(new Event("online"))
     })
-    expect(store.reconnectWebNow).toHaveBeenCalledTimes(1)
+    // The transport decides what a probe means in this state (skip the
+    // remaining backoff); the guard never reaches past it.
+    expect(store.probeTransportLiveness).toHaveBeenCalledTimes(1)
+    expect(store.reconnectWebNow).not.toHaveBeenCalled()
   })
 
-  it("does not nudge on network events while connected", () => {
+  it("probes liveness on every wake signal even while the link looks connected", () => {
+    // A socket that died during sleep still reports "connected" — the probe
+    // is exactly how that gets noticed, so it must not be gated on state.
     renderGuard()
     act(() => {
       window.dispatchEvent(new Event("online"))
+      window.dispatchEvent(new Event("pageshow"))
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "visible",
+      })
+      document.dispatchEvent(new Event("visibilitychange"))
     })
-    expect(store.reconnectWebNow).not.toHaveBeenCalled()
+    expect(store.probeTransportLiveness).toHaveBeenCalledTimes(3)
+  })
+
+  it("does not probe when the tab goes hidden", () => {
+    renderGuard()
+    act(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      })
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    expect(store.probeTransportLiveness).not.toHaveBeenCalled()
   })
 })

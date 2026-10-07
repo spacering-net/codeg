@@ -20,6 +20,7 @@ import {
   subscribeWebConnection,
 } from "@/lib/transport/web-connection-store"
 import { redirectToCodegLogin } from "@/lib/transport/web-auth"
+import { probeTransportLiveness } from "@/lib/platform"
 
 // Debounce before the "reconnecting" dialog is shown. Server restarts, brief
 // network blips, and laptop sleep/wake usually recover within a few seconds —
@@ -34,9 +35,11 @@ const RECONNECT_DIALOG_GRACE_MS = 4_000
  * Global, single-instance guard mounted once at the root layout. Watches the
  * web transport's connection health and renders a blocking dialog when the
  * link is lost (auto-reconnecting, with a manual "Reconnect now") or the
- * session has expired (prompting re-login). Inert outside web mode — the store
- * returns "connected" for SSR / desktop / remote-desktop, so this renders
- * nothing there.
+ * session has expired (prompting re-login). The dialog is inert outside web
+ * mode — the store returns "connected" for SSR / desktop / remote-desktop, so
+ * it renders nothing there. The wake-time liveness probe below is not: it
+ * goes through whichever transport is active, so a remote-workspace desktop
+ * window gets the same post-sleep recovery via its Rust-side proxy.
  */
 export function WebConnectionGuard() {
   const t = useTranslations("WebConnection")
@@ -64,23 +67,29 @@ export function WebConnectionGuard() {
     }
   }, [state])
 
-  // Fast recovery on network restore / tab wake. Backoff caps at 32s, but the
-  // browser signals the instant connectivity returns (`online`) or the tab
-  // becomes visible after sleep — probe right away instead of waiting out the
-  // remaining backoff (sleep/wake and Wi‑Fi flaps are the common triggers).
-  // Guarded to "reconnecting" so a healthy link is never torn down; the store
-  // accessors are no-ops off web, so this is inert on desktop/SSR.
+  // Fast recovery on network restore / tab wake. Two things can be wrong when
+  // the machine wakes. Either the transport already knows the link is down —
+  // backoff caps at 32s, so probe right away instead of waiting it out — or
+  // it does NOT know: a socket that died during sleep sits in OPEN state
+  // until the OS times it out, with no close event to trigger reconnection,
+  // and the event stream stays dark for minutes. `probeTransportLiveness`
+  // covers both — while reconnecting it skips the remaining backoff; on a
+  // seemingly-healthy socket it pings and replaces the socket if no pong
+  // comes back within seconds. A healthy link only ever costs one ping.
+  // `pageshow` is the bfcache restore on mobile Safari, which fires no
+  // `visibilitychange`. Inert on the local desktop transport, whose IPC has
+  // no socket to lose.
   useEffect(() => {
-    const nudgeIfReconnecting = () => {
-      if (getWebConnectionSnapshot() === "reconnecting") reconnectWebNow()
-    }
+    const probe = () => probeTransportLiveness()
     const onVisible = () => {
-      if (document.visibilityState === "visible") nudgeIfReconnecting()
+      if (document.visibilityState === "visible") probe()
     }
-    window.addEventListener("online", nudgeIfReconnecting)
+    window.addEventListener("online", probe)
+    window.addEventListener("pageshow", probe)
     document.addEventListener("visibilitychange", onVisible)
     return () => {
-      window.removeEventListener("online", nudgeIfReconnecting)
+      window.removeEventListener("online", probe)
+      window.removeEventListener("pageshow", probe)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [])

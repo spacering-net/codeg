@@ -2717,10 +2717,17 @@ function reducer(
 
 export interface RuntimeActions {
   fetchDetail: (conversationId: number) => void
+  /**
+   * Re-read the conversation's detail. Callers that only need it to happen
+   * can ignore the result; one that must know whether the read got through
+   * (the wake resync, which retries on the next trigger only when it did
+   * not) awaits it: `true` once this fetch's response is in the store,
+   * `false` when it failed or a later fetch superseded it.
+   */
   refetchDetail: (
     conversationId: number,
     options?: { preserveLive?: boolean; dropLiveTurnIds?: string[] }
-  ) => void
+  ) => Promise<boolean>
   /**
    * Load one page of older history above the current window and prepend it
    * (reverse infinite scroll). No-op unless the loaded detail is windowed
@@ -3772,7 +3779,7 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
   const refetchDetail = (
     conversationId: number,
     options?: { preserveLive?: boolean; dropLiveTurnIds?: string[] }
-  ): void => {
+  ): Promise<boolean> => {
     // The session key is not always a fetchable DB id: a conversation started
     // as a new-chat draft keeps its virtual (negative) key for the tab's whole
     // life. Fetch with the bound DB row id (see `dbConversationId`) and store
@@ -3785,9 +3792,12 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
     const fetchId = session?.dbConversationId ?? conversationId
     const generation = bumpFetchGeneration(conversationId)
     dispatch({ type: "FETCH_DETAIL_START", conversationId })
-    fetchDetailWindowed(fetchId, session?.detail ?? null)
+    // Never rejects: failure is reported as `false` (and as FETCH_DETAIL_ERROR
+    // in the store), so the many callers that fire and forget cannot leak an
+    // unhandled rejection.
+    return fetchDetailWindowed(fetchId, session?.detail ?? null)
       .then((detail) => {
-        if (!isLatestGeneration(conversationId, generation)) return
+        if (!isLatestGeneration(conversationId, generation)) return false
         dispatch({
           type: "FETCH_DETAIL_SUCCESS",
           conversationId,
@@ -3795,14 +3805,16 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
           preserveLive: options?.preserveLive ?? false,
           dropLiveTurnIds: options?.dropLiveTurnIds,
         })
+        return true
       })
       .catch((error: unknown) => {
-        if (!isLatestGeneration(conversationId, generation)) return
+        if (!isLatestGeneration(conversationId, generation)) return false
         dispatch({
           type: "FETCH_DETAIL_ERROR",
           conversationId,
           error: toErrorMessage(error),
         })
+        return false
       })
   }
 

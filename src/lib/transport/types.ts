@@ -128,6 +128,19 @@ export interface Transport {
   onReconnect?(callback: () => void): UnsubscribeFn
 
   /**
+   * Verify the WebSocket link is actually alive. Meant for wake-up moments
+   * (tab becomes visible, lid opened, network restored): a socket that died
+   * while the machine slept can sit in OPEN state for minutes without the
+   * browser noticing — no close frame ever arrives, so the reconnect path
+   * never runs and the event stream silently stays dark. Implementations
+   * send a ping and, if no pong (or any other frame) arrives within a short
+   * deadline, tear the socket down and reconnect at once; while already
+   * reconnecting they skip the remaining backoff instead. Optional — IPC-only
+   * transports leave this undefined.
+   */
+  probeLiveness?(): void
+
+  /**
    * Resolves when the server-side broadcaster receiver is currently
    * subscribed (i.e. the most recent WS connection has received its
    * `__ready__` frame). Callers should await this immediately before

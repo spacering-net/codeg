@@ -1806,6 +1806,7 @@ mod tauri_app {
                 remote_proxy_commands::remote_ws_subscribe,
                 remote_proxy_commands::remote_ws_unsubscribe,
                 remote_proxy_commands::remote_ws_send_text,
+                remote_proxy_commands::remote_ws_probe,
                 windows::open_pet_window,
                 windows::close_pet_window,
                 windows::pet_window_record_position,

@@ -289,3 +289,178 @@ describe("WebTransport connection state machine", () => {
     expect(localStorage.getItem("codeg_token")).toBe("tok") // token preserved
   })
 })
+
+describe("WebTransport heartbeat (dead-socket detection)", () => {
+  const pings = (ws: MockWebSocket) =>
+    ws.sent.filter(
+      (s) => (JSON.parse(s) as { action?: string }).action === "ping"
+    )
+  const pong = (ws: MockWebSocket) =>
+    ws.onmessage?.({ data: JSON.stringify({ type: "pong" }) })
+
+  it("pings after 15s of silence and stays put when the pong comes back", () => {
+    const { t, ws } = connectReady()
+    vi.advanceTimersByTime(14_999)
+    expect(pings(ws)).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+    expect(pings(ws)).toHaveLength(1)
+    pong(ws)
+    vi.advanceTimersByTime(10_000)
+    expect(t.getConnectionSnapshot()).toBe("connected")
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  it("replaces a socket whose pong never comes back", async () => {
+    // The sleep/wake case: the browser still reports the socket OPEN, the
+    // server streams into the void, no close frame ever arrives.
+    fetchMock.mockResolvedValue(ok200())
+    const { t, ws } = connectReady()
+    vi.advanceTimersByTime(15_000)
+    expect(pings(ws)).toHaveLength(1)
+    vi.advanceTimersByTime(9_999)
+    expect(t.getConnectionSnapshot()).toBe("connected")
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.getConnectionSnapshot()).toBe("reconnecting")
+    expect(ws.readyState).toBe(MockWebSocket.CLOSED)
+    // Straight to the health probe: no backoff for a socket we know is dead.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const ws2 = lastWs()
+    expect(ws2).not.toBe(ws)
+    ws2.open()
+    ws2.ready()
+    expect(t.getConnectionSnapshot()).toBe("connected")
+  })
+
+  it("makes waitForReady() wait for the socket that replaces a dead one", async () => {
+    fetchMock.mockResolvedValue(ok200())
+    const { t, ws } = connectReady()
+    await vi.advanceTimersByTimeAsync(25_000) // pinged at 15s, overdue at 25s
+    const ws2 = lastWs()
+    expect(ws2).not.toBe(ws)
+    let ready = false
+    void t.waitForReady().then(() => {
+      ready = true
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    // The dead socket's `__ready__` must not vouch for its replacement.
+    expect(ready).toBe(false)
+    ws2.open()
+    ws2.ready()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ready).toBe(true)
+  })
+
+  it("counts any inbound frame as proof of life, so a busy stream is never pinged", () => {
+    const { ws } = connectReady()
+    for (let i = 0; i < 8; i++) {
+      vi.advanceTimersByTime(10_000)
+      ws.onmessage?.({
+        data: JSON.stringify({ channel: "acp://event", payload: null }),
+      })
+    }
+    expect(pings(ws)).toHaveLength(0)
+  })
+
+  it("probeLiveness() pings at once and replaces the socket when nothing answers within 4s", async () => {
+    fetchMock.mockResolvedValue(ok200())
+    const { t, ws } = connectReady()
+    t.probeLiveness()
+    expect(pings(ws)).toHaveLength(1)
+    vi.advanceTimersByTime(3_999)
+    expect(t.getConnectionSnapshot()).toBe("connected")
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.getConnectionSnapshot()).toBe("reconnecting")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(lastWs()).not.toBe(ws)
+  })
+
+  it("probeLiveness() leaves a socket that answers alone", () => {
+    const { t, ws } = connectReady()
+    t.probeLiveness()
+    pong(ws)
+    vi.advanceTimersByTime(4_000)
+    expect(t.getConnectionSnapshot()).toBe("connected")
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("probeLiveness() while reconnecting skips the remaining backoff, but never restarts a handshake in flight", async () => {
+    fetchMock.mockResolvedValue(ok200())
+    const { t, ws } = connectReady()
+    ws.drop() // backoff: probe scheduled at 1s
+    expect(fetchMock).not.toHaveBeenCalled()
+    t.probeLiveness()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const ws2 = lastWs()
+    expect(ws2).not.toBe(ws)
+    // A second wake signal while the new socket is mid-handshake.
+    t.probeLiveness()
+    expect(lastWs()).toBe(ws2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("gives up on a socket that never opens after the health probe passed, and retries", async () => {
+    // The server answers /api/health, but the upgrade black-holes: the socket
+    // sits in CONNECTING with no deadline of its own.
+    fetchMock.mockResolvedValue(ok200())
+    const { t, ws } = connectReady()
+    const onReconnect = vi.fn()
+    t.onReconnect(onReconnect)
+    ws.drop()
+    await vi.advanceTimersByTimeAsync(1_000) // backoff → probe → 200
+    const stuck = lastWs()
+    expect(stuck).not.toBe(ws)
+    expect(stuck.readyState).toBe(MockWebSocket.CONNECTING)
+
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(lastWs()).toBe(stuck)
+    await vi.advanceTimersByTimeAsync(1)
+    // Dropped at the 10s deadline, and the retry backs off like any failure.
+    expect(stuck.readyState).toBe(MockWebSocket.CLOSED)
+    expect(t.getConnectionSnapshot()).toBe("reconnecting")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const ws3 = lastWs()
+    expect(ws3).not.toBe(stuck)
+    ws3.open()
+    ws3.ready()
+    expect(t.getConnectionSnapshot()).toBe("connected")
+    expect(onReconnect).toHaveBeenCalledTimes(1)
+  })
+
+  it("probeLiveness() replaces a socket stuck opening past its deadline before its timer runs", async () => {
+    fetchMock.mockResolvedValue(ok200())
+    const { t, ws } = connectReady()
+    ws.drop()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const stuck = lastWs()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The machine sleeps with the handshake in flight: the clock moves on,
+    // the deadline timer does not fire.
+    vi.setSystemTime(Date.now() + 10_000)
+    t.probeLiveness()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stuck.readyState).toBe(MockWebSocket.CLOSED)
+    // Straight to the health probe, as for any link known to be down.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastWs()).not.toBe(stuck)
+  })
+
+  it("probeLiveness() is inert once unauthorized", () => {
+    const { t } = connectReady()
+    t.markUnauthorized()
+    t.probeLiveness()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(t.getConnectionSnapshot()).toBe("unauthorized")
+  })
+
+  it("stops the heartbeat with the socket", () => {
+    const { t, ws } = connectReady()
+    t.destroy()
+    vi.advanceTimersByTime(60_000)
+    expect(pings(ws)).toHaveLength(0)
+  })
+})

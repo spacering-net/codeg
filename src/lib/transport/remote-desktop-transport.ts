@@ -225,6 +225,23 @@ export class RemoteDesktopTransport implements Transport {
     }
   }
 
+  /**
+   * Wake-time liveness check. The WS lives in the Rust proxy, which runs its
+   * own heartbeat (`run_ws_task` in `remote_proxy.rs`); this asks it to ping
+   * right now under a short pong deadline, so a socket that died during
+   * sleep is replaced within seconds instead of at the next scheduled
+   * heartbeat. Fire-and-forget: no task entry yet (not subscribed) or one
+   * already torn down is not a failure worth surfacing.
+   */
+  probeLiveness(): void {
+    if (this.destroyed || !this.wsStarted) return
+    void invoke("remote_ws_probe", { connectionId: this.config.id }).catch(
+      (err) => {
+        console.warn("[RemoteDesktopTransport] remote_ws_probe failed:", err)
+      }
+    )
+  }
+
   eventStream(): EventStream {
     if (!this.eventStreamInstance) {
       const host: AttachTransportHost = {
@@ -388,8 +405,8 @@ export class RemoteDesktopTransport implements Transport {
       return
     }
     if (channel === WS_UNAUTHORIZED_CHANNEL) {
-      // Rust gave up after WS_RECONNECT_FAIL_THRESHOLD failures, OR the
-      // remote rejected the handshake. Either way, surface as expired.
+      // Rust gave up: the remote rejected the handshake's credentials
+      // WS_RECONNECT_FAIL_THRESHOLD times in a row. Surface as expired.
       this.config.onUnauthorized?.()
       return
     }

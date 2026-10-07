@@ -39,7 +39,8 @@ use base64::{
 use futures_util::{SinkExt, Stream, StreamExt};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, EventTarget, State, WebviewWindow};
-use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::sync::{mpsc, watch, Mutex, Notify, RwLock};
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest,
     handshake::client::Request,
@@ -87,13 +88,48 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// longest today is 70s for `describeAgentOptions`).
 const HTTP_TIMEOUT_MAX: Duration = Duration::from_secs(600);
 
-/// Number of consecutive WS connect failures before we give up and emit
-/// `__unauthorized__`. Matches the JS-side `wsFailCount >= 3` threshold.
+/// Number of consecutive TERMINAL handshake failures (the remote rejected
+/// the token, or the request could not even be built) before we give up
+/// and emit `__unauthorized__`. Transient failures — DNS, TCP, TLS, a
+/// proxy 5xx, a timeout — never count: the remote may simply be unreachable
+/// for a moment (Wi-Fi re-associating after wake, server restarting), and
+/// surfacing that as "expired" made the user close and reopen the workspace
+/// over a network gap. Those back off and retry indefinitely, exactly like
+/// the browser-side `WebTransport` does.
 const WS_RECONNECT_FAIL_THRESHOLD: u32 = 3;
 
 /// Exponential backoff bounds for WS reconnect. 1s/2s/4s/8s/16s/32s.
 const WS_BACKOFF_INITIAL_SECS: u64 = 1;
 const WS_BACKOFF_MAX_SECS: u64 = 32;
+
+/// Heartbeat for the proxied WS. A socket that died while the laptop slept
+/// (lid closed) never produces a read error or a close frame by itself:
+/// the kernel only learns the peer is gone when something is written and
+/// the retransmits time out, and this task writes nothing unless the
+/// frontend sends a frame. So it would sit in the read loop indefinitely
+/// while the remote server streams a whole turn into the void — the
+/// "stale transcript after wake" bug. The heartbeat pings after
+/// `WS_HEARTBEAT_INTERVAL` of silence (any inbound frame is proof of life,
+/// so a busy stream never pays for it) and treats a pong overdue by
+/// `WS_PONG_TIMEOUT` as a dead socket: leave the read loop, emit
+/// `__disconnected__`, reconnect. The remote axum server answers
+/// protocol-level pings on its own.
+const WS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const WS_PONG_TIMEOUT: Duration = Duration::from_secs(10);
+/// Pong deadline for a frontend-requested probe (`remote_ws_probe`, sent on
+/// tab-visible / lid-open). Tight on purpose: the user is looking at the
+/// screen, and a false positive only costs one reconnect + re-attach.
+const WS_PROBE_PONG_TIMEOUT: Duration = Duration::from_secs(4);
+/// Bound on one handshake attempt (TCP + TLS + upgrade). A connect toward a
+/// host that silently drops packets — a laptop that just woke, a VPN still
+/// re-establishing — otherwise waits out the OS's own connect timeout, which
+/// can take minutes, before the reconnect loop gets to try again. Timing out
+/// is a transient failure like any other network error.
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bound on writing a heartbeat ping. A dead socket normally accepts the
+/// write into the kernel buffer (the missing pong is what catches it), but a
+/// socket whose buffer is wedged must not stall the read loop either.
+const WS_PING_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// MUST match the values in `src-tauri/src/web/auth.rs` and
 /// `src/lib/transport/ws-auth.ts`. The server's auth middleware reads the
@@ -134,6 +170,13 @@ struct WsTaskEntry {
     /// attach frames on every `__ready__` so a transient WS gap is recovered
     /// automatically.
     outbound_tx: mpsc::Sender<String>,
+    /// Wake-time liveness probe requested by the frontend
+    /// (`remote_ws_probe`): the WS task pings at once under the short
+    /// `WS_PROBE_PONG_TIMEOUT` instead of waiting for the next quiet
+    /// interval — or, while it is between reconnect attempts, skips the rest
+    /// of the backoff wait. A `Notify` so a request landing between two loop
+    /// iterations is kept as a permit, not lost.
+    probe: Notify,
 }
 
 #[derive(Clone)]
@@ -1605,6 +1648,7 @@ pub async fn remote_ws_subscribe(
         ready: RwLock::new(false),
         shutdown_tx,
         outbound_tx,
+        probe: Notify::new(),
     });
 
     // Insert under the proxy lock. If a concurrent subscribe raced us, fold
@@ -1726,6 +1770,128 @@ pub async fn remote_ws_unsubscribe(
     Ok(())
 }
 
+/// Ask the WS task for `connection_id` to verify its socket is alive right
+/// now (see `Heartbeat::on_probe`), or — while it is waiting to reconnect —
+/// to retry at once. The frontend calls this on wake-up signals (tab
+/// visible, lid open, network back), so a socket that died during sleep is
+/// replaced within seconds instead of at the next quiet-interval ping or the
+/// end of a 32 s backoff. No entry (nothing subscribed, or already torn
+/// down) is not an error: there is no socket to check.
+#[tauri::command]
+pub async fn remote_ws_probe(
+    proxy: State<'_, Arc<RemoteProxyState>>,
+    connection_id: i32,
+) -> Result<(), AppCommandError> {
+    let entry = {
+        let tasks = proxy.tasks.lock().await;
+        tasks.get(&connection_id).cloned()
+    };
+    if let Some(entry) = entry {
+        entry.probe.notify_one();
+    }
+    Ok(())
+}
+
+// ─── Heartbeat ────────────────────────────────────────────────────────
+
+/// What the heartbeat wants done when its deadline fires.
+#[derive(Debug, PartialEq, Eq)]
+enum HeartbeatAction {
+    /// Quiet for a full interval: send a ping.
+    Ping,
+    /// The outstanding ping's pong is overdue: the socket is dead.
+    Dead,
+    /// Deadline moved (a frame arrived meanwhile); keep waiting.
+    Wait,
+}
+
+/// Pure liveness state machine for one socket (see `WS_HEARTBEAT_INTERVAL`).
+/// Free of I/O so the timing rules are unit-testable; `run_ws_task` feeds it
+/// `Instant`s and acts on what it returns.
+struct Heartbeat {
+    last_inbound: Instant,
+    /// Deadline of the outstanding ping, if one is out.
+    pong_due: Option<Instant>,
+}
+
+impl Heartbeat {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_inbound: now,
+            pong_due: None,
+        }
+    }
+
+    /// Any inbound frame — text, pong, even a ping from the server — proves
+    /// the link is alive and settles an outstanding ping.
+    fn on_inbound(&mut self, now: Instant) {
+        self.last_inbound = now;
+        self.pong_due = None;
+    }
+
+    /// The next moment `on_deadline` should be consulted.
+    fn next_deadline(&self) -> Instant {
+        self.pong_due
+            .unwrap_or(self.last_inbound + WS_HEARTBEAT_INTERVAL)
+    }
+
+    fn on_deadline(&mut self, now: Instant) -> HeartbeatAction {
+        if let Some(due) = self.pong_due {
+            return if now >= due {
+                HeartbeatAction::Dead
+            } else {
+                HeartbeatAction::Wait
+            };
+        }
+        if now >= self.last_inbound + WS_HEARTBEAT_INTERVAL {
+            self.pong_due = Some(now + WS_PONG_TIMEOUT);
+            HeartbeatAction::Ping
+        } else {
+            HeartbeatAction::Wait
+        }
+    }
+
+    /// Frontend-requested probe: answer within `WS_PROBE_PONG_TIMEOUT` or be
+    /// presumed dead. Returns whether a ping must go out — an outstanding
+    /// ping is not resent, its deadline is just pulled in to the probe's
+    /// (never pushed out) so the answer comes as fast as the probe promised.
+    fn on_probe(&mut self, now: Instant) -> bool {
+        let probe_due = now + WS_PROBE_PONG_TIMEOUT;
+        match self.pong_due {
+            Some(due) => {
+                self.pong_due = Some(due.min(probe_due));
+                false
+            }
+            None => {
+                self.pong_due = Some(probe_due);
+                true
+            }
+        }
+    }
+}
+
+type RemoteWsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Send a protocol-level ping, bounded by `WS_PING_SEND_TIMEOUT`. Any
+/// failure means the socket is unusable: the caller leaves the read loop and
+/// reconnects.
+async fn send_heartbeat_ping(socket: &mut RemoteWsStream) -> Result<(), String> {
+    match tokio::time::timeout(
+        WS_PING_SEND_TIMEOUT,
+        socket.send(Message::Ping(Bytes::new())),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(err.to_string()),
+        Err(_) => Err(format!(
+            "send did not complete within {}s",
+            WS_PING_SEND_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 // ─── WS background task ───────────────────────────────────────────────
 
 /// Long-running task that maintains one WebSocket per `connection_id`.
@@ -1734,10 +1900,11 @@ pub async fn remote_ws_unsubscribe(
 ///   2. On successful upgrade, emit `__ready__` to current subscribers.
 ///   3. Read messages, fan out to subscribers as `(channel, payload)`
 ///      envelopes.
-///   4. On disconnect, emit `__disconnected__`, increment fail count, back
-///      off, retry.
-///   5. After `WS_RECONNECT_FAIL_THRESHOLD` consecutive failures, emit
-///      `__unauthorized__` and exit.
+///   4. On disconnect — remote close, read error, or a heartbeat that went
+///      unanswered (the socket died during sleep) — emit `__disconnected__`,
+///      back off, retry. Indefinitely: a drop says nothing about the token.
+///   5. After `WS_RECONNECT_FAIL_THRESHOLD` consecutive TERMINAL handshake
+///      failures (auth rejection), emit `__unauthorized__` and exit.
 ///   6. At any point, a `shutdown_tx.send(true)` causes graceful exit.
 ///
 /// On exit (any path), the task removes its entry from `proxy.tasks` —
@@ -1761,7 +1928,11 @@ async fn run_ws_task(
 ) {
     let event_name = format!("remote-ws-event-{connection_id}");
     let ws_url = http_url_to_ws_url(&base_url, WS_EVENTS_PATH);
-    let mut fail_count: u32 = 0;
+    // Drives the backoff delay: grows on every failure of any kind, resets
+    // on a successful handshake.
+    let mut backoff_step: u32 = 0;
+    // Consecutive terminal handshake failures (see WS_RECONNECT_FAIL_THRESHOLD).
+    let mut terminal_failures: u32 = 0;
 
     'reconnect: loop {
         if *shutdown_rx.borrow() {
@@ -1776,32 +1947,38 @@ async fn run_ws_task(
                 }
                 continue;
             }
-            res = connect_with_subprotocol_auth(&ws_url, WS_EVENT_PROTOCOL, &token, &custom_headers) => res,
+            res = connect_events_ws(&ws_url, &token, &custom_headers) => res,
         };
 
         let mut socket = match connect_result {
             Ok(s) => s,
             Err(err) => {
                 tracing::error!("[RemoteProxy] WS connect failed for connection {connection_id}: {err}");
-                fail_count += 1;
-                if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
-                    emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
-                    break;
+                backoff_step = backoff_step.saturating_add(1);
+                if matches!(err, WsConnectError::Terminal(_)) {
+                    terminal_failures += 1;
+                    if terminal_failures >= WS_RECONNECT_FAIL_THRESHOLD {
+                        emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
+                        break;
+                    }
                 }
-                if backoff_sleep(&mut shutdown_rx, fail_count).await {
+                if backoff_sleep(&mut shutdown_rx, &entry.probe, backoff_step).await {
                     break;
                 }
                 continue;
             }
         };
 
-        // Connect succeeded — reset fail count. We do not emit `__ready__`
-        // here; the remote server emits the real `__ready__` only after it
-        // has subscribed to its broadcaster, and that is the readiness
-        // contract the frontend relies on.
-        fail_count = 0;
+        // Connect succeeded — reset the failure counters. We do not emit
+        // `__ready__` here; the remote server emits the real `__ready__` only
+        // after it has subscribed to its broadcaster, and that is the
+        // readiness contract the frontend relies on.
+        backoff_step = 0;
+        terminal_failures = 0;
+        let mut heartbeat = Heartbeat::new(Instant::now());
 
-        // Read loop. Exits on shutdown, error, or remote close.
+        // Read loop. Exits on shutdown, error, remote close, or a socket the
+        // heartbeat presumes dead.
         loop {
             tokio::select! {
                 biased;
@@ -1827,43 +2004,82 @@ async fn run_ws_task(
                         break 'reconnect;
                     }
                 },
-                msg = socket.next() => match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Err(err) = forward_text_message(&app, &entry, &event_name, &text).await {
+                // Polled before the heartbeat branches: a frame that has
+                // already arrived must count as proof of life before an
+                // overdue deadline is judged.
+                msg = socket.next() => {
+                    if let Some(Ok(_)) = &msg {
+                        heartbeat.on_inbound(Instant::now());
+                    }
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Err(err) = forward_text_message(&app, &entry, &event_name, &text).await {
+                                tracing::error!(
+                                    "[RemoteProxy] failed to forward WS message on connection {connection_id}: {err}"
+                                );
+                            }
+                        }
+                        Some(Ok(Message::Binary(_))) => {
+                            // Server only emits text frames today; ignore binary.
+                        }
+                        Some(Ok(Message::Ping(payload))) => {
+                            let _ = socket.send(Message::Pong(payload)).await;
+                        }
+                        Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
+                        Some(Ok(Message::Close(_))) | None => {
+                            break;
+                        }
+                        Some(Err(err)) => {
                             tracing::error!(
-                                "[RemoteProxy] failed to forward WS message on connection {connection_id}: {err}"
+                                "[RemoteProxy] WS read error on connection {connection_id}: {err}"
                             );
+                            break;
                         }
                     }
-                    Some(Ok(Message::Binary(_))) => {
-                        // Server only emits text frames today; ignore binary.
+                }
+                // Frontend-requested liveness probe (tab visible / lid open):
+                // ping now under the short deadline instead of waiting for
+                // the next quiet interval.
+                _ = entry.probe.notified() => {
+                    if heartbeat.on_probe(Instant::now()) {
+                        if let Err(err) = send_heartbeat_ping(&mut socket).await {
+                            tracing::warn!(
+                                "[RemoteProxy] probe ping failed on connection {connection_id}: {err}"
+                            );
+                            break;
+                        }
                     }
-                    Some(Ok(Message::Ping(payload))) => {
-                        let _ = socket.send(Message::Pong(payload)).await;
+                }
+                _ = tokio::time::sleep_until(heartbeat.next_deadline()) => {
+                    match heartbeat.on_deadline(Instant::now()) {
+                        HeartbeatAction::Ping => {
+                            if let Err(err) = send_heartbeat_ping(&mut socket).await {
+                                tracing::warn!(
+                                    "[RemoteProxy] heartbeat ping failed on connection {connection_id}: {err}"
+                                );
+                                break;
+                            }
+                        }
+                        HeartbeatAction::Dead => {
+                            tracing::warn!(
+                                "[RemoteProxy] WS on connection {connection_id} stopped answering \
+                                 pings; presuming the socket died (sleep/wake?) and reconnecting"
+                            );
+                            break;
+                        }
+                        HeartbeatAction::Wait => {}
                     }
-                    Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
-                    Some(Ok(Message::Close(_))) | None => {
-                        break;
-                    }
-                    Some(Err(err)) => {
-                        tracing::error!(
-                            "[RemoteProxy] WS read error on connection {connection_id}: {err}"
-                        );
-                        break;
-                    }
-                },
+                }
             }
         }
 
-        // Disconnected (not via shutdown). Notify and try again.
+        // Disconnected (not via shutdown). Notify and try again. A drop is
+        // never evidence the token expired — only the next handshake can
+        // tell — so it feeds the backoff, not the terminal counter.
         *entry.ready.write().await = false;
         emit_internal(&app, &entry, &event_name, WS_DISCONNECTED_CHANNEL).await;
-        fail_count += 1;
-        if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
-            emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
-            break;
-        }
-        if backoff_sleep(&mut shutdown_rx, fail_count).await {
+        backoff_step = backoff_step.saturating_add(1);
+        if backoff_sleep(&mut shutdown_rx, &entry.probe, backoff_step).await {
             break;
         }
     }
@@ -1886,12 +2102,22 @@ async fn run_ws_task(
 /// `fail_count` (1s, 2s, 4s, … capped at `WS_BACKOFF_MAX_SECS`). Returns
 /// `true` if shutdown was requested during the wait — caller should exit
 /// its loop in that case.
-async fn backoff_sleep(shutdown_rx: &mut watch::Receiver<bool>, fail_count: u32) -> bool {
+///
+/// `wake` (the entry's probe signal) cuts the wait short: a wake-up probe
+/// (lid opened, network back) means "try now", not "after the remaining
+/// 32 s". A request that landed while a connect attempt was in flight is kept
+/// as a `Notify` permit, so the retry after that attempt starts at once too.
+async fn backoff_sleep(
+    shutdown_rx: &mut watch::Receiver<bool>,
+    wake: &Notify,
+    fail_count: u32,
+) -> bool {
     let shift = fail_count.saturating_sub(1).min(8) as u64;
     let secs = (WS_BACKOFF_INITIAL_SECS << shift).min(WS_BACKOFF_MAX_SECS);
     tokio::select! {
         biased;
         changed = shutdown_rx.changed() => changed.is_ok() && *shutdown_rx.borrow(),
+        _ = wake.notified() => false,
         _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
     }
 }
@@ -1966,6 +2192,61 @@ async fn snapshot_subscribers(entry: &Arc<WsTaskEntry>) -> Vec<String> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
+/// Why a WS handshake failed, as far as the reconnect policy cares.
+#[derive(Debug)]
+enum WsConnectError {
+    /// The remote answered the upgrade with an auth rejection, or the
+    /// request could not even be built (bad URL / header). Retrying will
+    /// not help; counts toward `WS_RECONNECT_FAIL_THRESHOLD`.
+    Terminal(String),
+    /// Everything else — DNS, TCP, TLS, a proxy 5xx, a timeout. The remote
+    /// may simply not be reachable yet; back off and retry, never give up.
+    Transient(String),
+}
+
+impl std::fmt::Display for WsConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WsConnectError::Terminal(msg) => write!(f, "{msg} (terminal)"),
+            WsConnectError::Transient(msg) => write!(f, "{msg} (transient)"),
+        }
+    }
+}
+
+/// Sort a `connect_async` failure into the two classes the reconnect loop
+/// distinguishes. Only an explicit 401/403 on the upgrade response is
+/// terminal: a 5xx is a proxy or a server mid-restart, and anything below
+/// HTTP (I/O, TLS) says nothing about the token at all.
+fn classify_ws_connect_error(err: tokio_tungstenite::tungstenite::Error) -> WsConnectError {
+    use tokio_tungstenite::tungstenite::Error;
+    match err {
+        Error::Http(resp) if matches!(resp.status().as_u16(), 401 | 403) => {
+            WsConnectError::Terminal(format!(
+                "connect_async: remote rejected the upgrade with HTTP {}",
+                resp.status()
+            ))
+        }
+        other => WsConnectError::Transient(format!("connect_async: {other}")),
+    }
+}
+
+/// One handshake attempt for the events WebSocket, bounded by
+/// `WS_CONNECT_TIMEOUT` (a timeout is transient: retried, never "expired").
+async fn connect_events_ws(
+    ws_url: &str,
+    token: &str,
+    custom_headers: &HeaderMap,
+) -> Result<RemoteWsStream, WsConnectError> {
+    let attempt = connect_with_subprotocol_auth(ws_url, WS_EVENT_PROTOCOL, token, custom_headers);
+    match tokio::time::timeout(WS_CONNECT_TIMEOUT, attempt).await {
+        Ok(result) => result,
+        Err(_) => Err(WsConnectError::Transient(format!(
+            "connect_async: no answer within {}s",
+            WS_CONNECT_TIMEOUT.as_secs()
+        ))),
+    }
+}
+
 /// Connect to a remote WebSocket with subprotocol-based token auth, speaking
 /// `protocol` (`codeg-events`, or the browser tunnel's). The remote server's
 /// auth middleware (see `web/auth.rs`) accepts either `Authorization: Bearer …`
@@ -1973,19 +2254,18 @@ async fn snapshot_subscribers(entry: &Arc<WsTaskEntry>) -> Vec<String> {
 /// is what browser WebSocket clients use because browsers cannot set arbitrary
 /// headers on WS handshakes; we follow the same convention here so both
 /// transports share one server-side codepath.
-pub(crate) async fn connect_with_subprotocol_auth(
+async fn connect_with_subprotocol_auth(
     ws_url: &str,
     protocol: &str,
     token: &str,
     custom_headers: &HeaderMap,
-) -> Result<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-    String,
-> {
-    let request = ws_request_with_subprotocol_auth(ws_url, protocol, token, custom_headers)?;
+) -> Result<RemoteWsStream, WsConnectError> {
+    // A request that cannot be built now will not build on a retry either.
+    let request = ws_request_with_subprotocol_auth(ws_url, protocol, token, custom_headers)
+        .map_err(WsConnectError::Terminal)?;
     let (stream, _resp) = tokio_tungstenite::connect_async(request)
         .await
-        .map_err(|e| format!("connect_async: {e}"))?;
+        .map_err(classify_ws_connect_error)?;
     Ok(stream)
 }
 
@@ -2046,7 +2326,127 @@ mod tests {
             ready: RwLock::new(false),
             shutdown_tx,
             outbound_tx,
+            probe: Notify::new(),
         })
+    }
+
+    // ─── Heartbeat (dead-socket detection) ──────────────────────────────
+
+    #[test]
+    fn heartbeat_pings_after_a_quiet_interval_then_dies_when_the_pong_is_overdue() {
+        let t0 = Instant::now();
+        let mut hb = Heartbeat::new(t0);
+        assert_eq!(hb.next_deadline(), t0 + WS_HEARTBEAT_INTERVAL);
+        // Consulted early (spurious wake): nothing to do yet.
+        assert_eq!(
+            hb.on_deadline(t0 + Duration::from_secs(1)),
+            HeartbeatAction::Wait
+        );
+        let sent = t0 + WS_HEARTBEAT_INTERVAL;
+        assert_eq!(hb.on_deadline(sent), HeartbeatAction::Ping);
+        assert_eq!(hb.next_deadline(), sent + WS_PONG_TIMEOUT);
+        assert_eq!(
+            hb.on_deadline(sent + Duration::from_secs(1)),
+            HeartbeatAction::Wait
+        );
+        assert_eq!(
+            hb.on_deadline(sent + WS_PONG_TIMEOUT),
+            HeartbeatAction::Dead
+        );
+    }
+
+    #[test]
+    fn heartbeat_treats_any_inbound_frame_as_proof_of_life() {
+        let t0 = Instant::now();
+        let mut hb = Heartbeat::new(t0);
+        // A busy stream is never pinged: each frame restarts the quiet interval.
+        for i in 1..=5 {
+            let now = t0 + Duration::from_secs(10 * i);
+            hb.on_inbound(now);
+            assert_eq!(hb.next_deadline(), now + WS_HEARTBEAT_INTERVAL);
+            assert_eq!(
+                hb.on_deadline(now + Duration::from_secs(5)),
+                HeartbeatAction::Wait
+            );
+        }
+        // An outstanding ping is settled by whatever arrives — no pong needed.
+        let quiet = t0 + Duration::from_secs(50) + WS_HEARTBEAT_INTERVAL;
+        assert_eq!(hb.on_deadline(quiet), HeartbeatAction::Ping);
+        hb.on_inbound(quiet + Duration::from_secs(1));
+        assert_eq!(
+            hb.on_deadline(quiet + WS_PONG_TIMEOUT),
+            HeartbeatAction::Wait
+        );
+    }
+
+    #[test]
+    fn heartbeat_probe_pings_at_once_under_the_short_deadline() {
+        let t0 = Instant::now();
+        let mut hb = Heartbeat::new(t0);
+        let now = t0 + Duration::from_secs(3);
+        assert!(
+            hb.on_probe(now),
+            "no ping outstanding: the probe must send one"
+        );
+        assert_eq!(hb.next_deadline(), now + WS_PROBE_PONG_TIMEOUT);
+        assert_eq!(
+            hb.on_deadline(now + WS_PROBE_PONG_TIMEOUT),
+            HeartbeatAction::Dead
+        );
+    }
+
+    #[test]
+    fn heartbeat_probe_pulls_in_an_outstanding_deadline_instead_of_resending() {
+        let t0 = Instant::now();
+        let sent = t0 + WS_HEARTBEAT_INTERVAL;
+        // Probe 1s after a ping: 1s + 4s beats the ping's own 10s; no resend.
+        let mut hb = Heartbeat::new(t0);
+        assert_eq!(hb.on_deadline(sent), HeartbeatAction::Ping);
+        let probe_at = sent + Duration::from_secs(1);
+        assert!(!hb.on_probe(probe_at));
+        assert_eq!(hb.next_deadline(), probe_at + WS_PROBE_PONG_TIMEOUT);
+        // Probe when the ping's own deadline is already closer: it stays.
+        let mut hb = Heartbeat::new(t0);
+        assert_eq!(hb.on_deadline(sent), HeartbeatAction::Ping);
+        let late_probe = sent + WS_PONG_TIMEOUT - Duration::from_secs(1);
+        assert!(!hb.on_probe(late_probe));
+        assert_eq!(hb.next_deadline(), sent + WS_PONG_TIMEOUT);
+    }
+
+    // ─── Handshake failure classification ───────────────────────────────
+
+    #[test]
+    fn only_an_auth_rejection_on_the_upgrade_is_terminal() {
+        use tokio_tungstenite::tungstenite::{http, Error};
+        let http_err =
+            |status: u16| Error::Http(http::Response::builder().status(status).body(None).unwrap());
+        assert!(matches!(
+            classify_ws_connect_error(http_err(401)),
+            WsConnectError::Terminal(_)
+        ));
+        assert!(matches!(
+            classify_ws_connect_error(http_err(403)),
+            WsConnectError::Terminal(_)
+        ));
+        // A proxy, or a server mid-restart: try again.
+        assert!(matches!(
+            classify_ws_connect_error(http_err(502)),
+            WsConnectError::Transient(_)
+        ));
+        assert!(matches!(
+            classify_ws_connect_error(http_err(404)),
+            WsConnectError::Transient(_)
+        ));
+        // Below HTTP nothing is known about the token (Wi-Fi still coming
+        // back after wake, server down for an upgrade).
+        let io = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "refused",
+        ));
+        assert!(matches!(
+            classify_ws_connect_error(io),
+            WsConnectError::Transient(_)
+        ));
     }
 
     // ─── Host pinning for credential-carrying requests ──────────────────
@@ -2358,6 +2758,7 @@ mod tests {
             ready: RwLock::new(false),
             shutdown_tx,
             outbound_tx,
+            probe: Notify::new(),
         });
         proxy.tasks.lock().await.insert(1, entry);
 
@@ -2392,6 +2793,7 @@ mod tests {
             ready: RwLock::new(false),
             shutdown_tx,
             outbound_tx,
+            probe: Notify::new(),
         });
         (entry, outbound_rx)
     }
@@ -2618,6 +3020,43 @@ mod tests {
         let name = "a".repeat(300);
         let result = sanitize_upload_file_name(&name);
         assert_eq!(result.chars().count(), 255);
+    }
+
+    // ─── Reconnect backoff ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_wake_request_cuts_the_backoff_short() {
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let wake = Notify::new();
+        // A wake-up probe that landed while a connect attempt was still in
+        // flight: kept as a permit, so the next wait ends at once.
+        wake.notify_one();
+        let started = std::time::Instant::now();
+        let shutdown = backoff_sleep(&mut shutdown_rx, &wake, 6).await; // a 32 s step
+        assert!(!shutdown);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn backoff_sleep_reports_a_shutdown() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let wake = Notify::new();
+        let (shutdown, _) = tokio::join!(backoff_sleep(&mut shutdown_rx, &wake, 6), async {
+            shutdown_tx.send(true).unwrap();
+        });
+        assert!(shutdown);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_handshake_that_never_answers_times_out_as_transient() {
+        // The kernel completes the TCP connect into the listen backlog, but
+        // nothing ever answers the upgrade — a host that went quiet mid-way.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws/events", listener.local_addr().unwrap());
+        let err = connect_events_ws(&url, "token", &HeaderMap::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WsConnectError::Transient(_)), "got {err}");
     }
 
     // ─── MIME guess ────────────────────────────────────────────────────
