@@ -11040,27 +11040,12 @@ pub(crate) fn fingerprint_config(
             hasher.update(json.as_bytes());
         }
     }
-    // Pi keeps its provider/model registry and credentials in three native
-    // files outside codeg's generic local-config path. They are all read at
-    // pi process startup, so changes must make an existing session stale. Hash
-    // the raw bytes (including an explicit missing-file marker) rather than
-    // parsing them; this tracks additions/removals and custom fields while
-    // keeping secrets out of the fingerprint itself.
+    // Pi native settings/auth/models — hashed in `pi_native_fingerprint`.
     if agent_type == AgentType::Pi {
-        let pi_dir = pi_agent_dir_for_env(runtime_env);
-        for file in ["settings.json", "auth.json", "models.json"] {
-            hasher.update(b"\x01pi_native_file\x01");
-            hasher.update(file.as_bytes());
-            hasher.update([0u8]);
-            match fs::read(pi_dir.join(file)) {
-                Ok(raw) => {
-                    hasher.update([1u8]);
-                    hasher.update(raw);
-                }
-                Err(_) => hasher.update([0u8]),
-            }
-            hasher.update([0u8]);
-        }
+        crate::acp::pi_native_fingerprint::hash_pi_native_dir_into(
+            &mut hasher,
+            &pi_agent_dir_for_env(runtime_env),
+        );
     }
     format!("{:x}", hasher.finalize())
 }
@@ -17413,29 +17398,19 @@ wire_api = "chat"
 
     #[test]
     fn pi_fingerprint_tracks_native_model_files_and_custom_agent_dir() {
-        // Pi's provider/model registry lives outside the generic local-config
-        // path. A custom PI_CODING_AGENT_DIR must be hashed too, because that is
-        // the directory the spawned pi process actually reads.
+        // Wiring check: fingerprint_config must honor PI_CODING_AGENT_DIR via
+        // pi_agent_dir_for_env. File-level hash behaviour is covered in
+        // `acp::pi_native_fingerprint` so this hotspot stays a thin hook.
         let dir = tempfile::tempdir().expect("tempdir");
         temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
             let env: BTreeMap<String, String> = BTreeMap::new();
             let empty_fp = fingerprint_config(AgentType::Pi, &env);
-
             std::fs::write(
                 dir.path().join("models.json"),
                 r#"{"providers":{"tokenkey":{"models":[{"id":"gpt-6"}]}}}"#,
             )
             .expect("write models");
-            let models_fp = fingerprint_config(AgentType::Pi, &env);
-            assert_ne!(empty_fp, models_fp);
-
-            std::fs::write(
-                dir.path().join("settings.json"),
-                r#"{"defaultProvider":"tokenkey","defaultModel":"gpt-6"}"#,
-            )
-            .expect("write settings");
-            let settings_fp = fingerprint_config(AgentType::Pi, &env);
-            assert_ne!(models_fp, settings_fp);
+            assert_ne!(empty_fp, fingerprint_config(AgentType::Pi, &env));
         });
     }
 

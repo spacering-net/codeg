@@ -32,6 +32,7 @@ pub mod manager;
 pub mod opencode_catalog;
 pub mod opencode_launch;
 pub mod opencode_plugins;
+pub mod pi_native_fingerprint;
 pub mod plan_approval;
 pub mod preflight;
 pub mod prompt_hydration;

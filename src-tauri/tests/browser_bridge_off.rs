@@ -93,3 +93,4 @@ async fn switching_the_bridge_off_closes_everything_and_refuses_new_opens() {
     assert_eq!(response.status(), 200);
     browser_bridge::close("tab-on");
 }
+
