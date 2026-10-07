@@ -53,7 +53,8 @@
       "office_tools": "Officeツール",
       "skill_packs": "スキルパック",
       "collaboration": "コラボレーション",
-      "browser": "ブラウザ",
+      "browser": "ブラウザ操作",
+      "computer_use": "コンピューター操作",
       "quick_messages": "クイックメッセージ",
       "logs": "実行ログ"
     }
@@ -722,13 +723,6 @@
     "emptyNoAgent": "利用可能なエージェントがありません。",
     "configManagement": "設定管理",
     "envVars": "環境変数",
-    "adapterChannel": {
-      "label": "アダプターのバージョン",
-      "description": "インストールとアップグレードは、codeg がレビューして固定したバージョンを使用します。「最新版」を選ぶと、その時点で最新の npm リリースをインストールします。最新版のインストールに失敗した場合は固定バージョンにフォールバックし、インストールログにその旨を記録します。",
-      "pinned": "固定バージョン（推奨）",
-      "latest": "最新版（未レビュー）",
-      "latestWarning": "最新リリースは未レビューのため、codeg でこのエージェントが動かなくなることがあります。まれに既知の不具合を含むリリースが最新版になっていることもあります。実際にインストールされたバージョンはバージョン状態に表示されます。"
-    },
     "hostTools": {
       "label": "ファイルとコマンドをエージェント自身に処理させる",
       "description": "codeg がファイルアクセスとターミナルコマンドを代行しなくなり、エージェントが自身のプロセスで実行します。そうすることで初めて、エージェント自身のサンドボックスと権限ルールが適用されます。他のエージェントへの委任も無効になります（同じ処理が codeg 経由に戻ってしまうため）。codeg 自体はサンドボックスを提供しないため、エージェント側でサンドボックスを設定済みの場合にのみ有効にしてください。"
@@ -799,6 +793,7 @@
       "saveCodeBuddyConfig": "CodeBuddy 設定を保存",
       "saveKimiCodeConfig": "Kimi Code の設定を保存",
       "customInstall": "カスタムインストール",
+      "upgradeToLatest": "未レビューの最新版 {version} にアップグレード",
       "saveKimiCodeRawConfig": "Save config.toml",
       "saveDeepSeekConfig": "DeepSeek 設定を保存",
       "diagnose": "診断"
@@ -1046,9 +1041,9 @@
       "sandboxMode_read-only": "読み取り専用",
       "sandboxMode_workspace-write": "ワークスペース書き込み",
       "sandboxMode_danger-full-access": "フルアクセス（サンドボックスなし）",
-      "sandboxModeReadOnlyAcpWarning": "ACP アダプタには読み取り専用のサンドボックスがなくなったため、ここでの選択にかかわらず codeg のセッションはワークスペース書き込み可で動きます。codeg は選べる中で最も厳しいプリセット（権限昇格はすべてあなたの承認を求める）を選びますが、ワークスペース内の編集には承認が要らなくなります。codex CLI と IDE のセッションは引き続き読み取り専用に従います。",
+      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7〜1.13 には読み取り専用のサンドボックスがありません。これらのアダプタでは、ここでの選択にかかわらず codeg のセッションはワークスペース書き込み可で動きます（権限昇格は引き続きすべてあなたの承認を求めます）。codex-acp 2.0 で復活したので、古いアダプタが入っている場合は更新してください。codex CLI と IDE のセッションは常に読み取り専用に従います。",
       "sandboxModeHint": "Windows では、codex の実験的 Windows サンドボックスが無効な場合、ワークスペース書き込みは読み取り専用に降格されます。",
-      "sandboxModeSeedsPresetHint": "codeg はこれをセッション開始時の承認プリセットにも対応づけるため、承認ポリシーとは違って通常のプロンプトにも効きます。なお、アダプタの既定プリセットではモデルが権限昇格を先に選別し、危険と判断したものだけを転送します。すべて自分で確認したい場合は入力欄で「承認を求める」を選んでください。入力欄のプリセットが常に優先されます。",
+      "sandboxModeSeedsPresetHint": "codeg はこれをセッション開始時の承認プリセットにも対応づけるため、承認ポリシーとは違って通常のプロンプトにも効きます。読み取り専用は「Read-only」で始まります。承認ポリシーが never のとき、フルアクセスは「Full access」、ワークスペース書き込み可は「Auto review」で始まります（モデルが権限昇格を先に選別し、危険と判断したものだけを転送します）。それ以外の承認ポリシーでは、ワークスペース書き込み可とフルアクセスは codex-acp 2.0 以降なら「Workspace access」で始まり、権限昇格をすべてあなたの承認に回します。それより古いアダプタでは「Auto review」で始まります。未設定ならアダプタ既定の「Auto review」のままです。入力欄のプリセットが常に優先されます。",
       "writableRootsLabel": "追加の書き込み可能フォルダ",
       "writableRootsHint": "作業ディレクトリに加えて許可する絶対パスを 1 行に 1 つ。",
       "sandboxRootsRelativeError": "絶対パスである必要があります — codex は相対パスを ~/.codex 基準で解決します: {path}",
@@ -1385,6 +1380,7 @@
       "haikuDefaultModel": "デフォルト Haiku モデル",
       "sonnetDefaultModel": "デフォルト Sonnet モデル",
       "opusDefaultModel": "デフォルト Opus モデル",
+      "fableDefaultModel": "デフォルト Fable モデル",
       "customModelOption": "カスタムモデル ID",
       "customModelOptionName": "カスタムモデル名",
       "customModelOptionDescription": "カスタムモデルの説明",
@@ -1403,7 +1399,9 @@
       "customInstallDescription": "インストールするバージョンを入力します。再インストールされ、現在インストールされているバージョンを置き換えます。",
       "customInstallVersionLabel": "バージョン番号",
       "customInstallInvalid": "有効なバージョン番号を入力してください（例: 1.2.3）。",
-      "customInstallSubmit": "インストール"
+      "customInstallSubmit": "インストール",
+      "confirmUpgradeToLatest": "{name} を未レビューの {version} にアップグレードしますか？",
+      "confirmUpgradeToLatestDescription": "このリリースは codeg で未レビューのため、codeg で {name} が動かなくなることがあります。まれに既知の不具合を含むリリースであることもあります。元に戻すには、「カスタムインストール」で推奨バージョン {recommendedVersion} を再インストールしてください。"
     },
     "errors": {
       "windowsFileLocked": "{name} のファイルは実行中のセッションが使用中のため、Windows では置き換えられません。{name} のセッションをすべて終了してから再試行してください。",
@@ -1492,7 +1490,7 @@
     "version": {
       "statusLabel": "バージョン状態",
       "notInstalled": "未インストール",
-      "remoteLocal": "リモート: {remoteVersion} · ローカル: {localVersion}",
+      "recommendedLocal": "推奨: {recommendedVersion} · ローカル: {localVersion}",
       "localOnly": "ローカル：{localVersion}",
       "localInstalled": "{versionText}。インストール済みです。",
       "platformUnsupported": "{versionText}。現在のプラットフォームではこのエージェントをサポートしていません。",
@@ -1500,9 +1498,9 @@
       "clickInstall": "{versionText}。右側の「インストール」をクリックしてください。",
       "localUnrecognized": "{versionText}。ローカルバージョンは比較できません。上書きインストールのためアップグレードを試してください。",
       "upgradeAvailable": "{versionText}。アップグレード可能です。",
-      "remoteUnavailable": "{versionText}。現在リモートバージョンは取得できません。",
+      "recommendedUnavailable": "{versionText}。推奨バージョンはありません。",
       "latest": "{versionText}。すでに最新です。",
-      "latestChannel": "{versionText}。最新版チャンネルが有効です。アップグレードで最新リリースをインストールします。"
+      "unreviewedAvailable": "{versionText}。未レビューの新しいリリースがあります。"
     },
     "adapter": {
       "label": "ACP アダプター",
@@ -1552,7 +1550,8 @@
         "medium": "中",
         "high": "高",
         "minimal": "最小",
-        "xhigh": "最高"
+        "xhigh": "最高",
+        "max": "最大"
       },
       "apiKeyLabel": "API キー",
       "apiKeyHint": "選択したプロバイダーの ~/.pi/agent/auth.json に保存されます。",
@@ -1566,7 +1565,9 @@
       "modeCustom": "カスタム pi",
       "modeCustomHint": "自分の pi ビルド・インストール・ラッパーを実行します。",
       "commandLabel": "pi コマンドまたはパス",
-      "commandHint": "絶対パス、PATH 上のコマンド名、またはラッパースクリプト（例: monorepo の ./pi-test.sh）。",
+      "commandHint": "絶対パスまたは PATH 上のコマンド名を指定してください。",
+      "relativeCommandPath": "Pi コマンドの絶対パス、または PATH 上のコマンド名を指定してください。",
+      "relativeAgentDir": "Pi エージェントディレクトリの絶対パスまたは ~/... を指定してください。相対パスは作業場所によって変わります。",
       "commandNotFound": "コマンドが見つかりません",
       "validate": "検証",
       "advanced": "詳細設定",
@@ -1607,7 +1608,14 @@
       "levelsEmptyError": "レベルを 1 つ以上選んでください。1 つも選ばないと pi は Off に戻ります。",
       "wireValuesTitle": "詳細: プロバイダーに送る値",
       "wireValuesHint": "空欄ならレベル名をそのまま送信します。エンドポイントが別の表記を求める場合のみ設定してください（Google 系は LOW / HIGH）。",
-      "defaultLevelUnlisted": "このレベルは上の選択リストにありません。pi が丸めてしまいます。"
+      "defaultLevelUnlisted": "このレベルは上の選択リストにありません。pi が丸めてしまいます。",
+      "modelLevels": "{model} の思考レベル：{levels}。",
+      "modelNoThinking": "{model} には思考レベルがありません。Pi は常に思考オフで実行します。",
+      "levelClamped": "{model} には「{level}」がないため、Pi は「{effective}」で実行します。「{level}」があるモデルは引き続き「{level}」で実行されます。",
+      "modelNotListed": "Pi はこのプロバイダーでこのモデルを一覧に表示していません。モデル ID を確認してください。Pi は API キーまたはログインがあるプロバイダーのみを表示します。",
+      "catalogUnavailable": "このモデルの思考レベルを Pi に問い合わせできませんでした。",
+      "configLoadFailed": "Pi の設定を読み込めませんでした：{message}",
+      "runtimeTooOld": "この Pi は古すぎます。Codeg でセッションを開くには Pi {min} 以降が必要です。先に Pi を更新してください。"
     },
     "addCustomAgent": "カスタムエージェントを追加",
     "addCustomAgentHint": "ACP 対応のエージェントを追加できます。公開 ACP レジストリから選ぶか、レジストリ情報を貼り付けてください。",
@@ -1991,7 +1999,7 @@
       "tasks": "ToDo タスク",
       "loadingSubsessions": "サブ会話を読み込み中…",
       "forge": "リポジトリパネル",
-      "canvas": "無限会話",
+      "canvas": "無限キャンバス",
       "folderGroup": {
         "newGroup": "新しいグループ",
         "newGroupTitle": "新しいフォルダグループ",
@@ -2007,7 +2015,12 @@
         "removeFromGroup": "グループなし",
         "newGroupAndMove": "新しいグループ…",
         "dropToUngroup": "ここにドロップしてグループから外す"
-      }
+      },
+      "recentFilterAll": "すべて",
+      "recentFilterTitle": "最近の表示: {filter}",
+      "noRecentChats": "最近のチャットはありません",
+      "noRecentFolders": "最近のフォルダー会話はありません",
+      "recentFilterMenuLabel": "最近の表示"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -3025,7 +3038,7 @@
           "downloadFailed": "{agent} のダウンロードに失敗しました: {message}",
           "sessionLoadResourceNotFound": "{agent} セッションの読み込みに失敗しました。再読み込みして再試行するか、新しい会話を開始してください。",
           "sessionLoadUnavailable": "{agent} はこのセッションを復元できませんでした。セッションが終了したか、エージェントが停止した可能性があります。再読み込みして再試行するか、新しい会話を開始してください。",
-          "sessionLoadBusy": "この履歴は、そこから分岐したセッションが開いたままにしています。そのセッションを閉じてから再読み込みしてください。",
+          "sessionLoadBusy": "このセッションは別の場所で開かれています。別の {agent} クライアント（デスクトップアプリ、CLI、IDE 拡張機能）で開いている場合は、そちらで閉じるかそのクライアントを終了してから再読み込みしてください。ここから分岐した直後なら、1 分ほどしてから再読み込みしてください。",
           "sessionArchived": "以前のセッションは {agent} 側でアーカイブされています。ターミナルで {command} を実行して復元してから再読み込みするか、新しい会話を開始してください。",
           "turnFailedRefusal": "{agent} がこのターンの続行を拒否しました。バックエンドまたはゲートウェイのエラーが原因の可能性があります。エージェントのログを確認してください。",
           "turnFailedMaxTokens": "{agent} がこのターンの最大トークン数に達しました。",
@@ -3033,6 +3046,7 @@
           "turnFailedUnknown": "{agent} が不明な停止理由でターンを終了しました。",
           "turnFailedAuthRequired": "{agent} はこのターンを実行する前に再度のサインインを必要としています。設定からサインインしてから、メッセージを送り直してください。",
           "agentAuthRequired": "{agent} はセッションを開始できませんでした。使用可能な認証情報がありません。設定 → エージェント → {agent} で再度サインインしてから、この会話を開き直してください。",
+          "agentRuntimeOutdated": "{agent} はこのバージョンの Codeg には古すぎます。更新してから、この会話を開き直してください。",
           "grokModelSwitchIncompatibleAgent": "{agent} は既存の会話ではこのモデルに切り替えられません。新しいセッションを開始して使用してください。",
           "setModeFailed": "{agent} はモードを切り替えられませんでした。",
           "setConfigOptionFailed": "{agent} はその設定を適用できませんでした。",
@@ -3063,7 +3077,8 @@
           "httpStatus": " (HTTP {status})"
         },
         "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました",
-        "noticeTitle": "{agent}：{title}"
+        "noticeTitle": "{agent}：{title}",
+        "pluginLoadFailedTitle": "{agent} で {count} 個のプラグインを読み込めませんでした"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3701,7 +3716,22 @@
           "outputMissing": "codex がスクリプト出力を切り詰めた際にこのコマンドの区切り行が失われたため、出力を割り当てられませんでした。",
           "sharedWith": "この範囲には {commands} の出力も含まれます — 区切り行が codex により切り捨てられました。",
           "truncated": "切り詰め済み"
-        }
+        },
+        "visualizeTitle": "ビジュアライゼーション",
+        "visualizeWide": "ワイド",
+        "visualizeLoading": "ビジュアライゼーションを読み込み中…",
+        "visualizeError": "ビジュアライゼーションを読み込めませんでした",
+        "visualizeReload": "再読み込み",
+        "visualizeOpenFile": "ファイルを開く",
+        "visualizeExpand": "すべて表示",
+        "visualizeCollapse": "折りたたむ",
+        "visualizeScriptsOn": "スクリプト有効",
+        "visualizeScriptsOff": "スクリプトを有効化",
+        "visualizeScriptsHint": "ビジュアライゼーションのスクリプトを実行して操作できるようにします。サンドボックス内で実行され、ネットワークやファイルにはアクセスできません。",
+        "visualizeFrameTitle": "Codex ビジュアライゼーション",
+        "htmlPreviewOpen": "プレビュー",
+        "htmlPreviewOpenAria": "{name} をプレビュー",
+        "htmlPreviewHide": "プレビューを閉じる"
       },
       "messageNav": {
         "title": "メッセージナビ",
@@ -4226,13 +4256,14 @@
     "agentTypeRequired": "エージェントタイプを選択してください。",
     "agentTypeImmutableHint": "エージェントタイプは作成後に変更できません。",
     "model": "モデル",
-    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "メインモデル",
     "claudeReasoningModel": "推論モデル（思考）",
     "claudeHaikuDefaultModel": "デフォルトの Haiku モデル",
     "claudeSonnetDefaultModel": "デフォルトの Sonnet モデル",
     "claudeOpusDefaultModel": "デフォルトの Opus モデル",
+    "claudeFableDefaultModel": "デフォルトの Fable モデル",
     "claudeCustomModelOption": "カスタムモデル ID",
     "claudeCustomModelOptionName": "カスタムモデル名",
     "claudeCustomModelOptionDescription": "カスタムモデルの説明",
@@ -4499,6 +4530,97 @@
       "deleted": "クイックメッセージを削除しました"
     }
   },
+  "ConversationTags": {
+    "tags": "タグ",
+    "moreTags": "ほか {count} 件のタグ",
+    "addTags": "タグを追加",
+    "editTags": "タグを編集",
+    "global": "グローバル",
+    "noTagsYet": "タグはまだありません",
+    "newTag": "新しいタグ…",
+    "manageTags": "タグを管理…",
+    "branchChip": "ブランチ: {branch}",
+    "picker": {
+      "searchPlaceholder": "タグを検索または作成…",
+      "noResults": "一致するタグはありません",
+      "empty": "タグはまだありません。名前を入力すると作成できます。",
+      "createGlobal": "グローバルタグ「{name}」を作成",
+      "createInFolder": "{folder} に「{name}」を作成",
+      "otherFolders": "ほかのフォルダー"
+    },
+    "form": {
+      "createTitle": "新しいタグ",
+      "editTitle": "タグを編集",
+      "name": "名前",
+      "namePlaceholder": "例：bug、レビュー待ち、アイデア",
+      "color": "色",
+      "customColor": "カスタムカラー",
+      "scope": "使用範囲",
+      "scopeGlobal": "すべての会話",
+      "scopeFolder": "{folder} のみ",
+      "create": "作成",
+      "save": "保存",
+      "cancel": "キャンセル"
+    },
+    "editor": {
+      "empty": "まだタグはありません。",
+      "add": "新しいタグ",
+      "edit": "タグ「{name}」を編集",
+      "delete": "タグ「{name}」を削除",
+      "dragToReorder": "ドラッグして「{name}」を並べ替え",
+      "deleteTitle": "このタグを削除しますか？",
+      "deleteDescription": "「{name}」はこのタグが付いているすべての会話から外されます。元に戻せません。",
+      "deleteConfirm": "削除",
+      "deleteCancel": "キャンセル",
+      "loadFailed": "タグを読み込めませんでした"
+    },
+    "manager": {
+      "title": "タグを管理",
+      "description": "会話に色付きのタグを付けて、サイドバーをタグで絞り込めます。",
+      "branchTitle": "ブランチタグ",
+      "branchDescription": "各会話を開始した Git ブランチを、タイトルの後ろにタグとして表示します。",
+      "branchShow": "表示",
+      "branchLoadFailed": "ブランチタグの設定を読み込めませんでした",
+      "globalTitle": "グローバルタグ",
+      "globalDescription": "チャットモードを含むすべての会話で使えます。",
+      "folderTitle": "フォルダーのタグ",
+      "folderDescription": "選んだフォルダーの会話（そのワークツリーを含む）でのみ使えます。",
+      "folderPlaceholder": "フォルダーを選択",
+      "noFolders": "フォルダーがまだありません。ワークスペースでフォルダーを開くと、専用のタグを設定できます。"
+    },
+    "filter": {
+      "button": "タグで絞り込み",
+      "searchPlaceholder": "タグを検索…",
+      "match": "条件",
+      "matchAny": "いずれか",
+      "matchAll": "すべて",
+      "matchAnyHint": "選んだタグのいずれかが付いた会話",
+      "matchAllHint": "選んだタグがすべて付いた会話",
+      "modeAll": "すべて一致",
+      "modeAny": "いずれか一致",
+      "clear": "絞り込みを解除",
+      "noTags": "タグはまだありません。会話のメニューから追加できます。",
+      "noResults": "一致するタグはありません",
+      "active": "タグで絞り込み中",
+      "noMatches": "これらのタグが付いた会話はありません",
+      "remove": "「{name}」を絞り込みから外す"
+    },
+    "toasts": {
+      "assignFailed": "会話のタグを更新できませんでした",
+      "createFailed": "タグを作成できませんでした",
+      "deleteFailed": "タグを削除できませんでした",
+      "reorderFailed": "タグの順序を保存できませんでした",
+      "branchTagFailed": "ブランチタグを保存できませんでした"
+    },
+    "errors": {
+      "emptyName": "タグ名を入力してください",
+      "duplicateName": "「{name}」という名前のタグはすでにあります",
+      "invalidColor": "有効な色を選んでください",
+      "folderNotTaggable": "このフォルダーには専用のタグを設定できません",
+      "notApplicable": "そのタグは別のフォルダーのものです",
+      "tagNotFound": "そのタグはもう存在しません"
+    }
+  },
   "Pet": {
     "badge": {
       "running": "実行中 {count} 件",
@@ -4656,6 +4778,7 @@
     "saveFailed": "Failed to save remote connection",
     "deleteFailed": "Failed to delete remote connection",
     "openFailed": "Failed to open remote workspace",
+    "restoreFailed": "リモートワークスペース「{name}」を再度開けませんでした",
     "connectionLoadFailed": "Failed to load remote connection: {message}",
     "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
   },
@@ -4676,7 +4799,8 @@
     "none": "ブランチがありません",
     "local": "ローカル",
     "remote": "リモート",
-    "useCustom": "「{query}」を使用"
+    "useCustom": "「{query}」を使用",
+    "head": "HEAD"
   },
   "BackupSettings": {
     "tabs": {
@@ -4977,6 +5101,11 @@
       "short": "共有したページで自分のコードを実行します。既定では確認しません。",
       "hint": "共有したページ上で、エージェントが自分で書いた JavaScript を実行できるようにします。既定ではオフで、上のスイッチも必要です。オンにするとコードは確認なしで実行されるため、判断はこのスイッチで行うことになります。1 つずつ確認したい場合は、設定 → 内蔵ブラウザで変更できます。"
     },
+    "computer": {
+      "label": "デスクトップのウィンドウを見て操作する",
+      "short": "アプリとウィンドウを一覧し、共有したウィンドウを読み取り、許可したウィンドウを操作します。",
+      "hint": "エージェントがデスクトップ上のアプリとウィンドウを一覧し、あなたが共有したウィンドウを読み取り——スクリーンショット、内容、期待した状態になっているか——操作を許可したウィンドウでクリック、入力、キー操作ができるようにします。ステータスバーの「コンピューター操作」パネルでウィンドウを共有するまで、どのウィンドウも読めず、操作も許可しない限りどのウィンドウも操作されません。共有はウィンドウが閉じたとき、しばらく使われなかったとき、またはあなたが停止したときに終わり、パネルの「エージェントを停止」ですべてのエージェントを即座に止められます。入力はバックグラウンドでウィンドウに届きます。バックグラウンドでは届かない操作では、エージェントがウィンドウを前面に出すことがあります（コンピューター操作の設定でオフにできます）。デスクトップアプリのみ。macOS では codeg-computer-helper への権限付与が必要です。プレビュー。"
+    },
     "automations": {
       "label": "自動化を作成",
       "short": "定期自動化を作成・管理します。",
@@ -5139,6 +5268,249 @@
     "clearConfirmDescriptionProfile": "プロファイル {name} の Cookie、キャッシュ、サイトデータを削除します。開いているタブはそのままですが、各サイトからログアウトされます。",
     "signInUaTitle": "Google ログインとの互換性",
     "signInUaHint": "Google は埋め込みブラウザーからのログインを拒否します。オンにすると、タブは Google のログインページ（accounts.google.com）に対してだけ Firefox として名乗ります。それ以外では実際に動いているエンジンとして名乗り、Firefox を名乗ることはありません。埋め込みタブにのみ適用され、別ウィンドウ表示には適用されません。ログインページから別のサイトへリダイレクトされた場合、そのサイトへの最初のリクエストにはログイン時の識別情報が残ります。"
+  },
+  "ComputerUse": {
+    "title": "コンピューター操作",
+    "preview": "プレビュー",
+    "refresh": "更新",
+    "tooltipShared": "コンピューター操作 · {count, plural, other {# 個のウィンドウを共有中}}",
+    "stop": "共有を停止",
+    "stopHint": "すべてのウィンドウの共有を今すぐ停止し、エージェントが行っている操作を中断します。必要になったら、もう一度ウィンドウを共有してください。",
+    "indicator": {
+      "actOne": "エージェントが「{app}」を操作できます",
+      "actMany": "エージェントが {count, plural, other {# 個のウィンドウ}}を操作できます",
+      "readOne": "エージェントが「{app}」を見られます",
+      "readMany": "エージェントが {count, plural, other {# 個のウィンドウ}}を見られます",
+      "readScreen": "エージェントが画面全体を見られます",
+      "actScreen": "エージェントが画面全体を操作できます",
+      "recent": "{app}：{action}",
+      "stop": "共有を停止",
+      "stopWithKey": "すべてのウィンドウの共有を停止（{key}）"
+    },
+    "codegGranted": "codeg 自体に「アクセシビリティ」または「画面収録」が許可されているため、エージェントのシェルは共有なしでそれを使えます。必要なければ、システム設定で codeg の許可をオフにしてください。",
+    "backend": {
+      "idle": "未起動",
+      "downloading": "ドライバーをダウンロード中…",
+      "starting": "ヘルパーを起動中…",
+      "ready": "準備完了",
+      "failed": "失敗"
+    },
+    "driver": "cua-driver {version}",
+    "devBuild": "開発ビルド：ヘルパーは呼び出し元のプログラムを検証しません。",
+    "devTag": "開発ビルド",
+    "permissions": {
+      "accessibility": "アクセシビリティ",
+      "screenRecording": "画面収録",
+      "granted": "許可済み",
+      "request": "許可する…",
+      "why": "システム設定で codeg-computer-helper をオンにしてください（codeg ではありません）。画面収録はウィンドウの表示内容を見るため、アクセシビリティはウィンドウの読み取りと操作のために使います。",
+      "devRebuild": "helper を再ビルドするたびに以前の許可は無効になります。先にリストから古い codeg-computer-helper を削除してから、もう一度許可してください。",
+      "notListed": "リストに codeg-computer-helper がない場合は、Finder からドラッグして追加してください：",
+      "reveal": "Finder で表示"
+    },
+    "shared": {
+      "title": "{count, plural, =0 {共有中のウィンドウなし} other {# 個のウィンドウを共有中}}",
+      "empty": "エージェントはウィンドウを一覧できますが、あなたが共有するまでどれも読めません。",
+      "stop": "停止",
+      "wholeApp": "アプリ全体 · {count, plural, =0 {開いているウィンドウなし} other {# 個のウィンドウ}}",
+      "screen": "画面全体",
+      "screenWindows": "{count, plural, =0 {ウィンドウなし} other {# 個のウィンドウ}}"
+    },
+    "level": {
+      "read": "読み取り可",
+      "control": "操作可",
+      "readLong": "読み取りのみ",
+      "controlLong": "読み取りと操作",
+      "change": "エージェントにできることを変更"
+    },
+    "activity": {
+      "title": "最近のアクティビティ",
+      "clear": "最近のアクティビティをクリア",
+      "capture": "スクリーンショット",
+      "snapshot": "読み取り",
+      "verify": "確認",
+      "click": "クリック",
+      "drag": "ドラッグ",
+      "scroll": "スクロール",
+      "type": "入力",
+      "key": "キー",
+      "hold-key": "キー長押し",
+      "set-value": "値の設定",
+      "restore": "復元",
+      "menu": "メニュー",
+      "set-frame": "ウィンドウを移動",
+      "launch": "アプリを起動",
+      "clipboard-read": "クリップボードを読む",
+      "clipboard-write": "クリップボードに書く",
+      "outcome": {
+        "done": "完了",
+        "refused": "拒否",
+        "failed": "失敗"
+      }
+    },
+    "share": "ウィンドウを共有…",
+    "openSettings": "詳細設定を開く",
+    "picker": {
+      "title": "ウィンドウをエージェントと共有",
+      "description": "すべての会話のエージェントが、共有したウィンドウを読み取れます。操作を許可したウィンドウではクリックや入力もできます。共有は、停止するか、ウィンドウが閉じられるか、設定した時間使われないと終わります。",
+      "count": "{count, plural, other {# 個のウィンドウ}}",
+      "sharedCount": "{count, plural, other {# 個を共有中}}",
+      "loading": "ウィンドウを読み込み中…",
+      "refresh": "更新",
+      "empty": "ウィンドウが見つかりません。あるはずなら、コンピューター操作パネルで権限を確認してください。",
+      "noScreenRecording": "codeg-computer-helper にまだ「画面収録」の権限がありません。ウィンドウのタイトルと画像を表示できず、エージェントもウィンドウを読み取れません。",
+      "unnamedApp": "不明なアプリ",
+      "untitled": "無題のウィンドウ",
+      "minimized": "最小化",
+      "hidden": "非表示",
+      "notGrantable": {
+        "codeg": "codeg のウィンドウ",
+        "blocklisted": "共有禁止リストに登録済み",
+        "unidentified": "アプリを特定できません"
+      },
+      "shareRead": "エージェントに読み取りを許可",
+      "shareControl": "エージェントに読み取りと操作を許可",
+      "stopSharing": "共有を停止",
+      "levelNone": "オフ",
+      "levelRead": "読み取り",
+      "levelControl": "操作",
+      "levelLabel": "{app} に対してエージェントができること",
+      "wholeApp": "アプリ全体",
+      "wholeAppHint": "{app} のすべてのウィンドウ（あとで開くものも含む）と、そのメニューやショートカット",
+      "appLevelLabel": "{app} 全体に対してエージェントができること",
+      "viaApp": "アプリごと共有",
+      "screenTitle": "画面全体",
+      "screenHint": "共有できるすべてのウィンドウ（あとで開くものも含む）と、デスクトップ自体のショートカット。codeg のウィンドウと共有禁止リストのアプリは常に塗りつぶされます。",
+      "screenLevelLabel": "画面全体に対してエージェントができること",
+      "viaScreen": "画面ごと共有",
+      "shareAll": "すべて共有",
+      "shareAllRead": "すべてエージェントに読み取りを許可",
+      "shareAllControl": "すべてエージェントに読み取りと操作を許可",
+      "stopSharingAll": "すべての共有を停止",
+      "skipped": "{count, plural, other {# 個のウィンドウを共有できませんでした。閉じられた可能性があります。}}",
+      "unshareable": "{count, plural, other {共有できないウィンドウ # 個}}",
+      "noneShareable": "共有できるウィンドウはありません。",
+      "codegWhy": "codeg のウィンドウは決して共有されません。codeg を操作できるエージェントは、自分の要求を自分で承認したり、自分にさらにウィンドウを共有したりできてしまうためです。ほかの codeg のウィンドウも同様です。"
+    },
+    "settings": {
+      "pageTitle": "コンピューター操作",
+      "pageDescription": "共有したデスクトップのウィンドウを、エージェントが見て操作できるようにします。",
+      "switch": {
+        "label": "コンピューター操作を有効にする",
+        "hint": "エージェントはアプリとウィンドウを一覧し、共有したウィンドウを読み取り、操作を許可したウィンドウでクリックや入力ができます。ステータスバーから共有するまで、どのウィンドウも読み取れません。",
+        "failed": "コンピューター操作を切り替えられませんでした"
+      },
+      "driver": {
+        "title": "ドライバー",
+        "description": "コンピューター操作は、オープンソースの cua-driver を通じてウィンドウを読み取り、操作します。codeg は検証済みのリリース {version} だけを実行し、初めて必要になったときにダウンロードします。",
+        "loading": "確認中…",
+        "unsupported": "cua-driver にはこのプラットフォーム向けのビルドがありません。",
+        "installing": "インストール中…",
+        "downloadingOf": "ダウンロード中… {done} / {total} MB",
+        "downloadingSoFar": "ダウンロード中… {done} MB",
+        "uninstalling": "アンインストール中…",
+        "installed": "インストール済み · {version}",
+        "outdated": "{installed} がインストールされています。この codeg は {version} を使います。",
+        "notInstalled": "未インストールです。コンピューター操作で初めて必要になったときにダウンロードされます。今すぐインストールすることもできます。",
+        "install": "インストール",
+        "upgrade": "{version} にアップグレード",
+        "uninstall": "アンインストール",
+        "installDone": "cua-driver をインストールしました",
+        "uninstallDone": "cua-driver をアンインストールしました",
+        "confirmTitle": "cua-driver をアンインストールしますか？",
+        "confirmDescription": "コンピューター操作はオフになり、すべてのウィンドウの共有が終わります。もう一度オンにすると、ドライバーを再びダウンロードします。",
+        "cancel": "キャンセル"
+      },
+      "permissions": {
+        "title": "権限",
+        "description": "macOS では codeg-computer-helper への許可が必要です。システム設定で許可してここに戻ると、表示は自動で更新されます。",
+        "off": "コンピューター操作をオンにすると、ここで権限を確認・許可できます。",
+        "accessibilityHint": "ウィンドウの内容を読み取り、操作します。",
+        "screenRecordingHint": "スクリーンショットを撮り、ウィンドウタイトルを読み取ります。"
+      },
+      "title": "共有・入力・停止",
+      "description": "共有したウィンドウがいつまで共有されるか、決して共有しないアプリ、すべての共有を一度に止めるショートカットとフローティング停止バー、そしてエージェントがウィンドウを前面に出して操作できるかどうか。",
+      "ttl": {
+        "label": "使われていないウィンドウの共有を停止するまで",
+        "hint": "共有中のウィンドウは、どのエージェントにもこの時間読み取られないと共有が停止します。",
+        "minutes": "{minutes} 分",
+        "never": "しない（自分で停止するまで）"
+      },
+      "blocklist": {
+        "label": "共有しないアプリ",
+        "hint": "これらのアプリのウィンドウはエージェントと共有できません。不要な既定項目は削除でき、バンドル ID（com.example.app）、実行ファイル名（app.exe）、フルパスでアプリを追加することもできます。",
+        "placeholder": "com.example.app",
+        "add": "追加",
+        "remove": "{name} を削除",
+        "restore": "既定に戻す",
+        "restoreConfirmTitle": "既定のリストに戻しますか？",
+        "restoreConfirmAdded": "{count, plural, other {追加した # 件のアプリがリストから外れます。}}",
+        "restoreConfirmRemoved": "{count, plural, other {削除した既定のアプリ # 件がリストに戻ります。}}",
+        "restoreConfirmSave": "保存すると反映されます。",
+        "cancel": "キャンセル",
+        "custom": "追加した項目",
+        "duplicate": "すでにリストにあります。",
+        "removedCount": "{count, plural, other {既定のアプリを # 件削除しました。}}",
+        "items": {
+          "systemSettings": "システム設定",
+          "credentialPrompts": "システムのパスワード・認証の画面",
+          "keychain": "キーチェーンアクセス",
+          "passwords": "パスワード"
+        }
+      },
+      "stopKey": {
+        "label": "停止ショートカット",
+        "hint": "どのアプリからでも、「共有を停止」ボタンと同じくすべてのウィンドウの共有を止めます。コンピューター操作がオンの間このキーは codeg が使うため、ほかで使わない組み合わせを選んでください。",
+        "recording": "キーを押してください…",
+        "recordHint": "Ctrl ともう一つの修飾キー（Alt か Shift）を押しながらキーを押します。Esc でキャンセル。",
+        "recordHintMac": "⌃ か ⌘ ともう一つの修飾キーを押しながらキーを押します。Esc でキャンセル。",
+        "off": "オフ",
+        "useDefault": "デフォルト",
+        "turnOff": "オフにする",
+        "statusActive": "有効：どこで押してもすべてのウィンドウの共有を停止します。",
+        "statusIdle": "コンピューター操作をオンにすると有効になります。",
+        "statusOff": "オフ：共有を止めるのは「共有を停止」ボタンだけです。",
+        "statusFailed": "無効：ほかのアプリがこのキーを使っているようです。別の組み合わせを選んでください。",
+        "problem": {
+          "unsupportedKey": "このキーは使えません。英字、数字、F1–F12、Esc、記号キーから選んでください。",
+          "weakModifiers": "修飾キーを 2 つ以上押してください。そのうち 1 つは Ctrl（Mac では ⌘ も可）です。",
+          "metaOffMac": "Windows キーは含められません。"
+        }
+      },
+      "strip": {
+        "label": "フローティング停止バー",
+        "hint": "ウィンドウを共有している間、エージェントができることと「共有を停止」ボタンを載せたバーを、すべてのウィンドウの上に表示します。オフにしても、ステータスバーの「コンピューター操作」ポップオーバーや停止ショートカットで共有を停止できます。"
+      },
+      "foreground": {
+        "label": "エージェントがウィンドウを前面に出すのを許可",
+        "hint": "バックグラウンドではキー入力や文字入力を受け付けないアプリがあります。Windows では Edge、Chrome、VS Code など Chromium ベースのアプリがすべてそうです。オンにすると、エージェントは操作を許可されたウィンドウを 1 回の操作のあいだだけ前面に出し、その後あなたが使っていたウィンドウに戻します（Linux ではそのウィンドウが前面に残ります）。ウィンドウが前面に出るのが見え、その瞬間にあなたが入力した文字はそのウィンドウに入ることがあります。クリックでマウスポインターが動くこともあります。"
+      },
+      "delivery": {
+        "label": "既定の入力方法",
+        "hint": "エージェントが指定しないとき、クリック、スクロール、文字入力、キー操作をどうウィンドウに届けるか。バックグラウンド：ウィンドウはそのままで、マウスとキーボードはあなたのものです。前面：操作のたびにウィンドウを前面に出します。",
+        "hintOff": "ウィンドウを前面に出すことを許可していない間は、常にバックグラウンドです。",
+        "background": "バックグラウンド",
+        "foreground": "前面"
+      },
+      "launch": {
+        "label": "エージェントがアプリを開いたりウィンドウを動かしたりするのを許可",
+        "hint": "オンにすると、エージェントはインストール済みのアプリをバックグラウンドで起動できます（codeg と共有しないアプリを除く）。また、操作を許可したウィンドウを移動したりサイズを変えたりできます。アプリを起動してもそのウィンドウは共有されず、共有するかどうかは引き続きあなたが決めます。"
+      },
+      "clipboard": {
+        "label": "エージェントがクリップボードを使うのを許可",
+        "hint": "オンにすると、エージェントはテキストをクリップボードに置いてペーストしたり、共有したウィンドウから自分でコピーした内容を読み返したりできます。あなたが自分でコピーした内容がエージェントに読まれることはなく、エージェントがペーストできるのは自分で置いた内容だけです。"
+      },
+      "screen": {
+        "label": "画面全体の共有を許可",
+        "hint": "オンにすると、共有ピッカーに「画面全体」が表示されます。エージェントは画面全体を1枚の画像として見て、どこでもクリックでき、共有できるすべてのウィンドウとデスクトップ自体のショートカットも一緒に共有されます。codeg のウィンドウと共有禁止リストのアプリは常に塗りつぶされます。オフにすると画面全体の共有は終了します。"
+      },
+      "boundary": "macOS では権限は codeg-computer-helper に与えられ、codeg だけが使えるため、エージェントのシェルは使えません。Windows と Linux にはこの分離がありません。そこでは、これらの設定は codeg を通じてエージェントに何を渡すかを決めるもので、コンピューター上のプログラムにできることを決めるものではありません。",
+      "save": "保存",
+      "saving": "保存中…",
+      "saved": "コンピューター操作の設定を保存しました",
+      "saveFailed": "コンピューター操作の設定を保存できませんでした",
+      "loadFailed": "読み込みに失敗しました：{detail}"
+    }
   },
   "LogsSettings": {
     "loading": "読み込み中…",
@@ -5450,10 +5822,11 @@
     "promptPlaceholder": "エージェントへの指示を記述 — @ でファイル参照、/ でコマンド",
     "folderPlaceholder": "フォルダを選択",
     "baseBranch": "ベースブランチ",
-    "baseBranchPlaceholder": "現在のブランチ",
     "baseBranchDefault": "タスク開始時の現在のブランチ",
     "baseBranchHint": "タスクはこのブランチから分岐し、マージもこのブランチに戻ります。",
     "agentInheritedHint": "タスク設定から継承 — 変更するとこのタスク専用になります",
+    "agentNoDefaultHint": "タスク設定に既定のエージェントがありません — 選択中のエージェントをこのタスクに保存します",
+    "agentInheritedUnavailableHint": "タスク設定の {agent} は利用できません — 選択中のエージェントをこのタスクに保存します",
     "agentOverrideReset": "継承に戻す",
     "sectionTarget": "ターゲット",
     "errorTitle": "タイトルを入力してください",
@@ -5582,8 +5955,8 @@
     "eventContextCompact": "コンテキスト圧縮",
     "eventUserAction": "ユーザー操作",
     "eventDiffStat": "変更スナップショット",
-    "eventForgeWriteback": "Issue にコメント済み",
-    "eventForgeWritebackFailed": "Issue へのコメントに失敗",
+    "eventForgeWriteback": "項目にコメント済み",
+    "eventForgeWritebackFailed": "項目へのコメントに失敗",
     "actionDeliverPr": "プルリクエストを作成",
     "actionDeliverPrMr": "マージリクエストを作成",
     "actionDeliverPrBack": "PR に push",
@@ -6117,7 +6490,7 @@
     "scenarioPlanFirst": "まず計画",
     "scenarioPlanFirstHint": "問題が実在することを確認したうえで実装計画を出し、そこで停止します。確認後にタスクを差し戻すと同じワークツリーで実装します。",
     "scenarioReviewFix": "レビューして修正",
-    "scenarioReviewFixHint": "変更をレビューして問題をその場で修正。承認するとコミットが元のブランチへプッシュされます。",
+    "scenarioReviewFixHint": "エージェントはまず方針そのものが妥当かを判断し、妥当なときだけその上で問題を修正します。妥当でなければ何もコミットせず、レビュー結果を添えてあなたの判断を待ちます。承認すると修正コミットが元のブランチへプッシュされます。",
     "scenarioReviewOnly": "レビューのみ",
     "scenarioReviewOnlyHint": "指摘と提案をまとめたレビューレポートのみで、コミットはしません。修正させたい場合はタスクを差し戻します。",
     "settingsTitle": "パネル設定",
@@ -6145,7 +6518,7 @@
     "save": "保存"
   },
   "Canvas": {
-    "title": "無限会話",
+    "title": "無限キャンバス",
     "untitled": "無題の会話",
     "unresolvedConversation": "会話は削除されました",
     "removeCard": "カードを削除",
@@ -6233,7 +6606,36 @@
     "removeTerminalCard": "ターミナルカードを削除",
     "terminalNoDirectory": "このカードには作業ディレクトリがありません",
     "confirmDeleteTerminals": "実行中のターミナル {count} 個が閉じられ、そのプロセスも終了します。",
-    "confirmDeleteNotesAndTerminals": "書き込んだメモ {notes} 件が完全に削除され、実行中のターミナル {terminals} 個も終了します。"
+    "confirmDeleteNotesAndTerminals": "書き込んだメモ {notes} 件が完全に削除され、実行中のターミナル {terminals} 個も終了します。",
+    "boardsTitle": "キャンバス",
+    "boardsSubtitle": "キャンバスごとに独立した無限ボードがあり、リージョン、会話カード、メモ、ファイル、ターミナルを配置できます。",
+    "boardCount": "{count} 個のキャンバス",
+    "newBoard": "新規キャンバス",
+    "newBoardTitle": "新規キャンバス",
+    "editBoard": "キャンバスを編集…",
+    "editBoardTitle": "キャンバスを編集",
+    "deleteBoard": "キャンバスを削除…",
+    "openBoard": "開く",
+    "boardMenu": "キャンバスのオプション",
+    "boardName": "名前",
+    "boardDescription": "説明",
+    "boardDescriptionPlaceholder": "このキャンバスの用途（任意）",
+    "untitledBoard": "無題のキャンバス",
+    "boardItemCount": "{count, plural, =0 {空} other {# 個の要素}}",
+    "boardEditedAt": "{time}に編集",
+    "boardsEmpty": "キャンバスはまだありません",
+    "boardsEmptyHint": "キャンバスを作成して、作業を空間的に整理しましょう。キャンバスごとにリージョン、カード、メモを持てます。",
+    "searchBoards": "キャンバスを検索…",
+    "noBoardsMatch": "「{query}」に一致するキャンバスはありません",
+    "boardsLoadFailed": "キャンバスを読み込めませんでした",
+    "retry": "再試行",
+    "backToBoards": "すべてのキャンバスに戻る",
+    "boardDeleted": "このキャンバスは削除されました",
+    "deleteBoardTitle": "このキャンバスを削除しますか？",
+    "deleteBoardDescription": "「{name}」とその上のすべての内容が完全に削除されます。表示されている会話、フォルダー、ファイル自体には影響しません。",
+    "deleteBoardItems": "このキャンバスには {count} 個の要素があります。",
+    "deleteBoardTerminals": "そのうちターミナル {count} 個が閉じられ、プロセスも終了します。",
+    "deleteBoardConfirm": "キャンバスを削除"
   },
   "Browser": {
     "toolbar": {
@@ -6251,7 +6653,17 @@
       "invalidUrl": "有効なアドレスではありません",
       "profile": "プロファイル: {name}",
       "profileMenuLabel": "このページを別のプロファイルで開く",
-      "profileDefault": "デフォルト"
+      "profileDefault": "デフォルト",
+      "device": "デバイス: {name}",
+      "deviceMenuLabel": "表示デバイス",
+      "deviceDesktop": "デスクトップ",
+      "deviceTablet": "タブレット",
+      "devicePhone": "スマートフォン",
+      "deviceFill": "ペイン全体",
+      "deviceCustom": "カスタム",
+      "deviceWidth": "幅",
+      "deviceHeight": "高さ",
+      "deviceLaidOut": "ペインが小さすぎます: {size} でレイアウト"
     },
     "status": {
       "popupDenied": "ポップアップをブロックしました: {host}",

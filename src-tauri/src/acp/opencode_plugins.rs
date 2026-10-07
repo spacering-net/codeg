@@ -99,7 +99,7 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
 }
 
-fn xdg_cache_home() -> Option<PathBuf> {
+pub(crate) fn xdg_cache_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -142,7 +142,7 @@ fn has_windows_drive_prefix(spec: &str) -> bool {
 }
 
 /// The file opencode will import for a path spec, mirroring
-/// `resolvePathPluginTarget` in opencode 1.18.32: a `file://` URL goes through
+/// `resolvePathPluginTarget` in opencode 1.18.35: a `file://` URL goes through
 /// `fileURLToPath`, anything already absolute is used as-is, and a relative spec
 /// is resolved against the directory opencode runs in — the project, not the
 /// config directory.
@@ -218,7 +218,7 @@ fn file_url_body_to_path(body: &str) -> Option<PathBuf> {
 
 /// The spec opencode uses as its package-directory KEY.
 ///
-/// Mirrors `resolvePluginTarget` in opencode 1.18.32: a bare package name
+/// Mirrors `resolvePluginTarget` in opencode 1.18.35: a bare package name
 /// becomes `<name>@latest`, anything already carrying a version or tag is used
 /// verbatim. Getting this wrong does not fail loudly — it just points codeg at
 /// a directory opencode will never look in.
@@ -230,7 +230,7 @@ pub(crate) fn effective_spec(declared_spec: &str, name: &str) -> String {
     }
 }
 
-/// Mirrors `Npm.sanitize` in opencode 1.18.32: on Windows the characters that
+/// Mirrors `Npm.sanitize` in opencode 1.18.35: on Windows the characters that
 /// cannot appear in a path become `_`. A deliberate no-op everywhere else —
 /// the directory name has to match opencode's byte for byte, and opencode
 /// gates this on `process.platform === "win32"`.
@@ -250,7 +250,7 @@ pub(crate) fn sanitize_spec(spec: &str) -> String {
 }
 
 /// `<cache>/packages/<sanitize(effective_spec)>` — the per-package install root
-/// opencode 1.18.32 uses (`Npm.add`'s `directory()`).
+/// opencode 1.18.35 uses (`Npm.add`'s `directory()`).
 pub(crate) fn plugin_package_dir(cache_dir: &Path, effective_spec: &str) -> PathBuf {
     cache_dir
         .join("packages")

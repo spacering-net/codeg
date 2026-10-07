@@ -460,7 +460,17 @@ export function parseBackgroundTaskEnvelope(
   return parseBackgroundTaskEnvelopes(text)[0] ?? null
 }
 
-const LAUNCH_RE = /Command running in background with ID:\s*([A-Za-z0-9_-]+)/i
+/** Claude Code's Bash/PowerShell acknowledgement for a command that keeps
+ *  running in the background. The CLI words it four ways, one per reason the
+ *  command left the foreground, with the same task id and output file after
+ *  it: a `run_in_background` launch (also used when a plugin's turn abort moved
+ *  it), the user's Ctrl+B in the terminal UI, a message that arrived while the
+ *  command ran, and a command that outlived its timeout. The third is the one
+ *  codeg causes: since Claude Code 2.1.286 (claude-agent-acp 0.85.0) a steer
+ *  sent during a foreground command moves that command to the background
+ *  instead of waiting for it to finish. */
+const LAUNCH_RE =
+  /Command (?:running in background with ID:|was manually backgrounded by user with ID:|was moved to the background \(ID:|did not complete within its \d+s timeout and was moved to the background \(ID:)\s*([A-Za-z0-9_-]+)/i
 /** Grok's `run_terminal_command(background: true)` acknowledgement. */
 const GROK_LAUNCH_RE = /Background task\s+([A-Za-z0-9_-]+)\s+started/i
 

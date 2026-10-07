@@ -4,6 +4,7 @@ import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { ChevronRightIcon } from "lucide-react"
 import { acquireNativeSurfaceOcclusionFor } from "@/lib/browser/native-surface-occlusion"
 import { attachRef } from "@/lib/attach-ref"
 
@@ -102,20 +103,7 @@ function ContextMenuSubTrigger({
       {...props}
     >
       {children}
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="ml-auto size-4"
-      >
-        <path d="m9 18 6-6-6-6" />
-      </svg>
+      <ChevronRightIcon className="ml-auto size-4" />
     </ContextMenuPrimitive.SubTrigger>
   )
 }

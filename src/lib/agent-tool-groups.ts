@@ -7,6 +7,7 @@ import {
   ListTodo,
   MessageSquare,
   MessageSquarePlus,
+  Monitor,
   type LucideIcon,
 } from "lucide-react"
 
@@ -41,6 +42,7 @@ type AgentToolCopy =
   | "sessions"
   | "browser"
   | "browserEval"
+  | "computer"
   | "automations"
   | "taskboard"
 
@@ -109,6 +111,15 @@ export const AGENT_TOOL_GROUPS: Record<
     hint: "browserEval.hint",
     icon: Code2,
     requires: "browser",
+  },
+  // The desktop's native windows, one person-shared window at a time. Its
+  // own group rather than part of the browser's: a web page and the rest of
+  // the user's screen are different things to hand over.
+  computer: {
+    label: "computer.label",
+    short: "computer.short",
+    hint: "computer.hint",
+    icon: Monitor,
   },
   automations: {
     label: "automations.label",

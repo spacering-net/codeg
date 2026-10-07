@@ -207,6 +207,41 @@ describe("BrowserTabsPersistence", () => {
     expect(mocks.restoreBrowserTabs).toHaveBeenCalledTimes(1)
   })
 
+  // A custom device is an object on the record: a new size for the same tab
+  // is a change to write, though nothing else about the strip moved.
+  it("writes a custom device's new size", async () => {
+    const custom = (width: number): FileWorkspaceTab => {
+      const tab = browserTab("t1", "https://example.com/a")
+      return {
+        ...tab,
+        browser: {
+          ...(tab as Extract<FileWorkspaceTab, { kind: "browser" }>).browser,
+          device: { width, height: 900 },
+        },
+      } as FileWorkspaceTab
+    }
+    mocks.fileTabs = [custom(1440)]
+    const { rerender } = render(<BrowserTabsPersistence />)
+    await flush()
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(readPersistedBrowserTabs("main")[0]?.device).toEqual({
+      width: 1440,
+      height: 900,
+    })
+
+    mocks.fileTabs = [custom(1280)]
+    rerender(<BrowserTabsPersistence />)
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(readPersistedBrowserTabs("main")[0]?.device).toEqual({
+      width: 1280,
+      height: 900,
+    })
+  })
+
   it("clears the stored list once the last browser tab is closed", async () => {
     writePersistedBrowserTabs(
       [

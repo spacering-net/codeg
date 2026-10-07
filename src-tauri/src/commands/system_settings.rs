@@ -668,8 +668,11 @@ pub async fn resolve_close_request(
     match behavior {
         CloseWindowBehavior::Minimize => {
             if let Some(window) = tauri::Manager::get_webview_window(&app, "main") {
+                let handle = app.clone();
                 crate::commands::windows::with_macos_fullscreen_drained(&app, move || {
                     let _ = window.hide();
+                    // Closed as far as the next launch is concerned.
+                    crate::commands::workspace_windows::note_hidden(&handle, window.label());
                 });
             }
         }

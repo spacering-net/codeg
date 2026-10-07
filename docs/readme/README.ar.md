@@ -1,32 +1,44 @@
-# Codeg
+<h1 align="center">
+  <a href="https://docs.codeg.app"><img src="../../public/icon.svg" alt="Codeg logo" width="64" align="absmiddle" /></a> Codeg
+</h1>
 
-[![Release](https://img.shields.io/github/v/release/xintaofei/codeg)](https://github.com/xintaofei/codeg/releases)
-[![Docs](https://img.shields.io/badge/docs-docs.codeg.app-3451b2)](https://docs.codeg.app)
-[![License](https://img.shields.io/github/license/xintaofei/codeg)](../../LICENSE)
-
-<p>
-  <a href="../../README.md">English</a> |
-  <a href="./README.zh-CN.md">简体中文</a> |
-  <a href="./README.zh-TW.md">繁體中文</a> |
-  <a href="./README.ja.md">日本語</a> |
-  <a href="./README.ko.md">한국어</a> |
-  <a href="./README.es.md">Español</a> |
-  <a href="./README.de.md">Deutsch</a> |
-  <a href="./README.fr.md">Français</a> |
-  <a href="./README.pt.md">Português</a> |
-  <strong>العربية</strong>
+<p align="center">
+  <a href="https://github.com/spacering-net/codeg"><img src="https://img.shields.io/github/stars/spacering-net/codeg?style=flat&color=e91e63" alt="GitHub stars" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases/latest"><img src="https://img.shields.io/github/v/release/spacering-net/codeg?style=flat&color=e91e63" alt="Latest release" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases"><img src="https://img.shields.io/github/downloads/spacering-net/codeg/total?style=flat&color=e91e63" alt="Total downloads" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/github/license/spacering-net/codeg?style=flat&color=e91e63" alt="License" /></a>
+  <a href="https://docs.codeg.app"><img src="https://img.shields.io/badge/docs-docs.codeg.app-3451b2?style=flat" alt="Documentation" /></a>
+  <a href="https://docs.codeg.app/getting-started/installation"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Docker%20%7C%20iOS%20%7C%20Android-03a9f4?style=flat" alt="Platforms: macOS, Windows, Linux, Docker, iOS, Android" /></a>
 </p>
 
-Codeg (Code Generation) هو مساحة عمل برمجية متعددة الوكلاء: شغّل كل وكلاء البرمجة بالذكاء الاصطناعي في مكان واحد — ودعهم يعملون معًا.
+<p align="center">
+  <sub><a href="../../README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.zh-TW.md">繁體中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.es.md">Español</a> · <a href="./README.de.md">Deutsch</a> · <a href="./README.fr.md">Français</a> · <a href="./README.pt.md">Português</a> · <strong>العربية</strong></sub>
+</p>
 
-يجمع جلساتك من كل واجهات الوكلاء المدعومة في مساحة عمل واحدة قابلة للبحث، ويتيح للوكيل الرئيسي أن يفوّض إلى وكلاء فرعيين من أنواع أخرى داخل المهمة نفسها. أما العمل الذي لا تريد الجلوس لمتابعته فيذهب إلى لوحة المهام قيد الانتظار: كل مهمة في فرعها الخاص، تعمل دون إشراف، وتنتظر مراجعتك قبل أن تُدمج. ويعمل Codeg كتطبيق سطح مكتب أو خادم مستقل أو حاوية Docker، إضافةً إلى تطبيقَي iOS وAndroid الأصليين لمواصلة العمل بعيدًا عن مكتبك؛ يأتي بخمسة عشر وكيلاً مدمجًا، ويمكنك تسجيل أي وكيل آخر متوافق مع ACP بنفسك.
+<p align="center">
+  <strong>مساحة العمل البرمجية متعددة الوكلاء.</strong><br/>
+  شغّل كل وكلاء البرمجة بالذكاء الاصطناعي في مكان واحد — ودعهم يعملون معًا.
+</p>
 
-![مساحة العمل](../images/workspace-light.png#gh-light-mode-only)
-![مساحة العمل](../images/workspace-dark.png#gh-dark-mode-only)
+<h3 align="center"><a href="https://github.com/spacering-net/codeg/releases/latest"><ins>تنزيل Codeg</ins></a> · <a href="https://docs.codeg.app"><ins>التوثيق</ins></a></h3>
 
-## 📖 التوثيق
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/workspace-dark.png" />
+    <img src="../images/workspace-light.png" alt="مساحة عمل Codeg: محادثة مع وكيل بجوار فروقاتها الحيّة وملفات المشروع" width="960" />
+  </picture>
+</p>
 
-**التوثيق الكامل على [docs.codeg.app](https://docs.codeg.app)** — [البداية](https://docs.codeg.app/getting-started/) · [الدليل](https://docs.codeg.app/guide/) · [المرجع](https://docs.codeg.app/reference/)
+<table>
+  <tr>
+    <td width="50%" valign="top">🧩 <strong>واجهة واحدة لكل الوكلاء</strong><br/>خمسة عشر وكيلاً مدمجًا، ويمكن لأي وكيل متوافق مع ACP الانضمام — ويُعرض عملهم جميعًا كمحادثة منظَّمة موحّدة، لا كطرفية.</td>
+    <td width="50%" valign="top">🔎 <strong>جلسات تنتقل معك</strong><br/>استورد السجل الذي يحفظه كل وكيل على القرص، وابحث فيه، واستأنفه، ثم سلّمه إلى وكيل آخر.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🤝 <strong>وكلاء يعملون معًا</strong><br/>فوّض العمل عبر الوكلاء بـ <code>@</code>، أو ضع في الطابور مهامَّ قيد الانتظار تعمل دون إشراف، كلٌّ في شجرة عملها الخاصة.</td>
+    <td width="50%" valign="top">🌍 <strong>أينما تعمل</strong><br/>تطبيق سطح المكتب، وخادم مستضاف ذاتيًا أو Docker، وiPhone وiPad وAndroid — وكذلك Telegram أو Lark أو WeChat.</td>
+  </tr>
+</table>
 
 ## 💖 الرعاة
 
@@ -88,104 +100,218 @@ Codeg (Code Generation) هو مساحة عمل برمجية متعددة الو�
 
 > هل ترغب في أن تصبح راعياً لـ Codeg؟ [راسلنا عبر البريد الإلكتروني.](mailto:itpkcn@gmail.com)
 
+## ✨ المزايا
+
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+### واجهة واحدة لكل الوكلاء
+
+يضم Codeg خمسة عشر وكيلاً مدمجًا، ويمكن لأي وكيل آخر متوافق مع ACP الانضمام من السجل العام أو عبر ملف distribution JSON الخاص به. ويتواصل Codeg مع كلٍّ منهم عبر Agent Client Protocol، فيحصلون جميعًا على المحادثة الغنية نفسها — بطاقات الأدوات، والفروقات الحيّة، والخطط، وطلبات الأذونات — بدلاً من طرفية تُضطر إلى التحديق فيها.
+
+[التوثيق ←](https://docs.codeg.app/guide/supported-agents) · [الوكلاء المخصّصون ←](https://docs.codeg.app/guide/custom-agents)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/agents-dark.gif" />
+  <img src="../images/features/agents-light.gif" alt="واجهة واحدة لكل الوكلاء" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### كل جلسة قابلة للبحث
+
+يقرأ Codeg السجل الذي تحفظه واجهة CLI لكل وكيل على القرص: استورده بنقرة واحدة، وابحث فيه كله، واستأنف أي جلسة من حيث توقفت. اذكر جلسة قديمة بـ `@`، فيستطيع الوكيل الذي تحادثه قراءتها — حتى لو كتبها وكيل آخر.
+
+[التوثيق ←](https://docs.codeg.app/guide/aggregation)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/sessions-dark.gif" />
+  <img src="../images/features/sessions-light.gif" alt="كل جلسة قابلة للبحث" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### التعاون متعدد الوكلاء
+
+اكتب `@`، اختر وكيلاً، ثم أرسل. يعمل كل وكيل تذكره في جلسة مستقلة خاصة به، جنبًا إلى جنب، ويتدفق عمله عائدًا إلى محادثتك — Claude Code يكتب المسودة بينما يراجع Codex — ويظهر الوكلاء الفرعيون كبطاقات تمتلئ أثناء عملهم.
+
+[التوثيق ←](https://docs.codeg.app/guide/multi-agent)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/multi-agent-dark.gif" />
+  <img src="../images/features/multi-agent-light.gif" alt="التعاون متعدد الوكلاء" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### مهامّ قيد الانتظار تعمل دون إشراف
+
+دوّن ما تريد إنجازه وانصرف إلى شأنك. تحصل كل مهمة على شجرة عمل git وفرعٍ خاصّين بها، وتبدأ فورًا أو وفق جدول زمني، ثم تنتظر في «مراجعة»؛ اقبل الفروقات فيتولّى الوكيل دمجها، ويتحقق Codeg من git قبل أن يعدّها منجزة.
+
+[التوثيق ←](https://docs.codeg.app/guide/tasks)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/todos-dark.gif" />
+  <img src="../images/features/todos-light.gif" alt="مهامّ قيد الانتظار تعمل دون إشراف" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### لوحة لا نهائية
+
+انشر عملك على مساحة مفتوحة: تصبح المحادثات والملفات والطرفيات والملاحظات بطاقاتٍ على لوحة، مجمّعةً حسب المجلد والوكيل، فيمكن لعدة وكلاء أن يعملوا جنبًا إلى جنب على مرأى منك.
+
+[التوثيق ←](https://docs.codeg.app/guide/canvas)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/canvas-dark.gif" />
+  <img src="../images/features/canvas-light.gif" alt="لوحة لا نهائية" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### سطح المكتب والخادم والأجهزة المحمولة وقنوات المحادثة
+
+شغّل Codeg كتطبيق سطح مكتب، أو كخادم مستضاف ذاتيًا تفتحه من أي متصفح، أو كحاوية Docker واحدة. وتُبقي تطبيقات iPhone وiPad وAndroid الأصلية — إضافةً إلى قنوات Telegram وLark وWeChat — وكلاءك في متناول يدك، بينما تبقى ملفاتك وجلساتك على جهازك أنت.
+
+[التوثيق ←](https://docs.codeg.app/getting-started/deployment) · [التطبيقات المحمولة ←](https://docs.codeg.app/getting-started/installation#mobile-apps) · [قنوات المحادثة ←](https://docs.codeg.app/guide/chat-channels)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/anywhere-dark.gif" />
+  <img src="../images/features/anywhere-light.gif" alt="سطح المكتب والخادم والأجهزة المحمولة وقنوات المحادثة" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### مستندات Office والبحث العلمي
+
+اطلب عرضًا تقديميًا أو تقريرًا أو جدول بيانات، وشاهد ملف `.pptx` أو `.docx` أو `.xlsx` الحقيقي يُعرض مباشرةً بجوار المحادثة. أما مهارات البحث المضمَّنة — الفرضيات، وتصميم التجارب، والإحصاء، والبحث في الأدبيات — فتعمل مع أي وكيل.
+
+[التوثيق ←](https://docs.codeg.app/guide/office) · [البحث العلمي ←](https://docs.codeg.app/guide/research)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/office-dark.gif" />
+  <img src="../images/features/office-light.gif" alt="مستندات Office والبحث العلمي" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### استخدام المتصفح والحاسوب
+
+في تطبيق سطح المكتب، تُفتح الروابط في متصفح مدمج بجوار ملفاتك: سلّم الوكيل صفحةً أو عنصرًا أو لقطة شاشة أو خطأً من وحدة التحكم، أو دعه يقود صفحةً تشاركها. ومع «استخدام الحاسوب»، المتاح حاليًا كمعاينة، يستطيع الوكلاء أيضًا رؤية النوافذ التي تشاركها والتحكم فيها — و«إيقاف» على بُعد نقرة واحدة.
+
+[التوثيق ←](https://docs.codeg.app/guide/browser) · [استخدام الحاسوب ←](https://docs.codeg.app/guide/computer-use)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/browser-dark.gif" />
+  <img src="../images/features/browser-light.gif" alt="استخدام المتصفح والحاسوب" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### الحلقة الهندسية الكاملة
+
+محرّر، وفروقات حيّة وأخرى بالعرض جنبًا إلى جنب، وعميل git كامل مع محرّر دمج بثلاث لوحات، وأشجار عمل بنقرة واحدة، وطرفية مدمجة، وعروض مقسّمة — كلها بجوار الوكيل، وعلى الملفات الحقيقية في مستودعك.
+
+[التوثيق ←](https://docs.codeg.app/guide/workspace) · [Git وأشجار العمل ←](https://docs.codeg.app/guide/git)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
+  <img src="../images/features/workspace-light.gif" alt="الحلقة الهندسية الكاملة" width="100%" />
+</picture>
+</td>
+</tr>
+</table>
+
+**ويتضمن أيضًا:**
+
+- **[لوحة المستودع](https://docs.codeg.app/guide/repository)** — المشكلات وطلبات السحب والفحوصات وعمليات الدمج لـ GitHub وGitLab وGitea وForgejo؛ ويمكن لأي مشكلة أو طلب سحب أن يتحول إلى مهمة قيد الانتظار
+- **[الأتمتة](https://docs.codeg.app/guide/automations)** — احفظ مربع الإدخال بإعداداته وشغّله بلا واجهة، وفق جدول cron أو عند الطلب
+- **[استخدام الرموز](https://docs.codeg.app/guide/token-usage)** — الاتجاهات، ونسبة إصابة التخزين المؤقت، وخريطة حرارية للنشاط، والاستخدام حسب المجلد والوكيل والنموذج والجلسة
+- **[التفريع والتوجيه](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — مع الوكلاء الذين يدعمون ذلك، فرّع محادثة من رد مكتمل، أو أرسل رسالة إلى دورٍ لا يزال قيد التنفيذ
+- **[المهارات](https://docs.codeg.app/guide/skills) و[MCP](https://docs.codeg.app/guide/mcp)** — حزم مهارات لكل وكيل، وفحص MCP المحلي، والبحث في السجل والتثبيت منه
+- **[مُنشئ المشروع](https://docs.codeg.app/guide/project-boot)** — أنشئ مشروعًا جديدًا بصريًا، مع معاينة حية
+- **[اجعله على ذوقك](https://docs.codeg.app/reference/settings/appearance)** — اثنتا عشرة سمة يمكنك إعادة تلوينها رمزًا لونيًا تلو الآخر، وخلفيات، واستدارة الزوايا، وCSS مخصّص — بأيٍّ من لغات الواجهة العشر
+- **[النسخ الاحتياطي والمزامنة](https://docs.codeg.app/reference/settings/system#backup-restore)** — نسخ احتياطية مشفّرة، ومزامنة الإعدادات بين الأجهزة عبر ملف أو خادم WebDAV الخاص بك
+- **[مخطط URL](../../docs/url-scheme.md)** — يفتح `codeg://session/<id>` محادثةً من تطبيق آخر (سطح المكتب)
+- **والمزيد** — يضيف كل إصدار تقريبًا شيئًا جديدًا؛ و[ملاحظات الإصدار](https://github.com/spacering-net/codeg/releases) هي القائمة الكاملة
+
 ## 🤖 الوكلاء المدعومون
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+يتواصل Codeg مع كل وكيل عبر [Agent Client Protocol](https://agentclientprotocol.com)، فيحصل كلٌّ منهم على الواجهة المنظَّمة نفسها. ويأتي بخمسة عشر وكيلاً مدمجًا، يتولّى تثبيت معظمهم وتثبيت إصداراتهم وتحديثهم نيابةً عنك:
 
-يتولّى Codeg تثبيت معظمهم وتثبيت إصداراتهم وتحديثهم نيابةً عنك. راجع [الوكلاء المدعومون](https://docs.codeg.app/guide/supported-agents) للقائمة الكاملة، ومتطلبات تشغيل كل وكيل، وموضع حفظ جلساته على القرص.
+<p>
+  <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
+  <a href="https://github.com/openai/codex"><kbd><img src="../images/agents/codex.svg" alt="" width="16" valign="middle" /> Codex</kbd></a> &nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli"><kbd><img src="../images/agents/gemini-cli.svg" alt="" width="16" valign="middle" /> Gemini CLI</kbd></a> &nbsp;
+  <a href="https://openclaw.ai"><kbd><img src="../images/agents/openclaw.svg" alt="" width="16" valign="middle" /> OpenClaw</kbd></a> &nbsp;
+  <a href="https://opencode.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/opencode-dark.svg" /><img src="../images/agents/opencode.svg" alt="" width="16" valign="middle" /></picture> OpenCode</kbd></a> &nbsp;
+  <a href="https://cline.bot"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cline-dark.svg" /><img src="../images/agents/cline.svg" alt="" width="16" valign="middle" /></picture> Cline</kbd></a> &nbsp;
+  <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
+  <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
+  <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
+  <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;
+  <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
+  <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
+  <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://docs.codeg.app/guide/custom-agents"><kbd>+ أي وكيل ACP</kbd></a>
+</p>
 
-ليس في القائمة؟ أضِفه بنفسك. اختر أي وكيل من سجل ACP العام أو الصق ملف distribution JSON الخاص به، فيتولّى Codeg تثبيته والتحقّق مسبقًا من قدرته على الإقلاع، ثم يعامله كوكيل مدمج — يظهر في المُحدِّد، ويقبل التفويض بـ `@` والمهارات، وتُسجَّل محادثاته وتصبح قابلة للبحث حتى لو لم يحتفظ الوكيل نفسه بأي سجل. → [الوكلاء المخصّصون](https://docs.codeg.app/guide/custom-agents)
+ليس في القائمة؟ اختر أي وكيل من سجل ACP العام أو الصق ملف distribution JSON الخاص به — فيتولّى Codeg تثبيته، ويتحقق من قدرته على الإقلاع، ويعامله كوكيل مدمج. متطلبات التشغيل، وأين يحفظ كل وكيل جلساته: [الوكلاء المدعومون](https://docs.codeg.app/guide/supported-agents).
 
-## 🤝 التعاون متعدد الوكلاء
+## 📦 التثبيت
 
-التعاون متعدد الوكلاء، مختصرًا في ضغطة واحدة: اكتب `@`، اختر وكيلاً، ثم أرسل. يتكفّل Codeg بالتنسيق — يشغّل كل وكيل تذكره كجلسة مستقلة، ويسلّمه المهمة، ثم يعيد بثّ عمله إلى المحادثة التي أنت فيها بالفعل. اذكر اثنين ليعملا جنبًا إلى جنب: Claude Code يكتب المسودة بينما يراجع Codex. بلا تبديل للسياق، وبلا نسخ ولصق بين الطرفيات.
-
-وعندما يشغّل وكيلٌ وكلاءه الفرعيين — وهذا ما يفعله Claude Code وCodex وGrok وOpenCode — تحصل كل مهمة فرعية على بطاقة تمتلئ أثناء العمل، بدلاً من الظهور كلها مرة واحدة عند الانتهاء. افتح إحداها لتقرأ جلسة المهمة الفرعية نفسها.
-
-![تفويض مهمة إلى وكلاء فرعيين من محادثة واحدة في Codeg](../images/collaboration-light.gif#gh-light-mode-only)
-![تفويض مهمة إلى وكلاء فرعيين من محادثة واحدة في Codeg](../images/collaboration-dark.gif#gh-dark-mode-only)
-
-## ✅ المهام قيد الانتظار
-
-ليس كل عمل يحتاج إلى متابعتك. دوّنه فحسب — عنوان ووصف والوكيل الذي سينفّذه — ويمنحه Codeg **نسخته الخاصة من الشيفرة**: شجرة عمل git بجوار مشروعك، على فرع خاص بها. تعمل عدة مهام في الوقت نفسه دون أن تمسّ إحداها الأخرى، ولا الشجرة التي تعمل فيها أنت. يمكنك جدولة مهمة لهذه الليلة، أو ترك مجلد يستهلك طابوره وحده حتى حد التزامن الذي تحدده.
-
-المهمة المنتهية لا تدمج نفسها. تنتقل إلى عمود المراجعة وتنتظر: اقرأ الفروقات، أو أعدها لجولة أخرى، أو اقبلها — عندها يتولّى الوكيل الدمج، فيجلب فرعك الأساسي إلى شجرة عمله ويحلّ التعارضات هناك أولًا. بعد ذلك لا يأخذ Codeg بكلام الوكيل، بل يتحقق من git بنفسه: أي دمج لا يستطيع تأكيده يعود إلى المراجعة بدلاً من الإبلاغ عن نجاح.
-
-![لوحة المهام قيد الانتظار، والمهام تنتقل من «قيد الانتظار» إلى «قيد التنفيذ» ثم «تم»](../images/task-light.png#gh-light-mode-only)
-![لوحة المهام قيد الانتظار، والمهام تنتقل من «قيد الانتظار» إلى «قيد التنفيذ» ثم «تم»](../images/task-dark.png#gh-dark-mode-only)
-
-## 🪟 العرض المُقسَّم
-
-شريط تبويبات واحد لا يكفي دائمًا. انقر بزر الفأرة الأيمن على تبويب محادثة لتقسيم العرض **يمينًا** أو **أسفل**، بأي عدد تريده: لوحان جنبًا إلى جنب، أو ثلاثة مرصوفة، أو شبكة كاملة. كل مجموعة مساحة عمل مكتملة بذاتها — تبويباتها الخاصة، ورأسها الخاص، وزر محادثة جديدة خاص بها — فيتولّى Claude Code إعادة الهيكلة في لوح بينما يراجع Codex فرقًا في اللوح المجاور.
-
-اسحب تبويبًا من مجموعة إلى أخرى وستواصل جلسته البثّ أثناء الانتقال، واسحب الفاصل بين مجموعتين لتغيير طريقة تقاسمهما المساحة. يُحفظ تخطيطك لكل مساحة عمل، بما في ذلك المسودات: أعِد فتح Codeg فيعود التقسيم كما كان، والنص الذي لم ترسله لا يزال في الصندوق.
-
-![تقسيم منطقة المحادثة إلى شبكة من مجموعات التبويبات](../images/split-light.gif#gh-light-mode-only)
-![تقسيم منطقة المحادثة إلى شبكة من مجموعات التبويبات](../images/split-dark.gif#gh-dark-mode-only)
-
-## 📄 مستندات Office
-
-اطلب عرضًا تقديميًا أو تقريرًا أو جدول بيانات، وسينشئ الوكيل ملف `.pptx` / `.docx` / `.xlsx` حقيقيًا — بينما تعرضه لوحة المعاينة مباشرةً. كل تعديل يصل إلى المعاينة من تلقاء نفسه: الشرائح تمتلئ، والجداول تتشكّل، والأرقام تستقر في خلاياها. لم تعجبك الشريحة الرابعة؟ قل ذلك في الرسالة التالية — يعدّل الوكيل الملف نفسه في مكانه، وتلحق به المعاينة. بلا تصدير، وبلا تطبيق Office خارجي، ودون مغادرة Codeg.
-
-![وكيل يحرّر مستند Office بجانب معاينته الحية](../images/office-light.png#gh-light-mode-only)
-![وكيل يحرّر مستند Office بجانب معاينته الحية](../images/office-dark.png#gh-dark-mode-only)
-
-## 💻 مساحة العمل
-
-مساحة عمل واحدة، وكل الوكلاء. أيًّا كان الوكيل الذي يعمل — Claude Code أو Codex أو Cursor — فهو يعمل داخل المحرّر نفسه، وبالفروقات الحيّة نفسها، وبعميل Git نفسه؛ وما ينتجه ملفات حقيقية في مستودعك، تتغيّر أمام عينيك. ويمكنك ربط أدلة أخرى بها — مكتبة مشتركة، أو خدمة مجاورة، أو مستودع التوثيق — فتتعامل معها شجرة الملفات والبحث والوكيل نفسه كمساحة عمل واحدة.
-
-**الجلسات.** استعِد ما لديك من سجل: جلسات سابقة من كل وكيل مثبَّت، تُستورَد بنقرة واحدة ويمكن استئنافها من حيث توقفت. وبمجرد دخولها لا تبقى جزرًا منفصلة — اذكر جلسة قديمة بـ `@` ليقرأها الوكيل الذي تحادثه، حتى لو كتبها وكيل آخر، فتُكمل جلسة Codex اليوم من حيث انتهت جلسة Claude Code الأسبوع الماضي. ومهما طالت المحادثة فإنها تُفتح على جولاتها الأخيرة، ويُحمَّل ما تبقّى تدريجيًا كلما رجعت إلى الأعلى.
-
-**الملفات.** تظهر تعديلات الوكيل على هيئة فروقات بجوار المحادثة فور وقوعها. افتح أي ملف في محرّر حقيقي مع إبراز لبنية الشيفرة، وأرسل ملفًا — أو تحديدًا منه فقط — إلى الوكيل مباشرةً بـ `⌘L`، وعايِن Markdown وHTML والصور ومستندات Office في اللوحة نفسها.
-
-**Git.** عميل كامل، لا مجرد عرض للحالة: أودِع مباشرةً من تبويب «التغييرات» — اكتب رسالة واضغط Enter — وبجواره السحب والجلب والدفع والإخفاء، وسجل يوضّح أي الإيداعات دُفعت. أنشئ الفروع وادمج وأعد الأساس وأعد الضبط وقارن مع فرع آخر، بل وحدِّث أي فرع أو ادفعه دون الانتقال إليه. وعند التعارض يُفتح محرّر دمج بثلاث لوحات تقبل فيه التغييرات كتلةً كتلة أو تكتب الحل بنفسك. أما أشجار العمل فتختصر العمل المتوازي إلى إجراء واحد — فرع جديد، ودليل خاص به، ومحادثة جديدة متجذّرة فيه، فيبني أسطول من الوكلاء ميزات مختلفة في الوقت نفسه دون أن يمسّ أحدهم ملفات الآخر.
-
-**حين يسوء الأمر.** الجولة الفاشلة لا تكتفي بقول إن شيئًا ما أخفق — ففي Claude Code وCodex تسمّي النوع: مشكلة اتصال، أو مشكلة وصول، أو بلوغ الحد، أو رفض للطلب، أو خلل في الخدمة — وتضع أسفل المُحرِّر شريطًا لا يحمل إلا ما يفيد فعلًا: إعادة المحاولة، أو تسجيل الدخول، أو جلسة جديدة. وما يعيد الوكيل محاولته من تلقاء نفسه يظهر بلون كهرماني ثم ينتهي إلى سطر واحد: «تمت الاستعادة». كما أن مؤشّر الاتصال أسفل المُحرِّر زرٌّ أيضًا: اضغطه لترى الحالة الحقيقية للجلسة، ومعه «إعادة اتصال» تستأنف الجلسة بدل أن تبدأ من جديد.
-
-## 📱 iPhone وiPad وAndroid
-
-ابتعد عن مكتبك، لا عن عملك. يتصل تطبيقا iOS وAndroid الأصليان بنسخة Codeg التي تشغّلها أصلًا — **خدمة الويب** في تطبيق سطح المكتب، أو خادم `codeg-server` الخاص بك — ومن هناك تبدأ الجلسات، وتتابع الردود واستدعاءات الأدوات لحظة بلحظة، وتردّ على طلبات الأذونات، وتتصفّح المشاريع والفروع. لا شيء ينتقل إلى الهاتف: ملفاتك وواجهات الوكلاء ومحادثاتك تبقى على الجهاز الذي يشغّل Codeg، ويُحفَظ رمز الوصول في Keychain على iOS أو عبر Android Keystore. التطبيقان مفتوحا المصدر ([iOS](https://github.com/xintaofei/codeg-ios) و[Android](https://github.com/xintaofei/codeg-android))؛ ويتم الاقتران في ثلاث خطوات تجدها في [التطبيقات المحمولة](https://docs.codeg.app/getting-started/installation#mobile-apps).
-
-| iPhone وiPad | Android |
-| :---: | :---: |
-| <img src="../images/mobile-ios.jpg" alt="بدء جلسة من تطبيق Codeg على iOS" width="248" /> | <img src="../images/mobile-android.jpg" alt="ردّ وكيل يتدفق مباشرةً داخل تطبيق Codeg على Android" width="248" /> |
-
-## ✨ أبرز المزايا
-
-- **[تجميع المحادثات](https://docs.codeg.app/guide/aggregation)** — استورد جلسات كل الوكلاء المدعومين إلى مساحة عمل موحّدة قابلة للبحث، وتابع أيًّا منها من حيث توقفت
-- **[التعاون متعدد الوكلاء](https://docs.codeg.app/guide/multi-agent)** — اذكر أي وكيل بـ `@` لتفويضه: وكلاء فرعيون من أنواع مختلفة يعملون كجلسات مستقلة، بالتوازي، داخل مهمة واحدة
-- **[المهام قيد الانتظار](https://docs.codeg.app/guide/tasks)** — دوّن ما ينبغي عمله ويتولّى الوكلاء الطابور مهمةً مهمة، كل مهمة في شجرة عمل خاصة بها، ولا تصل إلى فرعك إلا بعد مراجعتك
-- **[الوكلاء المخصّصون](https://docs.codeg.app/guide/custom-agents)** — سجّل أي وكيل آخر متوافق مع ACP من السجل العام أو من ملف distribution JSON؛ يتولّى Codeg تثبيته وتسجيل تاريخه، ويعامله كوكيل مدمج
-- **[مساحة العمل](https://docs.codeg.app/guide/workspace)** — حلقة هندسية كاملة بجوار الوكيل: شجرة الملفات، المحرّر والفروقات، تغييرات git، الإيداع، وطرفية مدمجة، و[عدة مجلدات مربوطة في مساحة عمل واحدة](https://docs.codeg.app/guide/workspace#work-across-several-folders)
-- **[العرض المُقسَّم](https://docs.codeg.app/guide/workspace#split-the-conversation-view-into-groups)** — قسّم منطقة المحادثة إلى أي عدد من مجموعات التبويبات، واسحب التبويبات والفواصل بينها، واستعد التخطيط — مع المسودات — بعد إعادة التشغيل
-- **[Git والـ worktrees](https://docs.codeg.app/guide/git)** — راجع التغييرات وأودعها، وأدر حسابات Git البعيدة، واعمل بالتوازي عبر تدفقات `git worktree` المدمجة
-- **[استخدام الرموز](https://docs.codeg.app/guide/token-usage)** — تقرير كامل خلف العدّاد في شريط الحالة: الاتجاهات ونسبة إصابة التخزين المؤقت، وخريطة حرارية للنشاط، وتوزيعات حسب المجلد والوكيل والنموذج والجلسة
-- **[قنوات الدردشة](https://docs.codeg.app/guide/chat-channels)** — قُد وكلاءك من Telegram وLark (Feishu) وWeChat: أنشئ المهام، ووافق على الأذونات، وتابع التحديثات لحظيًا
-- **[الأتمتة](https://docs.codeg.app/guide/automations)** — احفظ إعدادًا كاملاً للمُحرِّر كمهمة أتمتة قابلة لإعادة الاستخدام تعمل بلا واجهة، وفق جدول cron أو عند الطلب — إما ببدء جلسة، أو بترك مهمة قيد الانتظار لتراجعها لاحقًا
-- **[مستندات Office](https://docs.codeg.app/guide/office)** — أنشئ وحلِّل وراجع وحرِّر ملفات `.docx` / `.xlsx` / `.pptx` عبر `officecli` المدمج، مع معاينة حية داخل التبويب
-- **[البحث العلمي](https://docs.codeg.app/guide/research)** — مهارات بحثية مدمجة (توليد الفرضيات، تصميم التجارب، الإحصاء، التمثيل المرئي، التقييم النقدي، البحث في الأدبيات) يمكن لأي وكيل استدعاؤها
-- **[مُنشئ المشروع](https://docs.codeg.app/guide/project-boot)** — أنشئ مشاريع جديدة بصريًا مع معاينة حية، ثم افتحها مباشرةً في مساحة العمل
-- **[MCP](https://docs.codeg.app/guide/mcp) & [المهارات](https://docs.codeg.app/guide/skills)** — فحص الخوادم المحلية مع البحث والتثبيت من السجل، ومهارات تُدار على النطاق العام أو نطاق المشروع
-- **[اجعله على ذوقك](https://docs.codeg.app/reference/settings/appearance)** — أعد تلوين أي من الثيمات الاثني عشر رمزًا لونيًا تلو الآخر، واضبط استدارة الزوايا في التطبيق كله، واستورد الثيمات وصدّرها بصيغة shadcn JSON، أو اكتب CSS خاصًا بك
-- **[سطح المكتب والخادم وDocker](https://docs.codeg.app/getting-started/deployment)** — تطبيق سطح مكتب أصلي، أو خادم `codeg-server` مستقل تصل إليه من أي متصفح، أو `docker compose up`
-- **[iPhone وiPad وAndroid](https://docs.codeg.app/getting-started/installation#mobile-apps)** — تطبيقات محمولة أصلية تتصل بسطح مكتبك أو خادمك: ابدأ الجلسات، وتابع الردود المتدفقة، ووافق على الأذونات، وتصفّح المشاريع من أي مكان
-
-## 📦 التثبيت والتشغيل
-
-**سطح المكتب** — نزّل المثبّت الخاص بـ macOS أو Windows أو Linux من [Releases](https://github.com/xintaofei/codeg/releases)، ثم اتبع [التثبيت](https://docs.codeg.app/getting-started/installation).
+**سطح المكتب** — تجد مثبّتات macOS وWindows وLinux في [Releases](https://github.com/spacering-net/codeg/releases/latest)؛ وخطوات الإعداد في [التثبيت](https://docs.codeg.app/getting-started/installation).
 
 **الخادم** — شغّل Codeg بلا واجهة وادخل إليه من أي متصفح. على Linux أو macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xintaofei/codeg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
 CODEG_STATIC_DIR=/usr/local/share/codeg/web codeg-server
 ```
 
 على Windows، في PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/xintaofei/codeg/main/install.ps1 | iex
-$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg\web"; codeg-server
+irm https://raw.githubusercontent.com/spacering-net/codeg/main/install.ps1 | iex
+$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 ```
 
 **Docker** — الخادم نفسه، داخل حاوية واحدة:
@@ -196,24 +322,39 @@ docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
 
 **الهاتف واللوحي** — ثبّت [تطبيق iOS](https://apps.apple.com/app/codeg-client/id6785199071) أو [حزمة Android APK](https://github.com/xintaofei/codeg-android/releases/latest)، ثم وجّهه إلى **خدمة الويب** في تطبيق سطح المكتب أو إلى خادم `codeg-server` الخاص بك: العنوان والرمز، وانتهى الأمر. خطوات الاقتران في [التطبيقات المحمولة](https://docs.codeg.app/getting-started/installation#mobile-apps).
 
-يغطي [النشر](https://docs.codeg.app/getting-started/deployment) استخدام Compose والملفات التنفيذية الجاهزة والبناء من المصدر والتحديث في المكان؛ وتجد متغيرات البيئة في [الإعداد](https://docs.codeg.app/getting-started/configuration). ولبناء Codeg نفسه: [التطوير](https://docs.codeg.app/reference/development) و[البنية](https://docs.codeg.app/reference/architecture).
+يغطي [النشر](https://docs.codeg.app/getting-started/deployment) استخدام Compose والملفات التنفيذية الجاهزة والبناء من المصدر والتحديث في المكان؛ وتجد متغيرات البيئة في [الإعداد](https://docs.codeg.app/getting-started/configuration).
 
-## 🔒 الخصوصية والأمان
+## 👥 المجتمع والدعم
 
-- محلي أولاً بشكل افتراضي في التحليل والتخزين وعمليات المشروع — ولا يحدث أي وصول للشبكة إلا عبر إجراء تبدأه أنت
-- وضعا الويب والخادم محميّان بمصادقة قائمة على الرموز
-- دعم بروكسي النظام لبيئات المؤسسات
+- **WeChat** — امسح رمز QR للانضمام إلى مجموعتنا للنقاشات والملاحظات والتحديثات:
 
-التفاصيل في [الخصوصية والأمان](https://docs.codeg.app/reference/privacy).
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/weixin-dark.jpg" />
+    <img src="../images/weixin-light.jpg" alt="WeChat" width="200" />
+  </picture>
 
-## 👥 المجتمع
+- **المشكلات** — وجدت خللًا أو تفتقد ميزةً ما؟ [افتح مشكلة](https://github.com/spacering-net/codeg/issues).
+- **الخصوصية** — محلي أولاً: يبقى التحليل والتخزين وعمليات المشروع على جهازك، ووضعا الويب والخادم محميّان بمصادقة قائمة على الرموز. التفاصيل في [الخصوصية والأمان](https://docs.codeg.app/reference/privacy).
+- **LinuxDO** — شكراً لمجتمع [LinuxDO](https://linux.do) على دعمه.
+- **أظهر دعمك** — [امنح المستودع نجمة](https://github.com/spacering-net/codeg) لتتابع جديده.
 
-- امسح رمز QR أدناه للانضمام إلى مجموعة WeChat الخاصة بنا للنقاشات والملاحظات والتحديثات
+## 🤝 المساهمة
 
-<img src="../images/weixin-light.jpg#gh-light-mode-only" alt="WeChat" width="240" />
-<img src="../images/weixin-dark.jpg#gh-dark-mode-only" alt="WeChat" width="240" />
+نرحّب بفتح المشكلات وتقديم طلبات السحب. ولبناء Codeg بنفسك، ابدأ بـ [التطوير](https://docs.codeg.app/reference/development) و[البنية](https://docs.codeg.app/reference/architecture).
 
-- شكراً لمجتمع [LinuxDO](https://linux.do) على دعمه
+<a href="https://github.com/spacering-net/codeg/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=spacering-net/codeg" alt="المساهمون في Codeg" />
+</a>
+
+## ⭐ سجل النجوم
+
+<a href="https://www.star-history.com/?repos=spacering-net%2Fcodeg&type=date&releases=&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+ </picture>
+</a>
 
 ## 🙏 شكر وتقدير
 

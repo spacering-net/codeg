@@ -138,6 +138,17 @@ function TaskEditorBody({
   const [agentType, setAgentType] = useState<AgentType>(
     task?.config?.agent_type ?? "claude_code"
   )
+  // What an agent-less task launches with in this folder, resolved the way the
+  // engine does it: the effective task settings' agent, else the folder's
+  // default agent — `null` when neither names one. Keyed by folder, so the
+  // answer for a previous folder never stands in for the current one's.
+  const [inherited, setInherited] = useState<{
+    folderId: number
+    agent: AgentType | null
+  } | null>(null)
+  // Whether the selector shows any agent as picked: with none enabled and
+  // available here it shows none.
+  const [agentShown, setAgentShown] = useState(false)
   const [modeId, setModeId] = useState<string | null>(
     task?.config?.mode_id ?? null
   )
@@ -194,9 +205,11 @@ function TaskEditorBody({
     workTaskSettingsEffective(folderId)
       .then((s) => {
         if (cancelled) return
-        setAgentType(
-          s.default_agent_type ?? folderDefaultAgent ?? "claude_code"
-        )
+        const agent = s.default_agent_type ?? folderDefaultAgent ?? null
+        setInherited({ folderId, agent })
+        // Nothing to inherit: a placeholder, which a save keeps rather than
+        // inherits (see `pinsShownAgent`).
+        setAgentType(agent ?? "claude_code")
         setModeId(s.mode_id ?? null)
         setConfigValues(s.config_values ?? {})
       })
@@ -221,9 +234,31 @@ function TaskEditorBody({
 
   const agentOptions = useAgentOptions(agentType, folderPath, true)
 
+  // An untouched pill is saved as "inherit" only while it shows the agent that
+  // inheriting launches. It can show another: the placeholder when nothing is
+  // configured to inherit, or the selector's own substitute when the inherited
+  // agent is disabled or unavailable here. Inheriting would then launch an
+  // agent other than the one on screen, or none at all ("no agent
+  // configured"), so the agent on screen is saved with the task instead. Until
+  // this folder's settings have answered, the pill inherits as it always has.
+  const pinsShownAgent =
+    !agentDirty &&
+    agentShown &&
+    inherited != null &&
+    inherited.folderId === folderId &&
+    inherited.agent !== agentType
+  const agentHint = !pinsShownAgent
+    ? t("agentInheritedHint")
+    : inherited?.agent == null
+      ? t("agentNoDefaultHint")
+      : t("agentInheritedUnavailableHint", {
+          agent: getAgentLabel(inherited.agent),
+        })
+
   // The captured composer + agent state as a `WorkTaskConfig` — the shared
-  // payload of both the task draft and a saved template.
-  const buildConfig = async (): Promise<WorkTaskConfig> => {
+  // payload of both the task draft and a saved template. Without `ownAgent`
+  // the config inherits its agent, mode and options.
+  const buildConfig = async (ownAgent: boolean): Promise<WorkTaskConfig> => {
     const displayText = (composerRef.current?.getText() ?? prompt).trim()
     // Prose + inline references + attached images, exactly as a chat send
     // composes them; the engine replays these blocks when the task launches.
@@ -233,7 +268,7 @@ function TaskEditorBody({
     // Explicitly null rather than absent when nothing is picked: clearing the
     // choice has to travel, and the save replaces the stored config wholesale.
     const base_branch = baseBranch.trim() || null
-    if (!agentDirty) {
+    if (!ownAgent) {
       return {
         prompt_blocks: blocks,
         display_text: displayText,
@@ -282,7 +317,7 @@ function TaskEditorBody({
       const draft: WorkTaskDraft = {
         folder_id: folderId,
         title: title.trim(),
-        config: await buildConfig(),
+        config: await buildConfig(agentDirty || pinsShownAgent),
       }
       await onSubmit(draft)
     } catch (e) {
@@ -333,8 +368,10 @@ function TaskEditorBody({
     try {
       // A blueprint is global — the folder is picked at creation time — so a
       // branch name from one repository must not ride along into another,
-      // where it would only fail the launch.
-      const config = await buildConfig()
+      // where it would only fail the launch. For the same reason an untouched
+      // agent stays inherited even where this folder has nothing to inherit:
+      // the task created from it settles that against its own folder.
+      const config = await buildConfig(agentDirty)
       delete config.base_branch
       await workTaskTemplateSave({
         name: title.trim(),
@@ -387,8 +424,17 @@ function TaskEditorBody({
               setConfigValues({})
             }}
             // A system substitution (agent unavailable) must not count as a
-            // user override choice.
-            onFallback={setAgentType}
+            // user override choice. The mode and options loaded for the agent
+            // it replaces are not the substitute's, though, and a substitute
+            // on an untouched pill is saved with the task.
+            onFallback={(a) => {
+              setAgentType(a)
+              setModeId(null)
+              setConfigValues({})
+            }}
+            onAgentsLoaded={(agents) =>
+              setAgentShown(agents.some((a) => a.enabled && a.available))
+            }
           />
           {agentDirty ? (
             <button
@@ -399,9 +445,7 @@ function TaskEditorBody({
               {t("agentOverrideReset")}
             </button>
           ) : (
-            <span className="text-xs text-muted-foreground">
-              {t("agentInheritedHint")}
-            </span>
+            <span className="text-xs text-muted-foreground">{agentHint}</span>
           )}
         </div>
 
@@ -480,7 +524,10 @@ function TaskEditorBody({
                 // request, because that is what a save would write back.
                 value={pinned ? (task?.base_branch ?? baseBranch) : baseBranch}
                 onChange={(b) => setBaseBranch(b)}
-                placeholder={t("baseBranchPlaceholder")}
+                // No pick means the project folder's checkout when the task
+                // starts, i.e. HEAD, so the picker says HEAD and names the
+                // branch it is on right now.
+                defaultFollowsHead
                 defaultLabel={t("baseBranchDefault")}
                 title={t("baseBranch")}
                 // The base is recorded when the worktree is minted, and every

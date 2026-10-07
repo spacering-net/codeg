@@ -13,6 +13,7 @@ import {
   removeBrowserProfile,
   resetBrowserPrefsForTests,
   setAllDefaultLinkTargets,
+  setBrowserCustomDevice,
   setBrowserDevtools,
   setBrowserEvalApproval,
   setBrowserHostRules,
@@ -379,6 +380,29 @@ describe("browser prefs", () => {
     localStorage.setItem("browser:service-auto-open", "sometimes")
     resetCacheOnly()
     expect(getBrowserPrefs().serviceAutoOpen).toBe("notify")
+  })
+
+  // The size "Custom" starts at: the last one typed, stored only when it is
+  // not the default, and never a size a custom device cannot have.
+  it("remembers the custom device's size, and reads anything else as the default", () => {
+    expect(getBrowserPrefs().customDevice).toEqual({ width: 1280, height: 800 })
+    setBrowserCustomDevice({ width: 1440, height: 900 })
+    expect(
+      JSON.parse(localStorage.getItem("browser:custom-device") ?? "")
+    ).toEqual({ width: 1440, height: 900 })
+    expect(getBrowserPrefs().customDevice).toEqual({ width: 1440, height: 900 })
+    // Out of range: not kept, the last good one stays.
+    setBrowserCustomDevice({ width: 20, height: 900 })
+    expect(getBrowserPrefs().customDevice).toEqual({ width: 1440, height: 900 })
+    setBrowserCustomDevice({ width: 1280, height: 800 })
+    expect(localStorage.getItem("browser:custom-device")).toBeNull()
+    for (const raw of ["1440x900", '{"width":99999,"height":900}', "[1, 2]"]) {
+      localStorage.setItem("browser:custom-device", raw)
+      resetCacheOnly()
+      expect(getBrowserPrefs().customDevice).toEqual(
+        DEFAULT_BROWSER_PREFS.customDevice
+      )
+    }
   })
 
   it("useBrowserPrefs re-renders on change", () => {

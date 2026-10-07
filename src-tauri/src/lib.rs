@@ -6,6 +6,10 @@
 // so the giant future's layout resolves. See the big-stack thread in
 // `acp/connection.rs` for the sibling *runtime* mitigation of the same frame.
 #![recursion_limit = "256"]
+// The unoptimized lib test binary trips the same harmless macOS
+// "__eh_frame section too large" linker warning as the `codeg` binary; see the
+// note at the top of `main.rs`.
+#![cfg_attr(debug_assertions, allow(linker_messages))]
 
 pub mod acp;
 pub mod acp_transcript;
@@ -15,6 +19,8 @@ pub use acp::{
 pub use acp::scratch_dir::scratch_sweep_task;
 pub use network::proxy::init_proxy_from_db;
 mod app_error;
+#[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
+mod app_menu;
 pub mod app_state;
 pub mod automation;
 pub mod backgrounds;
@@ -23,6 +29,7 @@ pub mod backgrounds;
 pub mod browser;
 pub mod chat_channel;
 pub mod commands;
+pub mod computer;
 pub mod db;
 pub mod deep_link;
 pub mod folder_links;
@@ -88,6 +95,7 @@ mod tauri_app {
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
         clipboard as clipboard_commands,
         config_sync,
+        conversation_tags,
         conversations,
         custom_skills as custom_skills_commands,
         deepseek_settings as deepseek_settings_commands, delegation as delegation_commands,
@@ -102,13 +110,72 @@ mod tauri_app {
         system_settings, terminal as terminal_commands,
         token_usage as token_usage_commands,
         forge as forge_commands, version_control, windows, work_task as work_task_commands,
-        workspace_state as workspace_state_commands,
+        workspace_state as workspace_state_commands, workspace_windows,
     };
     use crate::terminal::manager::TerminalManager;
     use crate::{db, git_credential, network, paths, process, web};
     use tauri::Manager;
 
     static APP_QUITTING: AtomicBool = AtomicBool::new(false);
+
+    /// Everything a quit does before the process goes.
+    ///
+    /// Runs from both `RunEvent::ExitRequested` and `RunEvent::Exit`, because
+    /// neither sees every quit. Tray Quit, the close button's exit and a
+    /// relaunch ask first, while the event loop is still running. ⌘Q, the
+    /// Dock's Quit and logging out on macOS, and logging off on Windows, do
+    /// not: the app hears `Exit` alone, from inside the platform's own
+    /// teardown, with the loop no longer delivering anything. Whichever
+    /// arrives first does the work, and `APP_QUITTING` turns the other into a
+    /// no-op.
+    ///
+    /// The process ends soon after this returns, so everything here finishes
+    /// before it does: nothing may be left to a spawned task, or to a window
+    /// event that `Exit` would never see delivered.
+    fn shut_down(app: &tauri::AppHandle) {
+        if APP_QUITTING.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        // First, while every window is still standing: remember which
+        // workspace windows are open, and stop recording before the shutdown
+        // tears them down.
+        workspace_windows::remember_on_quit(app);
+        // The pet goes down with the process instead of being closed, so its
+        // close handler never writes this.
+        if app.get_webview_window("pet").is_some() {
+            if let Some(db) = app.try_state::<db::AppDatabase>() {
+                tauri::async_runtime::block_on(persist_pet_closed(&db.conn));
+            }
+        }
+        if let Some(ws) = app.try_state::<web::WebServerState>() {
+            tauri::async_runtime::block_on(web::do_stop_web_server(&ws));
+        }
+        if let Some(tm) = app.try_state::<TerminalManager>() {
+            tm.kill_all();
+        }
+        crate::office_watch::stop_all_office_watches();
+        if let Some(cm) = app.try_state::<ConnectionManager>() {
+            tauri::async_runtime::block_on(cm.disconnect_all());
+        }
+    }
+
+    /// Persist the pet as closed, so the next launch doesn't race-open it
+    /// before the user asks for it. `active_pet_id` is deliberately kept: the
+    /// user chose that pet, and they want it back the next time they open the
+    /// window.
+    async fn persist_pet_closed(conn: &sea_orm::DatabaseConnection) {
+        let _ = crate::commands::pet::pet_save_window_state_core(
+            conn,
+            crate::models::pet::PetWindowStatePatch {
+                x: None,
+                y: None,
+                scale: None,
+                always_on_top: None,
+                enabled: Some(false),
+            },
+        )
+        .await;
+    }
 
     /// Routes one close-button press to hide, exit, or a prompt.
     ///
@@ -200,8 +267,11 @@ mod tauri_app {
 
         let hide = || {
             let window = window.clone();
+            let handle = app.clone();
             windows::with_macos_fullscreen_drained(&app, move || {
                 let _ = window.hide();
+                // Closed as far as the next launch is concerned.
+                crate::commands::workspace_windows::note_hidden(&handle, window.label());
             });
         };
 
@@ -462,6 +532,11 @@ mod tauri_app {
 
         let builder = tauri::Builder::default();
 
+        // The default menu minus its ⌘W "Close Window", which closed the
+        // workspace whenever ⌘W was pressed inside a page (see `app_menu`).
+        #[cfg(target_os = "macos")]
+        let builder = builder.menu(crate::app_menu::build);
+
         // Must be the first plugin: it short-circuits second launches by
         // signalling the running instance and exiting before any other
         // initialization. The callback runs in the *original* process.
@@ -485,12 +560,20 @@ mod tauri_app {
             // by an older build would call `set_decorations(true)` after the
             // window is built and re-add the native title bar on top of the
             // app's own toolbar — the Linux "double title bar".
+            //
+            // Computer use's strip and action marker are placed by codeg each
+            // time they are made and must never come back where (or as
+            // visible as) a previous run left them.
             .plugin(
                 tauri_plugin_window_state::Builder::new()
                     .with_state_flags(
                         tauri_plugin_window_state::StateFlags::all()
                             & !tauri_plugin_window_state::StateFlags::DECORATIONS,
                     )
+                    .with_denylist(&[
+                        crate::computer::indicator::INDICATOR_LABEL,
+                        crate::computer::marker::MARKER_LABEL,
+                    ])
                     .build(),
             )
             .plugin(tauri_plugin_deep_link::init())
@@ -499,6 +582,9 @@ mod tauri_app {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init())
             .plugin(tauri_plugin_notification::init())
+            // Computer use's stop shortcut. Registered from Rust alone; no
+            // webview is granted the plugin's commands.
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build())
             // "Launch at login". LaunchAgent rather than AppleScript on macOS:
             // writing `~/Library/LaunchAgents/codeg.plist` needs no Automation
             // consent prompt, where scripting System Events does. No extra
@@ -547,6 +633,7 @@ mod tauri_app {
             .manage(windows::CommitWindowState::new())
             .manage(windows::MergeWindowState::new())
             .manage(windows::AuxWindowState::new())
+            .manage(workspace_windows::WorkspaceWindowSession::new())
             .manage(web::WebServerState::new())
             // Remote-workspace IPC proxy. Routes HTTP / WS for windows
             // opened against a remote codeg-server through Rust so we
@@ -962,6 +1049,7 @@ mod tauri_app {
                         session_info_config,
                         chat_authoring_config,
                         browser_tools_config,
+                        computer_tools_config,
                     ) = crate::app_state::build_delegation_stack(
                         &cm_state,
                         db_conn.clone(),
@@ -974,6 +1062,11 @@ mod tauri_app {
                     app.manage(session_info_config.clone());
                     app.manage(chat_authoring_config.clone());
                     app.manage(browser_tools_config.clone());
+                    // The desktop app always serves computer use (its service
+                    // starts below): said now, before any session could be
+                    // started and ask whether to offer the tools.
+                    computer_tools_config.mark_served();
+                    app.manage(computer_tools_config.clone());
                     app.manage(crate::commands::delegation::DelegationSocketPath(
                         socket_path.clone(),
                     ));
@@ -987,6 +1080,7 @@ mod tauri_app {
                     let session_info_for_init = session_info_config.clone();
                     let chat_authoring_for_init = chat_authoring_config.clone();
                     let browser_tools_for_init = browser_tools_config.clone();
+                    let computer_tools_for_init = computer_tools_config.clone();
                     tauri::async_runtime::block_on(async move {
                         delegation_commands::apply_persisted_config(
                             &db_for_init,
@@ -1018,7 +1112,23 @@ mod tauri_app {
                             &browser_tools_for_init,
                         )
                         .await;
+                        crate::commands::computer_tools::apply_persisted_computer_tools_config(
+                            &db_for_init,
+                            &computer_tools_for_init,
+                        )
+                        .await;
                     });
+
+                    // Computer use: the helper, the window table, and the two
+                    // background duties (end every grant when the group is
+                    // switched off; end grants that go unused). Started after
+                    // the persisted settings are applied, so the watcher's
+                    // first view of the switch is the stored one.
+                    let computer_service = crate::commands::computer::ComputerService::start(
+                        crate::commands::computer::ComputerHost::Desktop(app.handle().clone()),
+                        computer_tools_config.clone(),
+                    );
+                    app.manage(computer_service.clone());
 
                     let listener_broker = broker.clone();
                     let listener = crate::acp::delegation::listener::DelegationListener::new(
@@ -1064,6 +1174,9 @@ mod tauri_app {
                                 browser_tools_config.clone(),
                             ),
                         ),
+                        std::sync::Arc::new(crate::commands::computer::McpComputerTools::new(
+                            computer_service,
+                        )),
                     );
                     // Bind through the service handle rather than a bare
                     // `listener.run` spawn: it keeps the bind error and the
@@ -1244,16 +1357,32 @@ mod tauri_app {
                 #[cfg(target_os = "macos")]
                 crate::browser::shim::macos::prefer_detached_inspector();
 
-                // Single-window workspace: ensure the main window exists.
-                // Workspace state (open folders, opened tabs, active tab) is
-                // restored by the frontend via `list_open_folder_details` /
-                // `list_opened_tabs` inside the main window.
+                // The workspace windows open at the last quit come back: the
+                // local one (`main`) and every remote workspace window (see
+                // `workspace_windows`). A `codeg://` link on the command line
+                // asks for the local workspace, which then opens in front
+                // whatever the last session left.
+                let restore = tauri::async_runtime::block_on(workspace_windows::load_restore(
+                    &db.conn,
+                    startup_urls
+                        .iter()
+                        .any(|url| crate::deep_link::parse_deep_link(url).is_some()),
+                    windows::can_hide_to_tray(),
+                ));
+
+                // `main` is always built. Workspace state (open folders, opened
+                // tabs, active tab) is restored by the frontend via
+                // `list_open_folder_details` / `list_opened_tabs` inside it. It
+                // starts hidden only when it was hidden to the tray at quit and
+                // other workspace windows are coming back in its place; the
+                // tray, the dock and a second launch still bring it up.
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App(workspace_path.into());
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                         .title("Codeg")
                         .inner_size(1260.0, 860.0)
-                        .min_inner_size(400.0, 600.0);
+                        .min_inner_size(400.0, 600.0)
+                        .visible(restore.show_local());
                     let builder = windows::apply_platform_window_style(builder);
                     // The workspace title bar is taller than the shared default
                     // (it hosts the tab strips), so nudge the native macOS
@@ -1264,8 +1393,16 @@ mod tauri_app {
                     );
                     if let Ok(w) = builder.build() {
                         windows::post_window_setup(&w);
+                        // The window-state plugin shows a window it remembers as
+                        // visible while the window is being built, whatever the
+                        // builder asked for. That memory can be older than the
+                        // list `restore` came from (it is only saved at exit).
+                        if !restore.show_local() && w.is_visible().unwrap_or(false) {
+                            let _ = w.hide();
+                        }
                     }
                 }
+                workspace_windows::begin_restore(app.handle(), restore);
 
                 #[cfg(all(
                     feature = "browser-child",
@@ -1281,6 +1418,11 @@ mod tauri_app {
             })
             .on_menu_event(|app, event| {
                 let id = event.id().as_ref().to_string();
+
+                #[cfg(target_os = "macos")]
+                if crate::app_menu::handle_event(app, &id) {
+                    return;
+                }
 
                 // Tray menu items act in Rust directly: showing the
                 // workspace and quitting are both pure runtime concerns
@@ -1320,6 +1462,10 @@ mod tauri_app {
             })
             .on_window_event(|window, event| {
                 let label = window.label().to_string();
+
+                // Which workspace windows are open, for the next launch to
+                // reopen.
+                workspace_windows::on_window_event(window, event);
 
                 // A window's browser tabs die with it: child webviews are
                 // destroyed by the platform, owned windows are closed here.
@@ -1384,42 +1530,18 @@ mod tauri_app {
                     }
                 }
 
+                // A quit persists the pet as closed itself, in `shut_down`,
+                // where a spawned save would not outlive the process.
                 if label == "pet"
+                    && !APP_QUITTING.load(Ordering::Relaxed)
                     && matches!(
                         event,
                         tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
                     )
                 {
-                    // Persist `enabled = false` so the next launch doesn't
-                    // race-open the pet before the user asks for it. We
-                    // intentionally do NOT clear `active_pet_id` — the user
-                    // chose that pet, they want it back next time they open
-                    // the window.
                     if let Some(db) = window.app_handle().try_state::<db::AppDatabase>() {
                         let conn = db.conn.clone();
-                        let save = async move {
-                            let _ = crate::commands::pet::pet_save_window_state_core(
-                                &conn,
-                                crate::models::pet::PetWindowStatePatch {
-                                    x: None,
-                                    y: None,
-                                    scale: None,
-                                    always_on_top: None,
-                                    enabled: Some(false),
-                                },
-                            )
-                            .await;
-                        };
-                        // During app shutdown the runtime is about to be torn
-                        // down — a fire-and-forget spawn would lose the save
-                        // and `enabled = true` would survive into the next
-                        // launch. Block here so the write lands before
-                        // ExitRequested returns.
-                        if APP_QUITTING.load(Ordering::Relaxed) {
-                            tauri::async_runtime::block_on(save);
-                        } else {
-                            tauri::async_runtime::spawn(save);
-                        }
+                        tauri::async_runtime::spawn(async move { persist_pet_closed(&conn).await });
                     }
                 }
 
@@ -1448,9 +1570,10 @@ mod tauri_app {
                         //     the running-terminal confirmation below on the
                         //     path for this platform too.
                         //
-                        // ExitRequested itself reaches this branch with
-                        // APP_QUITTING already set — that's the only path
-                        // that should fall through to the cleanup below.
+                        // A close that arrives once a quit is under way (see
+                        // `shut_down`) finds APP_QUITTING set — that's the
+                        // only path that should fall through to the cleanup
+                        // below.
                         if !APP_QUITTING.load(Ordering::Relaxed) {
                             api.prevent_close();
                             handle_main_close_request(window, &label);
@@ -1478,6 +1601,7 @@ mod tauri_app {
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
                 browser_commands::browser_set_bounds,
+                browser_commands::browser_set_window_viewport,
                 browser_commands::browser_set_visible,
                 browser_commands::browser_freeze_frame,
                 browser_commands::browser_navigate,
@@ -1533,6 +1657,14 @@ mod tauri_app {
                 conversations::update_conversation_status,
                 conversations::update_conversation_title,
                 conversations::update_conversation_pinned,
+                conversation_tags::list_conversation_tags,
+                conversation_tags::create_conversation_tag,
+                conversation_tags::update_conversation_tag,
+                conversation_tags::delete_conversation_tag,
+                conversation_tags::reorder_conversation_tags,
+                conversation_tags::update_conversation_tags,
+                conversation_tags::get_conversation_branch_tag,
+                conversation_tags::update_conversation_branch_tag,
                 conversations::delete_conversation,
                 folders::load_folder_history,
                 folders::get_folder,
@@ -1560,6 +1692,10 @@ mod tauri_app {
                 folder_links::rename_folder_link,
                 folder_links::repair_folder_link,
                 folder_links::remove_folder_link,
+                canvas_commands::canvas_list_boards,
+                canvas_commands::canvas_create_board,
+                canvas_commands::canvas_update_board,
+                canvas_commands::canvas_delete_board,
                 canvas_commands::canvas_list_nodes,
                 canvas_commands::canvas_create_node,
                 canvas_commands::canvas_group_into_region,
@@ -1659,6 +1795,7 @@ mod tauri_app {
                 remote_workspace_commands::get_remote_workspace_connection,
                 remote_workspace_commands::reorder_remote_workspace_connections,
                 remote_workspace_commands::open_remote_workspace,
+                workspace_windows::take_workspace_restore_failures,
                 remote_proxy_commands::remote_http_call,
                 remote_proxy_commands::remote_upload_attachment,
                 remote_proxy_commands::remote_upload_workspace_paths,
@@ -1750,6 +1887,28 @@ mod tauri_app {
                 chat_authoring_commands::set_chat_authoring_settings,
                 crate::commands::browser_tools::get_browser_tools_settings,
                 crate::commands::browser_tools::set_browser_tools_settings,
+                crate::commands::computer_tools::get_computer_tools_settings,
+                crate::commands::computer_tools::set_computer_tools_settings,
+                crate::commands::computer_tools::set_computer_tools_enabled,
+                crate::commands::computer_tools::set_computer_tools_preferences,
+                crate::commands::computer::computer_status,
+                crate::commands::computer::computer_request_permission,
+                crate::commands::computer::computer_open_permission_settings,
+                crate::commands::computer::computer_reveal_helper,
+                crate::commands::computer::computer_list_shareable_windows,
+                crate::commands::computer::computer_window_thumbnail,
+                crate::commands::computer::computer_share_window,
+                crate::commands::computer::computer_share_windows,
+                crate::commands::computer::computer_share_app,
+                crate::commands::computer::computer_share_screen,
+                crate::commands::computer::computer_revoke_all,
+                crate::commands::computer::computer_stop,
+                crate::commands::computer::computer_shared_state,
+                crate::commands::computer::computer_stop_key_status,
+                crate::commands::computer::computer_indicator_fit,
+                crate::commands::computer::computer_driver_info,
+                crate::commands::computer::computer_driver_install,
+                crate::commands::computer::computer_driver_uninstall,
                 version_control::detect_git,
                 version_control::test_git_path,
                 version_control::get_git_settings,
@@ -1793,6 +1952,7 @@ mod tauri_app {
                 acp_commands::acp_download_agent_binary,
                 acp_commands::acp_install_uv_tool,
                 acp_commands::acp_detect_agent_local_version,
+                acp_commands::acp_fetch_agent_latest_release,
                 acp_commands::acp_prepare_npx_agent,
                 acp_commands::acp_uninstall_agent,
                 acp_commands::acp_update_agent_preferences,
@@ -1805,6 +1965,7 @@ mod tauri_app {
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
                 acp_commands::acp_update_pi_config,
                 acp_commands::acp_load_pi_config,
+                acp_commands::acp_list_pi_model_capabilities,
                 acp_commands::acp_validate_pi_command,
                 acp_commands::acp_sync_antigravity_settings,
                 acp_commands::acp_antigravity_login_start,
@@ -2032,27 +2193,8 @@ mod tauri_app {
             .build(tauri::generate_context!())
             .expect("error while building tauri application")
             .run(|app, event| match event {
-                tauri::RunEvent::ExitRequested { .. } => {
-                    APP_QUITTING.store(true, Ordering::Relaxed);
-                    // Drop the desktop pet alongside the workspace so it
-                    // never outlives a real quit. Tauri also tears down all
-                    // windows on shutdown, but doing it explicitly here lets
-                    // the pet's CloseRequested handler persist `enabled = false`
-                    // before the runtime races to exit.
-                    if let Some(pet) = app.get_webview_window("pet") {
-                        let _ = pet.close();
-                    }
-                    if let Some(ws) = app.try_state::<web::WebServerState>() {
-                        tauri::async_runtime::block_on(web::do_stop_web_server(&ws));
-                    }
-                    if let Some(tm) = app.try_state::<TerminalManager>() {
-                        tm.kill_all();
-                    }
-                    crate::office_watch::stop_all_office_watches();
-                    if let Some(cm) = app.try_state::<ConnectionManager>() {
-                        tauri::async_runtime::block_on(cm.disconnect_all());
-                    }
-                }
+                // Some quits only ever reach `Exit`; see `shut_down`.
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => shut_down(app),
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
                     // Dock-icon click: bring the workspace forward

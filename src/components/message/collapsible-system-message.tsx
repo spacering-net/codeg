@@ -11,16 +11,19 @@ import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { ContentPartsRenderer } from "./content-parts-renderer"
 
 /**
- * System-role messages — in practice Claude Code's post-`/compact` continuation
- * summary, which the parser retags from `user` to `system`
- * (`is_context_continuation` in `parsers/claude.rs`).
+ * System-role messages — context a transcript injected that nobody typed, e.g.
+ * pi's branch summary or Qoder's compaction summary. A Claude Code continuation
+ * summary lands here only when it finds no compaction divider to fold into;
+ * whenever one is waiting the parser folds it into the divider's "Summary"
+ * toggle instead (see `compaction_summary_slot` in `parsers/claude.rs`).
  *
  * Shows a *preview* rather than hiding the body behind a shut accordion: these
- * summaries are the only record of what the pre-compaction context held, so the
- * first screenful is worth reading in place. Same clamp-then-toggle affordance
- * as the sibling plan card (`PlanMarkdownCard`) and user messages, shared via
- * `useCollapsibleOverflow` — identical `max-h-72`, bottom fade while clipped,
- * and a footer toggle that only appears once the body is actually cut off.
+ * summaries are often the only record of what the context they replaced held,
+ * so the first screenful is worth reading in place. Same clamp-then-toggle
+ * affordance as the sibling plan card (`PlanMarkdownCard`) and user messages,
+ * shared via `useCollapsibleOverflow` — identical `max-h-72`, bottom fade while
+ * clipped, and a footer toggle that only appears once the body is actually cut
+ * off.
  *
  * Takes `parts` rather than the whole `ResolvedMessageGroup` so this module
  * doesn't have to import back from `message-list-view` (its only caller).

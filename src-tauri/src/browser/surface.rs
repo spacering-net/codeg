@@ -8,7 +8,7 @@
 use tauri::Url;
 
 use super::surface_window;
-use super::types::{Bounds, SurfaceKind};
+use super::types::{Bounds, SurfaceKind, ViewportSize};
 
 #[cfg(all(
     feature = "browser-child",
@@ -48,6 +48,24 @@ pub enum PointerGesture {
         /// 1 for a click, 2 for a double click.
         count: u8,
     },
+}
+
+/// The page zoom a geometry pass gives an embedded surface, from what the
+/// frontend wants (`Some` while the tab emulates a device, `None` while the
+/// zoom is not ours) and what was last applied for it. `None` = leave the
+/// page's zoom as it is.
+///
+/// A device's zoom is reasserted on every pass, not only when it changed: the
+/// person can zoom a page (WebView2's Ctrl+wheel), and the device's width is
+/// what the page has to lay out at. A desktop tab's zoom is never touched —
+/// that is the person's — except once, to give a page that was zoomed for a
+/// device its own size back.
+pub fn page_zoom_to_apply(wanted: Option<f64>, applied: Option<f64>) -> Option<f64> {
+    match (wanted, applied) {
+        (Some(zoom), _) => Some(zoom),
+        (None, Some(_)) => Some(1.0),
+        (None, None) => None,
+    }
 }
 
 impl From<tauri::Error> for SurfaceError {
@@ -331,6 +349,45 @@ impl BrowserSurface {
         per_surface!(self, child: |c| Ok(c.zoom(factor)?), window: |w| Ok(w.set_zoom(factor)?))
     }
 
+    /// Apply the bounds and page zoom the registry holds for this tab, as
+    /// they stand when the main thread gets to it (see
+    /// `ChildHandle::sync_geometry`). Embedded surfaces only: an owned window
+    /// keeps whatever size and position the user gave it, and is sized to an
+    /// emulated device rather than zoomed (`set_window_inner_size`).
+    pub fn sync_geometry(&self) -> Result<(), SurfaceError> {
+        per_surface!(self, child: |c| Ok(c.sync_geometry()?), window: |_w| Ok(()))
+    }
+
+    /// An owned window's content size, in logical pixels. `None` for an
+    /// embedded surface, whose size is its bounds.
+    pub fn window_inner_size(&self) -> Result<Option<ViewportSize>, SurfaceError> {
+        per_surface!(self,
+            child: |_c| Ok(None),
+            window: |w| {
+                let scale = w.scale_factor()?;
+                let size = w.inner_size()?.to_logical::<f64>(scale);
+                Ok(Some(ViewportSize { width: size.width, height: size.height }))
+            })
+    }
+
+    /// Size an owned window's content to `size`, letting it go no smaller
+    /// than `min` by hand. Nothing for an embedded surface.
+    pub fn set_window_inner_size(
+        &self,
+        size: ViewportSize,
+        min: ViewportSize,
+    ) -> Result<(), SurfaceError> {
+        per_surface!(self,
+            child: |_c| { let _ = (size, min); Ok(()) },
+            window: |w| {
+                // The floor first: a size below the current floor would be
+                // refused, and a raised floor is met by the size that follows.
+                w.set_min_size(Some(tauri::LogicalSize::new(min.width, min.height)))?;
+                w.set_size(tauri::LogicalSize::new(size.width, size.height))?;
+                Ok(())
+            })
+    }
+
     /// Wipe cookies, caches and storage. Every tab shares one data store, so
     /// clearing through any surface clears them all.
     pub fn clear_browsing_data(&self) -> Result<(), SurfaceError> {
@@ -346,5 +403,25 @@ impl BrowserSurface {
         per_surface!(self,
             child: |c| Ok(c.refresh_user_agent()?),
             window: |w| surface_window::refresh_user_agent(w))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_zoom_to_apply;
+
+    #[test]
+    fn a_device_owns_the_zoom_and_gives_it_back_once() {
+        // Emulating: the device's zoom, every pass — even when it is what was
+        // applied last, since the person may have zoomed the page since.
+        assert_eq!(page_zoom_to_apply(Some(0.5), None), Some(0.5));
+        assert_eq!(page_zoom_to_apply(Some(0.5), Some(0.75)), Some(0.5));
+        assert_eq!(page_zoom_to_apply(Some(0.5), Some(0.5)), Some(0.5));
+        // A device at its own size is still a device: 1, reasserted.
+        assert_eq!(page_zoom_to_apply(Some(1.0), None), Some(1.0));
+        // Back on the desktop: the page's own size, once…
+        assert_eq!(page_zoom_to_apply(None, Some(0.5)), Some(1.0));
+        // …and after that the zoom is the person's to keep.
+        assert_eq!(page_zoom_to_apply(None, None), None);
     }
 }

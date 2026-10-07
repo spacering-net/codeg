@@ -5,6 +5,7 @@ pub mod cline;
 pub mod codebuddy;
 pub mod codex;
 pub mod codex_code_mode;
+mod codex_desktop_attachments;
 pub mod cursor;
 pub mod deepseek;
 pub mod gemini;
@@ -13,6 +14,7 @@ pub mod hermes;
 pub mod kimi_code;
 pub mod openclaw;
 pub mod opencode;
+mod opencode_context_window;
 pub mod pi;
 pub mod qoder;
 mod summary_cache;
@@ -1005,7 +1007,8 @@ pub fn latest_turn_total_usage_tokens(turns: &[MessageTurn]) -> Option<u64> {
 /// Deliberately NOT [`latest_turn_total_usage_tokens`], which adds
 /// `output_tokens` too: for this counter shape the reply is not resident in the
 /// prompt window that produced it, so including it over-reports the gauge by
-/// the last turn's output. Claude Code and Qoder both write this shape.
+/// the last turn's output. Claude Code, Qoder and OpenCode all write this
+/// shape (OpenCode's `tokens.input` already has the cached part taken out).
 pub fn latest_turn_prompt_usage_tokens(turns: &[MessageTurn]) -> Option<u64> {
     turns.iter().rev().find_map(|turn| {
         turn.usage.as_ref().and_then(|usage| {
@@ -1086,6 +1089,46 @@ pub fn with_reported_context_percent(
             context_window_usage_percent: Some(percent),
         }),
     }
+}
+
+/// `_meta` key claiming that a context-compaction call's result IS the summary
+/// the agent kept of the history it dropped.
+///
+/// The live reader stamps it on every call it translates from the ACP
+/// compaction lifecycle (`acp::connection::session_compaction_event`); a history
+/// parser stamps it through [`attach_compaction_summary`] on a divider whose
+/// summary its transcript still holds. Codeg-namespaced (like
+/// `codeg.delegation`) rather than nested in `contextCompaction`, whose members
+/// are the adapters' reserved vocabulary. The frontend twin is
+/// `COMPACTION_SUMMARY_META_KEY` in `src/lib/context-compaction.ts`, which shows
+/// a compaction call's output as its summary only under this claim.
+pub(crate) const COMPACTION_SUMMARY_META_KEY: &str = "codeg.compactionSummary";
+
+/// Hand a synthesized compaction divider — the `_meta.contextCompaction`
+/// ToolUse and its paired ToolResult that every parser emits for a compaction —
+/// the summary its agent retained, so the reopened divider opens onto the same
+/// "Summary" the live one does: the result carries the text, the call carries
+/// the claim.
+///
+/// Returns `false`, touching nothing, unless `blocks` is such a pair still
+/// waiting for its summary; a divider takes exactly one.
+pub(crate) fn attach_compaction_summary(blocks: &mut [ContentBlock], summary: String) -> bool {
+    let [ContentBlock::ToolUse {
+        meta: Some(serde_json::Value::Object(meta)),
+        ..
+    }, ContentBlock::ToolResult { output_preview, .. }] = blocks
+    else {
+        return false;
+    };
+    if !meta.contains_key("contextCompaction") || output_preview.is_some() {
+        return false;
+    }
+    meta.insert(
+        COMPACTION_SUMMARY_META_KEY.to_string(),
+        serde_json::Value::Bool(true),
+    );
+    *output_preview = Some(summary);
+    true
 }
 
 /// Relocate orphaned tool_result blocks to the turn that contains their matching tool_use.

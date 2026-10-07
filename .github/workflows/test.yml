@@ -86,14 +86,14 @@ jobs:
             # need for webkit/appindicator system libs. `--lib` skips
             # integration tests for `cargo test`, so `test-utils` is not
             # required here.
-            cargo_args: "--no-default-features --bin codeg-server --lib"
+            cargo_args: "--no-default-features --features server-bin --bin codeg-server --lib"
             # Server clippy intentionally skips `--all-targets`: integration
             # tests are already linted in the desktop cells, and pulling
             # them in here would force `test-utils` (a test-only feature)
             # into the server build matrix. Lint scope here is lib + the
             # codeg-server binary, which is exactly the cfg-gated surface
             # that this cell exists to verify.
-            clippy_args: "--no-default-features --bin codeg-server --lib"
+            clippy_args: "--no-default-features --features server-bin --bin codeg-server --lib"
     steps:
       - uses: actions/checkout@v4
 

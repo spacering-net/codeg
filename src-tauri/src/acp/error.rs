@@ -78,6 +78,16 @@ pub enum AcpError {
     /// and points at the agent's own settings panel, which knows the path.
     #[error("{0}")]
     AgentAuthRequired(String),
+    /// The agent launched, but its own runtime is too old for the ACP adapter
+    /// codeg pins, so no session can open. pi is the case today: pi-acp asks pi
+    /// for the current model's thinking levels while opening every session, and
+    /// a pi that predates that RPC answers `Unknown command`. Recognised from that
+    /// answer rather than predicted from a version string (see
+    /// `acp::connection::pi_runtime_is_outdated`). Carries codeg's upgrade
+    /// instructions — which version is needed and how to get it — shown as the
+    /// notification's detail under the localized headline.
+    #[error("{0}")]
+    AgentRuntimeOutdated(String),
 }
 
 impl AcpError {
@@ -132,6 +142,7 @@ impl AcpError {
             Self::ConnectionNotFound(_) => Some("connection_not_found"),
             Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
             Self::AgentAuthRequired(_) => Some("agent_auth_required"),
+            Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
             Self::Protocol(_) => None,
         }
     }

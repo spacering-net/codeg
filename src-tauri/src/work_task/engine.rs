@@ -3360,9 +3360,11 @@ impl TaskEngine {
         }
         self.emit_upsert(task_id);
         // The third settlement gets a comment too: the setting promises one
-        // whenever a forge task finishes, and "accepted, nothing to land" is
-        // an outcome the issue's readers want as much as the other two. The
-        // CAS above is what makes it one comment and not one per attempt.
+        // whenever a forge task finishes, and a task that landed nothing is an
+        // outcome the thread's readers want as much as the other two — told as
+        // what did not happen to their item, never as "accepted" (see
+        // `writeback_comment_body`). The CAS above is what makes it one comment
+        // and not one per attempt.
         self.spawn_forge_writeback(task_id, WritebackOutcome::Accepted { nothing_to_land });
 
         if live_wt.is_none() {
@@ -4825,7 +4827,9 @@ impl TaskEngine {
                 nothing_to_land: *nothing_to_land,
             },
         };
-        let body = writeback_comment_body(task_id, &outcome, stats);
+        // Where it is posted shapes what it may say: a pull request's thread
+        // hears what happened to that pull request, in its forge's own noun.
+        let body = writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats);
 
         let ctx = DeliveryCtx {
             conn: &self.db.conn,
@@ -10585,6 +10589,40 @@ mod tests {
             (ForgeItemKind::Change, 7),
             "the comment belongs on the pull request the task came from"
         );
+    }
+
+    /// Completing a pull-request task that pushed nothing — a review-only
+    /// report, or a review that stopped at an unsound approach — must not tell
+    /// the pull request's thread it was "accepted". That is codeg's word for
+    /// signing off on the TASK; on a pull request it reads as approval of the
+    /// change, which may be the opposite of what the review found. The thread
+    /// hears what happened to its pull request: nothing was pushed to it.
+    #[tokio::test]
+    async fn completing_a_pull_request_task_tells_its_thread_nothing_was_pushed() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The pull request's head IS the task branch's head: the task made no
+        // changes of its own, which is when the board offers "complete".
+        let pr = open_pull(&f.head, "feature", "acme/app");
+        as_pull_request_task(&f, pr).await;
+        enable_writeback(&f).await;
+
+        f.engine
+            .complete_task(f.task_id, false)
+            .await
+            .expect("completed with nothing to push");
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(comments.len(), 1, "one settle, one comment");
+        let (kind, number, body) = &comments[0];
+        assert_eq!((*kind, *number), (ForgeItemKind::Change, 7));
+        assert!(body.contains("nothing was pushed to this pull request"), "{body}");
+        assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
     }
 
     /// The comment is a fact sheet: the link and the counters. Nothing the

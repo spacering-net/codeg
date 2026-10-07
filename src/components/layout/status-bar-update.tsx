@@ -25,7 +25,7 @@ const ReleaseNotes = dynamic(
   { ssr: false }
 )
 
-const RELEASES_URL = "https://github.com/xintaofei/codeg/releases/latest"
+const RELEASES_URL = "https://github.com/spacering-net/codeg/releases/latest"
 
 function Spinner({ className }: { className?: string }) {
   return (

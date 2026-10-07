@@ -60,6 +60,7 @@ import {
   BrowserAgentActivityControl,
   BrowserAgentShareControl,
 } from "./browser-agent-access"
+import { BrowserDeviceMenu } from "./browser-device-menu"
 import { BrowserSendToChatControl } from "./browser-page-handoff"
 import { ICON_BTN } from "./browser-toolbar-buttons"
 
@@ -410,6 +411,9 @@ export function BrowserToolbar({
         <BrowserAgentActivityControl tab={tab} />
         <BrowserSendToChatControl tab={tab} state={state} />
       </div>
+      {/* Right of the field: it changes how the page in it is laid out, not
+          which page it is, so it is the first thing after the address. */}
+      <BrowserDeviceMenu tab={tab} />
       {/* A remote tab lives in its connection's profile, which is no
           choice of the person's and no place to open the page in another. */}
       {tab.browser.remote === true ? null : (

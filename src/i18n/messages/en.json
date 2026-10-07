@@ -53,7 +53,8 @@
       "office_tools": "Office Tools",
       "skill_packs": "Skill Packs",
       "collaboration": "Collaboration",
-      "browser": "Browser",
+      "browser": "Browser Use",
+      "computer_use": "Computer Use",
       "quick_messages": "Quick Messages",
       "logs": "Runtime Logs"
     }
@@ -722,13 +723,6 @@
     "emptyNoAgent": "No available agent.",
     "configManagement": "Config Management",
     "envVars": "Environment Variables",
-    "adapterChannel": {
-      "label": "Adapter version",
-      "description": "Install and Upgrade use the version codeg has reviewed and pinned. Latest switches them to the package's newest npm release at that moment; if installing it fails, codeg falls back to the pinned version and notes it in the install log.",
-      "pinned": "Pinned (recommended)",
-      "latest": "Latest (unreviewed)",
-      "latestWarning": "Newest releases are unreviewed and can break this agent in codeg, and occasionally a release is known broken. Version Status shows what is actually installed."
-    },
     "hostTools": {
       "label": "Let the agent handle files and commands",
       "description": "codeg stops serving file access and terminal commands, so the agent runs them in its own process — where its own sandbox and permission rules apply. Delegating to other agents is also turned off, since that would route the same work back through codeg. codeg adds no sandbox itself, so turn this on only if the agent has one configured."
@@ -799,6 +793,7 @@
       "saveCodeBuddyConfig": "Save CodeBuddy Config",
       "saveKimiCodeConfig": "Save Kimi Code Config",
       "customInstall": "Custom install",
+      "upgradeToLatest": "Upgrade to unreviewed latest {version}",
       "saveKimiCodeRawConfig": "Save config.toml",
       "saveDeepSeekConfig": "Save DeepSeek Config",
       "diagnose": "Diagnose"
@@ -1046,9 +1041,9 @@
       "sandboxMode_read-only": "Read-only",
       "sandboxMode_workspace-write": "Workspace write",
       "sandboxMode_danger-full-access": "Full access (no sandbox)",
-      "sandboxModeReadOnlyAcpWarning": "The ACP adapter no longer ships a read-only sandbox, so codeg sessions run workspace-writable whatever this says. codeg picks the strictest preset it can — every escalation comes to you for approval — but edits inside the workspace no longer need one. codex CLI and IDE sessions still honor read-only.",
+      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7–1.13 ship no read-only sandbox: on those adapter versions a codeg session runs workspace-writable whatever this says, with every escalation still coming to you. codex-acp 2.0 restored it, so update the adapter if an older one is installed. codex CLI and IDE sessions always honor read-only.",
       "sandboxModeHint": "On Windows, workspace write is downgraded to read-only unless codex's experimental Windows sandbox is enabled.",
-      "sandboxModeSeedsPresetHint": "codeg also maps this onto the session's starting approval preset, so unlike approval policy it does reach ordinary prompts. Note that the adapter's default preset now has a model pre-screen escalations and forward only what it judges unsafe; pick \"Ask for approval\" in the composer to review every one yourself. The composer's preset always overrides this.",
+      "sandboxModeSeedsPresetHint": "codeg also maps this onto the session's starting approval preset, so unlike approval policy it does reach ordinary prompts. read-only starts in \"Read-only\". With approval policy never, danger-full-access starts in \"Full access\" and workspace-write in \"Auto review\", where a model pre-screens escalations and forwards only what it judges unsafe. With any other approval policy, workspace-write and danger-full-access start in \"Workspace access\", which brings every escalation to you, on codex-acp 2.0 and later, and in \"Auto review\" on older adapters. Unset leaves the adapter's default, \"Auto review\". The composer's preset always overrides this.",
       "writableRootsLabel": "Extra writable folders",
       "writableRootsHint": "One absolute path per line, in addition to the working directory.",
       "sandboxRootsRelativeError": "Must be an absolute path — codex resolves relative entries against ~/.codex: {path}",
@@ -1385,6 +1380,7 @@
       "haikuDefaultModel": "Default Haiku Model",
       "sonnetDefaultModel": "Default Sonnet Model",
       "opusDefaultModel": "Default Opus Model",
+      "fableDefaultModel": "Default Fable Model",
       "customModelOption": "Custom Model ID",
       "customModelOptionName": "Custom Model Name",
       "customModelOptionDescription": "Custom Model Description",
@@ -1403,7 +1399,9 @@
       "customInstallDescription": "Enter the version to install. This reinstalls and replaces the currently installed version.",
       "customInstallVersionLabel": "Version number",
       "customInstallInvalid": "Enter a valid version number, e.g. 1.2.3.",
-      "customInstallSubmit": "Install"
+      "customInstallSubmit": "Install",
+      "confirmUpgradeToLatest": "Upgrade {name} to unreviewed {version}?",
+      "confirmUpgradeToLatestDescription": "This release hasn't been reviewed by codeg. It can break {name} in codeg, and occasionally a release is known broken. To go back, use Custom install to reinstall the recommended version {recommendedVersion}."
     },
     "errors": {
       "windowsFileLocked": "{name}'s files are in use by a running session, so Windows can't replace them. Close all {name} sessions and try again.",
@@ -1492,7 +1490,7 @@
     "version": {
       "statusLabel": "Version Status",
       "notInstalled": "Not installed",
-      "remoteLocal": "Remote: {remoteVersion} · Local: {localVersion}",
+      "recommendedLocal": "Recommended: {recommendedVersion} · Local: {localVersion}",
       "localOnly": "Local: {localVersion}",
       "localInstalled": "{versionText}. Installed.",
       "platformUnsupported": "{versionText}. Current platform does not support this agent.",
@@ -1500,9 +1498,9 @@
       "clickInstall": "{versionText}. Click Install on the right.",
       "localUnrecognized": "{versionText}. Local version is not comparable; try upgrade to overwrite install.",
       "upgradeAvailable": "{versionText}. Upgrade available.",
-      "remoteUnavailable": "{versionText}. Remote version is currently unavailable.",
+      "recommendedUnavailable": "{versionText}. No recommended version is available.",
       "latest": "{versionText}. Already latest.",
-      "latestChannel": "{versionText}. Latest channel is on; Upgrade installs the newest release."
+      "unreviewedAvailable": "{versionText}. A newer, unreviewed release is available."
     },
     "adapter": {
       "label": "ACP adapter",
@@ -1552,7 +1550,8 @@
         "medium": "Medium",
         "high": "High",
         "minimal": "Minimal",
-        "xhigh": "Extra high"
+        "xhigh": "Extra high",
+        "max": "Max"
       },
       "apiKeyLabel": "API Key",
       "apiKeyHint": "Stored in ~/.pi/agent/auth.json for the selected provider.",
@@ -1566,7 +1565,9 @@
       "modeCustom": "Custom pi",
       "modeCustomHint": "Run your own pi build, install, or wrapper.",
       "commandLabel": "pi command or path",
-      "commandHint": "An absolute path, a command name on PATH, or a wrapper script (e.g. a monorepo ./pi-test.sh).",
+      "commandHint": "Use an absolute path or a command name on PATH.",
+      "relativeCommandPath": "Use an absolute Pi command path or a command name on PATH.",
+      "relativeAgentDir": "Use an absolute Pi agent directory or ~/...; relative directories differ between workspaces.",
       "commandNotFound": "Command not found",
       "validate": "Validate",
       "advanced": "Advanced",
@@ -1607,7 +1608,14 @@
       "levelsEmptyError": "Pick at least one level — with none, pi falls back to Off.",
       "wireValuesTitle": "Advanced: values sent to the provider",
       "wireValuesHint": "Leave blank to send the level name as-is. Set one when your endpoint expects something else — Google-style backends want LOW / HIGH.",
-      "defaultLevelUnlisted": "This level isn't in the available list above — pi would clamp it."
+      "defaultLevelUnlisted": "This level isn't in the available list above — pi would clamp it.",
+      "modelLevels": "{model} offers: {levels}.",
+      "modelNoThinking": "{model} has no thinking levels — Pi always runs it with thinking off.",
+      "levelClamped": "{model} doesn't offer {level}, so Pi runs it at {effective}. Models that offer {level} still get it.",
+      "modelNotListed": "Pi doesn't list this model for this provider. Check the model ID — Pi only lists providers it has an API key or login for.",
+      "catalogUnavailable": "Couldn't ask Pi which thinking levels this model offers.",
+      "configLoadFailed": "Couldn't read Pi's settings: {message}",
+      "runtimeTooOld": "This Pi is too old: Codeg needs Pi {min} or newer to open a session. Update it first."
     },
     "addCustomAgent": "Add custom agent",
     "addCustomAgentHint": "Register any ACP-compatible agent. Pick one from the public ACP registry, or paste its registry information.",
@@ -1991,7 +1999,7 @@
       "tasks": "To-dos",
       "loadingSubsessions": "Loading sub-conversations…",
       "forge": "Repository panel",
-      "canvas": "Infinite Conversations",
+      "canvas": "Infinite Canvas",
       "folderGroup": {
         "newGroup": "New group",
         "newGroupTitle": "New folder group",
@@ -2007,7 +2015,12 @@
         "removeFromGroup": "No group",
         "newGroupAndMove": "New group…",
         "dropToUngroup": "Drop here to remove from group"
-      }
+      },
+      "recentFilterAll": "All",
+      "recentFilterTitle": "Show in Recent: {filter}",
+      "noRecentChats": "No recent chats",
+      "noRecentFolders": "No recent folder conversations",
+      "recentFilterMenuLabel": "Show in Recent"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -3025,7 +3038,7 @@
           "downloadFailed": "{agent} download failed: {message}",
           "sessionLoadResourceNotFound": "{agent} session failed to load. Reload to retry, or start a new conversation.",
           "sessionLoadUnavailable": "{agent} couldn't restore this session — it may have ended or the agent stopped. Reload to retry, or start a new conversation.",
-          "sessionLoadBusy": "This history is held open by the session forked from it. Close that session, then reload to open this one.",
+          "sessionLoadBusy": "This session is open elsewhere. If another {agent} client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload. If you just forked it, reload in about a minute.",
           "sessionArchived": "The previous session was archived on the {agent} side. Run {command} in a terminal to restore it and reload, or start a new conversation.",
           "turnFailedRefusal": "{agent} refused to continue this turn. This often indicates a backend or gateway error — check the agent's logs.",
           "turnFailedMaxTokens": "{agent} reached the maximum token limit for this turn.",
@@ -3033,6 +3046,7 @@
           "turnFailedUnknown": "{agent} ended the turn with an unrecognized stop reason.",
           "turnFailedAuthRequired": "{agent} needs you to sign in again before it can run this turn. Sign in from Settings, then send the message again.",
           "agentAuthRequired": "{agent} could not start a session: it has no usable credential. Sign in again from Settings → Agents → {agent}, then reopen this conversation.",
+          "agentRuntimeOutdated": "{agent} is too old for this version of Codeg. Update it, then reopen this conversation.",
           "grokModelSwitchIncompatibleAgent": "{agent} can't switch to that model in an existing conversation. Start a new session to use it.",
           "setModeFailed": "{agent} couldn't switch modes.",
           "setConfigOptionFailed": "{agent} couldn't apply that setting.",
@@ -3063,7 +3077,8 @@
           "httpStatus": " (HTTP {status})"
         },
         "configOptionAdjusted": "{agent} set {option} to {actual} instead of {requested}",
-        "noticeTitle": "{agent}: {title}"
+        "noticeTitle": "{agent}: {title}",
+        "pluginLoadFailedTitle": "{agent} couldn't load {count, plural, one {# plugin} other {# plugins}}"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3701,7 +3716,22 @@
           "outputMissing": "Codex truncated the script output and dropped this command's separator, so none of the output could be attributed to it.",
           "sharedWith": "Also contains the output of {commands} — codex truncated their separators away.",
           "truncated": "truncated"
-        }
+        },
+        "visualizeTitle": "Visualization",
+        "visualizeWide": "Wide",
+        "visualizeLoading": "Loading visualization…",
+        "visualizeError": "Could not load the visualization",
+        "visualizeReload": "Reload",
+        "visualizeOpenFile": "Open file",
+        "visualizeExpand": "Show all",
+        "visualizeCollapse": "Show less",
+        "visualizeScriptsOn": "Scripts on",
+        "visualizeScriptsOff": "Enable scripts",
+        "visualizeScriptsHint": "Run the visualization's scripts so it is interactive. It runs in a sandbox and cannot reach the network or your files.",
+        "visualizeFrameTitle": "Codex visualization",
+        "htmlPreviewOpen": "Preview",
+        "htmlPreviewOpenAria": "Preview {name}",
+        "htmlPreviewHide": "Hide preview"
       },
       "messageNav": {
         "title": "Message navigation",
@@ -4089,7 +4119,8 @@
     "none": "No branches",
     "local": "Local",
     "remote": "Remote",
-    "useCustom": "Use \"{query}\""
+    "useCustom": "Use \"{query}\"",
+    "head": "HEAD"
   },
   "ChatChannelSettings": {
     "loading": "Loading...",
@@ -4245,13 +4276,14 @@
     "agentTypeRequired": "Agent type is required.",
     "agentTypeImmutableHint": "Agent type cannot be changed after creation.",
     "model": "Model",
-    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Main Model",
     "claudeReasoningModel": "Reasoning Model (thinking)",
     "claudeHaikuDefaultModel": "Default Haiku Model",
     "claudeSonnetDefaultModel": "Default Sonnet Model",
     "claudeOpusDefaultModel": "Default Opus Model",
+    "claudeFableDefaultModel": "Default Fable Model",
     "claudeCustomModelOption": "Custom Model ID",
     "claudeCustomModelOptionName": "Custom Model Name",
     "claudeCustomModelOptionDescription": "Custom Model Description",
@@ -4518,6 +4550,97 @@
       "deleted": "Quick message deleted"
     }
   },
+  "ConversationTags": {
+    "tags": "Tags",
+    "moreTags": "{count, plural, one {# more tag} other {# more tags}}",
+    "addTags": "Add tags",
+    "editTags": "Edit tags",
+    "global": "Global",
+    "noTagsYet": "No tags yet",
+    "newTag": "New tag…",
+    "manageTags": "Manage tags…",
+    "branchChip": "Branch: {branch}",
+    "picker": {
+      "searchPlaceholder": "Search or create a tag…",
+      "noResults": "No matching tags",
+      "empty": "No tags yet. Type a name to create one.",
+      "createGlobal": "Create global tag “{name}”",
+      "createInFolder": "Create “{name}” in {folder}",
+      "otherFolders": "Other folders"
+    },
+    "form": {
+      "createTitle": "New tag",
+      "editTitle": "Edit tag",
+      "name": "Name",
+      "namePlaceholder": "e.g. bug, review, idea",
+      "color": "Color",
+      "customColor": "Custom color",
+      "scope": "Available in",
+      "scopeGlobal": "Every conversation",
+      "scopeFolder": "{folder} only",
+      "create": "Create",
+      "save": "Save",
+      "cancel": "Cancel"
+    },
+    "editor": {
+      "empty": "No tags here yet.",
+      "add": "New tag",
+      "edit": "Edit tag “{name}”",
+      "delete": "Delete tag “{name}”",
+      "dragToReorder": "Drag to reorder “{name}”",
+      "deleteTitle": "Delete this tag?",
+      "deleteDescription": "“{name}” will be taken off every conversation that has it. This can't be undone.",
+      "deleteConfirm": "Delete",
+      "deleteCancel": "Cancel",
+      "loadFailed": "Couldn't load tags"
+    },
+    "manager": {
+      "title": "Manage tags",
+      "description": "Label conversations with colored tags, then filter the sidebar by them.",
+      "branchTitle": "Branch tag",
+      "branchDescription": "Show the git branch each conversation started on as a tag after its title.",
+      "branchShow": "Show",
+      "branchLoadFailed": "Couldn't load the branch tag setting",
+      "globalTitle": "Global tags",
+      "globalDescription": "Available on every conversation, chat mode included.",
+      "folderTitle": "Folder tags",
+      "folderDescription": "Available only on the chosen folder's conversations, its worktrees included.",
+      "folderPlaceholder": "Choose a folder",
+      "noFolders": "No folders yet. Open one in the workspace to give it its own tags."
+    },
+    "filter": {
+      "button": "Filter by tags",
+      "searchPlaceholder": "Search tags…",
+      "match": "Match",
+      "matchAny": "Any",
+      "matchAll": "All",
+      "matchAnyHint": "Conversations with at least one of the selected tags",
+      "matchAllHint": "Conversations with every selected tag",
+      "modeAll": "Match all",
+      "modeAny": "Match any",
+      "clear": "Clear filter",
+      "noTags": "No tags yet. Add one from a conversation's menu.",
+      "noResults": "No matching tags",
+      "active": "Filtered by tags",
+      "noMatches": "No conversations with these tags",
+      "remove": "Remove “{name}” from the filter"
+    },
+    "toasts": {
+      "assignFailed": "Couldn't update the conversation's tags",
+      "createFailed": "Couldn't create the tag",
+      "deleteFailed": "Couldn't delete the tag",
+      "reorderFailed": "Couldn't save the tag order",
+      "branchTagFailed": "Couldn't save the branch tag"
+    },
+    "errors": {
+      "emptyName": "Enter a tag name",
+      "duplicateName": "A tag named “{name}” already exists here",
+      "invalidColor": "Pick a valid color",
+      "folderNotTaggable": "This folder can't have its own tags",
+      "notApplicable": "That tag belongs to another folder",
+      "tagNotFound": "That tag no longer exists"
+    }
+  },
   "Pet": {
     "badge": {
       "running": "{count} running",
@@ -4675,6 +4798,7 @@
     "saveFailed": "Failed to save remote connection",
     "deleteFailed": "Failed to delete remote connection",
     "openFailed": "Failed to open remote workspace",
+    "restoreFailed": "Couldn't reopen remote workspace \"{name}\"",
     "connectionLoadFailed": "Failed to load remote connection: {message}",
     "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
   },
@@ -4977,6 +5101,11 @@
       "short": "Run its own code on a page you shared — without asking, unless you ask it to.",
       "hint": "Let agents run their own JavaScript on a page you’ve shared. Off by default, and needs the switch above. Turning it on means snippets run without asking, so this switch is where the decision is made; Settings → Built-in browser can put each snippet in front of you instead."
     },
+    "computer": {
+      "label": "See and use your desktop's windows",
+      "short": "List apps and windows; read the ones you share, act on the ones you allow.",
+      "hint": "Lets an agent list the applications and windows on your desktop, read the windows you share with it — a screenshot, its contents, whether it shows what it expects — and click, type and press keys in the ones you share for acting. Nothing is readable until you share a window from the Computer use panel in the status bar, and nothing can be acted on unless you also let agents act on it; sharing ends when the window closes, after a while unused, or when you stop it, and Stop agents in that panel halts every agent at once. Input goes to the window in the background; for an action that will not go in the background, an agent may bring the window to the front, which you can switch off in Computer use settings. Desktop app only; on macOS it needs permissions granted to codeg-computer-helper. Preview."
+    },
     "automations": {
       "label": "Create automations",
       "short": "Create and manage scheduled automations.",
@@ -5139,6 +5268,249 @@
     "clearConfirmDescriptionProfile": "Cookies, caches and site storage of the profile {name} will be removed. Open tabs stay open, but you will be signed out of sites.",
     "signInUaTitle": "Google sign-in compatibility",
     "signInUaHint": "Google refuses to sign in from embedded browsers. When on, tabs present a Firefox identity to Google's sign-in pages only (accounts.google.com); everywhere else they identify as the engine they run in, never as Firefox. Embedded tabs only, not the separate-window surface; when a sign-in page redirects you to another site, the first request there still carries the sign-in identity."
+  },
+  "ComputerUse": {
+    "title": "Computer use",
+    "preview": "Preview",
+    "refresh": "Refresh",
+    "tooltipShared": "Computer use · {count, plural, one {# window shared} other {# windows shared}}",
+    "stop": "Stop sharing",
+    "stopHint": "Stop sharing every window now, and cut off whatever agents are doing. Share a window again whenever you want them back.",
+    "indicator": {
+      "actOne": "Agents can act on {app}",
+      "actMany": "Agents can act on {count, plural, one {# window} other {# windows}}",
+      "readOne": "Agents can see {app}",
+      "readMany": "Agents can see {count, plural, one {# window} other {# windows}}",
+      "readScreen": "Agents can see the entire screen",
+      "actScreen": "Agents can act on the entire screen",
+      "recent": "{action} in {app}",
+      "stop": "Stop sharing",
+      "stopWithKey": "Stop sharing every window ({key})"
+    },
+    "codegGranted": "codeg itself has Accessibility or Screen Recording, so agents' shells can use it without anything being shared. Unless you need it, turn it off for codeg in System Settings.",
+    "backend": {
+      "idle": "Not started",
+      "downloading": "Downloading the driver…",
+      "starting": "Starting the helper…",
+      "ready": "Ready",
+      "failed": "Failed"
+    },
+    "driver": "cua-driver {version}",
+    "devBuild": "Development build: the helper doesn't check which program calls it.",
+    "devTag": "development build",
+    "permissions": {
+      "accessibility": "Accessibility",
+      "screenRecording": "Screen Recording",
+      "granted": "Granted",
+      "request": "Grant…",
+      "why": "Turn on codeg-computer-helper in System Settings — not codeg. Screen Recording lets it see windows; Accessibility lets it read and act on them.",
+      "devRebuild": "Each rebuild of the helper voids its old grant: remove the old codeg-computer-helper from the list first, then grant again.",
+      "notListed": "If codeg-computer-helper isn't in the list, drag it in from the Finder:",
+      "reveal": "Show in Finder"
+    },
+    "shared": {
+      "title": "{count, plural, =0 {No windows shared} one {# window shared} other {# windows shared}}",
+      "empty": "Agents can list your windows but read none of them until you share one.",
+      "stop": "Stop",
+      "wholeApp": "Whole app · {count, plural, =0 {no windows open} one {# window} other {# windows}}",
+      "screen": "Entire screen",
+      "screenWindows": "{count, plural, =0 {no windows yet} one {# window} other {# windows}}"
+    },
+    "level": {
+      "read": "Can read",
+      "control": "Can act",
+      "readLong": "Read only",
+      "controlLong": "Read and act",
+      "change": "Change what agents may do"
+    },
+    "activity": {
+      "title": "Recent activity",
+      "clear": "Clear recent activity",
+      "capture": "Screenshot",
+      "snapshot": "Read",
+      "verify": "Check",
+      "click": "Click",
+      "drag": "Drag",
+      "scroll": "Scroll",
+      "type": "Type",
+      "key": "Key",
+      "hold-key": "Hold key",
+      "set-value": "Set value",
+      "restore": "Restore",
+      "menu": "Menu",
+      "set-frame": "Move window",
+      "launch": "Open app",
+      "clipboard-read": "Read clipboard",
+      "clipboard-write": "Write clipboard",
+      "outcome": {
+        "done": "done",
+        "refused": "refused",
+        "failed": "failed"
+      }
+    },
+    "share": "Share a window…",
+    "openSettings": "Open full settings",
+    "picker": {
+      "title": "Share a window with agents",
+      "description": "Agents in every conversation can read the windows you share, and click and type in the ones you let them act on. Sharing ends when you stop it, the window closes, or it goes unused for the time set in Settings.",
+      "count": "{count, plural, one {# window} other {# windows}}",
+      "sharedCount": "{count, plural, one {# shared} other {# shared}}",
+      "loading": "Loading windows…",
+      "refresh": "Refresh",
+      "empty": "No windows found. If you expected some, check the permissions in the Computer use panel.",
+      "noScreenRecording": "codeg-computer-helper doesn't have Screen Recording yet: window titles and pictures can't be shown, and agents can't read windows.",
+      "unnamedApp": "Unknown app",
+      "untitled": "Untitled window",
+      "minimized": "Minimized",
+      "hidden": "Hidden",
+      "notGrantable": {
+        "codeg": "codeg's window",
+        "blocklisted": "On the never-share list",
+        "unidentified": "Can't tell which app this is"
+      },
+      "shareRead": "Let agents read it",
+      "shareControl": "Let agents read and act on it",
+      "stopSharing": "Stop sharing",
+      "levelNone": "Off",
+      "levelRead": "Read",
+      "levelControl": "Act",
+      "levelLabel": "What agents may do with {app}",
+      "wholeApp": "Whole app",
+      "wholeAppHint": "Every window of {app}, including ones it opens later, plus its menus and its own shortcuts",
+      "appLevelLabel": "What agents may do with all of {app}",
+      "viaApp": "With the app",
+      "screenTitle": "Entire screen",
+      "screenHint": "Every window you can share, including ones that open later, and the desktop's own shortcuts. codeg's windows and the never-share list stay painted over.",
+      "screenLevelLabel": "What agents may do with the entire screen",
+      "viaScreen": "With the screen",
+      "shareAll": "Share all",
+      "shareAllRead": "Let agents read all of them",
+      "shareAllControl": "Let agents read and act on all of them",
+      "stopSharingAll": "Stop sharing all",
+      "skipped": "{count, plural, one {# window could not be shared; it may have closed.} other {# windows could not be shared; they may have closed.}}",
+      "unshareable": "{count, plural, one {# window can't be shared} other {# windows can't be shared}}",
+      "noneShareable": "None of these windows can be shared.",
+      "codegWhy": "codeg's windows are never shared: an agent that could operate codeg could approve its own requests or share more windows with itself. The same goes for other copies of codeg."
+    },
+    "settings": {
+      "pageTitle": "Computer use",
+      "pageDescription": "Let agents see and use the desktop windows you share with them.",
+      "switch": {
+        "label": "Enable computer use",
+        "hint": "Agents can list your apps and windows, read the windows you share, and click and type in the ones you let them act on. No window can be read until you share it from the status bar.",
+        "failed": "Could not switch computer use"
+      },
+      "driver": {
+        "title": "Driver",
+        "description": "Computer use reads and acts on windows through cua-driver, an open-source program. codeg runs only the release it has checked, {version}, and downloads it the first time it is needed.",
+        "loading": "Checking…",
+        "unsupported": "cua-driver has no build for this platform.",
+        "installing": "Installing…",
+        "downloadingOf": "Downloading… {done} / {total} MB",
+        "downloadingSoFar": "Downloading… {done} MB",
+        "uninstalling": "Uninstalling…",
+        "installed": "Installed · {version}",
+        "outdated": "{installed} is installed; this codeg runs {version}.",
+        "notInstalled": "Not installed. It is downloaded the first time computer use needs it, or you can install it now.",
+        "install": "Install",
+        "upgrade": "Upgrade to {version}",
+        "uninstall": "Uninstall",
+        "installDone": "cua-driver installed",
+        "uninstallDone": "cua-driver uninstalled",
+        "confirmTitle": "Uninstall cua-driver?",
+        "confirmDescription": "Computer use will be switched off and every window will stop being shared. Switching it back on downloads the driver again.",
+        "cancel": "Cancel"
+      },
+      "permissions": {
+        "title": "Permissions",
+        "description": "macOS asks for these for codeg-computer-helper. Grant one in System Settings and come back: this updates by itself.",
+        "off": "Switch computer use on to check and grant permissions.",
+        "accessibilityHint": "Read windows' contents and act on them.",
+        "screenRecordingHint": "Take screenshots and read window titles."
+      },
+      "title": "Sharing, input and stopping",
+      "description": "How long a shared window stays shared, which apps can never be shared, the shortcut and floating bar that stop all sharing at once, and whether agents may bring a window to the front to act on it.",
+      "ttl": {
+        "label": "Stop sharing unused windows after",
+        "hint": "A shared window stops being shared when no agent has read it for this long.",
+        "minutes": "{minutes} minutes",
+        "never": "Never (until I stop it)"
+      },
+      "blocklist": {
+        "label": "Apps that are never shared",
+        "hint": "Their windows can't be shared with agents. Remove the defaults you don't need, or add an app by bundle ID (com.example.app), executable name (app.exe) or full path.",
+        "placeholder": "com.example.app",
+        "add": "Add",
+        "remove": "Remove {name}",
+        "restore": "Restore defaults",
+        "restoreConfirmTitle": "Restore the default list?",
+        "restoreConfirmAdded": "{count, plural, one {The app you added comes off the list.} other {The # apps you added come off the list.}}",
+        "restoreConfirmRemoved": "{count, plural, one {The default app you removed goes back on the list.} other {The # default apps you removed go back on the list.}}",
+        "restoreConfirmSave": "The change takes effect when you save.",
+        "cancel": "Cancel",
+        "custom": "Added by you",
+        "duplicate": "Already on the list.",
+        "removedCount": "{count, plural, one {# default app removed.} other {# default apps removed.}}",
+        "items": {
+          "systemSettings": "System Settings",
+          "credentialPrompts": "System password and authorization prompts",
+          "keychain": "Keychain Access",
+          "passwords": "Passwords"
+        }
+      },
+      "stopKey": {
+        "label": "Stop shortcut",
+        "hint": "Stops sharing every window from any app, like the Stop sharing button. While computer use is on these keys belong to codeg, so pick ones you don't use elsewhere.",
+        "recording": "Press keys…",
+        "recordHint": "Hold Ctrl and one more modifier (Alt or Shift), then press a key. Esc cancels.",
+        "recordHintMac": "Hold ⌃ or ⌘ and one more modifier, then press a key. Esc cancels.",
+        "off": "Off",
+        "useDefault": "Default",
+        "turnOff": "Turn off",
+        "statusActive": "Active: press it anywhere to stop sharing every window.",
+        "statusIdle": "Takes effect while computer use is switched on.",
+        "statusOff": "Off: only the Stop sharing buttons stop sharing.",
+        "statusFailed": "Not active: another app is probably using these keys. Choose others.",
+        "problem": {
+          "unsupportedKey": "That key can't be used. Choose a letter, a digit, F1–F12, Esc or a punctuation key.",
+          "weakModifiers": "Hold at least two modifiers, one of them Ctrl (or ⌘ on a Mac).",
+          "metaOffMac": "The Windows key can't be part of it."
+        }
+      },
+      "strip": {
+        "label": "Floating stop bar",
+        "hint": "While any window is shared, a bar floats above all windows saying what agents may do, with a Stop sharing button. Turned off, you can still stop sharing from the Computer use popover in the status bar or with the stop shortcut."
+      },
+      "foreground": {
+        "label": "Let agents bring windows to the front",
+        "hint": "Some apps take no keys or typing while they're in the background — on Windows, any built on Chromium, such as Edge, Chrome and VS Code. With this on, an agent may bring a window you let it act on to the front for one action, then switch back to the window you were in (on Linux, it stays in front). You'll see the window come forward; anything you type at that moment may go to it, and a click may move your mouse pointer."
+      },
+      "delivery": {
+        "label": "Default input mode",
+        "hint": "How agents' clicks, scrolling, typing and keys reach a window when they don't ask for either. Background leaves the window where it is and your pointer and keyboard to you; Foreground brings the window to the front for every action.",
+        "hintOff": "Always Background while agents may not bring windows to the front.",
+        "background": "Background",
+        "foreground": "Foreground"
+      },
+      "launch": {
+        "label": "Let agents open applications and move windows",
+        "hint": "With this on, an agent may start an installed application in the background — never codeg or one of the apps that are never shared — and move or resize a window you let it act on. Starting an application shares none of its windows: that is still yours to decide."
+      },
+      "clipboard": {
+        "label": "Let agents use the clipboard",
+        "hint": "With this on, an agent may put text on the clipboard to paste it, and read back what it copied out of a window you shared with it. What you copied yourself is never read for an agent, and an agent can paste only what it put there itself."
+      },
+      "screen": {
+        "label": "Offer the entire screen",
+        "hint": "With this on, the share picker offers the entire screen: agents see one picture of all of it and can click anywhere on it, and every window you can share goes with it, along with the desktop's own shortcuts. codeg's windows and the never-share list stay painted over. Turning this off ends the screen's sharing."
+      },
+      "boundary": "On macOS the permissions go to codeg-computer-helper, which only codeg can use, so agents' shells can't. Windows and Linux have no such separation: there these settings decide what agents get through codeg, not what programs on your computer can do.",
+      "save": "Save",
+      "saving": "Saving…",
+      "saved": "Computer use settings saved",
+      "saveFailed": "Failed to save computer use settings",
+      "loadFailed": "Failed to load: {detail}"
+    }
   },
   "LogsSettings": {
     "loading": "Loading…",
@@ -5450,10 +5822,11 @@
     "promptPlaceholder": "Describe the task for the agent — @ to reference files, / for commands",
     "folderPlaceholder": "Select a folder",
     "baseBranch": "Base branch",
-    "baseBranchPlaceholder": "Current branch",
     "baseBranchDefault": "Current branch when the task starts",
     "baseBranchHint": "The task branches from here, and merging lands it back on this branch.",
     "agentInheritedHint": "Inherited from task settings — change it to override for this task",
+    "agentNoDefaultHint": "No default agent in task settings — the selected agent will be saved with the task",
+    "agentInheritedUnavailableHint": "{agent} from task settings isn't available — the selected agent will be saved with the task",
     "agentOverrideReset": "Reset to inherited",
     "sectionTarget": "Target",
     "errorTitle": "Title is required",
@@ -5582,8 +5955,8 @@
     "eventContextCompact": "Context compaction",
     "eventUserAction": "User action",
     "eventDiffStat": "Change snapshot",
-    "eventForgeWriteback": "Commented on the issue",
-    "eventForgeWritebackFailed": "Comment on the issue failed",
+    "eventForgeWriteback": "Commented on the item",
+    "eventForgeWritebackFailed": "Comment on the item failed",
     "actionDeliverPr": "Open pull request",
     "actionDeliverPrMr": "Open merge request",
     "actionDeliverPrBack": "Push to the pull request",
@@ -6117,7 +6490,7 @@
     "scenarioPlanFirst": "Plan first",
     "scenarioPlanFirstHint": "The agent confirms the problem is real, then delivers an implementation plan and stops — approve it by returning the task for implementation.",
     "scenarioReviewFix": "Review & fix",
-    "scenarioReviewFixHint": "Review the changes and fix problems on top; the commits go back to the branch once you accept.",
+    "scenarioReviewFixHint": "The agent first judges whether the approach itself holds up, and only then fixes problems on top — if it doesn't, it commits nothing and hands the review back to you to decide. Accepted fixes go back to the branch.",
     "scenarioReviewOnly": "Review only",
     "scenarioReviewOnlyHint": "A review report with findings and suggestions, no commits — return the task if you want fixes applied.",
     "settingsTitle": "Panel settings",
@@ -6145,7 +6518,7 @@
     "save": "Save"
   },
   "Canvas": {
-    "title": "Infinite Conversations",
+    "title": "Infinite Canvas",
     "untitled": "Untitled conversation",
     "unresolvedConversation": "Conversation removed",
     "removeCard": "Remove card",
@@ -6233,7 +6606,36 @@
     "removeTerminalCard": "Remove terminal card",
     "terminalNoDirectory": "This card has no working directory",
     "confirmDeleteTerminals": "{count} running terminal(s) will be closed and their processes stopped.",
-    "confirmDeleteNotesAndTerminals": "{notes} note(s) you wrote will be permanently deleted, and {terminals} running terminal(s) will be stopped."
+    "confirmDeleteNotesAndTerminals": "{notes} note(s) you wrote will be permanently deleted, and {terminals} running terminal(s) will be stopped.",
+    "boardsTitle": "Canvases",
+    "boardsSubtitle": "Each canvas is its own infinite board of regions, conversation cards, notes, files and terminals.",
+    "boardCount": "{count, plural, one {# canvas} other {# canvases}}",
+    "newBoard": "New canvas",
+    "newBoardTitle": "New canvas",
+    "editBoard": "Edit canvas…",
+    "editBoardTitle": "Edit canvas",
+    "deleteBoard": "Delete canvas…",
+    "openBoard": "Open",
+    "boardMenu": "Canvas options",
+    "boardName": "Name",
+    "boardDescription": "Description",
+    "boardDescriptionPlaceholder": "What is this canvas for? (optional)",
+    "untitledBoard": "Untitled canvas",
+    "boardItemCount": "{count, plural, =0 {Empty} one {# item} other {# items}}",
+    "boardEditedAt": "Edited {time}",
+    "boardsEmpty": "No canvases yet",
+    "boardsEmptyHint": "Create a canvas to lay out your work spatially. Each canvas keeps its own regions, cards and notes.",
+    "searchBoards": "Search canvases…",
+    "noBoardsMatch": "No canvases match “{query}”",
+    "boardsLoadFailed": "Couldn't load canvases",
+    "retry": "Retry",
+    "backToBoards": "Back to all canvases",
+    "boardDeleted": "This canvas was deleted",
+    "deleteBoardTitle": "Delete this canvas?",
+    "deleteBoardDescription": "“{name}” and everything on it will be deleted for good. The conversations, folders and files it shows are not affected.",
+    "deleteBoardItems": "It holds {count, plural, one {# item} other {# items}}.",
+    "deleteBoardTerminals": "{count, plural, one {# terminal on it will be closed and its process stopped.} other {# terminals on it will be closed and their processes stopped.}}",
+    "deleteBoardConfirm": "Delete canvas"
   },
   "Browser": {
     "toolbar": {
@@ -6251,7 +6653,17 @@
       "invalidUrl": "Not a valid address",
       "profile": "Profile: {name}",
       "profileMenuLabel": "Open this page in another profile",
-      "profileDefault": "Default"
+      "profileDefault": "Default",
+      "device": "Device: {name}",
+      "deviceMenuLabel": "View as",
+      "deviceDesktop": "Desktop",
+      "deviceTablet": "Tablet",
+      "devicePhone": "Phone",
+      "deviceFill": "Full pane",
+      "deviceCustom": "Custom",
+      "deviceWidth": "Width",
+      "deviceHeight": "Height",
+      "deviceLaidOut": "Pane too small: laid out at {size}"
     },
     "status": {
       "popupDenied": "Pop-up blocked: {host}",

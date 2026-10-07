@@ -1,6 +1,6 @@
 [package]
 name = "codeg"
-version = "0.32.2"
+version = "0.33.0"
 description = "Agent Code Generation App"
 authors = ["feitao"]
 edition = "2021"
@@ -30,6 +30,7 @@ tauri-runtime = [
     "dep:tauri-plugin-single-instance",
     "dep:tauri-plugin-deep-link",
     "dep:tauri-plugin-autostart",
+    "dep:tauri-plugin-global-shortcut",
     "dep:keyring",
     # `src/browser` is compiled under this feature and reaches WebKitGTK
     # directly on Linux. These three exist only on Linux targets; naming them
@@ -41,8 +42,25 @@ tauri-runtime = [
 # Exposes test scaffolding (`AppState::new_for_test`, `EventEmitter::test_web_only`,
 # `ConnectionManager::insert_test_connection`, parser `with_base_dir`, the
 # `db::test_helpers` module) for integration tests in `tests/*.rs`. Without
-# this feature the items are physically uncompiled in release builds.
-test-utils = []
+# this feature the items are physically uncompiled in release builds. It
+# also builds the three standalone binaries below, so the test and lint runs
+# cover them.
+test-utils = ["computer-helper", "server-bin", "mcp-bin"]
+# The `codeg-computer-helper` binary. Off unless asked for: the Tauri CLI puts
+# every binary target whose features are on into a bundle, and the copy
+# `tauri build` would compile is not the helper that ships. That is the one
+# `prepare-sidecars` builds with this feature — a sidecar, and on macOS an app
+# of its own (see `tauri.macos.conf.json`).
+computer-helper = ["dep:x11rb"]
+# The `codeg-server` binary. Off unless asked for, for the same reason: the
+# desktop app serves its web interface from its own process and has no use
+# for a second server, so it must not ship one (70–90 MB) in its bundle.
+server-bin = []
+# The `codeg-mcp` binary, likewise: the companion that ships is the sidecar
+# `prepare-sidecars` builds without the desktop features, and the copy `tauri
+# build` would compile — with them, WebKit and all — would replace it in the
+# bundle.
+mcp-bin = []
 # Built-in browser. `browser-child` compiles the embedded surface: a wry child
 # webview created directly through tauri-runtime-wry's re-exported `wry`
 # (`WebViewBuilder::build_as_child`), which is exactly how tauri-runtime-wry
@@ -62,15 +80,34 @@ name = "codeg"
 path = "src/main.rs"
 required-features = ["tauri-runtime"]
 
+# The standalone server. Built only with `server-bin` (and, for the real
+# thing, without the default features): `cargo build --release --bin
+# codeg-server --no-default-features --features server-bin`.
 [[bin]]
 name = "codeg-server"
 path = "src/bin/codeg_server.rs"
-required-features = []
+required-features = ["server-bin"]
 
+# The MCP companion each agent session runs. Built only with `mcp-bin` (and,
+# for the real thing, without the default features).
 [[bin]]
 name = "codeg-mcp"
 path = "src/bin/codeg_mcp.rs"
-required-features = []
+required-features = ["mcp-bin"]
+
+# The computer-use executor: holds the OS permissions (macOS TCC) in place of
+# codeg, and runs the pinned cua-driver as its child. No Tauri: it is launched
+# by the desktop app and serves only it. Built only with `computer-helper`.
+[[bin]]
+name = "codeg-computer-helper"
+path = "src/bin/codeg_computer_helper.rs"
+required-features = ["computer-helper"]
+
+# Runs the `codeg-server` binary, so only where that is built.
+[[test]]
+name = "credential_helper_subprocess"
+path = "tests/credential_helper_subprocess.rs"
+required-features = ["server-bin"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
@@ -202,6 +239,11 @@ tauri-plugin-deep-link = { version = "2", optional = true }
 # "Launch at login" toggle. Desktop-only: registry Run key on Windows, a
 # LaunchAgent plist on macOS, an XDG autostart .desktop entry on Linux.
 tauri-plugin-autostart = { version = "2", optional = true }
+# Computer use's stop shortcut, registered from Rust only (no JS permission is
+# granted). On macOS an ordinary key is a Carbon hotkey, which needs no
+# permission; `computer::stop_shortcut` keeps media keys — an event tap, and
+# Input Monitoring with it — out of reach.
+tauri-plugin-global-shortcut = { version = "2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6"
@@ -212,10 +254,14 @@ objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData", "NSDictionary", "NSError", "NSObject", "NSArray", "NSValue", "NSURLRequest", "NSURL", "NSEnumerator", "NSObjCRuntime", "NSGeometry", "NSRange", "NSThread", "NSDate", "NSSet", "NSProcessInfo", "NSUUID", "NSURLError"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKUserContentController", "WKUserScript", "WKContentWorld", "WKScriptMessage", "WKScriptMessageHandler", "WKFrameInfo", "WKSnapshotConfiguration", "WKFindConfiguration", "WKFindResult", "WKNavigation", "WKNavigationAction", "WKNavigationDelegate", "WKNavigationResponse", "WKUIDelegate", "WKWebsiteDataStore", "WKWebsiteDataRecord", "WKContentRuleList", "WKContentRuleListStore"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSPasteboard", "NSResponder", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSApplication"] }
+# Computer use: code-signature checks (Security.framework) between codeg, the
+# helper and the driver. Both already in the lock tree via security-framework.
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell"] }
 junction = "1"
 # Built-in browser Windows shim (isolated world over CDP, world-scoped eval,
 # snapshots, find, history, the sign-in identity, the subframe fence, and the
@@ -245,6 +291,11 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com"
 # feature — if wry ever stops asking for it, the failure is a version error
 # here rather than a missing symbol somewhere in the shim.
 webkit2gtk = { version = "=2.0.2", features = ["v2_40"], optional = true }
+# The computer-use helper asks the X11 window manager what the driver's
+# listing leaves unsaid — which windows are minimized, which on another
+# desktop — and which modifier keys are held. The helper's alone, so only
+# with `computer-helper`. Pure Rust; the version the driver itself uses.
+x11rb = { version = "0.13", optional = true }
 gtk = { version = "0.18", optional = true }
 javascriptcore-rs = { version = "=1.1.2", optional = true }
 

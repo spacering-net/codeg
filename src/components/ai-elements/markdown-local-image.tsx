@@ -54,6 +54,17 @@ export function MarkdownImageProvider({
   )
 }
 
+/**
+ * This transcript's working directory — the root its local Markdown images
+ * resolve against — for anything else in the thread that names a file by a
+ * relative path. Same rule: never the globally active folder, which a
+ * background conversation from another folder does not share. `null` outside
+ * a transcript, or for one with no folder.
+ */
+export function useTranscriptRoot(): string | null {
+  return useContext(LocalImageContext)?.root ?? null
+}
+
 function LocalMarkdownImage({
   source,
   alt,

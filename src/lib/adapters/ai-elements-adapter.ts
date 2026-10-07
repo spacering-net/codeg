@@ -18,6 +18,7 @@ import {
   CODEX_SEARCH_ACTION_META_KEY,
   isCodexGrepNoMatchEnvelope,
 } from "@/lib/codex-command-action"
+import { isGrepNoMatchCommandResult } from "@/lib/grep-no-match"
 import { isBackgroundTaskToolCall } from "@/lib/background-task"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
@@ -2285,7 +2286,7 @@ function buildToolResultMap(
 
 /**
  * Codex reports a ripgrep search with no matches as a failed ACP tool result.
- * Treat only its two no-match shapes as a successful presentation state; the
+ * Treat only its three no-match shapes as a successful presentation state; the
  * ContentBlock stays untouched, and every other failure remains an error.
  *
  * 1. The command envelope: exit 1 with otherwise empty output. Shares
@@ -2304,13 +2305,30 @@ function buildToolResultMap(
  *    grep from another adapter can look exactly the same. A persisted row
  *    carries neither the marker nor a status and keeps its own rendering.
  *    The caller renders the absent body as `""`, i.e. "No matches".
+ * 3. A shell card whose command ENDS in a search — `rg --files src | rg foo`,
+ *    `cat f | grep foo`. codex only makes a grep card of a command it reduces
+ *    to one search action; a pipeline is several actions, so it arrives as a
+ *    plain `bash` call, and its exit lives only in the exit line the backend
+ *    appends. `isGrepNoMatchCommandResult` requires that line to read exit 1
+ *    and to be ALL the call printed. Nothing here is codex's own: the exit
+ *    line is codeg's record of the process, and a pipeline exits with its
+ *    last stage's status, so any agent's card of that shape is the same no
+ *    match. The output (the exit line) is kept, so the raw exit code still
+ *    shows.
  */
-function isCodexGrepNoMatchResult(
+function isGrepNoMatchResult(
   toolUse: ContentBlock & { type: "tool_use" },
   result: ContentBlock & { type: "tool_result" }
 ): boolean {
   if (!result.is_error) return false
-  if (normalizeToolName(toolUse.tool_name) !== "grep") return false
+  const toolName = normalizeToolName(toolUse.tool_name)
+  if (toolName === "bash") {
+    return isGrepNoMatchCommandResult(
+      toolUse.input_preview,
+      result.output_preview
+    )
+  }
+  if (toolName !== "grep") return false
 
   if (typeof result.output_preview === "string") {
     if (isCodexGrepNoMatchEnvelope(result.output_preview)) return true
@@ -2483,7 +2501,7 @@ export function adaptMessageTurn(
           adaptedContent.push(...imageParts)
           continue
         }
-        const isNoMatch = isCodexGrepNoMatchResult(block, matchedResult)
+        const isNoMatch = isGrepNoMatchResult(block, matchedResult)
         adaptedContent.push({
           type: "tool-call",
           toolCallId,
@@ -2527,7 +2545,7 @@ export function adaptMessageTurn(
             adaptedContent.push(...imageParts)
             continue
           }
-          const isNoMatch = isCodexGrepNoMatchResult(block, positionalResult)
+          const isNoMatch = isGrepNoMatchResult(block, positionalResult)
           adaptedContent.push({
             type: "tool-call",
             toolCallId,

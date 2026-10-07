@@ -154,4 +154,32 @@ describe("command card — claude's parsed launch badge is unaffected", () => {
     })
     expect(container.textContent).toContain(BADGE)
   })
+
+  it("badges a command a steer moved to the background", () => {
+    // Claude Code 2.1.286: a steer that lands during a foreground command
+    // moves it to the background, and the call completes with this notice in
+    // place of output. The card says so in a line instead of printing the
+    // model-facing notice and its temp-file path.
+    const { container } = renderPart({
+      type: "tool-call",
+      toolCallId: "toolu_9be29c6ab1f34a13b8f781",
+      toolName: "bash",
+      displayTitle: "sleep 10 && echo sleeper-done",
+      input: JSON.stringify({
+        command: "sleep 10 && echo sleeper-done",
+        description: "Sleep ten seconds",
+      }),
+      state: "output-available",
+      toolStatus: "completed",
+      output:
+        "```console\nCommand was moved to the background (ID: bj0x9uqsf) so " +
+        "that a message that arrived while it was running can reach you; it " +
+        "was not interrupted. Output is being written to: " +
+        "/private/tmp/x/tasks/bj0x9uqsf.output. You will be notified when it " +
+        "completes.\n```",
+      meta: AIR_BACKGROUNDED,
+    })
+    expect(container.textContent).toContain(BADGE)
+    expect(container.textContent).not.toContain("so that a message")
+  })
 })

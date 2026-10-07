@@ -114,6 +114,93 @@ pub fn build_router(
             post(handlers::browser_tools::set_browser_tools_settings),
         )
         .route(
+            "/get_computer_tools_settings",
+            post(handlers::computer_tools::get_computer_tools_settings),
+        )
+        .route(
+            "/set_computer_tools_settings",
+            post(handlers::computer_tools::set_computer_tools_settings),
+        )
+        .route(
+            "/set_computer_tools_enabled",
+            post(handlers::computer_tools::set_computer_tools_enabled),
+        )
+        .route(
+            "/set_computer_tools_preferences",
+            post(handlers::computer_tools::set_computer_tools_preferences),
+        )
+        // Computer use itself: answered only by a codeg-server let share the
+        // screen it runs on (see `handlers::computer`).
+        .route(
+            "/computer_available",
+            post(handlers::computer::computer_available),
+        )
+        .route(
+            "/computer_status",
+            post(handlers::computer::computer_status),
+        )
+        .route(
+            "/computer_request_permission",
+            post(handlers::computer::computer_request_permission),
+        )
+        .route(
+            "/computer_open_permission_settings",
+            post(handlers::computer::computer_open_permission_settings),
+        )
+        .route(
+            "/computer_reveal_helper",
+            post(handlers::computer::computer_reveal_helper),
+        )
+        .route(
+            "/computer_list_shareable_windows",
+            post(handlers::computer::computer_list_shareable_windows),
+        )
+        .route(
+            "/computer_window_thumbnail",
+            post(handlers::computer::computer_window_thumbnail),
+        )
+        .route(
+            "/computer_share_window",
+            post(handlers::computer::computer_share_window),
+        )
+        .route(
+            "/computer_share_windows",
+            post(handlers::computer::computer_share_windows),
+        )
+        .route(
+            "/computer_shared_state",
+            post(handlers::computer::computer_shared_state),
+        )
+        .route(
+            "/computer_share_app",
+            post(handlers::computer::computer_share_app),
+        )
+        .route(
+            "/computer_share_screen",
+            post(handlers::computer::computer_share_screen),
+        )
+        .route(
+            "/computer_revoke_all",
+            post(handlers::computer::computer_revoke_all),
+        )
+        .route("/computer_stop", post(handlers::computer::computer_stop))
+        .route(
+            "/computer_stop_key_status",
+            post(handlers::computer::computer_stop_key_status),
+        )
+        .route(
+            "/computer_driver_info",
+            post(handlers::computer::computer_driver_info),
+        )
+        .route(
+            "/computer_driver_install",
+            post(handlers::computer::computer_driver_install),
+        )
+        .route(
+            "/computer_driver_uninstall",
+            post(handlers::computer::computer_driver_uninstall),
+        )
+        .route(
             "/get_chat_authoring_settings",
             post(handlers::chat_authoring::get_chat_authoring_settings),
         )
@@ -248,6 +335,38 @@ pub fn build_router(
             post(handlers::folders::set_folder_group),
         )
         .route(
+            "/list_conversation_tags",
+            post(handlers::conversation_tags::list_conversation_tags),
+        )
+        .route(
+            "/create_conversation_tag",
+            post(handlers::conversation_tags::create_conversation_tag),
+        )
+        .route(
+            "/update_conversation_tag",
+            post(handlers::conversation_tags::update_conversation_tag),
+        )
+        .route(
+            "/delete_conversation_tag",
+            post(handlers::conversation_tags::delete_conversation_tag),
+        )
+        .route(
+            "/reorder_conversation_tags",
+            post(handlers::conversation_tags::reorder_conversation_tags),
+        )
+        .route(
+            "/update_conversation_tags",
+            post(handlers::conversation_tags::update_conversation_tags),
+        )
+        .route(
+            "/get_conversation_branch_tag",
+            post(handlers::conversation_tags::get_conversation_branch_tag),
+        )
+        .route(
+            "/update_conversation_branch_tag",
+            post(handlers::conversation_tags::update_conversation_branch_tag),
+        )
+        .route(
             "/update_folder_color",
             post(handlers::folders::update_folder_color),
         )
@@ -284,6 +403,22 @@ pub fn build_router(
             post(handlers::folder_links::remove_folder_link),
         )
         // ─── Canvas ───
+        .route(
+            "/canvas_list_boards",
+            post(handlers::canvas::canvas_list_boards),
+        )
+        .route(
+            "/canvas_create_board",
+            post(handlers::canvas::canvas_create_board),
+        )
+        .route(
+            "/canvas_update_board",
+            post(handlers::canvas::canvas_update_board),
+        )
+        .route(
+            "/canvas_delete_board",
+            post(handlers::canvas::canvas_delete_board),
+        )
         .route(
             "/canvas_list_nodes",
             post(handlers::canvas::canvas_list_nodes),
@@ -920,6 +1055,10 @@ pub fn build_router(
             post(handlers::acp::acp_load_pi_config),
         )
         .route(
+            "/acp_list_pi_model_capabilities",
+            post(handlers::acp::acp_list_pi_model_capabilities),
+        )
+        .route(
             "/acp_load_deepseek_model_catalog",
             post(handlers::acp::acp_load_deepseek_model_catalog),
         )
@@ -986,6 +1125,10 @@ pub fn build_router(
         .route(
             "/acp_detect_agent_local_version",
             post(handlers::acp::acp_detect_agent_local_version),
+        )
+        .route(
+            "/acp_fetch_agent_latest_release",
+            post(handlers::acp::acp_fetch_agent_latest_release),
         )
         .route(
             "/acp_prepare_npx_agent",

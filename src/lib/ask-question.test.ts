@@ -355,6 +355,64 @@ describe("parseAskQuestionOutcome", () => {
     ])
   })
 
+  it("decodes codex's note encoding to the text the user chose", () => {
+    // codex writes a free-form note as a `user_note: ` entry next to the
+    // option labels. codex-acp 2.1.0 hands codex the free text codeg's card
+    // sends as ["None of the above", "user_note: <text>"] (recorded on the
+    // adapter with codeg's capabilities). Codex's own TUI writes the same pair
+    // for its "None of the above" + notes, an option plus a note, and a
+    // free-form question as the note alone.
+    const output = JSON.stringify({
+      answers: {
+        typed_other: {
+          answers: ["None of the above", "user_note: Inspect flaky logs"],
+        },
+        option_and_note: {
+          answers: ["Option 2", "user_note: Notes for option 2"],
+        },
+        free_form: { answers: ["user_note: feat/x"] },
+        bare_other: { answers: ["None of the above"] },
+        plain_option: { answers: ["Run tests"] },
+        empty_note: { answers: ["None of the above", "user_note:  "] },
+      },
+    })
+    expect(parseAskQuestionOutcome(output)?.answers).toEqual([
+      {
+        id: "typed_other",
+        header: "",
+        question: "",
+        selected: ["Inspect flaky logs"],
+      },
+      {
+        id: "option_and_note",
+        header: "",
+        question: "",
+        selected: ["Option 2", "Notes for option 2"],
+      },
+      { id: "free_form", header: "", question: "", selected: ["feat/x"] },
+      // Picked with nothing typed: that IS the answer, so it stays.
+      {
+        id: "bare_other",
+        header: "",
+        question: "",
+        selected: ["None of the above"],
+      },
+      {
+        id: "plain_option",
+        header: "",
+        question: "",
+        selected: ["Run tests"],
+      },
+      // A blank note says nothing, so the pick it came with stands alone.
+      {
+        id: "empty_note",
+        header: "",
+        question: "",
+        selected: ["None of the above"],
+      },
+    ])
+  })
+
   it("parses kimi's string-valued answers keyed by question text", () => {
     // Verbatim tool.result output from a Kimi Code wire.jsonl: the native
     // AskUserQuestion keys `answers` by the QUESTION TEXT with the chosen

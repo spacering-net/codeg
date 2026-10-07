@@ -112,7 +112,10 @@ export function FilePathBreadcrumb({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5 text-sm">
+    // `gap-1.5` and the `h-3.5` chevron are the conversation detail header's
+    // folder › title crumb (conversation-detail-header.tsx), so a file tab and
+    // a conversation tab space their trails alike.
+    <div className="flex min-w-0 items-center gap-1.5 text-sm">
       {leadingDirs.map((dir) => (
         <Fragment key={dir.absPath}>
           <DirSegmentPopover
@@ -153,7 +156,9 @@ export function FilePathBreadcrumb({
 }
 
 function Separator() {
-  return <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+  return (
+    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+  )
 }
 
 function DirSegmentPopover({
@@ -185,11 +190,12 @@ function DirSegmentPopover({
           type="button"
           title={title}
           className={cn(
-            // Pill, like every other button on this row — with `px-2` so the
-            // label clears the curve (`px-1` had it touching).
-            "flex min-w-0 shrink items-center rounded-full px-2 py-0.5",
+            // Bare text, no pill: the pill's padding made the gap before a
+            // `›` wider than the gap after it, and indented the trail from
+            // the header's edge. Hover and an open popover only recolor it.
+            "flex min-w-0 shrink items-center",
             "text-muted-foreground transition-colors",
-            "hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+            "hover:text-foreground data-[state=open]:text-foreground"
           )}
         >
           <span className="truncate">{label}</span>

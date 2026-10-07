@@ -176,6 +176,43 @@ function parseAnswers(raw: unknown): AskQuestionAnswer[] {
   return out
 }
 
+/** codex's prefix for the free-form part of a `request_user_input` answer. */
+const CODEX_NOTE_PREFIX = "user_note: "
+/** The option codex adds to an `isOther` question for "my own answer". */
+const CODEX_OTHER_OPTION = "None of the above"
+
+/**
+ * Decode one codex `request_user_input` answer list into what the user chose.
+ *
+ * codex encodes an answer as option labels plus a free-form note written as a
+ * `user_note: <text>` entry. Its own TUI builds `[label?, "user_note: <text>"?]`
+ * and splits it back the same way for display. That gives three shapes:
+ *   - `["Option 2", "user_note: <text>"]`: an option with a note.
+ *   - `["None of the above", "user_note: <text>"]`: an "Other" answer. The TUI
+ *     writes this when the user picks the extra option and types. codex-acp
+ *     2.1.0+ writes it for the free text codeg's card sends.
+ *   - `["user_note: <text>"]`: a free-form question answered in the TUI.
+ *
+ * The note becomes its bare text, so it matches what the live card showed.
+ * The "None of the above" label goes when a note says what it meant, because
+ * that pair is a single typed answer. A bare one, picked with no note, is the
+ * user's literal choice and stays.
+ */
+function decodeCodexAnswerEntries(entries: string[]): string[] {
+  const labels: string[] = []
+  const notes: string[] = []
+  for (const entry of entries) {
+    if (entry.startsWith(CODEX_NOTE_PREFIX)) {
+      const note = entry.slice(CODEX_NOTE_PREFIX.length).trim()
+      if (note) notes.push(note)
+    } else {
+      labels.push(entry)
+    }
+  }
+  if (notes.length === 0) return labels
+  return [...labels.filter((label) => label !== CODEX_OTHER_OPTION), ...notes]
+}
+
 /**
  * codex `request_user_input` records its answers keyed by question id rather
  * than as the codeg-mcp array envelope:
@@ -183,6 +220,7 @@ function parseAnswers(raw: unknown): AskQuestionAnswer[] {
  * Return one answer per id (carrying that id so the card can match it against
  * the question's own id), or `null` when `answers` isn't the object map — so a
  * codeg-mcp / Claude result (whose `answers` is an ARRAY) never lands here.
+ * Each list is decoded by `decodeCodexAnswerEntries`.
  */
 function parseCodexAnswers(
   source: Record<string, unknown> | null | undefined
@@ -200,7 +238,9 @@ function parseCodexAnswers(
     if (!rec) continue
     const raw = rec.answers
     const selected = Array.isArray(raw)
-      ? raw.filter((x): x is string => typeof x === "string")
+      ? decodeCodexAnswerEntries(
+          raw.filter((x): x is string => typeof x === "string")
+        )
       : []
     out.push({ id, header: "", question: "", selected })
   }

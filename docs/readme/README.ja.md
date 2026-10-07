@@ -1,32 +1,44 @@
-# Codeg
+<h1 align="center">
+  <a href="https://docs.codeg.app"><img src="../../public/icon.svg" alt="Codeg logo" width="64" align="absmiddle" /></a> Codeg
+</h1>
 
-[![Release](https://img.shields.io/github/v/release/xintaofei/codeg)](https://github.com/xintaofei/codeg/releases)
-[![Docs](https://img.shields.io/badge/docs-docs.codeg.app-3451b2)](https://docs.codeg.app)
-[![License](https://img.shields.io/github/license/xintaofei/codeg)](../../LICENSE)
-
-<p>
-  <a href="../../README.md">English</a> |
-  <a href="./README.zh-CN.md">简体中文</a> |
-  <a href="./README.zh-TW.md">繁體中文</a> |
-  <strong>日本語</strong> |
-  <a href="./README.ko.md">한국어</a> |
-  <a href="./README.es.md">Español</a> |
-  <a href="./README.de.md">Deutsch</a> |
-  <a href="./README.fr.md">Français</a> |
-  <a href="./README.pt.md">Português</a> |
-  <a href="./README.ar.md">العربية</a>
+<p align="center">
+  <a href="https://github.com/spacering-net/codeg"><img src="https://img.shields.io/github/stars/spacering-net/codeg?style=flat&color=e91e63" alt="GitHub stars" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases/latest"><img src="https://img.shields.io/github/v/release/spacering-net/codeg?style=flat&color=e91e63" alt="Latest release" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases"><img src="https://img.shields.io/github/downloads/spacering-net/codeg/total?style=flat&color=e91e63" alt="Total downloads" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/github/license/spacering-net/codeg?style=flat&color=e91e63" alt="License" /></a>
+  <a href="https://docs.codeg.app"><img src="https://img.shields.io/badge/docs-docs.codeg.app-3451b2?style=flat" alt="Documentation" /></a>
+  <a href="https://docs.codeg.app/getting-started/installation"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Docker%20%7C%20iOS%20%7C%20Android-03a9f4?style=flat" alt="Platforms: macOS, Windows, Linux, Docker, iOS, Android" /></a>
 </p>
 
-Codeg（Code Generation）はマルチエージェント・コーディングワークスペースです。あらゆる AI コーディングエージェントをひとつの場所で動かし、そして協働させます。
+<p align="center">
+  <sub><a href="../../README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.zh-TW.md">繁體中文</a> · <strong>日本語</strong> · <a href="./README.ko.md">한국어</a> · <a href="./README.es.md">Español</a> · <a href="./README.de.md">Deutsch</a> · <a href="./README.fr.md">Français</a> · <a href="./README.pt.md">Português</a> · <a href="./README.ar.md">العربية</a></sub>
+</p>
 
-対応するすべてのエージェント CLI のセッションを検索可能なワークスペースへ集約し、ひとつのタスクの中でメインエージェントが別種類のサブエージェントへ委譲できます。付きっきりで見ていたくない作業は ToDo タスクに書いておけば、それぞれが専用のブランチで無人のまま進み、あなたのレビューを待ってから取り込まれます。Codeg はデスクトップアプリ・スタンドアロンサーバー・Docker コンテナのいずれとしても動作し、ネイティブの iOS / Android クライアントもあるのでデスクを離れても作業を続けられます。エージェントは 15 種を内蔵し、ACP 互換の任意のエージェントを自分で登録することもできます。
+<p align="center">
+  <strong>マルチエージェント・コーディングワークスペース。</strong><br/>
+  あらゆる AI コーディングエージェントをひとつの場所で動かし、そして協働させます。
+</p>
 
-![ワークスペース](../images/workspace-light.png#gh-light-mode-only)
-![ワークスペース](../images/workspace-dark.png#gh-dark-mode-only)
+<h3 align="center"><a href="https://github.com/spacering-net/codeg/releases/latest"><ins>Codeg をダウンロード</ins></a> · <a href="https://docs.codeg.app"><ins>ドキュメント</ins></a></h3>
 
-## 📖 ドキュメント
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/workspace-dark.png" />
+    <img src="../images/workspace-light.png" alt="Codeg のワークスペース：エージェントとの会話と、その隣に並ぶライブ diff とプロジェクトのファイル" width="960" />
+  </picture>
+</p>
 
-**完全なドキュメントは [docs.codeg.app](https://docs.codeg.app)** — [はじめに](https://docs.codeg.app/getting-started/) · [ガイド](https://docs.codeg.app/guide/) · [リファレンス](https://docs.codeg.app/reference/)
+<table>
+  <tr>
+    <td width="50%" valign="top">🧩 <strong>すべてのエージェントを、ひとつのインターフェースで</strong><br/>15 種のエージェントを内蔵し、ACP エージェントならどれでも加えられます — いずれもターミナルではなく、同じ構造化された会話として表示されます。</td>
+    <td width="50%" valign="top">🔎 <strong>引き継げるセッション</strong><br/>各エージェントがディスクに残す履歴をインポート・検索・再開でき、さらに別のエージェントへ引き継げます。</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🤝 <strong>協働するエージェント</strong><br/><code>@</code> ひとつでエージェント間の委譲ができ、ToDo タスクをキューに積めば、それぞれ専用のワークツリーで無人のまま進みます。</td>
+    <td width="50%" valign="top">🌍 <strong>どこで作業していても</strong><br/>デスクトップアプリ、セルフホストのサーバーまたは Docker、iPhone・iPad・Android — さらに Telegram、Lark、WeChat からも。</td>
+  </tr>
+</table>
 
 ## 💖 スポンサー
 
@@ -88,104 +100,218 @@ Codeg（Code Generation）はマルチエージェント・コーディングワ
 
 > Codeg のスポンサーになりませんか？[メールでお問い合わせください。](mailto:itpkcn@gmail.com)
 
+## ✨ 機能
+
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+### すべてのエージェントを、ひとつのインターフェースで
+
+15 種のエージェントを内蔵し、ほかの ACP エージェントも公開レジストリまたはその distribution JSON から加えられます。Codeg はそのすべてと Agent Client Protocol で通信するので、どれも目を凝らして読むターミナルではなく、同じリッチな会話 — ツールカード、ライブ diff、計画、権限の確認 — として表示されます。
+
+[ドキュメント →](https://docs.codeg.app/guide/supported-agents) · [カスタムエージェント →](https://docs.codeg.app/guide/custom-agents)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/agents-dark.gif" />
+  <img src="../images/features/agents-light.gif" alt="すべてのエージェントを、ひとつのインターフェースで" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### すべてのセッションを、検索可能に
+
+Codeg は各エージェント CLI がディスクに残す履歴を読み取ります：ワンクリックでインポートし、すべてを検索し、どのセッションも止まったところから再開できます。古いセッションを `@` で指名すれば、いま話しているエージェントがそれを読めます — 別のエージェントが書いたものでも構いません。
+
+[ドキュメント →](https://docs.codeg.app/guide/aggregation)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/sessions-dark.gif" />
+  <img src="../images/features/sessions-light.gif" alt="すべてのセッションを、検索可能に" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### マルチエージェント協調
+
+`@` を打ち、エージェントを選び、送信するだけ。指名したエージェントはそれぞれ独立したセッションとして並走し、その出力があなたのスレッドへストリーミングで流れ込みます — Claude Code が下書きする間に Codex がレビューする、という具合に。サブエージェントは、動いている間に中身が埋まっていくカードとして現れます。
+
+[ドキュメント →](https://docs.codeg.app/guide/multi-agent)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/multi-agent-dark.gif" />
+  <img src="../images/features/multi-agent-light.gif" alt="マルチエージェント協調" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### 無人で進む ToDo タスク
+
+仕事を書き留めたら、あとは席を外すだけ。ToDo タスクはそれぞれ専用の git ワークツリーとブランチを持ち、すぐに、または予約した時刻に始まり、そのあと「レビュー」で待ちます。diff を受け入れるとエージェントが取り込み、Codeg は git を確かめてから完了とします。
+
+[ドキュメント →](https://docs.codeg.app/guide/tasks)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/todos-dark.gif" />
+  <img src="../images/features/todos-light.gif" alt="無人で進む ToDo タスク" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### 無限キャンバス
+
+作業を空間に広げましょう：会話、ファイル、ターミナル、メモがボード上のカードになり、フォルダーとエージェントごとにまとまるので、複数のエージェントが並んで動く様子をひと目で見渡せます。
+
+[ドキュメント →](https://docs.codeg.app/guide/canvas)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/canvas-dark.gif" />
+  <img src="../images/features/canvas-light.gif" alt="無限キャンバス" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### デスクトップ・サーバー・モバイル・チャット
+
+Codeg はデスクトップアプリとしても、任意のブラウザで開けるセルフホストのサーバーとしても、ひとつの Docker コンテナとしても動かせます。ネイティブの iPhone・iPad・Android クライアント — さらに Telegram、Lark、WeChat のチャットチャンネル — でエージェントにいつでも手が届き、その間もファイルとセッションはあなた自身のマシンにとどまります。
+
+[ドキュメント →](https://docs.codeg.app/getting-started/deployment) · [モバイルアプリ →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [チャットチャンネル →](https://docs.codeg.app/guide/chat-channels)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/anywhere-dark.gif" />
+  <img src="../images/features/anywhere-light.gif" alt="デスクトップ・サーバー・モバイル・チャット" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Office ドキュメントと科学研究
+
+スライドでも、レポートでも、表計算でも、頼めば本物の `.pptx`、`.docx`、`.xlsx` が会話の隣でリアルタイムに描画されていく様子を見られます。同梱の研究スキル — 仮説生成、実験計画、統計、文献検索 — はどのエージェントでも使えます。
+
+[ドキュメント →](https://docs.codeg.app/guide/office) · [科学研究 →](https://docs.codeg.app/guide/research)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/office-dark.gif" />
+  <img src="../images/features/office-light.gif" alt="Office ドキュメントと科学研究" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### ブラウザとコンピューター操作
+
+デスクトップアプリでは、リンクはファイルの隣の内蔵ブラウザで開きます：ページ、要素、スクリーンショット、コンソールエラーをエージェントに渡すことも、共有したページをエージェントに操作させることもできます。プレビュー版の機能として、共有したウィンドウをエージェントが見て操作することもできます — 停止はいつでもワンクリックです。
+
+[ドキュメント →](https://docs.codeg.app/guide/browser) · [コンピューター操作 →](https://docs.codeg.app/guide/computer-use)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/browser-dark.gif" />
+  <img src="../images/features/browser-light.gif" alt="ブラウザとコンピューター操作" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### 開発の一連の流れをまるごと
+
+エディタ、ライブ diff と左右分割の diff、三ペインのマージエディタを備えた完全な Git クライアント、ワンクリックのワークツリー、内蔵ターミナル、画面分割 — そのすべてがエージェントの隣にあり、リポジトリの本物のファイルを扱います。
+
+[ドキュメント →](https://docs.codeg.app/guide/workspace) · [Git とワークツリー →](https://docs.codeg.app/guide/git)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
+  <img src="../images/features/workspace-light.gif" alt="開発の一連の流れをまるごと" width="100%" />
+</picture>
+</td>
+</tr>
+</table>
+
+**このほかにも：**
+
+- **[リポジトリパネル](https://docs.codeg.app/guide/repository)** — GitHub、GitLab、Gitea、Forgejo のイシュー、プルリクエスト、チェック、マージ。どのイシューや PR も ToDo タスクにできます
+- **[オートメーション](https://docs.codeg.app/guide/automations)** — 設定済みの入力欄を保存し、cron スケジュールまたは任意のタイミングでヘッドレス実行
+- **[トークン使用量](https://docs.codeg.app/guide/token-usage)** — 推移、キャッシュヒット率、アクティビティのヒートマップ、フォルダー・エージェント・モデル・セッション別の使用量
+- **[分岐とステアリング](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — 対応しているエージェントでは、完了した返信から会話を分岐させたり、まだ実行中のターンにメッセージを送り込んだりできます
+- **[スキル](https://docs.codeg.app/guide/skills) と [MCP](https://docs.codeg.app/guide/mcp)** — エージェントごとのスキルパック、ローカルの MCP スキャン、レジストリの検索とインストール
+- **[プロジェクトブート](https://docs.codeg.app/guide/project-boot)** — ライブプレビュー付きで新規プロジェクトを視覚的に構築
+- **[自分好みに](https://docs.codeg.app/reference/settings/appearance)** — カラートークン単位で塗り替えられる 12 のテーマ、壁紙、角丸、カスタム CSS — インターフェースは 10 言語に対応
+- **[バックアップと同期](https://docs.codeg.app/reference/settings/system#backup-restore)** — 暗号化バックアップと、ファイルまたは自分の WebDAV サーバーを介したマシン間の設定同期
+- **[URL スキーム](../../docs/url-scheme.md)** — `codeg://session/<id>` で別のアプリから会話を開けます（デスクトップ）
+- **まだまだあります** — ほぼすべてのリリースで何かが加わります。全リストは [リリースノート](https://github.com/spacering-net/codeg/releases) で確認できます
+
 ## 🤖 対応エージェント
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+Codeg はすべてのエージェントと [Agent Client Protocol](https://agentclientprotocol.com) で通信するため、どのエージェントにも同じ構造化されたインターフェースが用意されます。15 種を内蔵し、その多くは Codeg がインストール・バージョン固定・更新まで面倒を見ます：
 
-その多くは Codeg がインストール・バージョン固定・更新まで面倒を見ます。全リスト、各エージェントの実行環境要件、セッションの保存場所は [対応エージェント](https://docs.codeg.app/guide/supported-agents) を参照してください。
+<p>
+  <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
+  <a href="https://github.com/openai/codex"><kbd><img src="../images/agents/codex.svg" alt="" width="16" valign="middle" /> Codex</kbd></a> &nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli"><kbd><img src="../images/agents/gemini-cli.svg" alt="" width="16" valign="middle" /> Gemini CLI</kbd></a> &nbsp;
+  <a href="https://openclaw.ai"><kbd><img src="../images/agents/openclaw.svg" alt="" width="16" valign="middle" /> OpenClaw</kbd></a> &nbsp;
+  <a href="https://opencode.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/opencode-dark.svg" /><img src="../images/agents/opencode.svg" alt="" width="16" valign="middle" /></picture> OpenCode</kbd></a> &nbsp;
+  <a href="https://cline.bot"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cline-dark.svg" /><img src="../images/agents/cline.svg" alt="" width="16" valign="middle" /></picture> Cline</kbd></a> &nbsp;
+  <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
+  <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
+  <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
+  <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;
+  <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
+  <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
+  <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://docs.codeg.app/guide/custom-agents"><kbd>+ 任意の ACP エージェント</kbd></a>
+</p>
 
-リストにない？自分で追加できます。公開されている ACP レジストリから選ぶか、distribution JSON を貼り付けるだけで、Codeg がインストールし、起動できるかを事前に確認し、あとは内蔵エージェントと同じように扱います — ピッカーに並び、`@` 委譲やスキルにも対応し、そのエージェント自身が履歴を残さない場合でも会話は記録され検索できます。→ [カスタムエージェント](https://docs.codeg.app/guide/custom-agents)
+リストにない？公開されている ACP レジストリから好きなエージェントを選ぶか、その distribution JSON を貼り付ければ、Codeg がインストールし、起動できるかを確かめ、内蔵エージェントと同じように扱います。各エージェントの実行環境要件とセッションの保存場所は [対応エージェント](https://docs.codeg.app/guide/supported-agents) を参照してください。
 
-## 🤝 マルチエージェント協調
+## 📦 インストール
 
-マルチエージェント協調は、キーひとつで完結します。`@` を打ち、エージェントを選び、送信するだけ。あとのスケジューリングは Codeg が引き受けます — 指名されたエージェントをそれぞれ独立したセッションとして起動し、タスクを引き渡し、その作業を今いるスレッドへ流し込みます。ふたつ指名すれば並走します。Claude Code が下書きし、Codex がレビューする。コンテキストの切り替えも、ターミナル間のコピー＆ペーストも不要です。
-
-エージェントが自前のサブエージェントを立ち上げたとき — Claude Code も Codex も Grok も OpenCode もそうします — 子ごとにカードができ、終わってからまとめて出るのではなく、動いている間に中身が埋まっていきます。開けば子自身のセッションを読めます。
-
-![ひとつの Codeg 会話からサブエージェントへタスクを委譲する様子](../images/collaboration-light.gif#gh-light-mode-only)
-![ひとつの Codeg 会話からサブエージェントへタスクを委譲する様子](../images/collaboration-dark.gif#gh-dark-mode-only)
-
-## ✅ ToDo タスク
-
-すべての仕事に付き添う必要はありません。書き留めるだけ — タイトル、説明、どのエージェントで走らせるか — で、Codeg がそれに**コードの専用コピー**を渡します。プロジェクトの隣に作られる git worktree で、専用のブランチの上です。同時にいくつ走っても互いに触れず、あなたが作業中のツリーにも触れません。今夜に予約することも、フォルダーに同時実行数の上限までキューを自分で消化させることもできます。
-
-終わったタスクが自分でマージすることはありません。レビュー列へ移って待ちます。diff を読み、もう一周やり直させ、あるいは受け入れる — すると取り込むのはエージェントで、まずベースブランチを自分の worktree に取り込み、そこでコンフリクトを解消します。そのあと Codeg はエージェントの言い分ではなく git を確かめます。確認できなかったマージは、成功と報告される代わりにレビューへ戻ります。
-
-![ToDo タスクのボード。タスクが「ToDo」から「進行中」を経て「完了」へ進む](../images/task-light.png#gh-light-mode-only)
-![ToDo タスクのボード。タスクが「ToDo」から「進行中」を経て「完了」へ進む](../images/task-dark.png#gh-dark-mode-only)
-
-## 🪟 画面分割
-
-タブ列がひとつでは足りないときもあります。会話タブを右クリックすれば、ビューを**右**または**下**へ、何度でも分割できます — 左右に 2 つ、縦に 3 つ、あるいは格子状に。どのグループもそれ自体がひとつのワークスペースで、独自のタブ、独自のヘッダー、独自の新規会話ボタンを持ちます。片方のペインで Claude Code にリファクタリングさせ、隣のペインで Codex に diff をレビューさせる、という具合です。
-
-タブをグループ間でドラッグしても、そのセッションは移動中もストリーミングを続けます。グループの境界をドラッグすれば、スペースの分け方が変わります。レイアウトはワークスペースごとに、下書きも含めて記憶されます — Codeg を開き直せば分割はそのまま戻り、送らなかった文字も入力欄に残っています。
-
-![会話エリアをタブグループの格子に分割する](../images/split-light.gif#gh-light-mode-only)
-![会話エリアをタブグループの格子に分割する](../images/split-dark.gif#gh-dark-mode-only)
-
-## 📄 Office ドキュメント
-
-スライドでも、レポートでも、表計算でも、頼めばエージェントは本物の `.pptx` / `.docx` / `.xlsx` を作ります — 右側のペインがそれをリアルタイムに描画しながら。編集は自動でプレビューへ反映され、スライドが埋まり、表が形になり、数値がセルに収まっていきます。4 枚目が気に入らない？次のメッセージでそう伝えるだけ — エージェントは同じファイルをその場で直し、プレビューが追いつきます。書き出しも、外部の Office アプリも、Codeg を離れる必要もありません。
-
-![ライブプレビューを横に置いて Office ドキュメントを編集するエージェント](../images/office-light.png#gh-light-mode-only)
-![ライブプレビューを横に置いて Office ドキュメントを編集するエージェント](../images/office-dark.png#gh-dark-mode-only)
-
-## 💻 ワークスペース
-
-ワークスペースはひとつ、エージェントはすべて。動かしているのが Claude Code でも Codex でも Cursor でも、同じエディタ、同じライブ diff、同じ Git クライアントの中で作業します。そして生まれるのはリポジトリの中の本物のファイル — 目の前で変わっていきます。別のディレクトリを取り込むこともできます — 共有ライブラリ、隣のサービス、ドキュメントのリポジトリ — ファイルツリーも検索もエージェント自身も、それらをひとつのワークスペースとして扱います。
-
-**セッション**：すでにある履歴をそのまま引き継げます。インストール済みのすべてのエージェントの過去セッションをワンクリックで取り込み、中断したところから再開できます。取り込んだ後は、もう互いに孤立したままではありません — 古いセッションを `@` で指名すれば、いま話しているエージェントがそれを読めます。別のエージェントが書いたものでも構いません。今日の Codex が、先週の Claude Code が終えたところから続けられます。セッションがどれだけ長くなっても、開くときはまず直近のラウンドを表示し、残りはさかのぼるにつれて読み込みます。
-
-**ファイル**：エージェントの編集は、着地するそばから会話の隣に diff として現れます。どのファイルもシンタックスハイライト付きの本物のエディタで開け、`⌘L` でファイルを — あるいは選択範囲だけを — そのままエージェントへ渡せます。Markdown、HTML、画像、Office ドキュメントも同じペインでプレビューできます。
-
-**Git**：状態表示ではなく、完全なクライアントです。「変更」タブからそのままコミットでき — メッセージを書いて Enter — その隣に pull、fetch、push、stash が並び、履歴はどのコミットが push 済みかを示します。ブランチ、マージ、リベース、リセット、別ブランチとの差分に加えて、切り替えずに任意のブランチを更新・push できます。コンフリクトは三ペインのマージエディタで開き、ハンク単位で採用するか自分で書きます。そして worktree は並行作業をワンアクションに変えます — 新しいブランチ、専用のディレクトリ、そこに根を張った新しい会話。エージェントの一隊が互いのファイルに触れることなく、別々の機能を同時に作れます。
-
-**うまくいかないとき**：失敗したターンは「何かが起きました」で終わりません。Claude Code と Codex では種類まで示します — 接続の問題、アクセスの問題、上限到達、リクエスト拒否、サービスの問題 — そして入力欄の下に、本当に役立つものだけを載せた帯が出ます。再試行、サインイン、あるいは新しいセッション。エージェントが自分で再試行している間は琥珀色で表示され、ターンが無事に終われば「復旧しました」の一行に収まります。入力欄の下の接続インジケーターもボタンです。押せばそのセッションの本当の状態が分かり、やり直しではなく再開する「再接続」もそこにあります。
-
-## 📱 iPhone・iPad・Android
-
-デスクを離れても、作業は止まりません。ネイティブの iOS / Android クライアントは、あなたがすでに動かしている Codeg —— デスクトップアプリの **Web サービス**、あるいは自分で立てた `codeg-server` —— に接続します。そこからセッションを開始し、返信やツール呼び出しが流れ込むのを追い、権限の確認に答え、プロジェクトやブランチを見て回れます。端末側には何も移りません。ファイルもエージェント CLI も会話も Codeg を実行しているマシンに残り、アクセストークンは iOS Keychain または Android Keystore が預かります。どちらのクライアントもオープンソース（[iOS](https://github.com/xintaofei/codeg-ios)、[Android](https://github.com/xintaofei/codeg-android)）です。接続はわずか 3 ステップ、詳しくは [モバイルアプリ](https://docs.codeg.app/getting-started/installation#mobile-apps)。
-
-| iPhone・iPad | Android |
-| :---: | :---: |
-| <img src="../images/mobile-ios.jpg" alt="Codeg iOS クライアントでセッションを開始する画面" width="248" /> | <img src="../images/mobile-android.jpg" alt="Codeg Android クライアントに流れ込むエージェントの返信" width="248" /> |
-
-## ✨ ハイライト
-
-- **[会話の集約](https://docs.codeg.app/guide/aggregation)** — 対応するすべてのエージェントのセッションを統一された検索可能なワークスペースへ取り込み、中断した続きから再開できます
-- **[マルチエージェント協調](https://docs.codeg.app/guide/multi-agent)** — `@` でエージェントを指名するだけで委譲。異なる種類のサブエージェントがそれぞれ独立したセッションとして、ひとつのタスク内で並行して動きます
-- **[ToDo タスク](https://docs.codeg.app/guide/tasks)** — やるべきことを書き留めればエージェントがキューを片づけていきます。各タスクは専用の worktree で走り、あなたがレビューして初めてブランチに取り込まれます
-- **[カスタムエージェント](https://docs.codeg.app/guide/custom-agents)** — 公開レジストリまたは distribution JSON から、ACP 互換の任意のエージェントを登録。Codeg がインストールと履歴の記録を引き受け、内蔵エージェントと同じように扱います
-- **[ワークスペース](https://docs.codeg.app/guide/workspace)** — エージェントの隣に開発の一連の流れがすべて揃います：ファイルツリー、エディタと diff、Git の変更、コミット、内蔵ターミナル、そして[ひとつのワークスペースにまとめた複数のフォルダー](https://docs.codeg.app/guide/workspace#work-across-several-folders)
-- **[画面分割](https://docs.codeg.app/guide/workspace#split-the-conversation-view-into-groups)** — 会話エリアを好きな数のタブグループに分割し、タブや境界をドラッグして組み替え。再起動後もレイアウトは下書きごと復元します
-- **[Git と Worktree](https://docs.codeg.app/guide/git)** — 変更のレビューとコミット、Git リモートアカウントの管理、内蔵の `git worktree` フローによる並行開発
-- **[トークン使用量](https://docs.codeg.app/guide/token-usage)** — ステータスバーのカウンターの裏には完全なレポート：推移とキャッシュヒット率、アクティビティのヒートマップ、フォルダー・エージェント・モデル・セッション別の内訳
-- **[チャットチャンネル](https://docs.codeg.app/guide/chat-channels)** — Telegram、Lark（飛書）、WeChat からエージェントを操作：タスク作成、権限の承認、進捗のリアルタイム受信
-- **[オートメーション](https://docs.codeg.app/guide/automations)** — 設定済みの入力欄を再利用可能なオートメーションとして保存し、cron スケジュールまたは任意のタイミングでヘッドレス実行。セッションを開始することも、後であなたがレビューする ToDo タスクを積むこともできます
-- **[Office ドキュメント](https://docs.codeg.app/guide/office)** — 同梱の `officecli` で `.docx` / `.xlsx` / `.pptx` を作成・分析・校正・編集し、タブ内でライブプレビュー
-- **[科学研究](https://docs.codeg.app/guide/research)** — 同梱の研究スキル（仮説生成、実験計画、統計、可視化、批判的吟味、文献検索）をどのエージェントからも呼び出せます
-- **[プロジェクトブート](https://docs.codeg.app/guide/project-boot)** — ライブプレビュー付きで新規プロジェクトを視覚的に構築し、そのままワークスペースで開きます
-- **[MCP](https://docs.codeg.app/guide/mcp) & [スキル](https://docs.codeg.app/guide/skills)** — ローカルスキャンとレジストリ検索/インストール、スキルはグローバル／プロジェクト単位で管理
-- **[自分の見た目に](https://docs.codeg.app/reference/settings/appearance)** — 12 のテーマをカラートークン単位で塗り替え、角丸をアプリ全体で設定し、テーマを shadcn JSON で読み書きし、必要なら自分で CSS を書けます
-- **[デスクトップ・サーバー・Docker](https://docs.codeg.app/getting-started/deployment)** — ネイティブなデスクトップアプリ、ブラウザから使えるスタンドアロンの `codeg-server`、あるいは `docker compose up`
-- **[iPhone・iPad・Android](https://docs.codeg.app/getting-started/installation#mobile-apps)** — デスクトップやサーバーに接続するネイティブモバイルクライアント：どこからでもセッションを開始し、返信をストリーミングで受け取り、権限を承認し、プロジェクトを閲覧
-
-## 📦 インストールと実行
-
-**デスクトップ** — macOS・Windows・Linux 向けインストーラーを [Releases](https://github.com/xintaofei/codeg/releases) から入手し、[インストール](https://docs.codeg.app/getting-started/installation) の手順に従ってください。
+**デスクトップ** — macOS・Windows・Linux 向けインストーラーは [Releases](https://github.com/spacering-net/codeg/releases/latest) にあります。セットアップ手順は [インストール](https://docs.codeg.app/getting-started/installation) を参照してください。
 
 **サーバー** — Codeg をヘッドレスで動かし、任意のブラウザから利用します。Linux / macOS の場合：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xintaofei/codeg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
 CODEG_STATIC_DIR=/usr/local/share/codeg/web codeg-server
 ```
 
 Windows（PowerShell）の場合：
 
 ```powershell
-irm https://raw.githubusercontent.com/xintaofei/codeg/main/install.ps1 | iex
-$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg\web"; codeg-server
+irm https://raw.githubusercontent.com/spacering-net/codeg/main/install.ps1 | iex
+$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 ```
 
 **Docker** — 同じサーバーを、ひとつのコンテナで：
@@ -194,26 +320,41 @@ $env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg\web"; codeg-server
 docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
 ```
 
-**モバイル** — [iOS アプリ](https://apps.apple.com/app/codeg-client/id6785199071) または [Android APK](https://github.com/xintaofei/codeg-android/releases/latest) をインストールし、デスクトップアプリの **Web サービス**か自分の `codeg-server` を指定するだけ：アドレスとトークンを入れれば完了です。接続手順は [モバイルアプリ](https://docs.codeg.app/getting-started/installation#mobile-apps)。
+**モバイル** — [iOS アプリ](https://apps.apple.com/app/codeg-client/id6785199071) または [Android APK](https://github.com/xintaofei/codeg-android/releases/latest) をインストールし、デスクトップアプリの **Webサービス**か自分の `codeg-server` を指定するだけ：アドレスとトークンを入れれば完了です。接続手順は [モバイルアプリ](https://docs.codeg.app/getting-started/installation#mobile-apps)。
 
-Compose、ビルド済みバイナリ、ソースからのビルド、その場での更新は [デプロイ](https://docs.codeg.app/getting-started/deployment) に、環境変数は [設定](https://docs.codeg.app/getting-started/configuration) にあります。Codeg 自体のビルドは [開発](https://docs.codeg.app/reference/development) と [アーキテクチャ](https://docs.codeg.app/reference/architecture) を参照。
+Compose、ビルド済みバイナリ、ソースからのビルド、その場での更新は [デプロイ](https://docs.codeg.app/getting-started/deployment) に、環境変数は [設定](https://docs.codeg.app/getting-started/configuration) にあります。
 
-## 🔒 プライバシーとセキュリティ
+## 👥 コミュニティとサポート
 
-- 解析・保存・プロジェクト操作はデフォルトでローカル優先 — ネットワークアクセスはユーザーが起点となった操作でのみ発生します
-- Web モードとサーバーモードはトークンベースの認証で保護されます
-- 企業環境向けにシステムプロキシに対応
+- **WeChat** — QRコードをスキャンして、ディスカッション、フィードバック、アップデートのためのグループに参加してください：
 
-詳細は [プライバシーとセキュリティ](https://docs.codeg.app/reference/privacy) を参照してください。
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/weixin-dark.jpg" />
+    <img src="../images/weixin-light.jpg" alt="WeChat" width="200" />
+  </picture>
 
-## 👥 コミュニティ
+- **イシュー** — バグを見つけた？欲しい機能がない？[イシューを作成してください](https://github.com/spacering-net/codeg/issues)。
+- **プライバシー** — ローカル優先：解析・保存・プロジェクト操作はあなたのマシン上にとどまり、Web モードとサーバーモードはトークン認証で保護されます。詳細は [プライバシーとセキュリティ](https://docs.codeg.app/reference/privacy) を参照してください。
+- **LinuxDO** — [LinuxDO](https://linux.do) コミュニティのサポートに感謝します。
+- **応援する** — [リポジトリにスターを付けて](https://github.com/spacering-net/codeg)、今後の進展をフォローしてください。
 
-- QRコードをスキャンして、ディスカッション、フィードバック、アップデートのための WeChat グループに参加してください
+## 🤝 コントリビューション
 
-<img src="../images/weixin-light.jpg#gh-light-mode-only" alt="WeChat" width="240" />
-<img src="../images/weixin-dark.jpg#gh-dark-mode-only" alt="WeChat" width="240" />
+イシューもプルリクエストも歓迎します。Codeg を自分でビルドするなら、まず [開発](https://docs.codeg.app/reference/development) と [アーキテクチャ](https://docs.codeg.app/reference/architecture) から読んでください。
 
-- [LinuxDO](https://linux.do) コミュニティのサポートに感謝します
+<a href="https://github.com/spacering-net/codeg/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=spacering-net/codeg" alt="Codeg のコントリビューター" />
+</a>
+
+## ⭐ スター履歴
+
+<a href="https://www.star-history.com/?repos=spacering-net%2Fcodeg&type=date&releases=&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+ </picture>
+</a>
 
 ## 🙏 謝辞
 

@@ -58,6 +58,18 @@ describe("routeAcpError", () => {
     expect(acpErrorNotifiesDesktop(route)).toBe(false)
   })
 
+  it("sends an outdated agent runtime to its settings, with the instructions", () => {
+    // The localized line says only that the runtime is too old; the backend's
+    // message says which version is needed and how to install it.
+    expect(routeAcpError("agent_runtime_outdated")).toEqual({
+      kind: "session",
+      level: "error",
+      rawAsDetail: true,
+      opensAgentSettings: true,
+    })
+    expect(routeAcpError("process_exited").opensAgentSettings).toBeFalsy()
+  })
+
   it("keeps a session restored as new as an amber session state", () => {
     expect(routeAcpError("session_load_fallback")).toMatchObject({
       kind: "session",

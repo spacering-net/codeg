@@ -261,6 +261,8 @@ pub fn scratch_root() -> PathBuf {
 /// codeg itself changes its mind about where the short root lives. Sweeping
 /// only today's answer would strand yesterday's directories exactly the way
 /// this module's own docs warn about.
+// Windows has no short root, so the list of candidates is one long there.
+#[cfg_attr(windows, allow(clippy::single_element_loop))]
 fn sweep_roots() -> Vec<PathBuf> {
     let mut roots = vec![scratch_root()];
     for candidate in [

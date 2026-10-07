@@ -36,13 +36,18 @@ fn cache_path() -> PathBuf {
         .join("bundled-catalog.json")
 }
 
-/// Extract the `models` array from a `{"models":[...]}` document.
+/// Extract the `models` array from a `{"models":[...]}` document, in codex's
+/// picker order: `debug models --bundled` prints FILE order, which is not
+/// priority order since 0.159.1 (see
+/// [`crate::acp::codex_model_catalog::sort_by_priority`]).
 fn parse_models(text: &str) -> Option<Vec<Value>> {
-    serde_json::from_str::<Value>(text)
+    let mut models = serde_json::from_str::<Value>(text)
         .ok()?
         .get("models")?
         .as_array()
-        .cloned()
+        .cloned()?;
+    crate::acp::codex_model_catalog::sort_by_priority(&mut models);
+    Some(models)
 }
 
 fn read_cache(require_fresh: bool) -> Option<Vec<Value>> {
@@ -161,11 +166,20 @@ pub async fn runtime_catalog(force_refresh: bool) -> Vec<Value> {
             return fresh;
         }
     }
-    if let Some(models) = fetch_live().await {
-        write_cache(&models);
+    if let Some(models) = refresh_live_catalog().await {
         return models;
     }
     read_cache(false).unwrap_or_else(crate::acp::codex_model_catalog::bundled_snapshot_models)
+}
+
+/// Re-read the catalog from the installed codex and store it in the cache.
+/// `None` when no live catalog could be produced — unlike [`runtime_catalog`]
+/// this never falls back, so a caller about to rewrite files from the result
+/// can tell a real refresh from a stale cache or the compiled-in snapshot.
+pub async fn refresh_live_catalog() -> Option<Vec<Value>> {
+    let models = fetch_live().await?;
+    write_cache(&models);
+    Some(models)
 }
 
 /// Synchronous catalog for the config-write paths: the on-disk cache (kept warm
@@ -187,6 +201,19 @@ mod tests {
         );
         assert!(parse_models("not json").is_none());
         assert!(parse_models(r#"{"nope":1}"#).is_none());
+    }
+
+    /// `debug models --bundled` prints file order; the editor, the cache and
+    /// the catalog writers all read position as codex's rank.
+    #[test]
+    fn parse_models_returns_codex_priority_order() {
+        let models = parse_models(
+            r#"{"models":[{"slug":"astra","priority":2},{"slug":"sol","priority":1},{"slug":"x"},{"slug":"luna","priority":2}]}"#,
+        )
+        .unwrap();
+        let slugs: Vec<&str> = models.iter().map(|m| m["slug"].as_str().unwrap()).collect();
+        // Ascending, ties in file order, no priority last.
+        assert_eq!(slugs, ["sol", "astra", "luna", "x"]);
     }
 
     #[test]

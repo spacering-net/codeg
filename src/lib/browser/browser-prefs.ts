@@ -9,6 +9,11 @@ import { useSyncExternalStore } from "react"
 
 import { randomUUID } from "@/lib/utils"
 
+import {
+  DEFAULT_CUSTOM_VIEWPORT,
+  parseEmulatedBrowserDevice,
+  type ViewportSize,
+} from "./browser-device"
 import { isHostRule, type HostRule } from "./host-rules"
 
 /** Where a clicked address came from; each source carries its own default. */
@@ -181,6 +186,10 @@ export interface BrowserPrefsSnapshot {
    *  `off` still LISTS the servers (the "+" menu reads them from the backend
    *  either way) — it only means "do not interrupt me". */
   serviceAutoOpen: ServiceAutoOpen
+  /** The size a tab picked as "Custom" in the device menu starts at: the
+   *  last one a person typed for any tab, so a size worth checking once is
+   *  there to check again. Each tab keeps its own from then on. */
+  customDevice: Readonly<ViewportSize>
 }
 
 export const DEFAULT_BROWSER_PREFS: BrowserPrefsSnapshot = Object.freeze({
@@ -204,6 +213,7 @@ export const DEFAULT_BROWSER_PREFS: BrowserPrefsSnapshot = Object.freeze({
   defaultAgentGrant: "control",
   evalApproval: "silent",
   serviceAutoOpen: "notify",
+  customDevice: DEFAULT_CUSTOM_VIEWPORT,
 }) as BrowserPrefsSnapshot
 
 const KEY_PREFIX = "browser:"
@@ -228,6 +238,7 @@ const SIGN_IN_UA_KEY = `${KEY_PREFIX}sign-in-user-agent`
 const AGENT_GRANT_KEY = `${KEY_PREFIX}default-agent-grant`
 const EVAL_APPROVAL_KEY = `${KEY_PREFIX}eval-approval`
 const SERVICE_AUTO_OPEN_KEY = `${KEY_PREFIX}service-auto-open`
+const CUSTOM_DEVICE_KEY = `${KEY_PREFIX}custom-device`
 
 function readRaw(key: string): string | null {
   if (typeof window === "undefined") return null
@@ -265,6 +276,17 @@ function parseServiceAutoOpen(raw: string | null): ServiceAutoOpen {
   return raw === "off" || raw === "open"
     ? raw
     : DEFAULT_BROWSER_PREFS.serviceAutoOpen
+}
+
+/** A stored size a custom device can have; anything else means the default. */
+function parseCustomDevice(raw: string | null): Readonly<ViewportSize> {
+  if (!raw) return DEFAULT_BROWSER_PREFS.customDevice
+  try {
+    const size = parseEmulatedBrowserDevice(JSON.parse(raw))
+    return typeof size === "object" ? size : DEFAULT_BROWSER_PREFS.customDevice
+  } catch {
+    return DEFAULT_BROWSER_PREFS.customDevice
+  }
 }
 
 /** Stored rules, one bad entry dropped rather than the whole list. */
@@ -344,6 +366,7 @@ function read(): BrowserPrefsSnapshot {
     defaultAgentGrant: parseAgentGrant(readRaw(AGENT_GRANT_KEY)),
     evalApproval: parseEvalApproval(readRaw(EVAL_APPROVAL_KEY)),
     serviceAutoOpen: parseServiceAutoOpen(readRaw(SERVICE_AUTO_OPEN_KEY)),
+    customDevice: parseCustomDevice(readRaw(CUSTOM_DEVICE_KEY)),
   }
 }
 
@@ -487,6 +510,17 @@ export function setBrowserServiceAutoOpen(mode: ServiceAutoOpen): void {
   write(SERVICE_AUTO_OPEN_KEY, mode === "off" || mode === "open" ? mode : null)
 }
 
+/** The size "Custom" starts at (the default one removes the key; a size a
+ *  custom device cannot have is not kept). */
+export function setBrowserCustomDevice(size: ViewportSize): void {
+  const device = parseEmulatedBrowserDevice(size)
+  if (typeof device !== "object") return
+  const isDefault =
+    device.width === DEFAULT_BROWSER_PREFS.customDevice.width &&
+    device.height === DEFAULT_BROWSER_PREFS.customDevice.height
+  write(CUSTOM_DEVICE_KEY, isDefault ? null : JSON.stringify(device))
+}
+
 export function subscribeBrowserPrefs(listener: () => void): () => void {
   if (typeof window === "undefined") return () => {}
   const onChange = () => listener()
@@ -538,6 +572,7 @@ export function resetBrowserPrefsForTests(): void {
     localStorage.removeItem(AGENT_GRANT_KEY)
     localStorage.removeItem(EVAL_APPROVAL_KEY)
     localStorage.removeItem(SERVICE_AUTO_OPEN_KEY)
+    localStorage.removeItem(CUSTOM_DEVICE_KEY)
   } catch {
     /* ignore */
   }

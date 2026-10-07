@@ -53,7 +53,8 @@
       "office_tools": "Office-Tools",
       "skill_packs": "Skill-Pakete",
       "collaboration": "Zusammenarbeit",
-      "browser": "Browser",
+      "browser": "Browsernutzung",
+      "computer_use": "Computernutzung",
       "quick_messages": "Schnellnachrichten",
       "logs": "Laufzeitprotokolle"
     }
@@ -722,13 +723,6 @@
     "emptyNoAgent": "Keine verfügbaren Agenten.",
     "configManagement": "Konfigurationsverwaltung",
     "envVars": "Umgebungsvariablen",
-    "adapterChannel": {
-      "label": "Adapter-Version",
-      "description": "Installieren und Aktualisieren verwenden die von codeg geprüfte und angepinnte Version. Mit Neueste wird stattdessen die jeweils neueste npm-Version des Pakets installiert; schlägt das fehl, fällt codeg auf die angepinnte Version zurück und vermerkt es im Installationsprotokoll.",
-      "pinned": "Angepinnt (empfohlen)",
-      "latest": "Neueste (ungeprüft)",
-      "latestWarning": "Die neuesten Versionen sind ungeprüft und können diesen Agenten in codeg beschädigen; gelegentlich ist eine Version sogar bekanntermaßen defekt. Der Versionsstatus zeigt, was tatsächlich installiert ist."
-    },
     "hostTools": {
       "label": "Dateien und Befehle vom Agenten selbst ausführen lassen",
       "description": "codeg übernimmt Dateizugriffe und Terminalbefehle nicht mehr, sodass der Agent sie im eigenen Prozess ausführt – nur dort greifen seine eigene Sandbox und seine Berechtigungsregeln. Auch das Delegieren an andere Agenten wird deaktiviert, da dieselbe Arbeit sonst wieder über codeg liefe. codeg fügt selbst keine Sandbox hinzu; aktivieren Sie dies also nur, wenn im Agenten eine konfiguriert ist."
@@ -799,6 +793,7 @@
       "saveCodeBuddyConfig": "CodeBuddy-Konfiguration speichern",
       "saveKimiCodeConfig": "Kimi-Code-Konfiguration speichern",
       "customInstall": "Benutzerdefinierte Installation",
+      "upgradeToLatest": "Auf ungeprüfte neueste Version {version} aktualisieren",
       "saveKimiCodeRawConfig": "Save config.toml",
       "saveDeepSeekConfig": "DeepSeek-Konfiguration speichern",
       "diagnose": "Diagnose"
@@ -1046,9 +1041,9 @@
       "sandboxMode_read-only": "Nur lesen",
       "sandboxMode_workspace-write": "Workspace-Schreibzugriff",
       "sandboxMode_danger-full-access": "Vollzugriff (keine Sandbox)",
-      "sandboxModeReadOnlyAcpWarning": "Der ACP-Adapter liefert keine schreibgeschützte Sandbox mehr, daher laufen codeg-Sitzungen unabhängig von dieser Einstellung mit Schreibrecht im Arbeitsbereich. codeg wählt die strengste verfügbare Voreinstellung – jede Rechteausweitung kommt zu dir zur Freigabe –, doch Änderungen innerhalb des Arbeitsbereichs brauchen keine mehr. codex-CLI- und IDE-Sitzungen beachten „schreibgeschützt“ weiterhin.",
+      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7–1.13 liefern keine schreibgeschützte Sandbox: Mit diesen Adapterversionen läuft eine codeg-Sitzung unabhängig von dieser Einstellung mit Schreibrecht im Arbeitsbereich, wobei jede Rechteausweitung weiterhin zu dir zur Freigabe kommt. codex-acp 2.0 hat sie wiederhergestellt – aktualisiere den Adapter, falls ein älterer installiert ist. codex-CLI- und IDE-Sitzungen beachten „schreibgeschützt“ immer.",
       "sandboxModeHint": "Unter Windows wird Workspace-Schreibzugriff auf Nur-Lesen herabgestuft, sofern die experimentelle Windows-Sandbox von codex nicht aktiviert ist.",
-      "sandboxModeSeedsPresetHint": "codeg bildet dies auch auf die Start-Freigabe-Voreinstellung der Sitzung ab, wirkt sich also – anders als die Freigaberichtlinie – auf gewöhnliche Anfragen aus. Beachte: Bei der Standard-Voreinstellung des Adapters sichtet jetzt ein Modell die Rechteausweitungen vor und leitet nur weiter, was es für unsicher hält; wähle im Eingabefeld „Um Freigabe bitten“, um jede selbst zu prüfen. Die Voreinstellung im Eingabefeld hat immer Vorrang.",
+      "sandboxModeSeedsPresetHint": "codeg bildet dies auch auf die Start-Freigabe-Voreinstellung der Sitzung ab, wirkt sich also – anders als die Freigaberichtlinie – auf gewöhnliche Anfragen aus. Schreibgeschützt startet in „Read-only“. Mit der Freigaberichtlinie never startet Vollzugriff in „Full access“ und Schreibrecht im Arbeitsbereich in „Auto review“, wo ein Modell die Rechteausweitungen vorsichtet und nur weiterleitet, was es für unsicher hält. Mit jeder anderen Freigaberichtlinie starten Schreibrecht im Arbeitsbereich und Vollzugriff ab codex-acp 2.0 in „Workspace access“, das dir jede Rechteausweitung vorlegt, bei älteren Adaptern in „Auto review“. Ohne Einstellung bleibt die Adaptervorgabe „Auto review“. Die Voreinstellung im Eingabefeld hat immer Vorrang.",
       "writableRootsLabel": "Zusätzliche beschreibbare Ordner",
       "writableRootsHint": "Ein absoluter Pfad pro Zeile, zusätzlich zum Arbeitsverzeichnis.",
       "sandboxRootsRelativeError": "Muss ein absoluter Pfad sein – codex löst relative Angaben unter ~/.codex auf: {path}",
@@ -1385,6 +1380,7 @@
       "haikuDefaultModel": "Standard-Haiku-Modell",
       "sonnetDefaultModel": "Standard-Sonnet-Modell",
       "opusDefaultModel": "Standard-Opus-Modell",
+      "fableDefaultModel": "Standard-Fable-Modell",
       "customModelOption": "Benutzerdefinierte Modell-ID",
       "customModelOptionName": "Name des benutzerdefinierten Modells",
       "customModelOptionDescription": "Beschreibung des benutzerdefinierten Modells",
@@ -1403,7 +1399,9 @@
       "customInstallDescription": "Geben Sie die zu installierende Version ein. Dies installiert neu und ersetzt die aktuell installierte Version.",
       "customInstallVersionLabel": "Versionsnummer",
       "customInstallInvalid": "Geben Sie eine gültige Versionsnummer ein, z. B. 1.2.3.",
-      "customInstallSubmit": "Installieren"
+      "customInstallSubmit": "Installieren",
+      "confirmUpgradeToLatest": "{name} auf die ungeprüfte Version {version} aktualisieren?",
+      "confirmUpgradeToLatestDescription": "Diese Version wurde von codeg nicht geprüft. Sie kann {name} in codeg beschädigen; gelegentlich ist eine Version sogar bekanntermaßen defekt. Um zurückzukehren, installiere über „Benutzerdefinierte Installation“ die empfohlene Version {recommendedVersion} neu."
     },
     "errors": {
       "windowsFileLocked": "Die Dateien von {name} werden von einer laufenden Sitzung verwendet, daher kann Windows sie nicht ersetzen. Schließe alle {name}-Sitzungen und versuche es erneut.",
@@ -1492,7 +1490,7 @@
     "version": {
       "statusLabel": "Versionsstatus",
       "notInstalled": "Nicht installiert",
-      "remoteLocal": "Remote: {remoteVersion} · Lokal: {localVersion}",
+      "recommendedLocal": "Empfohlen: {recommendedVersion} · Lokal: {localVersion}",
       "localOnly": "Lokal: {localVersion}",
       "localInstalled": "{versionText}. Installiert.",
       "platformUnsupported": "{versionText}. Aktuelle Plattform unterstützt diesen Agenten nicht.",
@@ -1500,9 +1498,9 @@
       "clickInstall": "{versionText}. Rechts auf Installieren klicken.",
       "localUnrecognized": "{versionText}. Lokale Version ist nicht vergleichbar; zum Überschreiben bitte Upgrade versuchen.",
       "upgradeAvailable": "{versionText}. Upgrade verfügbar.",
-      "remoteUnavailable": "{versionText}. Remote-Version ist derzeit nicht verfügbar.",
+      "recommendedUnavailable": "{versionText}. Keine empfohlene Version verfügbar.",
       "latest": "{versionText}. Bereits aktuell.",
-      "latestChannel": "{versionText}. Neueste-Kanal ist aktiv; Aktualisieren installiert die neueste Version."
+      "unreviewedAvailable": "{versionText}. Eine neuere, ungeprüfte Version ist verfügbar."
     },
     "adapter": {
       "label": "ACP-Adapter",
@@ -1552,7 +1550,8 @@
         "medium": "Mittel",
         "high": "Hoch",
         "minimal": "Minimal",
-        "xhigh": "Sehr hoch"
+        "xhigh": "Sehr hoch",
+        "max": "Maximum"
       },
       "apiKeyLabel": "API-Schlüssel",
       "apiKeyHint": "Wird in ~/.pi/agent/auth.json für den ausgewählten Anbieter gespeichert.",
@@ -1566,7 +1565,9 @@
       "modeCustom": "Eigenes pi",
       "modeCustomHint": "Führe deinen eigenen pi-Build, deine Installation oder einen Wrapper aus.",
       "commandLabel": "pi-Befehl oder -Pfad",
-      "commandHint": "Ein absoluter Pfad, ein Befehlsname im PATH oder ein Wrapper-Skript (z. B. ./pi-test.sh eines Monorepos).",
+      "commandHint": "Verwende einen absoluten Pfad oder einen Befehlsnamen aus PATH.",
+      "relativeCommandPath": "Verwende einen absoluten Pi-Befehlspfad oder einen Befehlsnamen aus PATH.",
+      "relativeAgentDir": "Verwende ein absolutes Pi-Agent-Verzeichnis oder ~/...; relative Pfade hängen vom Arbeitsverzeichnis ab.",
       "commandNotFound": "Befehl nicht gefunden",
       "validate": "Prüfen",
       "advanced": "Erweitert",
@@ -1607,7 +1608,14 @@
       "levelsEmptyError": "Wähle mindestens eine Stufe — ohne eine fällt pi auf Off zurück.",
       "wireValuesTitle": "Erweitert: an den Anbieter gesendete Werte",
       "wireValuesHint": "Leer lassen, um den Stufennamen unverändert zu senden. Setze einen Wert, wenn dein Endpunkt etwas anderes erwartet — Google-artige Backends erwarten LOW / HIGH.",
-      "defaultLevelUnlisted": "Diese Stufe steht nicht in der Liste oben — pi würde sie begrenzen."
+      "defaultLevelUnlisted": "Diese Stufe steht nicht in der Liste oben — pi würde sie begrenzen.",
+      "modelLevels": "{model} bietet: {levels}.",
+      "modelNoThinking": "{model} hat keine Denkstufen — Pi führt es immer ohne Denken aus.",
+      "levelClamped": "{model} bietet {level} nicht an, daher führt Pi es mit {effective} aus. Modelle, die {level} anbieten, nutzen es weiterhin.",
+      "modelNotListed": "Pi listet dieses Modell für diesen Anbieter nicht auf. Prüfe die Modell-ID — Pi listet nur Anbieter, für die ein API-Schlüssel oder eine Anmeldung vorliegt.",
+      "catalogUnavailable": "Pi konnte nicht gefragt werden, welche Denkstufen dieses Modell anbietet.",
+      "configLoadFailed": "Die Pi-Einstellungen konnten nicht gelesen werden: {message}",
+      "runtimeTooOld": "Dieses Pi ist zu alt: Codeg benötigt Pi {min} oder neuer, um eine Sitzung zu öffnen. Aktualisiere es zuerst."
     },
     "addCustomAgent": "Eigenen Agenten hinzufügen",
     "addCustomAgentHint": "Registriere jeden ACP-kompatiblen Agenten. Wähle einen aus der öffentlichen ACP-Registry oder füge seine Registry-Informationen ein.",
@@ -1991,7 +1999,7 @@
       "tasks": "To-dos",
       "loadingSubsessions": "Unterkonversationen werden geladen…",
       "forge": "Repository-Panel",
-      "canvas": "Unendliche Unterhaltungen",
+      "canvas": "Unendlicher Canvas",
       "folderGroup": {
         "newGroup": "Neue Gruppe",
         "newGroupTitle": "Neue Ordnergruppe",
@@ -2007,7 +2015,12 @@
         "removeFromGroup": "Keine Gruppe",
         "newGroupAndMove": "Neue Gruppe…",
         "dropToUngroup": "Hier ablegen, um aus der Gruppe zu entfernen"
-      }
+      },
+      "recentFilterAll": "Alle",
+      "recentFilterTitle": "In „Zuletzt“ anzeigen: {filter}",
+      "noRecentChats": "Keine letzten Chats",
+      "noRecentFolders": "Keine letzten Ordner-Unterhaltungen",
+      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -3025,7 +3038,7 @@
           "downloadFailed": "{agent}-Download fehlgeschlagen: {message}",
           "sessionLoadResourceNotFound": "{agent}-Sitzung konnte nicht geladen werden. Neu laden, um es erneut zu versuchen, oder eine neue Konversation starten.",
           "sessionLoadUnavailable": "{agent} konnte diese Sitzung nicht wiederherstellen – sie wurde möglicherweise beendet oder der Agent wurde gestoppt. Neu laden, um es erneut zu versuchen, oder eine neue Konversation starten.",
-          "sessionLoadBusy": "Dieser Verlauf wird von der daraus abgezweigten Sitzung offen gehalten. Schließe diese Sitzung und lade neu, um ihn zu öffnen.",
+          "sessionLoadBusy": "Diese Sitzung ist an anderer Stelle geöffnet. Hat ein anderer {agent}-Client (App, CLI oder IDE-Erweiterung) sie offen, schließe sie dort oder beende diesen Client und lade dann neu. Hast du sie gerade verzweigt, lade in etwa einer Minute neu.",
           "sessionArchived": "Die vorherige Sitzung wurde auf {agent}-Seite archiviert. Führe {command} im Terminal aus, um sie wiederherzustellen und neu zu laden, oder starte eine neue Unterhaltung.",
           "turnFailedRefusal": "{agent} hat die Fortsetzung dieser Runde abgelehnt. Häufig deutet das auf einen Backend- oder Gateway-Fehler hin. Bitte prüfen Sie die Agent-Logs.",
           "turnFailedMaxTokens": "{agent} hat das Token-Limit für diese Runde erreicht.",
@@ -3033,6 +3046,7 @@
           "turnFailedUnknown": "{agent} hat die Runde mit einem unbekannten Stoppgrund beendet.",
           "turnFailedAuthRequired": "{agent} benötigt eine erneute Anmeldung, bevor diese Runde ausgeführt werden kann. Melde dich in den Einstellungen an und sende die Nachricht erneut.",
           "agentAuthRequired": "{agent} konnte keine Sitzung starten: Es sind keine verwendbaren Anmeldedaten vorhanden. Melde dich unter Einstellungen → Agenten → {agent} erneut an und öffne diese Unterhaltung neu.",
+          "agentRuntimeOutdated": "{agent} ist für diese Version von Codeg zu alt. Aktualisiere es und öffne diese Unterhaltung dann erneut.",
           "grokModelSwitchIncompatibleAgent": "{agent} kann in einer bestehenden Unterhaltung nicht zu diesem Modell wechseln. Starte eine neue Sitzung, um es zu verwenden.",
           "setModeFailed": "{agent} konnte den Modus nicht wechseln.",
           "setConfigOptionFailed": "{agent} konnte diese Einstellung nicht übernehmen.",
@@ -3063,7 +3077,8 @@
           "httpStatus": " (HTTP {status})"
         },
         "configOptionAdjusted": "{agent} hat {option} auf {actual} statt {requested} gesetzt",
-        "noticeTitle": "{agent}: {title}"
+        "noticeTitle": "{agent}: {title}",
+        "pluginLoadFailedTitle": "{agent} konnte {count, plural, one {# Plugin} other {# Plugins}} nicht laden"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3701,7 +3716,22 @@
           "outputMissing": "Codex hat die Skriptausgabe gekürzt und dabei das Trennzeichen dieses Befehls entfernt, sodass ihm keine Ausgabe zugeordnet werden konnte.",
           "sharedWith": "Enthält auch die Ausgabe von {commands} – codex hat deren Trennzeichen abgeschnitten.",
           "truncated": "gekürzt"
-        }
+        },
+        "visualizeTitle": "Visualisierung",
+        "visualizeWide": "Breit",
+        "visualizeLoading": "Visualisierung wird geladen…",
+        "visualizeError": "Die Visualisierung konnte nicht geladen werden",
+        "visualizeReload": "Neu laden",
+        "visualizeOpenFile": "Datei öffnen",
+        "visualizeExpand": "Alles anzeigen",
+        "visualizeCollapse": "Weniger anzeigen",
+        "visualizeScriptsOn": "Skripte aktiv",
+        "visualizeScriptsOff": "Skripte aktivieren",
+        "visualizeScriptsHint": "Führt die Skripte der Visualisierung aus, damit sie interaktiv ist. Sie läuft in einer Sandbox und hat keinen Zugriff auf das Netzwerk oder deine Dateien.",
+        "visualizeFrameTitle": "Codex-Visualisierung",
+        "htmlPreviewOpen": "Vorschau",
+        "htmlPreviewOpenAria": "Vorschau von {name}",
+        "htmlPreviewHide": "Vorschau ausblenden"
       },
       "messageNav": {
         "title": "Nachrichtennavigation",
@@ -4226,13 +4256,14 @@
     "agentTypeRequired": "Agententyp ist erforderlich.",
     "agentTypeImmutableHint": "Der Agententyp kann nach der Erstellung nicht mehr geändert werden.",
     "model": "Modell",
-    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Hauptmodell",
     "claudeReasoningModel": "Reasoning-Modell (Thinking)",
     "claudeHaikuDefaultModel": "Standard Haiku-Modell",
     "claudeSonnetDefaultModel": "Standard Sonnet-Modell",
     "claudeOpusDefaultModel": "Standard Opus-Modell",
+    "claudeFableDefaultModel": "Standard Fable-Modell",
     "claudeCustomModelOption": "Benutzerdefinierte Modell-ID",
     "claudeCustomModelOptionName": "Name des benutzerdefinierten Modells",
     "claudeCustomModelOptionDescription": "Beschreibung des benutzerdefinierten Modells",
@@ -4499,6 +4530,97 @@
       "deleted": "Schnellnachricht gelöscht"
     }
   },
+  "ConversationTags": {
+    "tags": "Tags",
+    "moreTags": "{count, plural, one {# weiterer Tag} other {# weitere Tags}}",
+    "addTags": "Tags hinzufügen",
+    "editTags": "Tags bearbeiten",
+    "global": "Global",
+    "noTagsYet": "Noch keine Tags",
+    "newTag": "Neuer Tag…",
+    "manageTags": "Tags verwalten…",
+    "branchChip": "Branch: {branch}",
+    "picker": {
+      "searchPlaceholder": "Tag suchen oder erstellen…",
+      "noResults": "Keine passenden Tags",
+      "empty": "Noch keine Tags. Gib einen Namen ein, um einen zu erstellen.",
+      "createGlobal": "Globalen Tag „{name}“ erstellen",
+      "createInFolder": "„{name}“ in {folder} erstellen",
+      "otherFolders": "Andere Ordner"
+    },
+    "form": {
+      "createTitle": "Neuer Tag",
+      "editTitle": "Tag bearbeiten",
+      "name": "Name",
+      "namePlaceholder": "z. B. Bug, Review, Idee",
+      "color": "Farbe",
+      "customColor": "Eigene Farbe",
+      "scope": "Verfügbar in",
+      "scopeGlobal": "Allen Konversationen",
+      "scopeFolder": "Nur {folder}",
+      "create": "Erstellen",
+      "save": "Speichern",
+      "cancel": "Abbrechen"
+    },
+    "editor": {
+      "empty": "Hier gibt es noch keine Tags.",
+      "add": "Neuer Tag",
+      "edit": "Tag „{name}“ bearbeiten",
+      "delete": "Tag „{name}“ löschen",
+      "dragToReorder": "Ziehen, um „{name}“ neu anzuordnen",
+      "deleteTitle": "Diesen Tag löschen?",
+      "deleteDescription": "„{name}“ wird von allen Konversationen entfernt, die ihn tragen. Das lässt sich nicht rückgängig machen.",
+      "deleteConfirm": "Löschen",
+      "deleteCancel": "Abbrechen",
+      "loadFailed": "Tags konnten nicht geladen werden"
+    },
+    "manager": {
+      "title": "Tags verwalten",
+      "description": "Versieh Konversationen mit farbigen Tags und filtere die Seitenleiste danach.",
+      "branchTitle": "Branch-Tag",
+      "branchDescription": "Zeigt den Git-Branch, auf dem jede Konversation begonnen hat, als Tag hinter ihrem Titel.",
+      "branchShow": "Anzeigen",
+      "branchLoadFailed": "Der Branch-Tag konnte nicht geladen werden",
+      "globalTitle": "Globale Tags",
+      "globalDescription": "In allen Konversationen verfügbar, auch im Chat-Modus.",
+      "folderTitle": "Ordner-Tags",
+      "folderDescription": "Nur in den Konversationen des gewählten Ordners verfügbar, einschließlich seiner Worktrees.",
+      "folderPlaceholder": "Ordner wählen",
+      "noFolders": "Noch keine Ordner. Öffne einen im Arbeitsbereich, um ihm eigene Tags zu geben."
+    },
+    "filter": {
+      "button": "Nach Tags filtern",
+      "searchPlaceholder": "Tags suchen…",
+      "match": "Treffer",
+      "matchAny": "Beliebig",
+      "matchAll": "Alle",
+      "matchAnyHint": "Konversationen mit mindestens einem der gewählten Tags",
+      "matchAllHint": "Konversationen mit allen gewählten Tags",
+      "modeAll": "Alle zugleich",
+      "modeAny": "Mindestens einer",
+      "clear": "Filter aufheben",
+      "noTags": "Noch keine Tags. Füge einen über das Menü einer Konversation hinzu.",
+      "noResults": "Keine passenden Tags",
+      "active": "Nach Tags gefiltert",
+      "noMatches": "Keine Konversationen mit diesen Tags",
+      "remove": "„{name}“ aus dem Filter entfernen"
+    },
+    "toasts": {
+      "assignFailed": "Die Tags der Konversation konnten nicht aktualisiert werden",
+      "createFailed": "Der Tag konnte nicht erstellt werden",
+      "deleteFailed": "Der Tag konnte nicht gelöscht werden",
+      "reorderFailed": "Die Reihenfolge der Tags konnte nicht gespeichert werden",
+      "branchTagFailed": "Der Branch-Tag konnte nicht gespeichert werden"
+    },
+    "errors": {
+      "emptyName": "Gib einen Namen für den Tag ein",
+      "duplicateName": "Hier gibt es bereits einen Tag namens „{name}“",
+      "invalidColor": "Wähle eine gültige Farbe",
+      "folderNotTaggable": "Dieser Ordner kann keine eigenen Tags haben",
+      "notApplicable": "Dieser Tag gehört zu einem anderen Ordner",
+      "tagNotFound": "Diesen Tag gibt es nicht mehr"
+    }
+  },
   "Pet": {
     "badge": {
       "running": "{count} laufend",
@@ -4656,6 +4778,7 @@
     "saveFailed": "Failed to save remote connection",
     "deleteFailed": "Failed to delete remote connection",
     "openFailed": "Failed to open remote workspace",
+    "restoreFailed": "Remote-Arbeitsbereich „{name}“ konnte nicht erneut geöffnet werden",
     "connectionLoadFailed": "Failed to load remote connection: {message}",
     "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
   },
@@ -4676,7 +4799,8 @@
     "none": "Keine Branches",
     "local": "Lokal",
     "remote": "Remote",
-    "useCustom": "„{query}“ verwenden"
+    "useCustom": "„{query}“ verwenden",
+    "head": "HEAD"
   },
   "BackupSettings": {
     "tabs": {
@@ -4977,6 +5101,11 @@
       "short": "Führt eigenen Code auf einer freigegebenen Seite aus — ohne Nachfrage.",
       "hint": "Erlaubt Agenten, eigenes JavaScript auf einer von dir geteilten Seite auszuführen. Standardmäßig aus und nur zusammen mit dem Schalter darüber. Einschalten heißt, dass Codeausschnitte ohne Nachfrage laufen – die Entscheidung fällt also an diesem Schalter; unter Einstellungen → Integrierter Browser kannst du dir stattdessen jeden Ausschnitt zeigen lassen."
     },
+    "computer": {
+      "label": "Fenster des Desktops sehen und bedienen",
+      "short": "Apps und Fenster auflisten; freigegebene lesen, erlaubte bedienen.",
+      "hint": "Lässt einen Agenten die Anwendungen und Fenster auf deinem Desktop auflisten, die Fenster lesen, die du für ihn freigibst – ein Bildschirmfoto, den Inhalt, ob es zeigt, was erwartet wird –, und in denen klicken, tippen und Tasten drücken, die du zum Handeln freigibst. Nichts ist lesbar, bis du im Bereich „Computernutzung“ in der Statusleiste ein Fenster freigibst, und in keinem Fenster wird gehandelt, wenn du das nicht auch erlaubst; die Freigabe endet, wenn das Fenster geschlossen wird, nach einer Weile ohne Nutzung oder wenn du sie beendest, und „Agenten anhalten“ in diesem Bereich hält alle auf einmal an. Eingaben erreichen das Fenster im Hintergrund; für eine Aktion, die im Hintergrund nicht ankommt, darf ein Agent das Fenster nach vorn holen – das lässt sich in den Einstellungen zur Computernutzung abschalten. Nur in der Desktop-App; unter macOS sind Berechtigungen für codeg-computer-helper nötig. Vorschau."
+    },
     "automations": {
       "label": "Automatisierungen erstellen",
       "short": "Erstellt und verwaltet geplante Automationen.",
@@ -5139,6 +5268,249 @@
     "clearConfirmDescriptionProfile": "Cookies, Caches und Website-Daten des Profils {name} werden entfernt. Offene Tabs bleiben offen, aber du wirst bei Websites abgemeldet.",
     "signInUaTitle": "Kompatibilität mit der Google-Anmeldung",
     "signInUaHint": "Google verweigert die Anmeldung aus eingebetteten Browsern. Wenn eingeschaltet, geben sich Tabs nur gegenüber Googles Anmeldeseiten (accounts.google.com) als Firefox aus; überall sonst geben sie sich als die Engine aus, in der sie laufen, nie als Firefox. Nur in eingebetteten Tabs, nicht im separaten Fenster; leitet eine Anmeldeseite auf eine andere Website weiter, trägt die erste Anfrage dort noch die Anmeldekennung."
+  },
+  "ComputerUse": {
+    "title": "Computernutzung",
+    "preview": "Vorschau",
+    "refresh": "Aktualisieren",
+    "tooltipShared": "Computernutzung · {count, plural, one {# Fenster freigegeben} other {# Fenster freigegeben}}",
+    "stop": "Freigabe beenden",
+    "stopHint": "Beendet sofort die Freigabe aller Fenster und bricht ab, was Agenten gerade tun. Gib ein Fenster erneut frei, wenn sie weitermachen sollen.",
+    "indicator": {
+      "actOne": "Agenten können in {app} handeln",
+      "actMany": "Agenten können in {count, plural, one {# Fenster} other {# Fenstern}} handeln",
+      "readOne": "Agenten können {app} sehen",
+      "readMany": "Agenten können {count, plural, one {# Fenster} other {# Fenster}} sehen",
+      "readScreen": "Agenten können den ganzen Bildschirm sehen",
+      "actScreen": "Agenten können auf dem ganzen Bildschirm handeln",
+      "recent": "{action} in {app}",
+      "stop": "Freigabe beenden",
+      "stopWithKey": "Freigabe aller Fenster beenden ({key})"
+    },
+    "codegGranted": "codeg selbst hat Bedienungshilfen oder Bildschirmaufnahme – die Shells der Agenten können das ohne jede Freigabe nutzen. Schalte es für codeg in den Systemeinstellungen aus, wenn du es nicht brauchst.",
+    "backend": {
+      "idle": "Nicht gestartet",
+      "downloading": "Treiber wird geladen …",
+      "starting": "Helfer wird gestartet …",
+      "ready": "Bereit",
+      "failed": "Fehlgeschlagen"
+    },
+    "driver": "cua-driver {version}",
+    "devBuild": "Entwicklungs-Build: Der Helfer prüft nicht, welches Programm ihn aufruft.",
+    "devTag": "Entwicklungs-Build",
+    "permissions": {
+      "accessibility": "Bedienungshilfen",
+      "screenRecording": "Bildschirmaufnahme",
+      "granted": "Erteilt",
+      "request": "Erteilen…",
+      "why": "Aktiviere codeg-computer-helper in den Systemeinstellungen – nicht codeg. Bildschirmaufnahme lässt ihn Fenster sehen, Bedienungshilfen lassen ihn sie lesen und darin handeln.",
+      "devRebuild": "Jeder Neubau des Helfers macht seine alte Berechtigung ungültig: Entferne zuerst den alten codeg-computer-helper aus der Liste und erteile sie dann erneut.",
+      "notListed": "Fehlt codeg-computer-helper in der Liste, zieh ihn aus dem Finder hinein:",
+      "reveal": "Im Finder zeigen"
+    },
+    "shared": {
+      "title": "{count, plural, =0 {Keine Fenster freigegeben} one {# Fenster freigegeben} other {# Fenster freigegeben}}",
+      "empty": "Agenten können deine Fenster auflisten, aber keines lesen, bis du eines freigibst.",
+      "stop": "Beenden",
+      "wholeApp": "Ganze App · {count, plural, =0 {kein Fenster offen} one {# Fenster} other {# Fenster}}",
+      "screen": "Ganzer Bildschirm",
+      "screenWindows": "{count, plural, =0 {noch kein Fenster} one {# Fenster} other {# Fenster}}"
+    },
+    "level": {
+      "read": "Darf lesen",
+      "control": "Darf handeln",
+      "readLong": "Nur lesen",
+      "controlLong": "Lesen und handeln",
+      "change": "Ändern, was Agenten dürfen"
+    },
+    "activity": {
+      "title": "Letzte Aktivität",
+      "clear": "Letzte Aktivität löschen",
+      "capture": "Bildschirmfoto",
+      "snapshot": "Lesen",
+      "verify": "Prüfen",
+      "click": "Klick",
+      "drag": "Ziehen",
+      "scroll": "Scrollen",
+      "type": "Eingabe",
+      "key": "Taste",
+      "hold-key": "Taste halten",
+      "set-value": "Wert setzen",
+      "restore": "Wiederherstellen",
+      "menu": "Menü",
+      "set-frame": "Fenster verschieben",
+      "launch": "Anwendung öffnen",
+      "clipboard-read": "Zwischenablage lesen",
+      "clipboard-write": "In Zwischenablage legen",
+      "outcome": {
+        "done": "erledigt",
+        "refused": "abgelehnt",
+        "failed": "fehlgeschlagen"
+      }
+    },
+    "share": "Fenster freigeben …",
+    "openSettings": "Alle Einstellungen öffnen",
+    "picker": {
+      "title": "Ein Fenster für Agenten freigeben",
+      "description": "Agenten in jeder Unterhaltung können die Fenster lesen, die du freigibst, und in denen klicken und tippen, in denen du sie handeln lässt. Eine Freigabe endet, wenn du sie beendest, das Fenster geschlossen wird oder es so lange ungenutzt bleibt wie in den Einstellungen festgelegt.",
+      "count": "{count, plural, one {# Fenster} other {# Fenster}}",
+      "sharedCount": "{count, plural, one {# freigegeben} other {# freigegeben}}",
+      "loading": "Fenster werden geladen …",
+      "refresh": "Aktualisieren",
+      "empty": "Keine Fenster gefunden. Wenn es welche geben sollte, prüfe die Berechtigungen im Bereich Computernutzung.",
+      "noScreenRecording": "codeg-computer-helper hat noch keine Bildschirmaufnahme: Fenstertitel und -bilder können nicht angezeigt werden, und Agenten können keine Fenster lesen.",
+      "unnamedApp": "Unbekannte App",
+      "untitled": "Fenster ohne Titel",
+      "minimized": "Minimiert",
+      "hidden": "Ausgeblendet",
+      "notGrantable": {
+        "codeg": "Fenster von codeg",
+        "blocklisted": "Auf der Sperrliste",
+        "unidentified": "App nicht identifizierbar"
+      },
+      "shareRead": "Agenten lesen lassen",
+      "shareControl": "Agenten lesen und handeln lassen",
+      "stopSharing": "Freigabe beenden",
+      "levelNone": "Aus",
+      "levelRead": "Lesen",
+      "levelControl": "Handeln",
+      "levelLabel": "Was Agenten mit {app} dürfen",
+      "wholeApp": "Ganze App",
+      "wholeAppHint": "Alle Fenster von {app}, auch später geöffnete, dazu ihre Menüs und Tastenkürzel",
+      "appLevelLabel": "Was Agenten mit ganz {app} dürfen",
+      "viaApp": "Mit der App",
+      "screenTitle": "Ganzer Bildschirm",
+      "screenHint": "Alle Fenster, die du freigeben kannst, auch später geöffnete, und die Tastenkürzel des Desktops selbst. codegs Fenster und die Sperrliste bleiben übermalt.",
+      "screenLevelLabel": "Was Agenten mit dem ganzen Bildschirm dürfen",
+      "viaScreen": "Mit dem Bildschirm",
+      "shareAll": "Alle freigeben",
+      "shareAllRead": "Agenten alle lesen lassen",
+      "shareAllControl": "Agenten alle lesen und darin handeln lassen",
+      "stopSharingAll": "Alle Freigaben beenden",
+      "skipped": "{count, plural, one {# Fenster konnte nicht freigegeben werden; es wurde vielleicht geschlossen.} other {# Fenster konnten nicht freigegeben werden; sie wurden vielleicht geschlossen.}}",
+      "unshareable": "{count, plural, one {# Fenster lässt sich nicht freigeben} other {# Fenster lassen sich nicht freigeben}}",
+      "noneShareable": "Keines dieser Fenster lässt sich freigeben.",
+      "codegWhy": "Fenster von codeg werden nie freigegeben: Ein Agent, der codeg bedienen könnte, könnte seine eigenen Anfragen genehmigen oder sich weitere Fenster freigeben. Dasselbe gilt für andere codeg-Instanzen."
+    },
+    "settings": {
+      "pageTitle": "Computernutzung",
+      "pageDescription": "Lass Agenten die Desktop-Fenster sehen und bedienen, die du für sie freigibst.",
+      "switch": {
+        "label": "Computernutzung aktivieren",
+        "hint": "Agenten können deine Apps und Fenster auflisten, freigegebene Fenster lesen und in denen klicken und tippen, in denen du sie handeln lässt. Kein Fenster ist lesbar, bevor du es über die Statusleiste freigibst.",
+        "failed": "Computernutzung konnte nicht umgeschaltet werden"
+      },
+      "driver": {
+        "title": "Treiber",
+        "description": "Die Computernutzung liest und bedient Fenster über cua-driver, ein Open-Source-Programm. codeg führt nur die geprüfte Version {version} aus und lädt sie beim ersten Bedarf herunter.",
+        "loading": "Wird geprüft …",
+        "unsupported": "cua-driver hat keinen Build für diese Plattform.",
+        "installing": "Wird installiert …",
+        "downloadingOf": "Wird heruntergeladen … {done} / {total} MB",
+        "downloadingSoFar": "Wird heruntergeladen … {done} MB",
+        "uninstalling": "Wird deinstalliert …",
+        "installed": "Installiert · {version}",
+        "outdated": "{installed} ist installiert; dieses codeg verwendet {version}.",
+        "notInstalled": "Nicht installiert. Er wird heruntergeladen, sobald die Computernutzung ihn zum ersten Mal braucht, oder du installierst ihn jetzt.",
+        "install": "Installieren",
+        "upgrade": "Auf {version} aktualisieren",
+        "uninstall": "Deinstallieren",
+        "installDone": "cua-driver installiert",
+        "uninstallDone": "cua-driver deinstalliert",
+        "confirmTitle": "cua-driver deinstallieren?",
+        "confirmDescription": "Die Computernutzung wird ausgeschaltet und alle Freigaben enden. Beim erneuten Einschalten wird der Treiber wieder heruntergeladen.",
+        "cancel": "Abbrechen"
+      },
+      "permissions": {
+        "title": "Berechtigungen",
+        "description": "macOS verlangt sie für codeg-computer-helper. Erteile sie in den Systemeinstellungen und kehre zurück – die Anzeige aktualisiert sich von selbst.",
+        "off": "Schalte die Computernutzung ein, um Berechtigungen zu prüfen und zu erteilen.",
+        "accessibilityHint": "Fensterinhalte lesen und darin handeln.",
+        "screenRecordingHint": "Bildschirmfotos machen und Fenstertitel lesen."
+      },
+      "title": "Freigeben, Eingabe und Anhalten",
+      "description": "Wie lange ein Fenster freigegeben bleibt, welche Apps nie freigegeben werden, das Tastenkürzel und die schwebende Leiste, die alle Freigaben auf einmal beenden, und ob Agenten ein Fenster nach vorn holen dürfen, um darin zu handeln.",
+      "ttl": {
+        "label": "Freigabe ungenutzter Fenster beenden nach",
+        "hint": "Ein freigegebenes Fenster wird nicht mehr geteilt, wenn es so lange kein Agent gelesen hat.",
+        "minutes": "{minutes} Minuten",
+        "never": "Nie (bis ich sie beende)"
+      },
+      "blocklist": {
+        "label": "Nie freigegebene Anwendungen",
+        "hint": "Ihre Fenster können nicht für Agenten freigegeben werden. Entferne Standardeinträge, die du nicht brauchst, oder füge eine Anwendung per Bundle-ID (com.example.app), Programmname (app.exe) oder vollständigem Pfad hinzu.",
+        "placeholder": "com.example.app",
+        "add": "Hinzufügen",
+        "remove": "{name} entfernen",
+        "restore": "Standard wiederherstellen",
+        "restoreConfirmTitle": "Standardliste wiederherstellen?",
+        "restoreConfirmAdded": "{count, plural, one {Die von dir hinzugefügte Anwendung wird von der Liste entfernt.} other {Die # von dir hinzugefügten Anwendungen werden von der Liste entfernt.}}",
+        "restoreConfirmRemoved": "{count, plural, one {Der entfernte Standardeintrag kommt wieder auf die Liste.} other {Die # entfernten Standardeinträge kommen wieder auf die Liste.}}",
+        "restoreConfirmSave": "Die Änderung gilt, sobald du speicherst.",
+        "cancel": "Abbrechen",
+        "custom": "Von dir hinzugefügt",
+        "duplicate": "Steht schon auf der Liste.",
+        "removedCount": "{count, plural, one {# Standardeintrag entfernt.} other {# Standardeinträge entfernt.}}",
+        "items": {
+          "systemSettings": "Systemeinstellungen",
+          "credentialPrompts": "Passwort- und Berechtigungsabfragen des Systems",
+          "keychain": "Schlüsselbundverwaltung",
+          "passwords": "Passwörter"
+        }
+      },
+      "stopKey": {
+        "label": "Tastenkürzel zum Anhalten",
+        "hint": "Beendet die Freigabe aller Fenster aus jeder App heraus, wie die Schaltfläche „Freigabe beenden“. Solange die Computernutzung eingeschaltet ist, gehören diese Tasten codeg – wähle also welche, die du sonst nicht verwendest.",
+        "recording": "Tasten drücken …",
+        "recordHint": "Strg und eine weitere Sondertaste (Alt oder Umschalt) halten, dann eine Taste drücken. Esc bricht ab.",
+        "recordHintMac": "⌃ oder ⌘ und eine weitere Sondertaste halten, dann eine Taste drücken. Esc bricht ab.",
+        "off": "Aus",
+        "useDefault": "Standard",
+        "turnOff": "Ausschalten",
+        "statusActive": "Aktiv: Überall drücken, um die Freigabe aller Fenster zu beenden.",
+        "statusIdle": "Wirkt, solange die Computernutzung eingeschaltet ist.",
+        "statusOff": "Aus: Nur die Schaltflächen „Freigabe beenden“ beenden die Freigabe.",
+        "statusFailed": "Nicht aktiv: Vermutlich verwendet eine andere App diese Tasten. Wähle andere.",
+        "problem": {
+          "unsupportedKey": "Diese Taste geht nicht. Wähle einen Buchstaben, eine Ziffer, F1–F12, Esc oder eine Satzzeichentaste.",
+          "weakModifiers": "Halte mindestens zwei Sondertasten, eine davon Strg (oder ⌘ auf einem Mac).",
+          "metaOffMac": "Die Windows-Taste darf nicht dazugehören."
+        }
+      },
+      "strip": {
+        "label": "Schwebende Stopp-Leiste",
+        "hint": "Solange ein Fenster freigegeben ist, schwebt über allen Fenstern eine Leiste, die sagt, was Agenten dürfen, mit der Schaltfläche „Freigabe beenden“. Ausgeschaltet kannst du Freigaben weiterhin im Computernutzungs-Popover der Statusleiste oder mit dem Tastenkürzel zum Anhalten beenden."
+      },
+      "foreground": {
+        "label": "Agenten dürfen Fenster nach vorn holen",
+        "hint": "Manche Apps nehmen im Hintergrund keine Tasten und keine Texteingabe an – unter Windows alle, die auf Chromium aufbauen, etwa Edge, Chrome und VS Code. Ist dies aktiv, darf ein Agent ein Fenster, in dem er handeln darf, für eine Aktion nach vorn holen und danach zu deinem vorherigen Fenster zurückwechseln (unter Linux bleibt das Fenster vorn). Du siehst das Fenster nach vorn kommen; was du in dem Moment tippst, kann darin landen, und ein Klick kann deinen Mauszeiger bewegen."
+      },
+      "delivery": {
+        "label": "Standard-Eingabemodus",
+        "hint": "Wie Klicks, Scrollen, Texteingabe und Tasten von Agenten ein Fenster erreichen, wenn sie nichts anderes verlangen. Hintergrund lässt das Fenster, wo es ist, und Maus und Tastatur dir; Vordergrund holt das Fenster für jede Aktion nach vorn.",
+        "hintOff": "Immer Hintergrund, solange Agenten keine Fenster nach vorn holen dürfen.",
+        "background": "Hintergrund",
+        "foreground": "Vordergrund"
+      },
+      "launch": {
+        "label": "Agenten Anwendungen öffnen und Fenster verschieben lassen",
+        "hint": "Ist dies aktiv, darf ein Agent eine installierte Anwendung im Hintergrund starten – nie codeg oder eine der nie freigegebenen – und ein Fenster, in dem er handeln darf, verschieben oder in der Größe ändern. Das Starten einer Anwendung gibt keines ihrer Fenster frei: Das entscheidest weiterhin du."
+      },
+      "clipboard": {
+        "label": "Agenten die Zwischenablage nutzen lassen",
+        "hint": "Ist dies aktiv, darf ein Agent Text in die Zwischenablage legen, um ihn einzusetzen, und zurücklesen, was er selbst aus einem für ihn freigegebenen Fenster kopiert hat. Was du selbst kopierst, wird nie für einen Agenten gelesen, und ein Agent kann nur einsetzen, was er selbst dort abgelegt hat."
+      },
+      "screen": {
+        "label": "Ganzen Bildschirm anbieten",
+        "hint": "Ist dies aktiv, bietet die Freigabeauswahl den ganzen Bildschirm an: Agenten sehen ein Bild des gesamten Bildschirms und können überall darauf klicken, und alle Fenster, die du freigeben kannst, gehen mit, ebenso die Tastenkürzel des Desktops selbst. codegs Fenster und die Sperrliste bleiben übermalt. Ausschalten beendet die Freigabe des Bildschirms."
+      },
+      "boundary": "Unter macOS gehen die Berechtigungen an codeg-computer-helper, den nur codeg nutzen kann – die Shells der Agenten können es nicht. Windows und Linux haben keine solche Trennung: Dort legen diese Einstellungen fest, was Agenten über codeg bekommen, nicht was Programme auf deinem Rechner tun können.",
+      "save": "Speichern",
+      "saving": "Wird gespeichert …",
+      "saved": "Einstellungen zur Computernutzung gespeichert",
+      "saveFailed": "Einstellungen zur Computernutzung konnten nicht gespeichert werden",
+      "loadFailed": "Laden fehlgeschlagen: {detail}"
+    }
   },
   "LogsSettings": {
     "loading": "Wird geladen…",
@@ -5450,10 +5822,11 @@
     "promptPlaceholder": "Beschreibe die Aufgabe für den Agenten — @ für Dateiverweise, / für Befehle",
     "folderPlaceholder": "Ordner wählen",
     "baseBranch": "Basis-Branch",
-    "baseBranchPlaceholder": "Aktueller Branch",
     "baseBranchDefault": "Aktueller Branch beim Start der Aufgabe",
     "baseBranchHint": "Die Aufgabe zweigt von diesem Branch ab und wird beim Mergen wieder dorthin übernommen.",
     "agentInheritedHint": "Aus den Aufgaben-Einstellungen geerbt — Änderungen gelten nur für diese Aufgabe",
+    "agentNoDefaultHint": "Kein Standard-Agent in den Aufgaben-Einstellungen — der ausgewählte Agent wird mit der Aufgabe gespeichert",
+    "agentInheritedUnavailableHint": "{agent} aus den Aufgaben-Einstellungen ist nicht verfügbar — der ausgewählte Agent wird mit der Aufgabe gespeichert",
     "agentOverrideReset": "Wieder erben",
     "sectionTarget": "Ziel",
     "errorTitle": "Titel ist erforderlich",
@@ -5582,8 +5955,8 @@
     "eventContextCompact": "Kontext-Komprimierung",
     "eventUserAction": "Benutzeraktion",
     "eventDiffStat": "Änderungs-Snapshot",
-    "eventForgeWriteback": "Im Issue kommentiert",
-    "eventForgeWritebackFailed": "Kommentar im Issue fehlgeschlagen",
+    "eventForgeWriteback": "Im Eintrag kommentiert",
+    "eventForgeWritebackFailed": "Kommentar im Eintrag fehlgeschlagen",
     "actionDeliverPr": "Pull Request öffnen",
     "actionDeliverPrMr": "Merge Request öffnen",
     "actionDeliverPrBack": "In den Pull Request pushen",
@@ -6117,7 +6490,7 @@
     "scenarioPlanFirst": "Erst planen",
     "scenarioPlanFirstHint": "Der Agent bestätigt, dass das Problem wirklich existiert, liefert einen Umsetzungsplan und stoppt — nach deiner Freigabe setzt er ihn per Rückgabe im selben Worktree um.",
     "scenarioReviewFix": "Review & Fix",
-    "scenarioReviewFixHint": "Änderungen reviewen und Probleme direkt beheben; nach der Abnahme gehen die Commits zurück auf den Branch.",
+    "scenarioReviewFixHint": "Der Agent prüft zuerst, ob der Ansatz selbst trägt, und behebt erst dann Probleme direkt darauf — trägt er nicht, committet er nichts und gibt dir das Review zur Entscheidung zurück. Nach der Abnahme gehen die Fixes zurück auf den Branch.",
     "scenarioReviewOnly": "Nur Review",
     "scenarioReviewOnlyHint": "Ein Review-Bericht mit Funden und Vorschlägen, ohne Commits — gib die Aufgabe zurück, wenn Fixes gewünscht sind.",
     "settingsTitle": "Panel-Einstellungen",
@@ -6145,7 +6518,7 @@
     "save": "Speichern"
   },
   "Canvas": {
-    "title": "Unendliche Unterhaltungen",
+    "title": "Unendlicher Canvas",
     "untitled": "Unbenannte Unterhaltung",
     "unresolvedConversation": "Unterhaltung gelöscht",
     "removeCard": "Karte entfernen",
@@ -6233,7 +6606,36 @@
     "removeTerminalCard": "Terminalkarte entfernen",
     "terminalNoDirectory": "Diese Karte hat kein Arbeitsverzeichnis",
     "confirmDeleteTerminals": "{count} laufende Terminal(s) werden geschlossen und ihre Prozesse beendet.",
-    "confirmDeleteNotesAndTerminals": "{notes} von dir geschriebene Notiz(en) werden endgültig gelöscht und {terminals} laufende Terminal(s) beendet."
+    "confirmDeleteNotesAndTerminals": "{notes} von dir geschriebene Notiz(en) werden endgültig gelöscht und {terminals} laufende Terminal(s) beendet.",
+    "boardsTitle": "Canvases",
+    "boardsSubtitle": "Jeder Canvas ist ein eigenes unendliches Board mit Regionen, Unterhaltungskarten, Notizen, Dateien und Terminals.",
+    "boardCount": "{count, plural, one {# Canvas} other {# Canvases}}",
+    "newBoard": "Neuer Canvas",
+    "newBoardTitle": "Neuer Canvas",
+    "editBoard": "Canvas bearbeiten…",
+    "editBoardTitle": "Canvas bearbeiten",
+    "deleteBoard": "Canvas löschen…",
+    "openBoard": "Öffnen",
+    "boardMenu": "Canvas-Optionen",
+    "boardName": "Name",
+    "boardDescription": "Beschreibung",
+    "boardDescriptionPlaceholder": "Wofür ist dieser Canvas? (optional)",
+    "untitledBoard": "Unbenannter Canvas",
+    "boardItemCount": "{count, plural, =0 {Leer} one {# Element} other {# Elemente}}",
+    "boardEditedAt": "Bearbeitet {time}",
+    "boardsEmpty": "Noch keine Canvases",
+    "boardsEmptyHint": "Erstelle einen Canvas, um deine Arbeit räumlich zu ordnen. Jeder Canvas hat eigene Regionen, Karten und Notizen.",
+    "searchBoards": "Canvases durchsuchen…",
+    "noBoardsMatch": "Kein Canvas passt zu „{query}“",
+    "boardsLoadFailed": "Canvases konnten nicht geladen werden",
+    "retry": "Erneut versuchen",
+    "backToBoards": "Zurück zu allen Canvases",
+    "boardDeleted": "Dieser Canvas wurde gelöscht",
+    "deleteBoardTitle": "Diesen Canvas löschen?",
+    "deleteBoardDescription": "„{name}“ und alles darauf werden endgültig gelöscht. Die angezeigten Unterhaltungen, Ordner und Dateien selbst bleiben unberührt.",
+    "deleteBoardItems": "Er enthält {count, plural, one {# Element} other {# Elemente}}.",
+    "deleteBoardTerminals": "{count, plural, one {# Terminal darauf wird geschlossen und sein Prozess beendet.} other {# Terminals darauf werden geschlossen und ihre Prozesse beendet.}}",
+    "deleteBoardConfirm": "Canvas löschen"
   },
   "Browser": {
     "toolbar": {
@@ -6251,7 +6653,17 @@
       "invalidUrl": "Keine gültige Adresse",
       "profile": "Profil: {name}",
       "profileMenuLabel": "Diese Seite in einem anderen Profil öffnen",
-      "profileDefault": "Standard"
+      "profileDefault": "Standard",
+      "device": "Gerät: {name}",
+      "deviceMenuLabel": "Anzeigen als",
+      "deviceDesktop": "Desktop",
+      "deviceTablet": "Tablet",
+      "devicePhone": "Smartphone",
+      "deviceFill": "Ganzer Bereich",
+      "deviceCustom": "Benutzerdefiniert",
+      "deviceWidth": "Breite",
+      "deviceHeight": "Höhe",
+      "deviceLaidOut": "Bereich zu klein: Layout in {size}"
     },
     "status": {
       "popupDenied": "Pop-up blockiert: {host}",

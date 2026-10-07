@@ -254,7 +254,7 @@ export function EditModelProviderDialog({
                       main: e.target.value,
                     }))
                   }
-                  placeholder="claude-sonnet-5"
+                  placeholder="claude-sonnet-5-5"
                 />
               </div>
               <div className="space-y-1.5">
@@ -299,10 +299,10 @@ export function EditModelProviderDialog({
                       sonnet: e.target.value,
                     }))
                   }
-                  placeholder="claude-sonnet-5"
+                  placeholder="claude-sonnet-5-5"
                 />
               </div>
-              <div className="space-y-1.5 md:col-span-2">
+              <div className="space-y-1.5">
                 <label className="text-xs font-medium">
                   {t("claudeOpusDefaultModel")}
                 </label>
@@ -315,6 +315,21 @@ export function EditModelProviderDialog({
                     }))
                   }
                   placeholder="claude-opus-5-5"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">
+                  {t("claudeFableDefaultModel")}
+                </label>
+                <Input
+                  value={claudeModel.fable ?? ""}
+                  onChange={(e) =>
+                    setClaudeModel((prev) => ({
+                      ...prev,
+                      fable: e.target.value,
+                    }))
+                  }
+                  placeholder="claude-fable-5-1"
                 />
               </div>
               <div className="space-y-1.5 md:col-span-2">

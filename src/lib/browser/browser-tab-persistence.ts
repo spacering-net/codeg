@@ -1,4 +1,5 @@
-// What survives a restart of a browser tab: its page and title, per window.
+// What survives a restart of a browser tab: its page, its title and the
+// device it shows the page as, per window.
 //
 // File tabs are session-only, browser tabs are not: a page is cheap to bring
 // back (one URL), and the dev-server page next to the chat is exactly what a
@@ -13,6 +14,11 @@
 
 import type { FileWorkspaceTab } from "@/contexts/workspace-context"
 
+import {
+  parseEmulatedBrowserDevice,
+  sameBrowserDevice,
+  type EmulatedBrowserDevice,
+} from "./browser-device"
 import { DEFAULT_BROWSER_PROFILE_ID, isBrowserProfileId } from "./browser-prefs"
 import type { BrowserTabState } from "./types"
 import { getCurrentWindowLabel } from "./window-label"
@@ -31,6 +37,9 @@ export interface PersistedBrowserTab {
   /** An address on the remote codeg host (`BrowserTabSeed.remote`). Written
    *  only when set, so records of every other tab keep their old shape. */
   remote?: true
+  /** The device the tab shows its page as (`BrowserTabSeed.device`). Written
+   *  only for a tablet, a phone or a custom device, for the same reason. */
+  device?: EmulatedBrowserDevice
 }
 
 const KEY_PREFIX = "browser:tabs:"
@@ -60,11 +69,14 @@ function isWebUrl(url: string): boolean {
  *  thrown on — a corrupt entry must not take the whole list with it. */
 function sanitize(raw: unknown): PersistedBrowserTab | null {
   if (!raw || typeof raw !== "object") return null
-  const { url, title, folderId, profile, remote } = raw as Record<
+  const { url, title, folderId, profile, remote, device } = raw as Record<
     string,
     unknown
   >
   if (typeof url !== "string" || !isWebUrl(url)) return null
+  // A device this build does not know is a desktop: the page comes back,
+  // filling the pane.
+  const emulated = parseEmulatedBrowserDevice(device)
   return {
     url,
     title: typeof title === "string" ? title : "",
@@ -74,6 +86,7 @@ function sanitize(raw: unknown): PersistedBrowserTab | null {
         : null,
     profile: isBrowserProfileId(profile) ? profile : DEFAULT_BROWSER_PROFILE_ID,
     ...(remote === true ? { remote: true as const } : {}),
+    ...(emulated ? { device: emulated } : {}),
   }
 }
 
@@ -125,6 +138,7 @@ export function writePersistedBrowserTabs(
         folderId: tab.folderId,
         profile: tab.profile,
         ...(tab.remote ? { remote: true as const } : {}),
+        ...(tab.device ? { device: tab.device } : {}),
       })),
     }
     localStorage.setItem(key, JSON.stringify(stored))
@@ -162,6 +176,7 @@ export function snapshotBrowserTabs(
       folderId: tab.folderId,
       profile: tab.browser.profile,
       ...(tab.browser.remote ? { remote: true as const } : {}),
+      ...(tab.browser.device ? { device: tab.browser.device } : {}),
     })
   }
   return out
@@ -178,7 +193,8 @@ export function samePersistedBrowserTabs(
       a[i].title !== b[i].title ||
       a[i].folderId !== b[i].folderId ||
       a[i].profile !== b[i].profile ||
-      a[i].remote !== b[i].remote
+      a[i].remote !== b[i].remote ||
+      !sameBrowserDevice(a[i].device, b[i].device)
     ) {
       return false
     }

@@ -9,6 +9,7 @@ use sea_orm::{
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::entities::{conversation, folder};
 use crate::db::error::DbError;
+use crate::db::service::conversation_tag_service;
 use crate::models::{AgentType, DbConversationSummary};
 
 pub async fn create(
@@ -822,6 +823,10 @@ pub async fn bind_external_id(
 
                 let agent_type = carried.agent_type.clone();
                 let preserved = carried.into_active_model(previous.clone()).insert(txn).await?;
+                // The preserving row IS the old conversation as far as the user
+                // can tell, so it keeps the tags they put on it.
+                conversation_tag_service::copy_conversation_tags(txn, conversation_id, preserved.id)
+                    .await?;
                 // The one signal that this happened at all. Deliberately WARN:
                 // every occurrence means a connection bound to a row while
                 // holding a session unrelated to that row's history, which is
@@ -1143,6 +1148,8 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         parent_tool_use_id: r.parent_tool_use_id,
         delegation_call_id: r.delegation_call_id,
         origin_cwd: r.origin_cwd,
+        // Backfilled by `fill_summary_extras`, like `child_count`.
+        tag_ids: Vec::new(),
     }
 }
 
@@ -1183,6 +1190,27 @@ async fn fill_child_counts(
     Ok(())
 }
 
+/// Backfill what a summary carries but its row does not: `child_count` and
+/// `tag_ids`, each with ONE query over the whole set. Every summary that leaves
+/// this module for the UI goes through here — the sidebar replaces a row
+/// wholesale on each `conversation://changed` upsert, so a path that skipped the
+/// tags would wipe them from the sidebar until the next full refresh.
+async fn fill_summary_extras(
+    conn: &DatabaseConnection,
+    summaries: &mut [DbConversationSummary],
+) -> Result<(), DbError> {
+    fill_child_counts(conn, summaries).await?;
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i32> = summaries.iter().map(|s| s.id).collect();
+    let mut tags = conversation_tag_service::tag_ids_by_conversation(conn, &ids).await?;
+    for s in summaries.iter_mut() {
+        s.tag_ids = tags.remove(&s.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
 pub async fn get_by_id(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -1194,7 +1222,7 @@ pub async fn get_by_id(
         .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
 
     let mut summary = conv_to_summary(conv);
-    fill_child_counts(conn, std::slice::from_mut(&mut summary)).await?;
+    fill_summary_extras(conn, std::slice::from_mut(&mut summary)).await?;
     Ok(summary)
 }
 
@@ -1242,7 +1270,7 @@ pub async fn find_live_by_session_ref(
     match conv {
         Some(conv) => {
             let mut summary = conv_to_summary(conv);
-            fill_child_counts(conn, std::slice::from_mut(&mut summary)).await?;
+            fill_summary_extras(conn, std::slice::from_mut(&mut summary)).await?;
             Ok(Some(summary))
         }
         None => Ok(None),
@@ -1313,7 +1341,7 @@ pub async fn list_by_folder(
     let rows = query.all(conn).await?;
 
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_summary_extras(conn, &mut summaries).await?;
 
     Ok(summaries)
 }
@@ -1395,7 +1423,7 @@ pub async fn list_all(
 
     let rows = query.all(conn).await?;
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_summary_extras(conn, &mut summaries).await?;
     Ok(summaries)
 }
 
@@ -1421,7 +1449,7 @@ pub async fn list_children(
         .all(conn)
         .await?;
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_summary_extras(conn, &mut summaries).await?;
     Ok(summaries)
 }
 

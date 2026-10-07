@@ -162,8 +162,8 @@ expression: detail
     },
     "total_tokens": 1540,
     "total_duration_ms": 7000,
-    "context_window_used_tokens": 1540,
+    "context_window_used_tokens": 1200,
     "context_window_max_tokens": 200000,
-    "context_window_usage_percent": 0.77
+    "context_window_usage_percent": 0.6
   }
 }

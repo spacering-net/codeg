@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/codeg-mcp"],
+    "macOS": {
+      "files": {
+        "Helpers/codeg-computer-helper.app": "binaries/codeg-computer-helper.app"
+      }
+    }
+  }
+}

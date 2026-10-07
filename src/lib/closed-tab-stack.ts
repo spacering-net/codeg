@@ -1,3 +1,4 @@
+import type { EmulatedBrowserDevice } from "@/lib/browser/browser-device"
 import type { AgentType } from "@/lib/types"
 
 export const CLOSED_TAB_STACK_LIMIT = 20
@@ -45,6 +46,9 @@ export type ClosedBrowserTab = {
   /** An address on the remote codeg host (`BrowserTabSeed.remote`): it
    *  reopens as one, never as a page of this computer. */
   remote?: true
+  /** The device it showed its page as (`BrowserTabSeed.device`); it reopens
+   *  as the same one. Absent for the desktop. */
+  device?: EmulatedBrowserDevice
 }
 
 export type ClosedWorkspaceTab =
@@ -192,7 +196,7 @@ export function snapshotBrowserTab(
   tab: {
     id: string
     folderId: number | null
-    browser: { profile: string; remote?: true }
+    browser: { profile: string; remote?: true; device?: EmulatedBrowserDevice }
   },
   url: string,
   title: string,
@@ -207,5 +211,6 @@ export function snapshotBrowserTab(
     folderId: tab.folderId,
     profile: tab.browser.profile,
     ...(tab.browser.remote ? { remote: true as const } : {}),
+    ...(tab.browser.device ? { device: tab.browser.device } : {}),
   }
 }

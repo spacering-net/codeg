@@ -126,6 +126,10 @@ export interface OpenBrowserTabParams {
    *  that connection's own profile once its egress is ready (the profile
    *  above is then ignored). Rejects with the reason when it cannot be. */
   egress?: number | null
+  /** The page zoom to build the surface with while its tab emulates a
+   *  device (`fitDeviceFrame`); `null` for a desktop tab, whose zoom is not
+   *  ours to set. Ignored for an owned window. */
+  zoom?: number | null
 }
 
 export function browserOpenTab(
@@ -141,6 +145,7 @@ export function browserOpenTab(
     devtools: params.devtools ?? false,
     profile: params.profile ?? "default",
     egress: params.egress ?? null,
+    zoom: params.zoom ?? null,
   })
 }
 
@@ -213,8 +218,41 @@ export function browserOpenDevtools(tabId: string): Promise<void> {
   return getShellTransport().call<void>("browser_open_devtools", { tabId })
 }
 
-export function browserSetBounds(tabId: string, bounds: Bounds): Promise<void> {
-  return getShellTransport().call<void>("browser_set_bounds", { tabId, bounds })
+/**
+ * Place a tab's surface at `bounds`, and while its tab emulates a device zoom
+ * its page to `zoom` — both in one step, so the page never draws a frame at
+ * the new size and the old zoom. The zoom is what a tab emulating a device in
+ * a slot too small for it lays its page out at the device's width by
+ * (`fitDeviceFrame`). `null` leaves the page's zoom to the person, giving it
+ * back its own size once if a device had zoomed it.
+ */
+export function browserSetBounds(
+  tabId: string,
+  bounds: Bounds,
+  zoom: number | null = null
+): Promise<void> {
+  return getShellTransport().call<void>("browser_set_bounds", {
+    tabId,
+    bounds,
+    zoom,
+  })
+}
+
+/**
+ * Size a tab's OWNED WINDOW to the device it emulates, or give the window its
+ * own size back (`null`, the desktop). An owned window is not fitted to the
+ * pane, so it takes the device's size itself; nothing for an embedded
+ * surface, which gets the device through `browserSetBounds`. Asking again for
+ * the size the window already has leaves it alone.
+ */
+export function browserSetWindowViewport(
+  tabId: string,
+  viewport: { width: number; height: number } | null
+): Promise<void> {
+  return getShellTransport().call<void>("browser_set_window_viewport", {
+    tabId,
+    viewport,
+  })
 }
 
 /**

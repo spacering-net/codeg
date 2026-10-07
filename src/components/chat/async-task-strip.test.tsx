@@ -105,4 +105,39 @@ describe("AsyncTaskStrip", () => {
       screen.queryByRole("button", { name: t.openOutput })
     ).not.toBeInTheDocument()
   })
+
+  it("puts a workflow's phase and running agent on the meta line", () => {
+    renderStrip(
+      <AsyncTaskStrip
+        tasks={[
+          task({
+            name: "deep-research",
+            task_type: "workflow",
+            can_stop: false,
+            phase: "Research",
+            current_agent: "researcher-2",
+          }),
+        ]}
+        onStop={vi.fn()}
+      />
+    )
+    expect(screen.getByText("Research · researcher-2")).toBeInTheDocument()
+    // Grok has no stop request: the row must not offer a dead control.
+    expect(
+      screen.queryByRole("button", { name: t.stop })
+    ).not.toBeInTheDocument()
+  })
+
+  it("drops a cleared agent from the meta line", () => {
+    // Between agents a Grok workflow reports its agent as "" — the line then
+    // reads as the phase alone, not "Verify · ".
+    renderStrip(
+      <AsyncTaskStrip
+        tasks={[
+          task({ task_type: "workflow", phase: "Verify", current_agent: "" }),
+        ]}
+      />
+    )
+    expect(screen.getByText("Verify")).toBeInTheDocument()
+  })
 })

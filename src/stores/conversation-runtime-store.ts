@@ -37,7 +37,11 @@ import { COLLAB_AGENT_TOOL_NAME, mergeCollabOp } from "@/lib/collab-tool"
 import { collapseLiveCollabBlocks } from "@/lib/collab-collapse"
 import { kimiTodoWriteEntries } from "@/lib/plan-parse"
 import { toErrorMessage } from "@/lib/app-error"
-import { BACKGROUND_TASK_MARKER } from "@/lib/background-agent"
+import {
+  BACKGROUND_TASK_MARKER,
+  isAsyncLaunchAckText,
+  parseBackgroundTaskMarker,
+} from "@/lib/background-agent"
 import { imageCardLabel } from "@/lib/image-tool-label"
 
 /**
@@ -1830,6 +1834,14 @@ function steeredContentKey(
  * is `matched` but not `changed` — callers must treat it as handled (NOT queue
  * it), or an idempotent re-settle would be buffered and later re-applied over a
  * newer result. `turns` keeps its original reference when nothing changed.
+ *
+ * Only a sub-agent's launch card is rewritten: one still showing its launch ack,
+ * or the marker a cold parse or an earlier settlement left there — the same
+ * cards `AgentToolCallPart` reads a lifecycle from. A background shell's
+ * notification names the `Bash` call that started it as well, so its
+ * settlement matches that command card, which shows the command and its launch
+ * notice rather than a lifecycle: it is `matched` (handled, never queued) and
+ * left as it is, as the cold parse leaves it.
  */
 function applyBackgroundSettlementToTurns(
   turns: MessageTurn[],
@@ -1853,7 +1865,10 @@ function applyBackgroundSettlementToTurns(
         block.tool_use_id === settlement.toolUseId
       ) {
         matched = true
-        if (block.output_preview !== marker) {
+        const isLaunchCard =
+          isAsyncLaunchAckText(block.output_preview) ||
+          parseBackgroundTaskMarker(block.output_preview) !== null
+        if (isLaunchCard && block.output_preview !== marker) {
           turnChanged = true
           changed = true
           return { ...block, output_preview: marker }

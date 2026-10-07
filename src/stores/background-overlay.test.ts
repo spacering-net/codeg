@@ -528,4 +528,76 @@ describe("RESOLVE_BACKGROUND_TASK (in-memory launch-card flip)", () => {
     )
     expect(parsed?.result).toBe("newer B")
   })
+
+  // A background shell notifies too, and its `<task-notification>` names the
+  // `Bash` call that started it, so its settlement arrives with that call's id.
+  // Text and settlement as Claude Code 2.1.286 wrote them for a command a steer
+  // moved to the background.
+  const SHELL_ACK =
+    "Command was moved to the background (ID: bu6gyv42q) so that a message " +
+    "that arrived while it was running can reach you; it was not interrupted. " +
+    "Output is being written to: /private/tmp/claude-501/proj/s1/tasks/" +
+    "bu6gyv42q.output. You will be notified when it completes."
+  const shellSettlement = {
+    toolUseId: "toolu_sh",
+    taskId: "bu6gyv42q",
+    status: "completed",
+    summary: 'Background command "Sleep ten seconds" completed (exit code 0)',
+    result: null,
+  }
+  function shellCardTurn(id: string): MessageTurn {
+    return {
+      id,
+      role: "assistant",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "toolu_sh",
+          tool_name: "Bash",
+          input_preview: '{"command":"sleep 10 && echo done"}',
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_sh",
+          output_preview: SHELL_ACK,
+          is_error: false,
+        },
+      ],
+      timestamp: "2026-07-07T03:47:00.000Z",
+    }
+  }
+
+  it("leaves a background command's card alone when its notification names the call", () => {
+    actions().appendOptimisticTurn(7, shellCardTurn("t-0"), "tok-1")
+    actions().completeTurn(7, null)
+    const before = session(7)!.localTurns
+
+    actions().resolveBackgroundTask(7, shellSettlement)
+
+    expect(ackOutput(session(7)!.localTurns, "toolu_sh")).toBe(SHELL_ACK)
+    expect(session(7)!.localTurns).toBe(before)
+    // Found, so not queued for a later turn either.
+    expect(session(7)!.pendingBackgroundSettlements).toEqual([])
+  })
+
+  it("drops a queued background-command settlement once its card promotes, leaving the card alone", () => {
+    actions().appendOptimisticTurn(
+      7,
+      {
+        id: "u-1",
+        role: "user",
+        blocks: [{ type: "text", text: "run the sleeper" }],
+        timestamp: "2026-07-07T03:46:00.000Z",
+      },
+      "tok-1"
+    )
+    actions().resolveBackgroundTask(7, shellSettlement)
+    expect(session(7)!.pendingBackgroundSettlements).toHaveLength(1)
+
+    actions().appendOptimisticTurn(7, shellCardTurn("t-0"), "tok-1")
+    actions().completeTurn(7, null)
+
+    expect(ackOutput(session(7)!.localTurns, "toolu_sh")).toBe(SHELL_ACK)
+    expect(session(7)!.pendingBackgroundSettlements).toEqual([])
+  })
 })

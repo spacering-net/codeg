@@ -14,7 +14,7 @@ use crate::app_error::AppCommandError;
 use super::console::{self, ConsoleRing, ReportedLine};
 use super::handoff::PickReport;
 use super::surface::BrowserSurface;
-use super::types::{Bounds, BrowserTabState};
+use super::types::{Bounds, BrowserTabState, ViewportSize};
 
 /// Recent user gestures reported by the isolated-world helper (untrusted).
 /// Consumed by the popup router to tell a gesture-backed `window.open` from
@@ -79,6 +79,21 @@ pub struct BrowserTab {
     /// and with the tab — in each case the command awaiting it hears a closed
     /// channel and reports the pick as called off.
     pub pending_pick: Option<PendingPick>,
+    /// The page zoom the frontend last asked this surface for: `Some` while
+    /// the tab emulates a device in a slot (`set_bounds_core`), `None` while
+    /// the page's zoom is not ours to set — a desktop tab's is the person's.
+    pub zoom_wanted: Option<f64>,
+    /// What a geometry pass last applied for it (`ChildHandle::sync_geometry`,
+    /// main thread only), so that leaving a device gives the page its own size
+    /// back exactly once.
+    pub zoom_applied: Option<f64>,
+    /// The device viewport an owned window was last sized to; `None` while it
+    /// is the person's own size. Embedded surfaces never set it: they emulate
+    /// a device through their bounds and page zoom.
+    pub window_viewport: Option<ViewportSize>,
+    /// An owned window's own size from before it was first sized to a device,
+    /// which it goes back to when the tab is a desktop again.
+    pub window_restore: Option<ViewportSize>,
 }
 
 /// A pick in flight: the token the picker will echo, and where its report
@@ -137,6 +152,10 @@ impl BrowserTab {
             gestures: VecDeque::with_capacity(GESTURE_RING_CAPACITY),
             console: ConsoleRing::new(),
             pending_pick: None,
+            zoom_wanted: None,
+            zoom_applied: None,
+            window_viewport: None,
+            window_restore: None,
         }
     }
 }

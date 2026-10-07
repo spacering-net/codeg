@@ -20,6 +20,15 @@ describe("settingsNavItemsFor", () => {
     )
   })
 
+  it("keeps collaboration under General and the two Use pages together", () => {
+    const labels = settingsNavItemsFor("tauri").map((item) => item.labelKey)
+    const after = (label: (typeof labels)[number]) =>
+      labels[labels.indexOf(label) + 1]
+    expect(after("general")).toBe("collaboration")
+    expect(after("quick_messages")).toBe("browser")
+    expect(after("browser")).toBe("computer_use")
+  })
+
   it("keeps every page on the desktop", () => {
     const labels = settingsNavItemsFor("tauri").map((item) => item.labelKey)
     expect(labels).toContain("web_service")

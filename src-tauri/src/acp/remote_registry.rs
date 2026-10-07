@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use crate::acp::custom_registry::{
@@ -9,15 +11,6 @@ use crate::models::agent::AgentType;
 
 pub const REGISTRY_URL: &str =
     "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
-
-#[derive(Debug, Clone)]
-pub struct RegistryAgent {
-    pub agent_type: AgentType,
-    pub registry_id: String,
-    pub name: String,
-    pub description: String,
-    pub version: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct RegistryBinaryRelease {
@@ -52,8 +45,26 @@ struct RegistryAgentItem {
     distribution: CustomAgentSpec,
 }
 
+/// HTTP client for the registries agent releases are read from: this ACP
+/// registry, and npm's for the newest release of an npx agent.
+///
+/// Built per call rather than cached, because reqwest samples the proxy
+/// environment when a client is built and codeg rewrites that environment at
+/// runtime when the user changes the proxy setting. The timeouts only cut off
+/// a stalled connection; a slow response that is still arriving completes.
+pub(crate) fn registry_http_client() -> Result<reqwest::Client, AppCommandError> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .user_agent(concat!("codeg/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| {
+            AppCommandError::network(format!("failed to initialize registry HTTP client: {e}"))
+        })
+}
+
 async fn fetch_registry_payload() -> Result<RegistryPayload, AppCommandError> {
-    let response = reqwest::Client::new()
+    let response = registry_http_client()?
         .get(REGISTRY_URL)
         .send()
         .await
@@ -74,25 +85,9 @@ async fn fetch_registry_payload() -> Result<RegistryPayload, AppCommandError> {
     })
 }
 
-pub async fn fetch_supported_agents() -> Result<Vec<RegistryAgent>, AppCommandError> {
-    let payload = fetch_registry_payload().await?;
-
-    let mut supported = Vec::new();
-    for item in payload.agents {
-        if let Some(agent_type) = registry::from_registry_id(&item.id) {
-            supported.push(RegistryAgent {
-                agent_type,
-                registry_id: item.id,
-                name: item.name,
-                description: item.description,
-                version: item.version,
-            });
-        }
-    }
-
-    Ok(supported)
-}
-
+/// The registry's current release of `agent_type` for `platform`: its version
+/// and archive URL. `None` when the registry does not list the agent, names no
+/// version, or has no archive for the platform.
 pub async fn fetch_binary_release(
     agent_type: AgentType,
     platform: &str,

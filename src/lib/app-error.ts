@@ -81,6 +81,12 @@ export function isNotAGitRepoError(error: unknown): boolean {
   )
 }
 
+/** Whether a command failed because the thing it named does not exist —
+ *  `AppErrorCode::NotFound` on the backend. */
+export function isNotFoundError(error: unknown): boolean {
+  return extractAppCommandError(error)?.code === "not_found"
+}
+
 export function toErrorMessage(error: unknown): string {
   const appError = extractAppCommandError(error)
   if (appError) {

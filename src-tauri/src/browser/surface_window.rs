@@ -22,6 +22,14 @@ use super::types::NavigationBlockReason;
 
 pub use platform::*;
 
+/// The size an owned window opens at, in logical pixels.
+pub const INNER_SIZE: (f64, f64) = (1100.0, 760.0);
+
+/// The smallest a person may drag an owned window to. A tab emulating a
+/// device narrower than this lowers it for as long as it does (see
+/// `commands::browser::set_window_viewport_core`).
+pub const MIN_INNER_SIZE: (f64, f64) = (480.0, 320.0);
+
 #[allow(clippy::too_many_arguments)]
 pub fn create(
     app: &AppHandle,
@@ -126,8 +134,8 @@ fn build(
     let blank = Url::parse("about:blank").expect("static url");
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(blank))
         .title(title)
-        .inner_size(1100.0, 760.0)
-        .min_inner_size(480.0, 320.0)
+        .inner_size(INNER_SIZE.0, INNER_SIZE.1)
+        .min_inner_size(MIN_INNER_SIZE.0, MIN_INNER_SIZE.1)
         .focused(!background)
         .devtools(devtools)
         .on_navigation({

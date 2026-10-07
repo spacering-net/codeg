@@ -29,6 +29,7 @@ pub async fn get_codeg_mcp_service_status(
             session_info: &state.session_info_config,
             browser: &state.browser_tools_config,
             authoring: &state.chat_authoring_config,
+            computer: &state.computer_tools_config,
         })
         .await,
     ))
@@ -58,6 +59,7 @@ pub async fn set_codeg_mcp_tool_group(
             session_info: &state.session_info_config,
             browser: &state.browser_tools_config,
             authoring: &state.chat_authoring_config,
+            computer: &state.computer_tools_config,
         },
         &state.emitter,
         &params.key,

@@ -41,7 +41,7 @@ use super::hooks;
 use super::policy::{self, BrowserPolicy};
 use super::profile;
 use super::registry::{BrowserRegistry, BrowserTab};
-use super::surface::BrowserSurface;
+use super::surface::{page_zoom_to_apply, BrowserSurface};
 use super::types::{
     Bounds, BrowserOpenRequestPayload, BrowserPopupPayload, BrowserTabState, ChannelKind,
     NavigationBlockReason, PopupPresentation, SurfaceKind, TabKind,
@@ -101,6 +101,20 @@ fn rect(bounds: Bounds) -> Rect {
     }
 }
 
+/// Whether the engine can zoom a page: always on Windows, and on macOS from 11
+/// (`shim::supports_page_zoom`). Without it a tab emulating a device in a slot
+/// smaller than the device lays its page out at the frame's width instead.
+fn page_zoom_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        shim::supports_page_zoom()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 /// Main thread only: which tab owns the platform webview behind `pointer`
 /// (see `channel::MessageSink`).
 fn tab_id_for_webview(pointer: usize) -> Option<String> {
@@ -110,6 +124,15 @@ fn tab_id_for_webview(pointer: usize) -> Option<String> {
             .find(|(_, wv)| shim::webview_pointer(wv) == pointer)
             .map(|(id, _)| id.clone())
     })
+}
+
+/// Main thread only: the tab whose surface has keyboard focus in `window` —
+/// its webview is the window's first responder, or holds the view that is.
+#[cfg(target_os = "macos")]
+pub fn tab_with_keyboard_focus(window: &objc2_app_kit::NSWindow) -> Option<String> {
+    shim::first_responder_chain(window)
+        .into_iter()
+        .find_map(tab_id_for_webview)
 }
 
 /// One sink for every tab: messages are attributed by source webview, because
@@ -360,7 +383,70 @@ impl ChildHandle {
     }
 
     pub fn zoom(&self, factor: f64) -> Result<(), ChildError> {
+        if !page_zoom_supported() {
+            return Ok(());
+        }
         self.op(move |wv| wv.zoom(factor))
+    }
+
+    /// Apply the geometry the registry holds for this tab — its bounds while
+    /// it is visible, and its page zoom (`page_zoom_to_apply`) — as it stands
+    /// when this runs on the main thread, not as it stood when the caller
+    /// asked.
+    ///
+    /// Requests are recorded on whatever thread their command runs on and
+    /// reach the main thread in no guaranteed order. Carrying values, an
+    /// overtaken request would land last and leave the page at its stale size
+    /// or zoom, with the newer one already spent; reading the newest record
+    /// here means whichever pass runs last applies the newest request. Bounds
+    /// and zoom go in the same turn, so no frame is ever drawn with one
+    /// applied and not the other — they change together when a tab emulating
+    /// a device is fitted into a different slot.
+    pub fn sync_geometry(&self) -> Result<(), ChildError> {
+        let app = self.app.clone();
+        let tab_id = self.tab_id.clone();
+        self.op(move |wv| {
+            let Some(registry) = app.try_state::<BrowserRegistry>() else {
+                return Ok(());
+            };
+            // Until the record holds still: a request recorded while this
+            // pass was applying may have skipped a pass of its own, having
+            // read `zoom_applied` from before this one published it (a hidden
+            // tab passes only when the zoom has to change). So the publish
+            // looks again, in the same lock, and goes round once more if the
+            // zoom asked for moved on meanwhile.
+            loop {
+                let Some((bounds, visible, wanted, applied)) = registry.update(&tab_id, |tab| {
+                    (
+                        tab.last_bounds,
+                        tab.visible,
+                        tab.zoom_wanted,
+                        tab.zoom_applied,
+                    )
+                }) else {
+                    return Ok(());
+                };
+                let zoom = page_zoom_to_apply(wanted, applied).filter(|_| page_zoom_supported());
+                if let Some(factor) = zoom {
+                    wv.zoom(factor)?;
+                }
+                if visible {
+                    wv.set_bounds(rect(bounds))?;
+                }
+                let settled = registry
+                    .update(&tab_id, |tab| {
+                        if zoom.is_some() {
+                            tab.zoom_applied = wanted;
+                            tab.state.zoom = wanted.unwrap_or(1.0);
+                        }
+                        tab.zoom_wanted == wanted
+                    })
+                    .unwrap_or(true);
+                if settled {
+                    return Ok(());
+                }
+            }
+        })
     }
 
     /// Through the shim, not `wry::WebView::open_devtools()`: the platforms

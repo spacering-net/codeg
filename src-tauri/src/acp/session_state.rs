@@ -18,8 +18,8 @@ use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
     AcpEvent, AsyncTaskRecord, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus,
-    EventEnvelope, GrokModelSpec, PromptCapabilitiesInfo, SessionConfigOptionInfo,
-    SessionFailureRecord, SessionModeStateInfo, ToolCallImageInfo,
+    EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
+    SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -328,12 +328,28 @@ pub struct SessionState {
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
     /// Grok only: per-model reasoning-effort specs, parsed from the top-level
     /// `models` of the session-establishment response (guaranteed on
-    /// `session/new`; opportunistic on resume/fork). Grok never re-sends this on
+    /// `session/new`; opportunistic on resume/fork) and refreshed by each model
+    /// catalog broadcast (`_x.ai/models/update`). Grok never re-sends this on
     /// `set_model`, so it is cached here to rebuild the composer's effort
     /// selector for the target model on a mid-session model switch. `None` for
-    /// non-Grok agents and when the response carried no `models` (flat fallback).
-    /// Backend-internal — not serialized.
+    /// non-Grok agents and when the response carried no `models` (flat fallback)
+    /// and no broadcast has come in since. Backend-internal — not serialized.
     pub grok_model_specs: Option<std::collections::HashMap<String, GrokModelSpec>>,
+    /// Grok only: the latest model catalog grok broadcast on
+    /// `_x.ai/models/update` since the current session establishment began,
+    /// for that establishment to fold into the picker it emits (see
+    /// `acp::connection::emit_grok_established_picker`).
+    ///
+    /// The broadcast names no session and can land at any point of an
+    /// establishment, including after the handshake answered but before its
+    /// picker went out — and the handshake itself may predate the catalog it
+    /// brings. Every broadcast also goes straight into the picker already on
+    /// screen, if any; this slot covers the one being built. Set by every
+    /// broadcast, taken by the establishment's emit, and cleared when a fork
+    /// sends `session/fork` — so a broadcast from before an establishment began
+    /// can never overrule that establishment's fresher handshake.
+    /// Backend-internal — not serialized.
+    pub grok_catalog_broadcast: Option<GrokModelCatalog>,
 
     /// pi only: the session prelude pi-acp reports as `_meta.piAcp.startupInfo`
     /// on `session/new`, held until the matching `agent_message_chunk` arrives
@@ -596,6 +612,15 @@ pub struct SessionState {
     /// not part of the client-visible snapshot.
     pub turn_in_flight: bool,
 
+    /// Whether the open turn is one the AGENT started on its own (Grok's
+    /// follow-up to a background workflow), which the idle loop renders as a
+    /// turn so its content isn't dropped between turns. Such a turn never took
+    /// the `turn_in_flight` gate, so its `TurnComplete` must leave the gate
+    /// alone: a prompt the manager admitted while it ran owns it. Set only by
+    /// [`Self::begin_agent_initiated_turn`]; cleared by `TurnComplete`. Not
+    /// serialized: backend-internal, like `turn_in_flight`.
+    pub agent_initiated_turn: bool,
+
     /// How many `TurnComplete`s this connection has applied — the turn's
     /// IDENTITY, paired with `turn_in_flight`. `turn_in_flight` alone only says
     /// "some turn is running"; a caller that admitted itself against turn N and
@@ -680,6 +705,7 @@ impl SessionState {
             current_mode: None,
             config_options: None,
             grok_model_specs: None,
+            grok_catalog_broadcast: None,
             pi_startup_banner: None,
             asserted_config_values: BTreeMap::new(),
             env_pinned_config_option_ids: Vec::new(),
@@ -710,6 +736,7 @@ impl SessionState {
             pending_user_message: None,
             pending_user_message_started_at: None,
             turn_in_flight: false,
+            agent_initiated_turn: false,
             turns_completed: 0,
             last_turn_ended_abnormally: false,
             config_stale: false,
@@ -1130,7 +1157,12 @@ impl SessionState {
                 // is accepted. (All connection-alive turn endings — normal,
                 // cancel, stop-reason — emit TurnComplete; disconnect/error
                 // discard the state entirely, so no stale flag can outlive them.)
-                self.turn_in_flight = false;
+                // A turn the agent started itself never held the gate; a set
+                // flag then belongs to a prompt admitted while it ran.
+                if !self.agent_initiated_turn {
+                    self.turn_in_flight = false;
+                }
+                self.agent_initiated_turn = false;
                 // Same edge, the identity half: anyone holding "the turn I was
                 // admitted against" can now see that it is gone, even if a new
                 // turn sets `turn_in_flight` again before they look.
@@ -1144,8 +1176,10 @@ impl SessionState {
                 self.pending_permission = None;
                 // A blocked `ask_user_question` can't outlive its turn: if the
                 // turn ends (cancel / stop) the card is moot. The backend's
-                // answer one-shot is cleaned via the listener's peer-close race;
-                // this just keeps the snapshot honest.
+                // answer one-shot is declined by the connection loop right after
+                // this event (see the turn exit's question sweep) — usually the
+                // listener's peer-close got there first; this just keeps the
+                // snapshot honest.
                 self.pending_question = None;
                 // Likewise a blocked `exit_plan_mode` approval: the parked ext
                 // responder is drained by the connection's teardown/cancel path;
@@ -1391,6 +1425,10 @@ impl SessionState {
                 // alert list) is the client's business: storing one here
                 // would bring it back on every snapshot.
             }
+            AcpEvent::PluginLoadFailures { .. } => {
+                // Same reasoning as a notice: an announcement, kept by the
+                // client's alert list, never re-raised by a snapshot.
+            }
             AcpEvent::AsyncTask { delta } => {
                 // The SAME merge the frontend reducer applies, so a client
                 // seeded from the snapshot and one that watched every delta
@@ -1506,6 +1544,30 @@ impl SessionState {
             Some(at) => now.signed_duration_since(at) < background_keepalive_max_age(),
             None => false,
         }
+    }
+
+    /// Claim the next turn for one the agent is starting on its own, unless a
+    /// prompt the manager admitted already owns it. On `true` the caller
+    /// announces the turn (`StatusChanged(Prompting)`); on `false` the admitted
+    /// prompt is about to start and the agent's output streams into it.
+    ///
+    /// Decided under the same lock as the manager's admission check, so the two
+    /// can never both own a turn: a prompt admitted AFTER the claim keeps its
+    /// gate through the agent turn's `TurnComplete` (see
+    /// [`Self::agent_initiated_turn`]).
+    ///
+    /// The turn starts from an empty live message, as the frontend's does at
+    /// `Prompting`: whatever sits in `live_message` now arrived between turns
+    /// (a late frame of the turn before), which no client rendered, and would
+    /// otherwise open this turn's snapshot and its captured result.
+    pub fn begin_agent_initiated_turn(&mut self) -> bool {
+        if self.turn_in_flight {
+            return false;
+        }
+        self.agent_initiated_turn = true;
+        self.live_message = None;
+        self.active_tool_calls.clear();
+        true
     }
 
     /// A single-line "what the sub-agent is doing right now" hint, used by the
@@ -2498,6 +2560,8 @@ mod tests {
             usage: None,
             output_file_path: None,
             tool_call_id: None,
+            phase: None,
+            current_agent: None,
         }
     }
 
@@ -2677,6 +2741,58 @@ mod tests {
         });
         assert!(s.async_tasks.is_empty());
         assert!(!s.has_active_background_work(Utc::now()));
+    }
+
+    /// A turn the agent started itself (Grok's follow-up to a background
+    /// workflow) never took the prompt gate, so its end must not release it: a
+    /// prompt admitted while it ran owns the flag until ITS turn completes.
+    #[test]
+    fn an_agent_initiated_turn_end_leaves_an_admitted_prompts_gate() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "a late frame of the turn before".into(),
+            parent_tool_use_id: None,
+        });
+        assert!(s.begin_agent_initiated_turn());
+        assert!(s.live_message.is_none(), "the turn starts from a clean slate");
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "report".into(),
+            parent_tool_use_id: None,
+        });
+        // The manager admits a prompt mid-way.
+        s.turn_in_flight = true;
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "cancelled".into(),
+            agent_type: "grok".into(),
+        });
+        assert!(s.turn_in_flight, "the admitted prompt still owns the gate");
+        assert!(!s.agent_initiated_turn);
+        assert_eq!(s.last_assistant_text.as_deref(), Some("report"));
+
+        // The prompt's own turn then releases it as always.
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "grok".into(),
+        });
+        assert!(!s.turn_in_flight);
+    }
+
+    /// An admitted prompt owns the next turn: the agent's own output then
+    /// streams into it rather than into a turn of its own.
+    #[test]
+    fn an_agent_initiated_turn_yields_to_an_admitted_prompt() {
+        let mut s = fresh_state();
+        s.turn_in_flight = true;
+        assert!(!s.begin_agent_initiated_turn());
+        assert!(!s.agent_initiated_turn);
     }
 
     #[test]

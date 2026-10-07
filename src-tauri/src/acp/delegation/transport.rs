@@ -331,6 +331,87 @@ pub struct BrokerBrowserTabOpRequest {
     pub op: crate::acp::browser_tools::BrowserTabOp,
 }
 
+/// List the running applications. Backs `computer_list_apps`. Token-scoped
+/// only, like the browser listing: the desktop belongs to the user, not to a
+/// conversation, and what any agent may *read* of it is the per-window grant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerAppsRequest {
+    pub token: String,
+}
+
+/// Start an installed application. Backs `computer_launch_app`. Token-scoped
+/// like the listing; whether it may be done at all is the person's switch,
+/// read on the codeg side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerLaunchRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+/// Read back, or write, the clipboard. Backs `computer_clipboard_read` and
+/// `computer_clipboard_write`; the person's switch for them and whose the
+/// clipboard's content is are judged on the codeg side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerClipboardRequest {
+    pub token: String,
+    pub op: crate::acp::computer_tools::ClipboardOp,
+}
+
+/// List the normal windows, or one process's. Backs `computer_list_windows`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerWindowsRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+}
+
+/// A screenshot of one shared window. Backs `computer_screenshot`; the grant
+/// check, the second check after the capture and the activity line all happen
+/// behind it, in `commands::computer`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerCaptureRequest {
+    pub token: String,
+    pub target_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_dimension: Option<u32>,
+}
+
+/// The accessibility tree of one shared window. Backs `computer_snapshot`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerSnapshotRequest {
+    pub token: String,
+    pub target_id: String,
+    #[serde(default)]
+    pub request: crate::acp::computer_tools::SnapshotRequest,
+}
+
+/// Predicates checked against one shared window. Backs `computer_verify`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerVerifyRequest {
+    pub token: String,
+    pub target_id: String,
+    pub request: crate::computer::types::VerifyRequest,
+}
+
+/// One action on a window shared for control. Backs `computer_click`,
+/// `computer_drag`, `computer_scroll`, `computer_type`, `computer_press_key`,
+/// `computer_hold_key`, `computer_set_value`, `computer_restore` and
+/// `computer_invoke_menu`; every
+/// check happens behind it, in `commands::computer`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerActRequest {
+    pub token: String,
+    pub target_id: String,
+    pub request: crate::computer::types::ComputerActRequest,
+    /// How the call asked for the action to reach the window; the person's
+    /// default when it did not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<crate::computer::types::ActDelivery>,
+}
+
 /// Tagged top-level message dispatched by the listener. Adding new variants
 /// is the wire-stable way to grow the broker protocol without touching the
 /// frame layer.
@@ -357,6 +438,14 @@ pub enum BrokerMessage {
     BrowserCapture(BrokerBrowserCaptureRequest),
     BrowserEval(BrokerBrowserEvalRequest),
     BrowserTabOp(BrokerBrowserTabOpRequest),
+    ComputerApps(BrokerComputerAppsRequest),
+    ComputerWindows(BrokerComputerWindowsRequest),
+    ComputerCapture(BrokerComputerCaptureRequest),
+    ComputerSnapshot(BrokerComputerSnapshotRequest),
+    ComputerVerify(BrokerComputerVerifyRequest),
+    ComputerAct(BrokerComputerActRequest),
+    ComputerLaunch(BrokerComputerLaunchRequest),
+    ComputerClipboard(BrokerComputerClipboardRequest),
     /// Liveness probe. Unlike every other variant this one is NOT sent by a
     /// companion — it comes from codeg's own service-status check
     /// (`acp::delegation::service`), which is why it carries no `token`: a
@@ -619,6 +708,78 @@ pub async fn client_browser_tab_op_round_trip(
     req: &BrokerBrowserTabOpRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::BrowserTabOp(req.clone())).await
+}
+
+/// Dispatch a `computer_list_apps` request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerAppsOutcome`].
+pub async fn client_computer_apps_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerAppsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerApps(req.clone())).await
+}
+
+/// Dispatch a `computer_launch_app` request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerLaunchOutcome`].
+pub async fn client_computer_launch_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerLaunchRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerLaunch(req.clone())).await
+}
+
+/// Dispatch a clipboard request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerClipboardOutcome`].
+pub async fn client_computer_clipboard_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerClipboardRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerClipboard(req.clone())).await
+}
+
+/// Dispatch a `computer_list_windows` request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerWindowsOutcome`].
+pub async fn client_computer_windows_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerWindowsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerWindows(req.clone())).await
+}
+
+/// Dispatch a `computer_screenshot` request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerCaptureOutcome`].
+pub async fn client_computer_capture_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerCaptureRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerCapture(req.clone())).await
+}
+
+/// Dispatch a `computer_snapshot` request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerSnapshotOutcome`].
+pub async fn client_computer_snapshot_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerSnapshotRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerSnapshot(req.clone())).await
+}
+
+/// Dispatch a `computer_verify` request and read back the serialized
+/// [`crate::acp::computer_tools::ComputerVerifyOutcome`].
+pub async fn client_computer_verify_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerVerifyRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerVerify(req.clone())).await
+}
+
+/// Dispatch one computer action and read back the serialized
+/// [`crate::acp::computer_tools::ComputerActOutcome`].
+pub async fn client_computer_act_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerActRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerAct(req.clone())).await
 }
 
 /// Probe the listener: write a [`BrokerMessage::Ping`] and read the

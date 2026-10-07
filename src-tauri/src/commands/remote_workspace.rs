@@ -10,6 +10,8 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 #[cfg(feature = "tauri-runtime")]
 use crate::app_error::AppCommandError;
 #[cfg(feature = "tauri-runtime")]
+use crate::commands::workspace_windows::WorkspaceWindow;
+#[cfg(feature = "tauri-runtime")]
 use crate::db::service::remote_workspace_connection_service;
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
@@ -36,8 +38,12 @@ pub struct RemoteWorkspaceConnectionInput {
     pub headers: Vec<RemoteWorkspaceHeader>,
 }
 
+/// The same check a remote workspace window has to pass before it opens, for
+/// every caller that opens one: the "Open remote workspace" menus, and the
+/// launch reopening the windows that were open at the last quit
+/// (`workspace_windows`).
 #[cfg(feature = "tauri-runtime")]
-async fn validate_remote_health(
+pub(crate) async fn validate_remote_health(
     base_url: &str,
     token: &str,
     headers: &[RemoteWorkspaceHeader],
@@ -205,7 +211,7 @@ pub async fn open_remote_workspace(
         .map_err(AppCommandError::db)?
         .ok_or_else(|| AppCommandError::not_found(format!("Remote connection {id} not found")))?;
 
-    let label = format!("remote-workspace-{id}");
+    let label = WorkspaceWindow::Remote { connection_id: id }.label();
     if let Some(existing) = app.get_webview_window(&label) {
         let _ = existing.unminimize();
         existing.set_focus().map_err(|e| {
@@ -216,11 +222,24 @@ pub async fn open_remote_workspace(
 
     validate_remote_health(&connection.base_url, &connection.token, &connection.headers).await?;
 
+    build_remote_workspace_window(&app, &connection)
+}
+
+/// Build the workspace window for `connection`, which the caller has already
+/// run [`validate_remote_health`] against and found without a window.
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn build_remote_workspace_window(
+    app: &AppHandle,
+    connection: &RemoteWorkspaceConnectionInfo,
+) -> Result<(), AppCommandError> {
+    let id = connection.id;
+    let window = WorkspaceWindow::Remote { connection_id: id };
+    let label = window.label();
     let window_instance_id = new_remote_window_instance_id();
     let url = WebviewUrl::App(
         format!("workspace?remoteConnectionId={id}&remoteWindowId={window_instance_id}").into(),
     );
-    let builder = WebviewWindowBuilder::new(&app, &label, url)
+    let builder = WebviewWindowBuilder::new(app, &label, url)
         .title(format!("Codeg - {}", connection.name))
         .inner_size(1260.0, 860.0)
         .min_inner_size(400.0, 600.0)
@@ -232,7 +251,7 @@ pub async fn open_remote_workspace(
     #[cfg(target_os = "macos")]
     let builder = builder
         .traffic_light_position(crate::commands::windows::workspace_window_traffic_light_position());
-    let window = builder
+    let built = builder
         .build()
         .map_err(|e| AppCommandError::window("Failed to open remote workspace", e.to_string()))?;
     if let Some(proxy) =
@@ -240,8 +259,9 @@ pub async fn open_remote_workspace(
     {
         proxy
             .inner()
-            .register_window_instance_cleanup(&window, window_instance_id);
+            .register_window_instance_cleanup(&built, window_instance_id);
     }
-    crate::commands::windows::post_window_setup(&window);
+    crate::commands::windows::post_window_setup(&built);
+    crate::commands::workspace_windows::note_opened(app, window);
     Ok(())
 }

@@ -483,13 +483,13 @@ describe("BrowserSurfaceHost", () => {
     render(<BrowserSurfaceHost tab={tab("host2")} />)
     await flush()
     expect(api.browserOpenTab).toHaveBeenCalledTimes(1)
-    // Re-mount re-applies bounds and shows the existing surface.
-    expect(api.browserSetBounds).toHaveBeenCalledWith("host2", {
-      x: 100,
-      y: 50,
-      width: 800,
-      height: 600,
-    })
+    // Re-mount re-applies bounds (and the zoom, which another host may have
+    // changed) and shows the existing surface.
+    expect(api.browserSetBounds).toHaveBeenCalledWith(
+      "host2",
+      { x: 100, y: 50, width: 800, height: 600 },
+      null
+    )
     expect(api.browserSetVisible).toHaveBeenLastCalledWith("host2", true, false)
   })
 
@@ -551,12 +551,87 @@ describe("BrowserSurfaceHost", () => {
     act(() => requestBrowserBoundsResync("host9"))
     await flush()
     expect(api.browserSetBounds.mock.calls.length).toBe(pushed + 1)
-    expect(api.browserSetBounds).toHaveBeenLastCalledWith("host9", {
-      x: 100,
+    expect(api.browserSetBounds).toHaveBeenLastCalledWith(
+      "host9",
+      { x: 100, y: 50, width: 800, height: 600 },
+      null
+    )
+  })
+
+  // A tab emulating a device in a slot smaller than the device: the page is
+  // zoomed out so it still lays out at the device's width, from its first
+  // document on, and the zoom moves with the frame it is fitted to.
+  it("builds the surface at its zoom and pushes a new zoom with the bounds", async () => {
+    api.browserOpenTab.mockImplementation(() => Promise.resolve(state("zoom1")))
+    const { rerender } = render(
+      <BrowserSurfaceHost tab={tab("zoom1")} zoom={0.5} />
+    )
+    await flush()
+    expect(api.browserOpenTab.mock.calls[0][0]).toMatchObject({
+      tabId: "zoom1",
+      zoom: 0.5,
+    })
+
+    api.browserSetBounds.mockClear()
+    rerender(<BrowserSurfaceHost tab={tab("zoom1")} zoom={0.75} />)
+    await flush()
+    // Same rect, new zoom: pushed, in one call with the bounds.
+    expect(api.browserSetBounds).toHaveBeenCalledTimes(1)
+    expect(api.browserSetBounds).toHaveBeenLastCalledWith(
+      "zoom1",
+      { x: 100, y: 50, width: 800, height: 600 },
+      0.75
+    )
+
+    // Nothing changed: nothing pushed.
+    rerender(<BrowserSurfaceHost tab={tab("zoom1")} zoom={0.75} />)
+    await flush()
+    expect(api.browserSetBounds).toHaveBeenCalledTimes(1)
+  })
+
+  // A device frame centred in a stage that grew has moved without changing
+  // size, which the host's ResizeObserver never hears of.
+  it("places the surface again when its layout key moves", async () => {
+    api.browserOpenTab.mockImplementation(() => Promise.resolve(state("move1")))
+    const { rerender } = render(
+      <BrowserSurfaceHost tab={tab("move1")} layoutKey="a" />
+    )
+    await flush()
+    api.browserSetBounds.mockClear()
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      x: 300,
       y: 50,
+      left: 300,
+      top: 50,
       width: 800,
       height: 600,
+      right: 1100,
+      bottom: 650,
+      toJSON: () => ({}),
     })
+    rerender(<BrowserSurfaceHost tab={tab("move1")} layoutKey="b" />)
+    await flush()
+    expect(api.browserSetBounds).toHaveBeenLastCalledWith(
+      "move1",
+      { x: 300, y: 50, width: 800, height: 600 },
+      null
+    )
+  })
+
+  // An owned window is sized to the device instead (`BrowserTabView`): it is
+  // never zoomed, so no zoom goes out for one.
+  it("pushes no bounds or zoom for an owned window", async () => {
+    api.browserOpenTab.mockImplementation(() =>
+      Promise.resolve({ ...state("win1"), surface: "window" as const })
+    )
+    const { rerender } = render(
+      <BrowserSurfaceHost tab={tab("win1")} zoom={0.5} />
+    )
+    await flush()
+    api.browserSetBounds.mockClear()
+    rerender(<BrowserSurfaceHost tab={tab("win1")} zoom={0.75} />)
+    await flush()
+    expect(api.browserSetBounds).not.toHaveBeenCalled()
   })
 
   // The whole point of the order: the still goes up while the native view is

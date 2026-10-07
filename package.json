@@ -1,7 +1,7 @@
 {
   "name": "codeg",
   "private": true,
-  "version": "0.32.2",
+  "version": "0.33.0",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev": "next dev --turbopack",
@@ -12,8 +12,8 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "server:build": "cd src-tauri && cargo build --release --bin codeg-server --no-default-features",
-    "server:dev": "cd src-tauri && cargo run --bin codeg-server --no-default-features",
+    "server:build": "cd src-tauri && cargo build --release --bin codeg-server --no-default-features --features server-bin",
+    "server:dev": "cd src-tauri && cargo run --bin codeg-server --no-default-features --features server-bin",
     "browser:agent": "node scripts/build-browser-agent.mjs",
     "browser:agent:check": "node scripts/build-browser-agent.mjs --check",
     "browser:agent:types": "tsc -p browser-agent/tsconfig.json",

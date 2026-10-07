@@ -9,7 +9,10 @@
  *     spawned with (`delegation-settings.tsx`).
  *   * "In-conversation tools" — the tool groups codeg-mcp injects when an
  *     agent starts: feedback, ask-user-question, session info, the built-in
- *     browser and the create-from-chat writers (`agent-tools-settings.tsx`).
+ *     browser, computer use and the create-from-chat writers
+ *     (`agent-tools-settings.tsx`). Computer use's own settings — the driver,
+ *     permissions, sharing — have a page of their own
+ *     (`computer-use-settings.tsx`).
  *
  * They used to sit at the bottom of `/settings/general`, which is how that
  * page grew to twice the length of what "general" describes — and why the

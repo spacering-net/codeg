@@ -190,6 +190,47 @@ describe("closed tab stack", () => {
     })
   })
 
+  it("records the device a browser tab was shown as", () => {
+    expect(
+      snapshotBrowserTab(
+        {
+          id: "browser:p",
+          folderId: 3,
+          browser: { profile: "default", device: "phone" },
+        },
+        "http://localhost:3000/",
+        "localhost:3000",
+        0
+      )
+    ).toMatchObject({ kind: "browser", device: "phone" })
+    // A custom device as its size: it reopens at that size.
+    expect(
+      snapshotBrowserTab(
+        {
+          id: "browser:c",
+          folderId: 3,
+          browser: {
+            profile: "default",
+            device: { width: 1440, height: 900 },
+          },
+        },
+        "http://localhost:3000/",
+        "localhost:3000",
+        0
+      )
+    ).toMatchObject({ device: { width: 1440, height: 900 } })
+    // The desktop is no device: the entry keeps the shape it always had.
+    expect(
+      "device" in
+        snapshotBrowserTab(
+          { id: "browser:d", folderId: 3, browser: { profile: "default" } },
+          "http://localhost:3000/",
+          "localhost:3000",
+          0
+        )
+    ).toBe(false)
+  })
+
   // A diff tab carries the path it compares, but reopening goes through
   // `openFilePreview` — restoring one would silently swap the diff for the
   // source editor, so it is not recorded at all.

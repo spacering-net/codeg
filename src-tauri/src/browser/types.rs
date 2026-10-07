@@ -49,6 +49,16 @@ pub struct Bounds {
     pub height: f64,
 }
 
+/// A page's viewport, in CSS pixels: the device a tab emulates (see
+/// `src/lib/browser/browser-device.ts`). An owned window is sized to it; an
+/// embedded surface gets it as bounds and a page zoom instead.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportSize {
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BrowserErrorKind {
@@ -108,6 +118,11 @@ pub struct BrowserTabState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub origin: Option<String>,
+    /// The page zoom the surface was last given. Not the person's: the only
+    /// thing that sets it is a tab emulating a device in a slot smaller than
+    /// that device's viewport, which zooms the page out so it still lays out
+    /// at the device's width (`commands::browser::set_bounds_core`). Always
+    /// 1 for an owned window, which is sized to the device instead.
     pub zoom: f64,
     pub error: Option<BrowserErrorInfo>,
     /// Set when the tab's traffic egresses through a remote workspace host.
@@ -456,6 +471,14 @@ mod tests {
         let bounds: Bounds =
             serde_json::from_str(r#"{"x":1,"y":2.5,"width":300,"height":200}"#).unwrap();
         assert_eq!(bounds.y, 2.5);
+        let viewport: ViewportSize = serde_json::from_str(r#"{"width":390,"height":844}"#).unwrap();
+        assert_eq!(
+            viewport,
+            ViewportSize {
+                width: 390.0,
+                height: 844.0
+            }
+        );
         let choice: SurfaceChoice = serde_json::from_str(r#""window""#).unwrap();
         assert_eq!(choice, SurfaceChoice::Window);
 

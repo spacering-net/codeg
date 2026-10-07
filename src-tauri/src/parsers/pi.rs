@@ -55,7 +55,10 @@ pub(crate) fn resolve_pi_sessions_dir() -> PathBuf {
 /// Pi's agent directory: `PI_CODING_AGENT_DIR` (through pi's tilde rule), else
 /// `~/.pi/agent`. The same rule [`resolve_pi_sessions_dir_from`] applies before
 /// it looks for `sessions`, kept in one place so the two can't drift.
-fn resolve_pi_agent_dir_from(agent_dir_env: Option<OsString>, home_dir: Option<&Path>) -> PathBuf {
+pub(crate) fn resolve_pi_agent_dir_from(
+    agent_dir_env: Option<OsString>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
     match agent_dir_env
         .filter(|value| !value.is_empty())
         .and_then(|value| value.into_string().ok())
@@ -69,7 +72,7 @@ fn resolve_pi_agent_dir_from(agent_dir_env: Option<OsString>, home_dir: Option<&
     }
 }
 
-fn resolve_pi_agent_dir() -> PathBuf {
+pub(crate) fn resolve_pi_agent_dir() -> PathBuf {
     resolve_pi_agent_dir_from(
         std::env::var_os("PI_CODING_AGENT_DIR"),
         dirs::home_dir().as_deref(),

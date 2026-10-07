@@ -268,6 +268,7 @@ async fn async_main() -> ExitCode {
         session_info_config,
         chat_authoring_config,
         browser_tools_config,
+        computer_tools_config,
     ) = codeg_lib::app_state::build_delegation_stack(
         &connection_manager,
         db.conn.clone(),
@@ -295,6 +296,8 @@ async fn async_main() -> ExitCode {
         session_info_config: session_info_config.clone(),
         chat_authoring_config: chat_authoring_config.clone(),
         browser_tools_config: browser_tools_config.clone(),
+        computer_tools_config: computer_tools_config.clone(),
+        computer_service: std::sync::OnceLock::new(),
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
     });
@@ -349,6 +352,50 @@ async fn async_main() -> ExitCode {
         &state.browser_tools_config,
     )
     .await;
+    // And the computer-use switches: the popover reports them, and — where
+    // the person running this server lets it share the screen it runs on —
+    // the computer service below starts from them.
+    codeg_lib::commands::computer_tools::apply_persisted_computer_tools_config(
+        &state.db.conn,
+        &state.computer_tools_config,
+    )
+    .await;
+    // Computer use: only where whoever runs this server says so, by
+    // CODEG_COMPUTER_USE — the server's web clients then share this
+    // machine's windows with agents, and Stop them, from the panel. Nothing
+    // else here can: a web client holds the token, not the machine.
+    if computer_use_requested() {
+        let service = codeg_lib::commands::computer::ComputerService::start(
+            codeg_lib::commands::computer::ComputerHost::Server {
+                broadcaster: state.event_broadcaster.clone(),
+                emitter: state.emitter.clone(),
+            },
+            state.computer_tools_config.clone(),
+        );
+        let _ = state.computer_service.set(service);
+        eprintln!(
+            "[SERVER] Computer use is offered (CODEG_COMPUTER_USE): this server's web clients \
+             may share this machine's windows with agents."
+        );
+        if !has_desktop_session() {
+            tracing::warn!(
+                "[SERVER] CODEG_COMPUTER_USE is set, but this process does not look like it \
+                 runs in a desktop session; computer use will report what stops it"
+            );
+        }
+    }
+    // A server an earlier install.ps1 put in %LOCALAPPDATA%\codeg shares that
+    // folder with the desktop app once it is installed there too: each
+    // install replaces the other's codeg-mcp.exe, codeg-computer-helper.exe
+    // and web\. install.ps1 moves the server out.
+    #[cfg(windows)]
+    if std::env::current_exe().is_ok_and(|exe| beside_the_desktop_app(&exe)) {
+        eprintln!(
+            "[SERVER] This codeg-server is in the codeg desktop app's folder, where each \
+             replaces the other's codeg-mcp.exe, codeg-computer-helper.exe and web\\. Re-run \
+             install.ps1 to move it to %LOCALAPPDATA%\\codeg-server."
+        );
+    }
     // Before accepting connections: keep ACP model terminal fallbacks aligned
     // with the same default-shell preference the built-in terminal uses, and
     // seed the command-color opt-in that every launch env is built from.
@@ -392,6 +439,15 @@ async fn async_main() -> ExitCode {
             // "browser tab" is an iframe their own browser renders, which
             // nothing here can reach.
             Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs),
+            // The screen this server runs on, where it is let share it
+            // (`CODEG_COMPUTER_USE`); none otherwise.
+            match state.computer_service.get() {
+                Some(service) => Arc::new(codeg_lib::commands::computer::McpComputerTools::new(
+                    service.clone(),
+                ))
+                    as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
+                None => Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop),
+            },
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
@@ -657,8 +713,74 @@ async fn async_main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Whether whoever runs this server lets it share the screen it runs on with
+/// agents: `CODEG_COMPUTER_USE` set to 1, true, yes or on.
+fn computer_use_requested() -> bool {
+    computer_use_requested_by(std::env::var("CODEG_COMPUTER_USE").ok().as_deref())
+}
+
+/// [`computer_use_requested`], for the variable's value.
+fn computer_use_requested_by(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+/// Whether this process looks like it runs where there is a screen: on
+/// Linux, a display it can reach; elsewhere it is not told apart here (the
+/// helper finds out, and says).
+fn has_desktop_session() -> bool {
+    if cfg!(target_os = "linux") {
+        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+    } else {
+        true
+    }
+}
+
+/// Whether `exe` sits beside the desktop app's `codeg.exe`.
+#[cfg(any(windows, test))]
+fn beside_the_desktop_app(exe: &std::path::Path) -> bool {
+    exe.parent()
+        .is_some_and(|dir| dir.join("codeg.exe").is_file())
+}
+
 fn default_data_dir() -> PathBuf {
     dirs::data_dir()
         .map(|d| d.join("codeg"))
         .unwrap_or_else(|| PathBuf::from(".codeg-data"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the desktop app's own executable beside the server counts.
+    #[test]
+    fn a_server_beside_the_desktop_app_is_told_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("codeg-server.exe");
+        std::fs::write(&exe, b"").unwrap();
+        assert!(!beside_the_desktop_app(&exe));
+        std::fs::write(dir.path().join("codeg-mcp.exe"), b"").unwrap();
+        std::fs::create_dir(dir.path().join("codeg")).unwrap();
+        assert!(!beside_the_desktop_app(&exe));
+        std::fs::write(dir.path().join("codeg.exe"), b"").unwrap();
+        assert!(beside_the_desktop_app(&exe));
+    }
+
+    /// Computer use is offered only when the variable says so in words —
+    /// anything else, unset included, is no.
+    #[test]
+    fn computer_use_is_offered_only_when_asked_for() {
+        for yes in ["1", "true", "TRUE", " yes ", "on"] {
+            assert!(computer_use_requested_by(Some(yes)), "{yes}");
+        }
+        for no in ["", "0", "false", "off", "no", "2", "enabled"] {
+            assert!(!computer_use_requested_by(Some(no)), "{no}");
+        }
+        assert!(!computer_use_requested_by(None));
+    }
 }

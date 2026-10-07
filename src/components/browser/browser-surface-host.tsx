@@ -154,10 +154,11 @@ export interface NativeSurfaceHostProps {
    *  (the workspace tab id for a browser tab; a key of its own for a
    *  document guest hosted by a file tab). */
   storeKey: string
-  /** Create the surface at these bounds; resolves to its first state. Keep
-   *  the identity stable for the life of the mount (memoize it): a new
-   *  identity only re-syncs, never re-creates. */
-  create: (bounds: Bounds) => Promise<BrowserTabState>
+  /** Create the surface at these bounds, its page at this zoom (see
+   *  `zoom`); resolves to its first state. Keep the identity stable for the
+   *  life of the mount (memoize it): a new identity only re-syncs, never
+   *  re-creates. */
+  create: (bounds: Bounds, zoom: number | null) => Promise<BrowserTabState>
   /** Tear the surface down when this host unmounts. A browser tab's surface
    *  belongs to its tab record and merely hides (the record outlives every
    *  host); a document guest belongs to the preview on screen and goes with
@@ -173,6 +174,16 @@ export interface NativeSurfaceHostProps {
   /** Shown in the slot while the create is on its way — worth saying when it
    *  takes a moment, as a remote tab's does (a tunnel to open, a probe). */
   pendingLabel?: string
+  /** The page zoom while the tab emulates a device — below 1 when its frame
+   *  is smaller than the device (`fitDeviceFrame` says how much). `null` (the
+   *  default) when it does not: the page's zoom is then not ours to set.
+   *  Pushed together with the bounds. */
+  zoom?: number | null
+  /** Changes whenever the layout may have MOVED this placeholder without
+   *  resizing it — a device frame re-centred in a stage that grew. Nothing
+   *  this host measures says so on its own: its ResizeObserver only hears
+   *  about size, and the poll that would notice is half a second away. */
+  layoutKey?: string
 }
 
 /**
@@ -195,9 +206,14 @@ export function NativeSurfaceHost({
   className,
   showCreateError = true,
   pendingLabel,
+  zoom = null,
+  layoutKey,
 }: NativeSurfaceHostProps) {
   const ref = useRef<HTMLDivElement | null>(null)
   const lastBoundsRef = useRef<Bounds | null>(null)
+  // The zoom last pushed with those bounds. `undefined` = unknown: another
+  // host may have zoomed the surface since (each fits it to its own slot).
+  const lastZoomRef = useRef<number | null | undefined>(undefined)
   const lastVisibleRef = useRef<boolean | null>(null)
   // Whichever host of this tab asked, the answer is every host's.
   const createOutcome = useBrowserCreateOutcome(storeKey)
@@ -290,9 +306,14 @@ export function NativeSurfaceHost({
     const bounds = measure(el)
     const visible =
       shouldShow && bounds.width > 0 && bounds.height > 0 && elementVisible(el)
-    if (visible && !sameBounds(lastBoundsRef.current, bounds)) {
+    if (
+      visible &&
+      (lastZoomRef.current !== zoom ||
+        !sameBounds(lastBoundsRef.current, bounds))
+    ) {
       lastBoundsRef.current = bounds
-      void browserSetBounds(backendId, bounds).catch(() => {})
+      lastZoomRef.current = zoom
+      void browserSetBounds(backendId, bounds, zoom).catch(() => {})
     }
     if (lastVisibleRef.current !== visible) {
       setLastVisible(visible)
@@ -364,6 +385,7 @@ export function NativeSurfaceHost({
     shouldShow,
     storeKey,
     windowShouldShow,
+    zoom,
   ])
 
   // Whether this tab currently has a live surface. Also the re-creation
@@ -382,6 +404,7 @@ export function NativeSurfaceHost({
     if (!el) return
     if (getBrowserTabState(storeKey)) {
       lastBoundsRef.current = null
+      lastZoomRef.current = undefined
       setLastVisible(null)
       sync()
       return
@@ -393,12 +416,13 @@ export function NativeSurfaceHost({
     }
     const bounds = measure(el)
     lastBoundsRef.current = bounds
-    // The surface is created visible, at these bounds.
+    lastZoomRef.current = zoom
+    // The surface is created visible, at these bounds and this zoom.
     setLastVisible(true)
     markBrowserCreatePending(storeKey)
     // Queued per tab id: a close issued for an earlier generation must reach
     // the backend before this create, never after it.
-    runSurfaceOp(backendId, () => create(bounds))
+    runSurfaceOp(backendId, () => create(bounds, zoom))
       .then((next) => {
         if (!surfaceClaimIsCurrent(backendId, token)) {
           // Someone else claimed this id meanwhile: their own create is
@@ -472,11 +496,18 @@ export function NativeSurfaceHost({
     }
   }, [backendId, sync])
 
-  // Layout-driven visibility flips (pane / mode / route) re-sync at once
-  // instead of waiting for the poll.
+  // Layout-driven visibility flips (pane / mode / route) and moves re-sync at
+  // once instead of waiting for the poll.
   useEffect(() => {
     sync()
-  }, [sync, view.mode, view.activePane, view.filesMaximized, routeVisible])
+  }, [
+    sync,
+    layoutKey,
+    view.mode,
+    view.activePane,
+    view.filesMaximized,
+    routeVisible,
+  ])
 
   // Something OTHER than this host moved the surface, so the bounds it last
   // pushed are no longer where the page is — and since the placeholder has
@@ -589,6 +620,8 @@ export function BrowserSurfaceHost({
   egress = null,
   showCreateError,
   pendingLabel,
+  zoom,
+  layoutKey,
 }: {
   tab: BrowserWorkspaceTab
   /** Force-hide (e.g. while a DOM error page replaces the page). */
@@ -599,18 +632,22 @@ export function BrowserSurfaceHost({
   egress?: number | null
   showCreateError?: boolean
   pendingLabel?: string
+  /** See `NativeSurfaceHost`: the device frame's (`BrowserDeviceStage`). */
+  zoom?: number | null
+  layoutKey?: string
 }) {
   const backendId = browserTabBackendId(tab.id)
   const initialUrl = tab.browser.initialUrl
   const profile = tab.browser.profile
   const folderId = tab.folderId
   const create = useCallback(
-    (bounds: Bounds) => {
+    (bounds: Bounds, zoom: number | null) => {
       const prefs = getBrowserPrefs()
       return browserOpenTab({
         tabId: backendId ?? "",
         url: initialUrl,
         bounds,
+        zoom,
         folderId,
         surface: prefs.surfaceOverride,
         devtools: prefs.devtools,
@@ -637,6 +674,8 @@ export function BrowserSurfaceHost({
       className={className}
       showCreateError={showCreateError}
       pendingLabel={pendingLabel}
+      zoom={zoom}
+      layoutKey={layoutKey}
     />
   )
 }

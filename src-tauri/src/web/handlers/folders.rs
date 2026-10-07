@@ -423,6 +423,7 @@ pub async fn open_settings_window(
         Some("office-tools") => "settings/office-tools",
         Some("collaboration") => "settings/collaboration",
         Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",

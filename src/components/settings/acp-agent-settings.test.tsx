@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  adapterChannelFromEnv,
-  adapterChannelFromEnvText,
   applyClaudeProviderToConfigText,
   buildCodexSandboxConfig,
   codexSandboxBaselineOf,
@@ -12,6 +10,8 @@ import {
   buildMergeConfigPayload,
   buildAcpAdapterCheck,
   buildVersionCheck,
+  canCheckLatestRelease,
+  compareReleaseVersion,
   configTextForClaudeSave,
   extractCodexImportantValues,
   getAgentChecks,
@@ -19,13 +19,14 @@ import {
   importantEnvKeysByAgent,
   importantFieldsFor,
   inferGrokMode,
+  latestReleaseOffer,
   materializeClaudeHardeningFlags,
   patchCodexConfigTomlText,
   patchEnvByImportantKey,
   patchImportantConfigText,
+  providerToRebindTo,
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
-  setAdapterChannel,
   setClaudeEnvFlagInConfigText,
   setHostToolsAgentMode,
   showsCodexReadOnlyAcpWarning,
@@ -35,6 +36,7 @@ import type {
   AcpAgentInfo,
   AdapterInfo,
   AgentType,
+  ModelProviderInfo,
   PreflightResult,
 } from "@/lib/types"
 
@@ -147,6 +149,56 @@ function codexSandboxDraft(
     codexSandboxBaseline: codexSandboxBaselineOf(seeded),
   }
 }
+
+// Providers arrive ordered by row id, so falling straight to the head of the
+// list rebound the agent to its OLDEST provider whenever the auth-mode dropdown
+// round-tripped through another mode, and the rebind copies that provider's
+// model names over the one the user was on. The rendered round trip is pinned
+// in acp-agent-settings.provider-rebind.test.tsx.
+describe("providerToRebindTo", () => {
+  function provider(id: number): ModelProviderInfo {
+    return {
+      id,
+      name: `provider-${id}`,
+      api_url: "",
+      api_key: "",
+      api_key_masked: "",
+      agent_type: "claude_code",
+      model: null,
+      created_at: "",
+      updated_at: "",
+    }
+  }
+  const available = [provider(1), provider(2), provider(3)]
+
+  it("returns to the user's last pick, not the head", () => {
+    expect(providerToRebindTo(available, 2, null)?.id).toBe(2)
+  })
+
+  it("prefers the last pick over the binding saved on the agent", () => {
+    expect(providerToRebindTo(available, 3, 2)?.id).toBe(3)
+  })
+
+  it("returns to the saved binding when nothing was picked in the panel", () => {
+    expect(providerToRebindTo(available, undefined, 2)?.id).toBe(2)
+  })
+
+  it("skips a last pick that is gone and returns to the saved binding", () => {
+    expect(providerToRebindTo(available, 9, 2)?.id).toBe(2)
+  })
+
+  it("falls back to the head for a first-time pick", () => {
+    expect(providerToRebindTo(available, undefined, null)?.id).toBe(1)
+  })
+
+  it("falls back to the head when every candidate is gone", () => {
+    expect(providerToRebindTo([provider(3), provider(4)], 2, 1)?.id).toBe(3)
+  })
+
+  it("has nothing to bind to when no provider exists", () => {
+    expect(providerToRebindTo([], 2, 2)).toBeNull()
+  })
+})
 
 describe("buildCodexSandboxConfig — Codex sandbox/approval save patch", () => {
   // The core contract. The panel also sends the raw config.toml text and the
@@ -725,9 +777,9 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes.some((fix) => fix.kind === "install_npx")).toBe(true)
   })
 
-  // A registry-added custom agent keeps the full remote/local comparison — its
-  // stored version is a real registry snapshot.
-  it("keeps the remote comparison for a registry-added custom agent", () => {
+  // A registry-added custom agent keeps the full recommended/local comparison —
+  // its stored version is a real registry snapshot.
+  it("keeps the recommended comparison for a registry-added custom agent", () => {
     const check = buildVersionCheck(
       makeAgent({
         agent_type: "custom:goose" as AgentType,
@@ -830,30 +882,8 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes).toHaveLength(0)
   })
 
-  // The opt-in latest channel keeps the Upgrade action available in the pass
-  // state: an installed latest-channel agent normally sits AT or AHEAD of the
-  // pin, so the compare-to-pin flow would never offer an upgrade again — and
-  // codeg cannot know whether npm has something newer, because nothing polls
-  // in the background.
-  it("keeps Upgrade available for an installed latest-channel npx agent", () => {
-    const check = buildVersionCheck(
-      makeAgent({
-        agent_type: "gemini" as AgentType,
-        distribution_type: "npx",
-        registry_version: "0.57.0",
-        installed_version: "0.60.0",
-        env: { CODEG_ADAPTER_CHANNEL: "latest" },
-      })
-    )
-    expect(check?.status).toBe("pass")
-    expect(check?.message).toContain("Latest channel")
-    expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(true)
-    expect(check?.fixes.some((fix) => fix.kind === "uninstall_npx")).toBe(true)
-  })
-
-  // The pinned default's pass state is byte-for-byte what it was before the
-  // channel existed.
-  it("leaves the pinned default's pass state unchanged", () => {
+  // An installed agent at the pin is the pass state: nothing to upgrade to.
+  it("reads Already latest with no Upgrade for an agent at the pin", () => {
     const check = buildVersionCheck(
       makeAgent({
         agent_type: "gemini" as AgentType,
@@ -866,39 +896,269 @@ describe("buildVersionCheck", () => {
     expect(check?.message).toContain("Already latest")
     expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(false)
   })
+})
 
-  // A latest-channel agent below the pin still warns: the upgrade it offers
-  // resolves the `latest` dist-tag, which is at least the pin.
-  it("still warns when a latest-channel agent sits below the pin", () => {
-    const check = buildVersionCheck(
-      makeAgent({
-        agent_type: "gemini" as AgentType,
-        distribution_type: "npx",
-        registry_version: "0.57.0",
-        installed_version: "0.50.0",
-        env: { CODEG_ADAPTER_CHANNEL: "latest" },
-      })
-    )
-    expect(check?.status).toBe("warn")
-    expect(check?.message).toContain("Upgrade available")
+describe("compareReleaseVersion", () => {
+  // The same cases as `is_strictly_newer` in acp/latest_release.rs: the
+  // backend decides which version to offer, and this decides whether the
+  // installed version already reaches it, so the two must agree.
+  const newer = (a: string, b: string) => compareReleaseVersion(a, b) > 0
+
+  it("orders semver by precedence", () => {
+    expect(newer("1.0.44", "1.0.41")).toBe(true)
+    expect(newer("0.61.0", "0.60.0")).toBe(true)
+    expect(newer("2.0.0", "1.99.99")).toBe(true)
+    expect(compareReleaseVersion("1.0.41", "1.0.41")).toBe(0)
+    expect(newer("1.0.40", "1.0.41")).toBe(false)
+    // Prereleases sort below their release, above the one before.
+    expect(newer("0.85.0-rc.1", "0.85.0")).toBe(false)
+    expect(newer("0.85.0", "0.85.0-rc.1")).toBe(true)
+    expect(newer("0.85.0-rc.1", "0.84.0")).toBe(true)
+    expect(newer("0.85.0-rc.2", "0.85.0-rc.1")).toBe(true)
+    expect(newer("1.0.0-rc.10", "1.0.0-rc.9")).toBe(true)
+    expect(newer("1.0.0-beta", "1.0.0-alpha.1")).toBe(true)
+    expect(newer("1.0.0-alpha.1", "1.0.0-alpha")).toBe(true)
+    // Build metadata carries no precedence.
+    expect(compareReleaseVersion("1.0.0+build.2", "1.0.0+build.1")).toBe(0)
+    // A leading `v` on either side.
+    expect(newer("v1.19.0", "1.18.33")).toBe(true)
+    expect(compareReleaseVersion("1.18.33", "v1.18.33")).toBe(0)
   })
 
-  // The channel is an npx concept (an npm dist-tag), so the same env key on a
-  // binary agent must not rewrite its version card.
-  it("ignores the channel key on a non-npx agent", () => {
-    const check = buildVersionCheck(
-      makeAgent({
-        agent_type: "open_code" as AgentType,
-        distribution_type: "binary",
-        registry_version: "1.0.0",
-        installed_version: "1.0.0",
-        env: { CODEG_ADAPTER_CHANNEL: "latest" },
-      })
-    )
-    expect(check?.message).toContain("Already latest")
-    expect(check?.fixes.some((fix) => fix.kind === "upgrade_binary")).toBe(
+  it("orders calendar versions by their numbers, ignoring suffixes", () => {
+    // Leading zeros are not semver, so these take the numeric path.
+    expect(newer("2026.10.03-abcdef1", "2026.09.26-dd393fe")).toBe(true)
+    expect(newer("2026.09.26-dd393fe", "2026.10.03-abcdef1")).toBe(false)
+    // Same numbers, different hash: a tie, not newer.
+    expect(
+      compareReleaseVersion("2026.09.26-aaaaaaa", "2026.09.26-dd393fe")
+    ).toBe(0)
+    expect(newer("2026.9.7", "2026.9.6")).toBe(true)
+    expect(newer("1.2.1.1", "1.2.1")).toBe(true)
+    expect(compareReleaseVersion("1.2.1", "1.2.1.0")).toBe(0)
+  })
+})
+
+describe("unreviewed latest release in Version Status", () => {
+  const release = { version: "0.61.0" }
+  const gemini = (overrides: Partial<AcpAgentInfo> = {}) =>
+    makeAgent({
+      agent_type: "gemini" as AgentType,
+      distribution_type: "npx",
+      registry_version: "0.60.0",
+      supports_custom_version: true,
+      installed_version: "0.60.0",
+      ...overrides,
+    })
+  const footerKinds = (agent: AcpAgentInfo) =>
+    buildVersionCheck(agent, true, release)?.footerFixes?.map((fix) => fix.kind)
+
+  it("is only looked up where Custom install could follow", () => {
+    expect(canCheckLatestRelease(gemini())).toBe(true)
+    expect(
+      canCheckLatestRelease(
+        gemini({
+          agent_type: "open_code" as AgentType,
+          distribution_type: "binary",
+        })
+      )
+    ).toBe(true)
+    // Custom install cannot fetch another version of these.
+    expect(canCheckLatestRelease(gemini({ distribution_type: "uvx" }))).toBe(
       false
     )
+    expect(
+      canCheckLatestRelease(gemini({ supports_custom_version: false }))
+    ).toBe(false)
+    expect(canCheckLatestRelease(gemini({ available: false }))).toBe(false)
+    // Nothing to be newer than.
+    expect(
+      canCheckLatestRelease(
+        gemini({
+          agent_type: "custom:goose" as AgentType,
+          custom_source: "manual",
+        })
+      )
+    ).toBe(false)
+    expect(canCheckLatestRelease(gemini({ registry_version: null }))).toBe(
+      false
+    )
+    // A registry-added custom agent has a real recommended version.
+    expect(
+      canCheckLatestRelease(
+        gemini({
+          agent_type: "custom:goose" as AgentType,
+          custom_source: "registry",
+        })
+      )
+    ).toBe(true)
+  })
+
+  it("offers the release until the installed version reaches it", () => {
+    expect(latestReleaseOffer(gemini(), release)).toBe("0.61.0")
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.60.5" }), release)
+    ).toBe("0.61.0")
+    // A prerelease of the offered version is still below it.
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.61.0-rc.1" }), release)
+    ).toBe("0.61.0")
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.61.0" }), release)
+    ).toBeNull()
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.62.0" }), release)
+    ).toBeNull()
+    // Not installed, or installed but unreadable: installing it is exactly
+    // what either needs.
+    expect(
+      latestReleaseOffer(gemini({ installed_version: null }), release)
+    ).toBe("0.61.0")
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "unknown" }), release)
+    ).toBe("0.61.0")
+    expect(latestReleaseOffer(gemini(), null)).toBeNull()
+  })
+
+  it("shares the bottom row with Custom install and never changes the status", () => {
+    // At the recommended version: still a pass, but no longer "Already
+    // latest" beside an offer of something newer.
+    const atPin = buildVersionCheck(gemini(), true, release)
+    expect(atPin?.status).toBe("pass")
+    expect(atPin?.message).toContain("A newer, unreviewed release is available")
+    expect(atPin?.message).not.toContain("Already latest")
+    expect(atPin?.fixes.map((fix) => fix.kind)).toEqual(["uninstall_npx"])
+    expect(atPin?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+    expect(atPin?.footerFixes?.[0].payload).toBe("0.61.0")
+
+    // Past the pin but short of the release: the same pass state.
+    const ahead = buildVersionCheck(
+      gemini({ installed_version: "0.60.5" }),
+      true,
+      release
+    )
+    expect(ahead?.status).toBe("pass")
+    expect(ahead?.message).toContain("A newer, unreviewed release is available")
+    expect(footerKinds(gemini({ installed_version: "0.60.5" }))).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+
+    // Below the pin: the upgrade to the recommended version stays the
+    // primary action, and the card stays a warning.
+    const behind = buildVersionCheck(
+      gemini({ installed_version: "0.59.0" }),
+      true,
+      release
+    )
+    expect(behind?.status).toBe("warn")
+    expect(behind?.message).toContain("Upgrade available")
+    expect(behind?.fixes.map((fix) => fix.kind)).toEqual([
+      "upgrade_npx",
+      "uninstall_npx",
+    ])
+    expect(behind?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+
+    // Unreadable local version: still the warning it was.
+    const unreadable = buildVersionCheck(
+      gemini({ installed_version: "unknown" }),
+      true,
+      release
+    )
+    expect(unreadable?.status).toBe("warn")
+    expect(unreadable?.message).toContain("Local version is not comparable")
+    expect(unreadable?.footerFixes?.[0].kind).toBe("upgrade_latest")
+
+    // Not installed: offered beside Custom install, Install stays primary.
+    const missing = buildVersionCheck(
+      gemini({ installed_version: null }),
+      true,
+      release
+    )
+    expect(missing?.status).toBe("fail")
+    expect(missing?.fixes.map((fix) => fix.kind)).toEqual(["install_npx"])
+    expect(missing?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+  })
+
+  it("is not offered once installed, nor where it does not apply", () => {
+    // Already at the release.
+    const reached = buildVersionCheck(
+      gemini({ installed_version: "0.61.0" }),
+      true,
+      release
+    )
+    expect(reached?.status).toBe("pass")
+    expect(reached?.message).toContain("Already latest")
+    expect(reached?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "custom_install",
+    ])
+    // No release found this visit.
+    const none = buildVersionCheck(gemini(), true, null)
+    expect(none?.message).toContain("Already latest")
+    expect(none?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "custom_install",
+    ])
+    // A manual definition has no recommended version to be newer than.
+    expect(
+      footerKinds(
+        gemini({
+          agent_type: "custom:goose" as AgentType,
+          custom_source: "manual",
+        })
+      )
+    ).toEqual(["custom_install"])
+    // No Custom install, no offer either.
+    expect(footerKinds(gemini({ supports_custom_version: false }))).toEqual([])
+    expect(footerKinds(gemini({ distribution_type: "uvx" }))).not.toContain(
+      "upgrade_latest"
+    )
+    // Platform unsupported keeps its action-free dead end.
+    const unsupported = buildVersionCheck(
+      gemini({
+        agent_type: "open_code" as AgentType,
+        distribution_type: "binary",
+        available: false,
+      }),
+      true,
+      release
+    )
+    expect(unsupported?.fixes).toEqual([])
+    expect(unsupported?.footerFixes).toBeUndefined()
+  })
+
+  // `hasComparableVersion` lets anything with a digit and a dot through, so a
+  // CLI that printed a diagnostic instead of its version lands in the
+  // compare-to-pin branches. Pinned so a change there is a deliberate one:
+  // the numbers read out of it put it past the pin but below the release,
+  // which offers an install over a version codeg cannot read anyway.
+  it("treats a diagnostic-looking local version as below the release", () => {
+    const check = buildVersionCheck(
+      gemini({ installed_version: "error: 1.2 failed" }),
+      true,
+      release
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.footerFixes?.[0].kind).toBe("upgrade_latest")
+  })
+
+  it("reaches the Version Status card through getAgentChecks", () => {
+    const versionCard = (latest?: { version: string } | null) =>
+      getAgentChecks(gemini(), undefined, latest).find(
+        (check) => check.check_id === "version_status"
+      )
+    expect(versionCard(release)?.footerFixes?.[0].kind).toBe("upgrade_latest")
+    expect(versionCard()?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "custom_install",
+    ])
   })
 })
 
@@ -1086,6 +1346,26 @@ describe("applyClaudeProviderToConfigText — provider-bound stale config", () =
     expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION).toBe("gw/opus-preview")
     expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME).toBe("GW Opus")
     expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION).toBe("via gateway")
+  })
+
+  // The Fable pin is provider-owned like the other model pins: a reload can
+  // carry the previous provider's ANTHROPIC_DEFAULT_FABLE_MODEL in the on-disk
+  // config, and a save for a provider that pins no Fable model must drop it.
+  it("writes the provider's Fable pin and clears a stale one", () => {
+    const pinned = applyClaudeProviderToConfigText("", {
+      api_url: "https://gw.example/v1",
+      api_key: "sk-x",
+      model: JSON.stringify({ main: "prov-main", fable: "gw/fable" }),
+    })
+    expect(envOf(pinned).ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("gw/fable")
+
+    const unpinned = applyClaudeProviderToConfigText(pinned, {
+      api_url: "https://gw.example/v1",
+      api_key: "sk-x",
+      model: JSON.stringify({ main: "prov-main" }),
+    })
+    expect(envOf(unpinned).ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined()
+    expect(envOf(unpinned).ANTHROPIC_MODEL).toBe("prov-main")
   })
 
   // The hardening toggles are not provider-controlled, so a provider-authoritative
@@ -1835,50 +2115,6 @@ describe("host-tools toggle — hand the fs/terminal channels back to the agent"
   })
 })
 
-describe("adapter-channel control — opt into the latest adapter release", () => {
-  const KEY = "CODEG_ADAPTER_CHANNEL"
-
-  it("defaults to pinned for an agent that has never touched the control", () => {
-    expect(adapterChannelFromEnvText("")).toBe("pinned")
-    expect(adapterChannelFromEnvText("XAI_API_KEY=abc")).toBe("pinned")
-    expect(adapterChannelFromEnv({})).toBe("pinned")
-  })
-
-  it("round-trips latest and back to pinned", () => {
-    const latest = setAdapterChannel("XAI_API_KEY=abc", "latest")
-    expect(latest).toContain(`${KEY}=latest`)
-    expect(adapterChannelFromEnvText(latest)).toBe("latest")
-
-    // Pinned DELETES the key: unlike the host-tools knob there is no
-    // process-env second layer that could make "absent" mean something else,
-    // so absent is unambiguously the default on both sides, and the raw
-    // editor stays free of a key that only restates it.
-    const pinned = setAdapterChannel(latest, "pinned")
-    expect(pinned).not.toContain(KEY)
-    expect(adapterChannelFromEnvText(pinned)).toBe("pinned")
-    expect(pinned).toContain("XAI_API_KEY=abc")
-  })
-
-  it("reads only the exact sentinel, matching the Rust reader", () => {
-    // `adapter_channel_is_latest` (commands/acp.rs) treats exactly the trimmed
-    // `latest` as the opt-in; everything else stays on the reviewed pin.
-    expect(adapterChannelFromEnvText(`${KEY}=latest`)).toBe("latest")
-    expect(adapterChannelFromEnvText(`${KEY} = latest `)).toBe("latest")
-    expect(adapterChannelFromEnvText(`${KEY}=Latest`)).toBe("pinned")
-    expect(adapterChannelFromEnvText(`${KEY}=pinned`)).toBe("pinned")
-    expect(adapterChannelFromEnvText(`${KEY}=`)).toBe("pinned")
-    expect(adapterChannelFromEnv({ [KEY]: "latest" })).toBe("latest")
-    expect(adapterChannelFromEnv({ [KEY]: "nightly" })).toBe("pinned")
-  })
-
-  it("does not double up when selected twice", () => {
-    const once = setAdapterChannel("", "latest")
-    const twice = setAdapterChannel(once, "latest")
-    expect(twice).toBe(once)
-    expect(twice.match(new RegExp(KEY, "g"))).toHaveLength(1)
-  })
-})
-
 describe("rebaseDeepSeekDraft", () => {
   // Only the fields this helper reads or writes; the rest of AgentDraft is
   // spread through untouched, which the identity assertion below pins.
@@ -2098,10 +2334,10 @@ describe("codex ACP preset disclosures", () => {
     expect(codexSandboxSeedsAcpPreset(true)).toBe(false)
   })
 
-  it("only warns about the lost read-only sandbox when codeg really seeds read-only", () => {
+  it("only notes the 1.7–1.13 read-only gap when codeg really seeds read-only", () => {
     // Unshadowed read-only: codeg injects the `read-only` preset, which on
-    // codex-acp >=1.7.0 is workspace-write with `approvalsReviewer: "user"`.
-    // Both halves of the warning hold.
+    // codex-acp 1.7.0–1.13.x is workspace-write with `approvalsReviewer:
+    // "user"` (2.0.0 made it read-only again). Both halves of the note hold.
     expect(showsCodexReadOnlyAcpWarning("read-only", false)).toBe(true)
     // Shadowed: no preset is injected, so the warning's promise that every
     // escalation reaches the user would be false — and it would sit directly

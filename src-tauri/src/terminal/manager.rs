@@ -90,13 +90,14 @@ pub struct TerminalManager {
 ///
 /// Two of those operations make that fatal rather than merely broken.
 /// [`TerminalManager::kill_by_owner_window`] runs inside Tauri's
-/// `on_window_event` and [`TerminalManager::kill_all`] inside
-/// `RunEvent::ExitRequested`: both on the main thread, inside the platform
-/// event loop, where a panic unwinds across an `extern "system"` boundary and
-/// Rust turns that into an immediate `abort` (Windows reports it as
-/// `0xc0000409`). So a poisoned mutex would take the whole process down at the
-/// next window close. The reader thread's own removal is the mirror case — it
-/// would leak the entry and its temp files for the rest of the process.
+/// `on_window_event` and [`TerminalManager::kill_all`] inside the quit's
+/// `RunEvent::ExitRequested` or `RunEvent::Exit`: both on the main thread,
+/// inside the platform event loop, where a panic unwinds across an
+/// `extern "system"` boundary and Rust turns that into an immediate `abort`
+/// (Windows reports it as `0xc0000409`). So a poisoned mutex would take the
+/// whole process down at the next window close. The reader thread's own
+/// removal is the mirror case — it would leak the entry and its temp files for
+/// the rest of the process.
 ///
 /// Matches the form already used in `office_watch` and `background_watch`.
 fn lock_terminals(
@@ -611,7 +612,8 @@ impl TerminalManager {
     }
 
     /// Poison-tolerant for the reason given on [`Self::kill_by_owner_window`]:
-    /// the quit path runs inside `RunEvent::ExitRequested` on the main thread.
+    /// the quit path runs inside `RunEvent::ExitRequested` or `RunEvent::Exit`,
+    /// on the main thread.
     pub fn kill_all(&self) -> usize {
         let mut instances: Vec<TerminalInstance> = {
             let mut terminals = lock_terminals(&self.terminals);

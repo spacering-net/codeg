@@ -219,6 +219,9 @@ export type ThreadRenderItem =
       /** The call's lifecycle, so a `/compact` still running reads as
        *  compacting and its summary streams. */
       state?: ToolCallState
+      /** The compaction call's id — the event's own name wherever the live
+       *  and history channels agree on one (see `dedupeCompactionItems`). */
+      callId?: string
     }
 
 /**
@@ -526,17 +529,19 @@ function isEmptyTurnItem(item: ThreadRenderItem): boolean {
 
 /**
  * When a resolved group's ONLY meaningful content is a single context-compaction
- * tool-call part, return that part's `_meta` and retained summary (so the caller
- * can hoist it to a standalone `"compaction"` divider item); otherwise `null`.
- * Empty text parts are ignored so a bare compaction turn still qualifies. Scoped
- * to assistant groups with no user resources/images. A compaction part always
- * carries a truthy `_meta` (`contextCompaction` as the boolean marker or the
- * 1.3.0+ versioned object), so a non-null return is unambiguous.
+ * tool-call part, return that part's `_meta`, retained summary and call id (so
+ * the caller can hoist it to a standalone `"compaction"` divider item);
+ * otherwise `null`. Empty text parts are ignored so a bare compaction turn
+ * still qualifies. Scoped to assistant groups with no user resources/images. A
+ * compaction part always carries a truthy `_meta` (`contextCompaction` as the
+ * boolean marker or the 1.3.0+ versioned object), so a non-null return is
+ * unambiguous.
  */
 export function compactionOnlyPart(group: ResolvedMessageGroup): {
   meta: Record<string, unknown> | null
   summary: string | null
   state: ToolCallState
+  callId: string
 } | null {
   if (group.role !== "assistant") return null
   if (group.resources.length > 0 || group.images.length > 0) return null
@@ -552,6 +557,7 @@ export function compactionOnlyPart(group: ResolvedMessageGroup): {
     meta: only.meta ?? null,
     summary: contextCompactionSummary(only.meta, only.output),
     state: only.state,
+    callId: only.toolCallId,
   }
 }
 
@@ -580,17 +586,24 @@ function compactionEventKey(
 /**
  * Drop repeat renderings of one compaction, keeping the first.
  *
- * A compaction reaches the timeline through two independent channels that no
- * id-keyed dedup can join: the live ACP `tool_call` (a `live-…` turn) and the
- * agent's own transcript, which `parsers::claude` turns into a divider under a
- * parser id. Mid-turn both are in hand at once — and unlike an ordinary
- * partial reply, the usual suppressor cannot help here, because the `/compact`
- * prompt is not persisted until AFTER the boundary, so the backend has no
+ * A compaction reaches the timeline through two independent channels: the live
+ * ACP `tool_call` (a `live-…` turn) and the agent's own transcript, which the
+ * history parsers turn into a divider under a parser turn id. Mid-turn both can
+ * be in hand at once — and unlike an ordinary partial reply, the usual
+ * suppressor cannot help here, because the `/compact` prompt is not persisted
+ * until AFTER the boundary (claude), or ever (codex), so the backend has no
  * in-flight user turn to anchor on (`apply_in_flight_message_id`).
  *
- * Content is therefore the only usable identity; see [`compactionEventKey`]
- * for why it is safe. Returns the input array when nothing is dropped, so the
- * common path allocates nothing.
+ * Two identities, either one enough:
+ * - the call id, where both channels name the event alike — codex-acp's live
+ *   `compactionId` is the app-server item id `parsers::codex` names its divider
+ *   by, and codex sends no counters for the content key to use;
+ * - the content, where they do not — claude's live id is its `compacting`
+ *   status message and its transcript's is the boundary record; see
+ *   [`compactionEventKey`] for why the content key is safe.
+ *
+ * Returns the input array when nothing is dropped, so the common path
+ * allocates nothing.
  */
 export function dedupeCompactionItems(
   items: ThreadRenderItem[]
@@ -599,14 +612,16 @@ export function dedupeCompactionItems(
   let dropped = false
   const kept = items.filter((item) => {
     if (item.kind !== "compaction") return true
-    const key = compactionEventKey(item.meta)
-    if (key === null) return true
-    if (seen.has(key)) {
-      dropped = true
-      return false
-    }
-    seen.add(key)
-    return true
+    const keys = [
+      compactionEventKey(item.meta),
+      item.callId ? `call:${item.callId}` : null,
+    ].filter((key): key is string => key !== null)
+    const repeat = keys.some((key) => seen.has(key))
+    // A repeat's other identity names the same event too, so it is recorded
+    // even though the item itself goes.
+    for (const key of keys) seen.add(key)
+    if (repeat) dropped = true
+    return !repeat
   })
   return dropped ? kept : items
 }
@@ -1215,6 +1230,7 @@ export function MessageListView({
           meta: compaction.meta,
           summary: compaction.summary,
           state: compaction.state,
+          callId: compaction.callId,
         }
       }
       return {

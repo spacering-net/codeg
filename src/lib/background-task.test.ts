@@ -170,6 +170,35 @@ describe("parseBackgroundLaunch", () => {
   it("extracts the task id from a background launch result", () => {
     expect(parseBackgroundLaunch(LAUNCH)).toEqual({ taskId: "be7lh91re" })
   })
+  it("recognizes every wording Claude Code uses for a command moved to the background", () => {
+    // Claude Code 2.1.286's acknowledgements, verbatim. The steer one is from a
+    // live run: the transcript stores it bare, claude-agent-acp wraps it in a
+    // console fence on the wire.
+    const steered =
+      "Command was moved to the background (ID: bj0x9uqsf) so that a message that arrived while it was running can reach you; it was not interrupted. Output is being written to: /private/tmp/x/tasks/bj0x9uqsf.output. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. To check interim output, use Read on that file path."
+    expect(parseBackgroundLaunch(steered)).toEqual({ taskId: "bj0x9uqsf" })
+    expect(parseBackgroundLaunch("```console\n" + steered + "\n```")).toEqual({
+      taskId: "bj0x9uqsf",
+    })
+    expect(
+      parseBackgroundLaunch(
+        "Command did not complete within its 120s timeout and was moved to the background (ID: b3k9x2m1q). Output is being written to: /tmp/tasks/b3k9x2m1q.output. You will be notified when it completes."
+      )
+    ).toEqual({ taskId: "b3k9x2m1q" })
+    expect(
+      parseBackgroundLaunch(
+        "Command was manually backgrounded by user with ID: bz81ab3cd. Output is being written to: /tmp/tasks/bz81ab3cd.output."
+      )
+    ).toEqual({ taskId: "bz81ab3cd" })
+  })
+  it("leaves an MCP tool that was moved to the background alone", () => {
+    // Not a command acknowledgement: the MCP card has no launch body to swap.
+    expect(
+      parseBackgroundLaunch(
+        'MCP tool "blocker/wait_for_answer" was moved to the background as task kjgwltsdi so that a message that arrived while it was running can reach you; it was not interrupted and keeps running'
+      )
+    ).toBeNull()
+  })
   it("extracts the task id from Grok's launch acknowledgement", () => {
     expect(parseBackgroundLaunch(GROK_LAUNCH)).toEqual({
       taskId: "term_b0d9512484964551a5bac4f82a805ae2",

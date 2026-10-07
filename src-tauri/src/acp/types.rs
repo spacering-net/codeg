@@ -92,6 +92,31 @@ pub struct SessionNotice {
     pub description: Option<String>,
 }
 
+/// One plugin Claude Code could not load, as its `system/init` frame lists it
+/// in `plugin_errors` (CLI 2.1.283+): a plugin that did not load at all, or one
+/// that loaded without one of its components.
+///
+/// claude-agent-acp gives these no ACP surface — it only writes them to its
+/// stderr — so codeg reads them off the raw SDK stream it already subscribes to
+/// (`emitRawSDKMessages`). Field for field the CLI's entry, except that its
+/// `type` is `kind` here, the key the frontend reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginLoadFailure {
+    /// `name@marketplace`, or the positional `inline[N]` / `synced[N]` tag of a
+    /// directory entry that failed before it had a name.
+    pub plugin: String,
+    /// The CLI's category, from an OPEN set (`path-not-found`,
+    /// `generic-error`, `manifest-validation-error`, `dependency-unsatisfied`,
+    /// `hook-load-failed`, …) — a plain string so a new one passes through.
+    pub kind: String,
+    /// CLI-authored display text, in its own English; shown verbatim.
+    pub message: String,
+    /// The entry's path, present only for a directory entry that did not load
+    /// at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 /// One JetBrains AIR typed session failure record
 /// (`session_info_update._meta.jetbrains.air.sessionFailure`; claude-agent-acp
 /// 0.67+/codex-acp 1.2+, published only because `build_client_capabilities`
@@ -147,7 +172,9 @@ pub struct AsyncTaskUsage {
 /// from the three `session/update` variants that describe it (claude-agent-acp
 /// 0.73+: background shells, workflows, monitors; codex-acp 1.10+: background
 /// terminals). Published only because `build_client_capabilities` advertises the
-/// `asyncTasks` AIR capability.
+/// `asyncTasks` AIR capability. Grok's background workflows land here too,
+/// translated from its own `workflow_updated` (Grok speaks no AIR — see
+/// `connection::grok_workflow_task_delta`).
 ///
 /// This is the MERGED projection, not a wire frame: the adapter announces a
 /// task once with its full identity (`async_task_spawned`) and then revises it
@@ -201,6 +228,14 @@ pub struct AsyncTaskRecord {
     /// the card already in the transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// The phase a multi-step task is in (a Grok workflow's current phase).
+    /// Empty = none right now (see [`AsyncTaskDelta::phase`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    /// The child agent the task is running right now (a Grok workflow's
+    /// current agent). Empty = none right now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agent: Option<String>,
 }
 
 /// One async-task delta as it arrived on the wire.
@@ -213,11 +248,13 @@ pub struct AsyncTaskRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsyncTaskDelta {
     pub task_id: String,
-    /// True only for `async_task_spawned`. A progress/state delta naming an
-    /// unknown task is DROPPED rather than creating a placeholder row: the
-    /// adapter publishes progress only for tasks it already announced, so an
-    /// unknown id means a frame we failed to read, and a row with a default
-    /// name and no type is worse than no row (see `SessionState::apply_event`).
+    /// True only for a frame that carries the task's identity: AIR's
+    /// `async_task_spawned`, and every Grok `workflow_updated` (each one
+    /// restates the whole run). A progress/state delta naming an unknown task
+    /// is DROPPED rather than creating a placeholder row: the adapter publishes
+    /// progress only for tasks it already announced, so an unknown id means a
+    /// frame we failed to read, and a row with a default name and no type is
+    /// worse than no row (see `SessionState::apply_event`).
     pub spawned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -241,6 +278,14 @@ pub struct AsyncTaskDelta {
     pub output_file_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Grok restates its whole run on every frame, so from Grok an EMPTY string
+    /// in these two (and in `summary`) means "none any more" — the agent
+    /// finished, the pause was resumed. Absent still means unchanged, which
+    /// keeps one merge rule for everyone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agent: Option<String>,
 }
 
 impl AsyncTaskDelta {
@@ -261,6 +306,8 @@ impl AsyncTaskDelta {
             usage: self.usage.clone(),
             output_file_path: self.output_file_path.clone(),
             tool_call_id: self.tool_call_id.clone(),
+            phase: self.phase.clone(),
+            current_agent: self.current_agent.clone(),
         }
     }
 
@@ -298,6 +345,12 @@ impl AsyncTaskDelta {
         }
         if let Some(v) = &self.tool_call_id {
             record.tool_call_id = Some(v.clone());
+        }
+        if let Some(v) = &self.phase {
+            record.phase = Some(v.clone());
+        }
+        if let Some(v) = &self.current_agent {
+            record.current_agent = Some(v.clone());
         }
     }
 }
@@ -605,6 +658,14 @@ pub enum AcpEvent {
     /// advertises `session.notices` to: claude-agent-acp (0.81+) and codex-acp
     /// (1.13+). Dropped on the replay seam — a notice has no history position.
     SessionNotice { notice: SessionNotice },
+    /// The plugins Claude Code reported it could not load (see
+    /// [`PluginLoadFailure`]). The CLI repeats the list on every turn's
+    /// `system/init`, so this is emitted once per conversation loop and again
+    /// only when the list changes — which includes coming back after an init
+    /// that listed none. Like [`Self::SessionNotice`] it is an event,
+    /// not state: `SessionState::apply_event` keeps none of it, and the frontend
+    /// shows it as a warning notification.
+    PluginLoadFailures { failures: Vec<PluginLoadFailure> },
     /// A JetBrains AIR async-task delta (see [`AsyncTaskDelta`]). Emitted for
     /// every frame codeg could read; the merge into whole rows happens
     /// identically in `SessionState::apply_event` (which the snapshot is taken
@@ -613,19 +674,23 @@ pub enum AcpEvent {
     ///
     /// Reaches codeg from the two adapters `build_client_capabilities`
     /// advertises `asyncTasks` to: claude-agent-acp (0.73+) and codex-acp
-    /// (1.10+).
+    /// (1.10+) — and from Grok, whose background workflows codeg translates
+    /// into the same deltas without advertising anything to it.
     AsyncTask { delta: AsyncTaskDelta },
     /// `session/load` failed in a way codeg cannot paper over — the agent has
-    /// no record of this `session_id`, the session/process died, or it is
-    /// archived. Emitted instead of silently falling back to `session/new`, so
-    /// the frontend can surface the failure with reload / new-conversation
-    /// actions.
+    /// no record of this `session_id`, the session/process died, it is
+    /// archived, or another client holds it open. Emitted instead of silently
+    /// falling back to `session/new`, so the frontend can surface the failure
+    /// with reload / new-conversation actions.
     SessionLoadFailed {
         session_id: String,
         message: String,
         /// Stable machine-readable identifier: `"resource_not_found"` for
-        /// JSON-RPC -32002, or `"session_unavailable"` / `"session_archived"`
-        /// matched on the wire message. See `classify_session_load_failure`.
+        /// JSON-RPC -32002, `"session_busy"` for codex-acp's typed
+        /// `data.reason: "thread_active_writer"` (2.1.0+; matched on the wire
+        /// message before that), or `"session_unavailable"` /
+        /// `"session_archived"` matched on the wire message. See
+        /// `classify_session_load_error`.
         code: String,
     },
     /// Available slash commands updated
@@ -797,8 +862,10 @@ pub enum AcpEvent {
 /// transcript mid-`#870`-hold and both double-renders the held turn and races
 /// the file's own last write.
 /// `tool_use_id` is the launching `tool_use`/`tool_result` block's id (Claude's
-/// SDK-level `toolu_…`), NOT `task_id`; `None` for a background shell (its
-/// notification carries no tool-use-id and it has no marker card to flip).
+/// SDK-level `toolu_…`), NOT `task_id`. A background shell's notification names
+/// its `Bash` call too, whose card has no marker to flip, so the frontend leaves
+/// it alone; `None` when the notification names no call (an MCP call moved to
+/// the background).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackgroundSettledInfo {
     pub task_id: String,
@@ -1269,21 +1336,21 @@ pub struct SessionModeStateInfo {
     pub available_modes: Vec<SessionModeInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigSelectOptionInfo {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigSelectGroupInfo {
     pub group: String,
     pub name: String,
     pub options: Vec<SessionConfigSelectOptionInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigSelectInfo {
     pub current_value: String,
     pub options: Vec<SessionConfigSelectOptionInfo>,
@@ -1292,19 +1359,19 @@ pub struct SessionConfigSelectInfo {
 
 /// An on/off toggle config option (ACP's boolean `SessionConfigOption`). Cline
 /// 3.0.50+ ships one as `auto_approve` ("Auto-approve tools").
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigBooleanInfo {
     pub current_value: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionConfigKindInfo {
     Select(SessionConfigSelectInfo),
     Boolean(SessionConfigBooleanInfo),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigOptionInfo {
     pub id: String,
     pub name: String,
@@ -1347,6 +1414,21 @@ pub struct GrokModelSpec {
     /// it, and the caller falls back to
     /// [`crate::parsers::infer_context_window_max_tokens`].
     pub context_window: Option<u64>,
+}
+
+/// Grok's model catalog as its `_x.ai/models/update` broadcast states it: the
+/// list a session's model picker should offer, plus each model's spec.
+/// Backend-internal — NOT serialized onto the wire.
+#[derive(Debug, Clone)]
+pub struct GrokModelCatalog {
+    /// The picker's model rows in catalog order — `value` is the model id and
+    /// `name` its display name. No description: the rows a handshake's
+    /// `x.ai/sessionConfig` yields carry none, and the picker must read the
+    /// same whichever of the two built it.
+    pub models: Vec<SessionConfigSelectOptionInfo>,
+    /// Per-model specs, parsed exactly as a handshake's `models` are. Each
+    /// `default` here is the bare catalog default, not a session's own effort.
+    pub specs: std::collections::HashMap<String, GrokModelSpec>,
 }
 
 /// Read-only snapshot of the modes + config_options an agent advertises

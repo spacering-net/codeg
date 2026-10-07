@@ -15,6 +15,12 @@ vi.mock("@/lib/api", () => ({
   setChatAuthoringSettings: vi.fn(),
 }))
 
+vi.mock("@/lib/computer/computer-api", () => ({
+  getComputerToolsSettings: vi.fn(),
+  setComputerToolsEnabled: vi.fn(),
+  useComputerAvailable: () => false,
+}))
+
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 // Capture the change-event handlers so a test can play a remote write back.
@@ -32,6 +38,8 @@ vi.mock("@/lib/platform", () => ({
 const authoringHandler = () => handlers.get("chat-authoring-settings://changed")
 const browserToolsHandler = () =>
   handlers.get("browser-tools-settings://changed")
+const computerToolsHandler = () =>
+  handlers.get("computer-tools-settings://changed")
 
 // Avoid mutating the shared module cache across tests.
 vi.mock("@/hooks/use-feedback-enabled", () => ({
@@ -53,6 +61,10 @@ import {
   setSessionInfoSettings,
 } from "@/lib/api"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
+import {
+  getComputerToolsSettings,
+  setComputerToolsEnabled,
+} from "@/lib/computer/computer-api"
 
 const mockGetFeedback = vi.mocked(getFeedbackSettings)
 const mockSetFeedback = vi.mocked(setFeedbackSettings)
@@ -65,6 +77,8 @@ const mockSetBrowser = vi.mocked(setBrowserToolsSettings)
 const mockGetChat = vi.mocked(getChatAuthoringSettings)
 const mockSetChat = vi.mocked(setChatAuthoringSettings)
 const mockPrime = vi.mocked(primeFeedbackEnabled)
+const mockGetComputer = vi.mocked(getComputerToolsSettings)
+const mockSetComputer = vi.mocked(setComputerToolsEnabled)
 
 const LABELS = {
   feedback: "Live Feedback",
@@ -72,6 +86,7 @@ const LABELS = {
   sessionInfo: "Get session info",
   browserTools: "Read and drive the built-in browser",
   browserEval: "Run code in the built-in browser",
+  computer: "See and use your desktop's windows",
   automations: "Create automations",
   workTasks: "Create to-do tasks",
 } as const
@@ -92,6 +107,7 @@ function primeBackend(
     sessionInfo?: boolean
     browserTools?: boolean
     browserEval?: boolean
+    computer?: boolean
     automations?: boolean
     workTasks?: boolean
   } = {}
@@ -102,6 +118,7 @@ function primeBackend(
     sessionInfo = true,
     browserTools = false,
     browserEval = false,
+    computer = false,
     automations = false,
     workTasks = false,
   } = overrides
@@ -121,6 +138,30 @@ function primeBackend(
   mockSetSessionInfo.mockImplementation(async (next) => next)
   mockSetBrowser.mockImplementation(async (next) => next)
   mockSetChat.mockImplementation(async (next) => next)
+  // The computer record carries two more settings this panel never edits;
+  // they come back as stored.
+  mockGetComputer.mockResolvedValue({
+    enabled: computer,
+    grantTtlMinutes: 45,
+    blocklist: ["com.example.vault"],
+    blocklistRemoved: [],
+    blocklistDefaults: [],
+    stopShortcut: "Control+Alt+Escape",
+    showIndicator: true,
+    allowForeground: false,
+    defaultDelivery: "background",
+  })
+  mockSetComputer.mockImplementation(async (enabled) => ({
+    enabled,
+    grantTtlMinutes: 45,
+    blocklist: ["com.example.vault"],
+    blocklistRemoved: [],
+    blocklistDefaults: [],
+    stopShortcut: "Control+Alt+Escape",
+    showIndicator: true,
+    allowForeground: false,
+    defaultDelivery: "background",
+  }))
 }
 
 beforeEach(() => {
@@ -452,5 +493,114 @@ describe("AgentToolsSettingsSection", () => {
     // …and the group whose load failed is showing a default, not stored state,
     // so an untouched switch must not overwrite the backend with it.
     expect(mockSetQuestion).not.toHaveBeenCalled()
+  })
+
+  /** The computer switch rides its own narrow endpoint: saving it moves the
+   * switch alone, never the grant timeout or blocklist stored beside it. */
+  it("saves the computer switch through the switch-only writer", async () => {
+    primeBackend({ computer: false })
+
+    renderWithIntl()
+
+    const row = await screen.findByLabelText(LABELS.computer)
+    expect(row).toHaveAttribute("data-state", "unchecked")
+    fireEvent.click(row)
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(mockSetComputer).toHaveBeenCalledWith(true))
+    expect(mockSetComputer).toHaveBeenCalledTimes(1)
+    expect(mockSetBrowser).not.toHaveBeenCalled()
+  })
+
+  /** A popover toggle elsewhere moves this form's switch too, unless the
+   * user has an edit of their own pending on it. */
+  it("follows a computer switch flipped elsewhere", async () => {
+    primeBackend({ computer: false })
+
+    renderWithIntl()
+
+    const row = await screen.findByLabelText(LABELS.computer)
+    await waitFor(() => expect(computerToolsHandler()).toBeDefined())
+    act(() => {
+      computerToolsHandler()!({
+        enabled: true,
+        grantTtlMinutes: 45,
+        blocklist: [],
+        blocklistRemoved: [],
+        blocklistDefaults: [],
+      })
+    })
+    await waitFor(() => expect(row).toHaveAttribute("data-state", "checked"))
+    // Converged, not dirty: nothing to save.
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+  })
+
+  /** A broadcast about one record says nothing about another's read: a
+   * computer-use write that lands during the initial load must not throw
+   * away the browser switches that load read. */
+  it("yields only the broadcast record's fields to it during the initial load", async () => {
+    let releaseBrowser: (v: {
+      enabled: boolean
+      eval: boolean
+    }) => void = () => {}
+    primeBackend({ browserTools: true })
+    mockGetBrowser.mockReturnValue(
+      new Promise((resolve) => {
+        releaseBrowser = resolve
+      })
+    )
+
+    renderWithIntl()
+    await waitFor(() => expect(computerToolsHandler()).toBeDefined())
+    act(() =>
+      computerToolsHandler()?.({
+        enabled: true,
+        grantTtlMinutes: 45,
+        blocklist: [],
+        blocklistRemoved: [],
+        blocklistDefaults: [],
+      })
+    )
+    await act(async () => {
+      releaseBrowser({ enabled: true, eval: false })
+    })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(LABELS.browserTools)).toBeChecked()
+    )
+    expect(screen.getByLabelText(LABELS.computer)).toBeChecked()
+  })
+
+  /** A switch cannot move while a save is on its way — the answer would
+   * overwrite the move without a trace. */
+  it("locks the switches while saving", async () => {
+    let finish: () => void = () => {}
+    primeBackend({ computer: false })
+    mockSetComputer.mockImplementationOnce(
+      (enabled) =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              enabled,
+              grantTtlMinutes: 45,
+              blocklist: [],
+              blocklistRemoved: [],
+              blocklistDefaults: [],
+              stopShortcut: "",
+              showIndicator: true,
+              allowForeground: false,
+              defaultDelivery: "background",
+            })
+        })
+    )
+
+    renderWithIntl()
+    const row = await screen.findByLabelText(LABELS.computer)
+    fireEvent.click(row)
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() => expect(row).toBeDisabled())
+    await act(async () => finish())
+    await waitFor(() => expect(row).not.toBeDisabled())
+    expect(row).toBeChecked()
   })
 })

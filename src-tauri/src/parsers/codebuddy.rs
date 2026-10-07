@@ -818,7 +818,13 @@ fn tool_is_error(value: &Value) -> bool {
 /// marks every one of them `providerData.isMeta: true` — the
 /// `<task-notification>` a finished background worker enqueues
 /// (`BackgroundTaskNotifier::enqueueAndScheduleDrain` calls
-/// `kQ(xml, {isMeta: true})`), a `/goal` kick-off, and the like.
+/// `kQ(xml, {isMeta: true})`), a `/goal` kick-off, and the like. Since 2.159.0
+/// that includes an ACP `session/prompt` sent with
+/// `_meta["codebuddy.ai"].isMeta` (advertised as
+/// `agentCapabilities.metaPromptSupport`; per the 2.159.0 changelog it reaches
+/// the model but is not shown, broadcast or replayed as a user message):
+/// `markAcpMetaPromptItems` stamps the same flag on its user items. codeg never
+/// sends one, but another client's would land here.
 ///
 /// CodeBuddy's OWN renderer skips exactly these records when it replays a
 /// session (`"message" === type && "user" === role && (isMeta ||

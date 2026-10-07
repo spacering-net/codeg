@@ -772,30 +772,43 @@ pub fn pull_request_body(issue_url: &str, issue_number: i64, task_id: i32) -> St
     )
 }
 
-/// How a task finished, in the only two shapes worth telling the issue about.
+/// How a task finished, in the three shapes worth telling its thread about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskOutcome<'a> {
     /// Landed on the base branch of the local checkout.
     Merged { commit: &'a str, base_branch: &'a str },
     /// Published as a pull request.
     Delivered { pr_url: &'a str },
-    /// The third settlement: accepted without merging. `nothing_to_land` tells
-    /// the two ways that happens apart — an empty diff, versus a worktree that
-    /// was already gone (whose branch may still hold real commits). Saying
-    /// "nothing to land" about the second would contradict the counters printed
-    /// beside it.
+    /// The third settlement: accepted in codeg without anything landing.
+    /// `nothing_to_land` tells the two ways that happens apart — an empty diff,
+    /// versus a worktree that was already gone (whose branch may still hold
+    /// real commits). Saying the task made no changes about the second would
+    /// contradict the counters printed beside it.
     Accepted { nothing_to_land: bool },
 }
 
 /// The comment codeg posts when a task finishes.
 ///
-/// Deliberately built from nothing but the task id, the outcome and the diff
-/// counters: NO agent-written text (result summary, commit message, verdict
-/// note) may reach a thread other people are reading. That is a rule about the
-/// signature, not about the formatting — there is no parameter here that could
-/// carry it, which is what makes the rule hold as this evolves.
+/// Deliberately built from nothing but the task id, the thread it goes to, the
+/// outcome and the diff counters: NO agent-written text (result summary,
+/// commit message, verdict note) may reach a thread other people are reading.
+/// That is a rule about the signature, not about the formatting — there is no
+/// parameter here that could carry it (the thread is named by two enums, not by
+/// a noun string), which is what makes the rule hold as this evolves.
+///
+/// Every sentence reports what happened to the TASK's work, never a verdict on
+/// the item the thread is about. "Accepted" is codeg's word for the user
+/// signing off on a task, and a thread reads it as its own: on a pull request
+/// it says the change was approved, on an issue that the report was accepted.
+/// Neither follows from a task that landed nothing — least of all from a
+/// review that found the pull request's approach unsound and stopped without
+/// committing, whose author would read the opposite of what the review found.
+/// So that settlement says what did NOT happen to this thread's item, in the
+/// thread's own terms: nothing was pushed to this pull request.
 pub fn writeback_comment_body(
     task_id: i32,
+    provider: ForgeProvider,
+    item: ForgeItemKind,
     outcome: &TaskOutcome<'_>,
     stats: Option<(i32, i32, i32)>,
 ) -> String {
@@ -823,11 +836,19 @@ pub fn writeback_comment_body(
         TaskOutcome::Delivered { pr_url } => {
             format!("codeg work task {task} is done — {pr_url}{numbers}.")
         }
-        TaskOutcome::Accepted { nothing_to_land: true } => {
-            format!("codeg work task {task} is done — accepted with nothing to land.")
-        }
-        TaskOutcome::Accepted { nothing_to_land: false } => {
-            format!("codeg work task {task} is done — accepted without merging{numbers}.")
+        TaskOutcome::Accepted { nothing_to_land } => {
+            let noun = provider.change_noun();
+            let what = match (item, *nothing_to_land) {
+                (ForgeItemKind::Change, true) => {
+                    format!("it made no changes, so nothing was pushed to this {noun}")
+                }
+                (ForgeItemKind::Change, false) => {
+                    format!("its work was not pushed to this {noun}{numbers}")
+                }
+                (ForgeItemKind::Issue, true) => "it made no changes".to_string(),
+                (ForgeItemKind::Issue, false) => format!("its work was not merged{numbers}"),
+            };
+            format!("codeg work task {task} is done — {what}.")
         }
     }
 }
@@ -1357,8 +1378,11 @@ mod tests {
     /// wrote can appear in a thread other people are reading.
     #[test]
     fn the_write_back_body_is_numbers_and_links_only() {
+        let (gh, issue) = (ForgeProvider::GitHub, ForgeItemKind::Issue);
         let merged = writeback_comment_body(
             12,
+            gh,
+            issue,
             &TaskOutcome::Merged {
                 commit: "abc1234def5678",
                 base_branch: "main",
@@ -1377,6 +1401,8 @@ mod tests {
 
         let delivered = writeback_comment_body(
             12,
+            gh,
+            issue,
             &TaskOutcome::Delivered {
                 pr_url: "https://github.com/acme/app/pull/42",
             },
@@ -1386,21 +1412,99 @@ mod tests {
         assert!(delivered.contains("(1 file, +1/-0)"), "singular: {delivered}");
 
         // No recorded diff → the sentence still stands on its own.
-        let bare = writeback_comment_body(12, &TaskOutcome::Delivered { pr_url: "u" }, None);
+        let bare =
+            writeback_comment_body(12, gh, issue, &TaskOutcome::Delivered { pr_url: "u" }, None);
         assert!(!bare.contains('('), "{bare}");
 
         // The third settlement says so rather than staying silent — the
         // setting promises a comment whenever a forge task finishes.
-        let empty = writeback_comment_body(12, &TaskOutcome::Accepted { nothing_to_land: true }, None);
-        assert!(empty.contains("work task `12`") && empty.contains("nothing to land"));
-        // …and an acceptance whose worktree was gone must NOT claim there was
-        // nothing to land while printing the counters that say otherwise.
+        let empty = writeback_comment_body(
+            12,
+            gh,
+            issue,
+            &TaskOutcome::Accepted { nothing_to_land: true },
+            None,
+        );
+        assert!(empty.contains("work task `12`") && empty.contains("it made no changes"), "{empty}");
+        // …and an acceptance whose worktree was gone must NOT claim the task
+        // made no changes while printing the counters that say otherwise.
         let gone = writeback_comment_body(
             12,
+            gh,
+            issue,
             &TaskOutcome::Accepted { nothing_to_land: false },
             Some((3, 42, 7)),
         );
-        assert!(gone.contains("without merging (3 files, +42/-7)"), "{gone}");
-        assert!(!gone.contains("nothing to land"), "{gone}");
+        assert!(gone.contains("its work was not merged (3 files, +42/-7)"), "{gone}");
+        assert!(!gone.contains("no changes"), "{gone}");
+    }
+
+    /// A task finished with nothing landed must not read as a verdict on the
+    /// item its thread is about. "Accepted" is codeg's word for signing off on
+    /// the TASK, and a thread reads it as its own: a pull request approved, an
+    /// issue accepted. On a pull request whose review stopped at an unsound
+    /// approach — or whose review-only task only ever delivered a report —
+    /// that tells the author the opposite of what the review found.
+    ///
+    /// What the comment says instead is what did not happen to THIS thread's
+    /// item, in the thread's own noun, and it still never claims "no changes"
+    /// beside counters that say otherwise.
+    #[test]
+    fn a_finish_that_landed_nothing_is_never_a_verdict_on_the_item() {
+        for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab, ForgeProvider::Gitea] {
+            let noun = provider.change_noun();
+            for item in [ForgeItemKind::Issue, ForgeItemKind::Change] {
+                for nothing_to_land in [true, false] {
+                    let body = writeback_comment_body(
+                        12,
+                        provider,
+                        item,
+                        &TaskOutcome::Accepted { nothing_to_land },
+                        Some((3, 42, 7)),
+                    );
+                    let at = format!("{provider:?} {item:?} nothing_to_land={nothing_to_land}");
+                    assert!(body.starts_with("codeg work task `12` is done — "), "{at}: {body}");
+                    let lower = body.to_lowercase();
+                    for verdict in ["accept", "approv", "reject", "closed", "lgtm"] {
+                        assert!(!lower.contains(verdict), "{at} reads as a verdict: {body}");
+                    }
+
+                    match (item, nothing_to_land) {
+                        (ForgeItemKind::Change, true) => {
+                            assert!(
+                                body.contains(&format!("nothing was pushed to this {noun}.")),
+                                "{at}: {body}"
+                            );
+                            // Git said there is nothing to land, so a stale
+                            // counter from the settle must not contradict it.
+                            assert!(!body.contains("(3 files"), "{at}: {body}");
+                        }
+                        (ForgeItemKind::Change, false) => {
+                            assert!(
+                                body.contains(&format!(
+                                    "its work was not pushed to this {noun} (3 files, +42/-7)."
+                                )),
+                                "{at}: {body}"
+                            );
+                            assert!(!body.contains("no changes"), "{at}: {body}");
+                        }
+                        (ForgeItemKind::Issue, true) => {
+                            assert!(body.ends_with("— it made no changes."), "{at}: {body}");
+                        }
+                        (ForgeItemKind::Issue, false) => {
+                            assert!(body.contains("(3 files, +42/-7)."), "{at}: {body}");
+                            assert!(!body.contains("no changes"), "{at}: {body}");
+                        }
+                    }
+                    // An issue's thread has no pull request to speak of, and a
+                    // merge request's thread is not a pull request's.
+                    if item == ForgeItemKind::Issue {
+                        assert!(!body.contains(" request"), "{at}: {body}");
+                    } else if provider == ForgeProvider::GitLab {
+                        assert!(!body.contains("pull request"), "{at}: {body}");
+                    }
+                }
+            }
+        }
     }
 }

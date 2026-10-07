@@ -53,7 +53,8 @@
       "office_tools": "Ferramentas de escritório",
       "skill_packs": "Pacotes de habilidades",
       "collaboration": "Colaboração",
-      "browser": "Navegador",
+      "browser": "Uso do navegador",
+      "computer_use": "Uso do computador",
       "quick_messages": "Mensagens rápidas",
       "logs": "Registros de execução"
     }
@@ -722,13 +723,6 @@
     "emptyNoAgent": "Nenhum agente disponível.",
     "configManagement": "Gerenciamento de configuração",
     "envVars": "Variáveis de ambiente",
-    "adapterChannel": {
-      "label": "Versão do adaptador",
-      "description": "Instalar e Atualizar usam a versão que o codeg revisou e fixou. Com Mais recente, passa a ser instalada a versão de npm mais nova do pacote naquele momento; se essa instalação falhar, o codeg volta para a versão fixada e registra isso no log de instalação.",
-      "pinned": "Fixada (recomendada)",
-      "latest": "Mais recente (não revisada)",
-      "latestWarning": "As versões mais novas não são revisadas e podem quebrar este agente no codeg; às vezes uma versão é até sabidamente defeituosa. O status da versão mostra o que foi realmente instalado."
-    },
     "hostTools": {
       "label": "Deixar o agente cuidar de arquivos e comandos",
       "description": "O codeg deixa de atender o acesso a arquivos e os comandos de terminal, de modo que o agente os executa no próprio processo — onde o sandbox e as regras de permissão dele realmente se aplicam. A delegação a outros agentes também é desativada, pois levaria o mesmo trabalho de volta ao codeg. O codeg não adiciona sandbox algum, então ative isto apenas se o agente tiver um configurado."
@@ -799,6 +793,7 @@
       "saveCodeBuddyConfig": "Salvar configuração do CodeBuddy",
       "saveKimiCodeConfig": "Salvar configuração do Kimi Code",
       "customInstall": "Instalação personalizada",
+      "upgradeToLatest": "Atualizar para a mais recente não revisada {version}",
       "saveKimiCodeRawConfig": "Save config.toml",
       "saveDeepSeekConfig": "Salvar configuração do DeepSeek",
       "diagnose": "Diagnosticar"
@@ -1046,9 +1041,9 @@
       "sandboxMode_read-only": "Somente leitura",
       "sandboxMode_workspace-write": "Escrita no espaço de trabalho",
       "sandboxMode_danger-full-access": "Acesso total (sem sandbox)",
-      "sandboxModeReadOnlyAcpWarning": "O adaptador ACP já não inclui uma sandbox só de leitura, por isso as sessões do codeg correm com escrita no espaço de trabalho, diga o que disser esta opção. O codeg escolhe a predefinição mais restrita disponível — cada elevação passa pela sua aprovação — mas as edições dentro do espaço de trabalho já não precisam dela. As sessões do codex CLI e do IDE continuam a respeitar só leitura.",
+      "sandboxModeReadOnlyAcpWarning": "O codex-acp 1.7–1.13 não inclui uma sandbox só de leitura: com essas versões do adaptador, uma sessão do codeg corre com escrita no espaço de trabalho, diga o que disser esta opção, embora cada elevação continue a passar pela sua aprovação. O codex-acp 2.0 restaurou-a, por isso atualize o adaptador se tiver um mais antigo. As sessões do codex CLI e do IDE respeitam sempre só leitura.",
       "sandboxModeHint": "No Windows, a escrita no espaço de trabalho é rebaixada para somente leitura, a menos que o sandbox experimental do Windows do codex esteja ativado.",
-      "sandboxModeSeedsPresetHint": "O codeg também mapeia isto para a predefinição de aprovação inicial da sessão, pelo que — ao contrário da política de aprovação — afeta os pedidos normais. Note que a predefinição por omissão do adaptador passa a ter um modelo a filtrar as elevações, reencaminhando só as que considera inseguras; escolha «Pedir aprovação» no compositor para as rever todas. A predefinição do compositor prevalece sempre.",
+      "sandboxModeSeedsPresetHint": "O codeg também mapeia isto para a predefinição de aprovação inicial da sessão, pelo que — ao contrário da política de aprovação — afeta os pedidos normais. Só leitura começa em «Read-only». Com a política de aprovação never, acesso total começa em «Full access» e escrita no espaço de trabalho em «Auto review», onde um modelo filtra as elevações e reencaminha só as que considera inseguras. Com qualquer outra política, escrita no espaço de trabalho e acesso total começam em «Workspace access», que lhe passa cada elevação, com o codex-acp 2.0 ou posterior, e em «Auto review» com adaptadores anteriores. Sem definição, mantém-se a predefinição do adaptador, «Auto review». A predefinição do compositor prevalece sempre.",
       "writableRootsLabel": "Pastas graváveis extras",
       "writableRootsHint": "Um caminho absoluto por linha, além do diretório de trabalho.",
       "sandboxRootsRelativeError": "Precisa ser um caminho absoluto — o codex resolve caminhos relativos dentro de ~/.codex: {path}",
@@ -1385,6 +1380,7 @@
       "haikuDefaultModel": "Modelo Haiku padrão",
       "sonnetDefaultModel": "Modelo Sonnet padrão",
       "opusDefaultModel": "Modelo Opus padrão",
+      "fableDefaultModel": "Modelo Fable padrão",
       "customModelOption": "ID do modelo personalizado",
       "customModelOptionName": "Nome do modelo personalizado",
       "customModelOptionDescription": "Descrição do modelo personalizado",
@@ -1403,7 +1399,9 @@
       "customInstallDescription": "Digite a versão a instalar. Isso reinstala e substitui a versão instalada atualmente.",
       "customInstallVersionLabel": "Número da versão",
       "customInstallInvalid": "Digite um número de versão válido, ex.: 1.2.3.",
-      "customInstallSubmit": "Instalar"
+      "customInstallSubmit": "Instalar",
+      "confirmUpgradeToLatest": "Atualizar {name} para a versão não revisada {version}?",
+      "confirmUpgradeToLatestDescription": "Esta versão não foi revisada pelo codeg. Ela pode quebrar {name} no codeg e, às vezes, uma versão é sabidamente defeituosa. Para voltar, use Instalação personalizada para reinstalar a versão recomendada {recommendedVersion}."
     },
     "errors": {
       "windowsFileLocked": "Os arquivos de {name} estão em uso por uma sessão ativa, então o Windows não consegue substituí-los. Feche todas as sessões de {name} e tente novamente.",
@@ -1492,7 +1490,7 @@
     "version": {
       "statusLabel": "Status da versão",
       "notInstalled": "Não instalado",
-      "remoteLocal": "Remoto: {remoteVersion} · Local: {localVersion}",
+      "recommendedLocal": "Recomendada: {recommendedVersion} · Local: {localVersion}",
       "localOnly": "Local: {localVersion}",
       "localInstalled": "{versionText}. Instalado.",
       "platformUnsupported": "{versionText}. A plataforma atual não suporta este agente.",
@@ -1500,9 +1498,9 @@
       "clickInstall": "{versionText}. Clique em Instalar à direita.",
       "localUnrecognized": "{versionText}. A versão local não é comparável; tente atualizar para sobrescrever a instalação.",
       "upgradeAvailable": "{versionText}. Atualização disponível.",
-      "remoteUnavailable": "{versionText}. A versão remota está indisponível no momento.",
+      "recommendedUnavailable": "{versionText}. Nenhuma versão recomendada disponível.",
       "latest": "{versionText}. Já está na versão mais recente.",
-      "latestChannel": "{versionText}. Canal de versão mais recente ativo; Atualizar instala a versão mais nova."
+      "unreviewedAvailable": "{versionText}. Há uma versão mais recente, não revisada."
     },
     "adapter": {
       "label": "Adaptador ACP",
@@ -1552,7 +1550,8 @@
         "medium": "Médio",
         "high": "Alto",
         "minimal": "Mínimo",
-        "xhigh": "Muito alto"
+        "xhigh": "Muito alto",
+        "max": "Máximo"
       },
       "apiKeyLabel": "Chave de API",
       "apiKeyHint": "Gravada em ~/.pi/agent/auth.json para o provedor selecionado.",
@@ -1566,7 +1565,9 @@
       "modeCustom": "pi personalizado",
       "modeCustomHint": "Execute sua própria build, instalação ou wrapper do pi.",
       "commandLabel": "Comando ou caminho do pi",
-      "commandHint": "Um caminho absoluto, um nome de comando no PATH ou um script wrapper (ex.: ./pi-test.sh de um monorepo).",
+      "commandHint": "Use um caminho absoluto ou um nome de comando no PATH.",
+      "relativeCommandPath": "Use um caminho absoluto para o comando Pi ou um nome de comando no PATH.",
+      "relativeAgentDir": "Use um diretório do agente Pi absoluto ou ~/...; caminhos relativos dependem do diretório de trabalho.",
       "commandNotFound": "Comando não encontrado",
       "validate": "Validar",
       "advanced": "Avançado",
@@ -1607,7 +1608,14 @@
       "levelsEmptyError": "Escolha pelo menos um nível — sem nenhum, o pi volta para Off.",
       "wireValuesTitle": "Avançado: valores enviados ao fornecedor",
       "wireValuesHint": "Deixe em branco para enviar o nome do nível tal como está. Defina quando o seu endpoint esperar outra coisa — backends ao estilo Google querem LOW / HIGH.",
-      "defaultLevelUnlisted": "Este nível não está na lista acima — o pi iria reduzi-lo."
+      "defaultLevelUnlisted": "Este nível não está na lista acima — o pi iria reduzi-lo.",
+      "modelLevels": "{model} oferece: {levels}.",
+      "modelNoThinking": "{model} não tem níveis de raciocínio — o Pi sempre o executa com o raciocínio desligado.",
+      "levelClamped": "{model} não oferece {level}, então o Pi o executa em {effective}. Os modelos que oferecem {level} continuam a usá-lo.",
+      "modelNotListed": "O Pi não lista este modelo para este provedor. Verifique o ID do modelo — o Pi só lista provedores para os quais tem uma chave de API ou um login.",
+      "catalogUnavailable": "Não foi possível perguntar ao Pi quais níveis de raciocínio este modelo oferece.",
+      "configLoadFailed": "Não foi possível ler as configurações do Pi: {message}",
+      "runtimeTooOld": "Este Pi é antigo demais: o Codeg precisa do Pi {min} ou mais recente para abrir uma sessão. Atualize-o primeiro."
     },
     "addCustomAgent": "Adicionar agente personalizado",
     "addCustomAgentHint": "Registre qualquer agente compatível com ACP. Escolha um no registro público do ACP ou cole as informações de registro dele.",
@@ -1991,7 +1999,7 @@
       "tasks": "Tarefas a fazer",
       "loadingSubsessions": "Carregando subconversas…",
       "forge": "Painel do repositório",
-      "canvas": "Conversas infinitas",
+      "canvas": "Canvas infinito",
       "folderGroup": {
         "newGroup": "Novo grupo",
         "newGroupTitle": "Novo grupo de pastas",
@@ -2007,7 +2015,12 @@
         "removeFromGroup": "Sem grupo",
         "newGroupAndMove": "Novo grupo…",
         "dropToUngroup": "Solte aqui para remover do grupo"
-      }
+      },
+      "recentFilterAll": "Tudo",
+      "recentFilterTitle": "Mostrar em Recentes: {filter}",
+      "noRecentChats": "Nenhum chat recente",
+      "noRecentFolders": "Nenhuma conversa de pasta recente",
+      "recentFilterMenuLabel": "Mostrar em Recentes"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",
@@ -3025,7 +3038,7 @@
           "downloadFailed": "Falha no download de {agent}: {message}",
           "sessionLoadResourceNotFound": "Falha ao carregar a sessão de {agent}. Recarregue para tentar novamente ou inicie uma nova conversa.",
           "sessionLoadUnavailable": "{agent} não conseguiu restaurar esta sessão; ela pode ter terminado ou o agente parou. Recarregue para tentar novamente ou inicie uma nova conversa.",
-          "sessionLoadBusy": "Este histórico está sendo mantido aberto pela sessão bifurcada a partir dele. Feche essa sessão e recarregue para abri-lo.",
+          "sessionLoadBusy": "Esta sessão está aberta em outro lugar. Se outro cliente do {agent} (o app, a CLI ou uma extensão de IDE) estiver com ela aberta, feche-a lá ou encerre esse cliente e recarregue. Se você acabou de bifurcá-la, recarregue em cerca de um minuto.",
           "sessionArchived": "A sessão anterior foi arquivada pelo {agent}. Execute {command} num terminal para restaurá-la e recarregá-la, ou inicie uma nova conversa.",
           "turnFailedRefusal": "{agent} recusou continuar este turno. Costuma indicar um erro de backend ou gateway. Confira os logs do agente.",
           "turnFailedMaxTokens": "{agent} atingiu o limite máximo de tokens para este turno.",
@@ -3033,6 +3046,7 @@
           "turnFailedUnknown": "{agent} encerrou o turno com um motivo de parada desconhecido.",
           "turnFailedAuthRequired": "O {agent} precisa que você entre novamente antes de executar este turno. Faça login nas Configurações e envie a mensagem de novo.",
           "agentAuthRequired": "O {agent} não conseguiu iniciar uma sessão: não tem credenciais utilizáveis. Inicia sessão de novo em Definições → Agentes → {agent} e reabre esta conversa.",
+          "agentRuntimeOutdated": "O {agent} é antigo demais para esta versão do Codeg. Atualiza-o e reabre esta conversa.",
           "grokModelSwitchIncompatibleAgent": "{agent} não pode mudar para esse modelo em uma conversa existente. Inicie uma nova sessão para usá-lo.",
           "setModeFailed": "{agent} não conseguiu mudar de modo.",
           "setConfigOptionFailed": "{agent} não conseguiu aplicar essa configuração.",
@@ -3063,7 +3077,8 @@
           "httpStatus": " (HTTP {status})"
         },
         "configOptionAdjusted": "O {agent} definiu {option} como {actual} em vez de {requested}",
-        "noticeTitle": "{agent}: {title}"
+        "noticeTitle": "{agent}: {title}",
+        "pluginLoadFailedTitle": "{agent} não conseguiu carregar {count, plural, one {# plugin} other {# plugins}}"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3701,7 +3716,22 @@
           "outputMissing": "O codex truncou a saída do script e removeu o separador deste comando, então nenhuma saída pôde ser atribuída a ele.",
           "sharedWith": "Também contém a saída de {commands} — o codex truncou os separadores delas.",
           "truncated": "truncado"
-        }
+        },
+        "visualizeTitle": "Visualização",
+        "visualizeWide": "Largo",
+        "visualizeLoading": "Carregando visualização…",
+        "visualizeError": "Não foi possível carregar a visualização",
+        "visualizeReload": "Recarregar",
+        "visualizeOpenFile": "Abrir arquivo",
+        "visualizeExpand": "Mostrar tudo",
+        "visualizeCollapse": "Mostrar menos",
+        "visualizeScriptsOn": "Scripts ativados",
+        "visualizeScriptsOff": "Ativar scripts",
+        "visualizeScriptsHint": "Executa os scripts da visualização para torná-la interativa. Ela roda em um sandbox e não pode acessar a rede nem seus arquivos.",
+        "visualizeFrameTitle": "Visualização do Codex",
+        "htmlPreviewOpen": "Pré-visualizar",
+        "htmlPreviewOpenAria": "Pré-visualizar {name}",
+        "htmlPreviewHide": "Ocultar pré-visualização"
       },
       "messageNav": {
         "title": "Navegação de mensagens",
@@ -4226,13 +4256,14 @@
     "agentTypeRequired": "O tipo de agente é obrigatório.",
     "agentTypeImmutableHint": "O tipo de agente não pode ser alterado após a criação.",
     "model": "Modelo",
-    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modelo Principal",
     "claudeReasoningModel": "Modelo de Raciocínio (pensamento)",
     "claudeHaikuDefaultModel": "Modelo Haiku Padrão",
     "claudeSonnetDefaultModel": "Modelo Sonnet Padrão",
     "claudeOpusDefaultModel": "Modelo Opus Padrão",
+    "claudeFableDefaultModel": "Modelo Fable Padrão",
     "claudeCustomModelOption": "ID do modelo personalizado",
     "claudeCustomModelOptionName": "Nome do modelo personalizado",
     "claudeCustomModelOptionDescription": "Descrição do modelo personalizado",
@@ -4499,6 +4530,97 @@
       "deleted": "Mensagem rápida excluída"
     }
   },
+  "ConversationTags": {
+    "tags": "Etiquetas",
+    "moreTags": "{count, plural, one {mais # etiqueta} other {mais # etiquetas}}",
+    "addTags": "Adicionar etiquetas",
+    "editTags": "Editar etiquetas",
+    "global": "Globais",
+    "noTagsYet": "Ainda não há etiquetas",
+    "newTag": "Nova etiqueta…",
+    "manageTags": "Gerenciar etiquetas…",
+    "branchChip": "Branch: {branch}",
+    "picker": {
+      "searchPlaceholder": "Pesquise ou crie uma etiqueta…",
+      "noResults": "Nenhuma etiqueta correspondente",
+      "empty": "Ainda não há etiquetas. Digite um nome para criar uma.",
+      "createGlobal": "Criar a etiqueta global “{name}”",
+      "createInFolder": "Criar “{name}” em {folder}",
+      "otherFolders": "Outras pastas"
+    },
+    "form": {
+      "createTitle": "Nova etiqueta",
+      "editTitle": "Editar etiqueta",
+      "name": "Nome",
+      "namePlaceholder": "ex.: bug, revisão, ideia",
+      "color": "Cor",
+      "customColor": "Cor personalizada",
+      "scope": "Disponível em",
+      "scopeGlobal": "Todas as conversas",
+      "scopeFolder": "Só em {folder}",
+      "create": "Criar",
+      "save": "Salvar",
+      "cancel": "Cancelar"
+    },
+    "editor": {
+      "empty": "Ainda não há etiquetas aqui.",
+      "add": "Nova etiqueta",
+      "edit": "Editar a etiqueta “{name}”",
+      "delete": "Excluir a etiqueta “{name}”",
+      "dragToReorder": "Arraste para reordenar “{name}”",
+      "deleteTitle": "Excluir esta etiqueta?",
+      "deleteDescription": "“{name}” será removida de todas as conversas que a têm. Não é possível desfazer.",
+      "deleteConfirm": "Excluir",
+      "deleteCancel": "Cancelar",
+      "loadFailed": "Não foi possível carregar as etiquetas"
+    },
+    "manager": {
+      "title": "Gerenciar etiquetas",
+      "description": "Marque conversas com etiquetas coloridas e filtre a barra lateral por elas.",
+      "branchTitle": "Etiqueta de branch",
+      "branchDescription": "Mostra o branch do Git em que cada conversa começou como uma etiqueta depois do título.",
+      "branchShow": "Mostrar",
+      "branchLoadFailed": "Não foi possível carregar a etiqueta de branch",
+      "globalTitle": "Etiquetas globais",
+      "globalDescription": "Disponíveis em todas as conversas, inclusive no modo chat.",
+      "folderTitle": "Etiquetas de pasta",
+      "folderDescription": "Disponíveis só nas conversas da pasta escolhida, inclusive nos worktrees dela.",
+      "folderPlaceholder": "Escolha uma pasta",
+      "noFolders": "Ainda não há pastas. Abra uma no espaço de trabalho para dar a ela etiquetas próprias."
+    },
+    "filter": {
+      "button": "Filtrar por etiquetas",
+      "searchPlaceholder": "Pesquisar etiquetas…",
+      "match": "Corresponder",
+      "matchAny": "Qualquer",
+      "matchAll": "Todas",
+      "matchAnyHint": "Conversas com pelo menos uma das etiquetas escolhidas",
+      "matchAllHint": "Conversas com todas as etiquetas escolhidas",
+      "modeAll": "Todas juntas",
+      "modeAny": "Qualquer uma",
+      "clear": "Limpar filtro",
+      "noTags": "Ainda não há etiquetas. Adicione uma pelo menu de uma conversa.",
+      "noResults": "Nenhuma etiqueta correspondente",
+      "active": "Filtrado por etiquetas",
+      "noMatches": "Nenhuma conversa com estas etiquetas",
+      "remove": "Remover “{name}” do filtro"
+    },
+    "toasts": {
+      "assignFailed": "Não foi possível atualizar as etiquetas da conversa",
+      "createFailed": "Não foi possível criar a etiqueta",
+      "deleteFailed": "Não foi possível excluir a etiqueta",
+      "reorderFailed": "Não foi possível salvar a ordem das etiquetas",
+      "branchTagFailed": "Não foi possível salvar a etiqueta de branch"
+    },
+    "errors": {
+      "emptyName": "Digite um nome para a etiqueta",
+      "duplicateName": "Já existe aqui uma etiqueta chamada “{name}”",
+      "invalidColor": "Escolha uma cor válida",
+      "folderNotTaggable": "Esta pasta não pode ter etiquetas próprias",
+      "notApplicable": "Essa etiqueta pertence a outra pasta",
+      "tagNotFound": "Essa etiqueta não existe mais"
+    }
+  },
   "Pet": {
     "badge": {
       "running": "{count} em execução",
@@ -4656,6 +4778,7 @@
     "saveFailed": "Failed to save remote connection",
     "deleteFailed": "Failed to delete remote connection",
     "openFailed": "Failed to open remote workspace",
+    "restoreFailed": "Não foi possível reabrir o espaço de trabalho remoto \"{name}\"",
     "connectionLoadFailed": "Failed to load remote connection: {message}",
     "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
   },
@@ -4676,7 +4799,8 @@
     "none": "Sem branches",
     "local": "Local",
     "remote": "Remoto",
-    "useCustom": "Usar \"{query}\""
+    "useCustom": "Usar \"{query}\"",
+    "head": "HEAD"
   },
   "BackupSettings": {
     "tabs": {
@@ -4977,6 +5101,11 @@
       "short": "Executa o próprio código numa página compartilhada, sem perguntar.",
       "hint": "Permite que os agentes executem o próprio JavaScript numa página que você compartilhou. Desativado por padrão e depende do interruptor acima. Ligá-lo significa que os trechos são executados sem perguntar, então a decisão é tomada neste interruptor; em Configurações → Navegador integrado dá para pedir que cada trecho seja mostrado a você."
     },
+    "computer": {
+      "label": "Ver e usar as janelas da área de trabalho",
+      "short": "Listar apps e janelas; ler as que você compartilhar e agir nas que permitir.",
+      "hint": "Permite que um agente liste os aplicativos e janelas da sua área de trabalho, leia as janelas que você compartilhar com ele — uma captura, o conteúdo, se mostra o que se espera — e clique, digite e pressione teclas nas que você compartilhar para agir. Nada fica legível até você compartilhar uma janela no painel Uso do computador da barra de status, e em nenhuma é possível agir sem que você também permita; o compartilhamento termina quando a janela fecha, depois de um tempo sem uso ou quando você o interrompe, e Parar agentes nesse painel para todos de uma vez. A entrada chega à janela em segundo plano; para uma ação que não chega em segundo plano, um agente pode trazer a janela para a frente, o que você pode desativar nas configurações de Uso do computador. Apenas no app para desktop; no macOS, exige permissões concedidas ao codeg-computer-helper. Prévia."
+    },
     "automations": {
       "label": "Criar automações",
       "short": "Cria e gere automações agendadas.",
@@ -5139,6 +5268,249 @@
     "clearConfirmDescriptionProfile": "Os cookies, caches e armazenamento de sites do perfil {name} serão removidos. As abas abertas continuam abertas, mas você sairá dos sites.",
     "signInUaTitle": "Compatibilidade com o login do Google",
     "signInUaHint": "O Google recusa login a partir de navegadores incorporados. Quando ativado, as abas se apresentam como Firefox apenas às páginas de login do Google (accounts.google.com); em todo o resto elas se apresentam como o mecanismo em que são executadas, nunca como Firefox. Apenas em abas incorporadas, não na janela separada; quando uma página de login redireciona para outro site, a primeira solicitação a ele ainda leva a identidade de login."
+  },
+  "ComputerUse": {
+    "title": "Uso do computador",
+    "preview": "Prévia",
+    "refresh": "Atualizar",
+    "tooltipShared": "Uso do computador · {count, plural, one {# janela compartilhada} other {# janelas compartilhadas}}",
+    "stop": "Parar de compartilhar",
+    "stopHint": "Para de compartilhar todas as janelas agora e interrompe o que os agentes estiverem fazendo. Compartilhe uma janela de novo quando quiser que continuem.",
+    "indicator": {
+      "actOne": "Os agentes podem agir em {app}",
+      "actMany": "Os agentes podem agir em {count, plural, one {# janela} other {# janelas}}",
+      "readOne": "Os agentes podem ver {app}",
+      "readMany": "Os agentes podem ver {count, plural, one {# janela} other {# janelas}}",
+      "readScreen": "Os agentes podem ver a tela inteira",
+      "actScreen": "Os agentes podem agir na tela inteira",
+      "recent": "{action} em {app}",
+      "stop": "Parar de compartilhar",
+      "stopWithKey": "Parar de compartilhar todas as janelas ({key})"
+    },
+    "codegGranted": "O próprio codeg tem Acessibilidade ou Gravação de Tela, então o shell dos agentes pode usá-la sem que nada seja compartilhado. Se não precisar, desative-a para o codeg nos Ajustes do Sistema.",
+    "backend": {
+      "idle": "Não iniciado",
+      "downloading": "Baixando o driver…",
+      "starting": "Iniciando o auxiliar…",
+      "ready": "Pronto",
+      "failed": "Falhou"
+    },
+    "driver": "cua-driver {version}",
+    "devBuild": "Build de desenvolvimento: o auxiliar não verifica qual programa o chama.",
+    "devTag": "build de desenvolvimento",
+    "permissions": {
+      "accessibility": "Acessibilidade",
+      "screenRecording": "Gravação de Tela",
+      "granted": "Concedida",
+      "request": "Conceder…",
+      "why": "Ative o codeg-computer-helper nos Ajustes do Sistema, não o codeg. A Gravação de Tela permite que ele veja as janelas; a Acessibilidade, que as leia e aja nelas.",
+      "devRebuild": "Cada recompilação do auxiliar anula a permissão anterior: remova primeiro o codeg-computer-helper antigo da lista e conceda de novo.",
+      "notListed": "Se o codeg-computer-helper não estiver na lista, arraste-o do Finder:",
+      "reveal": "Mostrar no Finder"
+    },
+    "shared": {
+      "title": "{count, plural, =0 {Nenhuma janela compartilhada} one {# janela compartilhada} other {# janelas compartilhadas}}",
+      "empty": "Os agentes podem listar suas janelas, mas não ler nenhuma até você compartilhar uma.",
+      "stop": "Parar",
+      "wholeApp": "App inteiro · {count, plural, =0 {nenhuma janela aberta} one {# janela} other {# janelas}}",
+      "screen": "Tela inteira",
+      "screenWindows": "{count, plural, =0 {nenhuma janela ainda} one {# janela} other {# janelas}}"
+    },
+    "level": {
+      "read": "Pode ler",
+      "control": "Pode agir",
+      "readLong": "Somente leitura",
+      "controlLong": "Ler e agir",
+      "change": "Mudar o que os agentes podem fazer"
+    },
+    "activity": {
+      "title": "Atividade recente",
+      "clear": "Limpar atividade recente",
+      "capture": "Captura",
+      "snapshot": "Leitura",
+      "verify": "Verificação",
+      "click": "Clique",
+      "drag": "Arrastar",
+      "scroll": "Rolagem",
+      "type": "Digitação",
+      "key": "Tecla",
+      "hold-key": "Tecla pressionada",
+      "set-value": "Valor",
+      "restore": "Restaurar",
+      "menu": "Menu",
+      "set-frame": "Mover janela",
+      "launch": "Abrir app",
+      "clipboard-read": "Ler área de transferência",
+      "clipboard-write": "Escrever na área de transferência",
+      "outcome": {
+        "done": "feito",
+        "refused": "recusado",
+        "failed": "falhou"
+      }
+    },
+    "share": "Compartilhar uma janela…",
+    "openSettings": "Abrir ajustes detalhados",
+    "picker": {
+      "title": "Compartilhar uma janela com os agentes",
+      "description": "Os agentes de qualquer conversa podem ler as janelas que você compartilhar, e clicar e digitar naquelas em que você deixar que ajam. O compartilhamento termina quando você o interrompe, a janela fecha ou fica sem uso pelo tempo definido nos ajustes.",
+      "count": "{count, plural, one {# janela} other {# janelas}}",
+      "sharedCount": "{count, plural, one {# compartilhada} other {# compartilhadas}}",
+      "loading": "Carregando janelas…",
+      "refresh": "Atualizar",
+      "empty": "Nenhuma janela encontrada. Se deveria haver alguma, verifique as permissões no painel Uso do computador.",
+      "noScreenRecording": "O codeg-computer-helper ainda não tem Gravação de Tela: os títulos e as imagens das janelas não podem ser mostrados, e os agentes não conseguem ler as janelas.",
+      "unnamedApp": "App desconhecido",
+      "untitled": "Janela sem título",
+      "minimized": "Minimizada",
+      "hidden": "Oculta",
+      "notGrantable": {
+        "codeg": "Janela do codeg",
+        "blocklisted": "Na lista de nunca compartilhar",
+        "unidentified": "Não é possível identificar o app"
+      },
+      "shareRead": "Deixar os agentes lerem",
+      "shareControl": "Deixar os agentes lerem e agirem nela",
+      "stopSharing": "Parar de compartilhar",
+      "levelNone": "Não",
+      "levelRead": "Ler",
+      "levelControl": "Agir",
+      "levelLabel": "O que os agentes podem fazer com {app}",
+      "wholeApp": "App inteiro",
+      "wholeAppHint": "Todas as janelas de {app}, inclusive as que abrir depois, além de seus menus e atalhos",
+      "appLevelLabel": "O que os agentes podem fazer com todo o {app}",
+      "viaApp": "Com o app",
+      "screenTitle": "Tela inteira",
+      "screenHint": "Todas as janelas que você pode compartilhar, inclusive as que abrirem depois, e os atalhos próprios da área de trabalho. As janelas do codeg e a lista de nunca compartilhar continuam cobertas.",
+      "screenLevelLabel": "O que os agentes podem fazer com a tela inteira",
+      "viaScreen": "Com a tela",
+      "shareAll": "Compartilhar todas",
+      "shareAllRead": "Deixar os agentes lerem todas",
+      "shareAllControl": "Deixar os agentes lerem e agirem em todas",
+      "stopSharingAll": "Parar de compartilhar todas",
+      "skipped": "{count, plural, one {# janela não pôde ser compartilhada; talvez tenha sido fechada.} other {# janelas não puderam ser compartilhadas; talvez tenham sido fechadas.}}",
+      "unshareable": "{count, plural, one {# janela não pode ser compartilhada} other {# janelas não podem ser compartilhadas}}",
+      "noneShareable": "Nenhuma destas janelas pode ser compartilhada.",
+      "codegWhy": "As janelas do codeg nunca são compartilhadas: um agente que pudesse operar o codeg poderia aprovar os próprios pedidos ou compartilhar mais janelas consigo mesmo. O mesmo vale para outras cópias do codeg."
+    },
+    "settings": {
+      "pageTitle": "Uso do computador",
+      "pageDescription": "Deixe os agentes verem e usarem as janelas da área de trabalho que você compartilhar com eles.",
+      "switch": {
+        "label": "Ativar o uso do computador",
+        "hint": "Os agentes podem listar seus apps e janelas, ler as janelas que você compartilhar e clicar e digitar naquelas em que você deixar que ajam. Nenhuma janela pode ser lida até você compartilhá-la pela barra de status.",
+        "failed": "Não foi possível alternar o uso do computador"
+      },
+      "driver": {
+        "title": "Driver",
+        "description": "O uso do computador lê e age nas janelas por meio do cua-driver, um programa de código aberto. O codeg executa apenas a versão que verificou, {version}, e a baixa na primeira vez em que for necessária.",
+        "loading": "Verificando…",
+        "unsupported": "O cua-driver não tem build para esta plataforma.",
+        "installing": "Instalando…",
+        "downloadingOf": "Baixando… {done} / {total} MB",
+        "downloadingSoFar": "Baixando… {done} MB",
+        "uninstalling": "Desinstalando…",
+        "installed": "Instalado · {version}",
+        "outdated": "A versão {installed} está instalada; este codeg usa a {version}.",
+        "notInstalled": "Não instalado. É baixado na primeira vez em que o uso do computador precisar dele, ou você pode instalá-lo agora.",
+        "install": "Instalar",
+        "upgrade": "Atualizar para {version}",
+        "uninstall": "Desinstalar",
+        "installDone": "cua-driver instalado",
+        "uninstallDone": "cua-driver desinstalado",
+        "confirmTitle": "Desinstalar o cua-driver?",
+        "confirmDescription": "O uso do computador será desligado e todas as janelas deixarão de ser compartilhadas. Ao religá-lo, o driver será baixado novamente.",
+        "cancel": "Cancelar"
+      },
+      "permissions": {
+        "title": "Permissões",
+        "description": "O macOS pede estas permissões para o codeg-computer-helper. Conceda uma nos Ajustes do Sistema e volte: isto se atualiza sozinho.",
+        "off": "Ligue o uso do computador para verificar e conceder permissões.",
+        "accessibilityHint": "Ler o conteúdo das janelas e agir nelas.",
+        "screenRecordingHint": "Fazer capturas e ler os títulos das janelas."
+      },
+      "title": "Compartilhar, entrada e parar",
+      "description": "Por quanto tempo uma janela continua compartilhada, quais apps nunca são compartilhados, o atalho e a barra flutuante que param todo o compartilhamento de uma vez, e se os agentes podem trazer uma janela para a frente para agir nela.",
+      "ttl": {
+        "label": "Parar de compartilhar janelas sem uso após",
+        "hint": "Uma janela compartilhada deixa de ser compartilhada quando nenhum agente a lê por esse tempo.",
+        "minutes": "{minutes} minutos",
+        "never": "Nunca (até eu parar)"
+      },
+      "blocklist": {
+        "label": "Aplicativos nunca compartilhados",
+        "hint": "As janelas deles não podem ser compartilhadas com agentes. Remova os padrões de que não precisa ou adicione um aplicativo por identificador de pacote (com.example.app), nome de executável (app.exe) ou caminho completo.",
+        "placeholder": "com.example.app",
+        "add": "Adicionar",
+        "remove": "Remover {name}",
+        "restore": "Restaurar padrão",
+        "restoreConfirmTitle": "Restaurar a lista padrão?",
+        "restoreConfirmAdded": "{count, plural, one {O aplicativo que você adicionou sai da lista.} other {Os # aplicativos que você adicionou saem da lista.}}",
+        "restoreConfirmRemoved": "{count, plural, one {O aplicativo padrão que você removeu volta para a lista.} other {Os # aplicativos padrão que você removeu voltam para a lista.}}",
+        "restoreConfirmSave": "A mudança vale quando você salvar.",
+        "cancel": "Cancelar",
+        "custom": "Adicionado por você",
+        "duplicate": "Já está na lista.",
+        "removedCount": "{count, plural, one {# aplicativo padrão removido.} other {# aplicativos padrão removidos.}}",
+        "items": {
+          "systemSettings": "Ajustes do Sistema",
+          "credentialPrompts": "Pedidos de senha e autorização do sistema",
+          "keychain": "Acesso às Chaves",
+          "passwords": "Senhas"
+        }
+      },
+      "stopKey": {
+        "label": "Atalho para parar",
+        "hint": "Para de compartilhar todas as janelas a partir de qualquer app, como o botão Parar de compartilhar. Enquanto o uso do computador estiver ligado, estas teclas pertencem ao codeg, então escolha teclas que você não usa em outro lugar.",
+        "recording": "Pressione as teclas…",
+        "recordHint": "Segure Ctrl e outro modificador (Alt ou Shift) e pressione uma tecla. Esc cancela.",
+        "recordHintMac": "Segure ⌃ ou ⌘ e outro modificador e pressione uma tecla. Esc cancela.",
+        "off": "Desligado",
+        "useDefault": "Padrão",
+        "turnOff": "Desligar",
+        "statusActive": "Ativo: pressione em qualquer lugar para parar de compartilhar todas as janelas.",
+        "statusIdle": "Vale enquanto o uso do computador estiver ligado.",
+        "statusOff": "Desligado: só os botões Parar de compartilhar param o compartilhamento.",
+        "statusFailed": "Inativo: provavelmente outro app usa estas teclas. Escolha outras.",
+        "problem": {
+          "unsupportedKey": "Essa tecla não pode ser usada. Escolha uma letra, um dígito, F1–F12, Esc ou uma tecla de pontuação.",
+          "weakModifiers": "Segure pelo menos dois modificadores, um deles Ctrl (ou ⌘ num Mac).",
+          "metaOffMac": "A tecla Windows não pode fazer parte dele."
+        }
+      },
+      "strip": {
+        "label": "Barra flutuante de parada",
+        "hint": "Enquanto alguma janela estiver compartilhada, uma barra flutua sobre todas as janelas dizendo o que os agentes podem fazer, com um botão Parar de compartilhar. Desligada, você ainda pode parar de compartilhar pelo painel de Uso do computador na barra de status ou com o atalho para parar."
+      },
+      "foreground": {
+        "label": "Permitir que agentes tragam janelas para a frente",
+        "hint": "Alguns apps não aceitam teclas nem digitação enquanto estão em segundo plano — no Windows, nenhum baseado no Chromium, como Edge, Chrome e VS Code. Com isto ativado, um agente pode trazer para a frente, por uma única ação, uma janela em que você o deixa agir, e depois voltar para a janela em que você estava (no Linux, a janela fica na frente). Você verá a janela vir para a frente; o que você digitar nesse momento pode ir para ela, e um clique pode mover o ponteiro do mouse."
+      },
+      "delivery": {
+        "label": "Modo de entrada padrão",
+        "hint": "Como cliques, rolagem, digitação e teclas dos agentes chegam a uma janela quando eles não pedem um nem outro. Segundo plano deixa a janela onde está e o ponteiro e o teclado com você; Primeiro plano traz a janela para a frente a cada ação.",
+        "hintOff": "Sempre Segundo plano enquanto os agentes não puderem trazer janelas para a frente.",
+        "background": "Segundo plano",
+        "foreground": "Primeiro plano"
+      },
+      "launch": {
+        "label": "Permitir que os agentes abram aplicativos e movam janelas",
+        "hint": "Com isto ativado, um agente pode iniciar em segundo plano um aplicativo instalado — nunca o codeg nem um dos aplicativos nunca compartilhados — e mover ou redimensionar uma janela em que você o deixa agir. Iniciar um aplicativo não compartilha nenhuma das janelas dele: isso continua sendo decisão sua."
+      },
+      "clipboard": {
+        "label": "Permitir que os agentes usem a área de transferência",
+        "hint": "Com isto ativado, um agente pode colocar texto na área de transferência para colá-lo e reler o que copiou de uma janela que você compartilhou com ele. O que você mesmo copia nunca é lido para um agente, e um agente só pode colar o que ele mesmo colocou lá."
+      },
+      "screen": {
+        "label": "Oferecer a tela inteira",
+        "hint": "Com isto ativado, o seletor de compartilhamento oferece a tela inteira: os agentes veem uma única imagem dela e podem clicar em qualquer ponto, e todas as janelas que você pode compartilhar vão junto, além dos atalhos próprios da área de trabalho. As janelas do codeg e a lista de nunca compartilhar continuam cobertas. Desativar encerra o compartilhamento da tela."
+      },
+      "boundary": "No macOS, as permissões vão para o codeg-computer-helper, que só o codeg pode usar, então o shell dos agentes não pode. O Windows e o Linux não têm essa separação: lá, estes ajustes decidem o que os agentes recebem pelo codeg, não o que os programas do seu computador podem fazer.",
+      "save": "Salvar",
+      "saving": "Salvando…",
+      "saved": "Ajustes de uso do computador salvos",
+      "saveFailed": "Falha ao salvar os ajustes de uso do computador",
+      "loadFailed": "Falha ao carregar: {detail}"
+    }
   },
   "LogsSettings": {
     "loading": "Carregando…",
@@ -5450,10 +5822,11 @@
     "promptPlaceholder": "Descreva a tarefa para o agente — @ para referenciar arquivos, / para comandos",
     "folderPlaceholder": "Selecione uma pasta",
     "baseBranch": "Branch base",
-    "baseBranchPlaceholder": "Branch atual",
     "baseBranchDefault": "Branch atual quando a tarefa iniciar",
     "baseBranchHint": "A tarefa parte deste branch e o merge a devolve para ele.",
     "agentInheritedHint": "Herdado das configurações de tarefas; altere para personalizar esta tarefa",
+    "agentNoDefaultHint": "Não há agente padrão nas configurações de tarefas; o agente selecionado será salvo com a tarefa",
+    "agentInheritedUnavailableHint": "O agente {agent} das configurações de tarefas não está disponível; o agente selecionado será salvo com a tarefa",
     "agentOverrideReset": "Voltar a herdar",
     "sectionTarget": "Destino",
     "errorTitle": "O título é obrigatório",
@@ -5582,8 +5955,8 @@
     "eventContextCompact": "Compactação de contexto",
     "eventUserAction": "Ação do usuário",
     "eventDiffStat": "Resumo das mudanças",
-    "eventForgeWriteback": "Comentado na issue",
-    "eventForgeWritebackFailed": "Falha ao comentar na issue",
+    "eventForgeWriteback": "Comentado no item",
+    "eventForgeWritebackFailed": "Falha ao comentar no item",
     "actionDeliverPr": "Abrir pull request",
     "actionDeliverPrMr": "Abrir merge request",
     "actionDeliverPrBack": "Enviar para o pull request",
@@ -6117,7 +6490,7 @@
     "scenarioPlanFirst": "Planejar primeiro",
     "scenarioPlanFirstHint": "O agente confirma que o problema é real, entrega um plano de implementação e para — aprove devolvendo a tarefa para a implementação.",
     "scenarioReviewFix": "Revisar e corrigir",
-    "scenarioReviewFixHint": "Revisa as mudanças e corrige os problemas em cima; ao aceitar, os commits voltam para o branch.",
+    "scenarioReviewFixHint": "O agente primeiro avalia se a abordagem em si se sustenta e só então corrige os problemas em cima; se não se sustentar, não faz nenhum commit e devolve a revisão para você decidir. Ao aceitar, as correções voltam para o branch.",
     "scenarioReviewOnly": "Apenas revisar",
     "scenarioReviewOnlyHint": "Um relatório de revisão com achados e sugestões, sem commits — devolva a tarefa se quiser aplicar correções.",
     "settingsTitle": "Configurações do painel",
@@ -6145,7 +6518,7 @@
     "save": "Salvar"
   },
   "Canvas": {
-    "title": "Conversas infinitas",
+    "title": "Canvas infinito",
     "untitled": "Conversa sem título",
     "unresolvedConversation": "Conversa removida",
     "removeCard": "Remover cartão",
@@ -6233,7 +6606,36 @@
     "removeTerminalCard": "Remover cartão de terminal",
     "terminalNoDirectory": "Este cartão não tem diretório de trabalho",
     "confirmDeleteTerminals": "{count} terminal(is) em execução serão fechados e seus processos encerrados.",
-    "confirmDeleteNotesAndTerminals": "{notes} nota(s) que você escreveu serão excluídas permanentemente e {terminals} terminal(is) em execução serão encerrados."
+    "confirmDeleteNotesAndTerminals": "{notes} nota(s) que você escreveu serão excluídas permanentemente e {terminals} terminal(is) em execução serão encerrados.",
+    "boardsTitle": "Canvas",
+    "boardsSubtitle": "Cada canvas é um quadro infinito próprio, com regiões, cartões de conversa, notas, arquivos e terminais.",
+    "boardCount": "{count, plural, one {# canvas} other {# canvas}}",
+    "newBoard": "Novo canvas",
+    "newBoardTitle": "Novo canvas",
+    "editBoard": "Editar canvas…",
+    "editBoardTitle": "Editar canvas",
+    "deleteBoard": "Excluir canvas…",
+    "openBoard": "Abrir",
+    "boardMenu": "Opções do canvas",
+    "boardName": "Nome",
+    "boardDescription": "Descrição",
+    "boardDescriptionPlaceholder": "Para que serve este canvas? (opcional)",
+    "untitledBoard": "Canvas sem título",
+    "boardItemCount": "{count, plural, =0 {Vazio} one {# item} other {# itens}}",
+    "boardEditedAt": "Editado {time}",
+    "boardsEmpty": "Nenhum canvas ainda",
+    "boardsEmptyHint": "Crie um canvas para organizar seu trabalho espacialmente. Cada canvas tem suas próprias regiões, cartões e notas.",
+    "searchBoards": "Pesquisar canvas…",
+    "noBoardsMatch": "Nenhum canvas corresponde a “{query}”",
+    "boardsLoadFailed": "Não foi possível carregar os canvas",
+    "retry": "Tentar novamente",
+    "backToBoards": "Voltar para todos os canvas",
+    "boardDeleted": "Este canvas foi excluído",
+    "deleteBoardTitle": "Excluir este canvas?",
+    "deleteBoardDescription": "“{name}” e tudo o que há nele serão excluídos definitivamente. As conversas, pastas e arquivos exibidos não são afetados.",
+    "deleteBoardItems": "Ele contém {count, plural, one {# item} other {# itens}}.",
+    "deleteBoardTerminals": "{count, plural, one {# terminal será fechado e seu processo encerrado.} other {# terminais serão fechados e seus processos encerrados.}}",
+    "deleteBoardConfirm": "Excluir canvas"
   },
   "Browser": {
     "toolbar": {
@@ -6251,7 +6653,17 @@
       "invalidUrl": "Endereço inválido",
       "profile": "Perfil: {name}",
       "profileMenuLabel": "Abrir esta página em outro perfil",
-      "profileDefault": "Padrão"
+      "profileDefault": "Padrão",
+      "device": "Dispositivo: {name}",
+      "deviceMenuLabel": "Ver como",
+      "deviceDesktop": "Desktop",
+      "deviceTablet": "Tablet",
+      "devicePhone": "Celular",
+      "deviceFill": "Painel inteiro",
+      "deviceCustom": "Personalizado",
+      "deviceWidth": "Largura",
+      "deviceHeight": "Altura",
+      "deviceLaidOut": "Painel pequeno demais: layout em {size}"
     },
     "status": {
       "popupDenied": "Pop-up bloqueado: {host}",

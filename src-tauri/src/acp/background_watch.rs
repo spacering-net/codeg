@@ -1305,8 +1305,10 @@ impl WatchState {
                         // is the launching tool call's id and `<result>` is the
                         // sub-agent's report. Carrying both lets the frontend flip
                         // the launch card in-memory (rewriting its marker) with no
-                        // `refetchDetail` — see `BackgroundSettledInfo`'s doc.
-                        // Absent for a background shell (no such tags → `None`).
+                        // `refetchDetail` — see `BackgroundSettledInfo`'s doc. A
+                        // background shell's notification names its `Bash` call
+                        // as well (with no `<result>`); the frontend leaves that
+                        // card alone.
                         let tool_use_id =
                             capture_tag(task_notification_tool_use_id_regex(), trimmed);
                         // Same cap the cold-parse fold applies, so the live card

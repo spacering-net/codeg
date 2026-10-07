@@ -714,11 +714,13 @@ describe("markThreadTail", () => {
 describe("dedupeCompactionItems", () => {
   const divider = (
     key: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    callId?: string
   ): ThreadItem => ({
     key,
     kind: "compaction",
     meta: { contextCompaction: { version: 1, ...payload } },
+    callId,
   })
   const full = { preTokens: 108716, postTokens: 4462, durationMs: 92728 }
   const keys = (items: ThreadItem[]) => items.map((i) => i.key)
@@ -775,6 +777,48 @@ describe("dedupeCompactionItems", () => {
     const items = [assistantItem("a"), divider("c1", full)]
     expect(dedupeCompactionItems(items)).toBe(items)
   })
+
+  // codex names the live divider by the app-server item id, and its history
+  // parser names the persisted one by the same id — the only identity a bare
+  // `{version: 1}` payload has.
+  it("folds two renderings that name the same call", () => {
+    const named = (key: string, callId: string) => divider(key, {}, callId)
+    expect(
+      keys(
+        dedupeCompactionItems([
+          named("persisted-c", "01a0eaed-d00a"),
+          assistantItem("b"),
+          named("live-c", "01a0eaed-d00a"),
+        ])
+      )
+    ).toEqual(["persisted-c", "persisted-b"])
+    // …while distinct calls stay distinct.
+    expect(
+      dedupeCompactionItems([named("c1", "item-1"), named("c2", "item-2")])
+    ).toHaveLength(2)
+  })
+
+  // Either identity is enough: claude's live and history copies share their
+  // counters but not their ids.
+  it("still folds on content when the ids differ", () => {
+    const items = [
+      divider("persisted-c", full, "boundary-uuid"),
+      divider("live-c", full, "compacting-uuid"),
+    ]
+    expect(keys(dedupeCompactionItems(items))).toEqual(["persisted-c"])
+  })
+
+  // Identity is transitive: a repeat folded on one identity still lends its
+  // other one to the event, so a third copy matching only that one folds too.
+  it("remembers the other identity of a copy it drops", () => {
+    const other = { preTokens: 1, postTokens: 2, durationMs: 3 }
+    const items = [
+      divider("c-first", full, "call-a"),
+      divider("c-same-call", other, "call-a"),
+      divider("c-same-counters", other, "call-b"),
+    ]
+    expect(keys(dedupeCompactionItems(items))).toEqual(["c-first"])
+  })
 })
 
 describe("compactionOnlyPart", () => {
@@ -814,6 +858,7 @@ describe("compactionOnlyPart", () => {
       },
       summary: "We kept the parser notes.",
       state: "input-available",
+      callId: "cmp_1",
     })
     expect(compactionOnlyPart(compactionGroup("output-available"))?.state).toBe(
       "output-available"

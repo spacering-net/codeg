@@ -471,4 +471,51 @@ describe("AskQuestionResultCard", () => {
     expect(chosen).toBeDisabled()
     expect(screen.getByRole("radio", { name: /茶/ })).not.toBeChecked()
   })
+
+  it("echoes a codex free-text answer, not codex's Other encoding", () => {
+    // codex-acp 2.1.0 hands codex the text typed into the card's "Other" as
+    // ["None of the above", "user_note: <text>"], which is what the reloaded
+    // rollout carries. The live card showed the typed text, so the reloaded
+    // one must too.
+    const input = JSON.stringify({
+      questions: [
+        {
+          id: "next_step",
+          header: "Next step",
+          question: "What should I do next?",
+          isOther: true,
+          options: [
+            { label: "Run tests", description: "Run the focused test suite." },
+            { label: "Stop", description: "Stop and report current status." },
+          ],
+        },
+      ],
+    })
+    const output = JSON.stringify({
+      answers: {
+        next_step: {
+          answers: ["None of the above", "user_note: Inspect flaky logs"],
+        },
+      },
+    })
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    expect(
+      screen.getByTestId("ask-question-result-card").textContent
+    ).toContain("Inspect flaky logs")
+    expect(screen.queryByText(/None of the above/)).toBeNull()
+    expect(screen.queryByText(/user_note/)).toBeNull()
+
+    expand()
+    expect(screen.getByRole("radio", { name: "Other" })).toBeChecked()
+    expect(screen.getByDisplayValue("Inspect flaky logs")).toBeInTheDocument()
+    expect(screen.getByRole("radio", { name: /Run tests/ })).not.toBeChecked()
+    expect(screen.getByRole("radio", { name: /Stop/ })).not.toBeChecked()
+  })
 })

@@ -20,7 +20,9 @@
     "remote-commit-*",
     "remote-merge-*",
     "remote-stash-*",
-    "remote-push-*"
+    "remote-push-*",
+    "computer-indicator",
+    "computer-marker"
   ],
   "permissions": [
     "core:default",

@@ -94,6 +94,7 @@ import {
 } from "@/lib/async-tasks"
 import { contentBlocksFromUserMessage } from "@/lib/user-message-blocks"
 import { presentSessionNotice, splitHeadline } from "@/lib/session-notices"
+import { presentPluginLoadFailures } from "@/lib/plugin-load-failures"
 import {
   acpErrorNotifiesDesktop,
   isTurnFailureCode,
@@ -116,6 +117,7 @@ import {
   notifyDesktop,
   withDesktopNotificationsSuppressed,
 } from "@/lib/desktop-notification"
+import { sessionNotificationPayload } from "@/lib/notification-session"
 import {
   playEventSound,
   primeNotificationSoundOutput,
@@ -1068,6 +1070,88 @@ function findLiveToolCallInfo(
   return block?.type === "tool_call" ? block.info : null
 }
 
+/**
+ * The keys that carry an edit's text in a file tool's input, in every spelling
+ * the permission card reads (`parsePermissionToolCall`).
+ */
+const EDIT_TEXT_INPUT_KEYS = [
+  "old_string",
+  "oldString",
+  "old_text",
+  "oldText",
+  "new_string",
+  "newString",
+  "new_text",
+  "newText",
+  "content",
+  "text",
+  "new_source",
+  "changes",
+  "diff",
+  "patch",
+  "unified_diff",
+  "unifiedDiff",
+] as const
+
+/** The file a file tool's input names, in any spelling the card reads. */
+const EDIT_PATH_INPUT_KEYS = [
+  "file_path",
+  "filePath",
+  "path",
+  "notebook_path",
+  "target_file",
+  "targetFile",
+] as const
+
+function inputFilePath(input: Record<string, unknown>): string | null {
+  for (const key of EDIT_PATH_INPUT_KEYS) {
+    const value = input[key]
+    if (typeof value === "string" && value.trim().length > 0) return value
+  }
+  return null
+}
+
+function parseInputRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return asRecord(JSON.parse(value))
+    } catch {
+      return null
+    }
+  }
+  return asRecord(value)
+}
+
+/**
+ * A permission request's file-tool input with the edit text put back from the
+ * live call, or `null` when nothing is missing.
+ *
+ * claude-agent-acp 0.82.0 sends an AIR client (codeg) an approval whose
+ * `toolCall` is a bare update — `{toolCallId, title, rawInput}`, and for an
+ * Edit/Write `rawInput` is `{file_path}` alone: the text lives only in the
+ * diff the live call already carries, which the backend rebuilds into the live
+ * call's input. Without this the card would name the file and show no diff.
+ * Only a request input that has NONE of the text keys (in any spelling) is
+ * filled, and only from a live input naming the same file; the request's own
+ * keys win.
+ */
+function fillStrippedEditInput(
+  requestInput: unknown,
+  liveRawInput: string | null | undefined
+): Record<string, unknown> | null {
+  const request = parseInputRecord(requestInput)
+  const live = parseInputRecord(liveRawInput)
+  if (!request || !live) return null
+  if (EDIT_TEXT_INPUT_KEYS.some((key) => key in request)) return null
+  if (!EDIT_TEXT_INPUT_KEYS.some((key) => key in live)) return null
+  // Both must name the same file: the request is the authority on WHAT is
+  // being approved, and a live input about another file must never lend it
+  // text.
+  const requestPath = inputFilePath(request)
+  if (requestPath === null || requestPath !== inputFilePath(live)) return null
+  return { ...live, ...request }
+}
+
 function mergePermissionToolCallWithLiveInfo(
   toolCall: unknown,
   liveInfo: ToolCallInfo | null
@@ -1088,10 +1172,20 @@ function mergePermissionToolCallWithLiveInfo(
 
   const next = { ...record }
   let changed = false
-  const existingInput = serializePermissionInput(pickPermissionToolInput(next))
+  const requestInput = pickPermissionToolInput(next)
+  const existingInput = serializePermissionInput(requestInput)
   if (!existingInput && rawInput) {
     next.rawInput = rawInput
     changed = true
+  } else if (existingInput) {
+    const filled = fillStrippedEditInput(requestInput, liveInfo.raw_input)
+    if (filled) {
+      const inputKey =
+        PERMISSION_TOOL_INPUT_KEYS.find((key) => next[key] === requestInput) ??
+        "rawInput"
+      next[inputKey] = filled
+      changed = true
+    }
   }
   if (typeof next.title !== "string" || next.title.trim().length === 0) {
     next.title = liveInfo.title
@@ -3264,7 +3358,13 @@ type TurnFailurePart =
       description?: string
       actions: NotifyAction[]
     }
-  | { kind: "verdict"; title: string; evidence?: string }
+  | {
+      kind: "verdict"
+      title: string
+      evidence?: string
+      /** Buttons of the verdict's own, for a failure no typed record explains. */
+      actions?: NotifyAction[]
+    }
 
 /** A connect failure's notification key: one per surface. */
 function connectErrorNotificationKey(contextKey: string): string {
@@ -3491,6 +3591,28 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       rememberResolvedIdentity(contextKey, { sessionId })
     },
     [rememberResolvedIdentity]
+  )
+
+  /**
+   * An OS notification payload naming the session `contextKey` serves (see
+   * `sessionNotificationPayload`).
+   *
+   * Its conversation is the one `connect()` was given or a first send linked
+   * (`conversation_linked`) — both remembered past the surface itself, which
+   * is when this matters: a tab closed while its agent is still busy keeps
+   * its connection, and the turn finishes under a tab id that no longer
+   * exists. Not the agent's session id: a Claude `/clear` re-points the row's
+   * `external_id` while the ACP session keeps its own.
+   */
+  const sessionNotification = useCallback(
+    (contextKey: string, content: { body: string; redactedBody?: string }) =>
+      sessionNotificationPayload(
+        contextKey,
+        lastConnectParamsRef.current.get(contextKey)?.conversationId,
+        folderNameRef.current,
+        content
+      ),
+    []
   )
 
   type ConnectBlockState =
@@ -4119,6 +4241,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           key,
           title: part.title,
           evidence: part.evidence,
+          actions: part.actions,
         })
         return
       }
@@ -4365,6 +4488,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           return t("backendErrors.agentAuthRequired", {
             agent: agentLabel,
           })
+        case "agent_runtime_outdated":
+          return t("backendErrors.agentRuntimeOutdated", {
+            agent: agentLabel,
+          })
         case "sdk_not_installed":
           return t("blocked.sdkMissing", { agent: agentLabel })
         case "platform_not_supported":
@@ -4399,9 +4526,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
         // The agent refused the prompt with ACP's `authRequired` instead
         // of running it. The connection is deliberately kept alive, so
-        // this reads as "sign in and send it again", not as a crash. An
-        // AIR-capable agent additionally publishes an `access` failure
-        // record whose Login button opens agent settings.
+        // this reads as "sign in and send it again", not as a crash. Its
+        // notification carries a Sign in button that opens agent settings
+        // (older claude/codex adapters also publish an `access` failure
+        // record with the same button; the two are told as one).
         case "turn_failed_auth_required":
           return t("backendErrors.turnFailedAuthRequired", {
             agent: agentLabel,
@@ -4662,13 +4790,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               ? null
               : storeRef.current.connections.get(contextKey)
             if (nc) {
-              const fn = folderNameRef.current
-              void notifyDesktop("question_request", {
-                title: fn ? `${fn} - Codeg` : "Codeg",
-                body: t("notificationQuestion", {
-                  agent: getAgentLabel(nc.agentType),
-                }),
-              })
+              void notifyDesktop(
+                "question_request",
+                sessionNotification(contextKey, {
+                  body: t("notificationQuestion", {
+                    agent: getAgentLabel(nc.agentType),
+                  }),
+                })
+              )
             }
           }
           break
@@ -4770,34 +4899,34 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             if (!quiet) {
               const nc = storeRef.current.connections.get(contextKey)
               const agentLabel = nc ? getAgentLabel(nc.agentType) : "Agent"
-              const fn = folderNameRef.current
-              const title = fn ? `${fn} - Codeg` : "Codeg"
               const count = e.settled.length
               const many = tChat("backgroundTasks.notifySettledMany", {
                 agent: agentLabel,
                 count,
               })
               const single = e.settled[0]
-              void notifyDesktop("background_task", {
-                body:
-                  count === 1
-                    ? `${agentLabel}: ${
-                        single.summary ??
-                        tChat("backgroundTasks.settledFallback", {
-                          status: single.status,
+              void notifyDesktop(
+                "background_task",
+                sessionNotification(contextKey, {
+                  body:
+                    count === 1
+                      ? `${agentLabel}: ${
+                          single.summary ??
+                          tChat("backgroundTasks.settledFallback", {
+                            status: single.status,
+                          })
+                        }`
+                      : many,
+                  // A summary is the sub-agent's own prose; the count form
+                  // names nothing and is safe to reuse as the redacted body.
+                  redactedBody:
+                    count === 1
+                      ? tChat("backgroundTasks.notifySettledOne", {
+                          agent: agentLabel,
                         })
-                      }`
-                    : many,
-                // A summary is the sub-agent's own prose; the count form names
-                // nothing and is safe to reuse as the redacted body.
-                redactedBody:
-                  count === 1
-                    ? tChat("backgroundTasks.notifySettledOne", {
-                        agent: agentLabel,
-                      })
-                    : many,
-                title,
-              })
+                      : many,
+                })
+              )
             }
             // 4. flip each async sub-agent's launch card to its terminal
             //    (completed + result) state IN-MEMORY, by rewriting the
@@ -4806,10 +4935,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             //    deliberately replaces the `refetchDetail` this used to do: that
             //    refetch re-parsed the still-open transcript mid-#870-hold,
             //    double-rendering the held turn AND racing the file's last
-            //    write. Entries with
-            //    no `tool_use_id` (background shells) have no marker card and are
-            //    skipped. The store queues a settlement whose launch turn hasn't
-            //    promoted yet and applies it at COMPLETE_TURN.
+            //    write. A background shell's notification names its `Bash` call
+            //    too, and the store leaves that command card as it is (see
+            //    `applyBackgroundSettlementToTurns`); entries with no
+            //    `tool_use_id` (an MCP call moved to the background) are
+            //    skipped. The store queues a settlement whose launch turn
+            //    hasn't promoted yet and applies it at COMPLETE_TURN.
             const conversationId = getConversationIdByExternalIdFromStore(
               e.session_id
             )
@@ -4850,14 +4981,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               : storeRef.current.connections.get(contextKey)
             if (nc) {
               const agentLabel = getAgentLabel(nc.agentType)
-              const fn = folderNameRef.current
-              const title = fn ? `${fn} - Codeg` : "Codeg"
               // No redacted variant: the body is a fixed localized string
-              // plus the agent's name, and names nothing of the user's.
-              void notifyDesktop("permission_request", {
-                title,
-                body: `${agentLabel}: ${tChat("permissionDialog.subtitle")}`,
-              })
+              // plus the agent's name, and names nothing of the user's. (The
+              // session title does; `sessionNotificationPayload` redacts it.)
+              void notifyDesktop(
+                "permission_request",
+                sessionNotification(contextKey, {
+                  body: `${agentLabel}: ${tChat("permissionDialog.subtitle")}`,
+                })
+              )
             }
           }
           break
@@ -5124,6 +5256,31 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           break
         }
+        case "plugin_load_failures": {
+          // Plugins the agent could not load (Claude Code 2.1.283+, read off
+          // the raw SDK stream by the backend — the adapter gives them no ACP
+          // surface). A warning, so it is kept in the alert list: a missing
+          // plugin is missing its commands, skills and MCP servers, and a
+          // failed hook may be the one guarding its permissions. Keyed by the
+          // failing plugins, so each new session that hits the same broken
+          // plugin refreshes one entry (see `lib/plugin-load-failures`). The
+          // per-plugin lines are the CLI's own English, shown verbatim.
+          if (quiet) break
+          const pc = storeRef.current.connections.get(contextKey)
+          const agentType: AgentType = pc?.agentType ?? "claude_code"
+          const failures = presentPluginLoadFailures(agentType, e.failures)
+          if (!failures) break
+          notify({
+            level: "warning",
+            key: failures.key,
+            title: t("pluginLoadFailedTitle", {
+              agent: getAgentLabel(agentType),
+              count: failures.count,
+            }),
+            description: failures.description,
+          })
+          break
+        }
         case "async_task": {
           // JetBrains AIR async-task delta (claude only) — Claude's background
           // shells / workflows / monitors. Merged into the connection's task
@@ -5240,27 +5397,29 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 : storeRef.current.connections.get(contextKey)
             if (nc) {
               const agentLabel = getAgentLabel(nc.agentType)
-              const fn = folderNameRef.current
-              const title = fn ? `${fn} - Codeg` : "Codeg"
               const failure = latestActiveTerminalFailure(nc.sessionFailures)
               if (failure) {
-                void notifyDesktop("error", {
-                  title,
-                  body: t("notificationError", {
-                    agent: agentLabel,
-                    message:
-                      failure.title.trim() ||
-                      tChat("sessionFailure.category.unknown"),
-                  }),
-                  redactedBody: t("notificationErrorRedacted", {
-                    agent: agentLabel,
-                  }),
-                })
+                void notifyDesktop(
+                  "error",
+                  sessionNotification(contextKey, {
+                    body: t("notificationError", {
+                      agent: agentLabel,
+                      message:
+                        failure.title.trim() ||
+                        tChat("sessionFailure.category.unknown"),
+                    }),
+                    redactedBody: t("notificationErrorRedacted", {
+                      agent: agentLabel,
+                    }),
+                  })
+                )
               } else {
-                void notifyDesktop("turn_complete", {
-                  title,
-                  body: t("notificationTurnComplete", { agent: agentLabel }),
-                })
+                void notifyDesktop(
+                  "turn_complete",
+                  sessionNotification(contextKey, {
+                    body: t("notificationTurnComplete", { agent: agentLabel }),
+                  })
+                )
               }
             }
           }
@@ -5300,31 +5459,58 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // quote agent stderr for codes we don't recognize, which is what the
           // redacted variant drops.
           if (nc && !quiet && acpErrorNotifiesDesktop(route)) {
-            const fn = folderNameRef.current
-            const title = fn ? `${fn} - Codeg` : "Codeg"
-            void notifyDesktop("error", {
-              title,
-              body: t("notificationError", {
-                agent: agentLabel,
-                message: text,
-              }),
-              redactedBody: t("notificationErrorRedacted", {
-                agent: agentLabel,
-              }),
-            })
+            void notifyDesktop(
+              "error",
+              sessionNotification(contextKey, {
+                body: t("notificationError", {
+                  agent: agentLabel,
+                  message: text,
+                }),
+                redactedBody: t("notificationErrorRedacted", {
+                  agent: agentLabel,
+                }),
+              })
+            )
           }
           if (quiet) break
           const connKey = nc?.connectionId ?? contextKey
           if (isTurnFailureCode(e.code)) {
             // The same failed turn the adapter may also report as a typed
             // record — told once, together (see `notifyTurnFailure`).
+            //
+            // A refusal for credentials gets a Sign in button of its own:
+            // claude-agent-acp 0.82.0 and codex-acp 2.0.0 stopped publishing
+            // the AIR `access` record that used to carry it, and answer with
+            // ACP's `authRequired` alone — which is all any non-AIR agent
+            // ever sent. If an older adapter still sends the record, its
+            // typed account (same button) takes this notification over.
+            const signInAgentType = nc?.agentType
             notifyTurnFailure(connKey, {
               kind: "verdict",
               title: text,
               evidence,
+              actions:
+                e.code === "turn_failed_auth_required" && signInAgentType
+                  ? [
+                      {
+                        label: tFailure("action.login"),
+                        onClick: () => {
+                          openSettingsWindow("agents", {
+                            agentType: signInAgentType,
+                          }).catch((err) => {
+                            console.error(
+                              "[AcpConnections] open agent settings:",
+                              err
+                            )
+                          })
+                        },
+                      },
+                    ]
+                  : undefined,
             })
             break
           }
+          const errorAgentType = nc?.agentType
           notify({
             level: route.level,
             // One per connection and code: the same refusal twice in a row, or
@@ -5333,6 +5519,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             title: text,
             description: reason,
             evidence,
+            actions:
+              route.opensAgentSettings && errorAgentType
+                ? [
+                    {
+                      label: t("actions.openAgentsSettings"),
+                      onClick: () => {
+                        openSettingsWindow("agents", {
+                          agentType: errorAgentType,
+                        }).catch((err) => {
+                          console.error(
+                            "[AcpConnections] open agent settings:",
+                            err
+                          )
+                        })
+                      },
+                    },
+                  ]
+                : undefined,
           })
           break
         }
@@ -5340,7 +5544,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           flushStreamingQueue(contextKey)
           // Localize via the stable `code` field ("resource_not_found" —
           // JSON-RPC -32002 — plus "session_unavailable" and
-          // "session_archived", both matched on the wire message). Fall back
+          // "session_archived", both matched on the wire message, and
+          // "session_busy", read from codex-acp's typed error reason). Fall back
           // to the raw agent message so an unknown future code still surfaces
           // something intelligible rather than getting swallowed.
           const nc = storeRef.current.connections.get(contextKey)
@@ -5386,7 +5591,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 })
               // Unlike its neighbours this one is temporary and self-clearing,
               // so the message says what holds the session rather than what
-              // went wrong: the fork took the lock, closing it gives it back.
+              // went wrong, and what frees it. Two things can hold it: another
+              // Codex client with the same session open (the app, the CLI or an
+              // IDE extension), where freeing it can take quitting that client
+              // because closing its tab does not always unload the thread; or
+              // a fork codeg just made from it, which closes the parent and
+              // leaves codex to unload it about a minute later.
               case "session_busy":
                 return t("backendErrors.sessionLoadBusy", {
                   agent: agentLabel,
@@ -5443,6 +5653,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       presentBackendError,
       retireTurnFailures,
       sessionFailureNotifyActions,
+      sessionNotification,
       settleRetryIncidentsOnProgress,
       t,
       tChat,

@@ -36,6 +36,9 @@ export interface AcpErrorRoute {
    * instead of being lost.
    */
   rawAsDetail: boolean
+  /** The fix lives in the agent's own settings panel (install, update,
+   *  configure), so the notification offers to open it. */
+  opensAgentSettings?: boolean
 }
 
 const DEFAULT_ROUTE: AcpErrorRoute = {
@@ -45,6 +48,15 @@ const DEFAULT_ROUTE: AcpErrorRoute = {
 }
 
 const ROUTES: Readonly<Record<string, AcpErrorRoute>> = {
+  // The agent's own runtime is too old for the adapter codeg pins, so no
+  // session opens until it is updated. The backend's message says which version
+  // is needed and how to get it; the agent's settings panel is where to do it.
+  agent_runtime_outdated: {
+    kind: "session",
+    level: "error",
+    rawAsDetail: true,
+    opensAgentSettings: true,
+  },
   // The session could not be restored and the agent started a new one. It is
   // the session's state from here on — the agent no longer has the earlier
   // context — but not a failure of anything the user can retry: amber, and no

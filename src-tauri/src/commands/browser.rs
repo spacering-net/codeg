@@ -28,7 +28,7 @@ use crate::browser::open_request;
 use crate::browser::types::{
     Bounds, BrowserCapabilities, BrowserErrorInfo, BrowserErrorKind, BrowserOpenRequestPayload,
     BrowserTabState, ChannelKind, DetectedService, FrozenFrame, SurfaceChoice, SurfaceKind,
-    TabKind,
+    TabKind, ViewportSize,
 };
 use crate::browser::{events, hooks, listener, policy, profile, services, tab_label};
 
@@ -171,6 +171,103 @@ fn window_err(what: &str, err: impl std::fmt::Display) -> AppCommandError {
     AppCommandError::window(what.to_string(), err.to_string())
 }
 
+/// The page zoom an embedded surface may be given. Chromium (WebView2) holds
+/// its zoom to this range, and WebKit is held to the same so a tab behaves
+/// alike on both. The frontend only ever asks for less than 1 — a tab
+/// emulating a device whose viewport is larger than the slot it is shown in.
+pub const MIN_PAGE_ZOOM: f64 = 0.25;
+pub const MAX_PAGE_ZOOM: f64 = 5.0;
+
+fn page_zoom(raw: f64) -> Result<f64, AppCommandError> {
+    if !raw.is_finite() || raw <= 0.0 {
+        return Err(AppCommandError::invalid_input(format!(
+            "invalid page zoom {raw}"
+        )));
+    }
+    Ok(raw.clamp(MIN_PAGE_ZOOM, MAX_PAGE_ZOOM))
+}
+
+/// What an owned window may be sized to for an emulated device: something a
+/// screen can hold, in logical pixels.
+const WINDOW_VIEWPORT_RANGE: std::ops::RangeInclusive<f64> = 100.0..=8192.0;
+
+fn window_viewport(raw: ViewportSize) -> Result<ViewportSize, AppCommandError> {
+    if WINDOW_VIEWPORT_RANGE.contains(&raw.width) && WINDOW_VIEWPORT_RANGE.contains(&raw.height) {
+        Ok(raw)
+    } else {
+        Err(AppCommandError::invalid_input(format!(
+            "invalid viewport {} x {}",
+            raw.width, raw.height
+        )))
+    }
+}
+
+/// Size an owned window's content to `size`, with `min` as the least it may
+/// be dragged to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WindowResize {
+    size: ViewportSize,
+    min: ViewportSize,
+}
+
+/// What an owned window's tab records, and what is done to the window, when
+/// it is asked to show `requested` (`None` = a desktop again).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WindowViewportPlan {
+    viewport: Option<ViewportSize>,
+    restore: Option<ViewportSize>,
+    resize: Option<WindowResize>,
+}
+
+/// `current` and `restore` are the tab's `window_viewport` and
+/// `window_restore`; `own_size` is the window's content size right now.
+fn plan_window_viewport(
+    current: Option<ViewportSize>,
+    restore: Option<ViewportSize>,
+    requested: Option<ViewportSize>,
+    own_size: ViewportSize,
+) -> WindowViewportPlan {
+    let (floor_width, floor_height) = crate::browser::surface_window::MIN_INNER_SIZE;
+    if current == requested {
+        // Asked again — every host that shows the tab asks once it knows the
+        // page is in a window of its own. Sizing it again would undo whatever
+        // the person did to the window since.
+        return WindowViewportPlan {
+            viewport: current,
+            restore,
+            resize: None,
+        };
+    }
+    match requested {
+        Some(size) => WindowViewportPlan {
+            viewport: Some(size),
+            // Only the first device keeps the window's size: from one device
+            // to another the size the window has is the last device's.
+            restore: restore.or(Some(own_size)),
+            resize: Some(WindowResize {
+                size,
+                // A phone is narrower than a person may otherwise drag the
+                // window to.
+                min: ViewportSize {
+                    width: floor_width.min(size.width),
+                    height: floor_height.min(size.height),
+                },
+            }),
+        },
+        None => WindowViewportPlan {
+            viewport: None,
+            restore: None,
+            resize: Some(WindowResize {
+                size: restore.unwrap_or(own_size),
+                min: ViewportSize {
+                    width: floor_width,
+                    height: floor_height,
+                },
+            }),
+        },
+    }
+}
+
 pub struct OpenTabParams {
     pub tab_id: String,
     pub url: String,
@@ -182,6 +279,11 @@ pub struct OpenTabParams {
     /// The browser profile to open the tab in (`default` when the caller has
     /// no opinion).
     pub profile: String,
+    /// The page zoom to build an embedded surface with, for a tab emulating
+    /// a device (see `set_bounds_core`): its first document already lays out
+    /// at the device's width. `None` for a desktop tab. Ignored for an owned
+    /// window.
+    pub zoom: Option<f64>,
 }
 
 pub fn open_tab_core(
@@ -191,6 +293,7 @@ pub fn open_tab_core(
     params: OpenTabParams,
 ) -> Result<BrowserTabState, AppCommandError> {
     validate_tab_id(&params.tab_id)?;
+    let zoom = params.zoom.map(page_zoom).transpose()?;
     // Held until the tab is registered: a second open of the same id while
     // this one builds its surface must fail, not build a second surface.
     let reservation = registry.reserve(&params.tab_id)?;
@@ -278,23 +381,39 @@ pub fn open_tab_core(
         profile: Some(params.profile.clone()),
         agent_grant: None,
     };
-    if let Err(err) = registry.insert_reserved(
-        BrowserTab::new(
-            state.clone(),
-            surface.clone(),
-            params.bounds,
-            !params.background,
-            params.devtools,
-        ),
-        reservation,
-    ) {
+    let mut tab = BrowserTab::new(
+        state.clone(),
+        surface.clone(),
+        params.bounds,
+        !params.background,
+        params.devtools,
+    );
+    tab.zoom_wanted = zoom.filter(|_| surface.is_embedded());
+    let zoomed = tab.zoom_wanted.is_some();
+    if let Err(err) = registry.insert_reserved(tab, reservation) {
         let _ = surface.close();
         return Err(err);
+    }
+    let mut state = state;
+    // Before anything loads, so the first document already lays out at the
+    // width it is zoomed for. Not fatal either: the tab works, only at the
+    // slot's width until the frontend's next bounds push zooms it.
+    if zoomed {
+        match surface.sync_geometry() {
+            Ok(()) => {
+                if let Some(next) = registry.update(&params.tab_id, |tab| tab.state.clone()) {
+                    state = next;
+                }
+            }
+            Err(err) => tracing::warn!(
+                "[browser] tab {}: page zoom not applied ({err})",
+                params.tab_id
+            ),
+        }
     }
     // The helper must be in place before the first real document loads;
     // `about:blank` is still showing at this point. A failed install is not
     // fatal: the tab works, only the page channel is missing.
-    let mut state = state;
     if surface.has_channel() {
         match surface.install_channel() {
             // Stays `degraded` until the helper's `hello` proves the round trip.
@@ -821,24 +940,99 @@ pub fn close_all_for_owner(app: &AppHandle, owner_window: &str) {
     }
 }
 
+/// Place an embedded surface at `bounds`, and zoom its page to `zoom` while
+/// its tab emulates a device (`None` otherwise: a desktop tab's zoom is not
+/// ours to set).
+///
+/// The zoom is what lets a tab emulate a device in a slot smaller than that
+/// device's viewport: the frontend fits a frame of the device's proportions
+/// into the slot and zooms the page out by the same factor, so the page still
+/// lays out at the device's width — its media queries see a phone, not a
+/// postage stamp.
+///
+/// Both are recorded here and applied by a main-thread pass that reads them
+/// back (`ChildHandle::sync_geometry`), so of two requests in flight the newer
+/// always wins whichever pass runs last. A hidden surface picks its bounds up
+/// when it is shown; moving it while hidden is wasted main-thread work on every
+/// split-pane drag — but a zoom that still has to change gets its pass even
+/// then, since the page keeps it either way.
 pub fn set_bounds_core(
     registry: &BrowserRegistry,
     tab_id: &str,
     bounds: Bounds,
+    zoom: Option<f64>,
 ) -> Result<(), AppCommandError> {
+    let zoom = zoom.map(page_zoom).transpose()?;
     let surface = surface_of(registry, tab_id)?;
-    let visible = registry
+    // An owned window is not fitted to the slot, and it is sized to an
+    // emulated device rather than zoomed (`set_window_viewport_core`).
+    let embedded = surface.is_embedded();
+    let pass = registry
         .update(tab_id, |tab| {
             tab.last_bounds = bounds;
-            tab.visible
+            if !embedded {
+                return false;
+            }
+            tab.zoom_wanted = zoom;
+            tab.visible || tab.zoom_wanted != tab.zoom_applied
         })
         .unwrap_or(false);
-    // A hidden surface picks the bounds up again when it is shown; moving it
-    // while hidden is wasted main-thread work on every split-pane drag.
-    if visible && surface.is_embedded() {
+    if pass {
         surface
-            .set_bounds(bounds)
+            .sync_geometry()
             .map_err(|e| window_err("Failed to move browser webview", e))?;
+    }
+    Ok(())
+}
+
+/// Owned-window viewport changes, one at a time. Each reads what the window
+/// was last sized to and what its own size was before that; two planned from
+/// the same reading would remember a device's size as the window's own, and
+/// the desktop could never get the real one back.
+static WINDOW_VIEWPORT_CHANGES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Size an owned window to the device its tab emulates — the window's own
+/// size again when `viewport` is `None` (a desktop). An owned window is not
+/// fitted to the slot, so where an embedded surface is framed and zoomed the
+/// window itself takes the device's size: the page in it lays out at the
+/// device's width, at 100%. Nothing for an embedded surface, which gets the
+/// device through `set_bounds_core`.
+pub fn set_window_viewport_core(
+    registry: &BrowserRegistry,
+    tab_id: &str,
+    viewport: Option<ViewportSize>,
+) -> Result<(), AppCommandError> {
+    let viewport = viewport.map(window_viewport).transpose()?;
+    let surface = surface_of(registry, tab_id)?;
+    if surface.is_embedded() {
+        return Ok(());
+    }
+    let _one_at_a_time = WINDOW_VIEWPORT_CHANGES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (current, restore) = registry
+        .update(tab_id, |tab| (tab.window_viewport, tab.window_restore))
+        .ok_or_else(|| AppCommandError::not_found(format!("browser tab {tab_id} not found")))?;
+    if current == viewport {
+        return Ok(());
+    }
+    let (default_width, default_height) = crate::browser::surface_window::INNER_SIZE;
+    let own_size = surface
+        .window_inner_size()
+        .map_err(|e| window_err("Failed to read the browser window's size", e))?
+        .unwrap_or(ViewportSize {
+            width: default_width,
+            height: default_height,
+        });
+    let plan = plan_window_viewport(current, restore, viewport, own_size);
+    registry.update(tab_id, |tab| {
+        tab.window_viewport = plan.viewport;
+        tab.window_restore = plan.restore;
+    });
+    if let Some(resize) = plan.resize {
+        surface
+            .set_window_inner_size(resize.size, resize.min)
+            .map_err(|e| window_err("Failed to resize the browser window", e))?;
     }
     Ok(())
 }
@@ -3591,6 +3785,7 @@ pub async fn browser_open_tab(
     devtools: Option<bool>,
     profile: Option<String>,
     egress: Option<i32>,
+    zoom: Option<f64>,
 ) -> Result<BrowserTabState, AppCommandError> {
     // Folder scoping is a frontend concern (tab strip grouping); the backend
     // only needs the owner window.
@@ -3620,6 +3815,7 @@ pub async fn browser_open_tab(
             surface: surface.unwrap_or_default(),
             devtools: devtools.unwrap_or(false),
             profile,
+            zoom,
         },
     )
 }
@@ -3746,8 +3942,18 @@ pub async fn browser_set_bounds(
     registry: State<'_, BrowserRegistry>,
     tab_id: String,
     bounds: Bounds,
+    zoom: Option<f64>,
 ) -> Result<(), AppCommandError> {
-    set_bounds_core(&registry, &tab_id, bounds)
+    set_bounds_core(&registry, &tab_id, bounds, zoom)
+}
+
+#[tauri::command]
+pub async fn browser_set_window_viewport(
+    registry: State<'_, BrowserRegistry>,
+    tab_id: String,
+    viewport: Option<ViewportSize>,
+) -> Result<(), AppCommandError> {
+    set_window_viewport_core(&registry, &tab_id, viewport)
 }
 
 #[tauri::command]
@@ -4060,6 +4266,92 @@ mod tests {
         for bad in ["", "a b", "a/b", "a:b", "é", &"x".repeat(65)] {
             assert!(validate_tab_id(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn page_zoom_is_held_to_what_the_engines_take() {
+        assert_eq!(page_zoom(1.0).unwrap(), 1.0);
+        assert_eq!(page_zoom(0.5).unwrap(), 0.5);
+        // A slot too small for the device still gets a page the engine can
+        // draw; it lays out narrower than the device instead.
+        assert_eq!(page_zoom(0.1).unwrap(), MIN_PAGE_ZOOM);
+        assert_eq!(page_zoom(9.0).unwrap(), MAX_PAGE_ZOOM);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(page_zoom(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_window_viewport_has_to_fit_on_a_screen() {
+        let size = |width, height| ViewportSize { width, height };
+        assert!(window_viewport(size(390.0, 844.0)).is_ok());
+        assert!(window_viewport(size(768.0, 1024.0)).is_ok());
+        for bad in [
+            size(0.0, 844.0),
+            size(390.0, -1.0),
+            size(f64::NAN, 844.0),
+            size(390.0, f64::INFINITY),
+            size(100_000.0, 844.0),
+        ] {
+            assert!(window_viewport(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_owned_window_takes_the_device_size_and_gives_its_own_back() {
+        let size = |width, height| ViewportSize { width, height };
+        let floor = size(
+            crate::browser::surface_window::MIN_INNER_SIZE.0,
+            crate::browser::surface_window::MIN_INNER_SIZE.1,
+        );
+        let own = size(1100.0, 760.0);
+        let phone = size(390.0, 844.0);
+        let tablet = size(768.0, 1024.0);
+
+        // Desktop → phone: the window's own size is kept, and the floor goes
+        // down to a phone's width so the window can be that narrow.
+        let to_phone = plan_window_viewport(None, None, Some(phone), own);
+        assert_eq!(to_phone.viewport, Some(phone));
+        assert_eq!(to_phone.restore, Some(own));
+        assert_eq!(
+            to_phone.resize,
+            Some(WindowResize {
+                size: phone,
+                min: size(390.0, floor.height),
+            })
+        );
+
+        // Phone → tablet: the size kept is still the window's own, not the
+        // phone's it has now.
+        let to_tablet = plan_window_viewport(Some(phone), Some(own), Some(tablet), phone);
+        assert_eq!(to_tablet.restore, Some(own));
+        assert_eq!(to_tablet.resize.map(|r| r.size), Some(tablet));
+        assert_eq!(to_tablet.resize.map(|r| r.min), Some(floor));
+
+        // Back to desktop: the window's own size and floor again.
+        let back = plan_window_viewport(Some(tablet), Some(own), None, tablet);
+        assert_eq!(back.viewport, None);
+        assert_eq!(back.restore, None);
+        assert_eq!(back.resize, Some(WindowResize { size: own, min: floor }));
+
+        // Asked again for what it already shows: left alone, so a window the
+        // person has since resized by hand stays the way they made it.
+        assert_eq!(
+            plan_window_viewport(Some(phone), Some(own), Some(phone), size(500.0, 900.0)),
+            WindowViewportPlan {
+                viewport: Some(phone),
+                restore: Some(own),
+                resize: None,
+            }
+        );
+        assert_eq!(
+            plan_window_viewport(None, None, None, own),
+            WindowViewportPlan {
+                viewport: None,
+                restore: None,
+                resize: None,
+            }
+        );
     }
 
     #[test]

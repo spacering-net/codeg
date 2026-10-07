@@ -30,8 +30,11 @@
  * history. When it does, the divider grows a "Summary" toggle that opens it
  * beneath the rule, collapsed by default so the boundary stays one line. Only
  * a summary the backend explicitly claims is shown (see
- * `contextCompactionSummary`); history dividers carry none, because claude's
- * transcript keeps the summary in its own continuation turn below the divider.
+ * `contextCompactionSummary`). History dividers carry it too wherever the
+ * transcript kept it: claude's continuation record and codex's `compacted`
+ * record are folded into the divider by their parsers, so a reopened
+ * conversation opens onto the same summary instead of a separate system turn
+ * or a stray reply.
  */
 
 import { useId, useState } from "react"

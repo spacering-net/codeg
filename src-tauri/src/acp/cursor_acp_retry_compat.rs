@@ -40,6 +40,21 @@
 //! .assign(…`), where darwin is `y`/`M` and linux is `b`/`k`. The minifier
 //! numbers each archive independently, so the only safe assumption is that
 //! EVERY local is per-archive — which is what deriving them buys.
+//! `2026.09.26-dd393fe` then moved linux's action local from `b` to `y`, so all
+//! six of its archives happen to agree on `y`; one build agreeing is not a
+//! pattern to hard-code either.
+//!
+//! `2026.09.28-64d2043` changed more than the locals: Cursor's build moved from
+//! ES2017 to ES2020 output. The run options stopped being an
+//! `Object.assign(Object.assign({…},…),{…})` chain and became a single object
+//! literal with a spread (`w={conversationId:…,...(0,S.U)({…}),
+//! onConnectionStateChange:…}`), `null==g?void 0:g.maxMode` became
+//! `h?.maxMode`, and the minifier now renames exports as well as locals
+//! (`(0,w.debugLog)` is `(0,I.cY)`). Nothing else moved: the flag is still
+//! absent, and the run loop still reads it as `d.enableAgentRetries??!1` and
+//! retries only when that or `endless` is set. So the patch still applies; the
+//! anchor and the declarator check accept both outputs. `2026.10.01-14929f9`
+//! ships that ES2020 statement byte for byte, in all six archives.
 //!
 //! So nothing about the splice is transcribed by hand any more:
 //!
@@ -82,6 +97,9 @@ const TRIAGED_AFFECTED_VERSIONS: &[&str] = &[
     "2026.09.10-fd3934a",
     "2026.09.15-d2fe57e",
     "2026.09.18-9a7762b",
+    "2026.09.26-dd393fe",
+    "2026.09.28-64d2043",
+    "2026.10.01-14929f9",
 ];
 
 /// Cursor agent-cli versions whose bundle was inspected and found to already
@@ -98,27 +116,38 @@ const UNAFFECTED_VERSIONS: &[&str] = &[];
 
 const AGENT_SESSION_MODULE: &str = "\"./src/acp/agent-session.ts\"";
 
-/// Opening bytes of the run-options tail, and the point the policy is inserted
-/// at: the patch splices a property in front of `onConnectionStateChange`
-/// without rewriting a single matched byte.
-const RUN_OPTIONS_OPEN: &str = ")),{";
-
-/// The `agentClient.run` options tail as it appears WITHOUT the flag.
+/// The `agentClient.run` options tail as it appears WITHOUT the flag, in both
+/// outputs Cursor's build has produced.
 ///
-/// Every identifier Cursor's minifier owns is a wildcard: the debug-log module
-/// (`S` in the September 2 generation, `w` from September 15 on), the
-/// `onErrorNotRetried` module (`P` → `I`) and its export. What is pinned is the
-/// shape — two `debugLog` calls with Cursor's own connection-state strings, and
-/// an `onErrorNotRetried` handler that forwards `this.sharedServices
+/// The first group is the bytes that open the tail, and the policy is inserted
+/// right after them, in front of `onConnectionStateChange`, without rewriting a
+/// single matched byte. They are `)),{` in the ES2017 output (through
+/// `2026.09.26-dd393fe`), where the handlers are the last `Object.assign`
+/// argument, and `),` in the ES2020 output (from `2026.09.28-64d2043`), where
+/// they follow a spread in one object literal.
+///
+/// Every identifier Cursor's minifier owns is a wildcard: the debug-log callee
+/// (`S.debugLog` in the September 2 generation, `w.debugLog` from September 15,
+/// `I.cY` once exports were minified too) and the `onErrorNotRetried` module
+/// (`P` → `I` → `y`) and its export. What is pinned is the shape — two
+/// debug-log calls with Cursor's own connection-state strings, and an
+/// `onErrorNotRetried` handler that forwards `this.sharedServices
 /// .configProvider` — which is specific enough that it occurs exactly once in
 /// the ACP chunk, and [`plan_splice`] refuses to touch a bundle where it does
 /// not.
 const RUN_OPTIONS_ANCHOR: &str = concat!(
-    r#"\)\),\{onConnectionStateChange:e=>\{"reconnecting"===e\.state\?"#,
-    r#"\(0,(\w+)\.debugLog\)\("Connection state: reconnecting"\):"#,
-    r#""connected"===e\.state&&\(0,(\w+)\.debugLog\)\("Connection state: connected"\)\},"#,
-    r#"onErrorNotRetried:e=>\{\(0,\w+\.\w+\)\(\{configProvider:this\.sharedServices\.configProvider,info:e\}\)\}\}\)"#,
+    r#"(\)\),\{|\),)onConnectionStateChange:e=>\{"reconnecting"===e\.state\?"#,
+    r#"\(0,(\w+\.\w+)\)\("Connection state: reconnecting"\):"#,
+    r#""connected"===e\.state&&\(0,(\w+\.\w+)\)\("Connection state: connected"\)\},"#,
+    r#"onErrorNotRetried:e=>\{\(0,\w+\.\w+\)\(\{configProvider:this\.sharedServices\.configProvider,info:e\}\)\}\}"#,
 );
+
+/// The declarator that starts building the run options the policy lands in:
+/// `M=Object.assign(Object.assign({conversationId:…` in the ES2017 output,
+/// `w={conversationId:…` in the ES2020 one. Finding it between the action's
+/// declarator and the insertion point is what says both sit in one declarator
+/// list (see [`declaration_reaches`]).
+const RUN_OPTIONS_DECL: &str = r"\w+=(?:Object\.assign\()*\{conversationId:";
 
 /// Declarator that binds the `ConversationAction` the run options are built
 /// for. Its local is the one thing the injected policy has to name, so it is
@@ -139,9 +168,9 @@ const ENABLE_AGENT_RETRIES_MARKER: &str = "enableAgentRetries:";
 
 /// How far back from the run options the `ConversationAction` declarator may
 /// sit and still be believed to be the same statement list. It is 356 bytes in
-/// every archive of every triaged build; the bound is loose enough to survive a
-/// field being added between them and tight enough that a match from an
-/// unrelated method cannot qualify.
+/// every archive of every ES2017 build and 314 in the ES2020 one; the bound is
+/// loose enough to survive a field being added between them and tight enough
+/// that a match from an unrelated method cannot qualify.
 const MAX_DECL_DISTANCE: usize = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +213,13 @@ fn action_local_decl() -> &'static Regex {
     RE.get_or_init(|| Regex::new(ACTION_LOCAL_DECL).expect("action-local pattern is a valid regex"))
 }
 
+fn run_options_decl() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(RUN_OPTIONS_DECL).expect("run-options declarator is a valid regex")
+    })
+}
+
 fn legacy_codeg_policy() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(LEGACY_CODEG_POLICY).expect("legacy policy is a valid regex"))
@@ -194,10 +230,15 @@ fn legacy_codeg_policy() -> &'static Regex {
 /// `function u(e){return"shellCommandAction"!==e&&"backgroundTaskCompletionAction"!==e&&"goalContinuationAction"!==e}`,
 /// guarded so that it cannot throw.
 ///
-/// `agent-session.ts` has a single `agentClient.run` call and it always builds
-/// a `userMessageAction`, so today the policy is always `true`; it is written
-/// out rather than as a bare `true` so that a bundle which later routes another
-/// action through the same call site still gets upstream's answer.
+/// `agent-session.ts` has a single `agentClient.run` call site, and the action
+/// these options are built for is always the turn's `userMessageAction`, so
+/// today the policy is always `true`. The call is wrapped in a closure that the
+/// subagent completion drain reuses, options and all, for
+/// `backgroundTaskCompletionAction` follow-ups that `w5` would answer `false`;
+/// that drain only runs once the client negotiates `subagents`, which codeg
+/// never advertises (see `build_client_capabilities`). The policy is written
+/// out rather than as a bare `true` so that a bundle which later builds these
+/// options for another action still gets upstream's answer.
 ///
 /// The `!(l&&l.action)||…` guard is what keeps a misread local survivable. `l`
 /// is always a declared binding — it is read off a declarator in the same
@@ -244,7 +285,12 @@ fn unique_action_local(content: &str) -> Option<(usize, String)> {
     // which is not a binding at all. Naming it in the policy is the one misread
     // the injected guard cannot survive — an undeclared identifier throws
     // before `!(L&&L.action)` ever runs — so a leading `.` disqualifies it.
-    if content.as_bytes()[..whole.start()].last() == Some(&b'.') {
+    // A leading `$` does too: `$` is an identifier character that `\w` does
+    // not cover, so a minified `$f` would come back as `f`, a different name.
+    if matches!(
+        content.as_bytes()[..whole.start()].last(),
+        Some(b'.') | Some(b'$')
+    ) {
         return None;
     }
     Some((whole.start(), first.get(1)?.as_str().to_string()))
@@ -255,7 +301,7 @@ fn unique_action_local(content: &str) -> Option<(usize, String)> {
 ///
 /// Three conditions, and the third is the one that matters. It is declared
 /// before the use and close to it; the run-options object is being built out of
-/// the same declarator list (`=Object.assign(` between the two); and no block
+/// the same declarator list ([`RUN_OPTIONS_DECL`] between the two); and no block
 /// or call the declarator sits inside has CLOSED before the use
 /// ([`no_enclosing_scope_closes`]). Without the last one a
 /// `ConversationAction` built inside some nested callback would be accepted and
@@ -269,7 +315,7 @@ fn declaration_reaches(content: &str, decl_start: usize, use_at: usize) -> bool 
     let Some(between) = content.get(decl_start..use_at) else {
         return false;
     };
-    between.contains("=Object.assign(") && no_enclosing_scope_closes(between)
+    run_options_decl().is_match(between) && no_enclosing_scope_closes(between)
 }
 
 /// True when nothing in `between` closes a brace or paren it did not open.
@@ -363,13 +409,24 @@ fn plan_splice(content: &str) -> Option<BundleSplice> {
     if anchors.next().is_some() {
         return None;
     }
-    // The two `debugLog` calls have to come from the same module binding; if
-    // they do not, this is not the statement the pattern was written against.
-    if anchor.get(1)?.as_str() != anchor.get(2)?.as_str() {
+    // The two debug-log calls have to name the same callee; if they do not,
+    // this is not the statement the pattern was written against.
+    if anchor.get(2)?.as_str() != anchor.get(3)?.as_str() {
         return None;
     }
-    let insert_at = anchor.get(0)?.start() + RUN_OPTIONS_OPEN.len();
+    // Right after the opening bytes, in front of `onConnectionStateChange`.
+    let insert_at = anchor.get(1)?.end();
     if !declaration_reaches(content, decl_start, insert_at) {
+        return None;
+    }
+    // Options that already carry the flag are not ours to add to: a second
+    // key would silently override upstream's. The anchor alone cannot rule
+    // that out, because the ES2020 opening `),` is also how a flag written in
+    // front of `onConnectionStateChange` ends (`…(f.action.case),`).
+    if content
+        .get(decl_start..anchor.get(0)?.end())?
+        .contains(ENABLE_AGENT_RETRIES_MARKER)
+    {
         return None;
     }
     Some(BundleSplice {
@@ -688,7 +745,8 @@ mod tests {
 
     /// The run-options statement exactly as `2026.09.15-d2fe57e` ships it on
     /// **darwin/arm64**, from `dist-package/2698.index.js`. Byte-identical in
-    /// `2026.09.18-9a7762b` (`dist-package/1006.index.js`).
+    /// `2026.09.18-9a7762b` (`dist-package/1006.index.js`) and in both darwin
+    /// archives of `2026.09.26-dd393fe` (`5672.index.js` arm64, `9841` x64).
     const REAL_DARWIN_RUN_OPTIONS: &str = concat!(
         r#"y=new c.ConversationAction({action:{case:"userMessageAction",value:d}}),"#,
         r#"M=Object.assign(Object.assign({conversationId:this.agentStore.getId(),"#,
@@ -726,6 +784,8 @@ mod tests {
     /// the action local from darwin (`y`) and the object-assign local from
     /// linux (`k`). Proof that the two locals vary independently, so "the
     /// darwin one" and "the linux one" are not two variants to choose between.
+    /// `2026.09.26-dd393fe` ships exactly this statement in all four of its
+    /// linux and windows archives.
     const REAL_WINDOWS_RUN_OPTIONS: &str = concat!(
         r#"y=new c.ConversationAction({action:{case:"userMessageAction",value:d}}),"#,
         r#"k=Object.assign(Object.assign({conversationId:this.agentStore.getId(),"#,
@@ -750,6 +810,25 @@ mod tests {
         r#"(0,S.debugLog)("Connection state: reconnecting"):"connected"===e.state&&"#,
         r#"(0,S.debugLog)("Connection state: connected")},onErrorNotRetried:e=>{"#,
         r#"(0,P.Z)({configProvider:this.sharedServices.configProvider,info:e})}})"#,
+    );
+
+    /// The run-options statement exactly as `2026.09.28-64d2043` ships it in
+    /// all six of its archives (`dist-package/3115.index.js` darwin/arm64,
+    /// `9824` darwin/x64, `6136` both linux, `4360` windows/arm64, `8210`
+    /// windows/x64): the first ES2020 build. One object literal with a spread
+    /// replaces the `Object.assign` chain, and the debug-log export is
+    /// minified (`I.cY`). `2026.10.01-14929f9` ships the same bytes in all six
+    /// of its archives (`3990` darwin/arm64, `6787` darwin/x64, `6136` both
+    /// linux, `8971` windows/arm64, `9389` windows/x64).
+    const REAL_ES2020_RUN_OPTIONS: &str = concat!(
+        r#"f=new d.ConversationAction({action:{case:"userMessageAction",value:l}}),"#,
+        r#"w={conversationId:this.agentStore.getId(),headers:(0,P.o)(this.agentStore),"#,
+        r#"requestedModel:m.requestedModel,...(0,S.U)({modelManager:this.sharedServices.modelManager,"#,
+        r#"configProvider:this.sharedServices.configProvider,parentMaxMode:h?.maxMode}),"#,
+        r#"onConnectionStateChange:e=>{"reconnecting"===e.state?"#,
+        r#"(0,I.cY)("Connection state: reconnecting"):"connected"===e.state&&"#,
+        r#"(0,I.cY)("Connection state: connected")},onErrorNotRetried:e=>{"#,
+        r#"(0,y.Z)({configProvider:this.sharedServices.configProvider,info:e})}}"#,
     );
 
     fn chunk(run_options: &str) -> String {
@@ -791,11 +870,12 @@ mod tests {
     // the request left the process. The local has to come from the bundle.
     #[test]
     fn each_platform_archive_gets_its_own_action_local() {
-        for (label, run_options, expected_local) in [
-            ("darwin", REAL_DARWIN_RUN_OPTIONS, "y"),
-            ("linux", REAL_LINUX_RUN_OPTIONS, "b"),
-            ("windows", REAL_WINDOWS_RUN_OPTIONS, "y"),
-            ("old-generation", OLD_GENERATION_RUN_OPTIONS, "I"),
+        for (label, run_options, expected_local, open) in [
+            ("darwin", REAL_DARWIN_RUN_OPTIONS, "y", ")),{"),
+            ("linux", REAL_LINUX_RUN_OPTIONS, "b", ")),{"),
+            ("windows", REAL_WINDOWS_RUN_OPTIONS, "y", ")),{"),
+            ("old-generation", OLD_GENERATION_RUN_OPTIONS, "I", ")),{"),
+            ("es2020", REAL_ES2020_RUN_OPTIONS, "f", "}),"),
         ] {
             let tmp = tempfile::tempdir().unwrap();
             write_bundle(tmp.path(), &chunk(run_options));
@@ -805,19 +885,16 @@ mod tests {
                 "{label} archive did not patch"
             );
             let patched = patched_bundle(tmp.path());
+            let policy = retry_policy_expression(expected_local);
             assert!(
-                patched.contains(&retry_policy_expression(expected_local)),
-                "{label} archive did not read its own ConversationAction local"
+                patched.contains(&format!("{open}{policy}onConnectionStateChange:")),
+                "{label} archive: the policy reads the wrong local or sits elsewhere"
             );
-            // The anchor's own bytes are never rewritten — the policy is
-            // inserted in front of them.
-            assert!(
-                patched.contains(&format!("{RUN_OPTIONS_OPEN}enableAgentRetries:")),
-                "{label} archive: policy is not at the head of the run options"
-            );
-            assert!(
-                patched.contains("},onErrorNotRetried:e=>{"),
-                "{label} archive: the matched tail was modified"
+            // Nothing is rewritten — the policy is only inserted.
+            assert_eq!(
+                patched.replacen(&policy, "", 1),
+                chunk(run_options),
+                "{label} archive: bytes other than the policy changed"
             );
         }
     }
@@ -881,34 +958,53 @@ mod tests {
 
     #[test]
     fn second_application_is_already_fixed() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_bundle(tmp.path(), &chunk(REAL_DARWIN_RUN_OPTIONS));
-        assert_eq!(
-            maybe_apply(tmp.path(), SAMPLE_VERSION),
-            CompatPatchStatus::Applied
-        );
-        assert_eq!(
-            maybe_apply(tmp.path(), SAMPLE_VERSION),
-            CompatPatchStatus::AlreadyFixed
-        );
+        for run_options in [REAL_DARWIN_RUN_OPTIONS, REAL_ES2020_RUN_OPTIONS] {
+            let tmp = tempfile::tempdir().unwrap();
+            write_bundle(tmp.path(), &chunk(run_options));
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::Applied
+            );
+            let once = patched_bundle(tmp.path());
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::AlreadyFixed
+            );
+            assert_eq!(
+                patched_bundle(tmp.path()),
+                once,
+                "a second pass wrote again"
+            );
+        }
     }
 
     #[test]
     fn upstream_fixed_bundle_is_already_fixed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let content = chunk(&REAL_DARWIN_RUN_OPTIONS.replace(
-            "})),{onConnectionStateChange",
-            "})),{enableAgentRetries:(0,w5.w5)(y.action.case),onConnectionStateChange",
-        ));
-        write_bundle(tmp.path(), &content);
-        assert_eq!(
-            maybe_apply(tmp.path(), SAMPLE_VERSION),
-            CompatPatchStatus::AlreadyFixed
-        );
-        assert!(
-            patched_bundle(tmp.path()).contains("(0,w5.w5)(y.action.case)"),
-            "upstream's own flag must be left alone"
-        );
+        for (run_options, head, upstream) in [
+            (
+                REAL_DARWIN_RUN_OPTIONS,
+                "})),{onConnectionStateChange",
+                "})),{enableAgentRetries:(0,w5.w5)(y.action.case),onConnectionStateChange",
+            ),
+            (
+                REAL_ES2020_RUN_OPTIONS,
+                "}),onConnectionStateChange",
+                "}),enableAgentRetries:(0,v.w5)(f.action.case),onConnectionStateChange",
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let content = chunk(&run_options.replace(head, upstream));
+            write_bundle(tmp.path(), &content);
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::AlreadyFixed
+            );
+            assert_eq!(
+                patched_bundle(tmp.path()),
+                content,
+                "upstream's own flag must be left alone"
+            );
+        }
     }
 
     #[test]
@@ -930,12 +1026,16 @@ mod tests {
     // alone rather than pick.
     #[test]
     fn an_ambiguous_bundle_is_not_patched() {
+        // The ES2017 statement minus its action declarator: just the options.
+        let es2017_options = REAL_DARWIN_RUN_OPTIONS.split_once("}}),").unwrap().1;
         for run_options in [
             format!("{REAL_DARWIN_RUN_OPTIONS};{REAL_DARWIN_RUN_OPTIONS}"),
             format!(
                 "x=new c.ConversationAction({{action:{{case:\"userMessageAction\",value:d}}}});\
                  {REAL_DARWIN_RUN_OPTIONS}"
             ),
+            // One tail of each output is still two tails.
+            format!("{REAL_ES2020_RUN_OPTIONS};{es2017_options}"),
         ] {
             let tmp = tempfile::tempdir().unwrap();
             write_bundle(tmp.path(), &chunk(&run_options));
@@ -951,16 +1051,78 @@ mod tests {
     // would be a name that is not in scope where the policy lands.
     #[test]
     fn a_declaration_from_another_scope_does_not_qualify() {
-        let tmp = tempfile::tempdir().unwrap();
-        let run_options = REAL_DARWIN_RUN_OPTIONS.replace(
-            "y=new c.ConversationAction({action:{case:\"userMessageAction\",value:d}}),",
-            "q=()=>{const y=new c.ConversationAction({action:{case:\"userMessageAction\",value:d}})},",
-        );
-        write_bundle(tmp.path(), &chunk(&run_options));
-        assert_eq!(
-            maybe_apply(tmp.path(), SAMPLE_VERSION),
-            CompatPatchStatus::PatternMismatch
-        );
+        for (run_options, declarator, nested) in [
+            (
+                REAL_DARWIN_RUN_OPTIONS,
+                "y=new c.ConversationAction({action:{case:\"userMessageAction\",value:d}}),",
+                "q=()=>{const y=new c.ConversationAction({action:{case:\"userMessageAction\",value:d}})},",
+            ),
+            (
+                REAL_ES2020_RUN_OPTIONS,
+                "f=new d.ConversationAction({action:{case:\"userMessageAction\",value:l}}),",
+                "q=()=>{const f=new d.ConversationAction({action:{case:\"userMessageAction\",value:l}})},",
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            assert!(run_options.contains(declarator));
+            write_bundle(tmp.path(), &chunk(&run_options.replace(declarator, nested)));
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::PatternMismatch
+            );
+        }
+    }
+
+    // The two connection-state calls are one debug-log callee in every build
+    // (`w.debugLog`, `I.cY`). A pair that disagrees is some other statement.
+    #[test]
+    fn the_two_debug_log_calls_must_share_a_callee() {
+        for (run_options, second, other) in [
+            (
+                REAL_DARWIN_RUN_OPTIONS,
+                "(0,w.debugLog)(\"Connection state: connected\")",
+                "(0,x.debugLog)(\"Connection state: connected\")",
+            ),
+            (
+                REAL_ES2020_RUN_OPTIONS,
+                "(0,I.cY)(\"Connection state: connected\")",
+                "(0,I.cZ)(\"Connection state: connected\")",
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            assert!(run_options.contains(second));
+            write_bundle(tmp.path(), &chunk(&run_options.replace(second, other)));
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::PatternMismatch
+            );
+        }
+    }
+
+    // The action's declarator and the run options have to come out of one
+    // declarator list: with no run-options declarator between them, the
+    // action local is not known to be the one these options are built for.
+    #[test]
+    fn the_run_options_must_be_declared_after_the_action() {
+        for (run_options, declarator) in [
+            (
+                REAL_DARWIN_RUN_OPTIONS,
+                "M=Object.assign(Object.assign({conversationId:",
+            ),
+            (REAL_ES2020_RUN_OPTIONS, "w={conversationId:"),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            assert!(run_options.contains(declarator));
+            let renamed = declarator.replace("conversationId", "requestId");
+            write_bundle(
+                tmp.path(),
+                &chunk(&run_options.replace(declarator, &renamed)),
+            );
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::PatternMismatch
+            );
+        }
     }
 
     // `(\w+)=` also fits the tail of a member-expression target. Adopting
@@ -980,6 +1142,29 @@ mod tests {
             maybe_apply(tmp.path(), SAMPLE_VERSION),
             CompatPatchStatus::PatternMismatch
         );
+    }
+
+    // Same failure through a different door: `$` is legal in a JavaScript
+    // identifier but not in `\w`, so `$f=new …` would be read as a binding
+    // named `f` — which, absent some other `f` in scope, throws just the same.
+    #[test]
+    fn a_dollar_binding_is_not_read_as_its_tail() {
+        for (run_options, declarator) in [
+            (REAL_DARWIN_RUN_OPTIONS, "y=new c.ConversationAction("),
+            (REAL_ES2020_RUN_OPTIONS, "f=new d.ConversationAction("),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            assert!(run_options.contains(declarator));
+            let dollar = format!("${declarator}");
+            write_bundle(
+                tmp.path(),
+                &chunk(&run_options.replace(declarator, &dollar)),
+            );
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::PatternMismatch
+            );
+        }
     }
 
     // A bundle still carrying the old wrong-local splice answers the

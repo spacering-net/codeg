@@ -941,8 +941,20 @@ pub async fn acp_update_pi_config(
 }
 
 pub async fn acp_load_pi_config(
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError> {
-    Ok(Json(acp_commands::load_pi_config_core()))
+    let config = acp_commands::load_pi_config_for_db(&state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(config))
+}
+
+pub async fn acp_list_pi_model_capabilities(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<acp_commands::PiModelCatalog>, AppCommandError> {
+    Ok(Json(
+        acp_commands::list_pi_model_catalog_core(&state.db, &state.data_dir).await,
+    ))
 }
 
 pub async fn acp_load_deepseek_model_catalog(
@@ -1162,6 +1174,15 @@ pub async fn acp_detect_agent_local_version(
         acp_commands::acp_detect_agent_local_version_core(params.agent_type, &db.conn, &emitter)
             .await
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_fetch_agent_latest_release(
+    Json(params): Json<AgentTypeParams>,
+) -> Result<Json<Option<crate::acp::latest_release::AgentLatestRelease>>, AppCommandError> {
+    let result = acp_commands::acp_fetch_agent_latest_release_core(params.agent_type)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 

@@ -381,6 +381,7 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("office-tools") => "settings/office-tools",
         Some("collaboration") => "settings/collaboration",
         Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
@@ -898,6 +899,10 @@ fn show_and_focus_window(app: &AppHandle, label: &str) {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+    // A `main` hidden to the tray is back, so the next launch reopens it too.
+    // Not left to the focus event: `set_focus` is skipped where the app is not
+    // allowed to take focus, and the window is open all the same.
+    crate::commands::workspace_windows::note_shown(app, label);
 }
 
 pub fn restore_windows_after_settings(
@@ -2697,6 +2702,7 @@ mod settings_route_tests {
     /// the fallback below it is Appearance, so a caller wanting the General
     /// page must be able to name it and land there. `collaboration` is where
     /// the codeg-mcp tool switches live in full, and it is what the status-bar
+    /// codeg-mcp popover links to; `computer-use` is what the Computer use
     /// popover links to.
     #[test]
     fn every_named_settings_section_resolves_to_its_own_route() {
@@ -2711,6 +2717,7 @@ mod settings_route_tests {
             "office-tools",
             "collaboration",
             "browser",
+            "computer-use",
             "version-control",
             "shortcuts",
             "system",

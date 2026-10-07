@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react"
+import { useEffect } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   WorkspaceProvider,
@@ -3946,6 +3947,187 @@ describe("browser tabs", () => {
   // Restored records carry their stored title and folder, are appended in
   // order, and none is activated: the surface of a restored tab is created
   // when it is first shown, not at startup.
+  function DeviceProbe({
+    onTabs,
+  }: {
+    /** Told of every new tab list, so a no-op can be seen to be one. */
+    onTabs?: (tabs: readonly unknown[]) => void
+  }) {
+    const { openBrowserTab, restoreBrowserTabs, setBrowserTabDevice } =
+      useWorkspaceActions()
+    const { fileTabs } = useWorkspaceFileTabs()
+    const first = fileTabs.find((t) => t.kind === "browser")
+    useEffect(() => {
+      onTabs?.(fileTabs)
+    }, [fileTabs, onTabs])
+    return (
+      <div>
+        <button onClick={() => openBrowserTab("http://localhost:3000/")}>
+          open
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:4000/", { device: "tablet" })
+          }
+        >
+          open-tablet
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { device: "tablet" })
+          }
+        >
+          open-again-as-tablet
+        </button>
+        <button onClick={() => first && setBrowserTabDevice(first.id, "phone")}>
+          phone
+        </button>
+        <button
+          onClick={() => first && setBrowserTabDevice(first.id, "desktop")}
+        >
+          desktop
+        </button>
+        <button onClick={() => setBrowserTabDevice("browser:gone", "phone")}>
+          phone-unknown
+        </button>
+        <button
+          onClick={() =>
+            first && setBrowserTabDevice(first.id, { width: 1440, height: 900 })
+          }
+        >
+          custom
+        </button>
+        <button
+          onClick={() =>
+            first && setBrowserTabDevice(first.id, { width: 20, height: 900 })
+          }
+        >
+          custom-out-of-range
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:5000/", {
+              device: { width: 1024, height: 600 },
+            })
+          }
+        >
+          open-custom
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "https://restored.example/",
+                title: "",
+                folderId: null,
+                profile: "default",
+                device: "phone",
+              },
+            ])
+          }
+        >
+          restore
+        </button>
+        <pre data-testid="devices">
+          {JSON.stringify(
+            fileTabs.flatMap((t) =>
+              t.kind === "browser"
+                ? [
+                    {
+                      url: t.browser.initialUrl,
+                      keyed: "device" in t.browser,
+                      device: t.browser.device ?? null,
+                    },
+                  ]
+                : []
+            )
+          )}
+        </pre>
+      </div>
+    )
+  }
+
+  function readDevices(): Array<{
+    url: string
+    keyed: boolean
+    device: string | { width: number; height: number } | null
+  }> {
+    return JSON.parse(screen.getByTestId("devices").textContent ?? "[]")
+  }
+
+  it("switches a tab's device, with the desktop as no device at all", () => {
+    render(
+      <WorkspaceProvider>
+        <DeviceProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    expect(readDevices()).toEqual([
+      { url: "http://localhost:3000/", keyed: false, device: null },
+    ])
+    act(() => screen.getByText("phone").click())
+    expect(readDevices()[0].device).toBe("phone")
+    // Back on the desktop the record is the one it was before: the key is
+    // gone, not set to a value meaning "none".
+    act(() => screen.getByText("desktop").click())
+    expect(readDevices()[0]).toEqual({
+      url: "http://localhost:3000/",
+      keyed: false,
+      device: null,
+    })
+    act(() => screen.getByText("phone-unknown").click())
+    expect(readDevices()).toHaveLength(1)
+  })
+
+  it("gives a tab a custom device as its size, and changes nothing for the same size or one out of range", () => {
+    const lists: unknown[] = []
+    const onTabs = (tabs: readonly unknown[]) => lists.push(tabs)
+    render(
+      <WorkspaceProvider>
+        <DeviceProbe onTabs={onTabs} />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("custom").click())
+    expect(readDevices()[0]).toEqual({
+      url: "http://localhost:3000/",
+      keyed: true,
+      device: { width: 1440, height: 900 },
+    })
+    const seen = lists.length
+    // The same size, asked for again in an object of its own.
+    act(() => screen.getByText("custom").click())
+    // A size no device can have: neither that nor the desktop.
+    act(() => screen.getByText("custom-out-of-range").click())
+    expect(lists.length).toBe(seen)
+    expect(readDevices()[0].device).toEqual({ width: 1440, height: 900 })
+    act(() => screen.getByText("open-custom").click())
+    expect(readDevices()[1].device).toEqual({ width: 1024, height: 600 })
+  })
+
+  it("opens and restores a tab as the device it was, and leaves an open one its own", () => {
+    render(
+      <WorkspaceProvider>
+        <DeviceProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-tablet").click())
+    act(() => screen.getByText("restore").click())
+    expect(readDevices().map((t) => t.device)).toEqual([
+      null,
+      "tablet",
+      "phone",
+    ])
+    // The page is already open: that tab is the answer, as it is.
+    act(() => screen.getByText("open-again-as-tablet").click())
+    expect(readDevices().map((t) => t.device)).toEqual([
+      null,
+      "tablet",
+      "phone",
+    ])
+  })
+
   it("restores stored tabs as inactive records, skipping unusable addresses", () => {
     render(
       <WorkspaceProvider>

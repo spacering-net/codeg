@@ -104,6 +104,12 @@ pub struct ForgeTaskDraft {
 /// "investigate only" choice next to these made the verification look optional
 /// in the two flows that need it most.
 ///
+/// Review-and-fix opens with a check of the same kind, aimed at the change's
+/// approach rather than at a reported problem: whether this change should be
+/// fixed in place at all. One that fails it comes back to the user with the
+/// review and nothing committed, rather than with fixes polished onto a design
+/// that was wrong.
+///
 /// The "report" scenarios close their loop the same way: the prompt tells the
 /// agent the user may RETURN the task for the follow-up work (implement the
 /// reviewed plan, apply review findings), which is exactly the engine's
@@ -117,7 +123,9 @@ pub enum ForgeScenario {
     /// Issue: confirm the problem, then write an implementation plan and stop;
     /// the user reviews the plan, then returns the task for implementation.
     PlanFirst,
-    /// PR/MR: review the change and fix on top (the PR default).
+    /// PR/MR: judge the approach first; only once it holds up, review the
+    /// change and fix on top (the PR default). When it does not hold, nothing
+    /// is committed and the review goes back to the user to decide.
     ReviewFix,
     /// PR/MR: review only — the reply is the deliverable.
     ReviewOnly,
@@ -236,6 +244,17 @@ impl ForgeScenario {
 /// classification with the instruction that produces it, and keeps the real
 /// blockers (a project that will not build, a missing credential) pointed at
 /// the failure path where they belong.
+///
+/// Review-and-fix takes the same shape, SUCCESS clause included, with the
+/// change's APPROACH as its gate — and it needs the gate more than either issue
+/// flow, because its failure branch has work in hand. An agent that has just
+/// judged a design wrong has usually found fixable bugs in it as well, and
+/// every fix it commits is pushed to the author's branch on acceptance: polish
+/// on the design the review should have stopped, making it look closer to done
+/// than it is. So that branch forbids EVERY commit, not only the rewrite the
+/// fixing paragraph fences off, and it settles doubt in the user's favour — a
+/// task sent back with "fix it anyway" costs one click, while fixes pushed onto
+/// somebody else's branch are theirs to unpick.
 fn forge_instruction(
     scenario: ForgeScenario,
     provider: ForgeProvider,
@@ -294,20 +313,43 @@ fn forge_instruction(
              in this same worktree — write the plan you would want to execute from."
         ),
         ForgeScenario::ReviewFix => format!(
-            "Review {noun} #{number} ({url}) and fix what needs fixing.\n\nThis worktree is \
-             already checked out at the {noun}'s head commit, so its changes are here and \
-             your commits go on top of them — they are pushed back to the same {noun} branch \
-             when the task is accepted. Read the fenced external content below to understand \
-             what the {noun} claims to do, then review its changes against the base branch: \
-             correctness, tests, security, and whether they deliver what is \
-             promised.\n\nJudge the approach, not just the diff. Is the change warranted at \
-             all; is this the best way to solve it given the rest of this codebase; and is it \
-             production-ready as it stands? A diff can be flawless line by line and still be \
-             the wrong design. If the design itself is what is wrong, say so and propose the \
-             better one — do not rewrite the {noun} into it, because a rewrite its author \
-             never asked for is not a review.\n\nFix the problems that are worth fixing in \
-             place, and say in your reply what you found, what you fixed, what you left for \
-             the author, and your verdict on whether this is ready for production."
+            "Review {noun} #{number} ({url}): judge its approach first, then fix what needs \
+             fixing.\n\nThis worktree is already checked out at the {noun}'s head commit, so \
+             its changes are here and your commits go on top of them — they are pushed back to \
+             the same {noun} branch when the task is accepted. Read the fenced external \
+             content below to understand what the {noun} claims to do, then read its changes \
+             against the base branch.\n\nJudge the approach, not just the diff, and do it \
+             first — this step is required, not a formality, and no fix comes before it. Is \
+             the change warranted at all? Is this the best way to solve it given the rest of \
+             this codebase? Is it production-ready as it stands — and if not, can fixes to \
+             this design get it there? A diff can be flawless line by line and still be the \
+             wrong design. The approach does not hold when the change should not be made at \
+             all, or when making it right would take a different design rather than fixes to \
+             this one; a name or a structure you would merely have chosen differently is not \
+             that. If you cannot tell which side of that line it falls on, treat it as not \
+             holding: that call belongs to the user.\n\nIf the approach does not hold, do NOT \
+             commit anything — not even the small fixes you would otherwise make. Every fix \
+             committed on top of the wrong design is work its author has to throw away \
+             along with it, and it makes that design look closer to done than it is. Leave \
+             the worktree clean and stop there, handing the decision back in your reply: why \
+             the approach does not hold, with file and line references; what you would do \
+             instead; and the other problems you found on the way. The user decides what \
+             happens next — they can send this task back to have you fix it in place anyway, \
+             or take your alternative to the author. Ending there is a SUCCESSFUL outcome for \
+             this task, not a blocked one: \"this should not be fixed as it stands, and here \
+             is why\" is the work product. Report this task as blocked only if something \
+             stopped you from judging it at all — a toolchain, service or credential you \
+             needed to evaluate it was missing.\n\nOnce the approach holds up, review the \
+             changes in detail — correctness, tests, security, and whether they deliver what \
+             is promised — and fix the problems that are worth fixing in place. Keep the fixes \
+             inside the {noun}'s own design: do not rewrite the {noun} into the one you would \
+             have built, because a rewrite its author never asked for is not a review. If the \
+             detailed review turns up a problem that only a different design would fix, the \
+             approach does not hold after all: stop fixing there and hand the decision back \
+             the same way, saying which fixes you had already committed.\n\nOpen your reply \
+             with your verdict on the approach, then say what you found, what you fixed, what \
+             you left for the author, and your verdict on whether this is ready for \
+             production."
         ),
         ForgeScenario::ReviewOnly => format!(
             "Review {noun} #{number} ({url}) — review only: report findings, do not change \
@@ -1412,6 +1454,94 @@ mod tests {
         }
     }
 
+    /// Review-and-fix judges the APPROACH before it fixes anything, and a
+    /// change whose approach does not hold ends the turn with nothing
+    /// committed. What this keeps out is a task that polishes fixes onto a
+    /// design the review should have stopped — fixes that are then pushed to
+    /// the author's branch, making the wrong design look closer to done.
+    ///
+    /// Same discipline as the issue gate above: the check is required, its
+    /// failure branch sits BEFORE the fixing paragraph, and that ending is a
+    /// success — the task has to land in review, where the user decides, not
+    /// on a red card nobody can accept. Two things are the review's own: the
+    /// branch forbids every commit (the reviewer has fixes in hand, which the
+    /// issue flows do not), and doubt resolves toward the user.
+    #[test]
+    fn review_and_fix_judges_the_approach_before_fixing_anything() {
+        for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab] {
+            let noun = provider.change_noun();
+            let text = forge_instruction(ForgeScenario::ReviewFix, provider, 7, URL);
+            assert!(
+                text.starts_with(&format!("Review {noun} #7 ({URL}): judge its approach first")),
+                "{provider:?}: the anchor does not put the judgement first"
+            );
+            assert!(
+                text.contains("required, not a formality"),
+                "{provider:?} leaves the judgement optional"
+            );
+
+            let gate = text.find("Judge the approach").expect("the gate paragraph");
+            let branch = text
+                .find("If the approach does not hold")
+                .unwrap_or_else(|| panic!("{provider:?} has no failure branch"));
+            let work = text.find("Once the approach holds up").expect("the fixing paragraph");
+            // Before the work, not after it: an instruction that arrives once
+            // the fixes are written is a retraction, not a gate.
+            assert!(gate < branch && branch < work, "{provider:?} judges after fixing");
+            let first_fix = text
+                .find("fix the problems that are worth fixing")
+                .expect("the licence to fix");
+            assert!(work < first_fix, "{provider:?} licenses fixes before the judgement");
+            // Doubt is the user's call, not a reason to go ahead.
+            assert!(
+                text[gate..branch].contains("treat it as not holding"),
+                "{provider:?} lets an unsure reviewer commit anyway"
+            );
+
+            let outcome = &text[branch..work];
+            assert!(
+                outcome.starts_with("If the approach does not hold, do NOT commit anything"),
+                "{provider:?} does not say what must not happen"
+            );
+            // Not only the rewrite: the small fixes it has in hand as well.
+            assert!(
+                outcome.contains("not even the small fixes"),
+                "{provider:?} still lets the reviewer polish the wrong design"
+            );
+            assert!(outcome.contains("worktree clean"), "{provider:?} leaves a dirty tree");
+            assert!(outcome.contains("stop there"), "{provider:?} never ends the task");
+            // The user gets the decision, and the ways forward from it.
+            assert!(
+                outcome.contains("send this task back to have you fix it in place anyway"),
+                "{provider:?} gives the user no way to overrule the stop"
+            );
+            // A success, landing in review: `verdict_blocked` fails the task,
+            // and `complete_task` accepts review tasks only.
+            assert!(
+                outcome.contains("SUCCESSFUL outcome for this task, not a blocked one"),
+                "{provider:?} leaves the stop looking like a failure"
+            );
+            assert!(
+                outcome.contains("blocked only if something stopped you from judging it at all"),
+                "{provider:?} gives real blockers nowhere to go"
+            );
+
+            // A design found wrong halfway through the fixes stops them too.
+            let late = text[work..]
+                .find("the approach does not hold after all")
+                .unwrap_or_else(|| panic!("{provider:?} never re-opens the judgement"));
+            assert!(
+                text[work + late..].contains("stop fixing there and hand the decision back"),
+                "{provider:?} keeps fixing a design it has just found wrong"
+            );
+            // The reply leads with the one call the user has to act on.
+            assert!(
+                text.contains("Open your reply with your verdict on the approach"),
+                "{provider:?} buries the approach verdict in the reply"
+            );
+        }
+    }
+
     /// Each scenario states its own goal, and the report ones close their
     /// loop: the reply carries the deliverable, and the user can return the
     /// task for the follow-up work.
@@ -1460,7 +1590,9 @@ mod tests {
     ///
     /// The two differ in what they may then do about it: "review & fix" is
     /// explicitly fenced off from rewriting the change into its own preferred
-    /// design (its commits are pushed back to the author's branch), and
+    /// design (its commits are pushed back to the author's branch) and only
+    /// fixes at all once the approach holds up (see
+    /// `review_and_fix_judges_the_approach_before_fixing_anything`), and
     /// "review only" touches nothing at all.
     #[test]
     fn the_review_templates_judge_the_approach_and_production_readiness() {
@@ -1478,7 +1610,7 @@ mod tests {
         // "the design is wrong" plus a write licence reads as permission to
         // replace someone else's branch with your own version of it.
         let fix = forge_instruction(ForgeScenario::ReviewFix, ForgeProvider::GitHub, 7, URL);
-        assert!(fix.contains("do not rewrite the pull request into it"));
+        assert!(fix.contains("do not rewrite the pull request into the one you would have built"));
         assert!(fix.contains("a rewrite its author never asked for is not a review"));
         // Review-only has nothing to fence off — it commits nothing at all —
         // so it must not carry a sentence about what its commits may do.
