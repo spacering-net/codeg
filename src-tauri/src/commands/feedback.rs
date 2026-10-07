@@ -129,6 +129,11 @@ pub async fn set_feedback_settings(
 /// web handler mirrors this. Returns the stored note so the caller can render it
 /// optimistically (it also arrives via the `FeedbackSubmitted` event).
 ///
+/// `blocks` (optional) is the full prompt-block draft when the note carries
+/// image attachments; `text` stays the recorded/display form. Only the native
+/// `_session/steering` channel can deliver blocks — the manager rejects them
+/// on the pull path so an attachment is never silently dropped.
+///
 /// The gate lives in `ConnectionManager::submit_feedback`, keyed on the
 /// connection's actual `check_user_feedback` capability (not the possibly
 /// later-toggled global setting). Rejections the frontend recognizes:
@@ -139,9 +144,10 @@ pub async fn set_feedback_settings(
 pub async fn submit_session_feedback(
     connection_id: String,
     text: String,
+    blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
     manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
 ) -> Result<crate::acp::feedback::FeedbackItem, crate::acp::error::AcpError> {
-    manager.submit_feedback(&connection_id, text).await
+    manager.submit_feedback(&connection_id, text, blocks).await
 }
 
 #[cfg(test)]

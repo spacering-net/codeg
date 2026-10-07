@@ -296,9 +296,8 @@ fn is_acp_event_relevant(payload: &AcpEvent) -> bool {
 /// renderer receives exactly one completion cue.
 fn classify_turn_complete(stop_reason: &str) -> Option<PetState> {
     match stop_reason {
-        "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" => {
-            Some(PetState::Failed)
-        }
+        "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" | "auth_required"
+        | "rejected" => Some(PetState::Failed),
         // `end_turn` is covered by PendingReview; `cancelled` and future reasons stay silent.
         _ => None,
     }
@@ -1289,6 +1288,10 @@ mod tests {
         );
         assert_eq!(classify_turn_complete("unknown"), Some(PetState::Failed));
         assert_eq!(classify_turn_complete("empty"), Some(PetState::Failed));
+        assert_eq!(
+            classify_turn_complete("auth_required"),
+            Some(PetState::Failed)
+        );
         assert_eq!(classify_turn_complete("cancelled"), None);
         assert_eq!(classify_turn_complete("future_reason"), None);
     }

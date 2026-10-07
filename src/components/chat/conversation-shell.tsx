@@ -1,6 +1,5 @@
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
-import { useMemo, type ReactNode } from "react"
-import { useTranslations } from "next-intl"
+import type { ReactNode } from "react"
 import type {
   AgentType,
   ConnectionStatus,
@@ -17,8 +16,7 @@ import type {
   SessionModeInfo,
   AvailableCommandInfo,
 } from "@/lib/types"
-import type { SessionFailureAction } from "@/lib/session-failures"
-import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
+import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
 import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
 import type {
   PendingPermission,
@@ -26,7 +24,6 @@ import type {
   ClaudeApiRetryState,
 } from "@/contexts/acp-connections-context"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
-import { Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/chat-input"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
@@ -39,18 +36,15 @@ interface ConversationShellProps {
   promptCapabilities: PromptCapabilitiesInfo
   defaultPath?: string
   agentName?: string
-  error: string | null
+  /** The in-flight retry line under the composer (see
+   *  `ComposerStatusStrips`). The session's errors are notifications, raised by
+   *  the connections provider — none is drawn here. */
   claudeApiRetry: ClaudeApiRetryState | null
-  /** AIR typed session failures for this connection (active + resolved; the
-   *  banner splits them itself). Omit/empty renders nothing. */
+  /** AIR typed session failures for this connection (active + resolved); the
+   *  dock draws only the in-flight retry incidents. Omit/empty renders
+   *  nothing. */
   sessionFailures?: SessionFailureRecord[]
-  /** Wires the failure strips' suggested actions (retry/login/new_session);
-   *  omitted for read-only surfaces — the buttons are then hidden. */
-  onSessionFailureAction?: (
-    action: SessionFailureAction,
-    failure: SessionFailureRecord
-  ) => void
-  /** Closes a failure strip, taking every record it stands for. Passed for
+  /** Closes an incident strip, taking every record it stands for. Passed for
    *  every surface with a live store — dismissing is client-local, so viewers
    *  get it too. */
   onSessionFailureDismiss?: (ids: string[]) => void
@@ -94,6 +88,8 @@ interface ConversationShellProps {
   /** Pass-through: see `MessageInput`. */
   folderPickerOverride?: ConversationFolderPickerOverride
   draftStorageKey?: string | null
+  /** Pass-through: see `MessageInput.getSentHistory`. */
+  getSentHistory?: () => string[]
   hideInput?: boolean
   /** Optional banner rendered in the composer dock, where the input sits.
    *  Used with `hideInput` to explain WHY the composer is unavailable (e.g.
@@ -118,16 +114,28 @@ interface ConversationShellProps {
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
+  /** Insert one queued item into the RUNNING turn over the session's
+   *  live-feedback channel; threaded straight through to the composer's
+   *  queue list. See `ChatInputProps.onQueueSteer`. */
+  onQueueSteer?: (id: string) => Promise<void> | void
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  /** Inject the draft's text into the RUNNING turn (native live-feedback
-   *  steering). Present only for sessions on the native channel; threaded
-   *  straight through to the composer. */
-  onSteer?: (text: string) => Promise<void>
+  /** Send the draft into the RUNNING turn over the session's live-feedback
+   *  channel. Present only for sessions with a working delivery channel;
+   *  threaded straight through to the composer. `blocks` carries the full
+   *  draft when it holds more than plain text (image attachments, file
+   *  badges); `text` stays the recorded/display form. Must stay in sync with
+   *  `MessageInputProps.onSteer` — the optional second parameter makes a
+   *  stale one-arg declaration here assignable, so tsc would NOT catch a
+   *  wrapper that silently drops the blocks. */
+  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  /** Which channel `onSteer` rides (picks the composer's honest copy);
+   *  threaded straight through. See `MessageInput`. */
+  steerChannel?: "native" | "pull"
   /** Optional banner pinned to the top of the panel, above the message area
    *  (e.g. the "restart to apply" config-stale banner). Renders nothing when
    *  omitted. */
@@ -144,10 +152,8 @@ export function ConversationShell({
   promptCapabilities,
   defaultPath,
   agentName,
-  error,
   claudeApiRetry,
   sessionFailures,
-  onSessionFailureAction,
   onSessionFailureDismiss,
   asyncTasks,
   onStopAsyncTask,
@@ -176,6 +182,7 @@ export function ConversationShell({
   attachmentTabId,
   folderPickerOverride,
   draftStorageKey,
+  getSentHistory,
   hideInput = false,
   composerBanner,
   feedbackList,
@@ -188,6 +195,7 @@ export function ConversationShell({
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
+  onQueueSteer,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -195,82 +203,11 @@ export function ConversationShell({
   onSaveQueueEdit,
   onCancelQueueEdit,
   onSteer,
+  steerChannel,
   topBanner,
   injectContent,
   onInjectConsumed,
 }: ConversationShellProps) {
-  const tAcp = useTranslations("Folder.chat.acpConnections")
-  const retryLineText = useMemo(() => {
-    const retry = claudeApiRetry
-    if (!retry) return null
-
-    const retryAttempt =
-      retry.attempt !== null && retry.attempt !== undefined
-        ? Math.trunc(retry.attempt)
-        : null
-    const retryMax =
-      retry.maxRetries !== null && retry.maxRetries !== undefined
-        ? Math.trunc(retry.maxRetries)
-        : null
-    const retryDelaySeconds =
-      retry.retryDelayMs !== null && retry.retryDelayMs !== undefined
-        ? (retry.retryDelayMs / 1000).toFixed(1)
-        : null
-    // `null` only for a source that reports no cause at all (pi, #525) — see
-    // `ClaudeApiRetryState.reportsError`. Claude and codex keep the fallback.
-    const errorLabel =
-      retry.error ??
-      (retry.reportsError ? tAcp("claudeApiRetry.fallbackError") : null)
-    const statusLabel =
-      retry.errorStatus !== null && retry.errorStatus !== undefined
-        ? tAcp("claudeApiRetry.httpStatus", {
-            status: Math.trunc(retry.errorStatus),
-          })
-        : ""
-    const retryLabel =
-      retryAttempt !== null && retryMax !== null
-        ? tAcp("claudeApiRetry.retryingWithMax", {
-            attempt: retryAttempt,
-            max: retryMax,
-          })
-        : retryAttempt !== null
-          ? tAcp("claudeApiRetry.retryingAttempt", {
-              attempt: retryAttempt,
-            })
-          : tAcp("claudeApiRetry.retrying")
-    const delayLabel =
-      retryDelaySeconds !== null
-        ? tAcp("claudeApiRetry.nextRetryIn", {
-            seconds: retryDelaySeconds,
-          })
-        : null
-
-    // With no cause AND no HTTP status there is nothing to put before the
-    // separator, and the shared template would render a dangling "· 正在重试".
-    // Take the prefix-less pair instead — the counters carry the whole message.
-    if (errorLabel === null && statusLabel === "") {
-      return delayLabel !== null
-        ? tAcp("claudeApiRetry.lineNoErrorWithDelay", {
-            retry: retryLabel,
-            delay: delayLabel,
-          })
-        : tAcp("claudeApiRetry.lineNoError", { retry: retryLabel })
-    }
-
-    return delayLabel !== null
-      ? tAcp("claudeApiRetry.lineWithDelay", {
-          error: errorLabel ?? "",
-          status: statusLabel,
-          retry: retryLabel,
-          delay: delayLabel,
-        })
-      : tAcp("claudeApiRetry.line", {
-          error: errorLabel ?? "",
-          status: statusLabel,
-          retry: retryLabel,
-        })
-  }, [claudeApiRetry, tAcp])
-
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       {topBanner}
@@ -279,7 +216,7 @@ export function ConversationShell({
           of work running RIGHT NOW, and pinning it here keeps it still while the
           messages scroll under it — the stop button doesn't move out from under
           the pointer. The dock below is for things that come and go with the
-          turn (retry line, last error). */}
+          turn or the connection (`ComposerStatusStrips`). */}
       {asyncTasks && asyncTasks.length > 0 && (
         <AsyncTaskStrip tasks={asyncTasks} onStop={onStopAsyncTask} />
       )}
@@ -289,6 +226,7 @@ export function ConversationShell({
       <PermissionDialog
         permission={pendingPermission}
         onRespond={onRespondPermission}
+        agentType={agentType}
       />
 
       <QuestionDialog question={pendingQuestion} onAnswer={onAnswerQuestion} />
@@ -351,6 +289,7 @@ export function ConversationShell({
               attachmentTabId={attachmentTabId}
               folderPickerOverride={folderPickerOverride}
               draftStorageKey={draftStorageKey}
+              getSentHistory={getSentHistory}
               isActive={isActive}
               showActiveFlow={showActiveFlow}
               queue={queue}
@@ -358,6 +297,7 @@ export function ConversationShell({
               onQueueReorder={onQueueReorder}
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}
+              onQueueSteer={onQueueSteer}
               editingItemId={editingItemId}
               editingDraftText={editingDraftText}
               editingDraftBlocks={editingDraftBlocks}
@@ -365,6 +305,7 @@ export function ConversationShell({
               onSaveQueueEdit={onSaveQueueEdit}
               onCancelQueueEdit={onCancelQueueEdit}
               onSteer={onSteer}
+              steerChannel={steerChannel}
               onAddFeedback={onAddFeedback}
               feedbackAddDisabled={feedbackAddDisabled}
               injectContent={injectContent}
@@ -374,30 +315,12 @@ export function ConversationShell({
         )}
       </div>
 
-      {sessionFailures && sessionFailures.length > 0 && (
-        <SessionFailureBanner
-          failures={sessionFailures}
-          onAction={onSessionFailureAction}
-          onDismiss={onSessionFailureDismiss}
-        />
-      )}
-
-      {retryLineText && (
-        <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
-          <div className="flex items-center gap-2 font-medium">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-              {retryLineText}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
-          {error}
-        </div>
-      )}
+      <ComposerStatusStrips
+        status={status}
+        claudeApiRetry={claudeApiRetry}
+        sessionFailures={sessionFailures}
+        onSessionFailureDismiss={onSessionFailureDismiss}
+      />
     </div>
   )
 }

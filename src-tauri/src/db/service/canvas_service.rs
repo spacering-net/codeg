@@ -7,18 +7,29 @@
 //! `lastRevision + 1` means a gap → refetch the snapshot. Per-node semantics
 //! stay last-write-wins — the revision orders writers, it does not reject them
 //! (unlike the tabs CAS, which protects whole-set replacement).
+//!
+//! Nodes live on boards (`canvas_board`), but the revision stays ONE
+//! workspace-global clock rather than one per board. A client only ever holds
+//! one board's nodes, yet it still sees every event: an event for another board
+//! simply advances its revision without touching its node set (every node
+//! payload carries `board_id`, and a node never changes board). One clock keeps
+//! the gap detection exactly as dense as before — and the deletion funnel,
+//! which scrubs conversations off EVERY board in one transaction, stays one
+//! event instead of fanning out into a revision per board.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait,
+    EntityTrait, FromQueryResult, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
 };
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
 use crate::db::entities::canvas_node::{self, CanvasNodeKind};
-use crate::db::entities::{app_metadata, conversation, folder, folder_group};
+use crate::db::entities::{app_metadata, canvas_board, conversation, folder, folder_group};
 use crate::db::error::DbError;
 use crate::db::service::app_metadata_service;
 
@@ -113,22 +124,72 @@ async fn claim_writer<C: ConnectionTrait>(conn: &C) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Read the node set and the revision in a single transaction so a concurrent
-/// mutation can't tear the pair — old nodes stamped with a newer revision would
-/// pass the client's `snapshot.revision >= lastRevision` guard while silently
-/// dropping the concurrent change (same hazard `tab_service::snapshot_tabs`
-/// exists for).
+/// Read one board's node set and the revision in a single transaction so a
+/// concurrent mutation can't tear the pair — old nodes stamped with a newer
+/// revision would pass the client's `snapshot.revision >= lastRevision` guard
+/// while silently dropping the concurrent change (same hazard
+/// `tab_service::snapshot_tabs` exists for).
+///
+/// A board that does not exist is `NotFound`, not an empty board: the two look
+/// identical as a node list, and a client told "empty" would keep drawing — and
+/// writing to — a canvas that was deleted out from under it.
 pub async fn snapshot(
     conn: &DatabaseConnection,
+    board_id: i32,
 ) -> Result<(Vec<canvas_node::Model>, i64), DbError> {
     let txn = conn.begin().await?;
+    require_board(&txn, board_id).await?;
     let nodes = canvas_node::Entity::find()
+        .filter(canvas_node::Column::BoardId.eq(board_id))
         .order_by_asc(canvas_node::Column::Id)
         .all(&txn)
         .await?;
     let revision = get_revision(&txn).await?;
     txn.commit().await?;
     Ok((nodes, revision))
+}
+
+/// Reject a write aimed at a board that does not exist (never created, or
+/// deleted by another client a moment ago). Runs inside the caller's write
+/// transaction and under [`revision_lock`], which is what orders it against
+/// [`delete_board`]: create-then-delete takes the new node with the board,
+/// delete-then-create is refused here instead of minting an orphan no board
+/// will ever show.
+async fn require_board<C: ConnectionTrait>(conn: &C, board_id: i32) -> Result<(), DbError> {
+    let exists = canvas_board::Entity::find_by_id(board_id)
+        .one(conn)
+        .await?
+        .is_some();
+    if exists {
+        Ok(())
+    } else {
+        Err(DbError::NotFound(format!(
+            "canvas board {board_id} not found"
+        )))
+    }
+}
+
+/// Stamp the boards a node write just changed as edited now. Rides the node
+/// write's own transaction, so "last edited" on the canvas list can never
+/// disagree with what is on the board — and costs one statement however many
+/// nodes moved.
+async fn touch_boards<C: ConnectionTrait>(
+    conn: &C,
+    board_ids: impl IntoIterator<Item = i32>,
+    now: DateTime<Utc>,
+) -> Result<(), DbError> {
+    let mut ids: Vec<i32> = board_ids.into_iter().collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    canvas_board::Entity::update_many()
+        .col_expr(canvas_board::Column::UpdatedAt, Expr::value(now))
+        .filter(canvas_board::Column::Id.is_in(ids))
+        .exec(conn)
+        .await?;
+    Ok(())
 }
 
 /// Decode a stored member list. Damaged JSON degrades to an empty list rather
@@ -200,6 +261,25 @@ fn normalize_color(v: Option<String>) -> Result<Option<String>, DbError> {
     }
 }
 
+/// Longest filesystem path a node may bind to. Well past every real OS limit
+/// (Windows extended-length paths top out at 32767 UTF-16 units, but nothing a
+/// user picks or a folder root comes near this) — it exists so a malformed
+/// caller cannot park an unbounded blob in a column every client reads.
+const MAX_PATH_LEN: usize = 4096;
+
+/// Trim a bound filesystem path, requiring a non-empty value. Callers hand us
+/// an already-absolute path (the frontend normalizes before it asks); we do not
+/// touch separators here, because the string has to round-trip byte-for-byte —
+/// it is the identity a file card's reads and a terminal's cwd are keyed on.
+fn normalize_path(v: Option<String>) -> Result<String, DbError> {
+    let path = normalize_text(v)
+        .ok_or_else(|| DbError::Validation("this node kind needs a path".into()))?;
+    if path.chars().count() > MAX_PATH_LEN {
+        return Err(DbError::Validation("path is too long".into()));
+    }
+    Ok(path)
+}
+
 /// Trim a pinned grid axis to `0..=MAX_GRID_AXIS`. Absent / negative reads as
 /// auto rather than an error: the axis is a display preference, and rejecting
 /// the whole write over one would lose a legitimate geometry change with it.
@@ -208,6 +288,8 @@ fn clamp_grid_axis(v: Option<i32>) -> i32 {
 }
 
 pub struct NewCanvasNode {
+    /// The board the node is placed on; must exist.
+    pub board_id: i32,
     pub kind: CanvasNodeKind,
     pub folder_id: Option<i32>,
     pub folder_group_id: Option<i32>,
@@ -215,6 +297,8 @@ pub struct NewCanvasNode {
     pub conversation_id: Option<i32>,
     pub title: Option<String>,
     pub content: Option<String>,
+    /// Required for `file` / `terminal`, rejected for every other kind.
+    pub path: Option<String>,
     pub color: Option<String>,
     pub grid_columns: Option<i32>,
     pub grid_rows: Option<i32>,
@@ -251,6 +335,7 @@ pub async fn create_node(
     let _guard = revision_lock().lock().await;
     let txn = conn.begin().await?;
     claim_writer(&txn).await?;
+    require_board(&txn, input.board_id).await?;
 
     // Kind-specific binding invariants. The unrelated binding columns are
     // forced to NULL rather than trusted from the caller, so a row can never
@@ -259,6 +344,7 @@ pub async fn create_node(
     let mut folder_group_id = None;
     let mut agent_type = None;
     let mut conversation_id = None;
+    let mut path = None;
     match input.kind {
         CanvasNodeKind::Folder => {
             let id = input
@@ -311,11 +397,30 @@ pub async fn create_node(
         // `detach_member` so every entry passes the liveness check.
         CanvasNodeKind::Custom => {}
         CanvasNodeKind::Note => {}
+        // Both bind a place on disk. Existence is deliberately NOT checked:
+        // like the folder / conversation bindings above the reference is SOFT,
+        // and a card whose file was moved has to survive as a visible
+        // "unavailable" frame the user can delete — the alternative is a create
+        // that fails on a network share that happens to be unmounted, or a row
+        // that silently vanishes when a branch switch takes the file away. The
+        // frontend renders the missing state and offers the delete.
+        CanvasNodeKind::File | CanvasNodeKind::Terminal => {
+            path = Some(normalize_path(input.path.clone())?);
+        }
+    }
+    // A path on any other kind is a caller bug, and one that would smuggle a
+    // filesystem reference into a row nothing reads it from — same stance the
+    // `content` check below takes for notes.
+    if path.is_none() && input.path.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+        return Err(DbError::Validation(
+            "path only applies to file and terminal nodes".into(),
+        ));
     }
 
     let now = Utc::now();
     let model = canvas_node::ActiveModel {
         id: NotSet,
+        board_id: Set(input.board_id),
         kind: Set(input.kind),
         folder_id: Set(folder_id),
         folder_group_id: Set(folder_group_id),
@@ -339,6 +444,7 @@ pub async fn create_node(
                 None
             }
         }),
+        path: Set(path),
         color: Set(normalize_color(input.color)?),
         collapsed: Set(false),
         // Grid shape is meaningless for a pinned card or a note; forcing 0
@@ -361,12 +467,16 @@ pub async fn create_node(
         updated_at: Set(now),
     };
     let row = model.insert(&txn).await?;
+    touch_boards(&txn, [row.board_id], now).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok((row, revision))
 }
 
 pub struct GroupIntoRegion {
+    /// The board the gesture happened on. A merge target and every consumed
+    /// card must be on it; a new region is created on it.
+    pub board_id: i32,
     /// Existing custom region to fold the conversations into. `None` creates a
     /// new custom region from the geometry below; `Some` merges into that
     /// region and ignores the geometry entirely (the frame is already placed).
@@ -425,6 +535,7 @@ pub async fn group_into_region(
     let _guard = revision_lock().lock().await;
     let txn = conn.begin().await?;
     claim_writer(&txn).await?;
+    require_board(&txn, input.board_id).await?;
 
     // Dedupe preserving the caller's order: the same conversation can be
     // selected twice (a member card and its mirror in another region), and the
@@ -460,6 +571,13 @@ pub async fn group_into_region(
                     "only custom regions can absorb conversations".into(),
                 ));
             }
+            // A gesture only ever sees one board, so a target on another one
+            // is a stale or forged id — refuse it rather than reach across.
+            if region.board_id != input.board_id {
+                return Err(DbError::Validation(
+                    "the region is on a different canvas".into(),
+                ));
+            }
             Some(region)
         }
         None => None,
@@ -488,12 +606,15 @@ pub async fn group_into_region(
 
     // Only pinned cards are consumable. A region or note in the selection keeps
     // living where it is — collecting a conversation is a membership change,
-    // not a licence to delete arbitrary nodes the caller named.
+    // not a licence to delete arbitrary nodes the caller named. Same for a card
+    // on another board: the gesture cannot have selected it, so it is skipped
+    // like any other id that is not a pin here.
     let mut deleted_ids = Vec::new();
     if !input.consume_node_ids.is_empty() {
         let doomed = canvas_node::Entity::find()
             .filter(canvas_node::Column::Id.is_in(input.consume_node_ids.iter().copied()))
             .filter(canvas_node::Column::Kind.eq(CanvasNodeKind::Conversation))
+            .filter(canvas_node::Column::BoardId.eq(input.board_id))
             .all(&txn)
             .await?;
         // Consuming a card is "the region took it over", so the takeover has to
@@ -533,6 +654,7 @@ pub async fn group_into_region(
             })?;
             canvas_node::ActiveModel {
                 id: NotSet,
+                board_id: Set(input.board_id),
                 kind: Set(CanvasNodeKind::Custom),
                 folder_id: Set(None),
                 folder_group_id: Set(None),
@@ -541,6 +663,7 @@ pub async fn group_into_region(
                 member_ids: Set(Some(encode_member_ids(&final_members))),
                 title: Set(normalize_text(input.title)),
                 content: Set(None),
+                path: Set(None),
                 color: Set(normalize_color(input.color)?),
                 collapsed: Set(false),
                 grid_columns: Set(clamp_grid_axis(input.grid_columns)),
@@ -557,6 +680,7 @@ pub async fn group_into_region(
         }
     };
 
+    touch_boards(&txn, [input.board_id], now).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok(GroupIntoRegionOutcome {
@@ -580,6 +704,7 @@ pub async fn update_node(
         .await?
         .ok_or_else(|| DbError::NotFound(format!("canvas node {node_id} not found")))?;
     let kind = existing.kind;
+    let board_id = existing.board_id;
     let mut members = parse_member_ids(existing.member_ids.as_deref());
     let mut active = existing.into_active_model();
 
@@ -647,9 +772,11 @@ pub async fn update_node(
     if let Some(h) = patch.height {
         active.height = Set(clamp_size(h)?);
     }
-    active.updated_at = Set(Utc::now());
+    let now = Utc::now();
+    active.updated_at = Set(now);
 
     let row = active.update(&txn).await?;
+    touch_boards(&txn, [board_id], now).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok((row, revision))
@@ -681,12 +808,14 @@ pub async fn move_nodes(
     claim_writer(&txn).await?;
     let now = Utc::now();
     let mut applied = Vec::with_capacity(moves.len());
+    let mut boards = Vec::new();
     for m in moves {
         let Some(existing) = canvas_node::Entity::find_by_id(m.id).one(&txn).await? else {
             continue;
         };
         let x = clamp_coord(m.x)?;
         let y = clamp_coord(m.y)?;
+        boards.push(existing.board_id);
         let mut active = existing.into_active_model();
         active.x = Set(x);
         active.y = Set(y);
@@ -698,6 +827,7 @@ pub async fn move_nodes(
         txn.commit().await?;
         return Ok(None);
     }
+    touch_boards(&txn, boards, now).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok(Some((applied, revision)))
@@ -706,6 +836,7 @@ pub async fn move_nodes(
 /// Result of [`detach_member`]: the region the conversation was removed from
 /// (custom regions only — binding regions copy), the freshly pinned node, and
 /// the revision of the single event describing both steps.
+#[derive(Debug)]
 pub struct DetachOutcome {
     pub removed_from: Option<i32>,
     pub node: canvas_node::Model,
@@ -739,6 +870,9 @@ pub async fn detach_member(
         .one(&txn)
         .await?
         .ok_or_else(|| DbError::NotFound(format!("canvas node {region_id} not found")))?;
+    // The pin lands on the region's own board — a member dragged out of a
+    // region is still on the canvas it was dragged across.
+    let board_id = region.board_id;
 
     let removed_from = match region.kind {
         CanvasNodeKind::Custom => {
@@ -757,7 +891,10 @@ pub async fn detach_member(
             Some(region_id)
         }
         CanvasNodeKind::Folder | CanvasNodeKind::Group | CanvasNodeKind::Agent => None,
-        CanvasNodeKind::Conversation | CanvasNodeKind::Note => {
+        CanvasNodeKind::Conversation
+        | CanvasNodeKind::Note
+        | CanvasNodeKind::File
+        | CanvasNodeKind::Terminal => {
             return Err(DbError::Validation(format!(
                 "canvas node {region_id} is not a region"
             )));
@@ -769,6 +906,7 @@ pub async fn detach_member(
     let now = Utc::now();
     let node = canvas_node::ActiveModel {
         id: NotSet,
+        board_id: Set(board_id),
         kind: Set(CanvasNodeKind::Conversation),
         folder_id: Set(None),
         folder_group_id: Set(None),
@@ -777,6 +915,7 @@ pub async fn detach_member(
         member_ids: Set(None),
         title: Set(None),
         content: Set(None),
+        path: Set(None),
         color: Set(None),
         collapsed: Set(false),
         grid_columns: Set(0),
@@ -791,6 +930,7 @@ pub async fn detach_member(
     .insert(&txn)
     .await?;
 
+    touch_boards(&txn, [board_id], now).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok(DetachOutcome {
@@ -809,11 +949,15 @@ pub async fn delete_node(
     let _guard = revision_lock().lock().await;
     let txn = conn.begin().await?;
     claim_writer(&txn).await?;
-    let removed = canvas_node::Entity::delete_by_id(node_id).exec(&txn).await?;
-    if removed.rows_affected == 0 {
+    // Read before deleting: the board it sat on is stamped as edited.
+    let Some(node) = canvas_node::Entity::find_by_id(node_id).one(&txn).await? else {
         txn.commit().await?;
         return Ok(None);
-    }
+    };
+    canvas_node::Entity::delete_by_id(node_id)
+        .exec(&txn)
+        .await?;
+    touch_boards(&txn, [node.board_id], Utc::now()).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok(Some(revision))
@@ -835,21 +979,20 @@ pub async fn delete_nodes(
     let _guard = revision_lock().lock().await;
     let txn = conn.begin().await?;
     claim_writer(&txn).await?;
-    let existing: Vec<i32> = canvas_node::Entity::find()
+    let rows = canvas_node::Entity::find()
         .filter(canvas_node::Column::Id.is_in(ids.iter().copied()))
         .all(&txn)
-        .await?
-        .into_iter()
-        .map(|n| n.id)
-        .collect();
-    if existing.is_empty() {
+        .await?;
+    if rows.is_empty() {
         txn.commit().await?;
         return Ok(None);
     }
+    let existing: Vec<i32> = rows.iter().map(|n| n.id).collect();
     canvas_node::Entity::delete_many()
         .filter(canvas_node::Column::Id.is_in(existing.iter().copied()))
         .exec(&txn)
         .await?;
+    touch_boards(&txn, rows.iter().map(|n| n.board_id), Utc::now()).await?;
     let revision = bump_revision(&txn).await?;
     txn.commit().await?;
     Ok(Some((existing, revision)))
@@ -869,6 +1012,12 @@ pub struct PruneOutcome {
 /// the liveness check in `require_live_conversation` (see the lock's doc).
 /// `None` when nothing referenced them (no bump, no event — a quieter barrier
 /// than tabs' because stale writes are rejected by liveness, not by version).
+///
+/// Crosses boards on purpose (a conversation can be pinned on several), and
+/// deliberately does NOT stamp them as edited: this is housekeeping after a
+/// deletion elsewhere, not someone working on the canvas, and "last edited"
+/// jumping on every board that happened to show a deleted conversation would
+/// reorder the canvas list for no visible reason.
 pub async fn prune_for_conversations(
     conn: &DatabaseConnection,
     conversation_ids: &[i32],
@@ -926,4 +1075,423 @@ pub async fn prune_for_conversations(
         updated,
         revision,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Boards
+// ---------------------------------------------------------------------------
+
+/// Longest board name / description a write accepts. Not a layout limit — the
+/// cards truncate long text anyway — but the list endpoint hands every board's
+/// text to every client, so a malformed caller must not be able to park an
+/// unbounded blob in it (the same stance [`MAX_PATH_LEN`] takes).
+pub const MAX_BOARD_NAME_LEN: usize = 200;
+pub const MAX_BOARD_DESCRIPTION_LEN: usize = 2_000;
+
+/// Most node rectangles a board's list card draws. A thumbnail is a silhouette,
+/// not a render: past a couple of hundred shapes nothing more is legible at card
+/// size, while every rectangle is paid for on each list refresh by every
+/// client. The largest nodes are kept (see [`list_boards`]), so what survives
+/// the cut is the structure — regions and big cards — not a random sample.
+pub const MAX_BOARD_PREVIEW_RECTS: usize = 200;
+
+pub struct NewCanvasBoard {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub color: Option<String>,
+}
+
+/// Field-by-field patch, same convention as [`CanvasNodePatch`]: `None` leaves a
+/// field alone, an empty (or all-whitespace) string clears it.
+#[derive(Debug, Default, Clone)]
+pub struct CanvasBoardPatch {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub color: Option<String>,
+}
+
+/// One node's footprint on a board's list card.
+#[derive(Debug, Clone)]
+pub struct BoardPreviewRect {
+    pub kind: CanvasNodeKind,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub color: Option<String>,
+}
+
+/// A board plus what its list card shows about the nodes on it.
+#[derive(Debug, Clone)]
+pub struct BoardSummary {
+    pub board: canvas_board::Model,
+    pub node_count: i64,
+    /// Terminal cards on the board — each one a shell a board delete stops, so
+    /// the confirmation can say so before the user agrees to it.
+    pub terminal_count: i64,
+    /// Up to [`MAX_BOARD_PREVIEW_RECTS`] footprints, largest first.
+    pub preview: Vec<BoardPreviewRect>,
+}
+
+/// The columns of a node the canvas list reads — its board and footprint.
+#[derive(Debug, FromQueryResult)]
+struct NodeFootprint {
+    board_id: i32,
+    kind: CanvasNodeKind,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    color: Option<String>,
+}
+
+/// Trim/clear like [`normalize_text`], then bound the length.
+fn normalize_board_text(
+    v: Option<String>,
+    max: usize,
+    what: &str,
+) -> Result<Option<String>, DbError> {
+    let text = normalize_text(v);
+    if text.as_ref().is_some_and(|s| s.chars().count() > max) {
+        return Err(DbError::Validation(format!("{what} is too long")));
+    }
+    Ok(text)
+}
+
+/// Every board, most recently edited first, each with its node count and a
+/// thumbnail's worth of footprints. One read transaction, so a board and the
+/// nodes counted under it can't come from two different moments.
+pub async fn list_boards(conn: &DatabaseConnection) -> Result<Vec<BoardSummary>, DbError> {
+    let txn = conn.begin().await?;
+    let boards = canvas_board::Entity::find()
+        .order_by_desc(canvas_board::Column::UpdatedAt)
+        .order_by_desc(canvas_board::Column::Id)
+        .all(&txn)
+        .await?;
+    // Only the geometry columns: a note's text or a region's member list is
+    // never drawn on a thumbnail, and reading every node's whole row for a list
+    // page would ship all of it for nothing.
+    let footprints = canvas_node::Entity::find()
+        .select_only()
+        .column(canvas_node::Column::BoardId)
+        .column(canvas_node::Column::Kind)
+        .column(canvas_node::Column::X)
+        .column(canvas_node::Column::Y)
+        .column(canvas_node::Column::Width)
+        .column(canvas_node::Column::Height)
+        .column(canvas_node::Column::Color)
+        .into_model::<NodeFootprint>()
+        .all(&txn)
+        .await?;
+    txn.commit().await?;
+
+    let mut by_board: HashMap<i32, Vec<BoardPreviewRect>> = HashMap::new();
+    for f in footprints {
+        by_board.entry(f.board_id).or_default().push(BoardPreviewRect {
+            kind: f.kind,
+            x: f.x,
+            y: f.y,
+            width: f.width,
+            height: f.height,
+            color: f.color,
+        });
+    }
+
+    Ok(boards
+        .into_iter()
+        .map(|board| {
+            let mut rects = by_board.remove(&board.id).unwrap_or_default();
+            let node_count = rects.len() as i64;
+            let terminal_count = rects
+                .iter()
+                .filter(|r| r.kind == CanvasNodeKind::Terminal)
+                .count() as i64;
+            // Largest first: that is both the order worth keeping under the cap
+            // and the paint order that leaves small cards on top of the regions
+            // around them.
+            rects.sort_by(|a, b| (b.width * b.height).total_cmp(&(a.width * a.height)));
+            rects.truncate(MAX_BOARD_PREVIEW_RECTS);
+            BoardSummary {
+                board,
+                node_count,
+                terminal_count,
+                preview: rects,
+            }
+        })
+        .collect())
+}
+
+pub async fn create_board(
+    conn: &DatabaseConnection,
+    input: NewCanvasBoard,
+) -> Result<canvas_board::Model, DbError> {
+    let name = normalize_board_text(input.name, MAX_BOARD_NAME_LEN, "name")?;
+    let description =
+        normalize_board_text(input.description, MAX_BOARD_DESCRIPTION_LEN, "description")?;
+    let color = normalize_color(input.color)?;
+    let _guard = revision_lock().lock().await;
+    let now = Utc::now();
+    let row = canvas_board::ActiveModel {
+        id: NotSet,
+        name: Set(name),
+        description: Set(description),
+        color: Set(color),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(conn)
+    .await?;
+    Ok(row)
+}
+
+pub async fn update_board(
+    conn: &DatabaseConnection,
+    board_id: i32,
+    patch: CanvasBoardPatch,
+) -> Result<canvas_board::Model, DbError> {
+    // Validate before taking the lock or opening anything: a rejected patch
+    // must not cost the writer lock (or a stamp on the board).
+    let name = patch
+        .name
+        .map(|n| normalize_board_text(Some(n), MAX_BOARD_NAME_LEN, "name"))
+        .transpose()?;
+    let description = patch
+        .description
+        .map(|d| normalize_board_text(Some(d), MAX_BOARD_DESCRIPTION_LEN, "description"))
+        .transpose()?;
+    let color = patch.color.map(|c| normalize_color(Some(c))).transpose()?;
+
+    let _guard = revision_lock().lock().await;
+    let txn = conn.begin().await?;
+    let now = Utc::now();
+    // Write first, then read (see `claim_writer`): stamping the row IS the
+    // claim, and zero rows touched means there is no such board.
+    let touched = canvas_board::Entity::update_many()
+        .col_expr(canvas_board::Column::UpdatedAt, Expr::value(now))
+        .filter(canvas_board::Column::Id.eq(board_id))
+        .exec(&txn)
+        .await?;
+    if touched.rows_affected == 0 {
+        return Err(DbError::NotFound(format!(
+            "canvas board {board_id} not found"
+        )));
+    }
+    let existing = canvas_board::Entity::find_by_id(board_id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("canvas board {board_id} not found")))?;
+    let mut active = existing.into_active_model();
+    if let Some(name) = name {
+        active.name = Set(name);
+    }
+    if let Some(description) = description {
+        active.description = Set(description);
+    }
+    if let Some(color) = color {
+        active.color = Set(color);
+    }
+    active.updated_at = Set(now);
+    let row = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(row)
+}
+
+/// What [`delete_board`] removed: the nodes that were on the board (so their
+/// shells can be ended and every client told they are gone), and the revision
+/// of that node removal — `None` when the board was empty, since nothing on the
+/// node stream changed.
+pub struct DeleteBoardOutcome {
+    pub deleted_node_ids: Vec<i32>,
+    pub revision: Option<i64>,
+}
+
+/// Delete a board and every node on it, as ONE transaction: a board that is
+/// gone with its nodes still in the table would leave rows no board ever shows
+/// again (and terminal cards whose shells nothing can reach), while nodes gone
+/// with the board still listed would be a canvas that silently emptied.
+/// `None` when the board was already gone — nothing changed, so the caller must
+/// not broadcast anything.
+pub async fn delete_board(
+    conn: &DatabaseConnection,
+    board_id: i32,
+) -> Result<Option<DeleteBoardOutcome>, DbError> {
+    let _guard = revision_lock().lock().await;
+    let txn = conn.begin().await?;
+    claim_writer(&txn).await?;
+    let removed = canvas_board::Entity::delete_by_id(board_id)
+        .exec(&txn)
+        .await?;
+    if removed.rows_affected == 0 {
+        txn.commit().await?;
+        return Ok(None);
+    }
+    let deleted_node_ids: Vec<i32> = canvas_node::Entity::find()
+        .select_only()
+        .column(canvas_node::Column::Id)
+        .filter(canvas_node::Column::BoardId.eq(board_id))
+        .order_by_asc(canvas_node::Column::Id)
+        .into_tuple()
+        .all(&txn)
+        .await?;
+    let revision = if deleted_node_ids.is_empty() {
+        None
+    } else {
+        canvas_node::Entity::delete_many()
+            .filter(canvas_node::Column::BoardId.eq(board_id))
+            .exec(&txn)
+            .await?;
+        Some(bump_revision(&txn).await?)
+    };
+    txn.commit().await?;
+    Ok(Some(DeleteBoardOutcome {
+        deleted_node_ids,
+        revision,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::fresh_in_memory_db;
+
+    /// A fresh database with one board on it — every node needs a board.
+    async fn board_db() -> (crate::db::AppDatabase, i32) {
+        let db = fresh_in_memory_db().await;
+        let board = create_board(
+            &db.conn,
+            NewCanvasBoard {
+                name: None,
+                description: None,
+                color: None,
+            },
+        )
+        .await
+        .expect("create board")
+        .id;
+        (db, board)
+    }
+
+    fn new_node(board_id: i32, kind: CanvasNodeKind, path: Option<&str>) -> NewCanvasNode {
+        NewCanvasNode {
+            board_id,
+            kind,
+            folder_id: None,
+            folder_group_id: None,
+            agent_type: None,
+            conversation_id: None,
+            title: None,
+            content: None,
+            path: path.map(str::to_string),
+            color: None,
+            grid_columns: None,
+            grid_rows: None,
+            x: 0.0,
+            y: 0.0,
+            width: 460.0,
+            height: 360.0,
+        }
+    }
+
+    #[tokio::test]
+    async fn file_and_terminal_nodes_keep_their_path() {
+        let (db, board) = board_db().await;
+        let (file, _) = create_node(
+            &db.conn,
+            new_node(board, CanvasNodeKind::File, Some("  /repo/src/main.rs  ")),
+        )
+        .await
+        .expect("create file node");
+        // Trimmed, but otherwise byte-for-byte: the path is the identity every
+        // read and every watch join is keyed on, so nothing may rewrite it.
+        assert_eq!(file.path.as_deref(), Some("/repo/src/main.rs"));
+
+        let (terminal, _) = create_node(
+            &db.conn,
+            new_node(board, CanvasNodeKind::Terminal, Some("/repo")),
+        )
+        .await
+        .expect("create terminal node");
+        assert_eq!(terminal.path.as_deref(), Some("/repo"));
+    }
+
+    #[tokio::test]
+    async fn a_path_bound_kind_without_a_path_is_rejected() {
+        let (db, board) = board_db().await;
+        for kind in [CanvasNodeKind::File, CanvasNodeKind::Terminal] {
+            for candidate in [None, Some(""), Some("   ")] {
+                let err = create_node(&db.conn, new_node(board, kind, candidate))
+                    .await
+                    .expect_err("a path-bound node needs a path");
+                assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn other_kinds_may_not_smuggle_a_path() {
+        // Same stance `content` takes for notes: a column only one kind reads
+        // must not be settable on the kinds that ignore it, or the row carries
+        // state nothing will ever surface or clean up.
+        let (db, board) = board_db().await;
+        let err = create_node(
+            &db.conn,
+            new_node(board, CanvasNodeKind::Custom, Some("/repo/secret")),
+        )
+        .await
+        .expect_err("path is not a custom-region field");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+
+        // …and a kind that legitimately has none stores NULL rather than "".
+        let (note, _) = create_node(&db.conn, new_node(board, CanvasNodeKind::Note, None))
+            .await
+            .expect("create note");
+        assert_eq!(note.path, None);
+    }
+
+    #[tokio::test]
+    async fn an_over_long_path_is_rejected_rather_than_stored() {
+        let (db, board) = board_db().await;
+        let long = format!("/{}", "a".repeat(MAX_PATH_LEN));
+        let err = create_node(&db.conn, new_node(board, CanvasNodeKind::File, Some(&long)))
+            .await
+            .expect_err("bounded");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn file_and_terminal_nodes_are_not_regions() {
+        // `is_region` gates the grid shape, member drops and the detach
+        // gesture. A file card answering yes would accept conversations it has
+        // nowhere to put.
+        assert!(!CanvasNodeKind::File.is_region());
+        assert!(!CanvasNodeKind::Terminal.is_region());
+        assert!(CanvasNodeKind::File.needs_path());
+        assert!(CanvasNodeKind::Terminal.needs_path());
+        for kind in [
+            CanvasNodeKind::Folder,
+            CanvasNodeKind::Group,
+            CanvasNodeKind::Agent,
+            CanvasNodeKind::Custom,
+            CanvasNodeKind::Conversation,
+            CanvasNodeKind::Note,
+        ] {
+            assert!(!kind.needs_path(), "{kind:?} should not carry a path");
+        }
+
+        let (db, board) = board_db().await;
+        let (file, _) = create_node(
+            &db.conn,
+            new_node(board, CanvasNodeKind::File, Some("/repo/a.rs")),
+        )
+        .await
+        .expect("create file node");
+        // Grid axes are forced to 0 for non-regions, so nothing downstream can
+        // read a shape off a card that has no grid.
+        assert_eq!((file.grid_columns, file.grid_rows), (0, 0));
+
+        let err = detach_member(&db.conn, file.id, 1, 0.0, 0.0)
+            .await
+            .expect_err("a file card is not a region to detach from");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
 }

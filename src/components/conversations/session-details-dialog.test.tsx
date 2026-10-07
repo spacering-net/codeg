@@ -25,6 +25,7 @@ vi.mock("@/lib/utils", async (importOriginal) => {
 })
 
 import { getFolderConversation } from "@/lib/api"
+import { rememberModelLabels } from "@/lib/model-label-store"
 import { copyTextToClipboard } from "@/lib/utils"
 const mockGet = vi.mocked(getFolderConversation)
 const mockCopy = vi.mocked(copyTextToClipboard)
@@ -296,6 +297,35 @@ describe("SessionDetailsDialog", () => {
       />
     )
     expect(await findByText("claude-sonnet-4-6")).toBeTruthy()
+  })
+
+  it("names the model the way its agent does", async () => {
+    // qoder records an account-internal key in its transcripts (`qfmodel`) and
+    // advertises the readable name over ACP. This field used to show the key
+    // while the composer's picker showed the name.
+    rememberModelLabels("qoder", [
+      {
+        id: "model",
+        name: "Model",
+        kind: {
+          type: "select",
+          current_value: "qfmodel",
+          options: [{ value: "qfmodel", name: "Qwen3.8-Flash" }],
+          groups: [],
+        },
+      },
+    ])
+    const qoder = summary({ agent_type: "qoder", model: "qfmodel" })
+    mockGet.mockResolvedValue({
+      summary: qoder,
+      turns: [],
+      session_stats: fullStats,
+    })
+    const { findByText, queryByText } = renderWithIntl(
+      <SessionDetailsDialog open onOpenChange={() => {}} summary={qoder} />
+    )
+    expect(await findByText("Qwen3.8-Flash")).toBeTruthy()
+    expect(queryByText("qfmodel")).toBeNull()
   })
 
   it("shows an error when the fetch fails", async () => {

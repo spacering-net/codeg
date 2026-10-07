@@ -21,7 +21,7 @@ Codeg（Code Generation）是一个多智能体编码工作台，它将多个智
 ### 前端
 
 ```bash
-pnpm eslint .                  # lint
+pnpm lint .                    # lint
 pnpm test                      # vitest 全跑（CI 用同一条命令）
 pnpm test:watch                # 开发时增量重跑
 pnpm test:coverage             # 覆盖率报告（输出到 coverage/index.html）
@@ -37,13 +37,13 @@ cargo test --features test-utils
 cargo clippy --all-targets --features test-utils -- -D warnings
 
 # 服务器模式
-cargo check --no-default-features --bin codeg-server
-cargo test --no-default-features --bin codeg-server --lib
-cargo clippy --no-default-features --bin codeg-server --lib -- -D warnings
+cargo check --no-default-features --features server-bin --bin codeg-server
+cargo test --no-default-features --features server-bin --bin codeg-server --lib
+cargo clippy --no-default-features --features server-bin --bin codeg-server --lib -- -D warnings
 
 # codeg-mcp 协作伴生进程（多智能体委托）
-cargo check --no-default-features --bin codeg-mcp
-cargo clippy --no-default-features --bin codeg-mcp -- -D warnings
+cargo check --no-default-features --features mcp-bin --bin codeg-mcp
+cargo clippy --no-default-features --features mcp-bin --bin codeg-mcp -- -D warnings
 
 # 解析器快照评审（输出变化时）
 cargo insta review
@@ -57,8 +57,10 @@ INSTA_UPDATE=auto cargo test --features test-utils     # 自动写新 .snap
 项目通过 Cargo feature flags 支持三种二进制：
 
 - **`codeg`**（`tauri-runtime`，默认）：完整桌面应用，包含 Tauri 窗口管理、系统通知、自动更新等
-- **`codeg-server`**（无 feature，`--no-default-features`）：独立服务器模式，仅编译 Axum HTTP API + WebSocket
-- **`codeg-mcp`**（无 feature）：per-launch stdio MCP 伴生进程，被注入到代理 CLI 的 MCP 配置中，向 LLM 暴露**异步**子智能体委托工具。
+- **`codeg-server`**（`--no-default-features --features server-bin`）：独立服务器模式，仅编译 Axum HTTP API + WebSocket
+- **`codeg-mcp`**（`--no-default-features --features mcp-bin`）：per-launch stdio MCP 伴生进程，被注入到代理 CLI 的 MCP 配置中，向 LLM 暴露**异步**子智能体委托工具。
+
+后两个（以及 `codeg-computer-helper` 的 `computer-helper`）各要一个默认不开的 feature：Tauri CLI 会把所有 feature 已开的二进制目标打进桌面安装包，不开就不进包。
 
 ### 共享核心
 

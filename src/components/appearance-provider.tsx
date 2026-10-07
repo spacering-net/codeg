@@ -50,6 +50,7 @@ import {
   STORAGE_KEY_WORKSPACE_BG_FILL,
   STORAGE_KEY_WORKSPACE_BG_PANEL_OPACITY,
   STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION,
+  STORAGE_KEY_WORKSPACE_BG_SOURCE_URL,
   STORAGE_KEY_CUSTOM_THEME,
   STORAGE_KEY_CUSTOM_THEME_ENABLED,
   STORAGE_KEY_CUSTOM_CSS,
@@ -88,6 +89,7 @@ import {
   clearWorkspaceBackground,
   type WorkspaceBgFillMode,
 } from "@/lib/workspace-background"
+import { downloadWorkspaceBgMarket } from "@/lib/workspace-background-market"
 
 function syncTrafficLightPosition(zoom: number) {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window))
@@ -156,6 +158,13 @@ type AppearanceContextValue = {
   setWorkspaceBackgroundImage: (imageBase64: string) => Promise<void>
   /** 移除背景图片（删盘 + revoke blob URL）。 */
   removeWorkspaceBackground: () => Promise<void>
+  /** 从壁纸市场下载并应用背景。写盘在后端，成功后与本地选图共用同一套失效 + 重读盘。 */
+  downloadMarketWorkspaceBackground: (
+    url: string,
+    sourceUrl: string
+  ) => Promise<void>
+  /** 当前背景的市场来源页（https://wallhaven.cc/w/<id>）；本地图 / 未设置为 null。 */
+  workspaceBgSourceUrl: string | null
   /** 当前解析出的明暗模式（读 <html> 的 dark 类，非 next-themes 的 resolvedTheme）。 */
   isDarkMode: boolean
   /** 主题 token 覆盖（明暗两套，键名不带 `--`，= shadcn cssVars 形状）。 */
@@ -434,6 +443,15 @@ export function AppearanceProvider({
   const [workspaceBgImageUrl, setWorkspaceBgImageUrlState] = useState<
     string | null
   >(null)
+  const [workspaceBgSourceUrl, setWorkspaceBgSourceUrlState] = useState<
+    string | null
+  >(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEY_WORKSPACE_BG_SOURCE_URL) ?? null
+    } catch {
+      return null
+    }
+  })
 
   // 自定义样式。初值同样从 localStorage 读 —— 视觉已由 inline 脚本就位，这里只是
   // 回填状态，不会造成闪烁（下方 apply effect 首次运行写的是同一份值，幂等）。
@@ -642,6 +660,16 @@ export function AppearanceProvider({
   // 切换的竞态）。写入窗口收不到自己的 storage 事件，本地一致性全靠这个守卫。
   const reloadGenRef = useRef(0)
 
+  // 本地选图 / 移除背景时，市场「使用中」标记随之失效。
+  const clearWorkspaceBgSourceUrl = useCallback(() => {
+    try {
+      localStorage.removeItem(STORAGE_KEY_WORKSPACE_BG_SOURCE_URL)
+    } catch {
+      // localStorage unavailable
+    }
+    setWorkspaceBgSourceUrlState(null)
+  }, [])
+
   // 从磁盘重新读取背景图并刷新 blob URL（revoke 旧、建新或置 null）。写/换/删图
   // 与跨窗口版本戳变更都复用它，确保 URL 生命周期与磁盘状态一致。
   const reloadWorkspaceBackgroundImage = useCallback(async () => {
@@ -662,8 +690,27 @@ export function AppearanceProvider({
   const setWorkspaceBackgroundImage = useCallback(
     async (imageBase64: string) => {
       await setWorkspaceBackground(imageBase64)
+      // 本地图覆盖市场图 → 「使用中」来源标记失效。
+      clearWorkspaceBgSourceUrl()
       // 写盘持久化后立即广播版本戳（不等本地 readback）：避免设置窗口在读回大图
       // 期间被关闭，导致 workspace 窗口收不到失效信号、停留在旧图。随后再刷新本地预览。
+      persist(STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION, String(Date.now()))
+      await reloadWorkspaceBackgroundImage()
+    },
+    [clearWorkspaceBgSourceUrl, reloadWorkspaceBackgroundImage]
+  )
+
+  // 壁纸市场下载：字节直接由后端落盘（不走前端 base64 往返），成功后与本地选图
+  // 共用同一套失效广播 + 重读盘，保证所有窗口一致换图。
+  const downloadMarketWorkspaceBackground = useCallback(
+    async (url: string, sourceUrl: string) => {
+      await downloadWorkspaceBgMarket(url, sourceUrl)
+      try {
+        localStorage.setItem(STORAGE_KEY_WORKSPACE_BG_SOURCE_URL, sourceUrl)
+      } catch {
+        // localStorage unavailable
+      }
+      setWorkspaceBgSourceUrlState(sourceUrl)
       persist(STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION, String(Date.now()))
       await reloadWorkspaceBackgroundImage()
     },
@@ -672,6 +719,7 @@ export function AppearanceProvider({
 
   const removeWorkspaceBackground = useCallback(async () => {
     await clearWorkspaceBackground()
+    clearWorkspaceBgSourceUrl()
     // 使任何在途 reload 失效（否则先前发起的旧读可能在清空后完成、恢复已删的图），
     // 立即广播失效戳，再置空本地预览。
     reloadGenRef.current += 1
@@ -680,7 +728,7 @@ export function AppearanceProvider({
       revokeBackgroundObjectUrl(prev)
       return null
     })
-  }, [])
+  }, [clearWorkspaceBgSourceUrl])
 
   // Sync traffic-light position and appearance mode on mount
   useEffect(() => {
@@ -956,6 +1004,12 @@ export function AppearanceProvider({
       if (e.key === STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION) {
         void reloadWorkspaceBackgroundImage()
       }
+      // 来源页跟着图一起变（另一窗口换成市场图 / 本地图 / 移除）。不同步的话本窗口
+      // 的市场面板会继续把一张已被换掉的壁纸标成「使用中」—— 那不是标记丢了，
+      // 而是标记在说谎。removeItem 时 newValue 为 null。
+      if (e.key === STORAGE_KEY_WORKSPACE_BG_SOURCE_URL) {
+        setWorkspaceBgSourceUrlState(e.newValue ?? null)
+      }
       // 自定义样式跨窗口同步。主题与 CSS 都要顺手重置防抖基线，否则本窗口会把
       // 刚收到的别人的值当成本地编辑再写回去，两个窗口互相回声。
       if (e.key === STORAGE_KEY_CUSTOM_THEME) {
@@ -1033,7 +1087,9 @@ export function AppearanceProvider({
         setWorkspaceBgFillMode,
         workspaceBgImageUrl,
         setWorkspaceBackgroundImage,
+        downloadMarketWorkspaceBackground,
         removeWorkspaceBackground,
+        workspaceBgSourceUrl,
         isDarkMode,
         customTheme,
         setCustomThemeToken,

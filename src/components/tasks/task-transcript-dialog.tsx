@@ -57,10 +57,20 @@ interface TaskTranscriptDialogProps {
   task: WorkTask | null
 }
 
-/** Statuses in which the engine holds a live connection worth attaching
- *  (`merging` included — the merge is an agent turn too). */
+/** Statuses in which the engine may hold a live connection worth attaching
+ *  (`merging` included — the merge is an agent turn too).
+ *
+ *  `preparing` is here because a round that RESUMES a session can spend that
+ *  status on a real agent turn: the pre-prompt context compaction runs between
+ *  the spawn and the round's own prompt, and on a full context window that is
+ *  minutes of work with nothing else to look at. The engine publishes the live
+ *  connection on the row before it starts (`mark_preparing_live`) and clears
+ *  the previous generation's dead one when the setup begins, so a
+ *  `connection_id` seen in this status is the one to stream — a fresh setup
+ *  simply has none yet, which the null check below already handles. */
 function isLive(task: WorkTask): boolean {
   return (
+    task.status === "preparing" ||
     task.status === "running" ||
     task.status === "awaiting_input" ||
     task.status === "merging"
@@ -152,8 +162,15 @@ function TaskTranscriptBody({
   // Round markers → phase dividers above the matching user turns. Refetched
   // when a new generation dispatches (run_seq moves) so a merge started while
   // watching gets its divider too.
+  //
+  // …and again when the compaction flag turns over, because a generation's
+  // `run_seq` moves BEFORE its compaction exists: a viewer already open when
+  // the round dispatched refetches on the bump, lands ahead of the
+  // `context_compact` marker, and then watches the `/compact` turn stream in
+  // with no divider on it — the one turn that most needs saying whose it is.
   const [rounds, setRounds] = useState<TaskRound[]>([])
   const runSeq = task.run_seq
+  const compacting = task.compacting === true
   useEffect(() => {
     let cancelled = false
     workTaskEvents(task.id, 500)
@@ -164,7 +181,7 @@ function TaskTranscriptBody({
     return () => {
       cancelled = true
     }
-  }, [task.id, runSeq])
+  }, [task.id, runSeq, compacting])
   const userTurnHeader = useCallback(
     (group: ResolvedMessageGroup) => {
       const round = matchRound(rounds, firstTextOfParts(group.parts))
@@ -184,6 +201,11 @@ function TaskTranscriptBody({
         }
         case "merge":
           return t("phaseMerge")
+        // Not a phase of the task, but the only thing that accounts for a
+        // `/compact` the user never typed — and, now that this viewer streams
+        // `preparing`, one they may well be watching arrive.
+        case "compact":
+          return t("phaseCompact")
         default:
           return null
       }
@@ -207,6 +229,10 @@ function TaskTranscriptBody({
   //     `merging`, so opening in that interval latched null;
   //   - a viewer held open across a generation boundary kept the previous
   //     connection, which `on_turn_complete` has already disconnected.
+  //
+  // The first of those three is now covered at the source: `preparing` is a
+  // live status here, and the engine keeps the column honest across it (see
+  // `isLive`). The other two still need the forward-only rule.
   //
   // Plain re-derivation is NOT the fix either — that was the reason for the
   // latch: the moment the provider flips the task to review we would detach and

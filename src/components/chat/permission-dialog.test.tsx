@@ -31,6 +31,93 @@ const baseOptions = [
 ]
 
 describe("PermissionDialog", () => {
+  // `deepseek-acp` hardcodes its approval buttons in Simplified Chinese and has
+  // no locale switch, so the dialog re-labels them from the option ids.
+  it("localises an agent's hardcoded approval labels, keeping the ids it answers with", () => {
+    const onRespond = vi.fn()
+    const permission: PendingPermission = {
+      request_id: "req-ds",
+      tool_call: { title: "ls", kind: "execute" },
+      options: [
+        { option_id: "allow-once", name: "允许本次", kind: "allow_once" },
+        { option_id: "reject-once", name: "拒绝", kind: "reject_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        agentType="deepseek"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }))
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument()
+    expect(screen.queryByText("允许本次")).not.toBeInTheDocument()
+    expect(onRespond).toHaveBeenCalledWith("req-ds", "allow-once")
+  })
+
+  it("leaves another agent's option labels verbatim", () => {
+    const permission: PendingPermission = {
+      request_id: "req-cx",
+      tool_call: { title: "ls", kind: "execute" },
+      options: [
+        { option_id: "allow-once", name: "允许本次", kind: "allow_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={() => {}}
+        agentType="codex"
+      />
+    )
+    expect(screen.getByRole("button", { name: "允许本次" })).toBeInTheDocument()
+  })
+
+  // `bg-primary` is what the `default` Button variant contributes and the
+  // `outline` one does not, so it reads as "this is the emphasised button".
+  const isEmphasised = (name: string) =>
+    screen.getByRole("button", { name }).className.includes("bg-primary")
+
+  it("emphasises the approval on an ordinary ask", () => {
+    const permission: PendingPermission = {
+      request_id: "req-plain",
+      tool_call: { title: "ls", kind: "execute" },
+      options: baseOptions,
+    }
+    renderWithIntl(
+      <PermissionDialog permission={permission} onRespond={() => {}} />
+    )
+    expect(isEmphasised("Allow once")).toBe(true)
+    expect(isEmphasised("Reject")).toBe(false)
+  })
+
+  it("emphasises the decline when claude marks the ask defaultToNo", () => {
+    // claude-agent-acp ≥0.77.0: "must not be approvable by a stray keystroke".
+    // codeg pre-selects nothing and binds no key, so the only thing left to
+    // give the decline is the accent colour the approve normally holds.
+    const permission: PendingPermission = {
+      request_id: "req-danger",
+      tool_call: {
+        title: "rm -rf build",
+        kind: "execute",
+        _meta: {
+          permission: {
+            version: 1,
+            title: "Run command?",
+            defaultToNo: true,
+          },
+        },
+      },
+      options: baseOptions,
+    }
+    renderWithIntl(
+      <PermissionDialog permission={permission} onRespond={() => {}} />
+    )
+    expect(isEmphasised("Reject")).toBe(true)
+    expect(isEmphasised("Allow once")).toBe(false)
+  })
+
   it("returns nothing when permission is null", () => {
     const { container } = renderWithIntl(
       <PermissionDialog permission={null} onRespond={() => {}} />

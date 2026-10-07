@@ -30,6 +30,8 @@ import {
 // transport and try to read the local path on the wrong machine.
 import { readFileBase64 as readLocalFileBase64 } from "@/lib/tauri"
 import { extractAppCommandError } from "@/lib/app-error"
+import { readPageHandoffBlock } from "@/lib/browser/page-handoff-block"
+import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import {
   clipboardHasText,
   filesFromClipboard,
@@ -39,6 +41,7 @@ import {
   hasFileTreeDragType,
   readFileTreeDragPayload,
 } from "@/lib/file-tree-dnd"
+import type { KnownInvocations } from "@/lib/invocation-token"
 import { isDesktop, openFileDialog } from "@/lib/platform"
 import {
   buildFileUri,
@@ -132,7 +135,14 @@ export interface ComposerAttachments {
   embeddedPayloadsRef: RefObject<Map<string, PromptInputBlock>>
 
   insertFileReferences: (
-    items: Array<{ name: string; uri?: string; realBlock?: PromptInputBlock }>,
+    items: Array<{
+      name: string
+      uri?: string
+      realBlock?: PromptInputBlock
+      /** With a `realBlock`: the ref its badge carries in its display uri
+       *  (see `buildEmbeddedReferenceUri`). */
+      ref?: string
+    }>,
     opts?: { atCaret?: boolean }
   ) => void
   appendResourceAttachments: (
@@ -164,8 +174,14 @@ export interface ComposerAttachments {
 
   /** Replay a stored `PromptInputBlock[]` into this composer: prose + file
    *  badges inline, images into the strip, bytes-bearing resources re-registered
-   *  behind fresh sentinel badges. Replaces whatever the editor held. */
-  hydrateFromBlocks: (editor: Editor, blocks: PromptInputBlock[]) => void
+   *  behind fresh sentinel badges. Replaces whatever the editor held. `known`
+   *  is the host's advertised invocations, gating bare `/cmd` tokens in the
+   *  prose (see {@link restoreBlocksIntoEditor}). */
+  hydrateFromBlocks: (
+    editor: Editor,
+    blocks: PromptInputBlock[],
+    known?: KnownInvocations
+  ) => void
   removeAttachment: (id: string) => void
   clearAttachments: () => void
   /** The image blocks for a send, in the encoding the agent accepts. Inline
@@ -212,10 +228,19 @@ export function useComposerAttachments({
   const lastDomDropAtRef = useRef(0)
   const disabledRef = useRef(disabled)
   const [serverFilePickerOpen, setServerFilePickerOpen] = useState(false)
+  // Read when a restore runs rather than closed over: `hydrateFromBlocks`
+  // keeps one identity for the composer's lifetime (its hydration effects
+  // re-run whenever it changes), and the names follow the app's language.
+  const pageHandoffName = usePageHandoffName()
+  const pageHandoffNameRef = useRef(pageHandoffName)
 
   useEffect(() => {
     disabledRef.current = disabled
   }, [disabled])
+
+  useEffect(() => {
+    pageHandoffNameRef.current = pageHandoffName
+  }, [pageHandoffName])
 
   const setDragActiveIfChanged = useCallback((next: boolean) => {
     if (dragActiveRef.current === next) return
@@ -226,8 +251,9 @@ export function useComposerAttachments({
   // Insert one inline file reference badge per item, matching `@`-file mentions.
   // A genuine `file://` item uses its uri directly (deduped against the document);
   // an item carrying a `realBlock` (embedded bytes / `data:` link) gets an inert
-  // `codeg://embedded/…` display uri and its block is stashed in
-  // `embeddedPayloadsRef` for send-time reconciliation. Badges append at the doc
+  // `codeg://embedded/…` display uri (carrying the item's `ref`, when it has
+  // one) and its block is stashed in `embeddedPayloadsRef` for send-time
+  // reconciliation. Badges append at the doc
   // end by default; pass `atCaret` to drop them at the composer's current caret
   // (`focus()` keeps the retained selection even while the input is blurred —
   // e.g. focus sits in the file editor), so "add to chat" lands a reference
@@ -238,6 +264,7 @@ export function useComposerAttachments({
         name: string
         uri?: string
         realBlock?: PromptInputBlock
+        ref?: string
       }>,
       opts: { atCaret?: boolean } = {}
     ) => {
@@ -252,7 +279,7 @@ export function useComposerAttachments({
       for (const item of items) {
         let refUri: string
         if (item.realBlock) {
-          refUri = buildEmbeddedReferenceUri()
+          refUri = buildEmbeddedReferenceUri(item.ref)
           embeddedPayloadsRef.current.set(refUri, item.realBlock)
         } else {
           if (!item.uri) continue
@@ -1260,9 +1287,9 @@ export function useComposerAttachments({
   // re-registered in the payload map (their original sentinel uri was never
   // serialized, so each gets a fresh one).
   const hydrateFromBlocks = useCallback(
-    (editor: Editor, blocks: PromptInputBlock[]) => {
+    (editor: Editor, blocks: PromptInputBlock[], known?: KnownInvocations) => {
       embeddedPayloadsRef.current.clear()
-      const restored = restoreBlocksIntoEditor(editor, blocks)
+      const restored = restoreBlocksIntoEditor(editor, blocks, known)
       setAttachments(
         restored.filter((a): a is ImageInputAttachment => a.type === "image")
       )
@@ -1272,7 +1299,15 @@ export function useComposerAttachments({
       if (resources.length === 0) return
       let chain = editor.chain().focus("end")
       for (const att of resources) {
-        const refUri = buildEmbeddedReferenceUri()
+        // A page the built-in browser handed over comes back as the badge it
+        // was queued as: the composer's name for it, carrying the page's
+        // address (see message-input's `handleAttachPage`) — not the last
+        // segment of that address, which is all its uri would say.
+        const handoff =
+          att.kind === "embedded" && att.text
+            ? readPageHandoffBlock(att.text)
+            : null
+        const refUri = buildEmbeddedReferenceUri(handoff ? att.uri : undefined)
         const block: PromptInputBlock =
           att.kind === "embedded"
             ? {
@@ -1294,7 +1329,7 @@ export function useComposerAttachments({
           .insertReference({
             refType: "file",
             id: refUri,
-            label: att.name,
+            label: handoff ? pageHandoffNameRef.current(handoff) : att.name,
             uri: refUri,
             meta: { fileKind: "file" },
           })

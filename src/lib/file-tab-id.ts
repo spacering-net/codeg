@@ -39,6 +39,10 @@ export type FileTabIdParts =
     }
   | { kind: "diff-session"; folderId: number; groupLabel: string; path: string }
   | { kind: "diff-external-conflict"; path: string }
+  // Built-in browser tab. `id` is the backend's tab id (a uuid, or
+  // `<opener-uuid>-p<n>` for a popup adopted from another tab); it never
+  // contains ":" so it needs no encoding, but goes through the encoder anyway.
+  | { kind: "browser"; id: string }
 
 export type FileTabIdKind = FileTabIdParts["kind"]
 
@@ -87,7 +91,15 @@ export function buildFileTabId(parts: FileTabIdParts): string {
       return `diff:session:${parts.folderId}:${encodeToken(parts.groupLabel)}:${encodeToken(parts.path)}`
     case "diff-external-conflict":
       return `diff:external-conflict:${encodeToken(parts.path)}`
+    case "browser":
+      return `browser:${encodeToken(parts.id)}`
   }
+}
+
+/** The backend tab id of a browser tab, or null for any other tab. */
+export function browserTabBackendId(tabId: string): string | null {
+  const parts = parseFileTabId(tabId)
+  return parts?.kind === "browser" ? parts.id : null
 }
 
 // Strict numeric-only folder segment: rejects "", "1x", "-1" so a malformed
@@ -104,6 +116,11 @@ export function parseFileTabId(id: string): FileTabIdParts | null {
   if (head === "file") {
     if (segments.length !== 2 || segments[1] === "") return null
     return { kind: "file", path: decodeToken(segments[1]) }
+  }
+
+  if (head === "browser") {
+    if (segments.length !== 2 || segments[1] === "") return null
+    return { kind: "browser", id: decodeToken(segments[1]) }
   }
 
   if (head !== "diff") return null

@@ -30,9 +30,13 @@ export interface ParsedPermissionToolCall {
   /**
    * Human-readable description from `_meta.claudeCode.title`
    * (claude-agent-acp ≥0.63; for Bash it is the model-authored `description`
-   * input). The permission path carries the RAW serde spelling `_meta` —
-   * unlike tool parts, whose `AcpEvent` field is named `meta`. Null when the
-   * agent supplied none; the dialog then falls back to `title`.
+   * input), else the hoisted `_meta.permission.title`. The permission path
+   * carries the RAW serde spelling `_meta` — unlike tool parts, whose
+   * `AcpEvent` field is named `meta`. Null when the agent supplied none; the
+   * dialog then falls back to `title`.
+   *
+   * A meta heading that merely restates {@link command} is not used — see
+   * {@link shellCommandLabel} for what replaces it and why.
    */
   description: string | null
   /**
@@ -42,6 +46,17 @@ export interface ParsedPermissionToolCall {
    * approval. Null for every agent that sends no such block.
    */
   reason: string | null
+  /**
+   * `_meta.permission.defaultToNo` (claude-agent-acp ≥0.77.0, from the CLI's
+   * SDK 0.3.268+ hint): this ask "must not be approvable by a stray
+   * keystroke". The adapter already orders the reject options first; the
+   * dialog additionally hands them the emphasis, so the one accent-coloured
+   * button on the card is the decline rather than an approve.
+   *
+   * False for every agent that sends no such hint — the absence of the flag
+   * must never read as "this ask is dangerous".
+   */
+  defaultToNo: boolean
   normalizedKind: string
   command: string | null
   cwd: string | null
@@ -251,22 +266,60 @@ function stringifyJson(value: unknown): string {
   }
 }
 
+/**
+ * The command a permission request is asking to run, dug out of whatever shape
+ * the agent used.
+ *
+ * `verbatim` marks a string LEAF sitting directly under a key that names a
+ * command (`command`, `cmd`, `script`, `args`, `argv`, `command_args`). Such a
+ * string is the command, so two heuristics that otherwise discard it do not
+ * apply. Both exist to stop the broad walk over an unknown outer value from
+ * mistaking a stringified payload for a command, and on a command leaf they
+ * only ever produce false negatives:
+ *
+ * - The `{` / `[` prefix is an envelope hint, and plenty of ordinary shell
+ *   opens with it — `[ -f package.json ] && pnpm test`, `{ npm test; }`, and
+ *   on PowerShell every `[System.Environment]::OSVersion`-style expression.
+ *   Only a string that FAILS to parse is shell: one that parses is a real
+ *   envelope and is unwrapped exactly as before, so an `argv` sent as
+ *   `["bash","-lc","ls"]` keeps joining and a parse that finds no command
+ *   still yields null.
+ * - {@link looksLikeDiffPayload} matches any command that WRITES a patch, e.g.
+ *   a `cat <<'EOF' > fix.patch` heredoc.
+ *
+ * Each of those left `command` null, and a null command means the approval card
+ * renders no command block at all — the one thing a command approval must never
+ * do, and exactly what claude-agent-acp 0.79.0 (#1070) set out to guarantee
+ * from its own side.
+ *
+ * The mark is granted for ONE hop and never travels. `args` is a command key on
+ * some agents and a generic MCP argument bag on others, so descending from it
+ * into an object drops straight back to the conservative reading: with
+ * `{args: {payload: '{"query":"hello"}'}}` the leaf is reached through
+ * `payload`, a wrapper key, and stays null rather than becoming a "command"
+ * that is really a tool argument — which would also suppress the card's
+ * description block.
+ */
 function extractCommandFromUnknownValue(
   value: unknown,
-  depth: number = 0
+  depth: number = 0,
+  verbatim: boolean = false
 ): string | null {
   if (depth > 4 || value === null || value === undefined) return null
   if (typeof value === "string") {
     const trimmed = value.trim()
-    if (!trimmed || looksLikeDiffPayload(trimmed)) return null
+    if (!trimmed) return null
     if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-      return trimmed
+      return !verbatim && looksLikeDiffPayload(trimmed) ? null : trimmed
     }
     try {
-      const parsed: unknown = JSON.parse(trimmed)
-      return extractCommandFromUnknownValue(parsed, depth + 1)
+      // A real envelope: read it exactly as before. The unwrapped value is
+      // structured data again, so it re-earns the mark through its own keys.
+      return extractCommandFromUnknownValue(JSON.parse(trimmed), depth + 1)
     } catch {
-      return null
+      // Not JSON at all. On a command leaf that makes it shell syntax; in the
+      // open it stays an unreadable payload.
+      return verbatim ? trimmed : null
     }
   }
 
@@ -287,7 +340,7 @@ function extractCommandFromUnknownValue(
     "command_args",
   ]
   for (const key of directKeys) {
-    const direct = extractCommandFromUnknownValue(obj[key], depth + 1)
+    const direct = extractCommandFromUnknownValue(obj[key], depth + 1, true)
     if (direct) return direct
   }
 
@@ -300,6 +353,9 @@ function extractCommandFromUnknownValue(
     "payload",
   ]
   for (const key of nestedKeys) {
+    // A wrapper, not a command field. Never carry the caller's mark in here:
+    // that is what would let an `args` bag's generic `payload` leaf be read as
+    // a command. Unmarked descent is exactly the pre-existing behaviour.
     const nested = extractCommandFromUnknownValue(obj[key], depth + 1)
     if (nested) return nested
   }
@@ -650,6 +706,35 @@ function parseAllowedPrompts(
   return prompts
 }
 
+/**
+ * Longest agent-authored label promoted to the card's heading. The heading is a
+ * single truncated line on both surfaces, so this is not what keeps it on one
+ * line — it keeps a pathological `description` (the field is agent-authored and
+ * unbounded on the wire) from riding the broadcast event and the snapshot as a
+ * heading. Same reasoning, and the same number, as
+ * {@link MAX_PERMISSION_CHANGE_CHARS}.
+ */
+const MAX_HEADING_CHARS = 200
+
+/**
+ * The model's own one-line label for a shell command, read straight off the
+ * tool input — the field claude-agent-acp itself used as the approval heading
+ * through 0.78.0 (`compactText(input.description)`) before #1070 replaced it
+ * with the command.
+ *
+ * Returns null when the label is missing or merely restates the command, so the
+ * caller keeps whatever heading it already had rather than printing the command
+ * a third time.
+ */
+function shellCommandLabel(
+  rawInputObj: ObjectLike | null,
+  command: string
+): string | null {
+  const label = pickString(rawInputObj, ["description"])
+  if (!label || label === command) return null
+  return label.slice(0, MAX_HEADING_CHARS)
+}
+
 function formatFallbackTitle(kind: string): string {
   const normalized = kind.replace(/_/g, " ").trim()
   if (!normalized) return "Permission Request"
@@ -790,10 +875,32 @@ export function parsePermissionToolCall(
   // ≥1.7.0, whose four fixed titles ("Run command?", "Make edits?", …) read
   // better as a heading than the generic `toolCall.title` beside them
   // ("Run command", "Edit files").
-  const description =
+  const metaHeading =
     pickString(asObject(pickValue(metaObj, ["claudeCode"])), ["title"]) ??
     pickString(asObject(pickValue(metaObj, ["permission"])), ["title"]) ??
     null
+
+  // …unless that heading IS the command the card already renders in its own
+  // block, in which case it is not a heading at all. claude-agent-acp 0.79.0
+  // (#1070) made a `Bash`/`PowerShell` approval's `_meta.permission.title` the
+  // raw command — byte-identical to `toolCall.title` — so that a client with no
+  // command view cannot approve a command it was never shown. codeg has that
+  // view, so taking the string as its heading would print the command twice and
+  // push the model's own one-line label off the card entirely: the adapter
+  // still ships it (as `toolCall.content`, since codeg advertises no
+  // `terminal_output` capability), but the dialog surfaces `contentText` only
+  // when NO structured view exists, and a command card always has one.
+  //
+  // Keyed on the SHAPE, not on an adapter version — the pinned version only
+  // governs what codeg INSTALLS, while `resolve_npx_command` launches whatever
+  // is on PATH, so "this is claude_code" never implies "this is ≥0.79.0". An
+  // equal-to-the-command heading reads the same on every agent and every
+  // version, including 0.78.0, whose `shellTitle` fell back to the bare tool
+  // name once a description passed its 160-char compaction limit.
+  const description =
+    metaHeading !== null && command !== null && metaHeading === command
+      ? (shellCommandLabel(rawInputObj, command) ?? metaHeading)
+      : metaHeading
 
   // Why the agent needs this approval, in its own words. codex-acp ≥1.7.0 puts
   // Codex's `reason` here; before 1.7.0 the same sentence WAS `toolCall.title`,
@@ -804,10 +911,20 @@ export function parsePermissionToolCall(
     pickValue(metaObj, ["permission"])
   )
 
+  // Same block, same `version: 1` gate as `reason` above. Strictly `true`: the
+  // extension documents the field as the literal `true` when present, and a
+  // truthy-coerced string or number would be a reshaped block this build does
+  // not understand.
+  const defaultToNo = parsePermissionMetaFlag(
+    pickValue(metaObj, ["permission"]),
+    "defaultToNo"
+  )
+
   return {
     title,
     description,
     reason,
+    defaultToNo,
     normalizedKind,
     command,
     cwd,
@@ -900,6 +1017,21 @@ function parsePermissionMetaDescription(permission: unknown): string | null {
   if (!record || record.version !== 1) return null
   const description = pickString(record, ["description"])
   return description ? description.slice(0, MAX_PERMISSION_CHANGE_CHARS) : null
+}
+
+/**
+ * Read a boolean flag out of the same request-level `_meta.permission` block
+ * {@link parsePermissionMetaDescription} reads, under the same `version: 1`
+ * gate.
+ *
+ * Only a real `true` counts. These flags gate a SAFER presentation, so the
+ * failure direction matters: an unrecognised shape has to fall back to the
+ * ordinary card, never to a card that claims a hint it did not understand.
+ */
+function parsePermissionMetaFlag(permission: unknown, key: string): boolean {
+  const record = asObject(permission)
+  if (!record || record.version !== 1) return false
+  return record[key] === true
 }
 
 /**

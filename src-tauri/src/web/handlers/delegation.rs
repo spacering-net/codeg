@@ -32,7 +32,12 @@ pub async fn set_delegation_settings(
     Json(params): Json<SetDelegationSettingsParams>,
 ) -> Result<Json<DelegationSettings>, AppCommandError> {
     let saved =
-        set_delegation_settings_core(&state.db.conn, &state.delegation_broker, params.settings)
+        set_delegation_settings_core(
+        &state.db.conn,
+        &state.delegation_broker,
+        &state.emitter,
+        params.settings,
+    )
             .await?;
     Ok(Json(saved))
 }

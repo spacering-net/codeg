@@ -74,6 +74,7 @@ function seedSession(
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
     ...overrides,
   }

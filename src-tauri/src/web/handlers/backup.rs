@@ -20,10 +20,13 @@ use tokio::io::AsyncWriteExt;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::backup::core::{self, BackupInputs, BackupOptions};
-use crate::commands::backup::manifest::BackupPreview;
+use crate::commands::backup::manifest::DegradedSqlite;
 use crate::commands::backup::restore::{
     self, ExternalRestoreMode, StagedRestore, EXPORT_TMP_DIR as BACKUP_TMP_DIR,
     UPLOAD_TMP_DIR as RESTORE_UPLOAD_DIR,
+};
+use crate::commands::backup::source::{
+    prepare_source_core, release_source_core, resolve_prepared_zip, PreparedSource,
 };
 use crate::workspace_transfer::{DownloadKind, DownloadTicketIssued, DownloadTicketSpec};
 
@@ -40,12 +43,24 @@ pub struct CreateBackupParams {
     pub passphrase: Option<String>,
 }
 
+/// A download ticket plus whatever the backup had to degrade on the way.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTicketResult {
+    #[serde(flatten)]
+    pub ticket: DownloadTicketIssued,
+    /// Third-party SQLite stores that could not be snapshotted cleanly. The
+    /// desktop command reads these off the returned manifest; discarding them
+    /// here would let the web UI report a degraded backup as a clean one.
+    pub degraded_sqlite: Vec<DegradedSqlite>,
+}
+
 /// Build a backup archive and return a single-use download ticket pointing at
 /// the new `GET /api/backup_download/{ticket}` route.
 pub async fn backup_create_ticket(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<CreateBackupParams>,
-) -> Result<Json<DownloadTicketIssued>, AppCommandError> {
+) -> Result<Json<BackupTicketResult>, AppCommandError> {
     let encrypted = params.passphrase.as_deref().is_some_and(|p| !p.is_empty());
     let ext = if encrypted { "codegbak" } else { "codeg.zip" };
 
@@ -60,7 +75,7 @@ pub async fn backup_create_ticket(
     let inputs = BackupInputs {
         conn: &state.db.conn,
         data_dir: &state.data_dir,
-        uploads_root: crate::paths::codeg_uploads_root(),
+        live_roots: crate::commands::backup::sections::LiveRoots::resolve(&state.data_dir),
         app_version: APP_VERSION,
         runtime_label: "server",
     };
@@ -70,7 +85,7 @@ pub async fn backup_create_ticket(
     };
     let result = core::create_backup_core(inputs, opts, &dest, &state.emitter, &op_id, &cancel).await;
     state.workspace_transfer.finish_transfer(&op_id).await;
-    result?;
+    let manifest = result?;
 
     let download_name = format!(
         "codeg-backup-{}.{ext}",
@@ -94,9 +109,12 @@ pub async fn backup_create_ticket(
         let _ = tokio::fs::remove_file(&dest).await;
     });
 
-    Ok(Json(DownloadTicketIssued {
-        url: format!("/api/backup_download/{}", ticket.ticket),
-        ..ticket
+    Ok(Json(BackupTicketResult {
+        ticket: DownloadTicketIssued {
+            url: format!("/api/backup_download/{}", ticket.ticket),
+            ..ticket
+        },
+        degraded_sqlite: manifest.degraded_sqlite,
     }))
 }
 
@@ -208,37 +226,52 @@ async fn receive_upload(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InspectParams {
+pub struct PrepareParams {
     pub upload_id: String,
     #[serde(default)]
     pub passphrase: Option<String>,
 }
 
-pub async fn backup_inspect(
+/// Decrypt once and hand back a handle the rest of the restore flow reuses,
+/// together with the compatibility preview.
+pub async fn backup_prepare_source(
     Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<InspectParams>,
-) -> Result<Json<BackupPreview>, AppCommandError> {
+    Json(params): Json<PrepareParams>,
+) -> Result<Json<PreparedSource>, AppCommandError> {
     let src = resolve_upload(&state, &params.upload_id)?;
-    let preview = core::inspect_backup_core(&src, params.passphrase.as_deref()).await?;
-    Ok(Json(preview))
+    // `true`: the upload is a transient temp file, and staging no longer
+    // deletes it — the prepared source takes it over.
+    let prepared =
+        prepare_source_core(&src, &state.data_dir, params.passphrase.as_deref(), true).await?;
+    Ok(Json(prepared))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceParams {
+    pub source_id: String,
+}
+
+pub async fn backup_release_source(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SourceParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    release_source_core(&state.data_dir, &params.source_id).map(Json)
 }
 
 pub async fn backup_scan_external_conflicts(
     Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<InspectParams>,
+    Json(params): Json<SourceParams>,
 ) -> Result<Json<Vec<crate::commands::backup::external::ExternalConflict>>, AppCommandError> {
-    let src = resolve_upload(&state, &params.upload_id)?;
-    let conflicts =
-        core::scan_external_conflicts_core(&src, params.passphrase.as_deref()).await?;
+    let zip = resolve_prepared_zip(&state.data_dir, &params.source_id)?;
+    let conflicts = core::scan_external_conflicts_core(&zip).await?;
     Ok(Json(conflicts))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageParams {
-    pub upload_id: String,
-    #[serde(default)]
-    pub passphrase: Option<String>,
+    pub source_id: String,
     /// Defaults to `Skip` when omitted.
     #[serde(default)]
     pub external_mode: Option<ExternalRestoreMode>,
@@ -256,30 +289,103 @@ pub async fn backup_restore_stage(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<StageParams>,
 ) -> Result<Json<StageResult>, AppCommandError> {
-    let src = resolve_upload(&state, &params.upload_id)?;
+    let zip = resolve_prepared_zip(&state.data_dir, &params.source_id)?;
     let (op_id, cancel) = state.workspace_transfer.register_transfer().await;
-    let staged = restore::stage_restore_core(
-        &src,
+    let staged =
+        restore::stage_restore_core(&zip, &state.data_dir, &state.emitter, &op_id, &cancel).await;
+    state.workspace_transfer.finish_transfer(&op_id).await;
+    let mut staged = staged?;
+    // Dispatched here, not inside the engine: this is the layer that can lock
+    // out new ACP connections while writing to the agents' own directories.
+    restore::dispatch_external_after_stage(
+        &mut staged,
         &state.data_dir,
-        params.passphrase.as_deref(),
+        &state.connection_manager,
         params.external_mode.unwrap_or_default(),
-        &state.emitter,
-        &op_id,
         &cancel,
     )
     .await;
-    state.workspace_transfer.finish_transfer(&op_id).await;
-    let staged = staged?;
 
-    // The verified copy now lives in staging; the upload temp is no longer
-    // needed. (A failed stage leaves it for a retry; startup sweeps the dir.)
-    let _ = tokio::fs::remove_file(&src).await;
+    // The verified copy now lives in staging, so neither the decrypted archive
+    // nor the upload is needed. (A failed stage keeps both for a retry; startup
+    // sweeps them.)
+    let _ = release_source_core(&state.data_dir, &params.source_id);
 
     Ok(Json(StageResult {
         needs_restart: true,
         restart_delay_ms: crate::update::runtime::restart_delay_ms(),
         staged,
     }))
+}
+
+/// Agents connected right now, so the mode picker can advise closing them
+/// before choosing "original locations". Advisory only.
+pub async fn backup_active_agents(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<String>>, AppCommandError> {
+    Ok(Json(
+        restore::active_agent_names(&state.connection_manager).await,
+    ))
+}
+
+pub async fn backup_list_safety_snapshots(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<restore::SafetySnapshot>>, AppCommandError> {
+    let data_dir = state.data_dir.clone();
+    let snapshots =
+        tokio::task::spawn_blocking(move || restore::list_safety_snapshots_core(&data_dir))
+            .await
+            .map_err(|e| {
+                AppCommandError::task_execution_failed("List snapshots failed")
+                    .with_detail(e.to_string())
+            })?;
+    Ok(Json(snapshots))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackParams {
+    pub snapshot_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackResult {
+    pub needs_restart: bool,
+    pub restart_delay_ms: u64,
+    pub snapshot_path: String,
+}
+
+pub async fn backup_rollback(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RollbackParams>,
+) -> Result<Json<RollbackResult>, AppCommandError> {
+    let data_dir = state.data_dir.clone();
+    let snapshot_path = tokio::task::spawn_blocking(move || {
+        restore::rollback_to_snapshot_core(&data_dir, &params.snapshot_id)
+    })
+    .await
+    .map_err(|e| {
+        AppCommandError::task_execution_failed("Rollback failed").with_detail(e.to_string())
+    })??;
+    Ok(Json(RollbackResult {
+        needs_restart: true,
+        restart_delay_ms: crate::update::runtime::restart_delay_ms(),
+        snapshot_path,
+    }))
+}
+
+pub async fn backup_discard_pending(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<bool>, AppCommandError> {
+    let data_dir = state.data_dir.clone();
+    tokio::task::spawn_blocking(move || restore::discard_pending_restore_core(&data_dir))
+        .await
+        .map_err(|e| {
+            AppCommandError::task_execution_failed("Discard pending failed")
+                .with_detail(e.to_string())
+        })?
+        .map(Json)
 }
 
 #[derive(Deserialize)]

@@ -2691,6 +2691,149 @@ pub async fn git_show_file(
     Ok(String::from_utf8_lossy(bytes).to_string())
 }
 
+/// A file's raw bytes at a git ref, base64-encoded — the binary counterpart of
+/// `git_show_file`, which refuses anything with a NUL byte. Image diffs need
+/// the "before" bytes of a PNG/JPEG/… that no text-shaped command can carry.
+#[derive(Debug, Serialize)]
+pub struct GitBlobBase64 {
+    /// False when the path does not exist at that ref — the shape of an added
+    /// file (no original) or a deleted one (no modified). Not an error: the
+    /// caller renders it as a one-sided diff.
+    pub exists: bool,
+    /// True when the *revision* is what could not be resolved, rather than the
+    /// path within it. Only the caller knows which of the two that is: the
+    /// parent of a root commit legitimately does not exist ("nothing came
+    /// before"), while a branch that stopped resolving mid-session is a failure
+    /// to look, not proof the file was added.
+    pub ref_missing: bool,
+    /// Base64 of the blob. Empty when `exists` is false or `too_large` is true.
+    pub data: String,
+    /// Blob size in bytes as git records it, reported even when the bytes were
+    /// skipped, so a caller can say how big the thing it refused to load is.
+    pub byte_size: u64,
+    pub too_large: bool,
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn git_show_file_base64(
+    path: String,
+    file: String,
+    ref_name: Option<String>,
+    max_bytes: Option<usize>,
+) -> Result<GitBlobBase64, AppCommandError> {
+    ensure_git_repo(&path)?;
+
+    let git_ref = ref_name.unwrap_or_else(|| "HEAD".to_string());
+    let file_spec = format!("{}:{}", git_ref, file);
+    let limit = max_bytes
+        .unwrap_or(FILE_BASE64_DEFAULT_MAX_BYTES)
+        .clamp(4_096, FILE_BASE64_MAX_BYTES) as u64;
+
+    let missing = |ref_missing: bool| GitBlobBase64 {
+        exists: false,
+        ref_missing,
+        data: String::new(),
+        byte_size: 0,
+        too_large: false,
+    };
+
+    // Pin the object id first. Sizing and reading `<ref>:<path>` directly would
+    // resolve the ref twice, and a ref that moves in between turns the size
+    // check into a promise about a different blob — the read would then buffer
+    // however many bytes the new one has before anything could refuse it. An
+    // oid is immutable, so the size below is a fact about the exact bytes the
+    // read returns.
+    let oid_output = crate::process::tokio_command("git")
+        .args(["rev-parse", "--verify", "--quiet", &file_spec])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(AppCommandError::io)?;
+
+    let oid = if oid_output.status.success() {
+        String::from_utf8_lossy(&oid_output.stdout).trim().to_string()
+    } else {
+        String::new()
+    };
+
+    if oid.is_empty() {
+        // `<ref>:<path>` fails the same way whether the path is not in that
+        // tree or the revision itself is gone, and the two mean opposite
+        // things to the reader. Ask which it was.
+        let revision = crate::process::tokio_command("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{}^{{commit}}", git_ref),
+            ])
+            .current_dir(&path)
+            .output()
+            .await
+            .map_err(AppCommandError::io)?;
+        return Ok(missing(!revision.status.success()));
+    }
+
+    // `cat-file -s` reads the object header only, so an oversized blob is
+    // reported without ever being buffered into memory (and then into a base64
+    // string 4/3 as large, crossing the IPC boundary).
+    let size_output = crate::process::tokio_command("git")
+        .args(["cat-file", "-s", &oid])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(AppCommandError::io)?;
+
+    // The oid resolved a moment ago, so a failure here is a broken read (a
+    // pruned or corrupt object), not evidence about the file's history.
+    if !size_output.status.success() {
+        return Err(git_command_error("cat-file", &size_output.stderr));
+    }
+
+    // A size we cannot read is not a size of zero: assuming the small end would
+    // wave an arbitrarily large blob past the cap below.
+    let byte_size: u64 = String::from_utf8_lossy(&size_output.stdout)
+        .trim()
+        .parse()
+        .map_err(|_| {
+            AppCommandError::external_command(
+                "git cat-file returned an unreadable object size",
+                String::from_utf8_lossy(&size_output.stdout).trim().to_string(),
+            )
+        })?;
+
+    if byte_size > limit {
+        return Ok(GitBlobBase64 {
+            exists: true,
+            ref_missing: false,
+            data: String::new(),
+            byte_size,
+            too_large: true,
+        });
+    }
+
+    // `cat-file blob` (not `show`) so the bytes come out raw, with no filter or
+    // eol conversion applied on the way.
+    let output = crate::process::tokio_command("git")
+        .args(["cat-file", "blob", &oid])
+        .current_dir(&path)
+        .output()
+        .await
+        .map_err(AppCommandError::io)?;
+
+    if !output.status.success() {
+        return Err(git_command_error("cat-file", &output.stderr));
+    }
+
+    Ok(GitBlobBase64 {
+        exists: true,
+        ref_missing: false,
+        data: base64::engine::general_purpose::STANDARD.encode(&output.stdout),
+        byte_size: output.stdout.len() as u64,
+        too_large: false,
+    })
+}
+
 pub(crate) async fn git_commit_core(
     emitter: &EventEmitter,
     folder_id: Option<i32>,
@@ -4989,7 +5132,7 @@ pub async fn read_file_base64(
 /// path validated by canonicalization cannot be redirected through a symlink
 /// swapped in afterward.
 #[cfg(unix)]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
@@ -4998,7 +5141,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(windows)]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     // FILE_FLAG_OPEN_REPARSE_POINT opens the reparse point itself instead of
     // following it, so a symlink/junction swapped in after validation is opened
@@ -5012,7 +5155,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
@@ -6953,6 +7096,187 @@ mod tests {
                 e.hash, e.pushed
             );
         }
+    }
+
+    /// A 1x1 transparent PNG: real binary bytes (NUL inside the IHDR length),
+    /// so it exercises the path `git_show_file` refuses.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    #[tokio::test]
+    async fn git_show_file_base64_returns_committed_binary_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("logo.png"), TINY_PNG).expect("write png");
+        git_run(p, &["add", "logo.png"]);
+        git_run(p, &["commit", "-q", "-m", "add logo"]);
+        // Working tree diverges from HEAD; the command must read the ref, not
+        // the file on disk.
+        std::fs::write(p.join("logo.png"), b"not a png").expect("overwrite png");
+
+        let blob = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            None,
+            None,
+        )
+        .await
+        .expect("show blob");
+
+        assert!(blob.exists, "committed file must exist at HEAD");
+        assert!(!blob.too_large);
+        assert_eq!(blob.byte_size, TINY_PNG.len() as u64);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&blob.data)
+                .expect("decode base64"),
+            TINY_PNG,
+            "bytes must round-trip unmodified"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_reports_missing_path_without_erroring() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+
+        let blob = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "added-later.png".to_string(),
+            None,
+            None,
+        )
+        .await
+        .expect("missing path is not an error");
+
+        assert!(!blob.exists, "an added file has no original side");
+        assert!(
+            !blob.ref_missing,
+            "HEAD resolved fine — it is the path that is not there"
+        );
+        assert!(blob.data.is_empty());
+        assert_eq!(blob.byte_size, 0);
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_separates_a_missing_ref_from_a_missing_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("logo.png"), TINY_PNG).expect("write png");
+        git_run(p, &["add", "logo.png"]);
+        git_run(p, &["commit", "-q", "-m", "add logo"]);
+
+        // A revision that does not resolve is not evidence that the file was
+        // added — the caller must be able to tell the two apart.
+        let gone = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            Some("deleted-branch".to_string()),
+            None,
+        )
+        .await
+        .expect("unresolvable ref is reported, not raised");
+
+        assert!(!gone.exists);
+        assert!(gone.ref_missing, "the revision is what went missing");
+
+        // The parent of the root commit: also unresolvable, and this is exactly
+        // the case where "nothing came before" is the truthful reading.
+        let root = git_capture(p, &["rev-parse", "HEAD"]);
+        let before_root = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            Some(format!("{}~1", root.trim())),
+            None,
+        )
+        .await
+        .expect("root commit has no parent");
+
+        assert!(!before_root.exists);
+        assert!(before_root.ref_missing);
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_flags_a_shallow_boundary_parent_as_missing() {
+        // A shallow clone's oldest commit keeps its `parent` header, but the
+        // graft hides that object: `rev-parse` cannot resolve it and
+        // `rev-list --parents` reports none. git's own diff reads such a commit
+        // as all-additions, and the commit-diff callers follow it by opting
+        // into `missingRefIsAbsent`; the command's job is only to report
+        // truthfully that the revision did not resolve.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let origin = dir.path().join("origin");
+        std::fs::create_dir(&origin).expect("mkdir origin");
+        git_run(&origin, &["init", "-q", "-b", "main"]);
+        std::fs::write(origin.join("logo.png"), TINY_PNG).expect("write png");
+        git_run(&origin, &["add", "logo.png"]);
+        git_run(&origin, &["commit", "-q", "-m", "c1"]);
+        std::fs::write(origin.join("logo.png"), b"changed").expect("rewrite png");
+        git_run(&origin, &["add", "logo.png"]);
+        git_run(&origin, &["commit", "-q", "-m", "c2"]);
+
+        let shallow = dir.path().join("shallow");
+        git_run(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--depth",
+                "1",
+                &format!("file://{}", origin.to_string_lossy()),
+                &shallow.to_string_lossy(),
+            ],
+        );
+
+        let head = git_capture(&shallow, &["rev-parse", "HEAD"]);
+        let blob = git_show_file_base64(
+            shallow.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            Some(format!("{}~1", head.trim())),
+            None,
+        )
+        .await
+        .expect("a truncated history is reported, not raised");
+
+        assert!(!blob.exists);
+        assert!(
+            blob.ref_missing,
+            "the parent revision is unreachable in a shallow clone"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_skips_bytes_over_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("big.png"), vec![0u8; 8_000]).expect("write big");
+        git_run(p, &["add", "big.png"]);
+        git_run(p, &["commit", "-q", "-m", "add big"]);
+
+        // 4_096 is the floor the clamp allows, and the blob is comfortably over it.
+        let blob = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "big.png".to_string(),
+            None,
+            Some(4_096),
+        )
+        .await
+        .expect("show blob");
+
+        assert!(blob.exists, "the blob is there, we just refused to load it");
+        assert!(blob.too_large);
+        assert!(blob.data.is_empty(), "no bytes when over the cap");
+        assert_eq!(blob.byte_size, 8_000, "size is reported anyway");
     }
 
     #[tokio::test]

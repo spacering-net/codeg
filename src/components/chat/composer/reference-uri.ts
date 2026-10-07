@@ -25,14 +25,46 @@ const SKILL_URI = /^codeg:\/\/skill\/(.+)$/i
 // the transcript renders it as an inert file badge rather than a blocked link.
 const EMBEDDED_URI_PREFIX = "codeg://embedded/"
 
-/** Mint a fresh inert display uri for a path-less embedded attachment badge. */
-export function buildEmbeddedReferenceUri(): string {
-  return `${EMBEDDED_URI_PREFIX}${randomUUID()}`
+/**
+ * Mint a fresh inert display uri for a path-less embedded attachment badge.
+ *
+ * Given `ref` — the uri of the block the badge stands in for, when the sent
+ * message should still say where it came from (a page the built-in browser
+ * handed over) — the display uri carries it: {@link embeddedReferenceUriFor}
+ * of it, with this badge's own id as the fragment, so two badges for one page
+ * stay two. Otherwise the path is just that id.
+ */
+export function buildEmbeddedReferenceUri(ref?: string): string {
+  const id = randomUUID()
+  return ref
+    ? `${embeddedReferenceUriFor(ref)}#${id}`
+    : `${EMBEDDED_URI_PREFIX}${id}`
 }
 
 /** Whether `uri` is an embedded-attachment display uri (see {@link buildEmbeddedReferenceUri}). */
 export function isEmbeddedReferenceUri(uri: string): boolean {
   return uri.toLowerCase().startsWith(EMBEDDED_URI_PREFIX)
+}
+
+/** The display uri for an embedded attachment by its ref alone — what a
+ *  transcript rebuilds for a block it finds in an agent's record, and the
+ *  part a composer badge minted with that ref shares with it. */
+export function embeddedReferenceUriFor(ref: string): string {
+  return `${EMBEDDED_URI_PREFIX}${encodeURIComponent(ref)}`
+}
+
+/** The ref an embedded display uri carries, or null when it carries none: the
+ *  path of a badge minted without one is a bare random id, never a uri. */
+export function refOfEmbeddedReferenceUri(uri: string): string | null {
+  if (!isEmbeddedReferenceUri(uri)) return null
+  const path = uri.slice(EMBEDDED_URI_PREFIX.length).split("#", 1)[0]
+  let ref: string
+  try {
+    ref = decodeURIComponent(path)
+  } catch {
+    return null
+  }
+  return /^[a-z][a-z0-9+.-]*:/i.test(ref) ? ref : null
 }
 
 /**

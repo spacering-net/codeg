@@ -135,9 +135,18 @@ export const OPENCODE_PERMISSION_KEYS: readonly OpenCodePermissionKeyMeta[] = [
     defaultAction: "allow",
     patternExample: "src/**",
   },
+  // Upstream types `lsp` as a `PermissionRuleConfig` (see `InputObject` in
+  // `config/v1/permission.ts`), i.e. it takes per-operation patterns like the
+  // keys above — `lsp_diagnostics`, `lsp_goto_definition`, … — not just a bare
+  // action.
+  {
+    key: "lsp",
+    fineGrained: true,
+    defaultAction: "allow",
+    patternExample: "lsp_diagnostics",
+  },
   { key: "webfetch", fineGrained: false, defaultAction: "allow" },
   { key: "websearch", fineGrained: false, defaultAction: "allow" },
-  { key: "lsp", fineGrained: false, defaultAction: "allow" },
   { key: "todowrite", fineGrained: false, defaultAction: "allow" },
   { key: "question", fineGrained: false, defaultAction: "allow" },
   { key: "doom_loop", fineGrained: false, defaultAction: "ask" },

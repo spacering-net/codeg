@@ -90,10 +90,12 @@ export function ImageActions({
   image,
   className,
   children,
+  as: Tag = "div",
 }: {
   image: UserImageDisplay
   className?: string
   children: ReactNode
+  as?: "div" | "span"
 }) {
   const t = useTranslations("Folder.chat.messageList")
   const { canCopy, copy, download } = useImageActions()
@@ -119,7 +121,7 @@ export function ImageActions({
   // without calling preventDefault is what lets it appear.
   if (!canCopy) {
     return (
-      <div
+      <Tag
         data-image-actions=""
         data-image-actions-native=""
         className={className}
@@ -127,21 +129,21 @@ export function ImageActions({
         onPointerDown={stopNonMousePointerDown}
       >
         {children}
-      </div>
+      </Tag>
     )
   }
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div
+        <Tag
           data-image-actions=""
           className={className}
           onContextMenu={stopContextMenu}
           onPointerDown={stopNonMousePointerDown}
         >
           {children}
-        </div>
+        </Tag>
       </ContextMenuTrigger>
       {/* The menu is portaled, but its click still bubbles through the React
           tree to whatever the trigger sits inside — in the preview dialog that

@@ -1,0 +1,25 @@
+{
+  "//": [
+    "Separate from the repo's tsconfig.json, which excludes this directory.",
+    "The vendored Playwright sources are written against Playwright's own",
+    "compiler settings; holding them to ours (noUnusedLocals, noUnusedParameters)",
+    "would mean editing upstream code, and editing it is what makes an update a",
+    "merge instead of a copy. esbuild does not typecheck, so nothing here gates",
+    "the build — `pnpm browser:agent:check` runs this for our own entry's sake."
+  ],
+  "compilerOptions": {
+    "target": "ES2021",
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["vitest/globals"],
+    "paths": {
+      "@isomorphic/*": ["./vendor/playwright/isomorphic/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "vendor/**/*.ts"]
+}

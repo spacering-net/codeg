@@ -2,15 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useTranslations } from "next-intl"
-import {
-  ChevronRight,
-  ChevronUp,
-  FileIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  Home,
-  Loader2,
-} from "lucide-react"
+import { ChevronRight, ChevronUp, FileIcon, Home, Loader2 } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -26,6 +18,10 @@ import { cn } from "@/lib/utils"
 import { getHomeDirectory, listDirectoryWithFiles } from "@/lib/api"
 import { parentFsPath } from "@/lib/path-utils"
 import type { DirectoryItem } from "@/lib/types"
+
+// One nesting level, in px. Matches the file tree's own step
+// (FILE_TREE_INDENT_STEP_REM) so every tree in the app indents alike.
+const INDENT_STEP_PX = 16
 
 interface ServerFileBrowserDialogProps {
   open: boolean
@@ -205,7 +201,7 @@ export function ServerFileBrowserDialog({
       return (
         <div
           className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
-          style={{ paddingLeft: `${depth * 20 + 8}px` }}
+          style={{ paddingLeft: `${depth * INDENT_STEP_PX + 8}px` }}
         >
           <Loader2 className="size-3.5 animate-spin" />
           <span>{t("loading")}</span>
@@ -219,7 +215,7 @@ export function ServerFileBrowserDialog({
       return (
         <div
           className="py-2 text-sm text-muted-foreground"
-          style={{ paddingLeft: `${depth * 20 + 28}px` }}
+          style={{ paddingLeft: `${depth * INDENT_STEP_PX + 28}px` }}
         >
           {t("emptyDirectory")}
         </div>
@@ -237,7 +233,7 @@ export function ServerFileBrowserDialog({
               "flex w-full items-center gap-1 rounded px-2 py-1 text-left text-sm transition-colors hover:bg-muted/50",
               isSelected && "bg-accent text-accent-foreground"
             )}
-            style={{ paddingLeft: `${depth * 20 + 8}px` }}
+            style={{ paddingLeft: `${depth * INDENT_STEP_PX + 8}px` }}
             onClick={() => {
               if (entry.isDir) {
                 handleToggleExpand(entry.path)
@@ -250,25 +246,23 @@ export function ServerFileBrowserDialog({
             }}
             type="button"
           >
+            {/* One leading column for both kinds: a directory states itself
+                with the expand chevron alone (no folder icon beside it), a file
+                puts its icon in that same slot — so names line up at any
+                depth. */}
             <span className="shrink-0 p-0.5">
-              <ChevronRight
-                className={cn(
-                  "size-3.5 text-muted-foreground transition-transform",
-                  isExpanded && "rotate-90",
-                  !entry.isDir && "invisible",
-                  entry.isDir && !entry.hasChildren && "invisible"
-                )}
-              />
-            </span>
-            {entry.isDir ? (
-              isExpanded ? (
-                <FolderOpenIcon className="size-4 shrink-0 text-blue-500" />
+              {entry.isDir ? (
+                <ChevronRight
+                  className={cn(
+                    "size-3.5 text-muted-foreground transition-transform",
+                    isExpanded && "rotate-90",
+                    !entry.hasChildren && "invisible"
+                  )}
+                />
               ) : (
-                <FolderIcon className="size-4 shrink-0 text-blue-500" />
-              )
-            ) : (
-              <FileIcon className="size-4 shrink-0 text-muted-foreground" />
-            )}
+                <FileIcon className="size-3.5 text-muted-foreground" />
+              )}
+            </span>
             <span className="truncate">{entry.name}</span>
           </button>
           {entry.isDir && isExpanded && renderEntries(entry.path, depth + 1)}

@@ -57,7 +57,9 @@ import type { GitStatusEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { DiffViewer } from "@/components/diff/diff-viewer"
-import { languageFromPath } from "@/lib/language-detect"
+import { ImageDiffView } from "@/components/diff/image-diff-view"
+import { loadImageDiffSides, type ImageDiffSides } from "@/lib/image-diff"
+import { isBinaryImageFile, languageFromPath } from "@/lib/language-detect"
 import { toErrorMessage } from "@/lib/app-error"
 
 interface CommitWorkspaceProps {
@@ -236,6 +238,13 @@ export function CommitWorkspace({
   const [diffModified, setDiffModified] = useState("")
   const [diffLanguage, setDiffLanguage] = useState("plaintext")
   const [diffFile, setDiffFile] = useState<string | null>(null)
+  // Carries the file it was loaded for: the several places that drop the diff
+  // only reset `diffFile`, and matching on it keeps a previous file's pixels
+  // from outliving the selection that produced them.
+  const [diffImage, setDiffImage] = useState<{
+    file: string
+    sides: ImageDiffSides
+  } | null>(null)
   const messageRef = useRef("")
   const [hasMessage, setHasMessage] = useState(false)
   const [messageInputKey, setMessageInputKey] = useState(0)
@@ -292,20 +301,42 @@ export function CommitWorkspace({
     [untrackedEntries]
   )
 
+  // Only the newest selection may write to the diff pane. Two selections in
+  // flight can settle in either order, and an older one landing last would
+  // otherwise overwrite the current file's content — or clear its spinner —
+  // with something the user is no longer looking at.
+  const diffRequestRef = useRef(0)
+
   // Shared diff loading logic — extracted to avoid duplication
   const loadDiff = useCallback(
     async (file: string, allEntries?: GitStatusEntry[]) => {
       if (!folderPath) return
+      const requestId = ++diffRequestRef.current
       setDiffFile(file)
       setDiffLanguage(languageFromPath(file))
       setLoadingDiff(true)
       setDiffOriginal("")
       setDiffModified("")
+      setDiffImage(null)
 
       try {
         const statusSource = allEntries ?? entriesRef.current
         const isUntracked =
           statusSource.find((e) => e.file === file)?.status === UNTRACKED_STATUS
+
+        if (isBinaryImageFile(file)) {
+          // An untracked file has no blob at HEAD either way, so the ref read
+          // resolves to "absent" on its own — no need to special-case it.
+          const sides = await loadImageDiffSides(
+            folderPath,
+            file,
+            { kind: "ref", ref: "HEAD", missingRefIsAbsent: true },
+            { kind: "worktree" }
+          )
+          if (diffRequestRef.current !== requestId) return
+          setDiffImage({ file, sides })
+          return
+        }
 
         const [originalContent, modifiedContent] = await Promise.all([
           isUntracked
@@ -316,13 +347,15 @@ export function CommitWorkspace({
             .catch(() => ""),
         ])
 
+        if (diffRequestRef.current !== requestId) return
         setDiffOriginal(originalContent)
         setDiffModified(modifiedContent)
       } catch {
+        if (diffRequestRef.current !== requestId) return
         setDiffOriginal("")
         setDiffModified("")
       } finally {
-        setLoadingDiff(false)
+        if (diffRequestRef.current === requestId) setLoadingDiff(false)
       }
     },
     [folderPath]
@@ -370,6 +403,7 @@ export function CommitWorkspace({
     if (!folderPath) return
     setDiffOriginal("")
     setDiffModified("")
+    setDiffImage(null)
     setDiffLanguage("plaintext")
     setDiffFile(null)
     messageRef.current = ""
@@ -783,11 +817,10 @@ export function CommitWorkspace({
       return (
         <ContextMenu key={`tracked:${node.path}`}>
           <ContextMenuTrigger>
-            <FileTreeFile
-              name={node.name}
-              path={node.path}
-              className="gap-1 px-1.5 py-1"
-            >
+            {/* No padding override: the row keeps the primitive's own px-2 so
+                the checkbox lands in the column a sibling folder spends on its
+                chevron, and both rows end flush on the right. */}
+            <FileTreeFile name={node.name} path={node.path}>
               <button
                 type="button"
                 onClick={(e) => {
@@ -888,11 +921,10 @@ export function CommitWorkspace({
       return (
         <ContextMenu key={`untracked:${node.path}`}>
           <ContextMenuTrigger>
-            <FileTreeFile
-              name={node.name}
-              path={node.path}
-              className="gap-1 px-1.5 py-1"
-            >
+            {/* No padding override: the row keeps the primitive's own px-2 so
+                the checkbox lands in the column a sibling folder spends on its
+                chevron, and both rows end flush on the right. */}
+            <FileTreeFile name={node.name} path={node.path}>
               <button
                 type="button"
                 onClick={(e) => {
@@ -1273,6 +1305,15 @@ export function CommitWorkspace({
                   {t("loadingDiff")}
                 </div>
               </>
+            ) : diffImage && diffImage.file === diffFile ? (
+              <ImageDiffView
+                key={diffFile}
+                original={diffImage.sides.original}
+                modified={diffImage.sides.modified}
+                originalLabel={t("head")}
+                modifiedLabel={t("workingTree")}
+                className="h-full [&>div:first-child]:h-9 [&>div:first-child]:py-0"
+              />
             ) : (
               <DiffViewer
                 key={diffFile}

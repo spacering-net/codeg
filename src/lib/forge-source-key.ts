@@ -6,8 +6,10 @@
  * or a chip simply never matches its task; any rule change lands in both
  * places (`src-tauri/src/forge/mod.rs`).
  */
+import type { ForgeProviderId } from "@/lib/types"
+
 export function buildForgeSourceKey(args: {
-  provider: "github" | "gitlab"
+  provider: ForgeProviderId
   serverHost: string
   ownerRepo: string
   kind: "issue" | "pr"

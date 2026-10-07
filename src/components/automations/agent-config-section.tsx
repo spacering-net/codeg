@@ -15,7 +15,12 @@ import {
 } from "@/components/ui/select"
 import { SelectorTooltip } from "@/components/chat/selector-tooltip"
 import { cn } from "@/lib/utils"
-import type { AgentOptionsSnapshot, SessionConfigOptionInfo } from "@/lib/types"
+import type {
+  AgentOptionsSnapshot,
+  AgentType,
+  SessionConfigOptionInfo,
+} from "@/lib/types"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 
 // Picking this clears the override (inherit the agent's own default). Mirrors
 // delegation-agent-defaults.tsx; the codeg prefix avoids colliding with a real
@@ -26,6 +31,10 @@ interface AgentConfigSectionProps {
   /** Probe result, owned by the parent (so a single probe also feeds the `/`
    *  command menu). Null while loading / on error / before the first probe. */
   snapshot: AgentOptionsSnapshot | null
+  /** Which agent the snapshot came from. Only used to localise the agent's own
+   *  mode / option vocabulary (see `lib/agent-label-vocabulary`); optional so a
+   *  caller without it keeps verbatim rendering. */
+  agentType?: AgentType | null
   loading: boolean
   error: string | null
   onReload: () => void
@@ -55,8 +64,10 @@ export function AgentConfigSection({
   onModeChange,
   onConfigChange,
   layout = "stacked",
+  agentType,
 }: AgentConfigSectionProps) {
   const t = useTranslations("Automations")
+  const vocabulary = useAgentVocabulary(agentType)
   const inline = layout === "inline"
 
   if (loading) {
@@ -138,7 +149,7 @@ export function AgentConfigSection({
           allowInherit={!inline}
           currentValue={snapshot.modes.current_mode_id}
           onChange={onModeChange}
-          items={snapshot.modes.available_modes.map((m) => ({
+          items={vocabulary.modes(snapshot.modes.available_modes).map((m) => ({
             value: m.id,
             name: m.name,
             description: m.description,
@@ -148,7 +159,7 @@ export function AgentConfigSection({
       {snapshot.config_options.map((option) => (
         <ConfigOptionRow
           key={option.id}
-          option={option}
+          option={vocabulary.configOption(option)}
           value={configValues[option.id] ?? null}
           inheritLabel={t("inherit")}
           inline={inline}

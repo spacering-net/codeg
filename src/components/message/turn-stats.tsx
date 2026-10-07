@@ -18,6 +18,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useMessageScroll } from "@/components/message/message-scroll-context"
+import { useModelLabel } from "@/components/message/model-label-context"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { formatTokenCount } from "@/lib/token-format"
 import { cn, copyTextToClipboard } from "@/lib/utils"
@@ -34,9 +35,17 @@ interface TurnStatsProps {
   /** ISO timestamp marking when the assistant reply finished. */
   completedAt?: string | null
   /** Fork the session at THIS reply. Undefined hides the affordance — the
-   * session has no live connection, the agent has no `session/fork`, or a turn
-   * is in flight. */
+   * session has no live connection, the agent has no `session/fork`, or this
+   * surface doesn't own the conversation. */
   onForkFromHere?: () => void
+  /** Forking is possible here but not right now. The button stays in place,
+   * greyed out, and says why on hover — it used to vanish for the length of
+   * every reply, which moved the whole icon row. */
+  forkDisabled?: boolean
+  /** Why it is greyed out: a turn is in flight (`busy`), or this reply has no
+   * name the backend can resolve yet (`unnamed` — the post-turn reparse fills
+   * it in a moment later). Only read while `forkDisabled`. */
+  forkDisabledReason?: "busy" | "unnamed"
 }
 
 const iconButtonClass =
@@ -52,11 +61,14 @@ export function TurnStats({
   copyText = "",
   completedAt,
   onForkFromHere,
+  forkDisabled = false,
+  forkDisabledReason = "busy",
 }: TurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.messageList")
   const tTasks = useTranslations("Tasks")
   const scroll = useMessageScroll()
+  const modelLabel = useModelLabel()
   const [isCopied, setIsCopied] = useState(false)
   const timeoutRef = useRef<number>(0)
   const shortTimeFormatter = useMemo(
@@ -90,9 +102,30 @@ export function TurnStats({
     ? fullTimeFormatter.format(completedAtDate)
     : null
 
-  const displayModels = models?.length ? models : model ? [model] : []
+  // The transcript records whatever id the agent's backend used, which for some
+  // agents is an account-internal key (qoder writes `qfmodel` for the model its
+  // own picker calls `Qwen3.8-Flash`). Show the picker's name so this row and
+  // the composer's selector can't disagree; unknown ids pass through unchanged.
+  const displayModels = (models?.length ? models : model ? [model] : []).map(
+    (id) => modelLabel(id) ?? id
+  )
   const hasCopy = copyText.trim().length > 0
   const hasUsage = Boolean(usage)
+  // An all-zero usage means "nobody said", not "nothing was spent": a reply
+  // that exists cannot have cost zero tokens. Qoder zeroes every counter for
+  // its own hosted models (see `QODER_EXPOSE_TOKEN_USAGE` in the registry), and
+  // a confident "Input 0" reads as a broken counter rather than as absent data.
+  // Same judgement the composer's context popover makes about cache rows.
+  //
+  // Deliberately NOT folded into `hasUsage`: that one gates `hasJump`, where a
+  // reply IS substantial whether or not its counters survived.
+  const hasTokenCounts =
+    usage != null &&
+    usage.input_tokens +
+      usage.output_tokens +
+      usage.cache_creation_input_tokens +
+      usage.cache_read_input_tokens >
+      0
   // The duration itself is shown by the reply's fold header
   // (`CompletedTurnContent`), not here — this row only uses it as a signal that
   // the turn was substantial.
@@ -181,16 +214,31 @@ export function TurnStats({
         {onForkFromHere && (
           <Tooltip>
             <TooltipTrigger asChild>
+              {/* `aria-disabled`, deliberately NOT the native `disabled`: a
+                  disabled element receives no pointer events, so the tooltip —
+                  the only thing that says WHY the button is dead — would never
+                  open. Staying focusable also keeps it reachable by keyboard. */}
               <button
                 type="button"
-                onClick={onForkFromHere}
-                className={iconButtonClass}
+                onClick={forkDisabled ? undefined : onForkFromHere}
+                aria-disabled={forkDisabled || undefined}
+                className={cn(
+                  iconButtonClass,
+                  forkDisabled &&
+                    "cursor-not-allowed opacity-50 hover:bg-transparent hover:text-muted-foreground"
+                )}
                 aria-label={t("forkFromHere")}
               >
                 <Split aria-hidden="true" className="h-3.5 w-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="top">{t("forkFromHere")}</TooltipContent>
+            <TooltipContent side="top">
+              {forkDisabled
+                ? forkDisabledReason === "unnamed"
+                  ? t("forkNotReady")
+                  : t("forkBusy")
+                : t("forkFromHere")}
+            </TooltipContent>
           </Tooltip>
         )}
         {displayModels.length > 0 && (
@@ -211,7 +259,7 @@ export function TurnStats({
             </TooltipContent>
           </Tooltip>
         )}
-        {hasUsage && usage && (
+        {hasTokenCounts && usage && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button

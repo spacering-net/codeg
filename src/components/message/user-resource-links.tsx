@@ -10,10 +10,12 @@ interface UserResourceLinksProps {
 
 /**
  * The attachment summary row shown beneath a user message: one grey chip per
- * attached file. This is the original (pre-rich-composer) attachment style — a
- * plain, non-interactive list that complements the inline file badges now kept
- * in the message prose (markdown-link → ReferenceBadge). Images are handled
- * separately as thumbnails.
+ * attached file — and for what the built-in browser handed over, one per page
+ * it came from, the badge in the prose saying what was taken. This is the
+ * original (pre-rich-composer) attachment style — a plain, non-interactive list
+ * that complements the inline file badges now kept in the message prose
+ * (markdown-link → ReferenceBadge). Images are handled separately as
+ * thumbnails.
  */
 export function UserResourceLinks({
   resources,

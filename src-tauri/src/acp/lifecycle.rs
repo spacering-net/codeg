@@ -35,9 +35,11 @@ use tokio::sync::RwLock;
 /// Per-connection worker queue depth. Sized for the **filtered** event set
 /// only (see `is_lifecycle_relevant`) — high-frequency events (ContentDelta,
 /// ToolCall*, PermissionRequest) are dropped at the dispatcher and never
-/// enter the queue. The remaining 6 event types arrive at most a handful
+/// enter the queue. The remaining 7 event types arrive at most a handful
 /// of times per turn, so 64 slots is comfortable headroom for a sustained
 /// SQLite stall without forcing the dispatcher to block on `send`.
+/// (SessionStarted, TurnComplete, ConversationLinked, NativeSessionTitle,
+/// TranscriptRolledOver, Disconnected, Error.)
 const WORKER_QUEUE_CAPACITY: usize = 64;
 
 /// Whether an event needs to reach the per-connection worker. Mirrors the
@@ -66,6 +68,7 @@ fn is_lifecycle_relevant(event: &AcpEvent) -> bool {
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationLinked { .. }
             | AcpEvent::NativeSessionTitle { .. }
+            | AcpEvent::TranscriptRolledOver { .. }
             | AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected
             }
@@ -246,21 +249,26 @@ pub(crate) async fn handle_event(
             //
             // The target status depends on the stop reason: `end_turn` is the
             // only success case and goes to `PendingReview`. `refusal`,
-            // `max_tokens`, `max_turn_requests`, `unknown`, and `empty`
-            // indicate the turn failed (often a backend/gateway error
-            // masquerading as `Refusal` per the ACP spec gap, or — common
-            // with OpenCode — a silent EndTurn that produced no output), so
-            // we flip to `Cancelled` and pair the transition with an
+            // `max_tokens`, `max_turn_requests`, `unknown`, `empty`,
+            // `auth_required` and `rejected` indicate the turn failed (often a
+            // backend/gateway error masquerading as `Refusal` per the ACP spec
+            // gap, or — common with OpenCode — a silent EndTurn that produced no
+            // output), so we flip to `Cancelled` and pair the transition with an
             // `AcpEvent::Error` toast emitted upstream by `connection.rs`.
+            // `auth_required` and `rejected` are the ones whose CONNECTION
+            // survives (the agent rejected the prompt — with ACP's -32000 when
+            // it wants the user to sign in, with anything else when it simply
+            // would not run this one), but their turn is just as dead as the
+            // others — leaving those rows out of this arm would strand them at
+            // InProgress for good.
             // `cancelled` is already written by `manager.cancel()` (eager
             // CAS InProgress → Cancelled at the user-cancel entry point), so
             // we leave it alone here. `completed` transitions remain
             // frontend-driven.
             let target_status = match stop_reason.as_str() {
                 "end_turn" => Some(ConversationStatus::PendingReview),
-                "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" => {
-                    Some(ConversationStatus::Cancelled)
-                }
+                "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty"
+                | "auth_required" | "rejected" => Some(ConversationStatus::Cancelled),
                 // `cancelled` and any future reason: don't write here.
                 _ => None,
             };
@@ -347,6 +355,43 @@ pub(crate) async fn handle_event(
             }
             Ok(())
         }
+        AcpEvent::TranscriptRolledOver { transcript_id } => {
+            // Claude `/clear` wrote a new transcript uuid. The ACP session id
+            // on SessionState is unchanged and must stay that way (prompts
+            // still use it). Re-point the conversation row in place — the
+            // outgoing id is this conversation's previous transcript, so it
+            // is passed as `continues` to avoid a sidebar split.
+            let Some((state_arc, emitter)) =
+                manager.get_state_and_emitter(&envelope.connection_id).await
+            else {
+                return Ok(());
+            };
+            let conversation_id = { state_arc.read().await.conversation_id };
+            if let Some(cid) = conversation_id {
+                // Continues is the row's current pointer (the file we are
+                // leaving), not SessionState.external_id — after the first
+                // `/clear` those diverge, and using the ACP id would split
+                // on a second rollover.
+                let Ok(current) = conversation_service::get_by_id(db_conn, cid).await else {
+                    return Ok(());
+                };
+                let continues: Vec<String> = current.external_id.into_iter().collect();
+                let preserved = conversation_service::bind_external_id(
+                    db_conn,
+                    cid,
+                    transcript_id,
+                    &continues,
+                )
+                .await?;
+                crate::commands::conversations::emit_conversation_upsert(&emitter, db_conn, cid)
+                    .await;
+                crate::commands::conversations::emit_preserved_conversation(
+                    &emitter, db_conn, preserved,
+                )
+                .await;
+            }
+            Ok(())
+        }
         // Other events don't need cross-connection DB persistence today; extend
         // this dispatcher with new arms as the lifecycle scope grows.
         _ => Ok(()),
@@ -420,6 +465,12 @@ async fn forward_turn_complete_to_broker(
             Some(conversation_id),
         ),
         "empty" => DelegationOutcome::from_err(DelegationError::ChildEmpty, Some(conversation_id)),
+        "auth_required" => {
+            DelegationOutcome::from_err(DelegationError::ChildAuthRequired, Some(conversation_id))
+        }
+        "rejected" => {
+            DelegationOutcome::from_err(DelegationError::ChildRejected, Some(conversation_id))
+        }
         other => DelegationOutcome::from_err(
             DelegationError::ChildUnknown(other.to_string()),
             Some(conversation_id),
@@ -1564,7 +1615,7 @@ async fn connection_worker_loop(
 /// connections, workers run independently so a slow SQLite write on one
 /// connection doesn't backpressure the others.
 ///
-/// All forwarded events (the 6 types in `is_lifecycle_relevant`) use
+/// All forwarded events (the 7 types in `is_lifecycle_relevant`) use
 /// blocking `send().await` to guarantee delivery even when the worker
 /// mailbox is full — `SessionStarted` (writes external_id) and
 /// `TurnComplete` (writes terminal status) are correctness-critical and
@@ -1780,6 +1831,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reloaded.external_id.as_deref(), Some("ext-99"));
+    }
+
+    #[tokio::test]
+    async fn handle_event_clear_rollover_repoints_external_id_in_place() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/test-clear-rollover").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        conversation_service::bind_external_id(&db.conn, conv.id, "old-sess", &[])
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        {
+            let mut map = mgr.connections.lock().await;
+            let conn = fake_connection_with_state("c1", Some(conv.id));
+            conn.state.write().await.external_id = Some("old-sess".into());
+            map.insert("c1".to_string(), conn);
+        }
+        let env = EventEnvelope {
+            seq: 1,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TranscriptRolledOver {
+                transcript_id: "new-sess".into(),
+            },
+        };
+        handle_event(&db.conn, &mgr, &env, None).await.unwrap();
+        let reloaded = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(reloaded.external_id.as_deref(), Some("new-sess"));
+
+        // A second rollover must also stay in place (ACP id still old-sess).
+        let env2 = EventEnvelope {
+            seq: 2,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TranscriptRolledOver {
+                transcript_id: "newer-sess".into(),
+            },
+        };
+        handle_event(&db.conn, &mgr, &env2, None).await.unwrap();
+        let reloaded = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(reloaded.external_id.as_deref(), Some("newer-sess"));
     }
 
     #[tokio::test]
@@ -2096,12 +2193,17 @@ mod tests {
         // The lifecycle subscriber must flip the conversation to Cancelled
         // for refusal/max_tokens/max_turn_requests/unknown so the user sees
         // a terminal state instead of a misleading PendingReview ("待审查").
+        // `auth_required` is synthesized by `run_conversation_loop` when the
+        // agent rejects the prompt with ACP's -32000: the CONNECTION survives
+        // that one, but the turn did not, so the row must still leave
+        // InProgress — nothing else would ever move it.
         let cases = [
             "refusal",
             "max_tokens",
             "max_turn_requests",
             "unknown",
             "empty",
+            "auth_required",
         ];
         for stop_reason in cases {
             let db = test_helpers::fresh_in_memory_db().await;
@@ -2488,6 +2590,9 @@ mod tests {
         }));
         assert!(is_lifecycle_relevant(&AcpEvent::NativeSessionTitle {
             title: "Fix login".into(),
+        }));
+        assert!(is_lifecycle_relevant(&AcpEvent::TranscriptRolledOver {
+            transcript_id: "new-sess".into(),
         }));
         assert!(is_lifecycle_relevant(&AcpEvent::StatusChanged {
             status: ConnectionStatus::Disconnected,

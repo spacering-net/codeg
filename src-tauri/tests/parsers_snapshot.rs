@@ -779,6 +779,380 @@ fn opencode_tool_call_session_snapshot() {
     });
 }
 
+/// The record shapes OpenCode writes AROUND the conversation, all verified
+/// against a real `~/.local/share/opencode/opencode.db` (430 sessions, 12 804
+/// parts):
+///
+///   - `synthetic` text — plan/build switch reminders and the post-compaction
+///     continuation OpenCode injects into the USER message for the model's
+///     benefit. Its own CLI filters them out of the transcript, and a message
+///     left with nothing else is not a turn the user took;
+///   - `compaction` parts, which are the sole part of their message, so the
+///     compaction previously showed as an empty user bubble;
+///   - an assistant `error`, whose message carries the only record of a turn
+///     the provider rejected or the user cancelled;
+///   - the `question` tool's positional `metadata.answers`.
+#[test]
+fn opencode_session_edges_snapshot() {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let base = temp.path().to_path_buf();
+    let db_path = base.join("opencode.db");
+    let session_id = "oc-edges-001";
+
+    // 2026-03-01T10:00:00Z in milliseconds.
+    let t0: i64 = 1_772_020_800_000;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async {
+        let conn = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .expect("open sqlite");
+
+        for ddl in [
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, \
+             title TEXT, time_created INTEGER, time_updated INTEGER)",
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, \
+             time_created INTEGER, data TEXT)",
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, \
+             time_created INTEGER, data TEXT)",
+        ] {
+            conn.execute(Statement::from_string(DatabaseBackend::Sqlite, ddl))
+                .await
+                .expect("create table");
+        }
+
+        conn.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO session (id, directory, title, time_created, time_updated) \
+             VALUES (?, ?, ?, ?, ?)",
+            [
+                session_id.into(),
+                "/tmp/demo".into(),
+                "OpenCode session edges".into(),
+                t0.into(),
+                (t0 + 9_000).into(),
+            ],
+        ))
+        .await
+        .expect("insert session");
+
+        for (mid, offset, data) in [
+            // A real prompt with a reminder appended to the same message.
+            (
+                "m-user-mixed",
+                500_i64,
+                json!({ "role": "user", "time": { "created": t0 + 500 } }),
+            ),
+            // Nothing but the reminder: not a turn the user took.
+            (
+                "m-user-synthetic",
+                1_000,
+                json!({ "role": "user", "time": { "created": t0 + 1_000 } }),
+            ),
+            // The compaction boundary's own (synthetic) user message.
+            (
+                "m-user-compaction",
+                1_500,
+                json!({ "role": "user", "time": { "created": t0 + 1_500 } }),
+            ),
+            // A question answered in OpenCode's own TUI.
+            (
+                "m-asst-question",
+                2_000,
+                json!({
+                    "role": "assistant",
+                    "modelID": "claude-sonnet-4-6",
+                    "time": { "created": t0 + 2_000, "completed": t0 + 2_400 },
+                    "tokens": { "input": 10, "output": 4, "cache": { "read": 0, "write": 0 } },
+                }),
+            ),
+            // A turn the provider rejected: no parts at all, only the error.
+            (
+                "m-asst-error",
+                3_000,
+                json!({
+                    "role": "assistant",
+                    "modelID": "claude-sonnet-4-6",
+                    "time": { "created": t0 + 3_000, "completed": t0 + 3_100 },
+                    "tokens": { "input": 3, "output": 0, "cache": { "read": 0, "write": 0 } },
+                    "error": {
+                        "name": "APIError",
+                        "data": { "message": "Invalid Authentication" }
+                    },
+                }),
+            ),
+            // …and one the user stopped.
+            (
+                "m-asst-aborted",
+                4_000,
+                json!({
+                    "role": "assistant",
+                    "modelID": "claude-sonnet-4-6",
+                    "time": { "created": t0 + 4_000, "completed": t0 + 4_100 },
+                    "tokens": { "input": 2, "output": 0, "cache": { "read": 0, "write": 0 } },
+                    "error": {
+                        "name": "MessageAbortedError",
+                        "data": { "message": "The operation was aborted." }
+                    },
+                }),
+            ),
+        ] {
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    mid.into(),
+                    session_id.into(),
+                    (t0 + offset).into(),
+                    data.to_string().into(),
+                ],
+            ))
+            .await
+            .expect("insert message");
+        }
+
+        for (i, (pid, mid, data)) in [
+            (
+                "p-user-real",
+                "m-user-mixed",
+                json!({ "type": "text", "text": "ship the release notes" }),
+            ),
+            (
+                "p-user-reminder",
+                "m-user-mixed",
+                json!({
+                    "type": "text",
+                    "synthetic": true,
+                    "text": "You are now in build mode. You can edit files."
+                }),
+            ),
+            (
+                "p-user-only-reminder",
+                "m-user-synthetic",
+                json!({
+                    "type": "text",
+                    "synthetic": true,
+                    "text": "Summarize the task tool output above and continue with your task."
+                }),
+            ),
+            (
+                "p-compaction",
+                "m-user-compaction",
+                json!({ "type": "compaction", "auto": true }),
+            ),
+            (
+                "p-question",
+                "m-asst-question",
+                json!({
+                    "type": "tool",
+                    "tool": "question",
+                    "callID": "question:2",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "questions": [{
+                                "question": "Ship it now?",
+                                "header": "Release",
+                                "multiple": false,
+                                "options": [
+                                    { "label": "Yes", "description": "Publish" },
+                                    { "label": "Not yet", "description": "Hold" }
+                                ]
+                            }]
+                        },
+                        "output": "User has answered your questions: \"Ship it now?\"=\"Not yet\". You can now continue with the user's answers in mind.",
+                        "title": "Asked 1 question",
+                        "metadata": { "answers": [["Not yet"]], "truncated": false },
+                        "time": { "start": t0 + 2_100, "end": t0 + 2_300 }
+                    }
+                }),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO part (id, message_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    pid.into(),
+                    mid.into(),
+                    (t0 + 1_000 + i as i64).into(),
+                    data.to_string().into(),
+                ],
+            ))
+            .await
+            .expect("insert part");
+        }
+    });
+
+    let parser = OpenCodeParser::with_base_dir(base);
+    let detail = parser
+        .get_conversation(session_id)
+        .expect("get conversation");
+    assert_json_snapshot!("opencode_edges_detail", detail, {
+        ".**.started_at" => "[ts]",
+        ".**.ended_at" => "[ts]",
+        ".**.timestamp" => "[ts]",
+        ".**.completed_at" => "[ts]",
+    });
+}
+
+/// OpenCode names a session `New session - <ISO>` at creation and is supposed to
+/// replace that on the first turn — but the rename is forked and its errors
+/// swallowed, so an unreachable small model leaves the placeholder as the
+/// session's name forever (243 of the 432 sessions in the author's store, every
+/// root session created since 2026-06-17). Both summary queries substitute the
+/// opening user message instead, the way OpenCode's own TUI does.
+///
+/// Exercises the correlated subquery rather than `resolve_title` alone: the
+/// `synthetic` filter and the ordering only exist in SQL, and a session whose
+/// first part is an injected reminder is exactly the case that would otherwise
+/// name the row after text nobody typed.
+#[test]
+fn opencode_placeholder_titles_fall_back_to_the_opening_message() {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let base = temp.path().to_path_buf();
+    let db_path = base.join("opencode.db");
+    let t0: i64 = 1_772_020_800_000;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async {
+        let conn = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .expect("open sqlite");
+
+        for ddl in [
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, \
+             title TEXT, time_created INTEGER, time_updated INTEGER)",
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, \
+             time_created INTEGER, data TEXT)",
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, \
+             time_created INTEGER, data TEXT)",
+        ] {
+            conn.execute(Statement::from_string(DatabaseBackend::Sqlite, ddl))
+                .await
+                .expect("create table");
+        }
+
+        // (session id, stored title, opening user text, whether that text is a
+        // synthetic injection the transcript also drops)
+        let sessions = [
+            (
+                "oc-placeholder",
+                "New session - 2026-03-01T10:00:00.000Z",
+                "执行一下 pnpm build",
+                false,
+            ),
+            (
+                "oc-fork",
+                "New session - 2026-03-01T10:00:00.000Z (fork #2)",
+                "look at [notes.md](file:///tmp/a/very/long/path/notes.md)",
+                false,
+            ),
+            ("oc-named", "Fix the login flow", "hi", false),
+            (
+                "oc-synthetic-only",
+                "New session - 2026-03-01T10:00:00.000Z",
+                "<system-reminder>switched to build mode</system-reminder>",
+                true,
+            ),
+        ];
+
+        for (i, (session_id, title, text, synthetic)) in sessions.iter().enumerate() {
+            let created = t0 + i as i64 * 1_000;
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO session (id, directory, title, time_created, time_updated) \
+                 VALUES (?, ?, ?, ?, ?)",
+                [
+                    (*session_id).into(),
+                    "/tmp/demo".into(),
+                    (*title).into(),
+                    created.into(),
+                    created.into(),
+                ],
+            ))
+            .await
+            .expect("insert session");
+
+            let message_id = format!("m-{session_id}");
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    message_id.clone().into(),
+                    (*session_id).into(),
+                    created.into(),
+                    json!({ "role": "user", "time": { "created": created } })
+                        .to_string()
+                        .into(),
+                ],
+            ))
+            .await
+            .expect("insert message");
+
+            let mut part = json!({ "type": "text", "text": text });
+            if *synthetic {
+                part["synthetic"] = json!(true);
+            }
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO part (id, message_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    format!("p-{session_id}").into(),
+                    message_id.into(),
+                    created.into(),
+                    part.to_string().into(),
+                ],
+            ))
+            .await
+            .expect("insert part");
+        }
+    });
+
+    let parser = OpenCodeParser::with_base_dir(base);
+    let titles: std::collections::HashMap<String, Option<String>> = parser
+        .list_conversations()
+        .expect("list conversations")
+        .into_iter()
+        .map(|c| (c.id, c.title))
+        .collect();
+
+    assert_eq!(
+        titles["oc-placeholder"].as_deref(),
+        Some("执行一下 pnpm build")
+    );
+    // The fork marker survives — it is the only thing telling the fork apart
+    // from the session it came from — while the placeholder under it does not.
+    // The message itself is folded the way every other derived title is.
+    assert_eq!(
+        titles["oc-fork"].as_deref(),
+        Some("look at notes.md (fork #2)")
+    );
+    assert_eq!(titles["oc-named"].as_deref(), Some("Fix the login flow"));
+    // Only synthetic text to go on: report untitled so the UI shows its own
+    // label rather than naming the row after a reminder nobody typed.
+    assert_eq!(titles["oc-synthetic-only"], None);
+
+    // The single-session query has to agree with the listing, or a row renames
+    // itself the moment it is opened.
+    let detail = parser
+        .get_conversation("oc-placeholder")
+        .expect("get conversation");
+    assert_eq!(detail.summary.title.as_deref(), Some("执行一下 pnpm build"));
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Hermes (reads ~/.hermes/state.db via sea-orm)
 // ────────────────────────────────────────────────────────────────────────────

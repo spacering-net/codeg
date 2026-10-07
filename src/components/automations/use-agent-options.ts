@@ -65,6 +65,13 @@ function fetchOptions(
 
 export interface AgentOptionsState {
   snapshot: AgentOptionsSnapshot | null
+  /** Which agent `snapshot` was probed from — NOT necessarily the `agentType`
+   *  argument. The two diverge for the whole debounce window after an agent
+   *  switch (the previous snapshot stays on screen until the re-probe lands),
+   *  so anything that interprets the snapshot's CONTENT — localising the
+   *  agent's own vocabulary, say — has to key on this rather than on the
+   *  currently-selected agent. Null whenever `snapshot` is. */
+  snapshotAgentType: AgentType | null
   loading: boolean
   error: string | null
   reload: () => void
@@ -90,7 +97,12 @@ export function useAgentOptions(
    *  probes on demand at save time. */
   enabled: boolean = true
 ): AgentOptionsState {
-  const [snapshot, setSnapshot] = useState<AgentOptionsSnapshot | null>(null)
+  // Snapshot and its producer live in ONE state value so they can never be
+  // rendered out of step — see `snapshotAgentType`.
+  const [loaded, setLoaded] = useState<{
+    agent: AgentType
+    snapshot: AgentOptionsSnapshot
+  } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const reqRef = useRef(0)
@@ -108,7 +120,7 @@ export function useAgentOptions(
       } else {
         const cached = readCache(agent, folder)
         if (cached) {
-          setSnapshot(cached)
+          setLoaded({ agent, snapshot: cached })
           setError(null)
           setLoading(false)
           return
@@ -116,11 +128,11 @@ export function useAgentOptions(
       }
       setLoading(true)
       setError(null)
-      setSnapshot(null)
+      setLoaded(null)
       fetchOptions(agent, folder)
         .then((fresh) => {
           if (reqRef.current !== id) return
-          setSnapshot(fresh)
+          setLoaded({ agent, snapshot: fresh })
           setLoading(false)
         })
         .catch((e) => {
@@ -172,5 +184,12 @@ export function useAgentOptions(
     }
   }, [agentType, folderPath])
 
-  return { snapshot, loading, error, reload, ensure }
+  return {
+    snapshot: loaded?.snapshot ?? null,
+    snapshotAgentType: loaded?.agent ?? null,
+    loading,
+    error,
+    reload,
+    ensure,
+  }
 }

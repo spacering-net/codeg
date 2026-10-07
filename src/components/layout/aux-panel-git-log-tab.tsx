@@ -137,6 +137,12 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 // end (VSCode/IDEA-style incremental history loading).
 const PAGE_SIZE = 100
 const LOAD_MORE_PX = 800
+const EMPTY_BRANCH_LIST: GitBranchList = {
+  local: [],
+  remote: [],
+  worktree_branches: [],
+  main_worktree_branch: null,
+}
 
 // Recently-filtered authors, persisted per folder (IDEA-style "recent users").
 // We deliberately do NOT scan the whole repo for authors (slow); the dropdown is
@@ -210,6 +216,13 @@ export function isLiveBranchSelection(
   return list.local.includes(branch) || list.remote.includes(branch)
 }
 
+export function coerceLiveBranchSelection(
+  branch: string | null,
+  list: GitBranchList
+): string | null {
+  return isLiveBranchSelection(branch, list) ? branch : HEAD_BRANCH_FILTER
+}
+
 // Reset always targets the CURRENT branch, so it is allowed from the
 // all-branches view, from the HEAD view (which *is* the current branch), or
 // while viewing the current branch by name — but not while viewing a different
@@ -227,37 +240,51 @@ export function canResetFromSelection(
 }
 
 // The last branch/author filter, persisted per folder path so the tab reopens on
-// the same view. `null` for either means the default (all branches / all
-// authors); when both are null the entry is dropped to keep storage tidy.
+// the same view. No entry defaults to the live HEAD view; a saved null branch
+// means the user explicitly chose All branches.
 const SELECTION_KEY_PREFIX = "codeg:gitlog:selection:"
+// Entries without this version predate the HEAD default. Their null branch was
+// the old default view (git log --all), not a choice — and it was only ever
+// saved next to an author filter, since a null/null entry was deleted — so it
+// opens on HEAD, the same as a folder with no entry.
+const SELECTION_STORAGE_VERSION = 2
 
 type GitLogSelection = { branch: string | null; author: string | null }
 
-function loadSelection(folderPath: string): GitLogSelection {
-  if (typeof window === "undefined") return { branch: null, author: null }
+export function loadSelection(folderPath: string): GitLogSelection {
+  if (typeof window === "undefined")
+    return { branch: HEAD_BRANCH_FILTER, author: null }
   try {
     const raw = window.localStorage.getItem(SELECTION_KEY_PREFIX + folderPath)
-    if (!raw) return { branch: null, author: null }
+    if (!raw) return { branch: HEAD_BRANCH_FILTER, author: null }
     const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { branch: HEAD_BRANCH_FILTER, author: null }
+    }
     return {
-      branch: typeof parsed?.branch === "string" ? parsed.branch : null,
-      author: typeof parsed?.author === "string" ? parsed.author : null,
+      branch:
+        typeof parsed.branch === "string" && parsed.branch.trim()
+          ? parsed.branch
+          : parsed.branch === null &&
+              parsed.version === SELECTION_STORAGE_VERSION
+            ? null
+            : HEAD_BRANCH_FILTER,
+      author: typeof parsed.author === "string" ? parsed.author : null,
     }
   } catch {
-    return { branch: null, author: null }
+    return { branch: HEAD_BRANCH_FILTER, author: null }
   }
 }
 
-function saveSelection(folderPath: string, selection: GitLogSelection): void {
+export function saveSelection(
+  folderPath: string,
+  selection: GitLogSelection
+): void {
   if (typeof window === "undefined") return
   try {
-    if (selection.branch == null && selection.author == null) {
-      window.localStorage.removeItem(SELECTION_KEY_PREFIX + folderPath)
-      return
-    }
     window.localStorage.setItem(
       SELECTION_KEY_PREFIX + folderPath,
-      JSON.stringify(selection)
+      JSON.stringify({ version: SELECTION_STORAGE_VERSION, ...selection })
     )
   } catch {
     // Best-effort — a failed persist just means the view won't be restored.
@@ -620,7 +647,10 @@ function CommitFilesTree({
             title={file.path}
           >
             <>
-              <span className="size-4 shrink-0" />
+              {/* The status letter is this row's LEADING glyph and shares the
+                  column a sibling folder's chevron occupies; a spacer in front
+                  of it would hang every file one glyph right of its parent
+                  directory. */}
               <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
                 <CommitFileStatus status={mapFileStatus(file.status)}>
                   {file.status}
@@ -708,7 +738,7 @@ function BranchSelector({
 }: {
   branchList: GitBranchList
   currentBranch: string | null
-  // null = the default "all branches" view (git log --all);
+  // null = an explicit "all branches" choice (git log --all);
   // HEAD_BRANCH_FILTER = the dynamic "whatever branch I'm on" view.
   selectedBranch: string | null
   onBranchChange: (branch: string | null) => void
@@ -731,9 +761,9 @@ function BranchSelector({
     // selector). -ml-1 pulls the wrapper's left rim out to the 8px guide so the
     // pill lines up with the expanded commit card's border (8px row inset); the
     // trigger's pl-1 then drops the branch glyph onto the 13px guide (8px + 1px
-    // card border + 4px), flush with each commit's leading push glyph. Default
-    // (no selection) shows just the "Branch" label; a ✕ appears once a branch is
-    // picked to clear back to the all-branches view.
+    // card border + 4px), flush with each commit's leading push glyph. The
+    // All branches view shows just the "Branch" label; a clear button appears
+    // for HEAD or a named branch to return to All branches.
     <div className="-ml-1 flex min-w-0 shrink items-center rounded-full transition-colors hover:bg-foreground/10 has-data-[state=open]:bg-foreground/10">
       <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
         <PopoverTrigger asChild>
@@ -1298,16 +1328,23 @@ export function GitLogTab() {
   >({})
   const [branchesError, setBranchesError] = useState<Record<string, string>>({})
 
-  // Branch filter state
-  const [branchList, setBranchList] = useState<GitBranchList>({
-    local: [],
-    remote: [],
-    worktree_branches: [],
-    main_worktree_branch: null,
-  })
-  const [currentBranch, setCurrentBranch] = useState<string | null>(null)
-  // null = the default "all branches" view (git log --all); a name narrows to
-  // that branch.
+  // Branch metadata belongs to the path that produced it. Hide it immediately
+  // when the active folder changes, including while useDeferredValue still
+  // points at the previous folder and the new branch request is in flight.
+  const [branchMetadata, setBranchMetadata] = useState<{
+    path: string
+    list: GitBranchList
+    current: string | null
+  } | null>(null)
+  const visibleBranchMetadata =
+    !folderStale && branchMetadata?.path === folder?.path
+      ? branchMetadata
+      : null
+  const branchList = visibleBranchMetadata?.list ?? EMPTY_BRANCH_LIST
+  const currentBranch = visibleBranchMetadata?.current ?? null
+  const branchRefreshSeqRef = useRef(0)
+  // null = an explicit "all branches" choice (git log --all); HEAD follows
+  // the currently checked-out worktree branch.
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
 
   // Author filter state (IDEA-style "User" filter). The dropdown is seeded from
@@ -1500,31 +1537,45 @@ export function GitLogTab() {
   const refreshBranches = useCallback(async () => {
     const path = folder?.path
     if (!path) return
+    const seq = ++branchRefreshSeqRef.current
     try {
       const [allBranches, current] = await Promise.all([
         gitListAllBranches(path),
         getGitBranch(path),
       ])
-      // Ignore a response that resolved after a folder switch.
-      if (folderPathRef.current !== path) return
-      setBranchList(allBranches)
-      setCurrentBranch(current)
-      // A restored/selected branch may no longer exist (deleted since it was
-      // last used). Once we have this repo's authoritative branch list, drop it
-      // back to the all-branches view and forget it so we don't keep restoring a
-      // dead branch (which would make the first fetch error). The HEAD sentinel
-      // is exempt — it is never in the branch list yet always resolves (see
-      // isLiveBranchSelection). Read via refs so this callback stays keyed only
-      // on the folder path — else it'd recreate, and re-run its effect, on every
-      // filter change. Otherwise leave selectedBranch alone: the default is "all
-      // branches" (null) and an explicit pick is owned by the branch selector /
-      // restored per folder.
-      if (!isLiveBranchSelection(selectedBranchRef.current, allBranches)) {
-        setSelectedBranch(null)
-        saveSelection(path, { branch: null, author: selectedAuthorRef.current })
+      // A later refresh for this path, or a folder switch, supersedes this
+      // response. In particular, an old branch list must not invalidate a
+      // selection made against a newer list. Deliberately keyed on the
+      // deferred folder, not the live active one: the metadata is tagged with
+      // its path and stays hidden until the view catches up, while a quick
+      // A→B→A switch that never commits B leaves this callback — and so the
+      // effect that runs it — unchanged, so dropping A's response there would
+      // leave A without branches until the next git event.
+      if (
+        seq !== branchRefreshSeqRef.current ||
+        folderPathRef.current !== path
+      ) {
+        return
+      }
+      setBranchMetadata({ path, list: allBranches, current })
+      // A restored/selected branch may have been deleted. Fall back to the
+      // live HEAD filter, which remains valid after branch switches and in a
+      // detached checkout. Keep a deliberate All branches choice unchanged.
+      // Read via refs so this callback stays keyed only on the folder path.
+      const liveBranch = coerceLiveBranchSelection(
+        selectedBranchRef.current,
+        allBranches
+      )
+      if (liveBranch !== selectedBranchRef.current) {
+        setSelectedBranch(liveBranch)
+        saveSelection(path, {
+          branch: liveBranch,
+          author: selectedAuthorRef.current,
+        })
       }
     } catch {
-      // Silently ignore — branches dropdown won't appear
+      // Keep the last successful metadata for this path. The sequence above
+      // still invalidates older in-flight requests when the latest one fails.
     }
   }, [folder?.path])
 
@@ -1649,7 +1700,7 @@ export function GitLogTab() {
       fetchingRef.current = true
       setLoadingMore(false)
       try {
-        // selectedBranch === null → the default "all branches" view. Always
+        // selectedBranch === null → the explicit "all branches" view. Always
         // skip file stats (withFiles=false) for speed; a commit's files load
         // lazily on expand.
         const result = await gitLog(
@@ -1813,9 +1864,17 @@ export function GitLogTab() {
       await gitNewBranch(folder.path, name, newBranchTarget.fullHash)
       setNewBranchTarget(null)
       setNewBranchName("")
-      // Keep the "all branches" view; just refresh branch metadata (currentBranch
-      // drives reset gating). The all-branches commit set is unchanged.
+      // `checkout -b` also switched to the new branch: refresh branch metadata
+      // (currentBranch drives reset gating), and reload the HEAD view, which
+      // now starts at that commit. A branch at an existing commit leaves every
+      // other view's commits unchanged. The reload starts at once: the modal
+      // dialog has kept the filter as it was until now, so it can't overwrite
+      // a filter picked while the branch refresh is still pending.
+      const headViewReload = isHeadFilter(selectedBranch)
+        ? fetchLog({ inline: true })
+        : undefined
       await refreshBranches()
+      await headViewReload
       toast.success(t("toasts.createdAndSwitchedNewBranch"), {
         description: t("toasts.newBranchFromCommit", {
           name,
@@ -1831,10 +1890,12 @@ export function GitLogTab() {
     }
   }, [
     creatingBranch,
+    fetchLog,
     folder?.path,
     newBranchName,
     newBranchTarget,
     refreshBranches,
+    selectedBranch,
     t,
   ])
 

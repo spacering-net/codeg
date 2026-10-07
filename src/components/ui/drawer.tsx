@@ -9,15 +9,88 @@ import { attachRef } from "@/lib/attach-ref"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
+import { acquireNativeSurfaceOcclusion } from "@/lib/browser/native-surface-occlusion"
 
 type DrawerContextProps = {
   hasSnapPoints: boolean
   modal: DrawerPrimitive.Root.Props["modal"]
   showSwipeHandle: boolean
   swipeDirection: NonNullable<DrawerPrimitive.Root.Props["swipeDirection"]>
+  /** The popup's DOM is in (see `useDrawerLease`); the returned function is
+   *  for when it goes. */
+  attachPopup: (hostsPage: boolean) => () => void
 }
 
 const DrawerContext = React.createContext<DrawerContextProps | null>(null)
+
+/**
+ * How a drawer holding a built-in browser page gets the drawers it is stacked
+ * on out of the way.
+ *
+ * Base UI stacks a drawer rendered anywhere under another one's root — inside
+ * its content, or beside it, where the task detail sheet puts its transcript
+ * drawer — in front of it, and fades the content of the one behind out. So the
+ * page is in front of them too. But each of them still holds the lease that
+ * hides native pages, and the page would never show: the transcript's browser
+ * viewer over a transcript that is itself in a drawer (the task board's, the
+ * canvas's, a session viewer's). Each drawer's root provides this to what it
+ * renders; calling it lifts that drawer's lease, and every one below it, until
+ * the returned function runs.
+ */
+const DrawerLeaseSuspension = React.createContext<(() => () => void) | null>(
+  null
+)
+
+/**
+ * One drawer's occlusion lease. A native browser surface would paint over the
+ * drawer, so it holds one while its popup's DOM exists — unless it is the
+ * drawer hosting such a surface (the transcript's browser viewer), which
+ * instead lifts the leases of the drawers it is stacked on; or one of those is
+ * stacked on it. Refs, not state: what the lease depends on changes in ref
+ * callbacks, and the lease has to follow at once rather than a render later.
+ */
+function useDrawerLease() {
+  const suspendBelow = React.useContext(DrawerLeaseSuspension)
+  const leaseRef = React.useRef<(() => void) | null>(null)
+  const holdingRef = React.useRef(false)
+  const suspensionsRef = React.useRef(0)
+  const syncLease = React.useCallback(() => {
+    const hold = holdingRef.current && suspensionsRef.current === 0
+    if (hold && !leaseRef.current) {
+      leaseRef.current = acquireNativeSurfaceOcclusion("drawer")
+    } else if (!hold && leaseRef.current) {
+      leaseRef.current()
+      leaseRef.current = null
+    }
+  }, [])
+  const suspendLease = React.useCallback(() => {
+    suspensionsRef.current += 1
+    syncLease()
+    const resumeBelow = suspendBelow?.()
+    let resumed = false
+    return () => {
+      if (resumed) return
+      resumed = true
+      suspensionsRef.current -= 1
+      syncLease()
+      resumeBelow?.()
+    }
+  }, [suspendBelow, syncLease])
+  const attachPopup = React.useCallback(
+    (hostsPage: boolean) => {
+      holdingRef.current = !hostsPage
+      syncLease()
+      const resumeBelow = hostsPage ? suspendBelow?.() : undefined
+      return () => {
+        holdingRef.current = false
+        syncLease()
+        resumeBelow?.()
+      }
+    },
+    [suspendBelow, syncLease]
+  )
+  return { attachPopup, suspendLease }
+}
 
 /**
  * The shape every side panel in the app shares: the task detail sheet and all
@@ -177,9 +250,16 @@ function Drawer({
   showSwipeHandle?: boolean
 }) {
   const hasSnapPoints = snapPoints != null && snapPoints.length > 0
+  const { attachPopup, suspendLease } = useDrawerLease()
   const contextValue = React.useMemo(
-    () => ({ hasSnapPoints, modal, showSwipeHandle, swipeDirection }),
-    [hasSnapPoints, modal, showSwipeHandle, swipeDirection]
+    () => ({
+      hasSnapPoints,
+      modal,
+      showSwipeHandle,
+      swipeDirection,
+      attachPopup,
+    }),
+    [hasSnapPoints, modal, showSwipeHandle, swipeDirection, attachPopup]
   )
 
   useEscapeShieldProbe()
@@ -201,15 +281,17 @@ function Drawer({
 
   return (
     <DrawerContext.Provider value={contextValue}>
-      <DrawerPrimitive.Root
-        data-slot="drawer"
-        modal={modal}
-        disablePointerDismissal={disablePointerDismissal}
-        onOpenChange={handleOpenChange}
-        snapPoints={snapPoints}
-        swipeDirection={swipeDirection}
-        {...props}
-      />
+      <DrawerLeaseSuspension.Provider value={suspendLease}>
+        <DrawerPrimitive.Root
+          data-slot="drawer"
+          modal={modal}
+          disablePointerDismissal={disablePointerDismissal}
+          onOpenChange={handleOpenChange}
+          snapPoints={snapPoints}
+          swipeDirection={swipeDirection}
+          {...props}
+        />
+      </DrawerLeaseSuspension.Provider>
     </DrawerContext.Provider>
   )
 }
@@ -264,13 +346,19 @@ function DrawerContent({
   children,
   closeButtonClassName,
   showCloseButton = true,
+  nativeSurfaceHost = false,
   ref,
   ...props
 }: DrawerPrimitive.Popup.Props & {
   closeButtonClassName?: string
   showCloseButton?: boolean
+  /** This drawer CONTAINS a built-in browser surface (the transcript's
+   *  browser viewer): it must not take the lease that would hide it, and the
+   *  drawers it is stacked on give theirs up while it is open. */
+  nativeSurfaceHost?: boolean
 }) {
-  const { hasSnapPoints, modal, showSwipeHandle, swipeDirection } = useDrawer()
+  const { hasSnapPoints, modal, showSwipeHandle, swipeDirection, attachPopup } =
+    useDrawer()
   const swipeAxis =
     swipeDirection === "down" || swipeDirection === "up" ? "y" : "x"
   // The host surface this drawer was opened from is hidden-but-mounted (the
@@ -287,12 +375,15 @@ function DrawerContent({
     (node: HTMLDivElement | null) => {
       setPopup(node)
       const detach = attachRef(ref, node)
+      // The drawer's occlusion lease follows the popup's DOM.
+      const detachLease = node ? attachPopup(nativeSurfaceHost) : undefined
       return () => {
+        detachLease?.()
         setPopup(null)
         detach()
       }
     },
-    [ref]
+    [ref, nativeSurfaceHost, attachPopup]
   )
 
   return (

@@ -51,6 +51,12 @@ pub async fn set_feedback_settings(
 pub struct SubmitSessionFeedbackParams {
     pub connection_id: String,
     pub text: String,
+    /// Full prompt-block draft when the note carries image attachments
+    /// (native steering only); `text` stays the recorded/display form. Web /
+    /// remote-mode uploads arrive as empty-payload `file://` markers, exactly
+    /// like `/acp_prompt`, and are re-hydrated server-side.
+    #[serde(default)]
+    pub blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
 }
 
 pub async fn submit_session_feedback(
@@ -61,7 +67,7 @@ pub async fn submit_session_feedback(
     // in `submit_feedback`; recoverable rejections map to 4xx below.
     let item = state
         .connection_manager
-        .submit_feedback(&params.connection_id, params.text)
+        .submit_feedback(&params.connection_id, params.text, params.blocks)
         .await
         .map_err(|e| {
             let message = e.to_string();

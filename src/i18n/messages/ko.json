@@ -52,6 +52,9 @@
       "science": "과학 연구",
       "office_tools": "오피스 도구",
       "skill_packs": "스킬 팩",
+      "collaboration": "협업",
+      "browser": "브라우저 사용",
+      "computer_use": "컴퓨터 사용",
       "quick_messages": "빠른 메시지",
       "logs": "실행 로그"
     }
@@ -196,7 +199,33 @@
       "panelOpacityHint": "사이드바, 패널, 탭 바의 불투명도입니다. 낮을수록 이미지가 더 많이 비쳐 보입니다.",
       "errorTooLarge": "이미지가 너무 큽니다(최대 16 MB).",
       "errorUnsupportedFormat": "지원하지 않는 이미지 형식입니다. PNG, JPEG, WebP, GIF 중에서 선택하세요.",
-      "errorUploadFailed": "배경 이미지 설정에 실패했습니다."
+      "errorUploadFailed": "배경 이미지 설정에 실패했습니다.",
+      "market": {
+        "open": "배경화면 마켓",
+        "title": "배경화면 마켓",
+        "description": "Wallhaven 공개 갤러리를 탐색하고 클릭해서 다운로드 후 적용하세요.",
+        "searchPlaceholder": "배경화면 검색…",
+        "categories": {
+          "all": "전체",
+          "general": "풍경",
+          "anime": "애니메이션",
+          "people": "인물"
+        },
+        "pageInfo": "{page} / {lastPage} 페이지",
+        "prevPage": "이전",
+        "nextPage": "다음",
+        "refresh": "새로고침",
+        "empty": "일치하는 배경화면이 없습니다.",
+        "error": "배경화면 마켓을 불러오지 못했습니다.",
+        "retry": "재시도",
+        "cardLabel": "배경화면 {id} 적용",
+        "applied": "사용 중",
+        "unavailable": "사용 불가",
+        "tooLarge": "배경으로 쓰기에 너무 큽니다: {actual} (제한 {limit})",
+        "downloadFailed": "다운로드에 실패했습니다. 다시 시도해 주세요.",
+        "appliedToast": "배경화면이 적용되었습니다",
+        "credit": "이미지 제공 wallhaven.cc · SFW만 표시"
+      }
     }
   },
   "SystemSettings": {
@@ -213,6 +242,8 @@
     "enableProxy": "시스템 프록시 활성화",
     "proxyAddress": "프록시 주소",
     "proxyHint": "http(s)/socks5 지원, 예: {example}. 시스템 프록시를 활성화한 경우에만 적용됩니다.",
+    "proxyBypass": "프록시를 거치지 않을 주소",
+    "proxyBypassHint": "여러 주소는 공백 없이 쉼표(<code>,</code>)로 구분합니다. 예: <code>{example}</code>. <code>example.com</code>은 해당 도메인과, <code>.example.com</code>은 모든 하위 도메인과 일치하며, IP 주소도 입력할 수 있습니다. 로컬 주소 <code>localhost,127.0.0.1,::1</code>은 항상 직접 연결되므로 입력할 필요가 없습니다. 이 목록은 환경 변수 NO_PROXY로 적용됩니다.",
     "save": "저장",
     "saving": "저장 중...",
     "proxyRequired": "프록시를 활성화하면 프록시 URL이 필요합니다",
@@ -223,6 +254,8 @@
     "appLanguage": "앱 언어",
     "languageSaveSuccess": "언어 설정이 저장되었습니다",
     "languageSaveFailed": "언어 설정 저장 실패: {message}",
+    "dataTitle": "데이터 및 동기화",
+    "dataDescription": "「설정 동기화」는 설정을 기기 사이로 옮기고, 「백업」은 이 기기의 codeg 데이터 전체를 묶습니다.",
     "updateTitle": "앱 업데이트",
     "versionTitle": "소프트웨어 업데이트",
     "updateDescription": "설정된 릴리스 소스에서 새 버전을 확인하고 가능하면 바로 설치합니다.",
@@ -270,6 +303,8 @@
     "rollbackSuccess": "이전 버전으로 롤백했습니다. 다시 불러오는 중...",
     "rollbackFailed": "롤백에 실패했습니다. 서버 로그를 확인하세요.",
     "updateErrors": {
+      "permissionDenied": "{path}에 쓸 수 없어 업데이트를 그 자리에서 설치할 수 없습니다. 관리자 권한으로 수동 업데이트하거나 설치 경로의 권한을 확인하세요.",
+      "targetWriteFailed": "{path}에 쓸 수 없어 업데이트를 그 자리에서 설치할 수 없습니다: {reason}",
       "sourceUnavailable": "업데이트 소스에 연결할 수 없습니다. 네트워크 또는 프록시를 확인한 뒤 다시 시도하세요.",
       "network": "네트워크 연결에 실패했습니다. 네트워크 또는 프록시를 확인한 뒤 다시 시도하세요.",
       "downloadFailed": "업데이트 패키지 다운로드에 실패했습니다. 잠시 후 다시 시도하세요.",
@@ -304,6 +339,10 @@
     "gitlabDescription": "인증용 GitLab 계정을 관리합니다. 토큰은 로컬에 저장됩니다.",
     "gitlabTokenHint": "GitLab → Preferences → Access tokens에서 api 범위를 가진 개인 액세스 토큰을 만드세요.",
     "gitlabNoAccounts": "아직 GitLab 계정이 없습니다",
+    "giteaTitle": "Gitea 계정",
+    "giteaDescription": "인증용 Gitea(및 Forgejo) 계정을 관리합니다. 토큰은 로컬에 저장됩니다.",
+    "giteaTokenHint": "Gitea → Settings → Applications에서 write:repository, write:issue, read:user 범위를 가진 액세스 토큰을 만드세요.",
+    "giteaNoAccounts": "아직 Gitea 계정이 없습니다",
     "noAccounts": "설정된 GitHub 계정이 없습니다.",
     "addAccount": "계정 추가",
     "serverUrl": "서버 URL",
@@ -336,7 +375,7 @@
     "loadFailed": "설정 로드 실패: {message}",
     "gitAccount": {
       "sectionTitle": "Git 서버 계정",
-      "sectionDescription": "GitHub 이외의 Git 서버 자격 증명을 관리합니다 (GitLab, Bitbucket, 자체 호스팅 등).",
+      "sectionDescription": "전용 섹션이 없는 Git 서버의 자격 증명을 관리합니다(Bitbucket, 자체 호스팅 등).",
       "noAccounts": "설정된 Git 서버 계정이 없습니다.",
       "addAccount": "계정 추가",
       "addTitle": "Git 계정 추가",
@@ -397,7 +436,7 @@
       },
       "open_folder": {
         "title": "폴더 열기",
-        "description": "폴더 선택기를 열고 새 창에서 엽니다"
+        "description": "폴더 선택기를 열고 작업 공간에서 폴더를 엽니다"
       },
       "open_settings": {
         "title": "설정 열기",
@@ -636,12 +675,16 @@
     "local": {
       "filterPlaceholder": "로컬 MCP 필터...",
       "loadFailed": "로드 실패: {message}",
+      "sourceUnreadable": "{app}의 MCP 구성을 읽을 수 없어 해당 서버가 표시되지 않습니다: {message}",
+      "saveBlockedByUnreadableSource": "저장하기 전에 해당 파일을 수정하거나 삭제한 뒤 새로 고치세요. 할당은 이 페이지가 읽을 수 있었던 에이전트를 기준으로 계산되므로, 지금 저장하면 읽지 못한 에이전트에서 이 서버가 제거될 수 있습니다.",
       "empty": "감지된 로컬 MCP가 없습니다.",
       "description": "로컬 MCP 구성은 직접 수정하고 저장할 수 있습니다.",
       "enabledApps": "활성화된 앱",
       "configJson": "MCP 구성 (JSON)",
       "draftTitle": "새 MCP",
       "draftDescription": "Server ID와 설정을 입력하여 로컬 MCP 서버를 생성합니다.",
+      "suggestedLabel": "알려진 서버에서 시작",
+      "suggestedChromeNote": "Google 공식 chrome-devtools-mcp로 양식을 채웁니다. 레지스트리에는 같은 이름의 유사 패키지가 있어 여기서는 진짜를 고정합니다. 이것은 codeg가 관리하지 않는 **별도의** Chrome을 조작합니다. 내장 브라우저 도구에 없는 네트워크·성능 정보를 얻는 대신, 그 보호 장치(탭별 공유, 활동 표시줄, 코드별 승인)는 하나도 없습니다. `npx`는 처음 실행할 때 npm에서 패키지를 내려받습니다.",
       "serverIdLabel": "Server ID",
       "serverIdPlaceholder": "Server ID (예: my-mcp)",
       "typeHint": "지원 타입: stdio, http (별칭: streamable-http, streamableHttp), sse. env는 stdio 전용이며, 원격 MCP는 인증 토큰을 headers로 전달해야 합니다.",
@@ -750,6 +793,7 @@
       "saveCodeBuddyConfig": "CodeBuddy 구성 저장",
       "saveKimiCodeConfig": "Kimi Code 구성 저장",
       "customInstall": "사용자 지정 설치",
+      "upgradeToLatest": "검토되지 않은 최신 버전 {version}(으)로 업그레이드",
       "saveKimiCodeRawConfig": "Save config.toml",
       "saveDeepSeekConfig": "DeepSeek 구성 저장",
       "diagnose": "진단"
@@ -819,7 +863,11 @@
       "authNotInstalled": "cursor-agent가 설치되지 않았습니다",
       "authLoggedIn": "로그인됨",
       "authNotLoggedIn": "로그인되지 않음",
+      "authUnverified": "로그인됨 — 자격 증명 확인 실패",
+      "authUnverifiedHint": "cursor-agent에 로그인 정보가 남아 있지만 방금 Cursor에 사용할 수 없었습니다. 보통 세션이 만료된 경우입니다. 다시 로그인하기 전까지 세션은 \"Authentication required\"로 실패합니다. 이 CLI는 브라우저 로그인을 스스로 갱신할 수 없습니다.",
+      "authUnverifiedHintApiKey": "cursor-agent에 API 키가 저장되어 있지만 Cursor가 방금 거부했습니다. 대개 폐기되었거나 만료되었거나 잘못 입력된 키입니다. 아래에서 유효한 키를 저장하기 전까지 세션은 \"Authentication required\"로 실패합니다.",
       "loginHint": "터미널에서 아래 명령을 실행해 Cursor 계정으로 로그인(브라우저가 열립니다)한 뒤 새로고침을 누르세요:",
+      "loginHintRemote": "cursor-agent가 설치된 codeg 호스트에서 실행하세요(이 컴퓨터가 아닙니다). 완료 후 새로고침을 누르세요. 그 호스트에는 보통 열 수 있는 브라우저가 없으므로 NO_OPEN_BROWSER=1과 함께 실행하세요. 대신 로그인 URL이 출력되며, 그 URL을 직접 브라우저에서 열면 됩니다. 무인 서버라면 위의 방식을 API 키로 바꾸세요.",
       "apiKeyLabel": "Cursor API 키",
       "apiKeyPlaceholder": "cursor.com/dashboard에서 발급",
       "apiKeyHint": "CURSOR_API_KEY —— Cursor 대시보드의 계정 키로, 헤드리스/서버 환경에서 브라우저 로그인 대신 사용합니다. 서드파티나 OpenAI 키가 아닙니다.",
@@ -922,7 +970,28 @@
         "failed": "로그인이 완료되지 않았습니다.",
         "startFailed": "로그인을 시작할 수 없습니다",
         "credentialHint": "토큰이 여기에 캐시됩니다. 이 파일을 데스크톱이 없는 다른 컴퓨터로 복사하면 그쪽도 로그인됩니다."
-      }
+      },
+      "signOut": {
+        "title": "잘못된 계정으로 로그인했나요?",
+        "description": "Antigravity는 로그인한 Google 계정을 캐시해 조용히 재사용하므로, 다시 로그인해도 다른 계정으로 바뀌지 않습니다. 로그아웃하면 저장된 자격 증명이 지워집니다. 실행 중인 Antigravity 세션은 먼저 종료됩니다. 그대로 두면 이전 계정을 다시 기록하기 때문입니다.",
+        "action": "로그아웃",
+        "done": "로그아웃했습니다. 다시 로그인하면 다른 계정을 선택할 수 있습니다.",
+        "failed": "로그아웃하지 못했습니다"
+      },
+      "tempReclaimTitle": "남은 임시 공간",
+      "tempReclaimHint": "이전 버전의 codeg는 이 에이전트가 실행할 때마다 압축을 푸는 임시 디렉터리를 정리하지 못했습니다. 시스템 임시 폴더에서 이러한 잔여물을 검색합니다. 이 폴더는 다른 애플리케이션과 공유되므로 확인하기 전에는 아무것도 삭제되지 않으며, 사용 중인 항목은 건너뜁니다.",
+      "tempReclaimScan": "검사",
+      "tempReclaimDelete": "잔여물 삭제",
+      "tempReclaimNone": "회수할 항목이 없습니다.",
+      "tempReclaimFound": "잔여 항목 {count}개, {size} 회수 가능.",
+      "tempReclaimSkipped": "{count}개 건너뜀 (사용 중이거나 너무 최근).",
+      "tempReclaimed": "{count}개 항목에서 {size}를 회수했습니다.",
+      "tempReclaimSelectAll": "전체 선택",
+      "tempReclaimAgeHours": "{hours}시간",
+      "tempReclaimConfirmTitle": "선택한 {count}개 항목을 삭제할까요?",
+      "tempReclaimConfirmBody": "{size}를 영구적으로 삭제합니다. 시스템 임시 폴더는 다른 앱과 공유되므로 확인하기 전에 각 경로를 확인하세요. 사용 중인 항목은 건너뜁니다.",
+      "tempReclaimConfirmAction": "삭제",
+      "tempReclaimCancel": "취소"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 구성",
@@ -972,9 +1041,9 @@
       "sandboxMode_read-only": "읽기 전용",
       "sandboxMode_workspace-write": "워크스페이스 쓰기",
       "sandboxMode_danger-full-access": "전체 접근(샌드박스 없음)",
-      "sandboxModeReadOnlyAcpWarning": "ACP 어댑터에는 더 이상 읽기 전용 샌드박스가 없어, 여기서 무엇을 고르든 codeg 세션은 작업 공간 쓰기 가능 상태로 실행됩니다. codeg는 고를 수 있는 가장 엄격한 프리셋을 선택해 모든 권한 상승을 사용자 승인으로 보내지만, 작업 공간 내부의 편집에는 승인이 필요 없습니다. codex CLI와 IDE 세션은 여전히 읽기 전용을 따릅니다.",
+      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7~1.13에는 읽기 전용 샌드박스가 없어, 이 어댑터 버전에서는 여기서 무엇을 고르든 codeg 세션이 작업 공간 쓰기 가능 상태로 실행됩니다(모든 권한 상승은 여전히 사용자 승인을 거칩니다). codex-acp 2.0에서 복원되었으니 이전 어댑터가 설치되어 있다면 업데이트하세요. codex CLI와 IDE 세션은 항상 읽기 전용을 따릅니다.",
       "sandboxModeHint": "Windows에서는 codex의 실험적 Windows 샌드박스를 켜지 않으면 워크스페이스 쓰기가 읽기 전용으로 낮아집니다.",
-      "sandboxModeSeedsPresetHint": "codeg는 이 값을 세션의 시작 승인 프리셋으로도 매핑하므로, 승인 정책과 달리 일반 프롬프트에도 적용됩니다. 참고로 어댑터의 기본 프리셋은 이제 모델이 권한 상승을 먼저 걸러 위험하다고 판단한 것만 전달합니다. 전부 직접 검토하려면 입력창에서 \"승인 요청\"을 선택하세요. 입력창의 프리셋이 항상 우선합니다.",
+      "sandboxModeSeedsPresetHint": "codeg는 이 값을 세션의 시작 승인 프리셋으로도 매핑하므로, 승인 정책과 달리 일반 프롬프트에도 적용됩니다. 읽기 전용은 \"Read-only\"로 시작합니다. 승인 정책이 never이면 전체 접근은 \"Full access\", 작업 공간 쓰기 가능은 \"Auto review\"로 시작합니다(모델이 권한 상승을 먼저 걸러 위험하다고 판단한 것만 전달). 그 밖의 승인 정책에서는 작업 공간 쓰기 가능과 전체 접근이 codex-acp 2.0 이상에서 \"Workspace access\"로 시작해 모든 권한 상승을 사용자 승인으로 보내고, 이전 어댑터에서는 \"Auto review\"로 시작합니다. 설정하지 않으면 어댑터 기본값인 \"Auto review\"를 따릅니다. 입력창의 프리셋이 항상 우선합니다.",
       "writableRootsLabel": "추가 쓰기 가능 폴더",
       "writableRootsHint": "작업 디렉터리 외에 허용할 절대 경로를 한 줄에 하나씩.",
       "sandboxRootsRelativeError": "절대 경로여야 합니다 — codex는 상대 경로를 ~/.codex 기준으로 해석합니다: {path}",
@@ -1131,6 +1200,46 @@
           "question": "사용자에게 질문",
           "doom_loop": "같은 호출이 같은 입력으로 3 번 반복되면 작동"
         }
+      },
+      "behavior": {
+        "title": "동작 및 압축",
+        "description": "세션 기본값, 컨텍스트 압축, 도구 출력 한도입니다. opencode.json에 기록되며 아래 저장을 눌러야 적용됩니다.",
+        "docsLink": "설정 문서",
+        "unset": "설정 안 함",
+        "defaultAgent": "기본 에이전트",
+        "defaultAgentHint": "새 세션이 시작할 기본 에이전트. 비어 있거나 알 수 없으면 build로 되돌아갑니다.",
+        "share": "공유",
+        "shareHint": "세션을 공유 링크로 게시할 수 있는지 여부입니다.",
+        "shareManual": "수동(요청할 때만)",
+        "shareAuto": "자동(모든 새 세션)",
+        "shareDisabled": "사용 안 함",
+        "autoUpdate": "자동 업데이트",
+        "autoUpdateHint": "OpenCode가 스스로 최신 버전으로 갱신할지 여부입니다.",
+        "autoUpdateOn": "자동으로 업데이트",
+        "autoUpdateNotify": "알림만",
+        "autoUpdateOff": "안 함",
+        "snapshot": "파일 시스템 스냅숏",
+        "snapshotHint": "각 단계 전에 스냅숏을 남깁니다. 끄면 실행 취소와 되돌리기가 파일을 복원하지 못합니다.",
+        "compactionAuto": "자동 압축",
+        "compactionAutoHint": "컨텍스트 창이 차면 대화를 자동으로 요약합니다.",
+        "compactionPrune": "오래된 도구 출력 정리",
+        "compactionPruneHint": "압축할 때 오래된 도구 호출의 출력을 요약하지 않고 버립니다.",
+        "fields": {
+          "subagentDepth": "서브에이전트 깊이",
+          "tailTurns": "원문으로 남길 턴 수",
+          "preserveRecentTokens": "원문으로 남길 토큰 수",
+          "reserved": "예약 토큰",
+          "maxLines": "도구 출력 줄 수 한도",
+          "maxBytes": "도구 출력 바이트 한도"
+        },
+        "hints": {
+          "subagentDepth": "서브에이전트를 몇 단계까지 중첩할 수 있는지. 1이면 서브에이전트가 다른 서브에이전트를 띄울 수 없습니다.",
+          "tailTurns": "최근 몇 개의 사용자 턴을 압축에서 제외할지. 설정하지 않으면 아래 토큰 예산만 제한합니다.",
+          "preserveRecentTokens": "압축 후에도 원문으로 남길 최근 턴의 토큰 예산입니다.",
+          "reserved": "압축 자체가 컨텍스트를 넘치게 하지 않도록 비워 두는 여유 창입니다.",
+          "maxLines": "이보다 긴 출력은 디스크에 저장되고 미리 보기만 남습니다. 기본값 2000.",
+          "maxBytes": "이보다 큰 출력은 디스크에 저장되고 미리 보기만 남습니다. 기본값 51200."
+        }
       }
     },
     "openClaw": {
@@ -1271,6 +1380,7 @@
       "haikuDefaultModel": "기본 Haiku 모델",
       "sonnetDefaultModel": "기본 Sonnet 모델",
       "opusDefaultModel": "기본 Opus 모델",
+      "fableDefaultModel": "기본 Fable 모델",
       "customModelOption": "사용자 지정 모델 ID",
       "customModelOptionName": "사용자 지정 모델 이름",
       "customModelOptionDescription": "사용자 지정 모델 설명",
@@ -1289,7 +1399,9 @@
       "customInstallDescription": "설치할 버전을 입력하세요. 다시 설치되며 현재 설치된 버전을 대체합니다.",
       "customInstallVersionLabel": "버전 번호",
       "customInstallInvalid": "유효한 버전 번호를 입력하세요. 예: 1.2.3",
-      "customInstallSubmit": "설치"
+      "customInstallSubmit": "설치",
+      "confirmUpgradeToLatest": "{name}을(를) 검토되지 않은 {version}(으)로 업그레이드하시겠습니까?",
+      "confirmUpgradeToLatestDescription": "이 릴리스는 codeg에서 검토되지 않아 codeg에서 {name}이(가) 깨질 수 있으며, 간혹 알려진 문제가 있는 릴리스일 수도 있습니다. 되돌리려면 「사용자 지정 설치」로 권장 버전 {recommendedVersion}을(를) 다시 설치하세요."
     },
     "errors": {
       "windowsFileLocked": "{name}의 파일이 실행 중인 세션에서 사용 중이어서 Windows에서 교체할 수 없습니다. 모든 {name} 세션을 닫은 후 다시 시도하세요.",
@@ -1378,7 +1490,7 @@
     "version": {
       "statusLabel": "버전 상태",
       "notInstalled": "설치되지 않음",
-      "remoteLocal": "원격: {remoteVersion} · 로컬: {localVersion}",
+      "recommendedLocal": "권장: {recommendedVersion} · 로컬: {localVersion}",
       "localOnly": "로컬: {localVersion}",
       "localInstalled": "{versionText}. 설치되어 있습니다.",
       "platformUnsupported": "{versionText}. 현재 플랫폼에서는 이 에이전트를 지원하지 않습니다.",
@@ -1386,8 +1498,9 @@
       "clickInstall": "{versionText}. 오른쪽의 설치를 클릭하세요.",
       "localUnrecognized": "{versionText}. 로컬 버전을 비교할 수 없습니다. 덮어쓰기 설치를 위해 업그레이드를 시도하세요.",
       "upgradeAvailable": "{versionText}. 업그레이드가 가능합니다.",
-      "remoteUnavailable": "{versionText}. 현재 원격 버전을 사용할 수 없습니다.",
-      "latest": "{versionText}. 이미 최신입니다."
+      "recommendedUnavailable": "{versionText}. 권장 버전이 없습니다.",
+      "latest": "{versionText}. 이미 최신입니다.",
+      "unreviewedAvailable": "{versionText}. 검토되지 않은 새 릴리스가 있습니다."
     },
     "adapter": {
       "label": "ACP 어댑터",
@@ -1400,7 +1513,11 @@
       "ready": "어댑터 {adapterCmd}가 설치되어 있으며 Codeg가 실행하는 것이 바로 이것입니다. 자체 런타임을 포함하므로 {nativeLabel}은 필요하지 않습니다. 나중에 설치해도 둘은 공존하며 {configDir}를 공유합니다."
     },
     "cline": {
-      "configDescription": "Cline API 제공자와 자격 증명을 구성합니다. 설정은 ~/.cline/data/에 저장됩니다."
+      "configDescription": "Cline API 제공자와 자격 증명을 구성합니다. 설정은 ~/.cline/data/에 저장됩니다.",
+      "signInGroup": "Cline 계정으로 로그인",
+      "byoGroup": "직접 공급자 사용",
+      "externalGroup": "codeg 외부에서 설정됨",
+      "signInHint": "이 자격 증명은 cline이 직접 보관합니다. 터미널에서 아래 명령을 실행해 로그인하세요. 코드가 출력되고 확인용 브라우저 페이지가 열립니다."
     },
     "opencodePlugins": {
       "title": "OpenCode 플러그인",
@@ -1408,7 +1525,10 @@
       "noPlugins": "opencode.json에 선언된 플러그인이 없습니다",
       "status": {
         "installed": "설치됨",
-        "missing": "미설치"
+        "needs_migration": "마이그레이션 필요",
+        "missing": "미설치",
+        "path": "경로 플러그인",
+        "path_missing": "경로를 찾을 수 없음"
       },
       "installAll": "누락된 플러그인 모두 설치",
       "pinVersions": "@latest 버전 고정",
@@ -1430,7 +1550,8 @@
         "medium": "중간",
         "high": "높음",
         "minimal": "최소",
-        "xhigh": "매우 높음"
+        "xhigh": "매우 높음",
+        "max": "최대"
       },
       "apiKeyLabel": "API 키",
       "apiKeyHint": "선택한 제공자의 ~/.pi/agent/auth.json에 저장됩니다.",
@@ -1444,7 +1565,9 @@
       "modeCustom": "사용자 지정 pi",
       "modeCustomHint": "자신의 pi 빌드, 설치 또는 래퍼를 실행합니다.",
       "commandLabel": "pi 명령 또는 경로",
-      "commandHint": "절대 경로, PATH의 명령 이름 또는 래퍼 스크립트(예: 모노레포의 ./pi-test.sh).",
+      "commandHint": "절대 경로 또는 PATH의 명령 이름을 사용하세요.",
+      "relativeCommandPath": "Pi 명령의 절대 경로 또는 PATH의 명령 이름을 사용하세요.",
+      "relativeAgentDir": "Pi 에이전트 디렉터리의 절대 경로 또는 ~/...를 사용하세요. 상대 경로는 작업 공간에 따라 달라집니다.",
       "commandNotFound": "명령을 찾을 수 없음",
       "validate": "검증",
       "advanced": "고급",
@@ -1469,6 +1592,7 @@
       "installing": "설치 중…",
       "recheck": "다시 확인",
       "configDirSkillsNote": "사용자 지정 구성 디렉터리를 설정하면 설정에서 관리하는 스킬, 전문가, 오피스 도구가 이 pi에 적용되지 않습니다. 해당 폴더에서 스킬을 직접 관리하세요.",
+      "dirHistoryNote": "이 디렉터리는 pi 프로세스에만 적용됩니다. codeg의 대화 기록은 pi의 기본 위치를 읽으므로, 사용자 지정 디렉터리에 기록된 세션은 목록에 표시되지 않습니다.",
       "projectTrustTitle": "프로젝트 신뢰",
       "projectTrustDescription": "pi가 프로젝트 파일을 불러오도록 허용한 폴더입니다. 신뢰한 폴더에서는 해당 저장소의 .pi/extensions가 pi 시작 시 코드를 실행하며, 그 아래 모든 폴더에 적용되고 터미널에서 pi를 실행할 때에도 사용됩니다.",
       "projectTrustLoading": "불러오는 중…",
@@ -1484,7 +1608,14 @@
       "levelsEmptyError": "단계를 하나 이상 선택하세요. 하나도 없으면 pi는 Off로 되돌아갑니다.",
       "wireValuesTitle": "고급: 공급자에게 보내는 값",
       "wireValuesHint": "비워 두면 단계 이름을 그대로 보냅니다. 엔드포인트가 다른 표기를 요구할 때만 설정하세요 — Google 계열은 LOW / HIGH가 필요합니다.",
-      "defaultLevelUnlisted": "이 단계는 위 선택 목록에 없습니다 — pi가 낮춰 버립니다."
+      "defaultLevelUnlisted": "이 단계는 위 선택 목록에 없습니다 — pi가 낮춰 버립니다.",
+      "modelLevels": "{model}의 사고 단계: {levels}.",
+      "modelNoThinking": "{model}에는 사고 단계가 없습니다 — Pi는 항상 사고를 끈 채로 실행합니다.",
+      "levelClamped": "{model}에는 {level} 단계가 없어 Pi가 {effective} 단계로 실행합니다. {level} 단계를 지원하는 모델은 계속 {level} 단계로 실행됩니다.",
+      "modelNotListed": "Pi가 이 제공자에서 이 모델을 표시하지 않습니다. 모델 ID를 확인하세요 — Pi는 API 키나 로그인이 있는 제공자만 표시합니다.",
+      "catalogUnavailable": "이 모델의 사고 단계를 Pi에 확인할 수 없었습니다.",
+      "configLoadFailed": "Pi 설정을 읽을 수 없습니다: {message}",
+      "runtimeTooOld": "이 Pi는 너무 오래되었습니다. Codeg에서 세션을 열려면 Pi {min} 이상이 필요합니다. 먼저 Pi를 업데이트하세요."
     },
     "addCustomAgent": "사용자 지정 에이전트 추가",
     "addCustomAgentHint": "ACP를 지원하는 모든 에이전트를 등록할 수 있습니다. 공개 ACP 레지스트리에서 선택하거나 레지스트리 정보를 붙여넣으세요.",
@@ -1538,16 +1669,64 @@
     "customAgentBadge": "사용자 지정",
     "customAgentNotLaunchable": "이 환경에서는 실행할 수 없습니다: {reason}"
   },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "일반",
+    "deepseekModeDefaultDescription": "파일을 직접 읽고 쓰며 명령을 실행해 작업을 끝냅니다",
+    "deepseekModePlan": "계획",
+    "deepseekModePlanDescription": "먼저 조사한 뒤 전체 계획을 제시하고 확인을 받은 다음에 실행합니다. 모델에 대한 안내일 뿐이며 실제 경계는 파일 접근 설정이 정합니다.",
+    "deepseekOptionModel": "모델",
+    "deepseekOptionReasoning": "추론 강도",
+    "deepseekOptionReasoningDescription": "높을수록 느리고 토큰을 더 쓰지만 어려운 문제에서 안정적입니다",
+    "deepseekOptionSandbox": "파일 접근",
+    "deepseekOptionSandboxDescription": "명령과 파일 도구가 이 경계를 함께 사용합니다",
+    "deepseekReasoningOff": "끄기",
+    "deepseekReasoningOffDescription": "추론 없이 바로 답합니다. 가장 빠릅니다",
+    "deepseekReasoningLow": "낮음",
+    "deepseekReasoningLowDescription": "짧게 추론합니다. 끄기보다 안정적이고 높음보다 빠릅니다",
+    "deepseekReasoningHigh": "높음",
+    "deepseekReasoningHighDescription": "추론한 뒤 답합니다. 일상적인 코딩의 기본값입니다",
+    "deepseekReasoningMax": "최고",
+    "deepseekReasoningMaxDescription": "더 오래 추론합니다. 어려운 문제에 강하지만 느리고 토큰을 더 씁니다",
+    "deepseekSandboxReadOnly": "읽기 전용",
+    "deepseekSandboxReadOnlyDescription": "읽기 전용 정책으로 실행합니다. 쓰기가 필요하면 권한을 바꾸세요. 일부 플랫폼에서는 부분적으로만 적용됩니다.",
+    "deepseekSandboxWorkspaceWrite": "워크스페이스 쓰기",
+    "deepseekSandboxWorkspaceWriteDescription": "쓰기는 세션 워크스페이스와 시스템 임시 디렉터리 안에 머무는 것을 목표로 합니다. 범위를 벗어난 호출은 일회성 승인을 요청합니다. 일부 플랫폼에서는 부분적으로만 적용됩니다.",
+    "deepseekSandboxFullAccess": "전체 접근(샌드박스 없음)",
+    "deepseekSandboxFullAccessDescription": "파일 제한을 전혀 적용하지 않습니다. 결과를 이해할 때만 선택하세요.",
+    "deepseekPermissionAllowOnce": "이번만 허용",
+    "deepseekPermissionRejectOnce": "거부"
+  },
   "SettingsPages": {
     "agentsLoading": "에이전트 설정을 불러오는 중...",
     "skillPacksLoading": "스킬 팩 로딩 중…"
   },
+  "CloseBehaviorSettings": {
+    "title": "닫기 버튼 동작",
+    "description": "메인 창의 닫기 버튼을 눌렀을 때의 동작을 선택합니다.",
+    "trayUnavailable": "이 시스템에는 사용 가능한 트레이가 없어 닫기 버튼은 항상 codeg를 종료합니다.",
+    "behaviorAsk": "매번 묻기",
+    "behaviorMinimize": "트레이로 최소화",
+    "behaviorExit": "codeg 종료",
+    "saveFailed": "닫기 동작 저장 실패: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "codeg를 닫을까요?",
+    "askDescription": "트레이에서 계속 실행해 에이전트와 터미널을 유지하거나, 완전히 종료할 수 있습니다.",
+    "confirmExitTitle": "codeg를 종료할까요?",
+    "confirmExitDescription": "현재 설정은 창을 닫으면 codeg를 종료하도록 되어 있습니다.",
+    "runningTerminals": "터미널 {count}개가 실행 중이며 종료 시 모두 중단됩니다.",
+    "remember": "내 선택 기억하기",
+    "cancel": "취소",
+    "minimize": "트레이로 최소화",
+    "exit": "codeg 종료",
+    "actionFailed": "작업 실패: {message}"
+  },
   "GeneralSettings": {
     "loading": "로딩 중...",
     "sectionTitle": "일반",
-    "sectionDescription": "기본 터미널, 렌더링 가속, 알림음, 다중 에이전트 위임 등 공용 환경설정을 한곳에서 관리합니다.",
+    "sectionDescription": "기본 터미널, 렌더링 가속, 창을 닫을 때의 동작, 알림과 알림음 등 공용 환경설정을 한곳에서 관리합니다.",
     "terminalTitle": "기본 터미널",
-    "terminalDescription": "터미널 바나 파일 트리에서 새 터미널 탭을 열 때 사용할 셸을 선택합니다. 에이전트가 codeg에 전체 명령줄 실행을 요청할 때도 사용됩니다.",
+    "terminalDescription": "codeg가 새 터미널 탭을 열 때와 에이전트를 대신해 전체 명령줄을 실행할 때 사용할 셸을 선택합니다. 자체 셸을 갖춘 에이전트(Codex, Claude Code)는 자기 프로세스 안에서 명령을 실행하므로 이 설정이 닿지 않습니다.",
     "terminalSystemDefault": "시스템 기본값",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1561,13 +1740,19 @@
     "terminalShellNotInstalled": "설치되지 않음",
     "terminalShellNotFoundWarning": "이 경로는 현재 호스트에 존재하지 않습니다.",
     "terminalCurrentShell": "현재 사용 중: {path}",
-    "renderingDescription": "앱이 검은 화면이 되거나 렌더링 문제가 발생하면(일부 AMD GPU 또는 Intel 내장 GPU에서 보고됨) 하드웨어 가속을 끄세요. Windows 데스크톱에서만 적용됩니다.",
+    "colorizeCommandOutput": "명령 출력에 색 입히기",
+    "colorizeCommandOutputDescription": "에이전트가 실행하는 명령에 ANSI 색상을 강제해, 그 출력이 대화 기록에서 일반 텍스트가 아닌 컬러로 표시되게 합니다. 새 세션부터 적용됩니다.",
+    "renderingDescription": "앱이 검은 화면이 되거나 렌더링 문제가 발생하면(Windows에서는 일부 AMD GPU 또는 Intel 내장 GPU, Linux에서는 NVIDIA 독점 드라이버에서 보고됨) 하드웨어 가속을 끄세요. Windows 및 Linux 데스크톱에서만 적용됩니다.",
     "disableHardwareAcceleration": "하드웨어 가속 비활성화",
     "renderingSaveFailed": "렌더링 설정 저장 실패: {message}",
     "restartRequired": "저장되었습니다. 변경 사항을 적용하려면 앱을 다시 시작하세요.",
     "restartNow": "지금 다시 시작",
     "restartFailed": "다시 시작 실패: {message}",
     "loadFailed": "불러오기 실패: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "협업",
+    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다."
   },
   "LoginPage": {
     "documentTitle": "로그인 - codeg",
@@ -1625,6 +1810,9 @@
     "searchPlaceholder": "제목 또는 경로 검색…",
     "allAgents": "모든 에이전트",
     "onlyImportable": "가져오기 가능만",
+    "includeDeleted": "삭제된 항목 포함",
+    "includeDeletedWithCount": "삭제된 항목 포함({count})",
+    "includeDeletedHint": "codeg에서 세션을 삭제해도 숨겨질 뿐 대화와 기록은 그대로 남아 있습니다. 켜면 삭제된 세션을 선택해 원래 자리로 복원할 수 있습니다.",
     "selectAll": "모두 선택",
     "clearSelection": "지우기",
     "expandAll": "모두 펼치기",
@@ -1637,6 +1825,7 @@
     "toggleSessionAria": "세션 {title} 선택",
     "statusImported": "가져옴",
     "statusDeleted": "삭제됨",
+    "statusDeletedRestorable": "삭제됨 — 가져오면 원래 대화가 복원됩니다",
     "untitled": "제목 없는 세션",
     "messageCount": "메시지 {count}개",
     "selectedCount": "{count}개 선택됨",
@@ -1645,6 +1834,7 @@
     "close": "닫기",
     "doneTitle": "가져오기 완료",
     "doneImported": "가져옴",
+    "doneRestored": "복원됨",
     "doneUpdated": "갱신됨",
     "doneSkipped": "건너뜀",
     "doneCreatedFolders": "생성된 폴더",
@@ -1809,7 +1999,7 @@
       "tasks": "할 일",
       "loadingSubsessions": "하위 대화 로드 중…",
       "forge": "리포지토리 패널",
-      "canvas": "무한 대화",
+      "canvas": "무한 캔버스",
       "folderGroup": {
         "newGroup": "새 그룹",
         "newGroupTitle": "새 폴더 그룹",
@@ -1825,7 +2015,12 @@
         "removeFromGroup": "그룹 없음",
         "newGroupAndMove": "새 그룹…",
         "dropToUngroup": "여기에 놓으면 그룹에서 제외됩니다"
-      }
+      },
+      "recentFilterAll": "전체",
+      "recentFilterTitle": "최근 항목 표시: {filter}",
+      "noRecentChats": "최근 채팅이 없습니다",
+      "noRecentFolders": "최근 폴더 대화가 없습니다",
+      "recentFilterMenuLabel": "최근 항목 표시"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
@@ -1986,7 +2181,8 @@
         "output": "출력",
         "cacheRead": "캐시 읽기",
         "cacheWrite": "캐시 쓰기",
-        "total": "합계"
+        "total": "합계",
+        "cacheHit": "캐시 적중률"
       },
       "quickActions": {
         "title": "빠른 작업",
@@ -1995,7 +2191,38 @@
           "navigation": "탐색",
           "more": "기타"
         },
+        "browserTab": "브라우저 탭 열기",
         "showPet": "펫 표시"
+      },
+      "mcp": {
+        "title": "codeg-mcp 서비스",
+        "state": {
+          "running": "실행 중",
+          "stopped": "실행되지 않음",
+          "disabled": "도구 비활성화됨",
+          "unavailable": "컴패니언 없음",
+          "unknown": "알 수 없음"
+        },
+        "hint": {
+          "running": "여기서 시작한 에이전트는 codeg 도구를 쓸 수 있습니다.",
+          "stopped": "브로커 소켓이 응답하지 않습니다.",
+          "disabled": "모든 도구 그룹이 꺼져 있습니다.",
+          "unavailable": "codeg-mcp 실행 파일을 찾을 수 없습니다.",
+          "unknown": "상태를 읽을 수 없습니다."
+        },
+        "socketPath": "주소",
+        "binary": "컴패니언",
+        "binaryMissing": "찾을 수 없음",
+        "sessions": "세션",
+        "activeDelegations": "위임",
+        "depthLimit": "깊이 제한",
+        "start": "서비스 시작",
+        "starting": "시작 중…",
+        "actionFailed": "작업 실패: {message}",
+        "lastError": "마지막 오류: {message}",
+        "loadFailed": "상태를 읽을 수 없습니다: {message}",
+        "openSettings": "전체 설정 열기",
+        "refresh": "새로 고침"
       }
     },
     "auxPanel": {
@@ -2037,12 +2264,20 @@
     },
     "fileWorkspace": {
       "files": "파일",
+      "newTab": "새 탭",
+      "newBrowserTab": "브라우저 탭",
+      "openFile": "파일 열기…",
+      "openFileTitle": "파일 열기",
+      "localServices": "로컬 서버",
+      "localServiceFromAgent": "에이전트",
       "closeFileTab": "파일 탭 닫기",
       "close": "닫기",
       "closeOthers": "다른 항목 닫기",
       "closeAll": "모두 닫기",
       "preview": "미리보기",
       "editSource": "소스 편집",
+      "openInSystemBrowser": "시스템 브라우저에서 열기",
+      "more": "더 보기",
       "maximize": "최대화",
       "restore": "복원",
       "emptyDirectory": "빈 폴더"
@@ -2053,7 +2288,26 @@
       "closeOthers": "다른 항목 닫기",
       "closeAll": "모두 닫기",
       "hideTerminal": "터미널 숨기기 ({shortcut})",
-      "openFolderFirst": "먼저 폴더를 여세요"
+      "openFolderFirst": "먼저 폴더를 여세요",
+      "keybar": {
+        "label": "터미널 가상 키",
+        "show": "가상 키 표시",
+        "hide": "가상 키 숨기기",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "폴더 열기",
@@ -2149,7 +2403,6 @@
       "imageZoomOut": "축소",
       "imageZoomReset": "확대/축소 초기화",
       "htmlPreviewTitle": "HTML 미리보기",
-      "htmlPreviewTrust": "스크립트 사용",
       "htmlPreviewTrustHint": "이 파일의 스크립트를 실행하고 네트워크 접근을 허용합니다. 신뢰할 수 있는 파일에서만 사용하세요.",
       "officePreviewTitle": "Office 문서 미리보기",
       "officeFullRender": "전체 렌더링",
@@ -2161,6 +2414,17 @@
       "officeWatchRetry": "다시 시도",
       "officeServerInstallHint": "OfficeCLI는 서버 호스트에 설치해야 합니다. 서버에서 다음 명령을 실행한 후 다시 시도하세요:",
       "officeRemoteDesktopUnsupported": "원격 데스크톱 창에서는 실시간 미리보기를 사용할 수 없습니다. Office 파일을 미리 보려면 서버의 웹 UI에서 이 작업 공간을 여세요."
+    },
+    "fileViewer": {
+      "title": "파일 미리보기",
+      "description": "이 대화에서 참조된 파일을 옆에서 엽니다.",
+      "openInWorkspace": "작업 공간에서 열기",
+      "back": "뒤로",
+      "preview": "미리보기",
+      "source": "소스",
+      "loading": "불러오는 중...",
+      "cannotResolve": "이 파일 경로를 확인할 수 없습니다.",
+      "tooLargeToPreview": "이 파일은 너무 커서 여기서 미리 볼 수 없습니다. 작업 공간에서 여세요."
     },
     "branchDropdown": {
       "toasts": {
@@ -2565,7 +2829,13 @@
       "openInTerminal": "터미널",
       "openInCode": "VS Code",
       "linkedFolder": "연결된 폴더",
+      "moreActions": "더 많은 작업",
       "copyPath": "경로 복사",
+      "copy": "복사",
+      "copyRelativePath": "상대 경로",
+      "copyAbsolutePath": "절대 경로",
+      "copyFileItself": "파일 자체",
+      "copyDirectoryItself": "폴더 자체",
       "upload": "파일/폴더 업로드",
       "download": "파일 다운로드",
       "downloadAsZip": "ZIP으로 다운로드",
@@ -2603,7 +2873,9 @@
         "downloadFailed": "{name} 다운로드 실패",
         "downloadSaved": "{name} 다운로드 완료",
         "pathCopied": "경로가 복사되었습니다",
-        "copyPathFailed": "경로 복사에 실패했습니다"
+        "copyPathFailed": "경로 복사에 실패했습니다",
+        "fileCopied": "{name} 복사됨",
+        "copyFileFailed": "{name} 복사에 실패했습니다"
       },
       "createDialog": {
         "newFile": "새 파일",
@@ -2751,8 +3023,6 @@
           "openAgentsSettings": "에이전트 설정 열기",
           "retry": "다시 시도"
         },
-        "agentsSetupHint": "설정 > 에이전트를 열어 설치를 관리하세요.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "현재 에이전트 구성을 읽을 수 없습니다.",
           "disabled": "{agent}은(는) 에이전트 설정에서 비활성화되어 있습니다. 연결 전에 활성화하세요.",
@@ -2768,24 +3038,32 @@
           "downloadFailed": "{agent} 다운로드 실패: {message}",
           "sessionLoadResourceNotFound": "{agent} 세션 불러오기에 실패했습니다. 다시 불러와 재시도하거나 새 대화를 시작하세요.",
           "sessionLoadUnavailable": "{agent}에서 이 세션을 복원할 수 없습니다. 세션이 종료되었거나 에이전트가 중지되었을 수 있습니다. 다시 불러와 재시도하거나 새 대화를 시작하세요.",
-          "sessionLoadBusy": "이 기록은 여기서 분기된 세션이 열어 두고 있습니다. 해당 세션을 닫은 뒤 다시 불러오세요.",
+          "sessionLoadBusy": "이 세션이 다른 곳에서 열려 있습니다. 다른 {agent} 클라이언트(데스크톱 앱, CLI 또는 IDE 확장 프로그램)에서 열려 있다면 그쪽에서 닫거나 해당 클라이언트를 종료한 뒤 다시 불러오세요. 방금 이 세션에서 분기했다면 1분쯤 뒤에 다시 불러오세요.",
           "sessionArchived": "이전 세션은 {agent} 측에서 보관되었습니다. 터미널에서 {command}을(를) 실행해 복원한 뒤 다시 불러오거나 새 대화를 시작하세요.",
           "turnFailedRefusal": "{agent}이(가) 이번 턴을 계속하지 않았습니다. 백엔드나 게이트웨이 오류일 수 있습니다. 에이전트 로그를 확인하세요.",
           "turnFailedMaxTokens": "{agent}이(가) 이번 턴의 최대 토큰 한도에 도달했습니다.",
           "turnFailedMaxTurnRequests": "{agent}이(가) 이번 턴에서 허용된 최대 요청 수에 도달했습니다.",
           "turnFailedUnknown": "{agent}이(가) 알 수 없는 중지 사유로 턴을 종료했습니다.",
+          "turnFailedAuthRequired": "{agent}이(가) 이번 턴을 실행하려면 다시 로그인해야 합니다. 설정에서 로그인한 뒤 메시지를 다시 보내세요.",
+          "agentAuthRequired": "{agent}이(가) 세션을 시작하지 못했습니다. 사용할 수 있는 자격 증명이 없습니다. 설정 → 에이전트 → {agent}에서 다시 로그인한 뒤 이 대화를 다시 열어 주세요.",
+          "agentRuntimeOutdated": "{agent}이(가) 이 Codeg 버전에 비해 너무 오래되었습니다. 업데이트한 뒤 이 대화를 다시 열어 주세요.",
           "grokModelSwitchIncompatibleAgent": "{agent}은(는) 기존 대화에서는 해당 모델로 전환할 수 없습니다. 새 세션을 시작하여 사용하세요.",
+          "setModeFailed": "{agent}에서 모드를 전환하지 못했습니다.",
+          "setConfigOptionFailed": "{agent}에서 해당 설정을 적용하지 못했습니다.",
+          "goalControlFailed": "{agent}에서 목표를 업데이트하지 못했습니다.",
+          "imageDropped": "첨부한 이미지 중 하나가 {agent}에 전달되지 않았습니다.",
+          "sessionLoadFallback": "{agent}에서 이전 세션을 복원하지 못해 새 세션을 시작했습니다. 이전 컨텍스트는 이어지지 않습니다.",
           "turnFailedEmpty": "{agent}이(가) 어떤 응답도 생성하지 않고 턴을 종료했습니다.",
           "turnFailedEmptyProtocol": "{agent}의 출력을 codeg가 구문 분석할 수 없습니다. 에이전트 버전이 프로토콜과 맞지 않을 수 있습니다.",
-          "turnFailedEmptyMetadata": "{agent}이(가) 이번 턴에 상태 업데이트(계획 / 모드 / 사용량)만 보내고 응답은 없었습니다.",
-          "detailsInAlerts": "상태 표시줄의 알림을 열고 세부 정보를 펼치면 에이전트 출력을 확인할 수 있습니다."
+          "turnFailedEmptyMetadata": "{agent}이(가) 이번 턴에 상태 업데이트(계획 / 모드 / 사용량)만 보내고 응답은 없었습니다."
         },
         "unableReadAgentConfig": "에이전트 구성을 읽을 수 없습니다: {message}",
         "connectFailedTitle": "{agent} 연결 실패",
         "toolFallbackTitle": "도구",
-        "eventErrorTitle": "에이전트 오류",
         "notificationTurnComplete": "{agent} 응답이 완료되었습니다",
         "notificationError": "{agent} 오류: {message}",
+        "notificationQuestion": "{agent}이(가) 답변을 기다리고 있습니다",
+        "notificationErrorRedacted": "{agent}에서 오류가 발생했습니다",
         "claudeApiRetry": {
           "fallbackError": "authentication_failed",
           "retryingWithMax": "재시도 중 {attempt}/{max}",
@@ -2798,12 +3076,16 @@
           "lineNoErrorWithDelay": "{retry}, {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "{agent}이(가) {option}을(를) {requested} 대신 {actual}(으)로 설정했습니다"
+        "configOptionAdjusted": "{agent}이(가) {option}을(를) {requested} 대신 {actual}(으)로 설정했습니다",
+        "noticeTitle": "{agent}: {title}",
+        "pluginLoadFailedTitle": "{agent}에서 플러그인 {count}개를 불러오지 못했습니다"
       },
       "connectionLifecycle": {
         "tasks": {
           "connectingTitle": "{agent}에 연결 중",
           "connectingDescription": "연결을 설정하는 중",
+          "preparingTitle": "{agent} 세션 준비 중",
+          "preparingDescription": "대화 기록을 읽는 중",
           "loadingSelectorsTitle": "{agent} 선택자 불러오는 중",
           "loadingSelectorsDescription": "모드 및 세션 구성 옵션을 가져오는 중",
           "initSessionTitle": "{agent} 세션 초기화 중",
@@ -2839,6 +3121,9 @@
         "cut": "잘라내기",
         "copy": "복사",
         "selectAll": "모두 선택",
+        "openLink": "링크 열기",
+        "openFile": "파일 열기",
+        "sendEmail": "메일 보내기",
         "pasteUnavailable": "클립보드를 읽을 수 없습니다. Ctrl/⌘V로 붙여넣으세요.",
         "clipboardWriteFailed": "클립보드에 쓸 수 없습니다. 키보드 단축키를 사용하세요.",
         "quickMessageUntitled": "제목 없음",
@@ -2854,14 +3139,16 @@
         "searchModel": "모델 검색...",
         "searchModelAria": "모델 검색",
         "modelListLabel": "모델",
+        "recommendedBadge": "권장",
         "noModels": "모델을 찾을 수 없습니다",
         "cancel": "취소",
         "send": "보내기",
         "queueMessage": "대기열에 추가",
         "steerIntoTurn": "현재 턴에 삽입",
+        "steerAsNote": "다음 확인용 메모 보내기",
         "steerQueuedInstead": "대신 대기열에 추가되었습니다. 다음 턴에 전송됩니다.",
         "steerFailed": "현재 턴에 삽입하지 못했습니다",
-        "steerAttachmentsUnsupported": "텍스트만 지원됩니다. 첨부 파일이 있는 초안은 대기열을 이용하세요.",
+        "steerNoteFailed": "메모를 보내지 못했습니다",
         "slashCommands": "슬래시 명령",
         "slashSearchPlaceholder": "명령 검색...",
         "slashSearchEmpty": "일치하는 명령이 없습니다",
@@ -2892,7 +3179,9 @@
         "saveEdit": "저장",
         "cancelEdit": "편집 취소",
         "editItem": "편집",
-        "deleteItem": "삭제"
+        "deleteItem": "삭제",
+        "steerItemNow": "현재 턴에 삽입",
+        "steerItemAsNote": "메모로 보내 다음 점검 때 읽도록 함"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "설정 > 에이전트",
@@ -3113,13 +3402,17 @@
         "openInFileManager": "파일 관리자에서 열기",
         "copyRelativePath": "상대 경로 복사",
         "copyAbsolutePath": "절대 경로 복사",
+        "download": "파일 다운로드",
         "pathCopied": "경로가 복사되었습니다",
         "copyPathFailed": "경로 복사에 실패했습니다",
-        "openFailed": "로컬 파일 열기 실패"
+        "openFailed": "로컬 파일 열기 실패",
+        "downloadSaved": "{name} 다운로드 완료",
+        "downloadFailed": "{name} 다운로드 실패"
       },
       "messageList": {
         "attachedResources": "첨부된 리소스",
         "loading": "불러오는 중...",
+        "loadBackgroundActivity": "백그라운드 활동 불러오기",
         "loadEarlier": "이전 메시지 불러오기",
         "loadingEarlier": "이전 메시지를 불러오는 중…",
         "error": "오류: {message}",
@@ -3132,6 +3425,8 @@
         "systemMessage": "시스템 메시지",
         "copyMessage": "복사",
         "forkFromHere": "여기서 분기",
+        "forkBusy": "턴이 실행 중일 때는 분기할 수 없습니다",
+        "forkNotReady": "아직 이 응답에서 분기할 수 없습니다. 잠시 후 다시 시도하세요",
         "copied": "복사됨",
         "selectionActions": "선택 영역 작업",
         "selectionCopy": "텍스트 복사",
@@ -3237,6 +3532,8 @@
             "child_max_tokens": "서브에이전트: 토큰 한도",
             "child_max_turn_requests": "서브에이전트: 요청 한도",
             "child_empty": "서브에이전트 응답 없음",
+            "child_auth_required": "서브에이전트 로그인 필요",
+            "child_rejected": "서브에이전트 요청 거부",
             "child_unknown": "서브에이전트: 오류",
             "unknown": "알 수 없는 작업"
           }
@@ -3282,7 +3579,10 @@
         "agentSessionLoading": "하위 에이전트의 기록을 불러오는 중…",
         "agentSessionEmpty": "하위 에이전트가 아직 아무것도 기록하지 않았습니다.",
         "agentFallbackTitle": "서브 에이전트 시작 중…",
-        "agentCodexLaunchOnly": "시작되었습니다. Codex는 이 하위 에이전트의 진행 상황을 더 이상 알리지 않으며, 결과는 이 대화의 메시지로 도착합니다.",
+        "agentCodexLaunchOnly": "시작되었습니다. Codex가 이 하위 에이전트의 결과를 아직 알리지 않았습니다. 세션을 열면 작업을 확인할 수 있습니다.",
+        "agentSubagentDone": "완료",
+        "agentSubagentInterrupted": "중단됨",
+        "agentSubagentUnknown": "결과 미확인",
         "agentStatsBash": "명령",
         "agentStatsRead": "파일 읽기",
         "agentStatsSearch": "검색",
@@ -3416,7 +3716,22 @@
           "outputMissing": "codex가 스크립트 출력을 잘라내면서 이 명령의 구분선이 사라져 출력을 귀속시킬 수 없습니다.",
           "sharedWith": "이 구간에는 {commands}의 출력도 포함됩니다 — 구분선이 codex에 의해 잘렸습니다.",
           "truncated": "잘림"
-        }
+        },
+        "visualizeTitle": "시각화",
+        "visualizeWide": "와이드",
+        "visualizeLoading": "시각화를 불러오는 중…",
+        "visualizeError": "시각화를 불러올 수 없습니다",
+        "visualizeReload": "다시 불러오기",
+        "visualizeOpenFile": "파일 열기",
+        "visualizeExpand": "모두 보기",
+        "visualizeCollapse": "접기",
+        "visualizeScriptsOn": "스크립트 켜짐",
+        "visualizeScriptsOff": "스크립트 활성화",
+        "visualizeScriptsHint": "시각화의 스크립트를 실행하여 상호작용할 수 있게 합니다. 샌드박스에서 실행되며 네트워크나 파일에 접근할 수 없습니다.",
+        "visualizeFrameTitle": "Codex 시각화",
+        "htmlPreviewOpen": "미리보기",
+        "htmlPreviewOpenAria": "{name} 미리보기",
+        "htmlPreviewHide": "미리보기 닫기"
       },
       "messageNav": {
         "title": "메시지 탐색",
@@ -3447,7 +3762,9 @@
         "skip": "건너뛰기",
         "next": "다음",
         "submit": "제출",
-        "submitError": "제출하지 못했습니다. 다시 시도해 주세요."
+        "submitError": "제출하지 못했습니다. 다시 시도해 주세요.",
+        "collapse": "접기",
+        "expand": "펼치기"
       },
       "planApproval": {
         "title": "에이전트가 계획을 제시했습니다 — 검토하세요",
@@ -3502,7 +3819,6 @@
         "reconnecting": "다시 연결하는 중…",
         "reconnectDisabledDuringTurn": "현재 턴이 끝나면 다시 연결할 수 있습니다",
         "dismiss": "닫기",
-        "reconnectFailed": "세션 다시 연결 실패",
         "applied": "새 설정이 적용되었습니다"
       },
       "piProjectTrust": {
@@ -3548,13 +3864,17 @@
         "opSpawn": "서브 에이전트 시작 중",
         "opWait": "서브 에이전트 결과 가져오는 중",
         "opClose": "서브 에이전트 종료 중",
-        "opResume": "서브 에이전트 재개 중"
+        "opResume": "서브 에이전트 재개 중",
+        "opList": "하위 에이전트 목록"
       },
       "contextCompaction": {
         "compacting": "컨텍스트 압축 중…",
         "compacted": "컨텍스트 압축 완료",
         "compactedTokens": "컨텍스트 압축 완료 · {before} → {after} 토큰",
-        "failed": "컨텍스트 압축 실패"
+        "failed": "컨텍스트 압축 실패",
+        "summary": "요약",
+        "triggerManual": "수동 실행",
+        "triggerAutomatic": "자동 실행"
       },
       "sessionFailure": {
         "category": {
@@ -3578,6 +3898,8 @@
       },
       "backgroundTasks": {
         "settledFallback": "백그라운드 작업이 종료되었습니다 ({status})",
+        "notifySettledOne": "{agent}: 백그라운드 작업이 끝났습니다",
+        "notifySettledMany": "{agent}: 백그라운드 작업 {count}개가 끝났습니다",
         "cardRunning": "백그라운드에서 실행 중",
         "cardLaunchedPending": "백그라운드 작업 시작됨",
         "cardCompleted": "백그라운드 작업 완료",
@@ -3610,6 +3932,16 @@
       "viewMode": {
         "split": "나란히 보기로 전환",
         "unified": "인라인 보기로 전환"
+      },
+      "binaryFile": "바이너리 파일 — 내용을 표시하지 않음",
+      "image": {
+        "sideBySide": "나란히 보기로 전환",
+        "swipe": "슬라이드 비교 보기로 전환",
+        "swipeHandle": "이미지 비교 슬라이더",
+        "noImage": "이 리비전에는 이미지가 없습니다",
+        "unavailable": "이쪽을 불러오지 못했습니다",
+        "tooLarge": "이미지가 너무 커서 미리 볼 수 없습니다({size})",
+        "loading": "이미지 로드 중..."
       }
     },
     "conversationContextBar": {
@@ -3924,13 +4256,14 @@
     "agentTypeRequired": "에이전트 유형을 선택하세요.",
     "agentTypeImmutableHint": "에이전트 유형은 생성 후 변경할 수 없습니다.",
     "model": "모델",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "메인 모델",
     "claudeReasoningModel": "추론 모델 (사고)",
     "claudeHaikuDefaultModel": "기본 Haiku 모델",
     "claudeSonnetDefaultModel": "기본 Sonnet 모델",
     "claudeOpusDefaultModel": "기본 Opus 모델",
+    "claudeFableDefaultModel": "기본 Fable 모델",
     "claudeCustomModelOption": "사용자 지정 모델 ID",
     "claudeCustomModelOptionName": "사용자 지정 모델 이름",
     "claudeCustomModelOptionDescription": "사용자 지정 모델 설명",
@@ -4197,6 +4530,97 @@
       "deleted": "빠른 메시지가 삭제되었습니다"
     }
   },
+  "ConversationTags": {
+    "tags": "태그",
+    "moreTags": "태그 {count}개 더",
+    "addTags": "태그 추가",
+    "editTags": "태그 편집",
+    "global": "전역",
+    "noTagsYet": "아직 태그가 없습니다",
+    "newTag": "새 태그…",
+    "manageTags": "태그 관리…",
+    "branchChip": "브랜치: {branch}",
+    "picker": {
+      "searchPlaceholder": "태그 검색 또는 만들기…",
+      "noResults": "일치하는 태그가 없습니다",
+      "empty": "아직 태그가 없습니다. 이름을 입력하면 만들 수 있습니다.",
+      "createGlobal": "전역 태그 “{name}” 만들기",
+      "createInFolder": "{folder}에 “{name}” 만들기",
+      "otherFolders": "다른 폴더"
+    },
+    "form": {
+      "createTitle": "새 태그",
+      "editTitle": "태그 편집",
+      "name": "이름",
+      "namePlaceholder": "예: bug, 리뷰 대기, 아이디어",
+      "color": "색상",
+      "customColor": "사용자 지정 색상",
+      "scope": "사용 범위",
+      "scopeGlobal": "모든 대화",
+      "scopeFolder": "{folder}에서만",
+      "create": "만들기",
+      "save": "저장",
+      "cancel": "취소"
+    },
+    "editor": {
+      "empty": "아직 태그가 없습니다.",
+      "add": "새 태그",
+      "edit": "태그 “{name}” 편집",
+      "delete": "태그 “{name}” 삭제",
+      "dragToReorder": "드래그하여 “{name}” 순서 변경",
+      "deleteTitle": "이 태그를 삭제할까요?",
+      "deleteDescription": "“{name}” 태그가 붙은 모든 대화에서 이 태그가 제거됩니다. 되돌릴 수 없습니다.",
+      "deleteConfirm": "삭제",
+      "deleteCancel": "취소",
+      "loadFailed": "태그를 불러오지 못했습니다"
+    },
+    "manager": {
+      "title": "태그 관리",
+      "description": "대화에 색상 태그를 붙이고 사이드바를 태그로 필터링할 수 있습니다.",
+      "branchTitle": "브랜치 태그",
+      "branchDescription": "각 대화를 시작한 Git 브랜치를 제목 뒤에 태그로 표시합니다.",
+      "branchShow": "표시",
+      "branchLoadFailed": "브랜치 태그 설정을 불러오지 못했습니다",
+      "globalTitle": "전역 태그",
+      "globalDescription": "채팅 모드를 포함한 모든 대화에서 사용할 수 있습니다.",
+      "folderTitle": "폴더 태그",
+      "folderDescription": "선택한 폴더의 대화(워크트리 포함)에서만 사용할 수 있습니다.",
+      "folderPlaceholder": "폴더 선택",
+      "noFolders": "아직 폴더가 없습니다. 작업 공간에서 폴더를 열면 전용 태그를 만들 수 있습니다."
+    },
+    "filter": {
+      "button": "태그로 필터링",
+      "searchPlaceholder": "태그 검색…",
+      "match": "조건",
+      "matchAny": "하나라도",
+      "matchAll": "모두",
+      "matchAnyHint": "선택한 태그 중 하나라도 있는 대화",
+      "matchAllHint": "선택한 태그가 모두 있는 대화",
+      "modeAll": "모두 일치",
+      "modeAny": "하나라도 일치",
+      "clear": "필터 지우기",
+      "noTags": "아직 태그가 없습니다. 대화 메뉴에서 추가할 수 있습니다.",
+      "noResults": "일치하는 태그가 없습니다",
+      "active": "태그로 필터링됨",
+      "noMatches": "이 태그가 붙은 대화가 없습니다",
+      "remove": "필터에서 “{name}” 제거"
+    },
+    "toasts": {
+      "assignFailed": "대화의 태그를 업데이트하지 못했습니다",
+      "createFailed": "태그를 만들지 못했습니다",
+      "deleteFailed": "태그를 삭제하지 못했습니다",
+      "reorderFailed": "태그 순서를 저장하지 못했습니다",
+      "branchTagFailed": "브랜치 태그를 저장하지 못했습니다"
+    },
+    "errors": {
+      "emptyName": "태그 이름을 입력하세요",
+      "duplicateName": "이름이 “{name}”인 태그가 이미 있습니다",
+      "invalidColor": "올바른 색상을 선택하세요",
+      "folderNotTaggable": "이 폴더에는 전용 태그를 만들 수 없습니다",
+      "notApplicable": "이 태그는 다른 폴더의 태그입니다",
+      "tagNotFound": "이 태그는 더 이상 존재하지 않습니다"
+    }
+  },
   "Pet": {
     "badge": {
       "running": "실행 중 {count}개",
@@ -4354,6 +4778,7 @@
     "saveFailed": "Failed to save remote connection",
     "deleteFailed": "Failed to delete remote connection",
     "openFailed": "Failed to open remote workspace",
+    "restoreFailed": "원격 워크스페이스 \"{name}\"을(를) 다시 열 수 없습니다",
     "connectionLoadFailed": "Failed to load remote connection: {message}",
     "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
   },
@@ -4369,14 +4794,21 @@
     "errorLoadingDir": "디렉토리 로드 실패",
     "selectedCount": "{count}개 선택됨"
   },
+  "BranchPicker": {
+    "searchPlaceholder": "브랜치 검색…",
+    "none": "브랜치 없음",
+    "local": "로컬",
+    "remote": "원격",
+    "useCustom": "\"{query}\" 사용",
+    "head": "HEAD"
+  },
   "BackupSettings": {
-    "title": "백업 및 복원",
-    "description": "codeg 데이터의 이동 가능한 백업을 내보내거나 백업에서 복원합니다.",
     "tabs": {
       "backup": "백업",
       "restore": "복원"
     },
     "export": {
+      "description": "이 기기의 codeg 데이터(데이터베이스와 업로드한 파일)를 하나의 아카이브로 묶습니다.",
       "includeExternal": "대화 내용 포함",
       "includeExternalHint": "각 CLI의 대화 기록(Claude, Codex, Gemini 등)도 함께 보관합니다. 용량이 커집니다.",
       "passphrase": "암호문 (선택)",
@@ -4388,9 +4820,18 @@
       "button": "백업 내보내기",
       "inProgress": "백업 만드는 중…",
       "success": "백업을 만들었습니다.",
-      "started": "백업 다운로드를 시작했습니다."
+      "started": "백업 다운로드를 시작했습니다.",
+      "degradedTitle": "일부 에이전트 세션 데이터베이스는 특별한 처리가 필요했습니다",
+      "degradedHint": "이 에이전트들은 세션을 SQLite에 저장합니다. 아래에 별도 표시가 없으면 백업에 포함되어 있습니다.",
+      "degradedMore": "…외 {count}건.",
+      "degradedLevel": {
+        "recoveredOnCopy": "전용 사본에서 복구됨 — 완전함",
+        "bareFileOnly": "선행 기록 로그 없이 보관됨 — 최신 메시지가 빠졌을 수 있음",
+        "notArchived": "백업하지 않음 — 복사하는 동안 계속 변경됨"
+      }
     },
     "restore": {
+      "description": "이 기기의 codeg 데이터를 백업 아카이브의 내용으로 바꿉니다.",
       "selectFile": "백업 파일 선택",
       "passphrasePrompt": "이 백업은 암호화되어 있습니다. 암호문을 입력하세요.",
       "unlock": "잠금 해제",
@@ -4426,11 +4867,136 @@
         "scanning": "충돌 확인 중…",
         "noConflicts": "덮어쓸 기존 파일이 없습니다.",
         "conflictCount": "기존 파일 {count}개가 영향을 받습니다.",
-        "conflictSkipNote": "덮어쓰기를 켜지 않으면 기존 파일은 유지(건너뜀)됩니다."
+        "conflictSkipNote": "덮어쓰기를 켜지 않으면 기존 파일은 유지(건너뜀)됩니다.",
+        "agentsRunning": "에이전트 {count}개가 실행 중입니다({agents}). 먼저 종료하세요. 그렇지 않으면 기록이 원래 위치에 기록되지 않고 별도 폴더에 보관됩니다."
       },
-      "restartFailed": "복원이 준비되었지만 서버를 다시 시작하지 못했습니다. 수동으로 다시 시작해 복원을 적용하세요."
+      "restartFailed": "복원이 준비되었지만 서버를 다시 시작하지 못했습니다. 수동으로 다시 시작해 복원을 적용하세요.",
+      "discardPending": "대기 중인 복원 취소",
+      "discarded": "대기 중이던 복원을 취소했습니다.",
+      "pendingBlockedHint": "재시작을 기다리는 복원이 이미 있습니다. 다른 것을 준비하려면 먼저 취소하세요.",
+      "result": {
+        "title": "복원이 준비되었습니다",
+        "needsRestart": "다음 시작 시 적용됩니다. 현재 데이터는 먼저 스냅샷으로 보관됩니다.",
+        "downgraded": "{agents}이(가) 실행 중이어서 대화 기록을 원래 위치에 기록하지 않고 {path}에 보관했습니다.",
+        "skipped": "기존 파일 {count}개를 그대로 두었습니다",
+        "refused": "세션 데이터베이스 {count}개를 기록하지 않았습니다",
+        "refusedHint": "데이터베이스와 선행 기록 로그를 따로 저장하던 이전 백업에서 온 것으로, 둘이 서로 맞는지 증명할 수 없습니다. 기존 데이터베이스는 그대로 두었습니다 — 별도 폴더로 복원하면 원본 파일을 받을 수 있습니다.",
+        "restartNow": "지금 재시작",
+        "later": "나중에"
+      }
     },
-    "remoteUnsupported": "백업 및 복원은 codeg를 실행 중인 컴퓨터의 데이터를 대상으로 합니다. 현재 원격 작업 공간에 연결되어 있습니다. 해당 서버에서 직접 백업을 관리하세요."
+    "remoteUnsupported": "백업 및 복원은 codeg를 실행 중인 컴퓨터의 데이터를 대상으로 합니다. 현재 원격 작업 공간에 연결되어 있습니다. 해당 서버에서 직접 백업을 관리하세요.",
+    "progress": {
+      "cancel": "취소"
+    },
+    "snapshots": {
+      "title": "복원 전 스냅샷",
+      "hint": "복원할 때마다 현재 데이터를 먼저 스냅샷으로 남기고, 최신 두 개를 보관합니다.",
+      "empty": "아직 스냅샷이 없습니다.",
+      "rollback": "이 시점으로 되돌리기",
+      "unsupported": "보기 전용",
+      "rollbackConfirmTitle": "이 스냅샷으로 되돌릴까요?",
+      "rollbackConfirmBody": "현재 데이터를 이 스냅샷으로 바꾸고 재시작합니다. 교체되는 데이터는 먼저 스냅샷으로 보관됩니다."
+    }
+  },
+  "ConfigSyncSettings": {
+    "title": "설정 동기화",
+    "scopeTitle": "동기화 범위",
+    "scopeIncludedTitle": "포함됨",
+    "scopeExcludedTitle": "포함되지 않음",
+    "scopeIncluded": {
+      "providers": "모델 공급업체(API 키 포함)",
+      "agentSettings": "에이전트 설정",
+      "customAgents": "사용자 지정 에이전트",
+      "quickMessages": "빠른 메시지",
+      "taskTemplates": "작업 템플릿",
+      "preferences": "앱 기본 설정(언어, 테마, 토글)"
+    },
+    "scopeExcluded": {
+      "conversations": "대화 기록",
+      "uploads": "업로드한 파일과 이미지",
+      "workspaces": "워크스페이스 프로젝트와 경로",
+      "mcp": "MCP 서버(각 CLI가 관리)",
+      "credentials": "로그인 자격 증명과 토큰"
+    },
+    "fileTitle": "설정 파일",
+    "exportButton": "파일로 내보내기",
+    "importButton": "파일에서 가져오기",
+    "fileHint": "다른 기기로 옮길 수 있는 JSON 파일 하나를 만듭니다. 가져올 때는 항목을 추가하거나 업데이트하며, 파일에 없는 기존 항목은 그대로 남습니다.",
+    "webdavTitle": "WebDAV 동기화",
+    "webdavHint": "설정 스냅샷을 직접 운영하는 WebDAV 서버에 업로드합니다.",
+    "presetLabel": "서버",
+    "preset": {
+      "jianguoyun": "Jianguoyun",
+      "nextcloud": "Nextcloud",
+      "synology": "Synology NAS",
+      "custom": "사용자 지정"
+    },
+    "presetHint": {
+      "jianguoyun": "Jianguoyun은 로그인 비밀번호가 아니라 보안 설정에서 만든 앱 비밀번호가 필요합니다.",
+      "nextcloud": "도메인과 사용자 이름을 바꾸고 「설정 → 보안」의 앱 비밀번호를 사용하세요.",
+      "synology": "DSM 패키지 센터에서 WebDAV Server를 활성화하세요. 기본 포트는 5005(HTTP) / 5006(HTTPS)입니다."
+    },
+    "serverUrl": "서버 URL",
+    "username": "사용자 이름",
+    "password": "비밀번호",
+    "passwordKeep": "비워 두면 저장된 비밀번호를 유지합니다",
+    "passwordPlaceholder": "앱 비밀번호",
+    "remoteDir": "원격 폴더",
+    "profile": "프로필",
+    "profileHint": "같은 프로필을 쓰는 기기는 하나의 설정을 공유합니다. 업무용과 개인용을 나누려면 프로필을 다르게 지정하세요.",
+    "autoSyncLabel": "자동 업로드",
+    "autoSyncHint": "주기적으로 확인하고 설정이 바뀜을 때만 업로드합니다.",
+    "intervalLabel": "확인 주기",
+    "intervalOption": "{minutes}분마다",
+    "saveButton": "저장",
+    "testButton": "연결 테스트",
+    "uploadButton": "지금 동기화",
+    "restoreButton": "원격에서 복원",
+    "saved": "동기화 설정을 저장했습니다",
+    "testSucceeded": "WebDAV 서버에 연결되었습니다",
+    "uploaded": "설정을 업로드했습니다",
+    "exported": "설정을 내보냈습니다",
+    "restored": "설정 {count}건을 적용했습니다",
+    "imported": "설정 {count}건을 적용했습니다",
+    "noRemoteSnapshot": "서버에 아직 설정 스냅샷이 없습니다",
+    "lastSyncAt": "마지막 동기화: {time}",
+    "neverSynced": "아직 동기화하지 않았습니다",
+    "lastError": "마지막 오류: {message}",
+    "working": "처리 중…",
+    "plaintextWarning": "스냅샷은 암호화되지 않은 상태로 업로드되며 API 키를 포함합니다. 본인만 접근할 수 있는 WebDAV 서버를 사용하세요. 동기화 자격 증명 자체는 스냅샷에 포함되지 않습니다.",
+    "importConfirmTitle": "설정을 가져올까요?",
+    "importConfirmBody": "파일의 항목이 이 기기에 추가되거나 업데이트됩니다. 파일에 없는 기존 항목은 유지됩니다.",
+    "restartHint": "모양, 언어, 공급자 목록 등 일부 변경 사항은 codeg를 다시 시작한 뒤에 적용됩니다.",
+    "importConfirmAction": "가져오기",
+    "restoreConfirmTitle": "원격에서 복원할까요?",
+    "restoreConfirmBody": "{device}에서 {time}에 만든 스냅샷을 이 기기에 적용합니다. 스냅샷에 없는 기존 항목은 유지됩니다.",
+    "restoreConfirmAction": "복원",
+    "cancel": "취소",
+    "emptySnapshot": "이 스냅샷에는 설정 항목이 없습니다.",
+    "domain": {
+      "modelProviders": "모델 공급자 {count}개",
+      "agentSettings": "에이전트 설정 {count}개",
+      "customAgents": "사용자 에이전트 {count}개",
+      "quickMessages": "빠른 메시지 {count}개",
+      "taskTemplates": "작업 템플릿 {count}개",
+      "preferences": "앱 환경설정 {count}개"
+    },
+    "rollbackTitle": "가져오기 되돌리기",
+    "rollbackHint": "가져오기와 복원을 할 때마다 직전의 이 기기 설정을 저장합니다. 최근 10개가 남습니다.",
+    "rollbackAction": "되돌리기",
+    "rollbackUnknownTime": "시간 불명",
+    "rollbackConfirmTitle": "이 설정으로 되돌릴까요?",
+    "rollbackConfirmBody": "현재 설정을 {time}에 저장된 사본으로 바꿉니다. 현재 설정을 먼저 저장하므로 이 작업도 되돌릴 수 있습니다.",
+    "rollbackConfirmAction": "되돌리기",
+    "rolledBack": "{count}개 항목을 복원했습니다",
+    "encryptLabel": "스냅샷 암호화",
+    "encryptHint": "업로드하는 파일을 암호구로 보호합니다. 동기화하는 모든 기기에 같은 암호구가 필요합니다.",
+    "encryptedNotice": "스냅샷은 업로드 전에 암호구로 암호화됩니다. 암호구를 잃어버리면 서버의 사본은 복구할 수 없습니다.",
+    "passphrase": "암호구",
+    "passphraseKeep": "비워 두면 저장된 암호구를 사용합니다",
+    "passphrasePlaceholder": "암호화 암호구",
+    "passphraseHint": "이 기기의 키체인에만 저장되며 업로드되지 않습니다. 다른 기기에도 같은 암호구를 입력하세요."
   },
   "backup": {
     "restore": {
@@ -4445,6 +5011,27 @@
     "error": {
       "diskSpace": "작업을 완료할 디스크 공간이 부족합니다.",
       "cancelled": "작업이 취소되었습니다."
+    }
+  },
+  "configSync": {
+    "error": {
+      "newerSchema": "이 스냅샷은 더 새로운 버전의 codeg(형식 {snapshotVersion})에서 만들었습니다. 현재 버전은 형식 {appVersion}까지 지원합니다.",
+      "checksum": "스냅샷이 체크섬과 일치하지 않아 손상되었을 수 있습니다.",
+      "invalidSnapshot": "이 파일은 유효한 codeg 설정 스냅샷이 아닙니다.",
+      "noRemoteSnapshot": "서버에 아직 설정 스냅샷이 없습니다.",
+      "notConfigured": "동기화하기 전에 WebDAV 서버를 설정하세요.",
+      "unauthorized": "WebDAV 서버가 사용자 이름 또는 비밀번호를 거부했습니다.",
+      "forbidden": "WebDAV 서버가 이 폴더에 대한 접근을 거부했습니다.",
+      "remotePath": "원격 폴더 또는 프로필 이름이 올바르지 않습니다.",
+      "quota": "WebDAV 서버에 남은 공간이 없습니다.",
+      "network": "WebDAV 서버에 연결할 수 없습니다.",
+      "server": "WebDAV 서버가 오류를 반환했습니다({status}).",
+      "passphraseRequired": "이 스냅샷은 암호화되어 있습니다. 동기화하기 전에 암호화 암호구를 설정하세요.",
+      "badPassphrase": "스냅샷을 복호화하지 못했습니다. 암호구를 확인하세요. 파일이 손상되었을 수도 있습니다.",
+      "badDomain": "이 스냅샷의 {domain} 부분을 읽지 못했습니다.",
+      "noRollback": "저장된 그 설정은 이 기기에 더 이상 없습니다.",
+      "credentialsUnreadable": "저장된 자격 증명을 읽지 못했습니다. 시스템 키체인을 잠금 해제한 후 다시 시도하세요.",
+      "notEncrypted": "서버의 스냅샷은 암호화되어 있지 않지만 이 기기에서는 암호화가 켜져 있습니다. 이 기기에서 업로드해 교체하거나 암호화를 끄고 사용하세요."
     }
   },
   "WebConnection": {
@@ -4477,21 +5064,97 @@
   "AgentToolsSettings": {
     "title": "대화 내 도구",
     "description": "codeg가 대화 안에서 에이전트에게 추가로 제공하는 도구입니다. 에이전트가 시작할 때 주입되므로 변경 사항은 이후에 시작한 에이전트부터 적용됩니다.",
-    "feedbackLabel": "라이브 피드백",
-    "feedbackHint": "에이전트가 작업하는 동안 메모와 수정 사항을 보낼 수 있습니다. 즉시 삽입을 지원하는 에이전트는 실행 중인 턴에 메모가 바로 삽입됩니다. 그 외 에이전트는 피드백 확인 도구로 읽는데, 보통 프롬프트에서 언급할 때만 확인합니다. 예: 메시지에 \"실시간 피드백을 정기적으로 확인해\"를 추가하세요.",
-    "questionLabel": "사용자에게 질문",
-    "questionHint": "에이전트가 작업을 멈추고 대화 입력창 위에 표시되는 객관식 질문을 할 수 있습니다. 답변(또는 건너뛰기)할 때까지 에이전트는 대기합니다.",
-    "sessionInfoLabel": "세션 정보 가져오기",
-    "sessionInfoHint": "메시지에서 참조한 세션(세션 배지)을 에이전트가 조회하여 제목, 에이전트, 상태, 작업 공간, 토큰 사용량, 최근 메시지를 읽을 수 있도록 합니다.",
-    "automationsLabel": "자동화 만들기",
-    "automationsHint": "대화를 일정에 따라 실행되는 자동화로 저장합니다. 기본값은 꺼짐 — 자동화는 이후 스스로 에이전트를 시작합니다.",
-    "workTasksLabel": "할 일 작업 만들기",
-    "workTasksHint": "대화에서 할 일 보드에 카드를 추가합니다. 기본값은 꺼짐 — 앱 상태를 기록합니다.",
     "save": "저장",
     "saving": "저장 중…",
     "saved": "도구 설정을 저장했습니다",
     "saveFailed": "도구 설정 저장에 실패했습니다",
     "loadFailed": "불러오기 실패: {detail}"
+  },
+  "AgentTools": {
+    "delegation": {
+      "label": "위임",
+      "short": "다른 에이전트에게 작업을 맡깁니다.",
+      "hint": "에이전트가 독립적인 하위 작업을 다른 에이전트에게 넘기고, 그 에이전트가 자신의 세션에서 처리한 뒤 결과를 돌려주도록 합니다. 중첩 깊이나 실행할 에이전트 같은 나머지 설정은 바로 위 섹션에 있습니다."
+    },
+    "feedback": {
+      "label": "라이브 피드백",
+      "short": "실행을 끊지 않고 메모를 덧붙입니다.",
+      "hint": "에이전트가 작업하는 동안 메모와 수정 사항을 보낼 수 있습니다. 즉시 삽입을 지원하는 에이전트는 실행 중인 턴에 메모가 바로 삽입됩니다. 그 외 에이전트는 피드백 확인 도구로 읽는데, 보통 프롬프트에서 언급할 때만 확인합니다. 예: 메시지에 \"실시간 피드백을 정기적으로 확인해\"를 추가하세요."
+    },
+    "ask": {
+      "label": "사용자에게 질문",
+      "short": "판단이 애매하면 먼저 물어보게 합니다.",
+      "hint": "에이전트가 작업을 멈추고 대화 입력창 위에 표시되는 객관식 질문을 할 수 있습니다. 답변(또는 건너뛰기)할 때까지 에이전트는 대기합니다."
+    },
+    "sessions": {
+      "label": "세션 정보 가져오기",
+      "short": "지난 세션과 결과를 조회합니다.",
+      "hint": "메시지에서 참조한 세션(세션 배지)을 에이전트가 조회하여 제목, 에이전트, 상태, 작업 공간, 토큰 사용량, 최근 메시지를 읽을 수 있도록 합니다."
+    },
+    "browser": {
+      "label": "내장 브라우저 읽기 및 조작",
+      "short": "내장 브라우저의 페이지를 열고 읽고 조작합니다.",
+      "hint": "내장 브라우저에 열려 있는 페이지 목록을 에이전트에게 보여 주고, 공유한 페이지를 읽게 하며, 조작을 허용한 페이지에서 클릭과 입력을 하게 합니다. 에이전트가 직접 주소를 열거나, 탭을 다른 곳으로 이동시키거나, 탭을 닫을 수도 있습니다. 기본값은 꺼짐입니다. 어떤 페이지를 읽을지는 여전히 해당 탭의 도구 모음에서 따로 정하지만, 기본 공유 수준을 설정해 두었다면 에이전트가 스스로 연 페이지는 로드되는 순간 그 수준으로 공유된다는 점에 유의하세요. 끄면 즉시 적용되며 이미 실행 중인 에이전트에도 적용됩니다."
+    },
+    "browserEval": {
+      "label": "내장 브라우저에서 코드 실행",
+      "short": "공유한 페이지에서 자체 코드를 실행합니다. 기본값은 묻지 않고 실행입니다.",
+      "hint": "공유한 페이지에서 에이전트가 직접 작성한 JavaScript를 실행할 수 있게 합니다. 기본값은 꺼짐이며 위 스위치가 켜져 있어야 합니다. 켜면 코드가 묻지 않고 실행되므로 판단은 이 스위치에서 하게 됩니다. 하나씩 확인하고 싶다면 설정 → 내장 브라우저에서 바꿀 수 있습니다."
+    },
+    "computer": {
+      "label": "데스크톱 창 보기 및 조작",
+      "short": "앱과 창을 나열하고, 공유한 창을 읽고, 허용한 창을 조작합니다.",
+      "hint": "에이전트가 데스크톱의 앱과 창을 나열하고, 공유한 창을 읽고——스크린샷, 창 내용, 기대한 상태인지 여부——조작을 허용한 창에서 클릭, 입력, 키 누르기를 할 수 있게 합니다. 상태 표시줄의 「컴퓨터 사용」 패널에서 창을 공유하기 전에는 어떤 창도 읽을 수 없고, 조작도 허용하지 않으면 어떤 창도 조작되지 않습니다. 창이 닫히거나 한동안 사용되지 않거나 공유를 중지하면 공유가 끝나며, 패널의 「에이전트 중지」로 모든 에이전트를 즉시 멈출 수 있습니다. 입력은 백그라운드로 창에 전달됩니다. 백그라운드로는 전달되지 않는 조작에서는 에이전트가 창을 앞으로 가져올 수 있으며, 컴퓨터 사용 설정에서 끌 수 있습니다. 데스크톱 앱 전용입니다. macOS에서는 codeg-computer-helper에 권한을 부여해야 합니다. 미리 보기."
+    },
+    "automations": {
+      "label": "자동화 만들기",
+      "short": "예약 자동화를 만들고 관리합니다.",
+      "hint": "대화를 일정에 따라 실행되는 자동화로 저장합니다. 기본값은 꺼짐 — 자동화는 이후 스스로 에이전트를 시작합니다."
+    },
+    "taskboard": {
+      "label": "할 일 작업 만들기",
+      "short": "작업 태스크를 만들고 관리합니다.",
+      "hint": "대화에서 할 일 보드에 카드를 추가합니다. 기본값은 꺼짐 — 앱 상태를 기록합니다."
+    }
+  },
+  "DesktopNotificationSettings": {
+    "title": "데스크톱 알림",
+    "description": "에이전트가 응답을 기다릴 때 OS 알림을 표시합니다. 설정은 기기별로 적용되며 다른 브라우저나 컴퓨터와는 별개입니다.",
+    "permissionTitle": "알림 권한",
+    "permissionGranted": "허용됨",
+    "permissionDenied": "차단됨",
+    "permissionDefault": "요청하지 않음",
+    "permissionUnsupported": "사용할 수 없음",
+    "permissionManagedByOs": "시스템이 관리",
+    "permissionGrantedHint": "이 브라우저는 Codeg 알림을 표시합니다.",
+    "permissionDeniedHint": "이 브라우저가 Codeg 알림을 차단하고 있습니다. 브라우저의 사이트 설정에서만 해제할 수 있으며, 페이지에서 다시 요청할 수는 없습니다.",
+    "permissionDefaultHint": "아직 이 브라우저에 요청하지 않았습니다. 허용하기 전까지는 알림이 오지 않습니다.",
+    "permissionUnsupportedHint": "알림에는 보안 컨텍스트가 필요합니다. HTTPS 또는 localhost로 접속하세요.",
+    "permissionManagedByOsHint": "데스크톱 앱은 시스템 알림 센터를 통해 보내며, OS는 Codeg가 허용되었는지 알려주지 않습니다. 테스트를 보내 확인하세요.",
+    "identityTitle": "전송 주체",
+    "identityHint": "시스템은 이 알림을 이 앱의 것으로 처리합니다. 실제로 적용되는 것은 그 앱의 알림 스위치입니다.",
+    "identityDegradedHint": "Codeg 자체 식별자를 사용할 수 없어 시스템이 {bundleId} 이름으로 알림을 보내며, 해당 앱의 알림 스위치가 적용됩니다. Codeg을 응용 프로그램 폴더에 설치하면 원래 신원으로 돌아갑니다.",
+    "requestPermission": "알림 허용",
+    "permissionGrantedToast": "알림이 허용되었습니다.",
+    "permissionDeniedToast": "알림이 차단되었습니다. 브라우저의 사이트 설정에서 다시 허용하세요.",
+    "openSystemSettings": "시스템 설정 열기",
+    "openSystemSettingsFailed": "시스템 알림 설정을 열 수 없습니다.",
+    "sendTest": "테스트 보내기",
+    "testTitle": "Codeg",
+    "testBody": "데스크톱 알림이 정상 작동합니다.",
+    "testSent": "테스트 알림을 보냈습니다.",
+    "testFailed": "테스트 알림을 보낼 수 없습니다.",
+    "whenTitle": "알림 시점",
+    "whenHint": "보조 모니터의 창은 보이지만 포거스되지는 않습니다. 알림이 오지 않는다면 “창이 포거스되지 않았을 때”를 선택하세요.",
+    "whenAlways": "항상",
+    "whenUnfocused": "창이 포거스되지 않았을 때",
+    "whenHidden": "창이 보이지 않을 때",
+    "hideBody": "알림 내용 숨기기",
+    "hideBodyHint": "에이전트 출력 대신 일반적인 문구를 표시합니다. 알림 센터는 내용을 앱 밖에 보관하며 대화를 닫은 뒤에도 남습니다. 어느 창으로 돌아갈지 알 수 있도록 제목에는 폴더 이름이 그대로 남습니다.",
+    "eventsTitle": "이벤트",
+    "eventsHint": "방해받고 싶지 않은 이벤트를 끕니다. 몇 초 이내의 동일 이벤트는 하나로 합쳐집니다.",
+    "eventBackgroundTask": "백그라운드 작업",
+    "eventWorkTask": "작업 항목"
   },
   "NotificationSoundSettings": {
     "title": "알림음",
@@ -4511,6 +5174,343 @@
     "tonePop": "팝",
     "toneAlert": "알림",
     "toneDescend": "하강음"
+  },
+  "BrowserSettings": {
+    "title": "내장 브라우저",
+    "description": "대화, 도구 결과, 터미널에서 연 웹 페이지를 앱을 벗어나지 않고 파일 옆의 탭으로 표시할 수 있습니다.",
+    "descriptionWeb": "브라우저 세션에서는 웹 페이지가 이미 사용 중인 브라우저에서 열립니다. 예외는 codeg 호스트에서 실행 중인 서버로, 여기 탭으로 전달됩니다. 아래는 그때도 적용되는 설정입니다.",
+    "defaultTargetTitle": "링크를 여는 위치",
+    "defaultTargetHint": "출처별로 설정합니다. ⌘/Ctrl을 누른 채 링크를 클릭하면 이번 한 번만 다른 쪽으로 엽니다.",
+    "sourceTranscript": "대화 메시지",
+    "sourceToolCard": "도구 결과",
+    "sourceTerminal": "터미널",
+    "sourceEditor": "편집기",
+    "sourceNotification": "알림",
+    "targetBuiltin": "내장 브라우저",
+    "targetSystem": "시스템 브라우저",
+    "devtoolsTitle": "웹 인스펙터",
+    "devtoolsHint": "탭의 ‘더 보기’ 메뉴에 ‘검사기 열기’를 표시하고 페이지에서 요소 검사를 허용합니다. 기본값은 켜짐. 이후 여는 탭부터 적용됩니다.",
+    "surfaceTitle": "탭 표시 방식",
+    "surfaceHint": "페이지를 표시하는 방식입니다. 이 시스템에서 내장 탭이 비정상적으로 동작하지 않는 한 「자동」을 유지하세요. 이후에 여는 탭부터 적용됩니다.",
+    "surfaceAuto": "자동",
+    "surfaceChild": "작업 공간에 내장",
+    "surfaceWindow": "별도 창",
+    "clearTitle": "브라우징 데이터",
+    "clearHint": "모든 브라우저 탭이 공유하는 쿠키, 캐시, 사이트 저장소입니다. 지우면 각 사이트에서 로그아웃됩니다.",
+    "clearAction": "지우기…",
+    "clearConfirmTitle": "브라우징 데이터를 지울까요?",
+    "clearConfirmDescription": "내장 브라우저의 쿠키, 캐시, 사이트 저장소가 삭제됩니다. 열린 탭은 유지되지만 각 사이트에서 로그아웃됩니다.",
+    "clearConfirmAction": "지우기",
+    "cancel": "취소",
+    "cleared": "브라우징 데이터를 지웠습니다",
+    "clearFailed": "브라우징 데이터를 지울 수 없습니다: {message}",
+    "proxyTitle": "네트워크 프록시",
+    "proxyHint": "브라우저 탭은 「시스템 설정」의 프록시를 사용합니다. 이 컴퓨터의 주소(localhost)는 프록시를 거치지 않습니다.",
+    "proxyOn": "{url} 사용 중",
+    "proxyOff": "직접 연결",
+    "proxyNextTab": "변경된 프록시는 이후에 여는 탭부터 적용됩니다.",
+    "proxyRestart": "변경된 프록시를 브라우저 탭에서 사용하려면 codeg를 다시 시작하세요.",
+    "proxyUnsupported": "이 macOS 버전에서는 사용할 수 없습니다(macOS 14 이상 필요).",
+    "proxyUnusable": "설정된 프록시는 브라우저 탭에서 사용할 수 없는 종류입니다(http 및 socks5만 지원).",
+    "suspendTitle": "백그라운드 탭 내려놓기",
+    "suspendHint": "30분 동안 백그라운드에 있는 브라우저 탭의 메모리를 해제합니다. 다시 전환하면 새로 불러오며, 스크롤 위치와 방문 기록은 사라집니다.",
+    "downloadsTitle": "다운로드",
+    "downloadsHint": "페이지에서 내려받은 파일은 {dir}에 저장됩니다. 자동으로 열지 않으며 기존 파일을 덮어쓰지 않습니다.",
+    "rulesTitle": "사이트 규칙",
+    "rulesHint": "사이트별 설정: 항상 내장 브라우저, 항상 시스템 브라우저, 또는 차단. 패턴은 호스트 이름, *.example.com 또는 *이며 :포트를 붙일 수 있습니다. 가장 구체적인 일치가 적용됩니다.",
+    "rulesHintWeb": "사이트별 설정: 차단. 브라우저 세션에서는 링크가 어디에서 열릴지 선택할 수 없습니다. 패턴은 호스트 이름, *.example.com 또는 *이며 :포트를 붙일 수 있습니다. 가장 구체적인 일치가 적용됩니다.",
+    "serviceOpenTitle": "로컬 서버",
+    "serviceOpenHint": "터미널에서 시작한 서버가 주소를 출력하면 브라우저 탭에서 엽니다. 이 컴퓨터의 주소만, 그리고 실제로 수신 중일 때만 해당합니다.",
+    "serviceOpenOff": "아무것도 하지 않기",
+    "serviceOpenNotify": "알림 표시",
+    "serviceOpenOpen": "탭으로 열기",
+    "rulePatternPlaceholder": "example.com 또는 *.example.com",
+    "rulePatternLabel": "사이트 패턴",
+    "ruleActionLabel": "동작",
+    "ruleActionFor": "{pattern}의 동작",
+    "ruleAdd": "추가",
+    "ruleRemove": "규칙 삭제",
+    "ruleActionBlock": "차단",
+    "ruleManaged": "관리자가 설정함",
+    "ruleInvalid": "올바른 패턴이 아닙니다",
+    "ruleDuplicate": "이 패턴에 대한 규칙이 이미 있습니다",
+    "rulesEmpty": "아직 규칙이 없습니다.",
+    "agentGrantTitle": "기본 공유 권한",
+    "agentGrantHint": "탭이 여는 모든 사이트를 묻지 않고 이 권한으로 공유합니다. 페이지의 제어는 사이트마다 이를 바꾸거나 해제할 수 있으며, ‘공유 안 함’을 고르면 모든 결정이 그 제어에 맡겨집니다.",
+    "agentGrantRead": "읽기 권한",
+    "agentGrantControl": "읽기 및 조작 권한",
+    "agentGrantNone": "공유 안 함",
+    "evalApprovalTitle": "페이지에서 코드 실행",
+    "evalApprovalHint": "‘읽기 및 조작 권한’으로 공유한 페이지에서 에이전트가 직접 작성한 JavaScript를 실행하려 할 때의 동작입니다. 기본값은 묻지 않고 실행입니다. 실행 여부를 정하는 것은 ‘내장 브라우저에서 코드 실행’ 스위치(기본값은 꺼짐이며 직접 켜야 합니다)와 페이지의 공유 권한이며, 실행된 코드는 모두 해당 탭의 에이전트 활동에 남습니다. ‘매번 물어보기’를 고르면 코드가 그대로 표시되고 답을 기다립니다.",
+    "evalApprovalAsk": "매번 물어보기",
+    "evalApprovalSilent": "묻지 않고 실행",
+    "terminalMenuTitle": "터미널 링크 메뉴",
+    "terminalMenuHint": "터미널에서 링크를 클릭하면 바로 열지 않고 작은 메뉴(내장 브라우저, 시스템 브라우저, 링크 복사)를 표시합니다. ⌘/Ctrl 클릭은 여전히 바로 엽니다.",
+    "htmlPreviewTitle": "HTML 파일 미리보기",
+    "htmlPreviewHint": "HTML 파일을 내장 브라우저의 제한된 문서 보기로 표시합니다. 파일별로 켜기 전에는 스크립트가 실행되지 않고, 해당 폴더 밖에는 접근할 수 없습니다. 끄면 웹 앱과 같은 인라인 미리보기를 사용합니다.",
+    "managedDisabled": "관리자 정책으로 내장 브라우저가 꺼져 있습니다. 링크는 시스템 브라우저에서 열립니다.",
+    "profilesTitle": "프로필",
+    "profilesHint": "프로필마다 쿠키, 사이트 저장소, 로그인 상태를 따로 보관합니다. 새 탭은 아래에서 선택한 프로필에서 열립니다. 탭 도구 모음에서 같은 페이지를 다른 프로필로 열 수 있습니다.",
+    "profileDefault": "기본",
+    "profileNewTabsTitle": "새 탭에 사용할 프로필",
+    "profileNamePlaceholder": "프로필 이름(예: 업무)",
+    "profileNameLabel": "프로필 이름",
+    "profileAdd": "프로필 추가",
+    "profileNameRequired": "프로필 이름을 입력하세요",
+    "profileNameDuplicate": "같은 이름의 프로필이 이미 있습니다",
+    "profileClear": "{name}의 브라우징 데이터 지우기",
+    "profileDelete": "프로필 {name} 삭제",
+    "profileDeleteConfirmTitle": "프로필 {name}을(를) 삭제할까요?",
+    "profileDeleteConfirmDescription": "해당 탭이 닫히고 쿠키, 캐시, 사이트 저장소가 삭제됩니다. 이 작업은 되돌릴 수 없습니다.",
+    "profileDeleteConfirmAction": "삭제",
+    "profileDeleted": "프로필을 삭제했습니다",
+    "profileDeleteFailed": "프로필을 삭제할 수 없습니다: {message}",
+    "clearConfirmDescriptionProfile": "프로필 {name}의 쿠키, 캐시, 사이트 저장소가 삭제됩니다. 열린 탭은 유지되지만 각 사이트에서 로그아웃됩니다.",
+    "signInUaTitle": "Google 로그인 호환",
+    "signInUaHint": "Google은 내장 브라우저에서의 로그인을 거부합니다. 켜면 탭이 Google 로그인 페이지(accounts.google.com)에만 Firefox로 표시되고, 그 밖의 곳에서는 실제로 실행 중인 엔진으로 식별되며 Firefox를 사칭하지 않습니다.내장 탭에만 적용되며 별도 창에는 적용되지 않습니다. 로그인 페이지가 다른 사이트로 리디렉션하면 그곳으로 가는 첫 요청에는 로그인 식별 정보가 그대로 남습니다."
+  },
+  "ComputerUse": {
+    "title": "컴퓨터 사용",
+    "preview": "미리 보기",
+    "refresh": "새로 고침",
+    "tooltipShared": "컴퓨터 사용 · {count, plural, other {창 #개 공유 중}}",
+    "stop": "공유 중지",
+    "stopHint": "모든 창의 공유를 지금 중지하고 에이전트가 하던 작업을 중단합니다. 필요하면 창을 다시 공유하세요.",
+    "indicator": {
+      "actOne": "에이전트가 {app}을(를) 조작할 수 있음",
+      "actMany": "에이전트가 {count, plural, other {창 #개}}를 조작할 수 있음",
+      "readOne": "에이전트가 {app}을(를) 볼 수 있음",
+      "readMany": "에이전트가 {count, plural, other {창 #개}}를 볼 수 있음",
+      "readScreen": "에이전트가 전체 화면을 볼 수 있음",
+      "actScreen": "에이전트가 전체 화면을 조작할 수 있음",
+      "recent": "{app}: {action}",
+      "stop": "공유 중지",
+      "stopWithKey": "모든 창의 공유 중지 ({key})"
+    },
+    "codegGranted": "codeg 자체에 「손쉬운 사용」 또는 「화면 기록」 권한이 있어, 에이전트의 셸이 공유 없이 이를 사용할 수 있습니다. 필요하지 않다면 시스템 설정에서 codeg의 권한을 끄세요.",
+    "backend": {
+      "idle": "시작 안 됨",
+      "downloading": "드라이버 다운로드 중…",
+      "starting": "헬퍼 시작 중…",
+      "ready": "준비됨",
+      "failed": "실패"
+    },
+    "driver": "cua-driver {version}",
+    "devBuild": "개발 빌드: 헬퍼가 호출하는 프로그램을 확인하지 않습니다.",
+    "devTag": "개발 빌드",
+    "permissions": {
+      "accessibility": "손쉬운 사용",
+      "screenRecording": "화면 기록",
+      "granted": "허용됨",
+      "request": "권한 부여…",
+      "why": "시스템 설정에서 codeg-computer-helper를 켜세요(codeg가 아닙니다). 화면 기록은 창 화면을 보는 데, 손쉬운 사용은 창을 읽고 조작하는 데 쓰입니다.",
+      "devRebuild": "helper를 다시 빌드할 때마다 이전 권한이 무효가 됩니다. 목록에서 이전 codeg-computer-helper를 먼저 제거한 뒤 다시 권한을 부여하세요.",
+      "notListed": "목록에 codeg-computer-helper가 없으면 Finder에서 목록으로 끌어다 놓으세요:",
+      "reveal": "Finder에서 보기"
+    },
+    "shared": {
+      "title": "{count, plural, =0 {공유 중인 창 없음} other {창 #개 공유 중}}",
+      "empty": "에이전트는 창 목록을 볼 수 있지만, 공유하기 전에는 어떤 창도 읽을 수 없습니다.",
+      "stop": "중지",
+      "wholeApp": "앱 전체 · {count, plural, =0 {열린 창 없음} other {창 #개}}",
+      "screen": "전체 화면",
+      "screenWindows": "{count, plural, =0 {아직 창 없음} other {창 #개}}"
+    },
+    "level": {
+      "read": "읽기 가능",
+      "control": "조작 가능",
+      "readLong": "읽기만",
+      "controlLong": "읽기 및 조작",
+      "change": "에이전트가 할 수 있는 일 변경"
+    },
+    "activity": {
+      "title": "최근 활동",
+      "clear": "최근 활동 지우기",
+      "capture": "스크린샷",
+      "snapshot": "읽기",
+      "verify": "확인",
+      "click": "클릭",
+      "drag": "드래그",
+      "scroll": "스크롤",
+      "type": "입력",
+      "key": "키",
+      "hold-key": "키 누르고 있기",
+      "set-value": "값 설정",
+      "restore": "창 복원",
+      "menu": "메뉴",
+      "set-frame": "창 이동",
+      "launch": "앱 열기",
+      "clipboard-read": "클립보드 읽기",
+      "clipboard-write": "클립보드 쓰기",
+      "outcome": {
+        "done": "완료",
+        "refused": "거부됨",
+        "failed": "실패"
+      }
+    },
+    "share": "창 공유…",
+    "openSettings": "상세 설정 열기",
+    "picker": {
+      "title": "에이전트와 창 공유",
+      "description": "모든 대화의 에이전트가 공유한 창을 읽을 수 있고, 조작을 허용한 창에서는 클릭하고 입력할 수 있습니다. 공유를 중지하거나, 창이 닫히거나, 설정한 시간 동안 사용되지 않으면 공유가 끝납니다.",
+      "count": "{count, plural, other {창 #개}}",
+      "sharedCount": "{count, plural, other {#개 공유 중}}",
+      "loading": "창을 불러오는 중…",
+      "refresh": "새로 고침",
+      "empty": "창을 찾지 못했습니다. 있어야 한다면 컴퓨터 사용 패널에서 권한을 확인하세요.",
+      "noScreenRecording": "codeg-computer-helper에 아직 '화면 기록' 권한이 없습니다. 창 제목과 화면을 보여 줄 수 없고, 에이전트도 창을 읽을 수 없습니다.",
+      "unnamedApp": "알 수 없는 앱",
+      "untitled": "제목 없는 창",
+      "minimized": "최소화됨",
+      "hidden": "숨겨짐",
+      "notGrantable": {
+        "codeg": "codeg의 창",
+        "blocklisted": "공유 금지 목록에 있음",
+        "unidentified": "어떤 앱인지 확인할 수 없음"
+      },
+      "shareRead": "에이전트가 읽도록 허용",
+      "shareControl": "에이전트가 읽고 조작하도록 허용",
+      "stopSharing": "공유 중지",
+      "levelNone": "끔",
+      "levelRead": "읽기",
+      "levelControl": "조작",
+      "levelLabel": "에이전트가 {app}에서 할 수 있는 일",
+      "wholeApp": "앱 전체",
+      "wholeAppHint": "{app}의 모든 창(나중에 여는 창 포함)과 메뉴, 단축키",
+      "appLevelLabel": "에이전트가 {app} 전체에서 할 수 있는 일",
+      "viaApp": "앱과 함께 공유",
+      "screenTitle": "전체 화면",
+      "screenHint": "공유할 수 있는 모든 창(나중에 여는 창 포함)과 데스크톱 자체의 단축키. codeg의 창과 공유 금지 목록의 앱은 항상 가려집니다.",
+      "screenLevelLabel": "에이전트가 전체 화면에서 할 수 있는 일",
+      "viaScreen": "화면과 함께 공유",
+      "shareAll": "모두 공유",
+      "shareAllRead": "모두 에이전트가 읽도록 허용",
+      "shareAllControl": "모두 에이전트가 읽고 조작하도록 허용",
+      "stopSharingAll": "모두 공유 중지",
+      "skipped": "{count, plural, other {창 #개를 공유하지 못했습니다. 닫혔을 수 있습니다.}}",
+      "unshareable": "{count, plural, other {공유할 수 없는 창 #개}}",
+      "noneShareable": "공유할 수 있는 창이 없습니다.",
+      "codegWhy": "codeg의 창은 절대 공유되지 않습니다. codeg를 조작할 수 있는 에이전트는 자신의 요청을 스스로 승인하거나 자신에게 창을 더 공유할 수 있기 때문입니다. 다른 codeg의 창도 마찬가지입니다."
+    },
+    "settings": {
+      "pageTitle": "컴퓨터 사용",
+      "pageDescription": "공유한 데스크톱 창을 에이전트가 보고 조작할 수 있게 합니다.",
+      "switch": {
+        "label": "컴퓨터 사용 켜기",
+        "hint": "에이전트가 앱과 창을 나열하고, 공유한 창을 읽고, 조작을 허용한 창에서 클릭하고 입력할 수 있습니다. 상태 표시줄에서 공유하기 전에는 어떤 창도 읽을 수 없습니다.",
+        "failed": "컴퓨터 사용을 전환하지 못했습니다"
+      },
+      "driver": {
+        "title": "드라이버",
+        "description": "컴퓨터 사용은 오픈 소스 프로그램인 cua-driver를 통해 창을 읽고 조작합니다. codeg는 확인을 거친 릴리스 {version}만 실행하며, 처음 필요할 때 다운로드합니다.",
+        "loading": "확인 중…",
+        "unsupported": "cua-driver에는 이 플랫폼용 빌드가 없습니다.",
+        "installing": "설치 중…",
+        "downloadingOf": "다운로드 중… {done} / {total} MB",
+        "downloadingSoFar": "다운로드 중… {done} MB",
+        "uninstalling": "제거 중…",
+        "installed": "설치됨 · {version}",
+        "outdated": "{installed}이(가) 설치되어 있습니다. 이 codeg는 {version}을(를) 사용합니다.",
+        "notInstalled": "설치되지 않았습니다. 컴퓨터 사용에 처음 필요할 때 다운로드되며, 지금 설치할 수도 있습니다.",
+        "install": "설치",
+        "upgrade": "{version}(으)로 업그레이드",
+        "uninstall": "제거",
+        "installDone": "cua-driver를 설치했습니다",
+        "uninstallDone": "cua-driver를 제거했습니다",
+        "confirmTitle": "cua-driver를 제거할까요?",
+        "confirmDescription": "컴퓨터 사용이 꺼지고 모든 창의 공유가 끝납니다. 다시 켜면 드라이버를 다시 다운로드합니다.",
+        "cancel": "취소"
+      },
+      "permissions": {
+        "title": "권한",
+        "description": "macOS에서는 codeg-computer-helper에 권한을 부여해야 합니다. 시스템 설정에서 부여한 뒤 여기로 돌아오면 자동으로 갱신됩니다.",
+        "off": "컴퓨터 사용을 켜면 여기에서 권한을 확인하고 부여할 수 있습니다.",
+        "accessibilityHint": "창 내용을 읽고 조작합니다.",
+        "screenRecordingHint": "스크린샷을 찍고 창 제목을 읽습니다."
+      },
+      "title": "공유, 입력과 중지",
+      "description": "공유한 창이 얼마나 오래 공유되는지, 절대 공유하지 않을 앱, 모든 공유를 한 번에 멈추는 단축키와 떠 있는 중지 막대, 그리고 에이전트가 창을 앞으로 가져와 조작할 수 있는지 여부.",
+      "ttl": {
+        "label": "사용되지 않는 창의 공유를 중지할 시간",
+        "hint": "공유 중인 창을 이 시간 동안 어떤 에이전트도 읽지 않으면 공유가 중지됩니다.",
+        "minutes": "{minutes}분",
+        "never": "안 함 (직접 중지할 때까지)"
+      },
+      "blocklist": {
+        "label": "공유하지 않는 앱",
+        "hint": "이 앱들의 창은 에이전트와 공유할 수 없습니다. 필요 없는 기본 항목은 제거할 수 있고, 번들 식별자(com.example.app), 실행 파일 이름(app.exe) 또는 전체 경로로 앱을 추가할 수도 있습니다.",
+        "placeholder": "com.example.app",
+        "add": "추가",
+        "remove": "{name} 제거",
+        "restore": "기본값으로 복원",
+        "restoreConfirmTitle": "기본 목록으로 복원할까요?",
+        "restoreConfirmAdded": "{count, plural, other {직접 추가한 앱 #개가 목록에서 빠집니다.}}",
+        "restoreConfirmRemoved": "{count, plural, other {제거한 기본 앱 #개가 목록에 다시 추가됩니다.}}",
+        "restoreConfirmSave": "저장하면 적용됩니다.",
+        "cancel": "취소",
+        "custom": "직접 추가함",
+        "duplicate": "이미 목록에 있습니다.",
+        "removedCount": "{count, plural, other {기본 앱 #개를 제거했습니다.}}",
+        "items": {
+          "systemSettings": "시스템 설정",
+          "credentialPrompts": "시스템 암호 및 권한 확인 창",
+          "keychain": "키체인 접근",
+          "passwords": "암호"
+        }
+      },
+      "stopKey": {
+        "label": "중지 단축키",
+        "hint": "어느 앱에서든 공유 중지 버튼처럼 모든 창의 공유를 중지합니다. 컴퓨터 사용이 켜져 있는 동안 이 키는 codeg가 사용하므로, 다른 곳에서 쓰지 않는 조합을 고르세요.",
+        "recording": "키를 누르세요…",
+        "recordHint": "Ctrl과 다른 보조 키(Alt 또는 Shift)를 누른 채 키를 누르세요. Esc로 취소합니다.",
+        "recordHintMac": "⌃ 또는 ⌘과 다른 보조 키를 누른 채 키를 누르세요. Esc로 취소합니다.",
+        "off": "꺼짐",
+        "useDefault": "기본값",
+        "turnOff": "끄기",
+        "statusActive": "활성: 어디서든 누르면 모든 창의 공유가 중지됩니다.",
+        "statusIdle": "컴퓨터 사용을 켜면 적용됩니다.",
+        "statusOff": "꺼짐: 공유 중지 버튼으로만 공유를 중지할 수 있습니다.",
+        "statusFailed": "비활성: 다른 앱이 이 키를 쓰고 있는 것 같습니다. 다른 조합을 고르세요.",
+        "problem": {
+          "unsupportedKey": "이 키는 쓸 수 없습니다. 영문자, 숫자, F1–F12, Esc 또는 문장 부호 키를 고르세요.",
+          "weakModifiers": "보조 키를 두 개 이상 누르세요. 그중 하나는 Ctrl(Mac에서는 ⌘도 가능)이어야 합니다.",
+          "metaOffMac": "Windows 키는 포함할 수 없습니다."
+        }
+      },
+      "strip": {
+        "label": "떠 있는 중지 막대",
+        "hint": "창을 공유하는 동안 에이전트가 할 수 있는 일과 공유 중지 버튼을 담은 막대를 모든 창 위에 띄웁니다. 꺼도 상태 표시줄의 컴퓨터 사용 팝오버나 중지 단축키로 공유를 중지할 수 있습니다."
+      },
+      "foreground": {
+        "label": "에이전트가 창을 앞으로 가져오도록 허용",
+        "hint": "어떤 앱은 백그라운드에서 키 입력이나 타이핑을 받지 않습니다. Windows에서는 Edge, Chrome, VS Code처럼 Chromium 기반 앱이 모두 그렇습니다. 켜면 에이전트가 조작을 허용한 창을 한 번의 조작 동안만 앞으로 가져온 뒤, 사용하던 창으로 다시 돌아갑니다(Linux에서는 그 창이 앞에 남습니다). 창이 앞으로 나오는 것이 보이고, 그 순간 입력한 내용이 그 창으로 들어갈 수 있으며, 클릭할 때 마우스 포인터가 움직일 수도 있습니다."
+      },
+      "delivery": {
+        "label": "기본 입력 방식",
+        "hint": "에이전트가 지정하지 않을 때 클릭, 스크롤, 타이핑, 키 입력을 창에 전달하는 방식입니다. 백그라운드: 창은 그대로 두고 마우스와 키보드는 계속 사용할 수 있습니다. 포그라운드: 조작할 때마다 창을 앞으로 가져옵니다.",
+        "hintOff": "창을 앞으로 가져오는 것을 허용하지 않은 동안에는 항상 백그라운드입니다.",
+        "background": "백그라운드",
+        "foreground": "포그라운드"
+      },
+      "launch": {
+        "label": "에이전트가 앱을 열고 창을 옮기도록 허용",
+        "hint": "켜면 에이전트가 설치된 앱을 백그라운드에서 실행할 수 있습니다(codeg와 공유하지 않는 앱 제외). 또한 조작을 허용한 창을 옮기거나 크기를 바꿀 수 있습니다. 앱을 실행해도 그 창은 공유되지 않으며, 공유 여부는 여전히 사용자가 정합니다."
+      },
+      "clipboard": {
+        "label": "에이전트가 클립보드를 사용하도록 허용",
+        "hint": "켜면 에이전트가 텍스트를 클립보드에 넣어 붙여넣거나, 공유한 창에서 직접 복사한 내용을 다시 읽을 수 있습니다. 사용자가 직접 복사한 내용은 에이전트에게 읽히지 않으며, 에이전트는 자신이 넣은 내용만 붙여넣을 수 있습니다."
+      },
+      "screen": {
+        "label": "전체 화면 공유 허용",
+        "hint": "켜면 공유 선택기에 '전체 화면'이 나타납니다. 에이전트는 화면 전체를 한 장의 그림으로 보고 어디든 클릭할 수 있으며, 공유할 수 있는 모든 창과 데스크톱 자체의 단축키도 함께 공유됩니다. codeg의 창과 공유 금지 목록의 앱은 항상 가려집니다. 끄면 전체 화면 공유가 끝납니다."
+      },
+      "boundary": "macOS에서는 권한이 codeg-computer-helper에 부여되고 codeg만 사용할 수 있으므로, 에이전트의 셸은 사용할 수 없습니다. Windows와 Linux에는 이런 분리가 없습니다. 그곳에서 이 설정은 codeg를 통해 에이전트에게 무엇을 넘길지를 정할 뿐, 컴퓨터의 프로그램이 할 수 있는 일을 정하지는 않습니다.",
+      "save": "저장",
+      "saving": "저장 중…",
+      "saved": "컴퓨터 사용 설정을 저장했습니다",
+      "saveFailed": "컴퓨터 사용 설정을 저장하지 못했습니다",
+      "loadFailed": "불러오기 실패: {detail}"
+    }
   },
   "LogsSettings": {
     "loading": "불러오는 중…",
@@ -4690,12 +5690,7 @@
     "cronApply": "적용",
     "cronPreviewLabel": "미리 보기",
     "cronOpenBuilder": "일정 빌더 열기",
-    "branchDefault": "기본 브랜치",
-    "branchUseCustom": "\"{query}\" 사용",
-    "branchLocal": "로컬",
-    "branchRemote": "원격",
-    "branchSearchPlaceholder": "브랜치 검색…",
-    "branchNone": "브랜치 없음"
+    "branchDefault": "기본 브랜치"
   },
   "Tasks": {
     "title": "할 일",
@@ -4804,6 +5799,8 @@
     "errorView": "보기",
     "notifyReview": "검수 대기: {title}",
     "notifyFailed": "작업 실패: {title}",
+    "notifyReviewRedacted": "검토를 기다리는 작업이 있습니다",
+    "notifyFailedRedacted": "작업이 실패했습니다",
     "createFromMessage": "이 메시지로 작업 만들기",
     "detailTokens": "총 토큰",
     "editorTitleNew": "새 작업",
@@ -4818,12 +5815,18 @@
     "phaseRetry": "다시 실행",
     "phaseReturn": "이어서 요청",
     "phaseMerge": "병합",
+    "phaseCompact": "컨텍스트 압축",
     "titleLabel": "제목",
     "titlePlaceholder": "무엇을 해야 하나요?",
     "promptLabel": "작업 설명",
     "promptPlaceholder": "에이전트에게 작업을 설명하세요 — @로 파일 참조, /로 명령",
     "folderPlaceholder": "폴더 선택",
+    "baseBranch": "기준 브랜치",
+    "baseBranchDefault": "작업이 시작될 때의 현재 브랜치",
+    "baseBranchHint": "작업은 이 브랜치에서 갈라져 나오고, 병합도 이 브랜치로 돌아갑니다.",
     "agentInheritedHint": "작업 설정에서 상속됨 — 변경하면 이 작업에만 적용됩니다",
+    "agentNoDefaultHint": "작업 설정에 기본 에이전트가 없습니다 — 선택한 에이전트가 이 작업에 저장됩니다",
+    "agentInheritedUnavailableHint": "작업 설정의 기본 에이전트({agent})를 사용할 수 없습니다 — 선택한 에이전트가 이 작업에 저장됩니다",
     "agentOverrideReset": "상속으로 되돌리기",
     "sectionTarget": "대상",
     "errorTitle": "제목을 입력하세요",
@@ -4848,6 +5851,7 @@
     "mergeDeleteWorktree": "병합 후 worktree 삭제",
     "mergeSubmit": "병합",
     "mergeSubmitQueue": "병합 대기열에 추가",
+    "mergeSubmitting": "시작 중…",
     "mergeQueuedToast": "병합 대기열에 추가했습니다. 현재 병합이 끝나는 대로 시작합니다.",
     "completeTitle": "작업 완료",
     "completeDescription": "이 작업은 파일을 변경하지 않아 병합할 것이 없습니다. 그대로 완료로 표시합니다.",
@@ -4869,6 +5873,7 @@
     "settingsMaxConcurrentHint": "0 = 무제한",
     "settingsAutoCompact": "자동 압축 임계값",
     "settingsAutoCompactHint": "후속 작업·재시도·병합 전에 컨텍스트 사용률이 이 값 이상이면 세션을 먼저 압축합니다. 0이면 사용 안 함.",
+    "compactingNote": "세션 컨텍스트를 압축하는 중…",
     "settingsCompactCommand": "압축 명령",
     "settingsCompactCommandHint": "비워 두면 에이전트가 제공하는 명령(또는 알려진 기본값)을 자동으로 사용합니다.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -4950,8 +5955,8 @@
     "eventContextCompact": "컨텍스트 압축",
     "eventUserAction": "사용자 작업",
     "eventDiffStat": "변경 스냅샷",
-    "eventForgeWriteback": "이슈에 댓글 남김",
-    "eventForgeWritebackFailed": "이슈 댓글 실패",
+    "eventForgeWriteback": "항목에 댓글 남김",
+    "eventForgeWritebackFailed": "항목 댓글 실패",
     "actionDeliverPr": "풀 리퀘스트 만들기",
     "actionDeliverPrMr": "병합 요청 만들기",
     "actionDeliverPrBack": "PR에 푸시",
@@ -5111,6 +6116,47 @@
     "groupInstructions": "설명 및 시스템 프롬프트",
     "fieldDescription": "설명",
     "baseInstructions": "시스템 프롬프트(base_instructions)"
+  },
+  "DeepSeekModelEditor": {
+    "title": "모델 목록",
+    "description": "DeepSeek 세션에서 전환할 수 있는 모델입니다. harness 설정 문서에 저장되며 에이전트가 시작할 때 읽습니다 — 저장 이후 시작된 세션부터 적용됩니다.",
+    "inheritedBadge": "에이전트 기본값",
+    "inheritedHint": "아직 저장된 목록이 없어 에이전트 내장 모델을 보여 줍니다. 저장하면 고정되어 이후 에이전트 업데이트로도 바뀌지 않습니다. 파일:",
+    "storedHint": "harness 설정 문서에 저장되어 있습니다. 이 목록 밖의 키와 그 주변 주석은 그대로 유지됩니다. 파일:",
+    "unreadable": "이 설정 문서는 기존 내용을 잃지 않고 여기서 편집할 수 없습니다. 직접 편집해 주세요.",
+    "invalidStored": "저장된 이 목록을 에이전트가 거부했습니다. 고치기 전까지 세션은 내장 모델로 동작합니다:",
+    "loading": "설정 문서를 읽는 중…",
+    "loadFailed": "설정 문서를 읽지 못했습니다.",
+    "empty": "모델이 없습니다. 추가하거나, 그대로 저장해 에이전트 내장 목록으로 되돌리세요.",
+    "addModel": "모델 추가",
+    "remove": "모델 삭제",
+    "advanced": "더 보기",
+    "save": "모델 목록 저장",
+    "saving": "저장 중…",
+    "restoreDefaults": "에이전트 기본값 사용",
+    "fieldId": "모델 id",
+    "fieldName": "표시 이름",
+    "fieldContextWindow": "컨텍스트 윈도우",
+    "fieldDescription": "설명",
+    "fieldMaxTokens": "최대 출력 토큰",
+    "fieldAcceptsImages": "이미지 허용",
+    "fieldImagePixelBudget": "이미지 픽셀 한도",
+    "imageBudgetPixels": "픽셀 수",
+    "imageBudgetLow": "저해상도(512×512)",
+    "fieldImageMaxBytes": "이미지 바이트 한도",
+    "placeholderId": "deepseek-flash",
+    "placeholderName": "선택기에 표시될 이름",
+    "placeholderInherit": "에이전트 기본값",
+    "errorMissingId": "모든 모델에는 id가 필요합니다.",
+    "errorDuplicateId": "“{id}” id를 가진 모델이 두 개입니다.",
+    "errorBadContextWindow": "“{id}”의 컨텍스트 윈도우는 0보다 큰 정수여야 합니다.",
+    "errorBadMaxTokens": "“{id}”의 최대 출력 토큰은 0보다 큰 정수여야 합니다.",
+    "errorBadImageLimit": "“{id}”의 이미지 한도는 0보다 큰 정수여야 합니다.",
+    "warnSingleModel": "모델이 하나뿐이면 에이전트가 모델 선택기 자체를 제공하지 않습니다.",
+    "warnLaunchModelMissing": "새 세션은 “{model}”로 시작하지만 이 목록에 없습니다. 추가하거나 위 환경 변수에서 {variable}을 설정하세요.",
+    "toastSaved": "모델 목록을 저장했습니다",
+    "toastRestored": "에이전트 내장 모델 목록을 사용합니다",
+    "toastSaveFailed": "모델 목록을 저장하지 못했습니다"
   },
   "DiagnosticsSettings": {
     "title": "환경 진단",
@@ -5279,7 +6325,7 @@
     "noRemote": "이 폴더에는 인식 가능한 원격 저장소(origin)가 없습니다",
     "errors": {
       "noAccount": "{host}에 대한 {provider} 계정이 설정되지 않았습니다. 설정 → 버전 관리에서 추가하면 이 저장소를 불러올 수 있습니다.",
-      "unsupportedHost": "리포지토리 패널은 GitHub와 GitLab만 지원하며, {host}는 둘 중 어느 쪽으로도 인식되지 않습니다. 자체 호스팅 GitHub Enterprise 또는 GitLab 인스턴스라면 설정 → 버전 관리에서 계정을 추가하세요.",
+      "unsupportedHost": "리포지토리 패널은 GitHub, GitLab, Gitea만 지원하며, {host}는 그중 어느 쪽으로도 인식되지 않습니다. 자체 호스팅 GitHub Enterprise, GitLab, Gitea 또는 Forgejo 인스턴스라면 설정 → 버전 관리에서 계정을 추가하세요.",
       "wrongForge": "{host}은(는) {provider}입니다. 다른 포지로 잘못 인식되었으나 감지 결과를 수정했습니다. 다시 불러오세요."
     },
     "addAccount": "계정 추가",
@@ -5444,7 +6490,7 @@
     "scenarioPlanFirst": "계획 먼저",
     "scenarioPlanFirstHint": "문제가 실제로 있는지 확인한 다음 구현 계획을 내놓고 멈춥니다. 확인 후 작업을 돌려보내면 같은 워크트리에서 구현합니다.",
     "scenarioReviewFix": "리뷰 후 수정",
-    "scenarioReviewFixHint": "변경을 리뷰하고 문제를 바로 고칩니다. 승인하면 커밋이 원래 브랜치로 푸시됩니다.",
+    "scenarioReviewFixHint": "에이전트가 먼저 접근 방식 자체가 타당한지 판단하고, 타당할 때만 그 위에서 문제를 고칩니다. 타당하지 않으면 아무것도 커밋하지 않고 리뷰 결과와 함께 판단을 넘깁니다. 승인하면 수정 커밋이 원래 브랜치로 푸시됩니다.",
     "scenarioReviewOnly": "리뷰만",
     "scenarioReviewOnlyHint": "지적과 제안을 담은 리뷰 보고서만 내고 커밋하지 않습니다. 수정이 필요하면 작업을 돌려보내세요.",
     "settingsTitle": "패널 설정",
@@ -5472,7 +6518,7 @@
     "save": "저장"
   },
   "Canvas": {
-    "title": "무한 대화",
+    "title": "무한 캔버스",
     "untitled": "제목 없는 대화",
     "unresolvedConversation": "대화가 삭제됨",
     "removeCard": "카드 제거",
@@ -5543,6 +6589,356 @@
     "confirmDeleteCancel": "취소",
     "confirmDeleteConfirm": "삭제",
     "canvasActions": "캔버스 작업",
-    "mergeIntoNewRegion": "새 영역"
+    "mergeIntoNewRegion": "새 영역",
+    "addFileCard": "파일 카드",
+    "addTerminalCard": "터미널 카드",
+    "searchFiles": "파일 검색…",
+    "searchFilesIn": "{folder}에서 검색…",
+    "searchingFiles": "검색 중…",
+    "noFiles": "파일을 찾을 수 없습니다",
+    "noOpenFiles": "열린 파일이 없습니다 — 입력해서 검색하세요",
+    "browseForFile": "찾아보기…",
+    "filePreview": "미리보기",
+    "fileSource": "소스",
+    "reloadFile": "다시 불러오기",
+    "removeFileCard": "파일 카드 제거",
+    "restartTerminal": "터미널 다시 시작",
+    "removeTerminalCard": "터미널 카드 제거",
+    "terminalNoDirectory": "이 카드에는 작업 디렉터리가 없습니다",
+    "confirmDeleteTerminals": "실행 중인 터미널 {count}개가 닫히고 해당 프로세스도 종료됩니다.",
+    "confirmDeleteNotesAndTerminals": "직접 작성한 메모 {notes}개가 영구 삭제되고, 실행 중인 터미널 {terminals}개도 종료됩니다.",
+    "boardsTitle": "캔버스",
+    "boardsSubtitle": "캔버스마다 영역, 대화 카드, 메모, 파일, 터미널을 배치할 수 있는 독립된 무한 보드가 있습니다.",
+    "boardCount": "캔버스 {count}개",
+    "newBoard": "새 캔버스",
+    "newBoardTitle": "새 캔버스",
+    "editBoard": "캔버스 편집…",
+    "editBoardTitle": "캔버스 편집",
+    "deleteBoard": "캔버스 삭제…",
+    "openBoard": "열기",
+    "boardMenu": "캔버스 옵션",
+    "boardName": "이름",
+    "boardDescription": "설명",
+    "boardDescriptionPlaceholder": "이 캔버스의 용도 (선택 사항)",
+    "untitledBoard": "제목 없는 캔버스",
+    "boardItemCount": "{count, plural, =0 {비어 있음} other {요소 #개}}",
+    "boardEditedAt": "{time} 수정됨",
+    "boardsEmpty": "아직 캔버스가 없습니다",
+    "boardsEmptyHint": "캔버스를 만들어 작업을 공간적으로 정리하세요. 캔버스마다 자체 영역, 카드, 메모를 가집니다.",
+    "searchBoards": "캔버스 검색…",
+    "noBoardsMatch": "“{query}”와(과) 일치하는 캔버스가 없습니다",
+    "boardsLoadFailed": "캔버스를 불러오지 못했습니다",
+    "retry": "다시 시도",
+    "backToBoards": "모든 캔버스로 돌아가기",
+    "boardDeleted": "이 캔버스는 삭제되었습니다",
+    "deleteBoardTitle": "이 캔버스를 삭제할까요?",
+    "deleteBoardDescription": "“{name}”과(와) 그 위의 모든 내용이 영구적으로 삭제됩니다. 캔버스에 표시된 대화, 폴더, 파일 자체는 영향을 받지 않습니다.",
+    "deleteBoardItems": "이 캔버스에는 요소 {count}개가 있습니다.",
+    "deleteBoardTerminals": "그중 터미널 {count}개가 닫히고 프로세스도 종료됩니다.",
+    "deleteBoardConfirm": "캔버스 삭제"
+  },
+  "Browser": {
+    "toolbar": {
+      "back": "뒤로",
+      "forward": "앞으로",
+      "reload": "새로 고침",
+      "stop": "중지",
+      "openInSystem": "시스템 브라우저에서 열기",
+      "more": "더 보기",
+      "copyUrl": "링크 복사",
+      "copied": "링크를 복사했습니다",
+      "openInspector": "검사기 열기",
+      "inspectorFailed": "검사기를 열 수 없습니다",
+      "addressPlaceholder": "주소 입력",
+      "invalidUrl": "올바른 주소가 아닙니다",
+      "profile": "프로필: {name}",
+      "profileMenuLabel": "이 페이지를 다른 프로필에서 열기",
+      "profileDefault": "기본",
+      "device": "기기: {name}",
+      "deviceMenuLabel": "보기 기기",
+      "deviceDesktop": "데스크톱",
+      "deviceTablet": "태블릿",
+      "devicePhone": "휴대폰",
+      "deviceFill": "패널 전체",
+      "deviceCustom": "사용자 지정",
+      "deviceWidth": "너비",
+      "deviceHeight": "높이",
+      "deviceLaidOut": "패널이 너무 작음: {size} 크기로 배치"
+    },
+    "status": {
+      "popupDenied": "팝업 차단됨: {host}",
+      "popupDeniedNoGesture": "클릭으로 열린 창이 아닙니다",
+      "popupDeniedBlockedScheme": "허용되지 않는 주소 형식입니다",
+      "popupOpenAnyway": "그래도 열기",
+      "dismiss": "닫기",
+      "errorDns": "사이트를 찾을 수 없습니다",
+      "errorTls": "안전하지 않은 연결입니다",
+      "errorBlocked": "내장 브라우저에서 열 수 없는 주소입니다",
+      "errorPopupDenied": "팝업이 차단되었습니다",
+      "errorFailed": "페이지를 불러올 수 없습니다",
+      "errorFailedHint": "사이트에 연결하지 못했습니다. 네트워크와 주소를 확인하세요. 프록시가 필요할 수도 있습니다.",
+      "retry": "다시 시도",
+      "openInSystem": "시스템 브라우저에서 열기",
+      "ownedWindow": "이 페이지는 별도의 창에 표시됩니다.",
+      "ownedWindowShow": "창 표시",
+      "remoteBanner": "{host}을(를) 통해 열림",
+      "remoteBannerDown": "{host}와(과)의 연결이 끊겼습니다. 다음 요청 때 다시 연결합니다.",
+      "navigationBlocked": "이동이 차단됨: {host}",
+      "navigationBlockedRule": "사이트 규칙으로 차단됨",
+      "navigationBlockedScheme": "이 종류의 주소는 여기서 열 수 없습니다",
+      "navigationBlockedOpenSystem": "시스템 앱으로 열기",
+      "errorBlockedHint": "사이트 규칙이 이 주소를 차단합니다. 규칙은 설정 → 내장 브라우저에서 관리합니다.",
+      "popupDeniedBlockedHost": "사이트 규칙으로 차단됨",
+      "channelDegraded": "이 탭에서는 팝업이 차단되며 주소 표시줄이 페이지를 따라가지 못할 수 있습니다",
+      "channelDegradedHint": "codeg가 페이지 스크립트를 설치하지 못했습니다. 이 페이지가 여는 팝업은 차단되고, 주소 표시줄은 페이지 내 이동을 따라가지 않으며, 페이지에서 찾기 단축키를 눌러도 찾기 막대가 열리지 않습니다. 탭을 다시 열면 재시도합니다.",
+      "downloadsDenied": "다운로드 차단됨: {host}",
+      "downloadsDeniedNoGesture": "여러 파일, 클릭으로 시작되지 않음",
+      "agentGrantLost": "공유가 끝났습니다: 페이지가 {origin}을(를) 벗어났습니다",
+      "agentGrantLostShare": "{origin}도 공유",
+      "agentGrantReplaced": "공유가 끝났습니다: 이제 {origin}에는 다른 프로그램이 응답합니다",
+      "agentGrantReplacedShare": "그래도 공유",
+      "errorRemoteRefused": "원격 호스트의 이 주소에서 수신 대기 중인 것이 없습니다",
+      "errorRemoteRefusedHint": "{host}이(가) 연결을 거부했습니다. 이 주소의 서버가 그곳에서 실행 중인지 확인하세요.",
+      "errorRemoteUnreachable": "원격 호스트가 이 주소에 도달할 수 없습니다",
+      "errorRemoteUnreachableHint": "{host}에서 보면 이 이름을 확인할 수 없거나 그곳으로 가는 경로가 없습니다.",
+      "errorRemoteNotAllowed": "원격 서버가 이 주소를 브라우저에 열어 주지 않습니다",
+      "errorRemoteNotAllowedHint": "{host}의 codeg-server는 브라우저 터널이 사설 주소에만 연결하도록 허용합니다(CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "원격 호스트의 연결 시간이 초과되었습니다",
+      "errorRemoteTimeoutHint": "{host}이(가) 제시간에 이 주소의 응답을 받지 못했습니다. 그쪽 서버가 바쁘거나 방화벽 뒤에 있을 수 있습니다.",
+      "errorTunnelDown": "원격 호스트와의 연결이 끊겼습니다",
+      "errorTunnelDownHint": "{host}(으)로 가는 터널이 지금은 아무것도 전달하지 못합니다. 다시 연결되면 재시도하세요."
+    },
+    "tab": {
+      "untitled": "새 탭"
+    },
+    "drawer": {
+      "title": "내장 브라우저",
+      "description": "대화에서 연 웹 페이지",
+      "openInWorkspace": "작업 공간에서 열기",
+      "cannotOpen": "이 주소는 여기에서 열 수 없습니다."
+    },
+    "bridge": {
+      "frameTitle": "개발 서버 미리보기",
+      "opening": "서버를 통해 연결하는 중…",
+      "reload": "새로고침",
+      "openExternal": "새 탭에서 열기",
+      "copyAddress": "주소 복사",
+      "copied": "주소를 복사했습니다",
+      "unreachableTitle": "브리지 포트에 연결할 수 없습니다",
+      "unreachableHint": "codeg 서버가 이 페이지를 {origin}에 올렸지만 브라우저에서 접근할 수 없습니다. 해당 포트를 공개하거나(CODEG_BRIDGE_PORTS 참고) CODEG_BRIDGE_PUBLIC_HOST를 설정하세요. codeg를 HTTPS로 제공한다면 브리지 포트에도 HTTPS가 필요합니다.",
+      "unreachableHostHint": "codeg 서버가 이 페이지를 {origin}에 두었지만 브라우저에서 접근할 수 없습니다. 해당 호스트 이름이 codeg 서버로 확인되고 앞단 프록시를 통과해야 합니다. 와일드카드 DNS 레코드와 와일드카드 vhost가 필요합니다(CODEG_BRIDGE_HOST_PATTERN 참조).",
+      "errorTitle": "이 페이지는 여기에 표시할 수 없습니다"
+    },
+    "remote": {
+      "title": "이 주소는 {host}에 있습니다",
+      "titleUnnamed": "이 주소는 원격 호스트에 있습니다",
+      "description": "이 주소는 이 작업 공간이 실행되는 머신을 가리키며, 이 컴퓨터가 아닙니다.",
+      "copyAddress": "주소 복사",
+      "copied": "주소를 복사했습니다",
+      "tryHost": "{host} 시도",
+      "tryHostHint": "{address}을(를) 이 컴퓨터의 탭에서 엽니다. 그쪽 페이지가 모든 네트워크 인터페이스에서 수신하고 이 컴퓨터가 해당 포트에 접근할 수 있을 때 동작합니다.",
+      "openHere": "이 컴퓨터에서 열기",
+      "openHereHint": "이 주소를 이 컴퓨터의 탭에서 엽니다. 이 컴퓨터가 같은 네트워크에 있을 때 동작합니다.",
+      "retry": "다시 시도",
+      "connecting": "{host}을(를) 통해 연결하는 중…",
+      "connectingUnnamed": "원격 호스트를 통해 연결하는 중…"
+    },
+    "download": {
+      "started": "내려받는 중…",
+      "completed": "저장됨",
+      "failed": "실패함",
+      "reveal": "폴더에서 보기",
+      "dismiss": "닫기"
+    },
+    "find": {
+      "placeholder": "페이지에서 찾기",
+      "next": "다음 찾기",
+      "previous": "이전 찾기",
+      "noMatches": "일치 항목 없음",
+      "close": "닫기"
+    },
+    "toast": {
+      "firstOpen": "내장 브라우저에서 열었습니다",
+      "firstOpenHint": "⌘/Ctrl을 누른 채 링크를 클릭하면 시스템 브라우저에서 열립니다. 기본값은 설정에서 바꿀 수 있습니다.",
+      "useSystemAlways": "항상 시스템 브라우저 사용",
+      "serviceDetected": "{address} 에서 서버가 실행 중입니다",
+      "serviceDetectedHint": "터미널에서 시작되었습니다. 설정 → 내장 브라우저에서 자동으로 열도록 바꿀 수 있습니다.",
+      "serviceOpen": "열기",
+      "blockedHost": "사이트 규칙으로 차단됨: {host}"
+    },
+    "link": {
+      "openBuiltin": "내장 브라우저에서 열기",
+      "openSystem": "시스템 브라우저에서 열기",
+      "copy": "링크 복사"
+    },
+    "doc": {
+      "scriptsOff": "스크립트 사용",
+      "scriptsOn": "스크립트 켜짐",
+      "scriptsHint": "이 문서의 스크립트를 실행합니다. 스크립트는 같은 폴더의 파일만 읽을 수 있고 네트워크에는 접근할 수 없습니다. 이후 그 파일 중 하나라도 바뀌면 스크립트는 다시 꺼집니다.",
+      "reload": "다시 불러오기",
+      "more": "더 보기",
+      "copyPath": "경로 복사",
+      "useInline": "인라인 미리보기 사용",
+      "useGuest": "내장 브라우저 미리보기 사용",
+      "unsaved": "저장하지 않은 변경 사항은 표시되지 않습니다",
+      "reset": "스크립트를 켠 뒤 {file}이(가) 변경되었습니다. 스크립트가 다시 꺼졌습니다.",
+      "enableAgain": "다시 사용",
+      "dismiss": "닫기",
+      "externalLink": "{host}(으)로 가는 링크를 열지 않았습니다",
+      "openLink": "링크 열기",
+      "downloadRefused": "문서 미리보기에서는 다운로드할 수 없습니다",
+      "openWithSystem": "시스템 앱으로 열기",
+      "schemeBlocked": "{url}은(는) 여기서 열 수 없습니다",
+      "cannotShow": "이 문서를 표시할 수 없습니다"
+    },
+    "agent": {
+      "share": "이 페이지를 에이전트와 공유({origin})",
+      "shareLabel": "에이전트와 공유",
+      "shareRead": "읽기 권한",
+      "shareControl": "읽기 및 조작 권한",
+      "levelDefault": "기본",
+      "notShareable": "이 페이지에는 에이전트와 공유할 웹 주소가 없습니다",
+      "remoteWindow": "원격 워크스페이스의 에이전트는 해당 호스트에서 실행되므로 이 컴퓨터의 브라우저를 사용할 수 없습니다",
+      "shared": "공유됨",
+      "sharedControl": "공유됨 · 조작 가능",
+      "sharedWith": "에이전트가 {origin}을(를) 읽을 수 있습니다",
+      "sharedWithControl": "에이전트가 {origin}을(를) 읽고 조작할 수 있습니다",
+      "sharedScope": "페이지가 이 사이트를 벗어나면 공유가 끝납니다.",
+      "sharedScopeProgram": "이 포트가 {program}에서 다른 프로그램으로 바뀌어도 공유가 끝납니다.",
+      "sharedToast": "이제 에이전트가 {origin}을(를) 읽을 수 있습니다",
+      "sharedControlToast": "이제 에이전트가 {origin}을(를) 읽고 조작할 수 있습니다",
+      "stopSharing": "공유 중지",
+      "allowActions": "이 페이지에서 조작 허용",
+      "readOnly": "읽기만",
+      "shareFailed": "이 페이지는 에이전트와 공유할 수 없습니다",
+      "activity": {
+        "read": {
+          "done": "페이지를 읽음",
+          "refused": "거부됨: 이 페이지는 공유되지 않았습니다",
+          "failed": "페이지를 읽지 못했습니다"
+        },
+        "click": {
+          "done": "클릭함",
+          "refused": "클릭 거부됨: 이 페이지에서는 조작이 허용되지 않습니다",
+          "failed": "클릭할 수 없음"
+        },
+        "hover": {
+          "done": "마우스를 올림",
+          "refused": "호버 거부됨: 이 페이지에서는 조작이 허용되지 않습니다",
+          "failed": "마우스를 올릴 수 없음"
+        },
+        "type": {
+          "done": "입력란에 입력함",
+          "refused": "입력 거부됨: 이 페이지에서는 조작이 허용되지 않습니다",
+          "failed": "입력할 수 없음"
+        },
+        "press": {
+          "done": "키를 누름",
+          "refused": "키 입력 거부됨: 이 페이지에서는 조작이 허용되지 않습니다",
+          "failed": "키를 누를 수 없음"
+        },
+        "select": {
+          "done": "옵션을 선택함",
+          "refused": "선택 거부됨: 이 페이지에서는 조작이 허용되지 않습니다",
+          "failed": "옵션을 선택할 수 없음"
+        },
+        "capture": {
+          "done": "스크린샷을 찍음",
+          "refused": "스크린샷 거부됨: 이 페이지는 공유되지 않았습니다",
+          "failed": "스크린샷을 찍지 못했습니다"
+        },
+        "console": {
+          "done": "콘솔을 읽음",
+          "refused": "콘솔 읽기 거부됨: 이 페이지는 공유되지 않았습니다",
+          "failed": "콘솔을 읽지 못했습니다"
+        },
+        "eval": {
+          "done": "페이지에서 코드를 실행했습니다",
+          "refused": "이 페이지에서 코드 실행을 거부했습니다",
+          "failed": "코드를 실행하지 못했습니다"
+        },
+        "open": {
+          "done": "이 페이지를 열었습니다",
+          "refused": "탭 열기를 거부했습니다",
+          "failed": "탭을 열지 못했습니다"
+        },
+        "navigate": {
+          "done": "다른 주소로 이동했습니다",
+          "refused": "이동 거부: 이 페이지는 조작이 허용되지 않습니다",
+          "failed": "주소를 바꾸지 못했습니다"
+        },
+        "close": {
+          "done": "이 탭을 닫았습니다",
+          "refused": "닫기 거부: 이 페이지는 조작이 허용되지 않습니다",
+          "failed": "이 탭을 닫지 못했습니다"
+        }
+      },
+      "activityCount": "{count}회",
+      "activityTitle": "이 페이지에서 에이전트가 한 일",
+      "activityLabel": "에이전트 작업 기록: {entry}",
+      "eval": {
+        "title": "{site}에서 이 코드를 실행할까요?",
+        "description": "에이전트가 이 페이지에서 JavaScript를 실행하려고 합니다. {site}에서 직접 할 수 있는 읽기와 변경은 이 코드도 모두 할 수 있습니다.",
+        "descriptionWithTitle": "에이전트가 ‘{title}’에서 JavaScript를 실행하려고 합니다. {site}에서 직접 할 수 있는 읽기와 변경은 이 코드도 모두 할 수 있습니다.",
+        "codeLabel": "실행될 코드",
+        "everyTime": "코드마다 매번 다시 묻습니다. 이번 승인이 다음 코드까지 승인하는 것은 아닙니다. 물어볼지 여부는 설정 → 내장 브라우저에서 정합니다.",
+        "allow": "한 번만 실행",
+        "deny": "실행하지 않음"
+      }
+    },
+    "handoff": {
+      "send": "이 페이지를 대화로 보내기",
+      "sendLabel": "대화로 보내기",
+      "noConversation": "보낼 대화를 먼저 열어 주세요",
+      "pickElement": "요소 선택…",
+      "screenshot": "스크린샷 보내기",
+      "markUp": "스크린샷에 표시하기…",
+      "consoleErrors": "콘솔 오류 보내기",
+      "consoleClean": "이 페이지에서 문제가 없었습니다",
+      "picking": "선택 중…",
+      "pickingHint": "페이지에서 요소를 클릭하거나 Esc를 누르세요",
+      "pickingCancel": "선택 그만두기",
+      "sent": "대화에 추가했습니다",
+      "failed": "이 페이지를 보내지 못했습니다",
+      "noConsoleErrors": "이 페이지는 오류를 출력하지 않았습니다",
+      "chipElement": "페이지 요소",
+      "chipScreenshot": "페이지 스크린샷",
+      "chipMarkedScreenshot": "표시한 스크린샷",
+      "chipConsole": "{count, plural, other {콘솔 오류 #건}}",
+      "gone": "그 대화는 이미 닫혔습니다",
+      "consoleErrorsCount": "{count, plural, other {콘솔 오류 #건 보내기}}",
+      "markupTitle": "스크린샷에 표시하기",
+      "markupTools": "그리기 도구",
+      "markupBox": "상자",
+      "markupArrow": "화살표",
+      "markupUndo": "실행 취소",
+      "markupClear": "지우기",
+      "markupHint": "그림 위를 드래그해서 그리세요. 표시마다 번호가 붙어서 메시지에서 번호로 가리킬 수 있습니다.",
+      "markupCount": "{count, plural, other {표시 #개}}",
+      "markupCancel": "취소",
+      "markupSend": "대화에 추가"
+    }
+  },
+  "browser": {
+    "agent": {
+      "error": {
+        "grantRequired": "이 탭은 에이전트와 공유되지 않았습니다. 공유하면 에이전트가 페이지를 읽을 수 있습니다."
+      }
+    },
+    "inspector": {
+      "error": {
+        "switchedOff": "이 탭은 웹 검사기가 꺼진 상태에서 열렸습니다. 브라우저 설정에서 켠 다음 페이지를 다시 여세요."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "원격 호스트의 주소를 내장 브라우저에서 열려면 macOS 14 이상이 필요합니다.",
+        "unsupported": "원격 codeg-server가 오래되어 브라우저 트래픽을 전달할 수 없습니다. 여기에서 주소를 열려면 업데이트하세요.",
+        "disabled": "원격 codeg-server의 브라우저 터널이 꺼져 있습니다(CODEG_BROWSER_TUNNEL).",
+        "unreachable": "원격 codeg-server의 브라우저 터널에 연결할 수 없습니다({reason}).",
+        "bypassed": "이 컴퓨터의 브라우저 엔진이 일부 주소를 터널을 거치지 않고 보내므로, 이 컴퓨터에서 불러오지 않도록 원격 호스트의 페이지는 열리지 않습니다.",
+        "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
+      }
+    }
   }
 }

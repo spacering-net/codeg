@@ -309,6 +309,7 @@ export function LiveTranscriptView({
           <PermissionDialog
             permission={pendingPermission}
             onRespond={onRespondPermission}
+            agentType={agentType}
           />
         </div>
       )}
@@ -340,6 +341,12 @@ export function LiveTranscriptView({
       <div className="min-h-0 flex-1">
         <MessageListView
           conversationId={conversationId}
+          // The viewed connection's own cwd. A delegation child runs in a
+          // scratch dir whose folder row this client may not have seen yet
+          // (it is created closed, without a folder-change broadcast), so the
+          // folder lookup would come up empty; `undefined` when there is no
+          // live connection keeps that lookup as the fallback.
+          imageRoot={conn?.workingDir ?? undefined}
           agentType={agentType ?? "claude_code"}
           connStatus={connStatus}
           isActive={false}

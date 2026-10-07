@@ -9,7 +9,6 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
-import { toast } from "sonner"
 import { AgentSelector } from "@/components/chat/agent-selector"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
@@ -24,10 +23,12 @@ import {
   createChatDir,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { notify } from "@/lib/notify"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
+  promptDraftTitleSeed,
 } from "@/lib/prompt-draft"
 import {
   getSavedModeId,
@@ -42,8 +43,10 @@ import type {
   QuestionAnswer,
 } from "@/lib/types"
 import { cn, randomUUID } from "@/lib/utils"
+import { userPromptHistory } from "@/lib/composer-history"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
+  getTimelineTurns,
   useConversationRuntimeActions,
   useConversationRuntimeStore,
 } from "@/stores/conversation-runtime-store"
@@ -67,8 +70,8 @@ import { useShallow } from "zustand/react/shallow"
  *   `MessageListView`         the transcript (reads turns by conversation id)
  *   `ConversationShell`       composer + the three interrupt dialogs
  *
- * What it deliberately leaves out: the message queue, fork-send, live-feedback
- * steering, transcript export and the welcome-page quick actions. Those belong
+ * What it deliberately leaves out: the message queue, live-feedback steering,
+ * transcript export and the welcome-page quick actions. Those belong
  * to the full workspace surface, which the card's "open in workspace" menu
  * entry is one click away from.
  *
@@ -262,7 +265,6 @@ export function CanvasConversationSurface({
     getSavedModeId(agentType)
   )
   const [sendSignal, setSendSignal] = useState(0)
-  const [createError, setCreateError] = useState<string | null>(null)
   const creatingRef = useRef(false)
   // Mirrors `creatingRef` as state, purely so the card can refuse to be thrown
   // away mid-creation: the row is already being written and the prompt is
@@ -358,7 +360,6 @@ export function CanvasConversationSurface({
     modeLoading,
     configOptionsLoading,
     selectorsLoading,
-    autoConnectError,
     handleFocus,
     handleSend: lifecycleSend,
     handleSetConfigOption,
@@ -370,6 +371,10 @@ export function CanvasConversationSurface({
     // Without a cwd there is nothing to connect to yet (a chat draft before its
     // scratch dir lands); auto-connect would fire with an undefined dir.
     isActive: isActive && workingDir != null && !awaitingHistoricalSessionId,
+    // The historical-session wait is a WAIT, not idleness — surface it so the
+    // card's composer shows selector placeholders instead of a bare row (the
+    // cwd wait has nothing to report: a dormant draft card isn't opening).
+    preparing: isActive && awaitingHistoricalSessionId,
     workingDir,
     sessionId:
       dbConversationId != null && agentType !== "cline"
@@ -572,15 +577,12 @@ export function CanvasConversationSurface({
       if (!draftTarget) return
       creatingRef.current = true
       setCreating(true)
-      setCreateError(null)
       void (async () => {
         try {
-          const title = getPromptDraftDisplayText(
+          const title = promptDraftTitleSeed(
             draft,
             sharedT("attachedResources")
           )
-            .trim()
-            .slice(0, 80)
           let newId: number
           let sendFolderId: number
           if (draftTarget.kind === "chat") {
@@ -618,11 +620,16 @@ export function CanvasConversationSurface({
         } catch (e) {
           console.error("[canvas] create conversation:", e)
           // Restore the pre-send state whole: no ghost turn stuck in
-          // awaiting_persist, and the error visible rather than silent.
+          // awaiting_persist, and the error visible rather than silent — as
+          // a notification, like every verdict on a click.
           removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
           setSyncState(effectiveConversationId, "idle")
-          setCreateError(toErrorMessage(e))
-          toast.error(t("createFailed"))
+          notify({
+            level: "error",
+            key: `canvas-create-failed:${contextKey}`,
+            title: t("createFailed"),
+            description: toErrorMessage(e),
+          })
         } finally {
           creatingRef.current = false
           setCreating(false)
@@ -634,6 +641,7 @@ export function CanvasConversationSurface({
       appendOptimisticTurn,
       boundFolderId,
       connSessionId,
+      contextKey,
       draftTarget,
       effectiveConversationId,
       lifecycleSend,
@@ -672,6 +680,13 @@ export function CanvasConversationSurface({
     [acpActions, contextKey]
   )
 
+  // Client-local, like the conversation panel's — and what lets the muted
+  // "recovered" line expire on its own.
+  const handleSessionFailureDismiss = useCallback(
+    (ids: string[]) => acpActions.dismissSessionFailures(contextKey, ids),
+    [acpActions, contextKey]
+  )
+
   /** Stop one AIR async task. `false` (the adapter declined) is surfaced —
    *  a successful stop announces itself by the row leaving the strip, so
    *  silence would be indistinguishable from a click that did nothing. */
@@ -681,10 +696,20 @@ export function CanvasConversationSurface({
       if (!connectionId) return false
       try {
         const stopped = await acpStopAsyncTask(connectionId, taskId)
-        if (!stopped) toast.warning(tAsyncTasks("stopDeclined"))
+        if (!stopped) {
+          notify({
+            level: "warning",
+            key: `async-task-stop:${connectionId}:${taskId}`,
+            title: tAsyncTasks("stopDeclined"),
+          })
+        }
         return stopped
       } catch (err) {
-        toast.error(tAsyncTasks("stopFailed", { error: toErrorMessage(err) }))
+        notify({
+          level: "error",
+          key: `async-task-stop:${connectionId}:${taskId}`,
+          title: tAsyncTasks("stopFailed", { error: toErrorMessage(err) }),
+        })
         return false
       }
     },
@@ -707,6 +732,16 @@ export function CanvasConversationSurface({
     return conn.modes?.current_mode_id ?? connectionModes[0]?.id ?? null
   }, [conn.modes, connectionModes, modeId])
 
+  // Arrow-key history source, read lazily on the first Up/Down (see
+  // `MessageInput.getSentHistory`) so streaming tokens cost nothing here.
+  const getSentHistory = useCallback(
+    () =>
+      userPromptHistory(
+        getTimelineTurns(effectiveConversationId).map((entry) => entry.turn)
+      ),
+    [effectiveConversationId]
+  )
+
   const isDraft = dbConversationId == null
 
   return (
@@ -722,9 +757,9 @@ export function CanvasConversationSurface({
           promptCapabilities={conn.promptCapabilities}
           defaultPath={workingDir}
           agentName={getAgentLabel(agentType)}
-          error={conn.error ?? autoConnectError ?? createError}
           claudeApiRetry={conn.claudeApiRetry}
           sessionFailures={conn.sessionFailures}
+          onSessionFailureDismiss={handleSessionFailureDismiss}
           asyncTasks={conn.asyncTasks}
           onStopAsyncTask={handleStopAsyncTask}
           pendingPermission={conn.pendingPermission}
@@ -749,6 +784,7 @@ export function CanvasConversationSurface({
           agentType={agentType}
           availableCommands={conn.availableCommands ?? []}
           draftStorageKey={`canvas-draft:${contextKey}`}
+          getSentHistory={getSentHistory}
           // The card's own connection key doubles as its composer scope: the
           // context-usage ring and connection dot in the picker row read it as
           // a contextKey (they showed nothing at all while it was undefined).
@@ -769,6 +805,12 @@ export function CanvasConversationSurface({
           )}
           <MessageListView
             conversationId={effectiveConversationId}
+            // The card's own cwd, which it already knows before any
+            // conversation row exists — a draft's first reply has no persisted
+            // detail to derive a folder from, so without this its screenshots
+            // stay unresolved until a later refetch. `undefined` (never a
+            // wrong guess) leaves MessageListView's folder fallback in place.
+            imageRoot={workingDir}
             agentType={agentType}
             connStatus={connStatus}
             isActive={isActive}

@@ -113,6 +113,39 @@ describe("ModelOptionList", () => {
     )
   })
 
+  // codex-acp 1.11.0 names a recommended value per select
+  // (`_meta.jetbrains.air.recommendedValue`). It is worth its own row marker
+  // precisely because it is NOT the selection: codeg replays a persisted
+  // per-agent preference into every new session, so the selected model is
+  // routinely one the agent no longer defaults to.
+  it("badges the recommended row, independently of the selected one", () => {
+    renderList({
+      recommendedValue: "anthropic/sonnet",
+      recommendedLabel: "Recommended",
+    })
+    const recommended = screen.getByRole("option", { name: /sonnet/ })
+    expect(recommended).toHaveTextContent("Recommended")
+    // The recommendation says nothing about what is selected, and vice versa.
+    expect(recommended).toHaveAttribute("aria-selected", "false")
+    const selected = screen.getByRole("option", { name: /opus/ })
+    expect(selected).toHaveAttribute("aria-selected", "true")
+    expect(selected).not.toHaveTextContent("Recommended")
+  })
+
+  // A recommendation that matches no option marks nothing — the backend
+  // deliberately does not validate membership against the list, so this is the
+  // guard that makes that safe. Same for a recommendation with no label.
+  it("marks nothing for an unknown recommendation or a missing label", () => {
+    renderList({
+      recommendedValue: "anthropic/retired",
+      recommendedLabel: "Recommended",
+    })
+    expect(screen.queryByText("Recommended")).toBeNull()
+    cleanup()
+    renderList({ recommendedValue: "anthropic/sonnet" })
+    expect(screen.queryByText("Recommended")).toBeNull()
+  })
+
   it("filters options as you type (matching name or value)", async () => {
     const user = userEvent.setup()
     renderList()

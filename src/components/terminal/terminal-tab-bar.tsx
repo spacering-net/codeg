@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useRef, useState } from "react"
-import { Minus, Plus, X } from "lucide-react"
+import { Keyboard, Minus, Plus, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -26,7 +26,20 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-export function TerminalTabBar() {
+interface TerminalTabBarProps {
+  /** 移动端折叠/展开键栏的开关。仅 isMobile 时父级才传 true。 */
+  showKeybarToggle?: boolean
+  /** 当前是否已折叠（驱动键盘按钮的 active 高亮）。 */
+  keybarCollapsed?: boolean
+  /** 点击键盘按钮的回调。 */
+  onToggleKeybar?: () => void
+}
+
+export function TerminalTabBar({
+  showKeybarToggle = false,
+  keybarCollapsed = false,
+  onToggleKeybar,
+}: TerminalTabBarProps) {
   const t = useTranslations("Folder.terminal")
   const ime = useImeGuard()
   const { shortcuts } = useShortcutSettings()
@@ -156,6 +169,29 @@ export function TerminalTabBar() {
           )}
         </Tooltip>
       </TooltipProvider>
+      {showKeybarToggle && onToggleKeybar && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-6 w-6 shrink-0 ${keybarCollapsed ? "" : "text-primary"}`}
+                onClick={onToggleKeybar}
+                aria-pressed={!keybarCollapsed}
+                aria-label={
+                  keybarCollapsed ? t("keybar.show") : t("keybar.hide")
+                }
+              >
+                <Keyboard className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {keybarCollapsed ? t("keybar.show") : t("keybar.hide")}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
       <Button
         variant="ghost"
         size="icon"

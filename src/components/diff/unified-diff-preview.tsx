@@ -50,6 +50,9 @@ interface ParsedDiffFile {
   oldPath: string | null
   newPath: string | null
   mode: DiffFileMode
+  /** git refused to line-diff this one ("Binary files … differ"). It has no
+   *  hunks and is kept only so the change stays visible in the list. */
+  binary: boolean
   additions: number
   deletions: number
   hunks: ParsedDiffHunk[]
@@ -70,6 +73,7 @@ interface WorkingFile {
   oldPath: string | null
   newPath: string | null
   mode: DiffFileMode
+  binary: boolean
   additions: number
   deletions: number
   hunks: WorkingHunk[]
@@ -98,7 +102,23 @@ function normalizePath(raw: string): string | null {
 }
 
 function parsePathFromDiffGitLine(line: string): string | null {
-  const match = line.match(/^diff --git\s+(.+?)\s+(.+)$/)
+  const rest = line.slice("diff --git ".length).trim()
+
+  // git does not quote plain spaces, so `a/<p1> b/<p2>` is genuinely ambiguous
+  // for a path like "my icon.png". Both sides name the same file unless this is
+  // a rename, so look for the split that makes them equal before falling back
+  // to the (lazy, first-space) guess. Text files recover either way — their
+  // `--- `/`+++ ` lines overwrite the path — but a binary file has none of
+  // those, and this line is all it gets.
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] !== " ") continue
+    const left = rest.slice(0, i)
+    const right = rest.slice(i + 1)
+    if (!left.startsWith("a/") || !right.startsWith("b/")) continue
+    if (left.slice(2) === right.slice(2)) return normalizePath(right)
+  }
+
+  const match = rest.match(/^(.+?)\s+(.+)$/)
   if (!match) return null
   return normalizePath(match[2]) ?? normalizePath(match[1])
 }
@@ -285,6 +305,7 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
       oldPath: null,
       newPath: null,
       mode,
+      binary: false,
       additions: 0,
       deletions: 0,
       hunks: [],
@@ -342,6 +363,50 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
       continue
     }
 
+    // A rename names each side on a line of its own, which is the only
+    // unambiguous statement of the paths git makes when they contain spaces —
+    // and for a binary rename, the only one at all.
+    if (line.startsWith("rename from ")) {
+      const renamedFrom = normalizePath(line.slice("rename from ".length))
+      const file = ensureFile()
+      if (renamedFrom) file.oldPath = renamedFrom
+      continue
+    }
+
+    if (line.startsWith("rename to ")) {
+      const renamedTo = normalizePath(line.slice("rename to ".length))
+      const file = ensureFile()
+      if (renamedTo) {
+        file.newPath = renamedTo
+        file.path = renamedTo
+      }
+      continue
+    }
+
+    // git's extended headers. A binary add/delete carries no `--- /dev/null`
+    // line for `resolveFileMode` to read the mode off, so take it from here.
+    if (line.startsWith("new file mode ")) {
+      ensureFile().mode = "added"
+      continue
+    }
+
+    if (line.startsWith("deleted file mode ")) {
+      ensureFile().mode = "deleted"
+      continue
+    }
+
+    // "Binary files a/logo.png and b/logo.png differ", or the base85 payload
+    // header of `git diff --binary`. Either way there is nothing to line up in
+    // a text grid — the file is kept, flagged, and rendered as a stub.
+    if (
+      (line.startsWith("Binary files ") && line.endsWith(" differ")) ||
+      line === "GIT binary patch"
+    ) {
+      flushHunk()
+      ensureFile().binary = true
+      continue
+    }
+
     if (line.startsWith("--- ")) {
       const file = ensureFile()
       const oldPath = normalizePath(line.slice(4))
@@ -362,6 +427,11 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
       startHunk(line)
       continue
     }
+
+    // A binary payload is not diff rows: `git diff --binary` emits base85,
+    // whose alphabet includes "+" and "-", and letting those through would
+    // paint a wall of fake added/deleted lines.
+    if (getActiveFile()?.binary) continue
 
     let hunk = getActiveHunk()
     // Auto-create an implicit hunk for patch formats (e.g. *** Add File)
@@ -436,7 +506,7 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
           rows: classifyRows(hunk.rows),
         })),
     }))
-    .filter((file) => file.hunks.length > 0)
+    .filter((file) => file.hunks.length > 0 || file.binary)
 }
 
 function modeKey(
@@ -804,7 +874,7 @@ function SplitDiffPanes({
 }
 
 function isNewFileOnly(file: ParsedDiffFile): boolean {
-  return file.mode === "added" && file.deletions === 0
+  return !file.binary && file.mode === "added" && file.deletions === 0
 }
 
 /** New files render as plain content in BOTH modes (there is no "before" side
@@ -812,7 +882,7 @@ function isNewFileOnly(file: ParsedDiffFile): boolean {
  *  offering the toggle there would be a control that visibly does nothing.
  *  Write-tool previews in a transcript are exactly this shape. */
 function supportsSplitView(files: ParsedDiffFile[]): boolean {
-  return files.some((file) => !isNewFileOnly(file))
+  return files.some((file) => !file.binary && !isNewFileOnly(file))
 }
 
 // Beyond this many rows a single file is rendered as a bounded preview: each
@@ -928,7 +998,7 @@ function DiffFileSection({
               {toDisplayPath(file.path, folderPath)}
             </span>
           )}
-          {!newFile && (
+          {!newFile && !file.binary && (
             // The counters are one LTR unit inside a header that still follows
             // the UI direction: without this, RTL reorders them to "3- 2+",
             // moving each sign behind its number. A no-op everywhere else.
@@ -944,7 +1014,7 @@ function DiffFileSection({
               </span>
             </span>
           )}
-          {!newFile && (
+          {!newFile && !file.binary && (
             <ViewModeToggle
               view={view}
               onSwitch={switchView}
@@ -954,7 +1024,11 @@ function DiffFileSection({
         </header>
       )}
 
-      {view === "split" && !newFile ? (
+      {file.binary ? (
+        <div className="px-3 py-2 text-2xs text-muted-foreground">
+          {t("binaryFile")}
+        </div>
+      ) : view === "split" && !newFile ? (
         <SplitDiffPanes hunks={hunks} bounded={!unbounded} />
       ) : (
         // `dir="ltr"` for the same reason the split panes force it: the rows

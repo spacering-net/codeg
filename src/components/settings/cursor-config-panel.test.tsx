@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   buildCursorEnv,
   CursorConfigPanel,
+  cursorAuthState,
   cursorLoginCommand,
+  cursorLoginIsHeadless,
+  cursorLoginRunsOnCodegHost,
   inferCursorMode,
   isCursorForceEnabled,
 } from "./cursor-config-panel"
@@ -21,6 +24,14 @@ vi.mock("@/lib/api", () => ({
   acpCursorAuthStatus: vi.fn(),
   acpCursorListModels: vi.fn(),
   acpUpdateAgentConfig: vi.fn(),
+}))
+
+// Default to a local desktop window: cursor-agent runs on this machine, so the
+// login command keeps its plain browser-opening form.
+const runtime = { desktop: true, remoteDesktop: false }
+vi.mock("@/lib/transport", () => ({
+  isDesktop: () => runtime.desktop,
+  isRemoteDesktopMode: () => runtime.remoteDesktop,
 }))
 
 describe("buildCursorEnv", () => {
@@ -120,6 +131,108 @@ describe("cursorLoginCommand", () => {
     expect(cursorLoginCommand(null)).toBe("cursor-agent login")
     expect(cursorLoginCommand("")).toBe("cursor-agent login")
   })
+
+  it("asks for the printed URL when the host cannot open a browser", () => {
+    expect(cursorLoginCommand("/opt/cursor-agent/bin/cursor-agent", true)).toBe(
+      "NO_OPEN_BROWSER=1 /opt/cursor-agent/bin/cursor-agent login"
+    )
+    // The prefix goes before the quoting, not inside it.
+    expect(cursorLoginCommand("/opt/my agent/cursor-agent", true)).toBe(
+      'NO_OPEN_BROWSER=1 "/opt/my agent/cursor-agent" login'
+    )
+    // The unresolved-path fallback takes the prefix too: a caller asking for
+    // the headless form is showing copy that promises a printed URL.
+    expect(cursorLoginCommand(null, true)).toBe(
+      "NO_OPEN_BROWSER=1 cursor-agent login"
+    )
+  })
+})
+
+describe("cursorLoginRunsOnCodegHost", () => {
+  it("is false only for a window whose backend is this machine", () => {
+    expect(cursorLoginRunsOnCodegHost(true, false)).toBe(false)
+    // A web page and a remote-desktop window both talk to a codeg server.
+    expect(cursorLoginRunsOnCodegHost(false, false)).toBe(true)
+    expect(cursorLoginRunsOnCodegHost(true, true)).toBe(true)
+  })
+})
+
+describe("cursorLoginIsHeadless", () => {
+  const POSIX = "/opt/cursor-agent/bin/cursor-agent"
+
+  it("keeps the browser flow on a local desktop window", () => {
+    expect(cursorLoginIsHeadless(POSIX, true, false)).toBe(false)
+  })
+
+  it("treats a web page and a remote-desktop window as another host", () => {
+    // Both talk to a codeg server: `login` would run there, with no display.
+    expect(cursorLoginIsHeadless(POSIX, false, false)).toBe(true)
+    expect(cursorLoginIsHeadless(POSIX, true, true)).toBe(true)
+  })
+
+  it("does not emit POSIX env syntax for a Windows host", () => {
+    const WIN = "C:\\Program Files\\cursor-agent.exe"
+    expect(cursorLoginIsHeadless(WIN, false, false)).toBe(false)
+    expect(
+      cursorLoginIsHeadless("\\\\srv\\share\\cursor-agent.exe", false, false)
+    ).toBe(false)
+    // ...but it is still another machine, so the wording must not claim a
+    // browser opens here. Suppressing both was the bug this pair splits.
+    expect(cursorLoginRunsOnCodegHost(false, false)).toBe(true)
+  })
+})
+
+describe("cursorAuthState", () => {
+  const signedIn = {
+    installed: true,
+    is_authenticated: true,
+    raw_status: "authenticated",
+    email: "itpkcn@gmail.com",
+    membership: null,
+    error: null,
+    binary_path: "/cache/cursor-agent",
+  }
+
+  it("demotes a stored-but-unusable login to `stale`", () => {
+    // The reported contradiction: `cursor-agent status` reports a login (it
+    // only checks that both tokens exist), while `cursor-agent acp` refuses
+    // every session/new because the access token has aged out. The card has to
+    // show the second answer, not the first.
+    expect(
+      cursorAuthState({ ...signedIn, credential_verified: false }, false)
+    ).toBe("stale")
+    expect(
+      cursorAuthState({ ...signedIn, credential_verified: true }, false)
+    ).toBe("ok")
+  })
+
+  it("keeps an unknown verification meaning signed in", () => {
+    // A backend that predates the flag sends null/undefined; inventing a login
+    // problem there would be worse than the bug being fixed.
+    expect(
+      cursorAuthState({ ...signedIn, credential_verified: null }, false)
+    ).toBe("ok")
+    expect(cursorAuthState(signedIn, false)).toBe("ok")
+  })
+
+  it("keeps the states that do not depend on verification", () => {
+    expect(cursorAuthState(null, true)).toBe("loading")
+    expect(cursorAuthState(null, false)).toBe("missing")
+    expect(cursorAuthState({ ...signedIn, installed: false }, false)).toBe(
+      "missing"
+    )
+    // Not signed in at all wins over the verification flag, whatever it says.
+    expect(
+      cursorAuthState(
+        { ...signedIn, is_authenticated: false, credential_verified: false },
+        false
+      )
+    ).toBe("unauthenticated")
+    // An in-flight re-probe must not blank a card that already has an answer.
+    expect(
+      cursorAuthState({ ...signedIn, credential_verified: false }, true)
+    ).toBe("stale")
+  })
 })
 
 describe("isCursorForceEnabled", () => {
@@ -184,6 +297,8 @@ describe("CursorConfigPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    runtime.desktop = true
+    runtime.remoteDesktop = false
     vi.mocked(acpCursorAuthStatus).mockResolvedValue({
       installed: false,
       is_authenticated: false,
@@ -284,6 +399,123 @@ describe("CursorConfigPanel", () => {
       CURSOR_AUTH_MODE: "subscription",
       CURSOR_FORCE: "0",
     })
+  })
+
+  it("a stored-but-unusable login shows the warning and the login command", async () => {
+    // What the user reported: the card said "signed in" while every session
+    // died with `Authentication required`. `cursor-agent status` reports the
+    // login because both tokens are on disk; it says `unable to fetch user
+    // details` in the same breath, which is the probe telling us the token no
+    // longer works. The card must say that, and offer the only recovery the
+    // CLI has.
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue({
+      installed: true,
+      is_authenticated: true,
+      raw_status: "authenticated",
+      email: null,
+      membership: null,
+      error: null,
+      binary_path: "/cache/cursor-agent",
+      credential_verified: false,
+    })
+    renderPanel({ env: { CURSOR_AUTH_MODE: "subscription" } })
+
+    await screen.findByText(enMessages.AcpAgentSettings.cursor.authUnverified)
+    expect(
+      screen.getByText(enMessages.AcpAgentSettings.cursor.authUnverifiedHint)
+    ).toBeTruthy()
+    // The same runnable command the not-signed-in state offers.
+    expect(screen.getByText("/cache/cursor-agent login")).toBeTruthy()
+    // ...and never the green "signed in" line it used to show instead.
+    expect(
+      screen.queryByText(enMessages.AcpAgentSettings.cursor.authLoggedIn)
+    ).toBeNull()
+  })
+
+  it("offers a command a headless codeg server can actually run", async () => {
+    // The reported deployment: codeg-server on a Linux box, panel open in a
+    // browser somewhere else. `login` would run on the server, where nothing
+    // can open a browser — the reason the offered command "just cannot be
+    // run". Cursor's documented answer is to print the URL instead.
+    runtime.desktop = false
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue({
+      installed: true,
+      is_authenticated: false,
+      raw_status: "unauthenticated",
+      email: null,
+      membership: null,
+      error: null,
+      binary_path: "/opt/cursor-agent/bin/cursor-agent",
+      credential_verified: null,
+    })
+    renderPanel({ env: { CURSOR_AUTH_MODE: "subscription" } })
+
+    expect(
+      await screen.findByText(
+        "NO_OPEN_BROWSER=1 /opt/cursor-agent/bin/cursor-agent login"
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByText(enMessages.AcpAgentSettings.cursor.loginHintRemote)
+    ).toBeTruthy()
+    // The desktop wording promises a browser window that never opens there.
+    expect(
+      screen.queryByText(enMessages.AcpAgentSettings.cursor.loginHint)
+    ).toBeNull()
+  })
+
+  it("still says where to run it when the host is Windows", async () => {
+    // A Windows codeg host cannot take the POSIX `VAR=1 cmd` prefix — but it
+    // is still not this machine, so the wording must not fall back to "a
+    // browser window opens". Suppressing both was the gap here.
+    runtime.desktop = false
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue({
+      installed: true,
+      is_authenticated: false,
+      raw_status: "unauthenticated",
+      email: null,
+      membership: null,
+      error: null,
+      binary_path: "C:\\Program Files\\cursor-agent\\cursor-agent.exe",
+      credential_verified: null,
+    })
+    renderPanel({ env: { CURSOR_AUTH_MODE: "subscription" } })
+
+    expect(
+      await screen.findByText(
+        '"C:\\Program Files\\cursor-agent\\cursor-agent.exe" login'
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByText(enMessages.AcpAgentSettings.cursor.loginHintRemote)
+    ).toBeTruthy()
+  })
+
+  it("explains a rejected API key in its own terms, not the browser's", async () => {
+    // The same `stale` card serves both modes, but the recoveries differ: an
+    // API key is replaced in the field below, and telling that user the CLI
+    // "cannot refresh a browser login" describes someone else's problem.
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue({
+      installed: true,
+      is_authenticated: true,
+      raw_status: "authenticated",
+      email: null,
+      membership: null,
+      error: null,
+      binary_path: "/cache/cursor-agent",
+      credential_verified: false,
+    })
+    renderPanel({ env: { CURSOR_AUTH_MODE: "custom", CURSOR_API_KEY: "sk-x" } })
+
+    await screen.findByText(enMessages.AcpAgentSettings.cursor.authUnverified)
+    expect(
+      screen.getByText(
+        enMessages.AcpAgentSettings.cursor.authUnverifiedHintApiKey
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByText(enMessages.AcpAgentSettings.cursor.authUnverifiedHint)
+    ).toBeNull()
   })
 
   it("round-trips a saved Run Everything choice", async () => {

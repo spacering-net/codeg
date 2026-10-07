@@ -68,6 +68,33 @@ pub struct DbConversationSummary {
     /// path (set when a removed task worktree's conversations were re-parented).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_cwd: Option<String>,
+    /// Ids of the tags on this conversation, ascending. Not stored on the row —
+    /// backfilled from `conversation_tag_link` by one query over the returned
+    /// set (`fill_summary_extras`), the same way `child_count` is. Omitted from
+    /// the wire when empty, so the frontend reads an absent field as "no tags".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tag_ids: Vec<i32>,
+}
+
+/// A conversation tag as the UI sees it. `folder_id` is the scope: `None` for
+/// a global tag, otherwise the root folder whose conversations it is offered
+/// on. `color` is always a normalized `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConversationTagDetail {
+    pub id: i32,
+    pub folder_id: Option<i32>,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i32,
+}
+
+/// The branch tag: every conversation's git branch (the one it started on)
+/// drawn as a chip beside its tags — whether at all, and in which colour. One
+/// setting for the whole app; `color` is a normalized `#rrggbb`, like a tag's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationBranchTag {
+    pub enabled: bool,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +230,12 @@ pub struct ImportResult {
     /// at first import). Manual renames are never touched.
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations brought back by this import. Only ever
+    /// non-zero for a run whose caller opted into
+    /// `DeletedPolicy::Restore` — i.e. the picker, where the user checked that
+    /// specific deleted session. A whole-folder sweep never resurrects.
+    #[serde(default)]
+    pub restored: u32,
 }
 
 /// Reconciliation state of one locally-discovered session against the codeg DB,
@@ -214,7 +247,11 @@ pub enum ScanSessionStatus {
     New,
     /// At least one live (non-deleted) row exists — already imported.
     Imported,
-    /// Only soft-deleted rows exist — never resurrected by import.
+    /// Only soft-deleted rows exist. Deletion is a soft delete, so the row (and
+    /// its whole history) is still there: the picker offers such a session for
+    /// RESTORE, and importing it un-deletes the existing row in place rather
+    /// than inserting a second one. Never restored implicitly — only when the
+    /// user checks that row (see `DeletedPolicy`).
     Deleted,
 }
 
@@ -283,6 +320,9 @@ pub struct ImportFolderOutcome {
     pub imported: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations restored in place under this folder.
+    #[serde(default)]
+    pub restored: u32,
 }
 
 /// Aggregate result of `import_selected_sessions`.
@@ -291,6 +331,10 @@ pub struct ImportSelectedResult {
     pub imported: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations the user re-selected and this run brought
+    /// back (see [`ImportResult::restored`]).
+    #[serde(default)]
+    pub restored: u32,
     /// Selection keys that no longer resolved to a scanned session (deleted on
     /// disk between scan and import, or bogus input).
     pub not_found: u32,

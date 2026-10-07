@@ -121,6 +121,28 @@ pub async fn git_show_file(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GitShowFileBase64Params {
+    pub path: String,
+    pub file: String,
+    pub ref_name: Option<String>,
+    pub max_bytes: Option<usize>,
+}
+
+pub async fn git_show_file_base64(
+    Json(params): Json<GitShowFileBase64Params>,
+) -> Result<Json<folder_commands::GitBlobBase64>, AppCommandError> {
+    let result = folder_commands::git_show_file_base64(
+        params.path,
+        params.file,
+        params.ref_name,
+        params.max_bytes,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitDiffParams {
     pub path: String,
     pub file: Option<String>,

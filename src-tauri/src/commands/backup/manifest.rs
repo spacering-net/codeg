@@ -15,7 +15,18 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped only on an incompatible change to the archive layout / manifest
 /// shape. Restores reject any archive whose `format_version` exceeds this.
-pub const BACKUP_FORMAT_VERSION: u32 = 1;
+///
+/// **2** — the archive gained the codeg-owned sections beyond `uploads`
+/// (`acp-transcripts/`, `pets/`, `skills/`, …) and one self-contained file per
+/// third-party SQLite store. Structurally a v1 reader could parse it: the new
+/// manifest fields are additive and serde ignores what it does not know. But
+/// it would restore the database, silently drop every section it has no live
+/// path for, delete staging, and report success — handing back conversations
+/// whose messages are gone, which is precisely the loss this format exists to
+/// fix. Bumping turns that into an up-front "this backup is newer than this
+/// version of codeg" refusal. Reading OLDER archives is unaffected; the gate
+/// is `manifest.format_version > BACKUP_FORMAT_VERSION`.
+pub const BACKUP_FORMAT_VERSION: u32 = 2;
 
 /// Magic discriminator stored in every manifest so a stray ZIP can't be
 /// mistaken for a codeg backup.
@@ -60,8 +71,49 @@ pub struct BackupManifest {
     /// Always true today; drives the UI "contains secrets" warning when the
     /// backup is unencrypted.
     pub includes_secrets: bool,
+    /// Which codeg-owned sections (see
+    /// [`crate::commands::backup::sections::MANAGED_SECTIONS`]) this archive
+    /// claims to manage — i.e. which live trees a restore is allowed to
+    /// replace wholesale. `None` on archives written before the field existed;
+    /// those are normalized to
+    /// [`crate::commands::backup::sections::LEGACY_SECTION_IDS`] so restoring
+    /// one can never clear a section its format never knew about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_sections: Option<Vec<String>>,
+    /// Agents whose third-party SQLite session store could not be snapshotted
+    /// through the normal read-only page copy. Surfaced in the UI so a degraded
+    /// backup is never reported as a clean one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_sqlite: Vec<DegradedSqlite>,
     /// Per-entry size + checksum, excluding the manifest itself.
     pub entries: Vec<ManifestEntry>,
+}
+
+/// How badly one third-party SQLite store degraded during backup.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SqliteDegradation {
+    /// The store could not be opened read-only, so it was recovered on a
+    /// private copy first. The archived snapshot is still complete.
+    RecoveredOnCopy,
+    /// Recovery on the private copy failed; only the bare main DB file was
+    /// archived, so frames that lived solely in the WAL are missing.
+    BareFileOnly,
+    /// The store kept changing under us (or could not be copied at all), so
+    /// nothing was archived for it rather than archiving a torn copy.
+    NotArchived,
+}
+
+/// One degraded third-party SQLite store, reported per agent + store path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DegradedSqlite {
+    /// `ExternalSource::agent` — the archive/UI-facing agent name.
+    pub agent: String,
+    /// Archive-relative path of the store (`external/<agent>/…`), so the UI can
+    /// tell apart the hundreds of per-session stores Cursor keeps.
+    pub archive_path: String,
+    pub level: SqliteDegradation,
 }
 
 impl BackupManifest {

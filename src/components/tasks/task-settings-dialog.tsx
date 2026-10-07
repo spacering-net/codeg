@@ -473,6 +473,7 @@ function TaskSettingsBody({
                       />
                     </div>
                     <AgentConfigSection
+                      agentType={agentOptions.snapshotAgentType}
                       snapshot={agentOptions.snapshot}
                       loading={agentOptions.loading}
                       error={agentOptions.error}

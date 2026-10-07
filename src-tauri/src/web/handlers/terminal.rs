@@ -7,7 +7,7 @@ use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::terminal::prepare_credential_env;
 use crate::terminal::manager::SpawnOptions;
-use crate::terminal::types::TerminalInfo;
+use crate::terminal::types::{TerminalInfo, TerminalSnapshot};
 
 // ---------------------------------------------------------------------------
 // Param structs
@@ -97,6 +97,16 @@ pub async fn terminal_resize(
         .resize(&params.terminal_id, params.cols, params.rows)
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
+}
+
+/// Recent output of an already-running terminal — the re-attach half of
+/// `terminal_spawn` (see the Tauri command of the same name).
+pub async fn terminal_snapshot(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<TerminalIdParams>,
+) -> Result<Json<TerminalSnapshot>, AppCommandError> {
+    let manager = &state.terminal_manager;
+    Ok(Json(manager.snapshot(&params.terminal_id)))
 }
 
 pub async fn terminal_kill(

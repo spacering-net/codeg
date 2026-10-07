@@ -88,6 +88,15 @@ export function parseCodexListFilesTitle(
   return null
 }
 
+/**
+ * `_meta` key the backend stamps on codex's `search` command actions
+ * (`stamp_codex_search_action` in `acp/connection.rs`). It is the only way the
+ * frontend can tell a codex search from another agent's grep once codeg
+ * advertises `_meta.terminal_output_delta`: a search that printed nothing then
+ * completes as a bare `failed`, with no envelope and so no exit code.
+ */
+export const CODEX_SEARCH_ACTION_META_KEY = "codeg.codexSearchAction"
+
 export interface CodexCommandEnvelope {
   output: string
   exitCode: number
@@ -120,4 +129,27 @@ export function parseCodexCommandEnvelope(
     return null
   }
   return { output: obj.formatted_output, exitCode: obj.exit_code }
+}
+
+/**
+ * True for the one command envelope that means "the search ran fine and matched
+ * nothing": codex derives an ACP tool status from the process exit code, and
+ * rg/grep exit 1 when no line was selected, so a healthy negative search arrives
+ * as a FAILED tool call carrying `{exit_code: 1, formatted_output: ""}`.
+ *
+ * Callers MUST first establish that the tool is a grep-like search
+ * (`normalizeToolName(...) === "grep"`): exit 1 only means "nothing selected"
+ * for grep-likes — for the list-files commands that classify as `glob`
+ * (ls/find/…) it is a genuine failure, and a successful empty listing already
+ * arrives with exit 0. The tool-name gate lives at the call sites because
+ * `tool-call-normalization` imports this module, not the other way round.
+ *
+ * Whitespace-only output counts as empty, matching `<SearchResultsOutput>`,
+ * which renders any blank body as "No matches" — a shell that echoes a bare
+ * newline must not flip the same result between the neutral and the error
+ * rendering. A real failure (exit ≥ 2, or any diagnostic text) is untouched.
+ */
+export function isCodexGrepNoMatchEnvelope(raw: string): boolean {
+  const envelope = parseCodexCommandEnvelope(raw)
+  return envelope?.exitCode === 1 && envelope.output.trim().length === 0
 }

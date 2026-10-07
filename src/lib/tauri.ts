@@ -28,6 +28,7 @@ import type {
   OpenedTab,
   OpenedTabsSnapshot,
   SaveTabsOutcome,
+  GitBlobBase64,
   GitStatusEntry,
   GitBranchList,
   GitHeadInfo,
@@ -65,6 +66,7 @@ import type {
   GitHubAccountsSettings,
   GitHubTokenValidation,
   McpAppType,
+  LocalMcpScan,
   LocalMcpServer,
   McpMarketplaceProvider,
   McpMarketplaceItem,
@@ -441,7 +443,7 @@ export async function deleteAccountToken(accountId: string): Promise<void> {
   return invoke("delete_account_token", { accountId })
 }
 
-export async function mcpScanLocal(): Promise<LocalMcpServer[]> {
+export async function mcpScanLocal(): Promise<LocalMcpScan> {
   return invoke("mcp_scan_local")
 }
 
@@ -959,6 +961,20 @@ export async function gitShowFile(
   })
 }
 
+export async function gitShowFileBase64(
+  path: string,
+  file: string,
+  refName?: string,
+  maxBytes?: number
+): Promise<GitBlobBase64> {
+  return invoke("git_show_file_base64", {
+    path,
+    file,
+    refName: refName ?? null,
+    maxBytes: maxBytes ?? null,
+  })
+}
+
 export async function gitIsTracked(
   path: string,
   file: string
@@ -1045,6 +1061,7 @@ export async function openCommitWindow(folderId: number): Promise<void> {
 }
 
 export type SettingsSection =
+  | "general"
   | "appearance"
   | "agents"
   | "mcp"

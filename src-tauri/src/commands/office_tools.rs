@@ -1531,7 +1531,13 @@ mod tests {
     }
 
     #[tokio::test]
+    // The hydrate guard is held across the await on purpose — see the
+    // identical note in `custom_agent_service`.
+    #[allow(clippy::await_holding_lock)]
     async fn list_all_install_statuses_covers_every_skill_agent_pair() {
+        // A test hydrating a custom agent that declares a store would add a
+        // column between the snapshot and the count below.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
         let rows = officecli_skill_list_all_install_statuses()
             .await
             .expect("snapshot returns Ok");

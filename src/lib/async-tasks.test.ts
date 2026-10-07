@@ -90,6 +90,34 @@ describe("upsertAsyncTask", () => {
     // Still the announced task, not a nameless re-creation.
     expect(tasks[0].name).toBe("pnpm test")
   })
+
+  it("clears a Grok workflow's agent with the empty string, not absence", () => {
+    // Grok restates its whole run on every frame, so each one is a spawn and
+    // an agent that finished comes back as "" — absent would still mean
+    // unchanged, and the finished agent would stick to the row.
+    const frame = (rest: Partial<AsyncTaskDelta>) =>
+      delta("wf_1", true, {
+        name: "deep-research",
+        task_type: "workflow",
+        can_stop: false,
+        state: "running",
+        ...rest,
+      })
+    let tasks = upsertAsyncTask(
+      [],
+      frame({ phase: "Research", current_agent: "researcher-2" })
+    )
+    expect(tasks[0]).toMatchObject({
+      phase: "Research",
+      current_agent: "researcher-2",
+    })
+    tasks = upsertAsyncTask(
+      tasks,
+      frame({ phase: "Verify", current_agent: "" })
+    )
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({ phase: "Verify", current_agent: "" })
+  })
 })
 
 describe("mergeAsyncTasks", () => {

@@ -85,7 +85,7 @@ import {
 } from "@/stores/canvas-store"
 import { NOTE_H, NOTE_W } from "./add-node-menu"
 import { CanvasConversationDrawer } from "./canvas-conversation-drawer"
-import { useCanvasData } from "./canvas-data"
+import { useBoardNodes, useCanvasData } from "./canvas-data"
 import { CanvasDock, CanvasViewportPanel } from "./canvas-dock"
 import {
   BOARD_DOT_GAP,
@@ -98,6 +98,7 @@ import {
   computeDropHint,
   computeRegionMembers,
   deriveFlowGraph,
+  isRegionKind,
   noteHoldsProse,
   packLayout,
   parseMemberNodeId,
@@ -127,8 +128,10 @@ import {
   ConversationDraftNode,
   type ConversationDraftData,
 } from "./nodes/conversation-detail-node"
+import { FileNode } from "./nodes/file-node"
 import { NoteNode } from "./nodes/note-node"
 import { RegionNode } from "./nodes/region-node"
+import { TerminalNode } from "./nodes/terminal-node"
 import { useCanvasMarqueeTextGuard } from "./use-canvas-marquee-text-guard"
 import { useCanvasRightDragPan } from "./use-canvas-right-drag-pan"
 
@@ -141,6 +144,8 @@ const NODE_TYPES = {
   conversationDetail: ConversationDetailNode,
   conversationDraft: ConversationDraftNode,
   note: NoteNode,
+  file: FileNode,
+  terminal: TerminalNode,
 } as unknown as NodeTypes
 
 /** How long a pan/zoom must be quiet before the viewport is written to disk.
@@ -184,8 +189,14 @@ function drawerSurfaceKey(conversationId: number): string {
   return `canvas-drawer-${conversationId}`
 }
 
-function CanvasFlow() {
-  useCanvasData()
+function CanvasFlow({
+  boardId,
+  exportName,
+}: {
+  boardId: number
+  exportName: string
+}) {
+  useCanvasData(boardId)
   const t = useTranslations("Canvas")
   const { openConversations } = useWorkbenchRoute()
   const { openTab } = useTabActions()
@@ -194,8 +205,9 @@ function CanvasFlow() {
   useCanvasRightDragPan(surfaceRef)
   useCanvasMarqueeTextGuard(surfaceRef)
 
-  const dbNodes = useCanvasStore((s) => s.nodes)
-  const hydrated = useCanvasStore((s) => s.hydrated)
+  // Scoped to THIS board: until the store has switched to it (from an
+  // effect), it reads as empty and unhydrated — see `useBoardNodes`.
+  const { nodes: dbNodes, hydrated } = useBoardNodes(boardId)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const folderGroups = useAppWorkspaceStore((s) => s.folderGroups)
@@ -209,14 +221,14 @@ function CanvasFlow() {
 
   // Read once: the canvas remounts on every route switch, so this IS "how the
   // user left it" rather than a cache of the current session.
-  const [initialViewport] = useState(() => loadCanvasViewport())
+  const [initialViewport] = useState(() => loadCanvasViewport(boardId))
   const [expandedRegions, setExpandedRegions] = useState<ReadonlySet<number>>(
-    () => new Set(loadCanvasExpandedRegions())
+    () => new Set(loadCanvasExpandedRegions(boardId))
   )
   // Pinned cards currently rendered as a live conversation. Client-local: a
   // detail card is how THIS viewer is looking at the board, not board state.
   const [detailCards, setDetailCards] = useState<ReadonlySet<number>>(
-    () => new Set(loadCanvasExpandedCards())
+    () => new Set(loadCanvasExpandedCards(boardId))
   )
   // Which live surfaces may hold an ACP connection. Session-only and NEVER
   // restored: an expansion remembered from last time renders its transcript but
@@ -236,7 +248,7 @@ function CanvasFlow() {
   >(null)
 
   const [drafts, setDrafts] = useState<readonly CanvasDraftCard[]>(() =>
-    loadCanvasDrafts()
+    loadCanvasDrafts(boardId)
   )
   // Drafts whose first send is in flight — see `dismissDraft`. Kept as state
   // (the dock and the card hide their discard controls off it) AND as a ref,
@@ -263,18 +275,20 @@ function CanvasFlow() {
   // agent its first message started is still running under the draft's key.
   const [surfaceKeys, setSurfaceKeys] = useState<
     ReadonlyMap<number, CanvasSurfaceKey>
-  >(loadCanvasSurfaceKeys)
+  >(() => loadCanvasSurfaceKeys(boardId))
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
     () => new Set()
   )
   const [renamingRegionId, setRenamingRegionId] = useState<number | null>(null)
   // The delete waiting on the user's answer, or null for "not asking".
-  // `notes` is how many written notes it would take, so the dialog can say
-  // what is at stake. `run` is the delete itself, CAPTURED when the question
-  // was asked — the alternative, re-reading the live selection on confirm,
-  // lets the prompt describe one set of nodes and the confirm delete another.
+  // `notes` is how many written notes it would take and `terminals` how many
+  // live shells it would end, so the dialog can say what is at stake. `run` is
+  // the delete itself, CAPTURED when the question was asked — the alternative,
+  // re-reading the live selection on confirm, lets the prompt describe one set
+  // of nodes and the confirm delete another.
   const [pendingDelete, setPendingDelete] = useState<{
     notes: number
+    terminals: number
     run: () => Promise<void>
   } | null>(null)
   // Transient drag positions (RF node id → parent-relative position). State,
@@ -351,11 +365,11 @@ function CanvasFlow() {
     (update: (prev: ReadonlySet<number>) => ReadonlySet<number>) => {
       setDetailCards((prev) => {
         const next = update(prev)
-        if (next !== prev) saveCanvasExpandedCards([...next])
+        if (next !== prev) saveCanvasExpandedCards(boardId, [...next])
         return next
       })
     },
-    []
+    [boardId]
   )
 
   const setDraftsPersisted = useCallback(
@@ -364,11 +378,11 @@ function CanvasFlow() {
     ) => {
       setDrafts((prev) => {
         const next = update(prev)
-        if (next !== prev) saveCanvasDrafts(next)
+        if (next !== prev) saveCanvasDrafts(boardId, next)
         return next
       })
     },
-    []
+    [boardId]
   )
 
   // Drop ids whose nodes are gone — deleted here, deleted from another window,
@@ -392,7 +406,7 @@ function CanvasFlow() {
     setExpandedRegions((prev) => {
       const next = new Set([...prev].filter((id) => dbNodes.has(id)))
       if (next.size === prev.size) return prev
-      saveCanvasExpandedRegions([...next])
+      saveCanvasExpandedRegions(boardId, [...next])
       return next
     })
     // Connection keys are checked against the card they were written for, not
@@ -411,10 +425,19 @@ function CanvasFlow() {
         })
       )
       if (next.size === prev.size) return prev
-      saveCanvasSurfaceKeys(next)
+      saveCanvasSurfaceKeys(boardId, next)
       return next
     })
-  }, [hydrated, dbNodes, setDetailCardsPersisted])
+  }, [boardId, hydrated, dbNodes, setDetailCardsPersisted])
+
+  /** Terminal cards on the board, by row id. */
+  const terminalNodeIds = useMemo(() => {
+    const out: number[] = []
+    for (const node of dbNodes.values()) {
+      if (node.kind === "terminal") out.push(node.id)
+    }
+    return out
+  }, [dbNodes])
 
   const derived = useMemo(
     () =>
@@ -555,6 +578,22 @@ function CanvasFlow() {
     ).length
   }, [])
 
+  /**
+   * How many of these nodes are terminals — i.e. how many running processes
+   * the delete would end.
+   *
+   * The board's rule is "ask only when the delete destroys something that
+   * lives nowhere else", and a shell qualifies for the same reason a written
+   * note does: the command halfway through a migration exists only there.
+   * Liveness is deliberately not probed — a card whose process already exited
+   * answers "yes" and costs one dialog, while asking the backend would make a
+   * confirmation prompt depend on a round trip.
+   */
+  const terminalsAtRisk = useCallback((ids: readonly number[]) => {
+    const rows = useCanvasStore.getState().nodes
+    return ids.filter((id) => rows.get(id)?.kind === "terminal").length
+  }, [])
+
   const forgetNodes = useCallback(
     (ids: readonly number[]) => {
       if (ids.length === 0) return
@@ -593,29 +632,37 @@ function CanvasFlow() {
   const deleteNode = useCallback(
     async (nodeId: number) => {
       const notes = notesAtRisk([nodeId])
-      if (notes > 0) {
-        setPendingDelete({ notes, run: () => commitDeleteNode(nodeId) })
+      const terminals = terminalsAtRisk([nodeId])
+      if (notes > 0 || terminals > 0) {
+        setPendingDelete({
+          notes,
+          terminals,
+          run: () => commitDeleteNode(nodeId),
+        })
         return
       }
       await commitDeleteNode(nodeId)
     },
-    [commitDeleteNode, notesAtRisk]
+    [commitDeleteNode, notesAtRisk, terminalsAtRisk]
   )
 
-  const createNode = useCallback(async (input: CreateCanvasNodeInput) => {
-    try {
-      const res = await canvasCreateNode(input)
-      useCanvasStore
-        .getState()
-        .applyResponse(res.revision, (nodes) =>
-          nodes.set(res.value.id, res.value)
-        )
-      return res.value
-    } catch (e) {
-      toast.error(toErrorMessage(e))
-      return null
-    }
-  }, [])
+  const createNode = useCallback(
+    async (input: CreateCanvasNodeInput) => {
+      try {
+        const res = await canvasCreateNode(boardId, input)
+        useCanvasStore
+          .getState()
+          .applyResponse(res.revision, (nodes) =>
+            nodes.set(res.value.id, res.value)
+          )
+        return res.value
+      } catch (e) {
+        toast.error(toErrorMessage(e))
+        return null
+      }
+    },
+    [boardId]
+  )
 
   /** Keep a passage from a card's transcript as a note beside it. Parked just
    *  off the card's right edge — the same "next to where it came from" rule
@@ -686,11 +733,11 @@ function CanvasFlow() {
         const next = new Set(prev)
         if (expanded) next.add(regionDbId)
         else next.delete(regionDbId)
-        saveCanvasExpandedRegions([...next])
+        saveCanvasExpandedRegions(boardId, [...next])
         return next
       })
     },
-    []
+    [boardId]
   )
 
   const activateSurface = useCallback((contextKey: string) => {
@@ -1002,7 +1049,7 @@ function CanvasFlow() {
           createdAt: created.created_at,
           key,
         })
-        saveCanvasSurfaceKeys(next)
+        saveCanvasSurfaceKeys(boardId, next)
         return next
       })
       activateSurface(key)
@@ -1018,6 +1065,7 @@ function CanvasFlow() {
       setDraftsPersisted((prev) => prev.filter((d) => d.id !== draftId))
     },
     [
+      boardId,
       drafts,
       overlay,
       sizeOverlay,
@@ -1039,8 +1087,12 @@ function CanvasFlow() {
       // cards on the way in, so record the column/row count it landed on as the
       // region's shape. Otherwise the next render would re-derive columns from
       // the width and the pinned shape would silently drift from the frame.
+      // Kinds are enumerated through ONE predicate, never re-listed here: the
+      // backend rejects grid fields on a non-region outright, so a kind this
+      // check forgot about would have its whole geometry patch fail and the
+      // card would snap back after every resize.
       const gridPatch =
-        dbNode && dbNode.kind !== "conversation" && dbNode.kind !== "note"
+        dbNode && isRegionKind(dbNode.kind)
           ? {
               gridColumns: columnsForRegionWidth(geometry.width),
               gridRows: rowsForRegionHeight(geometry.height),
@@ -1267,12 +1319,9 @@ function CanvasFlow() {
       }
       const dbId = parseRegionNodeId(change.id)
       const dbNode = dbId != null ? storeNodes.get(dbId) : undefined
-      // Only member GRIDS snap; notes and (expanded) conversation cards resize
-      // freely — they have no cards to line up.
-      const isRegion =
-        dbNode != null &&
-        dbNode.kind !== "note" &&
-        dbNode.kind !== "conversation"
+      // Only member GRIDS snap; notes, files, terminals and (expanded)
+      // conversation cards resize freely — they have no cards to line up.
+      const isRegion = dbNode != null && isRegionKind(dbNode.kind)
       liveSizes.push([
         change.id,
         isRegion
@@ -1511,7 +1560,7 @@ function CanvasFlow() {
    *  gestures (box-select, card into region, card onto card). */
   const groupIntoRegion = useCallback(
     async (input: GroupIntoRegionInput) => {
-      const res = await canvasGroupIntoRegion(input)
+      const res = await canvasGroupIntoRegion(boardId, input)
       useCanvasStore.getState().applyResponse(res.revision, (nodes) => {
         for (const id of res.value.deletedIds) nodes.delete(id)
         nodes.set(res.value.node.id, res.value.node)
@@ -1519,7 +1568,7 @@ function CanvasFlow() {
       forgetNodes(res.value.deletedIds)
       setSelectedIds(new Set([regionNodeId(res.value.node.id)]))
     },
-    [forgetNodes]
+    [boardId, forgetNodes]
   )
 
   /** Turn a drop into its command. The hint is recomputed from the drag's FINAL
@@ -1804,12 +1853,19 @@ function CanvasFlow() {
    */
   const deleteSelection = useCallback(async () => {
     const notes = notesAtRisk(selection.noteIds)
-    if (notes > 0) {
-      setPendingDelete({ notes, run: commitDeleteSelection })
+    const terminals = terminalsAtRisk(selection.deletableIds)
+    if (notes > 0 || terminals > 0) {
+      setPendingDelete({ notes, terminals, run: commitDeleteSelection })
       return
     }
     await commitDeleteSelection()
-  }, [selection.noteIds, commitDeleteSelection, notesAtRisk])
+  }, [
+    selection.noteIds,
+    selection.deletableIds,
+    commitDeleteSelection,
+    notesAtRisk,
+    terminalsAtRisk,
+  ])
 
   // ── Toolbar actions ──
 
@@ -1950,13 +2006,15 @@ function CanvasFlow() {
         ) {
           return
         }
-        // Rename is a region's verb; with anything else selected these keys
-        // have nothing to do and are left alone.
+        // Rename is a region's verb — `renamingRegionId` is read by the region
+        // component's inline title input and nothing else, so arming it for any
+        // other kind swallows the key and opens nothing. Through the shared
+        // predicate rather than a list of exclusions, for the same reason the
+        // resize commit is.
         if (selectedNodes.length !== 1) return
         const dbId = parseRegionNodeId(selectedNodes[0].id)
-        if (dbId == null || dbNodes.get(dbId)?.kind == null) return
-        const kind = dbNodes.get(dbId)!.kind
-        if (kind === "conversation" || kind === "note") return
+        const kind = dbId != null ? dbNodes.get(dbId)?.kind : undefined
+        if (dbId == null || kind == null || !isRegionKind(kind)) return
         e.preventDefault()
         setRenamingRegionId(dbId)
         return
@@ -2047,7 +2105,7 @@ function CanvasFlow() {
           !(el instanceof HTMLElement && el.dataset?.canvasExportSkip != null),
       })
       const link = document.createElement("a")
-      link.download = "canvas.png"
+      link.download = `${exportName}.png`
       link.href = dataUrl
       link.click()
     } catch (e) {
@@ -2055,7 +2113,7 @@ function CanvasFlow() {
     } finally {
       setExporting(false)
     }
-  }, [rfNodes])
+  }, [rfNodes, exportName])
 
   // ── Viewport persistence ──
 
@@ -2068,32 +2126,46 @@ function CanvasFlow() {
     zoomRef.current = viewport.zoom
   }, [])
 
-  const handleMoveEnd = useCallback((_e: unknown, viewport: Viewport) => {
-    pendingViewport.current = viewport
-    zoomRef.current = viewport.zoom
-    // A real debounce, restarted on every frame: the custom pan calls
-    // `setViewport` per frame and each call fires `onMoveEnd` again, so leaving
-    // the timer to run would put a synchronous localStorage write in the middle
-    // of the gesture twice a second. Nothing is lost by waiting — the unmount
-    // flush below covers leaving the route mid-pan.
-    if (saveTimer.current != null) window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => {
-      saveTimer.current = null
-      if (pendingViewport.current) saveCanvasViewport(pendingViewport.current)
-    }, VIEWPORT_SAVE_DELAY_MS)
-  }, [])
+  const handleMoveEnd = useCallback(
+    (_e: unknown, viewport: Viewport) => {
+      pendingViewport.current = viewport
+      zoomRef.current = viewport.zoom
+      // A real debounce, restarted on every frame: the custom pan calls
+      // `setViewport` per frame and each call fires `onMoveEnd` again, so leaving
+      // the timer to run would put a synchronous localStorage write in the middle
+      // of the gesture twice a second. Nothing is lost by waiting — the unmount
+      // flush below covers leaving the route mid-pan.
+      if (saveTimer.current != null) window.clearTimeout(saveTimer.current)
+      saveTimer.current = window.setTimeout(() => {
+        saveTimer.current = null
+        if (pendingViewport.current) {
+          saveCanvasViewport(boardId, pendingViewport.current)
+        }
+      }, VIEWPORT_SAVE_DELAY_MS)
+    },
+    [boardId]
+  )
   useEffect(
     () => () => {
       if (saveTimer.current != null) window.clearTimeout(saveTimer.current)
       // Leaving the route is the most common way a pan ends — flush whatever
       // the debounce still owes rather than losing the last move.
-      if (pendingViewport.current) saveCanvasViewport(pendingViewport.current)
+      if (pendingViewport.current) {
+        saveCanvasViewport(boardId, pendingViewport.current)
+      }
     },
-    []
+    [boardId]
   )
 
   const empty = hydrated && dbNodes.size === 0 && drafts.length === 0
-  const liveSurfaceCount = detailCards.size + drafts.length
+  // Nodes whose unmount would cost the user something: an expanded
+  // conversation takes its ACP connection with it, a draft its unsent text,
+  // and a terminal its emulator (the PTY survives, but the pane comes back
+  // holding only what the scrollback replay can redraw). None of them may be
+  // culled off-screen. File cards are absent on purpose — their content lives
+  // in the shared file tab and a re-mount rebuilds them from it for free.
+  const liveSurfaceCount =
+    detailCards.size + drafts.length + terminalNodeIds.length
 
   return (
     <CanvasViewProvider value={viewContext}>
@@ -2292,7 +2364,23 @@ function CanvasFlow() {
             <AlertDialogHeader>
               <AlertDialogTitle>{t("confirmDeleteTitle")}</AlertDialogTitle>
               <AlertDialogDescription>
-                {t("confirmDeleteNotes", { count: pendingDelete?.notes ?? 0 })}
+                {/* One sentence per situation rather than two stacked
+                    clauses: the mixed case is rare enough that a dedicated
+                    string reads better than gluing two together, and ICU
+                    plurals can't span two independent counts anyway. */}
+                {(pendingDelete?.notes ?? 0) > 0 &&
+                (pendingDelete?.terminals ?? 0) > 0
+                  ? t("confirmDeleteNotesAndTerminals", {
+                      notes: pendingDelete?.notes ?? 0,
+                      terminals: pendingDelete?.terminals ?? 0,
+                    })
+                  : (pendingDelete?.terminals ?? 0) > 0
+                    ? t("confirmDeleteTerminals", {
+                        count: pendingDelete?.terminals ?? 0,
+                      })
+                    : t("confirmDeleteNotes", {
+                        count: pendingDelete?.notes ?? 0,
+                      })}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -2316,11 +2404,20 @@ function CanvasFlow() {
 
 /** Default export for `next/dynamic` — the RF provider wrapper lives here so
  *  every hook below it (`useReactFlow` in the dock/menu, the pan controller)
- *  has its store. */
-export default function CanvasView() {
+ *  has its store. One board per mount: the caller keys this by `boardId`, so
+ *  every piece of view state above (viewport, drafts, expansions, selection)
+ *  starts from that board's own memory instead of carrying the last one's. */
+export default function CanvasView({
+  boardId,
+  exportName,
+}: {
+  boardId: number
+  /** File name (without extension) for "Export as PNG". */
+  exportName: string
+}) {
   return (
     <ReactFlowProvider>
-      <CanvasFlow />
+      <CanvasFlow boardId={boardId} exportName={exportName} />
     </ReactFlowProvider>
   )
 }

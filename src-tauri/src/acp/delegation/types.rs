@@ -150,6 +150,24 @@ pub enum DelegationError {
     /// as `empty` by the connection loop's "silent EndTurn" guard).
     #[error("subagent produced no output")]
     ChildEmpty,
+    /// Child's agent refused the prompt with ACP's `authRequired` (synthesized
+    /// as `auth_required` by the connection loop). Distinct from
+    /// [`Self::ChildUnknown`] because it names an action the user can take —
+    /// and because this message ships to the parent LLM, which would otherwise
+    /// read "unrecognized stop reason" for a reason codeg recognizes perfectly
+    /// well. The child's session survives it, so signing in and re-delegating
+    /// works.
+    #[error("subagent's agent needs you to sign in again")]
+    ChildAuthRequired,
+    /// Child's agent rejected the prompt outright (synthesized as `rejected` by
+    /// the connection loop — every turn-scoped rejection that is not
+    /// `authRequired`: an unsupported slash command, a provider-side error the
+    /// adapter wrapped as -32603, …). Distinct from [`Self::ChildUnknown`] for
+    /// the same reason [`Self::ChildAuthRequired`] is: the parent LLM reads this
+    /// message, and "unrecognized stop reason" would be wrong. The child's
+    /// session survives it, so re-delegating works.
+    #[error("subagent's agent rejected the prompt")]
+    ChildRejected,
     #[error("subagent ended with unrecognized stop reason: {0}")]
     ChildUnknown(String),
     #[error("canceled: {reason}")]
@@ -290,6 +308,8 @@ impl DelegationOutcome {
             DelegationError::ChildMaxTokens => "child_max_tokens",
             DelegationError::ChildMaxTurnRequests => "child_max_turn_requests",
             DelegationError::ChildEmpty => "child_empty",
+            DelegationError::ChildAuthRequired => "child_auth_required",
+            DelegationError::ChildRejected => "child_rejected",
             DelegationError::ChildUnknown(_) => "child_unknown",
             DelegationError::Canceled { .. } => "canceled",
             DelegationError::ParentSessionGone => "canceled",
@@ -299,5 +319,55 @@ impl DelegationOutcome {
             message: err.to_string(),
             child_conversation_id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `code` strings ship to the parent LLM and to the status badge's
+    /// i18n switch, and `from_err`'s comment declares them stable — so pin
+    /// them here rather than trusting the comment. A renamed code silently
+    /// falls through to the badge's `default` ("failed") and hands the LLM a
+    /// label it has never seen; a NEW variant that forgets its arm would be
+    /// caught by the compiler, but a new variant sharing an existing code
+    /// (the mistake `ChildAuthRequired` was one edit away from) would not.
+    #[test]
+    fn error_codes_are_stable_and_distinct_per_child_failure() {
+        let cases = [
+            (DelegationError::ChildRefusal, "child_refusal"),
+            (DelegationError::ChildMaxTokens, "child_max_tokens"),
+            (
+                DelegationError::ChildMaxTurnRequests,
+                "child_max_turn_requests",
+            ),
+            (DelegationError::ChildEmpty, "child_empty"),
+            (DelegationError::ChildAuthRequired, "child_auth_required"),
+            (DelegationError::ChildRejected, "child_rejected"),
+            (
+                DelegationError::ChildUnknown("whatever".into()),
+                "child_unknown",
+            ),
+        ];
+        for (err, expected) in cases {
+            let display = err.to_string();
+            let DelegationOutcome::Err { code, message, .. } = DelegationOutcome::from_err(err, None)
+            else {
+                panic!("from_err must produce an Err outcome");
+            };
+            assert_eq!(code, expected);
+            assert_eq!(message, display);
+        }
+
+        // A sign-out is a recognized reason with an action attached, so it
+        // must NOT reach the parent wearing `ChildUnknown`'s "unrecognized
+        // stop reason" wording.
+        let DelegationOutcome::Err { message, .. } =
+            DelegationOutcome::from_err(DelegationError::ChildAuthRequired, None)
+        else {
+            unreachable!()
+        };
+        assert!(message.contains("sign in"), "message was {message:?}");
     }
 }

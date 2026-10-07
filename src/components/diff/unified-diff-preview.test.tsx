@@ -95,6 +95,126 @@ describe("UnifiedDiffPreview", () => {
   })
 })
 
+describe("UnifiedDiffPreview — binary files", () => {
+  it("keeps a binary change visible instead of dropping the file", () => {
+    // Hunkless by nature: before this was handled, the file was filtered out
+    // and an image change vanished from the diff entirely.
+    renderWithIntl(
+      <UnifiedDiffPreview
+        diffText={[
+          "diff --git a/logo.png b/logo.png",
+          "index 1111111..2222222 100644",
+          "Binary files a/logo.png and b/logo.png differ",
+          "",
+        ].join("\n")}
+      />
+    )
+
+    expect(screen.getByText("logo.png")).toBeInTheDocument()
+    expect(
+      screen.getByText(enMessages.Folder.diffPreview.binaryFile)
+    ).toBeInTheDocument()
+    expect(screen.getByText("Modified")).toBeInTheDocument()
+  })
+
+  it("reads add/delete off the extended header a binary file does have", () => {
+    renderWithIntl(
+      <UnifiedDiffPreview
+        diffText={[
+          "diff --git a/icon.png b/icon.png",
+          "new file mode 100644",
+          "index 0000000..3333333",
+          "Binary files /dev/null and b/icon.png differ",
+          "",
+        ].join("\n")}
+      />
+    )
+
+    // No `--- /dev/null` line exists here for the mode to be inferred from.
+    expect(screen.getByText("Added")).toBeInTheDocument()
+  })
+
+  it("does not paint base85 payload lines as diff rows", () => {
+    // `git diff --binary` emits base85, whose alphabet includes "+" and "-".
+    renderWithIntl(
+      <UnifiedDiffPreview
+        diffText={[
+          "diff --git a/logo.png b/logo.png",
+          "index 1111111..2222222 100644",
+          "GIT binary patch",
+          "literal 12",
+          "+c$@(NfB*mh",
+          "-zcmeAS@N?",
+          "",
+        ].join("\n")}
+      />
+    )
+
+    expect(screen.queryByText("c$@(NfB*mh")).not.toBeInTheDocument()
+    expect(screen.queryByText("zcmeAS@N?")).not.toBeInTheDocument()
+    expect(
+      screen.getByText(enMessages.Folder.diffPreview.binaryFile)
+    ).toBeInTheDocument()
+  })
+
+  it("keeps a spaced binary path intact, having no --- line to recover from", () => {
+    // `a/<p1> b/<p2>` is ambiguous when the path has a space, and a binary file
+    // carries no `--- `/`+++ ` lines to correct a bad guess.
+    renderWithIntl(
+      <UnifiedDiffPreview
+        diffText={[
+          "diff --git a/img/my logo.png b/img/my logo.png",
+          "index 1111111..2222222 100644",
+          "Binary files a/img/my logo.png and b/img/my logo.png differ",
+          "",
+        ].join("\n")}
+      />
+    )
+
+    expect(screen.getByText("img/my logo.png")).toBeInTheDocument()
+  })
+
+  it("names a binary rename off its rename headers", () => {
+    renderWithIntl(
+      <UnifiedDiffPreview
+        diffText={[
+          "diff --git a/old icon.png b/new icon.png",
+          "similarity index 80%",
+          "rename from old icon.png",
+          "rename to new icon.png",
+          "index 1111111..2222222 100644",
+          "Binary files a/old icon.png and b/new icon.png differ",
+          "",
+        ].join("\n")}
+      />
+    )
+
+    expect(screen.getByText("new icon.png")).toBeInTheDocument()
+    expect(screen.getByText("Renamed")).toBeInTheDocument()
+  })
+
+  it("still line-diffs an svg, which git treats as text", () => {
+    renderWithIntl(
+      <UnifiedDiffPreview
+        diffText={[
+          "diff --git a/icon.svg b/icon.svg",
+          "--- a/icon.svg",
+          "+++ b/icon.svg",
+          "@@ -1,1 +1,1 @@",
+          '-<svg width="16"/>',
+          '+<svg width="32"/>',
+          "",
+        ].join("\n")}
+      />
+    )
+
+    expect(screen.getByText('<svg width="32"/>')).toBeInTheDocument()
+    expect(
+      screen.queryByText(enMessages.Folder.diffPreview.binaryFile)
+    ).not.toBeInTheDocument()
+  })
+})
+
 describe("UnifiedDiffPreview — sticky line numbers", () => {
   beforeEach(() => {
     localStorage.clear()

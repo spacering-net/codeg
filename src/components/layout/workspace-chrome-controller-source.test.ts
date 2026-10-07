@@ -47,6 +47,14 @@ describe("tab close/navigation shortcuts live in the always-mounted controller",
     expect(controllerSource).toMatch(/closeAllFileTabs\(/)
   })
 
+  // A closed remote tab (an address of the remote codeg host) must reopen as
+  // one: reopened as an ordinary tab it would load this machine's port.
+  it("reopens a remote browser tab as remote", () => {
+    expect(controllerSource).toMatch(
+      /openBrowserTab\(closed\.url, \{[\s\S]*?closed\.remote === true \? \{ remote: true \}/
+    )
+  })
+
   // Ctrl+<digit> is a terminal control code (Ctrl+6 is vim's alternate-file
   // Ctrl+^), so the numbered jump has to decline inside the terminal region —
   // the same carve-out the zoom listener makes for Ctrl+-/Ctrl+=. Cmd+<digit>
@@ -64,6 +72,13 @@ describe("tab close/navigation shortcuts live in the always-mounted controller",
     expect(controllerSource).toMatch(
       /isConversationDeleted\(closed\.conversationId\)/
     )
+  })
+
+  // Each entry carries the slot it was closed from; every opener gets it, so
+  // the tab goes back where it was (clamped) instead of at the end of the
+  // strip. One per restorable kind: file, browser, conversation, draft.
+  it("hands the closed tab's slot to each opener when restoring", () => {
+    expect(controllerSource.match(/index: closed\.index/g)).toHaveLength(4)
   })
 
   it("removes the keydown shortcut listeners from both tab strips", () => {

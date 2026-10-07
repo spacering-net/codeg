@@ -11,6 +11,10 @@ import {
 } from "@/stores/app-workspace-store"
 import { useTabStore, type TabItem } from "@/stores/tab-store"
 import {
+  resetConversationTagsStore,
+  useConversationTagsStore,
+} from "@/stores/conversation-tags-store"
+import {
   ATTACH_SESSION_TO_SESSION_EVENT,
   type AttachSessionToSessionDetail,
 } from "@/lib/session-attachment-events"
@@ -644,4 +648,130 @@ describe("SidebarConversationCard hover details bubble", () => {
   // jsdom ships no `PointerEvent`, so every synthetic pointer event arrives as a
   // `MouseEvent` with `pointerType: undefined` and the branch can't be reached.
   // Verify that one in a real browser, not here.
+})
+
+describe("SidebarConversationCard tag chips", () => {
+  beforeEach(() => {
+    resetConversationTagsStore()
+    probe.agentIconRenders = 0
+    const store = useConversationTagsStore.getState()
+    for (const [id, name] of [
+      [1, "bug"],
+      [2, "idea"],
+      [3, "ui"],
+    ] as const) {
+      store.applyChange({
+        kind: "upsert",
+        tag: { id, folder_id: null, name, color: "#cf222e", sort_order: id },
+      })
+    }
+  })
+
+  it("draws two chips, folds the rest into +N, and skips unknown tags", () => {
+    const tagged = { ...conv(1), tag_ids: [1, 2, 3, 99] }
+    renderWithIntl(<CardList conversations={[tagged]} now={NOW} />)
+    expect(screen.getByText("bug")).toBeTruthy()
+    expect(screen.getByText("idea")).toBeTruthy()
+    expect(screen.queryByText("ui")).toBeNull()
+    // 99 names no tag this client knows: it is neither drawn nor counted.
+    expect(screen.getByText("+1")).toBeTruthy()
+    expect(screen.getByTitle("ui")).toBeTruthy()
+  })
+
+  it("re-renders only the cards showing a tag whose definition changed", () => {
+    const list = [
+      { ...conv(1), tag_ids: [1] },
+      { ...conv(2), tag_ids: [2] },
+      conv(3),
+    ]
+    renderWithIntl(<CardList conversations={list} now={NOW} />)
+    probe.agentIconRenders = 0
+    act(() => {
+      useConversationTagsStore.getState().applyChange({
+        kind: "upsert",
+        tag: {
+          id: 1,
+          folder_id: null,
+          name: "Bug!",
+          color: "#cf222e",
+          sort_order: 1,
+        },
+      })
+    })
+    expect(screen.getByText("Bug!")).toBeTruthy()
+    expect(probe.agentIconRenders).toBe(1)
+  })
+})
+
+describe("SidebarConversationCard branch chip", () => {
+  beforeEach(() => {
+    resetConversationTagsStore()
+    probe.agentIconRenders = 0
+    const store = useConversationTagsStore.getState()
+    for (const [id, name] of [
+      [1, "bug"],
+      [2, "idea"],
+    ] as const) {
+      store.applyChange({
+        kind: "upsert",
+        tag: { id, folder_id: null, name, color: "#cf222e", sort_order: id },
+      })
+    }
+  })
+
+  const setBranchTag = (enabled: boolean, color = "#0969da") =>
+    act(() => {
+      useConversationTagsStore
+        .getState()
+        .applyChange({ kind: "branch_tag", setting: { enabled, color } })
+    })
+
+  const follows = (a: Node, b: Node) =>
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+
+  it("comes first after the title, in the branch tag's colour, and counts toward the two chips", () => {
+    setBranchTag(true)
+    const row = { ...conv(1), git_branch: "feature/x", tag_ids: [1, 2] }
+    renderWithIntl(<CardList conversations={[row]} now={NOW} />)
+
+    const title = screen.getByText("conv-1")
+    const chip = screen.getByTitle("Branch: feature/x")
+    const bug = screen.getByText("bug")
+    expect(follows(title, chip)).toBe(true)
+    expect(follows(chip, bug)).toBe(true)
+    expect(chip.style.getPropertyValue("--fl-bg")).toBe("#0969da")
+    // Branch + one tag is the row's two chips; the other tag folds away.
+    expect(screen.queryByText("idea")).toBeNull()
+    expect(screen.getByText("+1")).toBeTruthy()
+    // The title grows only as far as its own text, so the chips follow it
+    // rather than the row's far end (layout itself is checked in a browser).
+    expect(title.className).toMatch(/(^|\s)max-w-max(\s|$)/)
+  })
+
+  it("follows the setting live, and skips rows without a branch and sub-sessions", () => {
+    const list = [
+      { ...conv(1), git_branch: "main" },
+      conv(2),
+      { ...conv(3), git_branch: "main", parent_id: 1 },
+    ]
+    renderWithIntl(<CardList conversations={list} now={NOW} />)
+    expect(screen.queryByTitle("Branch: main")).toBeNull()
+
+    setBranchTag(true)
+    // One chip, on the root row: conv(2) has no branch, conv(3) is a
+    // sub-session.
+    const rowOf = (id: number) =>
+      document.querySelector(`[data-conv-key="claude_code:${id}"]`)!
+    expect(screen.getAllByTitle("Branch: main")).toHaveLength(1)
+    expect(rowOf(1).contains(screen.getByTitle("Branch: main"))).toBe(true)
+    expect(rowOf(3).querySelector("[data-branch-chip]")).toBeNull()
+
+    setBranchTag(true, "#1a7f37")
+    expect(
+      screen.getByTitle("Branch: main").style.getPropertyValue("--fl-bg")
+    ).toBe("#1a7f37")
+
+    setBranchTag(false, "#1a7f37")
+    expect(screen.queryByTitle("Branch: main")).toBeNull()
+  })
 })

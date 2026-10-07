@@ -1,5 +1,6 @@
-import { toErrorMessage } from "./app-error"
+import { extractAppCommandError, toErrorMessage } from "./app-error"
 import { getTransport, isDesktop, isRemoteDesktopMode } from "./transport"
+import type { AppCommandError } from "./types"
 
 // Drive the LOCAL Tauri app updater only for a genuine local desktop window.
 // A remote-desktop window IS a Tauri app (`isDesktop()` is true) but its
@@ -58,6 +59,13 @@ export interface ServerUpdateStatus {
   restartDelayMs: number
   rollbackAvailable: boolean
   liveProgress?: boolean
+  /** Why an in-place update can't run on this server although the platform
+   * supports one — the error the update itself would fail with, e.g. an
+   * install directory this process can't write (a `permission_denied` one
+   * rules out a rollback too). Render it with {@link describeAppUpdateError}.
+   * Only reported here, never by the check, so there is one source to trust.
+   * Absent when nothing is in the way, and on servers that predate it. */
+  selfUpdateBlocker?: AppCommandError | null
 }
 
 // ─── Unified, backend-owned update lifecycle ───────────────────────────────
@@ -94,6 +102,10 @@ export interface AppUpdateState {
   capability?: ServerUpdateCapability
   /** Raw error message (error only); classify via {@link normalizeAppUpdateError}. */
   error?: string
+  /** The structured error behind `error`, when the backend had one — code,
+   * OS detail, and for a failure it can explain an i18n key with params.
+   * {@link describeAppUpdateError} prefers it over classifying `error`. */
+  errorInfo?: AppCommandError
 }
 
 /** Snapshot of the current update state. Works in every mode: desktop reads a
@@ -144,6 +156,7 @@ export type AppUpdateErrorKind =
   | "source_unreachable"
   | "network"
   | "download_failed"
+  | "permission_denied"
   | "install_failed"
   | "unknown"
 
@@ -163,6 +176,8 @@ export type AppUpdateErrorMessageKey =
   | "updateErrors.sourceUnavailable"
   | "updateErrors.network"
   | "updateErrors.downloadFailed"
+  | "updateErrors.permissionDenied"
+  | "updateErrors.targetWriteFailed"
   | "updateErrors.installFailed"
   | "updateErrors.unknown"
 
@@ -177,6 +192,8 @@ export function appUpdateErrorMessageKey(
       return "updateErrors.network"
     case "download_failed":
       return "updateErrors.downloadFailed"
+    case "permission_denied":
+      return "updateErrors.permissionDenied"
     case "install_failed":
       return "updateErrors.installFailed"
     case "unknown":
@@ -184,6 +201,73 @@ export function appUpdateErrorMessageKey(
       return action === "install"
         ? "updateErrors.installFailed"
         : "updateErrors.unknown"
+  }
+}
+
+/** A {@link AppUpdateErrorMessageKey} with the ICU values its message needs. */
+export interface AppUpdateErrorMessage {
+  key: AppUpdateErrorMessageKey
+  values: Record<string, string>
+}
+
+/**
+ * Explanations the server attaches to update failures it can pin down,
+ * keyed by the i18n key it sends (`UPDATE_I18N_KEY_*` in
+ * src-tauri/src/update/install.rs), with the params each message interpolates.
+ * A Map, not an object literal: the key comes off the wire, and a plain lookup
+ * would resolve `"constructor"` to a prototype member.
+ */
+const SERVER_UPDATE_ERROR_MESSAGES = new Map<
+  string,
+  { key: AppUpdateErrorMessageKey; params: readonly string[] }
+>([
+  [
+    "SystemSettings.updateErrors.permissionDenied",
+    { key: "updateErrors.permissionDenied", params: ["path"] },
+  ],
+  [
+    "SystemSettings.updateErrors.targetWriteFailed",
+    { key: "updateErrors.targetWriteFailed", params: ["path", "reason"] },
+  ],
+])
+
+/**
+ * What to tell the user about an update failure. `info` — the structured error
+ * behind a lifecycle `error`, or a {@link ServerUpdateStatus.selfUpdateBlocker}
+ * — wins when the server explained the failure: it says precisely what went
+ * wrong, down to the directory. Everything else is classified from `error` as
+ * before: older servers, the desktop updater (whose plugin errors are opaque
+ * strings), and failures the server left unexplained.
+ */
+export function describeAppUpdateError(
+  error: unknown,
+  action: "check" | "install",
+  info?: AppCommandError | null
+): AppUpdateErrorMessage {
+  const structured = extractAppCommandError(info)
+  const explained = structured?.i18n_key
+    ? SERVER_UPDATE_ERROR_MESSAGES.get(structured.i18n_key)
+    : undefined
+  if (explained) {
+    const params = structured?.i18n_params ?? {}
+    const values: Record<string, string> = {}
+    for (const name of explained.params) {
+      if (typeof params[name] === "string") values[name] = params[name]
+    }
+    // A message missing one of its values would render as a formatting error,
+    // so an incomplete explanation falls back to the classification below.
+    if (Object.keys(values).length === explained.params.length) {
+      return { key: explained.key, values }
+    }
+  }
+
+  const { kind, rawMessage } = normalizeAppUpdateError(error)
+  return {
+    key: appUpdateErrorMessageKey(kind, action),
+    values:
+      kind === "permission_denied"
+        ? { path: unwritableTargetPath(rawMessage) }
+        : {},
   }
 }
 
@@ -389,9 +473,29 @@ export async function confirmRollbackVersion(
   return everRead ? "unchanged" : "unreachable"
 }
 
+const UNWRITABLE_TARGET_PREFIX = "update target is not writable:"
+
+/** The directory named by an unwritable-target message (see
+ * {@link UNWRITABLE_TARGET_PREFIX}). Only the separator space after the colon
+ * is dropped, never the path's own characters. */
+function unwritableTargetPath(rawMessage: string): string {
+  const rest = rawMessage.slice(UNWRITABLE_TARGET_PREFIX.length)
+  return rest.startsWith(" ") ? rest.slice(1) : rest
+}
+
 export function normalizeAppUpdateError(error: unknown): AppUpdateErrorInfo {
   const rawMessage = toErrorMessage(error)
   const normalized = rawMessage.toLowerCase()
+
+  // The server's pre-download writability probe (`check_writable` in
+  // src-tauri/src/update/install.rs, whose test pins this prefix) — how a
+  // server that predates `errorInfo` reports it. Checked first: the message
+  // ends in an arbitrary path, which may contain any of the substrings below.
+  // A bare "permission denied" stays an install failure — only the probe
+  // proves the unwritable part is the install location itself.
+  if (normalized.startsWith(UNWRITABLE_TARGET_PREFIX)) {
+    return { kind: "permission_denied", rawMessage }
+  }
 
   if (
     normalized.includes("latest.json") ||

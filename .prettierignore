@@ -7,3 +7,5 @@ src-tauri/resources/opencode/models-dev.json
 src-tauri/resources/codex/bundled-catalog.json
 docs/
 pnpm-lock.yaml
+browser-agent/vendor/
+src-tauri/src/browser/js/

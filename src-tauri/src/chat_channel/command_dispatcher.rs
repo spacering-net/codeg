@@ -25,7 +25,17 @@ const CONFIG_CACHE_TTL_SECS: u64 = 30;
 struct CommandConfigCache {
     prefix: String,
     lang: Lang,
-    last_refresh: Instant,
+    /// `None` until the first refresh, which is what forces one.
+    ///
+    /// This used to be a plain `Instant` seeded with
+    /// `Instant::now() - Duration::from_secs(TTL + 1)`, which is a panic, not a
+    /// saturating subtraction: `Sub<Duration> for Instant` is a `checked_sub`
+    /// plus `expect`. On Windows an `Instant` is the QPC reading, i.e. time
+    /// since boot, so starting codeg inside the first 31 seconds of a boot
+    /// aborted the process here. codeg ships an autostart plugin, so launching
+    /// at login is an ordinary case, and this runs inside a long-lived spawned
+    /// task with nobody at the keyboard.
+    last_refresh: Option<Instant>,
 }
 
 impl CommandConfigCache {
@@ -34,12 +44,15 @@ impl CommandConfigCache {
             prefix: DEFAULT_COMMAND_PREFIX.to_string(),
             lang: Lang::default(),
             // Force refresh on first use
-            last_refresh: Instant::now() - Duration::from_secs(CONFIG_CACHE_TTL_SECS + 1),
+            last_refresh: None,
         }
     }
 
     async fn refresh_if_needed(&mut self, db: &DatabaseConnection) {
-        if self.last_refresh.elapsed() < Duration::from_secs(CONFIG_CACHE_TTL_SECS) {
+        if self
+            .last_refresh
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(CONFIG_CACHE_TTL_SECS))
+        {
             return;
         }
 
@@ -50,7 +63,7 @@ impl CommandConfigCache {
             self.lang = Lang::from_str_lossy(&val);
         }
 
-        self.last_refresh = Instant::now();
+        self.last_refresh = Some(Instant::now());
     }
 }
 

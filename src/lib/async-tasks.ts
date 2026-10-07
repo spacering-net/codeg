@@ -51,6 +51,8 @@ function recordFromDelta(delta: AsyncTaskDelta): AsyncTaskRecord {
     usage: delta.usage ?? null,
     output_file_path: delta.output_file_path ?? null,
     tool_call_id: delta.tool_call_id ?? null,
+    phase: delta.phase ?? null,
+    current_agent: delta.current_agent ?? null,
   }
 }
 
@@ -73,6 +75,8 @@ function applyDelta(
   if (delta.output_file_path != null)
     next.output_file_path = delta.output_file_path
   if (delta.tool_call_id != null) next.tool_call_id = delta.tool_call_id
+  if (delta.phase != null) next.phase = delta.phase
+  if (delta.current_agent != null) next.current_agent = delta.current_agent
   return next
 }
 

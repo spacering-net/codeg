@@ -123,6 +123,7 @@ function seedSession(
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
   const next = new Map(useConversationRuntimeStore.getState().byConversationId)

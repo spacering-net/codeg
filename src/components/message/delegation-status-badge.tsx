@@ -99,6 +99,10 @@ function ErrorLabel({ code }: { code?: string }) {
       return <>{t("child_max_turn_requests")}</>
     case "child_empty":
       return <>{t("child_empty")}</>
+    case "child_auth_required":
+      return <>{t("child_auth_required")}</>
+    case "child_rejected":
+      return <>{t("child_rejected")}</>
     case "child_unknown":
       return <>{t("child_unknown")}</>
     case "unknown":

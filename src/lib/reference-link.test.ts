@@ -262,6 +262,49 @@ describe("foldReferenceLinks", () => {
   })
 })
 
+// The attachment markers in a user turn are written by Rust
+// (`acp::types::attachment_marker`, shared by the live broadcast and every
+// history parser) and parsed back here. The two escapers live in different
+// languages, so pin the boundary: these are the exact strings the backend
+// emits — see `attachment_markers_escape_their_label_and_destination` in
+// src-tauri/src/acp/types.rs, which asserts the same values from the other
+// side.
+describe("backend attachment markers", () => {
+  const cases: Array<[string, string, string]> = [
+    // [emitted by Rust, recovered label, recovered uri]
+    ["[b \\(1\\).ts](<file:///a/b (1).ts>)", "b (1).ts", "file:///a/b (1).ts"],
+    ["[dir](<file:///C:\\\\dir\\\\>)", "dir", "file:///C:\\dir\\"],
+    [
+      "[\\]\\(http://evil\\) \\[pwn](file:///a/x.ts)",
+      "](http://evil) [pwn",
+      "file:///a/x.ts",
+    ],
+    [
+      "[clipboard://a \\(b\\).txt](<clipboard://a (b).txt>)",
+      "clipboard://a (b).txt",
+      "clipboard://a (b).txt",
+    ],
+    // The common case is bare and unescaped, byte for byte as before.
+    ["[app.ts](file:///a/app.ts)", "app.ts", "file:///a/app.ts"],
+  ]
+
+  it.each(cases)("round-trips %s", (emitted, label, uri) => {
+    const tokens = tokenizeReferenceLinks(emitted)
+    expect(tokens).toHaveLength(1)
+    const token = tokens[0]
+    if (token.type !== "link") throw new Error("expected one link token")
+    expect(token.raw).toBe(emitted)
+    expect(unescapeReferenceLabel(token.label)).toBe(label)
+    expect(unwrapReferenceDestination(token.destination)).toBe(uri)
+  })
+
+  it("folds each marker to the readable name", () => {
+    expect(cases.map(([emitted]) => foldReferenceLinks(emitted))).toEqual(
+      cases.map(([, label]) => label)
+    )
+  })
+})
+
 describe("buildFileUriWithRange", () => {
   it("returns the plain file uri when no range is given", () => {
     expect(buildFileUriWithRange("/repo/src/app.ts")).toBe(

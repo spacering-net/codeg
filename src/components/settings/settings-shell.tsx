@@ -11,12 +11,15 @@ import {
   Bot,
   BookOpenText,
   Boxes,
+  Bubbles,
+  Compass,
   FileSpreadsheet,
   GitBranch,
   Globe,
   Keyboard,
   Menu,
   MessageSquareText,
+  MonitorCog,
   SendHorizontal,
   Palette,
   PlugZap,
@@ -31,7 +34,10 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { AppToaster } from "@/components/ui/app-toaster"
 import { cn } from "@/lib/utils"
-import { detectEnvironment } from "@/lib/transport/detect"
+import {
+  detectEnvironment,
+  type TransportEnvironment,
+} from "@/lib/transport/detect"
 import { AppTitleBar } from "@/components/layout/app-title-bar"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
@@ -46,6 +52,9 @@ interface SettingsNavItem {
     | "mcp"
     | "skills"
     | "skill_packs"
+    | "collaboration"
+    | "browser"
+    | "computer_use"
     | "quick_messages"
     | "shortcuts"
     | "version_control"
@@ -66,6 +75,11 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     href: "/settings/general",
     labelKey: "general",
     icon: SlidersHorizontal,
+  },
+  {
+    href: "/settings/collaboration",
+    labelKey: "collaboration",
+    icon: Bubbles,
   },
   {
     href: "/settings/mcp",
@@ -96,6 +110,16 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     href: "/settings/quick-messages",
     labelKey: "quick_messages",
     icon: MessageSquareText,
+  },
+  {
+    href: "/settings/browser",
+    labelKey: "browser",
+    icon: Compass,
+  },
+  {
+    href: "/settings/computer-use",
+    labelKey: "computer_use",
+    icon: MonitorCog,
   },
   {
     href: "/settings/shortcuts",
@@ -131,6 +155,24 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
 
 interface SettingsShellProps {
   children: ReactNode
+}
+
+/**
+ * The nav for one runtime. Only one entry is runtime-bound: the Web service
+ * page configures the server a web client is already talking to, and there is
+ * no such server to configure from inside it.
+ *
+ * The Browser page is deliberately not on that list. Most of what it holds is
+ * a desktop browser engine, but site rules, what a server starting in a
+ * terminal does and the terminal's link menu all still decide something in a
+ * browser session, and that page is the only place they can be set.
+ */
+export function settingsNavItemsFor(
+  env: TransportEnvironment
+): SettingsNavItem[] {
+  return SETTINGS_NAV_ITEMS.filter(
+    (item) => !(item.labelKey === "web_service" && env === "web")
+  )
 }
 
 function normalizePath(path: string): string {
@@ -187,10 +229,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
     [router, setNavOpen]
   )
 
-  const filteredNavItems = SETTINGS_NAV_ITEMS.filter(
-    (item) =>
-      !(item.labelKey === "web_service" && detectEnvironment() === "web")
-  )
+  const filteredNavItems = settingsNavItemsFor(detectEnvironment())
 
   const navContent = (
     <div className="flex min-h-0 flex-1 flex-col">

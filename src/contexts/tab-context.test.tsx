@@ -2215,6 +2215,87 @@ describe("TabProvider tab groups", () => {
     expect(store().rawTabs).toBe(before)
   })
 
+  /**
+   * The unsplit strip's reorder, which has to take the same care its
+   * split-group sibling above already takes.
+   *
+   * `Reorder.Group` emits the order of the items it has measured since its own
+   * last render, filtered by REFERENCE against its current `values`. The filter
+   * can only remove, and the tab objects it holds are the ones the strip
+   * rendered with — so the list it hands back is a request to MOVE tabs, not a
+   * new tab set. Adopting it wholesale closed whichever tab was missing from it
+   * and rolled the rest back to whatever the strip last rendered.
+   */
+  describe("reorderTabs", () => {
+    it("keeps a tab the reorder callback left out", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
+      const rendered = store().tabs
+
+      act(() => {
+        store().reorderTabs([rendered[2], rendered[1]])
+      })
+
+      // The omitted tab is still open — and still the one being looked at.
+      expect(store().rawTabs.map((t) => t.id)).toContain("conv-1-codex-1")
+      expect(store().activeTabId).toBe("conv-1-codex-1")
+      expect(store().rawTabs).toHaveLength(3)
+    })
+
+    it("does not roll a tab back to what the strip rendered with", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      act(() => {
+        store().openNewConversationTab(1, "/repo")
+      })
+      const draftId = store().rawTabs.find((t) => t.conversationId == null)!.id
+      // What the strip was holding when the drag began.
+      const rendered = store().tabs
+
+      // The draft's first message lands mid-drag: it binds to a real
+      // conversation, and its transcript now lives under a virtual runtime id.
+      act(() => {
+        store().bindConversationTab(draftId, 7, "codex", "sent", -42)
+      })
+      act(() => {
+        store().reorderTabs([rendered[1], rendered[0]])
+      })
+
+      expect(store().rawTabs.map((t) => t.id)).toEqual([
+        draftId,
+        "conv-1-codex-1",
+      ])
+      const moved = store().rawTabs.find((t) => t.id === draftId)!
+      expect(moved.conversationId).toBe(7)
+      expect(moved.runtimeConversationId).toBe(-42)
+    })
+
+    it("still moves the tab on a complete permutation", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
+      const rendered = store().tabs
+
+      act(() => {
+        store().reorderTabs([rendered[1], rendered[2], rendered[0]])
+      })
+
+      expect(store().rawTabs.map((t) => t.id)).toEqual([
+        "conv-1-codex-2",
+        "conv-1-codex-3",
+        "conv-1-codex-1",
+      ])
+    })
+
+    it("refuses a list that names one tab twice", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+      const rendered = store().tabs
+      const before = store().rawTabs
+
+      act(() => {
+        store().reorderTabs([rendered[1], rendered[1]])
+      })
+
+      expect(store().rawTabs).toBe(before)
+    })
+  })
+
   it("per-group draft singleton: each group reuses its own draft", async () => {
     await renderWithTabs([tabItem(1, 1, true)])
     const home = leaves()[0]

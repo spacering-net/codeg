@@ -386,8 +386,9 @@ export function TabBar({ groupId }: TabBarProps) {
         // the new-conversation button. Inter-tab separators sit on each tab's
         // LEFT edge (`.browser-tab-item::before`), so the last tab's RIGHT edge —
         // where this flush-pinned button begins — otherwise has none. Only the
-        // conversation strip carries `tab-strip-tail`; the file strip floats its
-        // trailing button far-right past a drag spacer, so it stays divider-free.
+        // conversation strip carries `tab-strip-tail`: the file strip pins an
+        // add-tab button in the same place but stays divider-free, so its "+"
+        // reads as belonging to the empty run of strip rather than to the tabs.
         data-adjacent-active={lastTabActive ? "after" : undefined}
         className="tab-strip-tail relative flex h-full flex-1 items-stretch ws-strip-line"
       >

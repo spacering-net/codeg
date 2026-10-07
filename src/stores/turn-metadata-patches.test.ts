@@ -402,6 +402,7 @@ function seedDetail(turns: MessageTurn[], inFlightUserTurnId?: string) {
       batchBoundaryPrefixHash: null,
       loadingOlderTurns: false,
       olderTurnsPrependEpoch: 0,
+      pendingOutOfTurnContent: false,
       pendingCleanup: false,
     }
     byId.set(CID, {

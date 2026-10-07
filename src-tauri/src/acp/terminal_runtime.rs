@@ -4,7 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sacp::schema::{
+use agent_client_protocol::schema::v1::{
     CreateTerminalRequest, CreateTerminalResponse, KillTerminalRequest, KillTerminalResponse,
     ReleaseTerminalRequest, ReleaseTerminalResponse, TerminalExitStatus, TerminalOutputRequest,
     TerminalOutputResponse, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
@@ -13,6 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::{watch, Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 
+use crate::browser::service_url::ServiceScanner;
+use crate::browser::services::ServiceWatch;
 use crate::terminal::shell_flavor::{classify_shell_family, ShellFamily};
 
 type TerminalMap = HashMap<String, Arc<TerminalInstance>>;
@@ -52,10 +54,10 @@ pub enum TerminalRuntimeError {
 }
 
 impl TerminalRuntimeError {
-    pub fn into_rpc_error(self) -> sacp::Error {
+    pub fn into_rpc_error(self) -> agent_client_protocol::Error {
         match self {
-            Self::InvalidParams(message) => sacp::Error::invalid_params().data(message),
-            Self::Internal(message) => sacp::util::internal_error(message),
+            Self::InvalidParams(message) => agent_client_protocol::Error::invalid_params().data(message),
+            Self::Internal(message) => agent_client_protocol::util::internal_error(message),
         }
     }
 }
@@ -85,9 +87,26 @@ enum TerminalCompletion {
     Exited(TerminalExitStatus),
 }
 
+/// One ACP terminal's share of the dev-server watch.
+///
+/// An agent that runs `pnpm dev` through `terminal/create` has started a
+/// server exactly as much as a person typing it in the terminal panel has,
+/// and the address only ever appears in this output. The scanner is
+/// thread-confined elsewhere; here two reader tasks (stdout and stderr) feed
+/// the same one, so it takes a lock of its own — never the snapshot's, which
+/// `terminal/output` polls.
+struct TerminalServiceWatch {
+    watch: ServiceWatch,
+    terminal_id: String,
+    scanner: std::sync::Mutex<ServiceScanner>,
+}
+
 struct TerminalInstance {
     session_id: String,
     output_limit: Option<usize>,
+    /// `None` when the runtime was built without a watch (tests, the
+    /// delegation probe, any caller with no window to tell).
+    service: Option<TerminalServiceWatch>,
     snapshot: Mutex<TerminalSnapshot>,
     reader_handles: Mutex<Vec<JoinHandle<()>>>,
     /// Asks the owner task to kill the process tree.
@@ -108,10 +127,15 @@ struct TerminalInstance {
 }
 
 impl TerminalInstance {
-    fn new(session_id: String, output_limit: Option<u64>) -> Self {
+    fn new(
+        session_id: String,
+        output_limit: Option<u64>,
+        service: Option<TerminalServiceWatch>,
+    ) -> Self {
         Self {
             session_id,
             output_limit: output_limit.and_then(|v| usize::try_from(v).ok()),
+            service,
             snapshot: Mutex::new(TerminalSnapshot::default()),
             reader_handles: Mutex::new(Vec::new()),
             kill: Notify::new(),
@@ -136,6 +160,17 @@ impl TerminalInstance {
     }
 
     async fn append_output(&self, text: &str) {
+        // Before the snapshot lock, and never holding both: the watch does no
+        // I/O of its own (it hands each candidate to a thread that probes),
+        // but `terminal/output` polls the snapshot and must not queue behind
+        // a scan of a chunk it is not waiting for.
+        if let Some(service) = &self.service {
+            let mut scanner = service
+                .scanner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            service.watch.feed(&mut scanner, text, &service.terminal_id);
+        }
         let mut snapshot = self.snapshot.lock().await;
         snapshot.output.push_str(text);
         if let Some(limit) = self.output_limit {
@@ -438,6 +473,9 @@ pub struct TerminalRuntime {
     /// still direct-exec real programs, while shell command lines and shell
     /// builtins use this selected shell as their fallback.
     default_shell: TerminalShellRuntimeConfig,
+    /// Where to report a local server an agent's command starts. `None` for
+    /// a runtime with nobody to report to.
+    service_watch: Option<ServiceWatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -460,6 +498,7 @@ impl TerminalRuntime {
             base_env,
             default_cwd: None,
             default_shell: TerminalShellRuntimeConfig::new(),
+            service_watch: None,
         }
     }
 
@@ -467,6 +506,16 @@ impl TerminalRuntime {
     /// does not specify its own `cwd`. Chainable after `with_base_env`.
     pub fn with_default_cwd(mut self, default_cwd: Option<PathBuf>) -> Self {
         self.default_cwd = default_cwd;
+        self
+    }
+
+    /// Watch this connection's terminals for a dev server announcing its
+    /// address, and tell `owner_window`'s workspace about it. Chainable.
+    ///
+    /// Left unset the feature is simply absent: a runtime with no window to
+    /// tell (the delegation probe, every unit test) behaves exactly as before.
+    pub fn with_service_watch(mut self, watch: Option<ServiceWatch>) -> Self {
+        self.service_watch = watch;
         self
     }
 
@@ -625,6 +674,13 @@ impl TerminalRuntime {
         let terminal = Arc::new(TerminalInstance::new(
             request.session_id.to_string(),
             Some(output_byte_limit),
+            self.service_watch
+                .as_ref()
+                .map(|watch| TerminalServiceWatch {
+                    watch: watch.clone(),
+                    terminal_id: terminal_id.clone(),
+                    scanner: std::sync::Mutex::new(ServiceScanner::new()),
+                }),
         ));
 
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -1058,7 +1114,7 @@ mod shell_config_tests {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use sacp::schema::{EnvVariable, SessionId, TerminalId, WaitForTerminalExitRequest};
+    use agent_client_protocol::schema::v1::{EnvVariable, SessionId, TerminalId, WaitForTerminalExitRequest};
 
     /// Regression: when an ACP agent calls `terminal/create` (e.g. to run
     /// `git push`), the runtime's base env — populated by the connection
@@ -1124,6 +1180,96 @@ mod tests {
 
         // Drop terminal handle so the runtime drops its writer ends.
         runtime.release_all_for_session(session_id.0.as_ref()).await;
+    }
+
+    /// A server an AGENT starts is a server the person is about to want to
+    /// look at, and its address only ever appears in this output — there is
+    /// no xterm anywhere in this path.
+    ///
+    /// End to end over a real child process: a real banner, a real socket,
+    /// and the event the workspace listens for, carrying the window the
+    /// connection belongs to.
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn a_server_an_agent_starts_is_announced_to_its_window() {
+        use crate::browser::types::{ServiceSource, SERVICE_DETECTED_EVENT};
+        use crate::web::event_bridge::{EventEmitter, WebEventBroadcaster};
+
+        // Something really listening, so the probe has something to find.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut events = broadcaster.subscribe();
+        let runtime = TerminalRuntime::with_base_env(BTreeMap::new()).with_service_watch(Some(
+            ServiceWatch::new(
+                EventEmitter::test_web_only(broadcaster),
+                "main".to_string(),
+                ServiceSource::Agent,
+            ),
+        ));
+
+        let session_id = SessionId::new("svc-session".to_string());
+        let mut request = CreateTerminalRequest::new(session_id.clone(), "/bin/sh".to_string());
+        request.args = vec![
+            "-c".into(),
+            format!("printf 'Local:   http://127.0.0.1:{port}/\\n'"),
+        ];
+        runtime
+            .create_terminal(request)
+            .await
+            .expect("create terminal");
+
+        let detected = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let event = events.recv().await.expect("event bus");
+                if event.channel == SERVICE_DETECTED_EVENT {
+                    return event;
+                }
+            }
+        })
+        .await
+        .expect("the service event");
+
+        assert_eq!(
+            detected.payload["origin"],
+            format!("http://127.0.0.1:{port}")
+        );
+        assert_eq!(detected.payload["ownerWindow"], "main");
+        // The list and the "+" menu tell the two apart; a person did not type
+        // this one.
+        assert_eq!(detected.payload["source"], "agent");
+
+        runtime.release_all_for_session(session_id.0.as_ref()).await;
+    }
+
+    /// A runtime built without a watch is the one every test and the
+    /// delegation probe get: it must behave exactly as it did before.
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn without_a_watch_nothing_is_announced() {
+        use crate::browser::types::SERVICE_DETECTED_EVENT;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let broadcaster = Arc::new(crate::web::event_bridge::WebEventBroadcaster::new());
+        let mut events = broadcaster.subscribe();
+
+        let runtime = TerminalRuntime::with_base_env(BTreeMap::new());
+        let session_id = SessionId::new("quiet-session".to_string());
+        let mut request = CreateTerminalRequest::new(session_id.clone(), "/bin/sh".to_string());
+        request.args = vec![
+            "-c".into(),
+            format!("printf 'Local:   http://127.0.0.1:{port}/\\n'"),
+        ];
+        let output = run_and_capture(&runtime, &session_id, request).await;
+        assert!(output.contains(&format!("http://127.0.0.1:{port}/")));
+
+        // Give a probe that should not exist every chance to finish first.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let announced = std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| event.channel == SERVICE_DETECTED_EVENT);
+        assert!(!announced, "a runtime with no watch announced a service");
     }
 
     /// Spawn `request`, wait for it to exit, return its captured output, and

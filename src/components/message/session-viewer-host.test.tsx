@@ -12,6 +12,7 @@ import { act, render, screen } from "@testing-library/react"
 import { useState } from "react"
 import { describe, expect, it, vi } from "vitest"
 
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
 import { SessionViewerHost, useSessionViewerHost } from "./session-viewer-host"
 
 // Both viewers reach the runtime provider tree / the conversation API. Stub
@@ -51,6 +52,32 @@ vi.mock("./subagent-session-dialog", () => ({
     ) : null,
 }))
 
+// The file viewer reads the workspace file-tab store. Stub the BODY but keep a
+// real `Drawer` around it: a plain `<div>` sentinel would still "open", so a
+// stacking assertion against it would pass even if the panel were rendered as a
+// sibling of the transcript's drawer instead of inside it — the exact
+// regression the host placement exists to prevent.
+vi.mock("@/components/files/file-viewer-drawer", () => ({
+  FileViewerDrawer: ({
+    open,
+    request,
+  }: {
+    open: boolean
+    request: { path: string; line: number | null }
+  }) => (
+    <Drawer open={open} swipeDirection="right">
+      <DrawerContent>
+        <DrawerTitle>
+          <span data-testid="file-viewer" data-path={request.path}>
+            {request.path}
+            {request.line ? `:${request.line}` : ""}
+          </span>
+        </DrawerTitle>
+      </DrawerContent>
+    </Drawer>
+  ),
+}))
+
 // The delegation branch re-derives its model from the raw source; drive that
 // resolution directly rather than booting the connection/binding stores.
 vi.mock("@/hooks/use-delegation-card-model", () => ({
@@ -83,6 +110,21 @@ function OpenerCard({ toolUseId }: { toolUseId: string }) {
       }
     >
       open {toolUseId}
+    </button>
+  )
+}
+
+/** A stand-in for a file badge in a tool card. */
+function FileOpener() {
+  const host = useSessionViewerHost()
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        host?.open({ kind: "file", path: "/repo/docs/plan.md", line: 12 })
+      }
+    >
+      open file
     </button>
   )
 }
@@ -173,6 +215,69 @@ describe("SessionViewerHost", () => {
     )
     expect(screen.queryByTestId("delegation-viewer")).not.toBeInTheDocument()
     expect(screen.queryByTestId("agent-session-viewer")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("file-viewer")).not.toBeInTheDocument()
+  })
+
+  it("hosts the file viewer, so it STACKS on the drawer the transcript is in", async () => {
+    // The situation this branch exists for: a transcript being read inside a
+    // side panel (the task board's session viewer, a canvas card's drawer),
+    // where the workspace file column is off screen entirely.
+    render(
+      <Drawer open swipeDirection="right">
+        <DrawerContent>
+          <DrawerTitle>Task session</DrawerTitle>
+          <Harness>
+            <FileOpener />
+          </Harness>
+        </DrawerContent>
+      </Drawer>
+    )
+
+    act(() => {
+      screen.getByText("open file").click()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(screen.getByTestId("file-viewer")).toHaveAttribute(
+      "data-path",
+      "/repo/docs/plan.md"
+    )
+    expect(screen.getByTestId("file-viewer")).toHaveTextContent(
+      "/repo/docs/plan.md:12"
+    )
+
+    // Descendant, not sibling: Base UI only stacks through
+    // `DialogRootContext`, and the marker on the transcript's own popup is the
+    // only proof the panel landed inside its React tree.
+    const popups = Array.from(
+      document.querySelectorAll("[data-slot=drawer-popup]")
+    )
+    const parent = popups.find((p) => p.textContent?.includes("Task session"))
+    expect(parent).toHaveAttribute("data-nested-drawer-open")
+  })
+
+  it("replaces an open session viewer rather than opening a second panel", () => {
+    // One slot, not one per kind — two same-width panels at the same level
+    // would flatly cover one another.
+    render(
+      <Harness>
+        <OpenerCard toolUseId="tool-9" />
+        <FileOpener />
+      </Harness>
+    )
+
+    act(() => {
+      screen.getByText("open tool-9").click()
+    })
+    expect(screen.getByTestId("delegation-viewer")).toBeInTheDocument()
+
+    act(() => {
+      screen.getByText("open file").click()
+    })
+    expect(screen.queryByTestId("delegation-viewer")).not.toBeInTheDocument()
+    expect(screen.getByTestId("file-viewer")).toBeInTheDocument()
   })
 
   it("reports no host outside a provider, so cards keep their own drawer", () => {

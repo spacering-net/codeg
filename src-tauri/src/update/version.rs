@@ -16,12 +16,12 @@ use crate::app_error::AppCommandError;
 /// Update manifest URL — mirrors the `endpoints` entry in `tauri.conf.json`
 /// so desktop and server modes consult the same source of truth.
 pub const UPDATE_MANIFEST_URL: &str =
-    "https://github.com/xintaofei/codeg/releases/latest/download/latest.json";
+    "https://github.com/spacering-net/codeg/releases/latest/download/latest.json";
 
 /// Deterministic base for "latest" release assets (server tarballs + their
 /// `.sig` detached signatures). Same channel as the manifest.
 pub const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/xintaofei/codeg/releases/latest/download";
+    "https://github.com/spacering-net/codeg/releases/latest/download";
 
 /// Short-timeout client for the small manifest fetch. Proxy env vars are
 /// sampled at build time, so `init_proxy_from_db` must run before the first

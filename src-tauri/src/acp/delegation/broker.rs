@@ -4472,9 +4472,17 @@ impl DelegationBroker {
             .cloned()
     }
 
+    /// How many delegation calls are parked awaiting a child's `TurnComplete`
+    /// right now. Surfaced by the codeg-mcp service-status indicator so the
+    /// popover can say the service is actually carrying traffic, not just
+    /// listening.
+    pub async fn running_delegation_count(&self) -> usize {
+        self.pending.inner.lock().await.running.len()
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub async fn pending_count(&self) -> usize {
-        self.pending.inner.lock().await.running.len()
+        self.running_delegation_count().await
     }
 
     /// Count of cached completed results across all parents.

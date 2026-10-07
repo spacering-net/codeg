@@ -17,8 +17,8 @@ COPY src-tauri/ ./
 # codeg-mcp is the stdio MCP companion the runtime injects per session
 # (see acp/delegation/companion.rs). It must ship next to codeg-server so
 # `locate_codeg_mcp_binary()` finds it via the exe-sibling lookup.
-RUN cargo build --release --bin codeg-server --no-default-features \
- && cargo build --release --bin codeg-mcp --no-default-features
+RUN cargo build --release --bin codeg-server --no-default-features --features server-bin \
+ && cargo build --release --bin codeg-mcp --no-default-features --features mcp-bin
 
 # Stage 3: Runtime
 FROM node:24-bookworm-slim
@@ -56,6 +56,10 @@ ENV CODEG_RUNTIME=docker
 ENV CODEG_RESTART_DELAY_MS=2000
 
 EXPOSE 3080
+# Port bridge for dev servers (CODEG_BRIDGE_PORTS; default CODEG_PORT+1..+10).
+# Not needed when CODEG_BRIDGE_HOST_PATTERN names the dev servers by hostname
+# instead: those answer on 3080, and no range has to be guessed in advance.
+EXPOSE 3081-3090
 VOLUME /data
 
 # Run under the built-in supervisor (PID 1) so an in-place upgrade can swap

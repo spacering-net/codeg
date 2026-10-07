@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   buildEmbeddedReferenceUri,
+  embeddedReferenceUriFor,
   isEmbeddedReferenceUri,
   parseCodegReferenceUri,
+  refOfEmbeddedReferenceUri,
 } from "./reference-uri"
 
 describe("parseCodegReferenceUri", () => {
@@ -166,5 +168,47 @@ describe("parseCodegReferenceUri", () => {
     expect(isEmbeddedReferenceUri(uri)).toBe(true)
     expect(isEmbeddedReferenceUri("file:///codeg-embedded/real.ts")).toBe(false)
     expect(isEmbeddedReferenceUri("codeg://session/abc")).toBe(false)
+  })
+})
+
+describe("an embedded reference uri that carries its ref", () => {
+  const page = "https://shop.test/a b/(1)?q=x&y=%20#top"
+
+  it("gives back the ref it was minted with, whatever is in it", () => {
+    const uri = buildEmbeddedReferenceUri(page)
+    expect(isEmbeddedReferenceUri(uri)).toBe(true)
+    expect(refOfEmbeddedReferenceUri(uri)).toBe(page)
+  })
+
+  // Two badges for one page each hold their own block until send, keyed by
+  // their display uri — the same uri twice would hand both the second block.
+  it("still mints a uri of its own for every badge", () => {
+    const first = buildEmbeddedReferenceUri(page)
+    const second = buildEmbeddedReferenceUri(page)
+    expect(first).not.toBe(second)
+    expect(first.startsWith(`${embeddedReferenceUriFor(page)}#`)).toBe(true)
+    expect(second.startsWith(`${embeddedReferenceUriFor(page)}#`)).toBe(true)
+  })
+
+  // What the transcript rebuilds from an agent's record names it the same way.
+  it("reads the ref out of the form a transcript rebuilds", () => {
+    expect(refOfEmbeddedReferenceUri(embeddedReferenceUriFor(page))).toBe(page)
+  })
+
+  it("carries no ref for a badge minted without one", () => {
+    expect(refOfEmbeddedReferenceUri(buildEmbeddedReferenceUri())).toBeNull()
+    expect(refOfEmbeddedReferenceUri(buildEmbeddedReferenceUri(""))).toBeNull()
+    expect(refOfEmbeddedReferenceUri("codeg://embedded/9f3c-uuid")).toBeNull()
+    expect(refOfEmbeddedReferenceUri("codeg://embedded/%E0%A4%A")).toBeNull()
+    expect(refOfEmbeddedReferenceUri("codeg://session/abc")).toBeNull()
+  })
+
+  it("is still an inert file badge with the label it was given", () => {
+    const uri = buildEmbeddedReferenceUri(page)
+    expect(parseCodegReferenceUri(uri, "Page screenshot")).toMatchObject({
+      refType: "file",
+      label: "Page screenshot",
+      uri,
+    })
   })
 })

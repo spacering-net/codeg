@@ -25,6 +25,11 @@ use super::{cancelled_error, corrupted_error, map_disk_full, unknown_format_erro
 const COPY_BUF: usize = 64 * 1024;
 /// Hard cap on the decompressed `manifest.json` we'll read from an untrusted
 /// archive (manifests are small; this defeats a manifest decompression bomb).
+///
+/// The entry count grew by an order of magnitude when `skills/` and `pets/`
+/// joined the managed sections — tens of entries became thousands. At roughly
+/// 120 bytes per entry, 10k entries is ~1.2 MB, so there is still a decade of
+/// headroom here; revisit if a section ever contributes six-figure file counts.
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Progress sink: invoked with the current entry name and the cumulative
@@ -199,6 +204,23 @@ pub fn validate_manifest(manifest: &BackupManifest) -> Result<(), AppCommandErro
     if !seen.contains("db/codeg.db") {
         return Err(corrupted_error());
     }
+    // When the archive declares which sections it manages, its declaration and
+    // its contents must agree: every entry has to sit under `db/`, `external/`,
+    // or a declared section. Otherwise an archive could stage files into a
+    // section it never claimed. Matched against the RAW declaration, not this
+    // binary's table, so an archive from a newer build with an extra section
+    // still validates — its unknown entries are simply never swapped in.
+    if let Some(declared) = manifest.managed_sections.as_deref() {
+        for e in &manifest.entries {
+            let top = e.path.split('/').next().unwrap_or_default();
+            let known = top == super::sections::DB_SECTION_PREFIX
+                || top == super::sections::EXTERNAL_SECTION_PREFIX
+                || declared.iter().any(|d| d == top);
+            if !known {
+                return Err(corrupted_error());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -341,6 +363,8 @@ mod tests {
             runtime: "server".to_string(),
             includes_external_transcripts: false,
             includes_secrets: true,
+            managed_sections: None,
+            degraded_sqlite: Vec::new(),
             entries: Vec::new(),
         }
     }

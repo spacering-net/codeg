@@ -78,10 +78,10 @@ export function SessionConfigStaleBanner({
       const reconnected = await reapplyConfig()
       if (reconnected) toast.success(t("applied"))
       // else: no-op (connection vanished mid-click, viewer/child) — say nothing.
-    } catch (error) {
-      toast.error(t("reconnectFailed"), {
-        description: error instanceof Error ? error.message : String(error),
-      })
+    } catch {
+      // Nothing to add here: a failed reconnect is published by `connect()`
+      // itself, as a notification with the reason and a Retry button. A toast
+      // from here too would say it twice.
     } finally {
       // Always clear our flag. Returning null above does NOT unmount this
       // component, so a leaked `true` would later show a phantom "reconnecting…"

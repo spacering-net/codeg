@@ -116,6 +116,7 @@ beforeEach(() => {
     rollbackAvailable: false,
   })
   availableIdentities = 0
+  offers = []
   // The availability cache lives in localStorage, which jsdom keeps across
   // tests in a file — clear it so each case starts cold.
   localStorage.clear()
@@ -247,6 +248,9 @@ const DISMISSED_KEY = "codeg.updateCheck.dismissedVersion"
 
 let ctx: ReturnType<typeof useAppUpdate> = null
 let availableIdentities = 0
+// Every release offer consumers were handed, with whether it came with the
+// in-place install enabled — so a test can assert on transient states too.
+let offers: Array<{ version: string; inPlace: boolean }> = []
 
 function AvailabilityProbe() {
   const u = useAppUpdate()
@@ -263,6 +267,14 @@ function AvailabilityProbe() {
   useEffect(() => {
     availableIdentities += 1
   }, [u?.available])
+  useEffect(() => {
+    if (u?.available) {
+      offers.push({
+        version: u.available.version,
+        inPlace: u.canInstallInPlace,
+      })
+    }
+  }, [u?.available, u?.canInstallInPlace])
   return (
     <div>
       <div data-testid="available">{u?.available?.version ?? "none"}</div>
@@ -341,6 +353,192 @@ describe("UpdateProvider — availability", () => {
     const cached = JSON.parse(localStorage.getItem(LAST_CHECK_KEY)!)
     expect(cached.info.version).toBe("0.21.9")
     expect(typeof cached.at).toBe("number")
+  })
+
+  it("offers no in-place install until the status probe finds the way clear", async () => {
+    // The local status probe finds the install unwritable: an upgrade would
+    // fail at its first step, so the UI must fall back to the release page.
+    let blocked = true
+    callImpl = async (endpoint: string) => {
+      if (endpoint === "app_update_state") return snapshot
+      if (endpoint === "app_update_status") {
+        return {
+          currentVersion: "0.21.7",
+          selfUpdateSupported: true,
+          capability: "supervised",
+          runtime: "standalone",
+          restartDelayMs: 2000,
+          rollbackAvailable: false,
+          liveProgress: true,
+          ...(blocked && {
+            selfUpdateBlocker: {
+              code: "permission_denied",
+              message: "Update target is not writable: /usr/local/bin",
+              i18n_key: "SystemSettings.updateErrors.permissionDenied",
+              i18n_params: { path: "/usr/local/bin" },
+            },
+          }),
+        }
+      }
+      if (endpoint === "check_app_update") return checkResult()
+      throw new Error(`unexpected endpoint: ${endpoint}`)
+    }
+    render(availabilityTree())
+
+    await waitFor(() => expect(ctx?.selfUpdateBlocker).toBeTruthy())
+    expect(ctx!.selfUpdateBlocker!.i18n_params).toEqual({
+      path: "/usr/local/bin",
+    })
+    expect(screen.getByTestId("in-place").textContent).toBe("false")
+
+    // The check carries no blocker: it is not a source, so it must not clear
+    // what the status probe found.
+    await act(async () => {
+      await ctx!.checkNow()
+    })
+    expect(ctx!.selfUpdateBlocker).toBeTruthy()
+    expect(screen.getByTestId("in-place").textContent).toBe("false")
+
+    // Fixed from another window; coming back to this one looks again.
+    blocked = false
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+    })
+    await waitFor(() => expect(ctx!.selfUpdateBlocker).toBeNull())
+    expect(screen.getByTestId("in-place").textContent).toBe("true")
+  })
+
+  it("offers a release only once the blocker verdict is as fresh as the check", async () => {
+    // Nothing blocks at mount; the install turns unwritable later, and the next
+    // check surfaces an update. Offering it before the status is read again
+    // would offer an upgrade certain to fail.
+    let blocked = false
+    // Holds the status reply back, to catch the offer arriving ahead of it.
+    let statusGate: Promise<void> | null = null
+    callImpl = async (endpoint: string) => {
+      if (endpoint === "app_update_state") return snapshot
+      if (endpoint === "app_update_status") {
+        if (statusGate) await statusGate
+        return {
+          currentVersion: "0.21.7",
+          selfUpdateSupported: true,
+          capability: "supervised",
+          runtime: "standalone",
+          restartDelayMs: 2000,
+          rollbackAvailable: false,
+          liveProgress: true,
+          ...(blocked && {
+            selfUpdateBlocker: {
+              code: "permission_denied",
+              message: "Update target is not writable: /usr/local/bin",
+              i18n_key: "SystemSettings.updateErrors.permissionDenied",
+              i18n_params: { path: "/usr/local/bin" },
+            },
+          }),
+        }
+      }
+      if (endpoint === "check_app_update") return checkResult()
+      throw new Error(`unexpected endpoint: ${endpoint}`)
+    }
+    const statusCalls = () =>
+      call.mock.calls.filter(([e]) => e === "app_update_status").length
+    render(availabilityTree())
+    await waitFor(() =>
+      expect(screen.getByTestId("current").textContent).toBe("0.21.7")
+    )
+    expect(screen.getByTestId("in-place").textContent).toBe("true")
+
+    blocked = true
+    let releaseStatus!: () => void
+    statusGate = new Promise<void>((resolve) => {
+      releaseStatus = resolve
+    })
+    checkResult = () => ({
+      currentVersion: "0.21.7",
+      update: { version: "0.21.9", body: "", date: null },
+      selfUpdateSupported: true,
+      liveProgress: true,
+      runtime: "standalone",
+      rollbackAvailable: false,
+    })
+    const before = statusCalls()
+    let checking!: Promise<void>
+    act(() => {
+      checking = ctx!.checkNow()
+    })
+    // The check has its answer and is re-reading the status…
+    await waitFor(() => expect(statusCalls()).toBe(before + 1))
+    // …and offers nothing until that verdict is in.
+    expect(screen.getByTestId("available").textContent).toBe("none")
+
+    await act(async () => {
+      releaseStatus()
+      await checking
+    })
+    expect(screen.getByTestId("available").textContent).toBe("0.21.9")
+    expect(screen.getByTestId("in-place").textContent).toBe("false")
+    expect(offers).toEqual([{ version: "0.21.9", inPlace: false }])
+  })
+
+  it("never publishes an answer from a process that restarted while the verdict was read", async () => {
+    // Another window upgrades the server to the offered release while this
+    // check is reading the blocker verdict. The answer must come from the
+    // process now running, not re-offer what it already runs.
+    let restarted = false
+    let statusGate: Promise<void> | null = null
+    callImpl = async (endpoint: string) => {
+      if (endpoint === "app_update_state") return snapshot
+      if (endpoint === "app_update_status") {
+        if (statusGate) await statusGate
+        return {
+          currentVersion: restarted ? "0.21.9" : "0.21.7",
+          selfUpdateSupported: true,
+          capability: "supervised",
+          runtime: "standalone",
+          restartDelayMs: 2000,
+          rollbackAvailable: false,
+          liveProgress: true,
+        }
+      }
+      if (endpoint === "check_app_update") {
+        return {
+          currentVersion: restarted ? "0.21.9" : "0.21.7",
+          update: restarted
+            ? null
+            : { version: "0.21.9", body: "", date: null },
+          selfUpdateSupported: true,
+          liveProgress: true,
+          runtime: "standalone",
+          rollbackAvailable: false,
+        }
+      }
+      throw new Error(`unexpected endpoint: ${endpoint}`)
+    }
+    const statusCalls = () =>
+      call.mock.calls.filter(([e]) => e === "app_update_status").length
+    render(availabilityTree())
+    await waitFor(() =>
+      expect(screen.getByTestId("current").textContent).toBe("0.21.7")
+    )
+
+    let releaseStatus!: () => void
+    statusGate = new Promise<void>((resolve) => {
+      releaseStatus = resolve
+    })
+    const before = statusCalls()
+    let checking!: Promise<void>
+    act(() => {
+      checking = ctx!.checkNow()
+    })
+    await waitFor(() => expect(statusCalls()).toBe(before + 1))
+    restarted = true
+    await act(async () => {
+      releaseStatus()
+      await checking
+    })
+
+    expect(screen.getByTestId("available").textContent).toBe("none")
+    expect(screen.getByTestId("current").textContent).toBe("0.21.9")
   })
 
   it("de-duplicates concurrent checks into a single manifest fetch", async () => {

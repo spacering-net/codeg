@@ -9,6 +9,11 @@ import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store
 import { formatTokenCount } from "@/lib/token-format"
 import { formatContextWindowPercent } from "@/lib/context-window"
 import {
+  CACHE_HIT_RATE_DIGITS,
+  cacheHitRatio,
+  formatPercent,
+} from "@/lib/token-usage"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -89,14 +94,29 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
       ? null
       : Math.max(0, Math.min(100, contextPercentRaw))
   const hasContext = contextPercent != null
-  const hasUsage = usage != null
+  // All-zero counters are "nobody said", not "nothing was spent" — the same
+  // judgement the cache rows below already make, applied to the whole section.
+  // A session that produced replies cannot have cost zero tokens; qoder zeroes
+  // every counter for its own hosted models (see `QODER_EXPOSE_TOKEN_USAGE` in
+  // the registry), and a breakdown of zeros reads as a broken counter. Those
+  // sessions still light the ring — qoder states its occupancy separately, as
+  // a ratio that survives the redaction.
+  const hasUsage =
+    usage != null &&
+    usage.input_tokens +
+      usage.output_tokens +
+      usage.cache_creation_input_tokens +
+      usage.cache_read_input_tokens >
+      0
   const fallbackTotal = hasUsage
     ? usage.input_tokens +
       usage.output_tokens +
       usage.cache_creation_input_tokens +
       usage.cache_read_input_tokens
     : null
-  const total = sessionStats?.total_tokens ?? fallbackTotal
+  const reportedTotal = sessionStats?.total_tokens
+  const total =
+    reportedTotal != null && reportedTotal > 0 ? reportedTotal : fallbackTotal
 
   const dashOffset = ICON_CIRCUMFERENCE * (1 - (contextPercent ?? 0) / 100)
 
@@ -117,6 +137,27 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
   }
 
   const hasTokenSection = rows.length > 0
+
+  // Cache hit rate, by the dashboard's definition (one shared `cacheHitRatio`,
+  // so the popover and the Token Usage page can never disagree about what the
+  // number means): cache reads over everything that entered as context.
+  //
+  // Gated on the session having ANY cache activity. Plenty of backends — a
+  // self-hosted OpenAI-compatible endpoint above all — report no cache counters
+  // at all, and codeg cannot tell "the cache did nothing" from "nobody said".
+  // Rendering a confident `0.0%` for the latter is worse than rendering
+  // nothing. A session with writes but no reads yet is genuinely 0% and still
+  // shows.
+  const hasCacheActivity =
+    hasUsage &&
+    usage.cache_read_input_tokens + usage.cache_creation_input_tokens > 0
+  const cacheHit = hasCacheActivity
+    ? cacheHitRatio(
+        usage.input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_read_input_tokens
+      )
+    : null
 
   if (!hasContext && !hasTokenSection) return null
 
@@ -179,32 +220,53 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-56 gap-2 p-3 text-xs">
-        {hasContext ? (
+        {hasContext || cacheHit != null ? (
           <div
             className={`space-y-1 ${
               hasUsage ? "mb-0.5 border-b border-border pb-0.5" : ""
             }`}
           >
-            <div className="flex items-center justify-between gap-2 text-xs font-medium whitespace-nowrap">
-              <span>{t("contextWindow")}</span>
-              <span className="tabular-nums shrink-0">
-                {formatContextWindowPercent(contextPercent)}
-              </span>
-            </div>
-            <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className="absolute inset-y-0 left-0 bg-foreground/70"
-                style={{ width: `${contextPercent ?? 0}%` }}
-              />
-            </div>
-            <div className="flex items-center justify-between text-xs leading-none text-muted-foreground">
-              <span>{t("usedMax")}</span>
-              <span className="tabular-nums">
-                {contextUsed == null || contextMax == null
-                  ? "--"
-                  : `${formatTokenCount(contextUsed)} / ${formatTokenCount(contextMax)}`}
-              </span>
-            </div>
+            {hasContext ? (
+              <>
+                <div className="flex items-center justify-between gap-2 text-xs font-medium whitespace-nowrap">
+                  <span>{t("contextWindow")}</span>
+                  <span className="tabular-nums shrink-0">
+                    {formatContextWindowPercent(contextPercent)}
+                  </span>
+                </div>
+                <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="absolute inset-y-0 left-0 bg-foreground/70"
+                    style={{ width: `${contextPercent ?? 0}%` }}
+                  />
+                </div>
+                {/* Dropped entirely rather than shown as "--": an agent can
+                    state its occupancy as a percentage without ever naming the
+                    two token counts behind it (qoder does exactly that once it
+                    has redacted them), and a labelled row with nothing in it
+                    reads as a figure that failed to load rather than one that
+                    was never reported. */}
+                {contextUsed != null && contextMax != null ? (
+                  <div className="flex items-center justify-between text-xs leading-none text-muted-foreground">
+                    <span>{t("usedMax")}</span>
+                    <span className="tabular-nums">
+                      {`${formatTokenCount(contextUsed)} / ${formatTokenCount(contextMax)}`}
+                    </span>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+            {/* Sits with the context figures rather than under the token
+                breakdown: it is a ratio, not a count, and a rule of its own
+                above it only fenced off a single line. */}
+            {cacheHit != null ? (
+              <div className="flex items-center justify-between gap-2 text-xs leading-none text-muted-foreground">
+                <span className="whitespace-nowrap">{t("cacheHit")}</span>
+                <span className="tabular-nums shrink-0">
+                  {formatPercent(cacheHit, CACHE_HIT_RATE_DIGITS)}
+                </span>
+              </div>
+            ) : null}
           </div>
         ) : null}
         {hasTokenSection ? (

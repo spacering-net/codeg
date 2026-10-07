@@ -76,7 +76,17 @@ struct EventConfigCache {
     /// feed as IM channels, but are not debounced and ignore the per-channel
     /// filter (an automation consumer wants the complete stream).
     webhooks: Vec<String>,
-    last_refresh: Instant,
+    /// `None` until the first clean refresh, which is what forces one.
+    ///
+    /// This used to be a plain `Instant` seeded with
+    /// `Instant::now() - Duration::from_secs(TTL + 1)`, which is a panic, not a
+    /// saturating subtraction: `Sub<Duration> for Instant` is a `checked_sub`
+    /// plus `expect`. On Windows an `Instant` is the QPC reading, i.e. time
+    /// since boot, so starting codeg inside the first 31 seconds of a boot
+    /// aborted the process here. codeg ships an autostart plugin, so launching
+    /// at login is an ordinary case, and this runs inside a long-lived spawned
+    /// task with nobody at the keyboard.
+    last_refresh: Option<Instant>,
     /// Value of `EVENT_CONFIG_EPOCH` at the last refresh; a mismatch forces an
     /// immediate refresh even within the TTL window.
     last_epoch: u64,
@@ -92,7 +102,7 @@ impl EventConfigCache {
             enabled_channels: Vec::new(),
             webhooks: Vec::new(),
             // Force refresh on first use
-            last_refresh: Instant::now() - Duration::from_secs(CONFIG_CACHE_TTL_SECS + 1),
+            last_refresh: None,
             last_epoch: 0,
         }
     }
@@ -113,7 +123,9 @@ impl EventConfigCache {
         // pending and the cached global_filter may already be out of date.
         let config_changed = epoch != self.last_epoch;
         if !config_changed
-            && self.last_refresh.elapsed() < Duration::from_secs(CONFIG_CACHE_TTL_SECS)
+            && self
+                .last_refresh
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(CONFIG_CACHE_TTL_SECS))
         {
             return;
         }
@@ -191,7 +203,7 @@ impl EventConfigCache {
         // TTL elapses. The other reads above already keep-prior / fail-closed on
         // their own errors, so re-reading them while retrying is harmless.
         if filter_ok {
-            self.last_refresh = Instant::now();
+            self.last_refresh = Some(Instant::now());
             self.last_epoch = epoch;
         }
     }
@@ -526,7 +538,7 @@ mod permission_push_tests {
                 event_filter_json: None,
             }],
             webhooks: Vec::new(),
-            last_refresh: Instant::now(),
+            last_refresh: Some(Instant::now()),
             last_epoch: 0,
         }
     }
@@ -1409,7 +1421,7 @@ mod permission_push_tests {
         app_metadata_service::upsert_value(&db.conn, EVENT_FILTER_KEY, "{corrupt")
             .await
             .unwrap();
-        config.last_refresh = Instant::now() - Duration::from_secs(CONFIG_CACHE_TTL_SECS + 1);
+        config.last_refresh = None;
         config.refresh_with_epoch(&db.conn, EPOCH).await;
 
         assert!(

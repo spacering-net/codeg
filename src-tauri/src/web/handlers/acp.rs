@@ -1,3 +1,4 @@
+use crate::acp::temp_reclaim as codeg_temp_reclaim;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::app_state::AppState;
 use crate::commands::acp as acp_commands;
 use crate::commands::custom_agents as custom_agent_commands;
+use crate::commands::deepseek_settings as deepseek_settings_commands;
 use crate::models::agent::AgentType;
 
 #[derive(Deserialize)]
@@ -214,6 +216,29 @@ pub async fn acp_clear_binary_cache(
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
+}
+
+pub async fn acp_scan_leaked_temp(
+) -> Result<Json<codeg_temp_reclaim::LeakedTempScan>, AppCommandError> {
+    let result = acp_commands::acp_scan_leaked_temp()
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpReclaimLeakedTempParams {
+    pub paths: Vec<String>,
+}
+
+pub async fn acp_reclaim_leaked_temp(
+    Json(params): Json<AcpReclaimLeakedTempParams>,
+) -> Result<Json<codeg_temp_reclaim::LeakedTempReclaim>, AppCommandError> {
+    let result = acp_commands::acp_reclaim_leaked_temp(params.paths)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
@@ -897,7 +922,7 @@ pub async fn acp_update_pi_config(
     Json(params): Json<AcpUpdatePiConfigParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let emitter = state.emitter.clone();
-    acp_commands::acp_update_pi_config_core(
+    acp_commands::acp_update_pi_config_and_refresh(
         acp_commands::PiConfigUpdate {
             provider: params.provider,
             model: params.model,
@@ -908,6 +933,8 @@ pub async fn acp_update_pi_config(
             model_reasoning: params.model_reasoning,
         },
         &state.db,
+        &state.connection_manager,
+        &state.data_dir,
         &emitter,
     )
     .await
@@ -916,8 +943,46 @@ pub async fn acp_update_pi_config(
 }
 
 pub async fn acp_load_pi_config(
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError> {
-    Ok(Json(acp_commands::load_pi_config_core()))
+    let config = acp_commands::load_pi_config_for_db(&state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(config))
+}
+
+pub async fn acp_list_pi_model_capabilities(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<acp_commands::PiModelCatalog>, AppCommandError> {
+    Ok(Json(
+        acp_commands::list_pi_model_catalog_core(&state.db, &state.data_dir).await,
+    ))
+}
+
+pub async fn acp_load_deepseek_model_catalog(
+) -> Result<Json<deepseek_settings_commands::DeepSeekModelCatalog>, AppCommandError> {
+    Ok(Json(
+        deepseek_settings_commands::load_deepseek_model_catalog_core(),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpUpdateDeepSeekModelCatalogParams {
+    /// Absent (or empty) clears the stored catalog so the agent's built-in one
+    /// is inherited again.
+    #[serde(default)]
+    pub models: Option<Vec<deepseek_settings_commands::DeepSeekCatalogModel>>,
+}
+
+pub async fn acp_update_deepseek_model_catalog(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateDeepSeekModelCatalogParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    deepseek_settings_commands::update_deepseek_model_catalog_core(params.models, &emitter)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
 }
 
 #[derive(Deserialize)]
@@ -988,6 +1053,15 @@ pub async fn acp_antigravity_login_cancel(
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
+}
+
+pub async fn acp_antigravity_sign_out(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
@@ -1102,6 +1176,15 @@ pub async fn acp_detect_agent_local_version(
         acp_commands::acp_detect_agent_local_version_core(params.agent_type, &db.conn, &emitter)
             .await
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_fetch_agent_latest_release(
+    Json(params): Json<AgentTypeParams>,
+) -> Result<Json<Option<crate::acp::latest_release::AgentLatestRelease>>, AppCommandError> {
+    let result = acp_commands::acp_fetch_agent_latest_release_core(params.agent_type)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 

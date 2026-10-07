@@ -167,7 +167,7 @@ export interface UseOpenFileTabsWatchParams {
   openFilePreview: (
     path: string,
     options?: { line?: number; reload?: boolean; folderId?: number }
-  ) => Promise<void>
+  ) => Promise<string | null>
   reloadOpenFileBackground: (path: string) => Promise<void>
   applyExternalReload: (path: string, fetched: FileEditContent) => Promise<void>
   markTabsStale: (path: string) => void

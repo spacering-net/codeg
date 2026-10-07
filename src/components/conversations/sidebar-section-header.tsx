@@ -4,13 +4,26 @@ import { memo } from "react"
 import {
   ChevronRight,
   Download,
+  Ellipsis,
   FolderGit2,
   FolderOpenDot,
   LayersPlus,
   SquarePen,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
-import type { SidebarSectionKey } from "@/lib/sidebar-view-mode-storage"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  SIDEBAR_RECENT_FILTERS,
+  type SidebarRecentFilter,
+  type SidebarSectionKey,
+} from "@/lib/sidebar-view-mode-storage"
 import { cn } from "@/lib/utils"
 
 /**
@@ -36,6 +49,8 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   onCloneRepository,
   onImportSessions,
   onNewFolderGroup,
+  recentFilter,
+  onRecentFilterChange,
   topGap = false,
 }: {
   section: SidebarSectionKey
@@ -75,6 +90,17 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
    */
   onNewFolderGroup?: () => void
   /**
+   * When both are provided on the "recent" section, renders a "⋯" menu LEFT
+   * of the New-conversation action that opens a labelled radio list — All /
+   * Chat / Folders — so the narrowing is spelled out rather than guessed from
+   * an icon. Unlike the other actions the trigger stays visible (not
+   * hover-revealed) whenever a filter other than "all" is active, so a
+   * narrowed list never looks like a mysteriously short one.
+   * `onRecentFilterChange` must be referentially stable to preserve the memo.
+   */
+  recentFilter?: SidebarRecentFilter
+  onRecentFilterChange?: (filter: SidebarRecentFilter) => void
+  /**
    * Adds breathing room above the header so the "Folders" section reads as
    * visually separated from the "Pinned" section above it. Implemented as
    * padding (not margin) on a wrapper so the row's measured border-box grows —
@@ -105,6 +131,17 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
     (section === "chats" || section === "recent") && onNewChat != null
   const newChatLabel =
     section === "recent" ? t("newConversation") : t("newChatAction")
+  const showRecentFilter =
+    section === "recent" && recentFilter != null && onRecentFilterChange != null
+  const recentFilterOptionLabel = (filter: SidebarRecentFilter) =>
+    filter === "chats"
+      ? t("sectionChats")
+      : filter === "folders"
+        ? t("sectionFolders")
+        : t("recentFilterAll")
+  const recentFilterLabel = t("recentFilterTitle", {
+    filter: recentFilterOptionLabel(recentFilter ?? "all"),
+  })
   // The folders section mirrors the chats section's right-edge affordance, but
   // with two buttons (Open Folder / Clone Repository) — the same "add a folder"
   // actions the top-of-page NewFolderDropdown offers.
@@ -176,27 +213,76 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
             )}
           />
         </button>
-        {showNewChat && (
-          <button
-            type="button"
-            // Stop the click from reaching the row (defensive — the button is a
-            // sibling, not nested, so it never triggers the toggle anyway).
-            onClick={(e) => {
-              e.stopPropagation()
-              onNewChat?.()
-            }}
-            title={newChatLabel}
-            aria-label={newChatLabel}
-            // Sized to match the folder rows' right-edge ⋯ action icon
-            // (`h-[0.875rem]`, 14px) so the two affordances read as one family —
-            // a hair smaller than the default `h-4` glyph.
-            className={cn(
-              "absolute top-1/2 right-[0.375rem] -translate-y-1/2",
-              actionButtonClassName
+        {(showNewChat || showRecentFilter) && (
+          <div className="absolute top-1/2 right-[0.375rem] flex -translate-y-1/2 items-center gap-px">
+            {showRecentFilter && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    // Sibling of the toggle button, so it never toggles the
+                    // section; stop propagation defensively anyway.
+                    onClick={(e) => e.stopPropagation()}
+                    title={recentFilterLabel}
+                    aria-label={recentFilterLabel}
+                    data-recent-filter={recentFilter}
+                    className={cn(
+                      actionButtonClassName,
+                      // The modal menu sets `pointer-events: none` on <body>
+                      // while open, which drops the row's hover — without this
+                      // the hover-revealed trigger fades out from under its
+                      // own open menu.
+                      "data-[state=open]:opacity-100",
+                      // An active filter is state the user must be able to see
+                      // without hovering; only the neutral "all" hides with the
+                      // rest.
+                      recentFilter !== "all" &&
+                        "opacity-100 text-sidebar-foreground/80"
+                    )}
+                  >
+                    <Ellipsis className="h-[0.875rem] w-[0.875rem]" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-40">
+                  <DropdownMenuLabel>
+                    {t("recentFilterMenuLabel")}
+                  </DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={recentFilter}
+                    onValueChange={(value) =>
+                      onRecentFilterChange(value as SidebarRecentFilter)
+                    }
+                  >
+                    {SIDEBAR_RECENT_FILTERS.map((filter) => (
+                      <DropdownMenuRadioItem key={filter} value={filter}>
+                        {recentFilterOptionLabel(filter)}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
-          >
-            <SquarePen className="h-[0.875rem] w-[0.875rem]" />
-          </button>
+            {showNewChat && (
+              <button
+                type="button"
+                // Stop the click from reaching the row (defensive — the button
+                // is a sibling, not nested, so it never triggers the toggle
+                // anyway).
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onNewChat?.()
+                }}
+                title={newChatLabel}
+                aria-label={newChatLabel}
+                // Sized to match the folder rows' right-edge ⋯ action icon
+                // (`h-[0.875rem]`, 14px) so the two affordances read as one
+                // family — a hair smaller than the default `h-4` glyph.
+                className={actionButtonClassName}
+              >
+                <SquarePen className="h-[0.875rem] w-[0.875rem]" />
+              </button>
+            )}
+          </div>
         )}
         {showFolderActions && (
           <div className="absolute top-1/2 right-[0.375rem] flex -translate-y-1/2 items-center gap-px">

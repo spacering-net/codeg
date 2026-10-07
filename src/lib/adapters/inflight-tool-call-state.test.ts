@@ -28,6 +28,7 @@ import type { ContentBlock, MessageTurn } from "@/lib/types"
 const TEXT: AdapterMessageText = {
   attachedResources: "attached",
   toolCallFailed: "Tool failed",
+  pageHandoffName: () => "",
 }
 
 function turnWith(blocks: ContentBlock[]): MessageTurn {

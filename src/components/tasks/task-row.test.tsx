@@ -160,6 +160,34 @@ describe("TaskRow", () => {
     expect(screen.getByText("installing deps")).toBeTruthy()
   })
 
+  it("says a round is compacting, in every status that can be", () => {
+    // The line exists for exactly this: a resumed round parks on its
+    // pre-prompt compaction — `preparing` for a retry or a follow-up,
+    // `merging` for a landing — and on a full context window that is minutes
+    // with nothing else on screen to explain it.
+    for (const status of ["preparing", "merging"] as const) {
+      const { unmount } = renderRow(task({ status, compacting: true }))
+      expect(screen.getByText("Compacting the session context…")).toBeTruthy()
+      unmount()
+    }
+
+    // It outranks the agent's own last milestone: it is both the newer truth
+    // and the one the user cannot otherwise account for.
+    const { unmount } = renderRow(
+      task({
+        status: "merging",
+        compacting: true,
+        latest_progress: "installing deps",
+      })
+    )
+    expect(screen.queryByText("installing deps")).toBeNull()
+    unmount()
+
+    // And a settled row never claims it, whatever a stale flag says.
+    renderRow(task({ status: "review", compacting: true }))
+    expect(screen.queryByText("Compacting the session context…")).toBeNull()
+  })
+
   it("marks the row with the agent the task runs under", () => {
     const { unmount } = renderRow(task({ agent_type: "codex" }))
     expect(screen.getByTitle("Codex")).toBeInTheDocument()

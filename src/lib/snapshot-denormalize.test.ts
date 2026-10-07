@@ -221,7 +221,23 @@ describe("denormalizeSnapshot — last_error", () => {
       })
     )
     expect(patch.lastError).toBe("ACP protocol error: Forbidden")
+    // The code rides along so the provider can localize the message the same
+    // way it localizes the live `error` event.
+    expect(patch.lastErrorCode).toBe("forbidden")
+    expect(patch.lastErrorLevel).toBe("error")
     expect(patch.status).toBe("connected")
+  })
+
+  it("routes the level off the code", () => {
+    const patch = denormalizeSnapshot(
+      baseSnapshot({
+        last_error: {
+          message: "Failed to load session, starting new: gone",
+          code: "session_load_fallback",
+        },
+      })
+    )
+    expect(patch.lastErrorLevel).toBe("warning")
   })
 
   it("defaults lastError to null when the field is absent", () => {
@@ -229,6 +245,7 @@ describe("denormalizeSnapshot — last_error", () => {
     delete (snap as { last_error?: unknown }).last_error
     const patch = denormalizeSnapshot(snap)
     expect(patch.lastError).toBeNull()
+    expect(patch.lastErrorCode).toBeNull()
     expect(patch.status).toBe("connected")
   })
 })

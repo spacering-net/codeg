@@ -1,4 +1,4 @@
-//! Forge (GitHub/GitLab) integration core: account/auth resolution, a
+//! Forge (GitHub/GitLab/Gitea) integration core: account/auth resolution, a
 //! proxy-aware HTTP client, the canonical source-key normalizer and the REST
 //! reads the Issues/PR workbench needs. Deliberately thin — no query DSL, no
 //! response caching (see `.docs/architecture/2026-08-17-*` for what is out of
@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod deliver;
 pub mod envelope;
+pub mod gitea;
 pub mod github;
 pub mod gitlab;
 pub mod settings;
@@ -26,6 +27,11 @@ pub use auth::{host_profile, resolve_forge_auth, strip_base_path, HostProfile, R
 pub enum ForgeProvider {
     GitHub,
     GitLab,
+    /// Gitea — and, by construction, Forgejo: it is a Gitea fork that keeps the
+    /// same `/api/v1` surface, so an instance of either answers every request
+    /// this variant makes. Nothing downstream distinguishes them, and inventing
+    /// a fourth variant would only split one credential store in two.
+    Gitea,
 }
 
 impl ForgeProvider {
@@ -33,6 +39,7 @@ impl ForgeProvider {
         match self {
             ForgeProvider::GitHub => "github",
             ForgeProvider::GitLab => "gitlab",
+            ForgeProvider::Gitea => "gitea",
         }
     }
 
@@ -43,6 +50,7 @@ impl ForgeProvider {
         match value.trim().to_ascii_lowercase().as_str() {
             "github" => Ok(ForgeProvider::GitHub),
             "gitlab" => Ok(ForgeProvider::GitLab),
+            "gitea" => Ok(ForgeProvider::Gitea),
             other => Err(ForgeError::Invalid(format!("unknown provider: {other}"))),
         }
     }
@@ -54,15 +62,18 @@ impl ForgeProvider {
         match self {
             ForgeProvider::GitHub => "GitHub",
             ForgeProvider::GitLab => "GitLab",
+            ForgeProvider::Gitea => "Gitea",
         }
     }
 
     /// What this forge calls a proposed change, for messages the user reads.
     /// GitLab users do not have "pull requests" and being told they do reads
-    /// like the wrong tool answered.
+    /// like the wrong tool answered. Gitea sides with GitHub here — its own UI
+    /// says "pull request" — which is one of the several places it is easier to
+    /// treat as a GitHub dialect than as its own vocabulary.
     pub fn change_noun(self) -> &'static str {
         match self {
-            ForgeProvider::GitHub => "pull request",
+            ForgeProvider::GitHub | ForgeProvider::Gitea => "pull request",
             ForgeProvider::GitLab => "merge request",
         }
     }
@@ -75,9 +86,13 @@ impl ForgeProvider {
     /// underscore, but the git ref namespace is `refs/merge-requests/<iid>`.
     /// The two spellings sit three lines apart in this file for a reason —
     /// using the API's spelling as a ref fetches nothing at all.
+    ///
+    /// Gitea publishes under GitHub's namespace exactly (`refs/pull/<index>/head`,
+    /// its `git.RefNameFromPullIndex`), which is what lets a pull-request task
+    /// check out a Gitea fork's head without adding a remote.
     pub fn change_head_ref(self, number: i64) -> String {
         match self {
-            ForgeProvider::GitHub => format!("refs/pull/{number}/head"),
+            ForgeProvider::GitHub | ForgeProvider::Gitea => format!("refs/pull/{number}/head"),
             ForgeProvider::GitLab => format!("refs/merge-requests/{number}/head"),
         }
     }
@@ -112,6 +127,17 @@ impl ForgeProvider {
                     ForgeItemKind::Change => "merge_requests",
                 };
                 format!("{origin}/{owner_repo}/-/{segment}/{number}")
+            }
+            ForgeProvider::Gitea => {
+                // `pulls`, PLURAL — the one letter that separates Gitea's web
+                // route from GitHub's `/pull/{n}`. Gitea 404s on the singular
+                // form, so borrowing GitHub's spelling here would put a dead
+                // link on every proposed change.
+                let segment = match kind {
+                    ForgeItemKind::Issue => "issues",
+                    ForgeItemKind::Change => "pulls",
+                };
+                format!("{origin}/{owner_repo}/{segment}/{number}")
             }
         }
     }
@@ -180,12 +206,12 @@ pub enum ForgeError {
     #[error("no {} account for host {host}", provider.display_name())]
     NoAccount { provider: ForgeProvider, host: String },
     /// The host is not one codeg can read: nothing is configured for it and its
-    /// name claims neither forge. Distinct from [`ForgeError::NoAccount`]
+    /// name claims none of the forges. Distinct from [`ForgeError::NoAccount`]
     /// because the advice differs — "add a GitHub account for bitbucket.org"
-    /// is advice that cannot work, while "only GitHub and GitLab are
+    /// is advice that cannot work, while "only GitHub, GitLab and Gitea are
     /// supported" is the actual answer (with adding an account still the way
     /// in for a self-hosted instance under an unrelated name).
-    #[error("unsupported forge host {host}: only GitHub and GitLab are supported")]
+    #[error("unsupported forge host {host}: only GitHub, GitLab and Gitea are supported")]
     UnsupportedHost { host: String },
     /// The host answered in a way only the OTHER forge answers — codeg had it
     /// classified wrong and now knows better. Recoverable by construction: the
@@ -271,10 +297,10 @@ pub fn source_key(
     kind: &str,
     number: i64,
 ) -> Result<String, ForgeError> {
-    let provider = provider.trim().to_ascii_lowercase();
-    if provider != "github" && provider != "gitlab" {
-        return Err(ForgeError::Invalid(format!("unknown provider: {provider}")));
-    }
+    // Through the enum rather than an inline list of names: this is the third
+    // place a provider name is validated, and a hand-written list here is what
+    // would silently refuse every key of a forge added to the enum later.
+    let provider = ForgeProvider::parse(provider)?.as_str();
     let kind = kind.trim().to_ascii_lowercase();
     if kind != "issue" && kind != "pr" {
         return Err(ForgeError::Invalid(format!("unknown source kind: {kind}")));
@@ -1592,15 +1618,19 @@ pub(crate) fn validate_state_filter(state: &str) -> Result<(), ForgeError> {
 ///
 /// `https://api.github.com` is the public service's dedicated API host, whose
 /// web origin is `https://github.com`; GitHub Enterprise mounts its API under
-/// the instance (`{origin}/api/v3`) and GitLab under `{origin}/api/v4`. One
-/// derivation, used by every place that needs a link or a push URL — three
-/// copies of this rule would be three chances to disagree.
+/// the instance (`{origin}/api/v3`), GitLab under `{origin}/api/v4` and Gitea
+/// under `{origin}/api/v1`. One derivation, used by every place that needs a
+/// link or a push URL — three copies of this rule would be three chances to
+/// disagree.
 pub fn web_origin(auth: &ResolvedAuth) -> String {
     let base = auth.api_base.trim_end_matches('/');
     if base == "https://api.github.com" {
         return "https://github.com".to_string();
     }
-    match base.strip_suffix("/api/v3").or_else(|| base.strip_suffix("/api/v4")) {
+    match ["/api/v3", "/api/v4", "/api/v1"]
+        .iter()
+        .find_map(|suffix| base.strip_suffix(suffix))
+    {
         Some(origin) => origin.to_string(),
         None => format!("https://{}", auth.server_host),
     }
@@ -1646,8 +1676,16 @@ fn origin_of(url: &reqwest::Url) -> (String, Option<String>, Option<u16>) {
     )
 }
 
+/// Every env var a reqwest client samples its proxy decision from at build
+/// time: the proxy URLs and the bypass list. A change to either must rebuild.
+fn proxy_fingerprint() -> Vec<(String, String)> {
+    let mut fingerprint = crate::network::proxy::current_proxy_env_vars();
+    fingerprint.extend(crate::network::proxy::current_no_proxy_env_vars());
+    fingerprint
+}
+
 pub(crate) fn http_client() -> Result<reqwest::Client, ForgeError> {
-    let fingerprint = crate::network::proxy::current_proxy_env_vars();
+    let fingerprint = proxy_fingerprint();
     if let Ok(guard) = HTTP_CLIENT.read() {
         if let Some((cached, client)) = guard.as_ref() {
             if *cached == fingerprint {
@@ -1778,12 +1816,21 @@ mod tests {
     fn provider_parsing_refuses_what_it_does_not_know() {
         assert_eq!(ForgeProvider::parse("GitHub").unwrap(), ForgeProvider::GitHub);
         assert_eq!(ForgeProvider::parse(" gitlab ").unwrap(), ForgeProvider::GitLab);
+        assert_eq!(ForgeProvider::parse("Gitea").unwrap(), ForgeProvider::Gitea);
         assert!(ForgeProvider::parse("bitbucket").is_err());
         assert!(ForgeProvider::parse("").is_err());
+        // Forgejo is served by the Gitea client, but it is not a NAME this
+        // accepts: what gets stored on an account and in a source key is the
+        // one wire value, or provenance splits in two for one instance.
+        assert!(ForgeProvider::parse("forgejo").is_err());
         // The wire form round-trips through the stored source_meta JSON.
         assert_eq!(
             serde_json::to_string(&ForgeProvider::GitLab).unwrap(),
             "\"gitlab\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ForgeProvider::Gitea).unwrap(),
+            "\"gitea\""
         );
     }
 
@@ -1824,6 +1871,22 @@ mod tests {
         // Both forges' changes key as "pr" so provenance keys stay comparable.
         assert_eq!(ForgeItemKind::Change.key_segment(), "pr");
         assert_eq!(ForgeItemKind::Issue.key_segment(), "issue");
+
+        // Gitea is GitHub's dialect everywhere except the one letter in its
+        // web route: `/pulls/7`, PLURAL, where GitHub says `/pull/7`. Its git
+        // ref namespace IS GitHub's, which is what lets a task check out a
+        // Gitea change without adding a remote.
+        let gt = ForgeProvider::Gitea;
+        assert_eq!(
+            gt.item_url("https://gitea.corp.com", "acme/app", ForgeItemKind::Change, 7),
+            "https://gitea.corp.com/acme/app/pulls/7"
+        );
+        assert_eq!(
+            gt.item_url("https://gitea.corp.com", "acme/app", ForgeItemKind::Issue, 7),
+            "https://gitea.corp.com/acme/app/issues/7"
+        );
+        assert_eq!(gt.change_head_ref(7), "refs/pull/7/head");
+        assert_eq!(gt.change_noun(), "pull request");
     }
 
     /// The push URL and every stored link come from this one derivation: a
@@ -1848,6 +1911,8 @@ mod tests {
         assert_eq!(web_origin(&auth), "https://ghe.corp.com:8443");
         auth.api_base = "http://gitlab.corp.com:8929/api/v4".into();
         assert_eq!(web_origin(&auth), "http://gitlab.corp.com:8929");
+        auth.api_base = "https://gitea.corp.com/api/v1".into();
+        assert_eq!(web_origin(&auth), "https://gitea.corp.com");
         // A base that is neither shape: fall back to the host we know rather
         // than build a link into whatever that string was.
         auth.api_base = "https://gitlab.com/weird".into();
@@ -2402,6 +2467,6 @@ mod tests {
             .as_ref()
             .map(|(fp, _)| fp.clone())
             .expect("cached");
-        assert_eq!(cached_fp, crate::network::proxy::current_proxy_env_vars());
+        assert_eq!(cached_fp, proxy_fingerprint());
     }
 }

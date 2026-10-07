@@ -182,19 +182,24 @@ fn lock_watches() -> MutexGuard<'static, HashMap<String, WatchInstance>> {
     OFFICE_WATCHES.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Reap a child without blocking the caller: kill + `wait()` on a detached task
-/// so no zombie lingers. Falls back to `start_kill` (relying on `kill_on_drop`
-/// + tokio's orphan reaper) when called outside a runtime, e.g. at shutdown.
+/// Reap a child without blocking the caller.
+///
+/// The signal goes out HERE, on the calling thread. Killing from the detached
+/// task instead would make the kill depend on that task being polled, and the
+/// callers who most need it are the ones whose runtime is about to go away —
+/// a shutdown, or a `#[tokio::test]` returning — where a queued task is simply
+/// dropped and the child lives on. (Watch children are also `kill_on_drop`,
+/// which is a second net, not the first one.)
+///
+/// The `wait()` is what still belongs on a task: it only keeps the killed
+/// child from lingering as a zombie while the app keeps running, and losing it
+/// at shutdown costs nothing — the OS reaps our orphans.
 fn reap(mut child: Child) {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(async move {
-                let _ = child.kill().await;
-            });
-        }
-        Err(_) => {
-            let _ = child.start_kill();
-        }
+    let _ = child.start_kill();
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
+            let _ = child.wait().await;
+        });
     }
 }
 
@@ -633,6 +638,9 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub fn insert_known_port_for_test(port: u16, cap: &str) {
     let child = tokio_command("sleep")
         .arg("600")
+        // Like the real watch child: a test that panics before it removes the
+        // entry must not leave the sleeper behind.
+        .kill_on_drop(true)
         .spawn()
         .expect("spawn test sleeper");
     lock_watches().insert(
@@ -821,7 +829,11 @@ mod tests {
     /// Seed a live watch entry (real `sleep` child bound conceptually to `port`).
     #[cfg(unix)]
     fn seed_live_watch(key: &str, port: u16, cap: &str, proxied: bool) {
-        let child = tokio_command("sleep").arg("600").spawn().unwrap();
+        let child = tokio_command("sleep")
+            .arg("600")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
         lock_watches().insert(
             key.to_string(),
             WatchInstance {
@@ -1010,7 +1022,11 @@ mod tests {
 
         // Seed a live "watch" with a sleep child + a real allocated port.
         let port = allocate_free_port().unwrap();
-        let child = tokio_command("sleep").arg("600").spawn().unwrap();
+        let child = tokio_command("sleep")
+            .arg("600")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
         lock_watches().insert(
             key.clone(),
             WatchInstance {
@@ -1080,7 +1096,11 @@ mod tests {
         lock_watches().insert(
             "sweep-desk".into(),
             WatchInstance {
-                child: tokio_command("sleep").arg("600").spawn().unwrap(),
+                child: tokio_command("sleep")
+                    .arg("600")
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap(),
                 port: p_desk,
                 cap: "c".into(),
                 file_canonical: PathBuf::from("/seed/desk"),
@@ -1096,7 +1116,11 @@ mod tests {
         lock_watches().insert(
             "sweep-web".into(),
             WatchInstance {
-                child: tokio_command("sleep").arg("600").spawn().unwrap(),
+                child: tokio_command("sleep")
+                    .arg("600")
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap(),
                 port: p_web,
                 cap: "c".into(),
                 file_canonical: PathBuf::from("/seed/web"),

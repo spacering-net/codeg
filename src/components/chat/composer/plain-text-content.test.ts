@@ -8,6 +8,9 @@ import {
   textToSeededInlineContent,
 } from "./plain-text-content"
 
+/** What the agent in these tests advertises: `/review` and `$deploy`, nothing else. */
+const KNOWN = new Set(["/review", "$deploy"])
+
 describe("decidePastedContent", () => {
   it("inserts text/plain when the clipboard carries an external HTML fragment", () => {
     // What a browser puts on the clipboard when a URL is copied from the address
@@ -47,6 +50,24 @@ describe("decidePastedContent", () => {
           label: "app.ts",
           uri: "file:///repo/app.ts",
         }),
+      },
+      { type: "text", text: " now" },
+    ])
+  })
+
+  it("pastes a slash word the agent does not advertise as prose", () => {
+    // A regex, a path or a sentence pasted out of a terminal is not a command,
+    // and a paste is not a choice from the menu.
+    expect(
+      decidePastedContent({ html: "", text: "run /notacommand now" }, KNOWN)
+    ).toBeNull()
+    expect(
+      decidePastedContent({ html: "", text: "run /review now" }, KNOWN)
+    ).toEqual([
+      { type: "text", text: "run " },
+      {
+        type: "reference",
+        attrs: expect.objectContaining({ refType: "skill", id: "review" }),
       },
       { type: "text", text: " now" },
     ])
@@ -134,7 +155,8 @@ describe("textToSeededInlineContent", () => {
     // filling one into the composer must show badges, not `[label](uri)` text.
     expect(
       textToSeededInlineContent(
-        "/review [app.ts](file:///repo/app.ts) with [@Codex](codeg://agent/codex)"
+        "/review [app.ts](file:///repo/app.ts) with [@Codex](codeg://agent/codex)",
+        KNOWN
       )
     ).toEqual([
       {
@@ -219,8 +241,8 @@ describe("textToHydratedInlineContent", () => {
     expect(textToHydratedInlineContent("see /usr/bin for it")).toBeNull()
   })
 
-  it("hydrates bare `/cmd` and `$skill` tokens, keeping their trigger", () => {
-    const content = textToHydratedInlineContent("$deploy prod")
+  it("hydrates an advertised bare `/cmd` / `$skill` token, keeping its trigger", () => {
+    const content = textToHydratedInlineContent("$deploy prod", KNOWN)
     expect(content).toEqual([
       {
         type: "reference",
@@ -233,13 +255,83 @@ describe("textToHydratedInlineContent", () => {
       },
       { type: "text", text: " prod" },
     ])
-    expect(textToHydratedInlineContent("/review it")?.[0]).toEqual({
+    expect(textToHydratedInlineContent("/review it", KNOWN)?.[0]).toEqual({
       type: "reference",
       attrs: expect.objectContaining({
         refType: "skill",
         id: "review",
         meta: { invocationPrefix: "/" },
       }),
+    })
+  })
+
+  describe("bare tokens the agent does not advertise", () => {
+    it("leaves a token matching no command as prose", () => {
+      expect(
+        textToHydratedInlineContent("/notacommand hello", KNOWN)
+      ).toBeNull()
+    })
+
+    it("leaves a prefix of a real command as prose", () => {
+      // `/rev` is not `/review`, and a menu row nobody picked is not a choice.
+      expect(textToHydratedInlineContent("/rev it", KNOWN)).toBeNull()
+      expect(textToHydratedInlineContent("/reviews it", KNOWN)).toBeNull()
+    })
+
+    it("matches command names case-sensitively", () => {
+      // The agent CLI reads the name it advertised; `/Review` is not it.
+      expect(textToHydratedInlineContent("/Review it", KNOWN)).toBeNull()
+    })
+
+    it("leaves paths, mid-word slashes and urls as prose", () => {
+      for (const text of [
+        "/tmp/x is the scratch dir",
+        "/usr/bin/env python",
+        "check and/or fix it",
+        "open http://x now",
+        "/etc please",
+      ]) {
+        expect(textToHydratedInlineContent(text, KNOWN)).toBeNull()
+      }
+    })
+
+    it("badges nothing at all with no advertised list", () => {
+      // The connection is still coming up (or there is no agent behind this
+      // box): unverifiable is not the same as valid.
+      expect(textToHydratedInlineContent("/review it")).toBeNull()
+      expect(textToSeededInlineContent("/review it")).toEqual([
+        { type: "text", text: "/review it" },
+      ])
+    })
+
+    it("keeps a reference link in text whose command is unknown", () => {
+      // Pass 1 is unambiguous — a `file:` link was inserted deliberately — so
+      // gating the bare token must not cost the badge next to it.
+      expect(
+        textToHydratedInlineContent(
+          "/notacommand [app.ts](file:///repo/app.ts)",
+          KNOWN
+        )
+      ).toEqual([
+        { type: "text", text: "/notacommand " },
+        {
+          type: "reference",
+          attrs: expect.objectContaining({ uri: "file:///repo/app.ts" }),
+        },
+      ])
+    })
+
+    it("keeps an unknown token's text byte for byte around a known one", () => {
+      expect(
+        textToSeededInlineContent("run /nope then /review ok", KNOWN)
+      ).toEqual([
+        { type: "text", text: "run /nope then " },
+        {
+          type: "reference",
+          attrs: expect.objectContaining({ refType: "skill", id: "review" }),
+        },
+        { type: "text", text: " ok" },
+      ])
     })
   })
 

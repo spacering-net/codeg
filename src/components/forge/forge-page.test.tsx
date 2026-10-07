@@ -366,7 +366,49 @@ describe("ForgePage list failures", () => {
 })
 
 /**
- * A repository codeg cannot read at all — Bitbucket, Gitee, somebody's Gitea.
+ * The sort control is offered only where the forge can honour it.
+ *
+ * Gitea cannot: its issues endpoint hard-codes newest-first and takes no sort
+ * parameter at all, so a select there would change the URL, change nothing on
+ * the server, and leave a list that says it is sorted one way while being
+ * sorted another. Hiding it is the honest version of that, and it costs
+ * nothing — the state stays at `newest`, which is exactly what Gitea serves.
+ */
+describe("ForgePage sort control", () => {
+  const GITEA: ForgeRemote = {
+    server_host: "git.corp.example",
+    owner_repo: "acme/app",
+    remote_url: "https://git.corp.example/acme/app.git",
+    provider: "gitea",
+    supported: true,
+  }
+
+  it("is offered on a forge that can order its list", async () => {
+    vi.mocked(folderForgeRemote).mockResolvedValue(REMOTE)
+    mount()
+
+    expect(
+      await screen.findByRole("combobox", { name: "Sort" })
+    ).toBeInTheDocument()
+  })
+
+  it("is absent on Gitea, which serves one order and takes no parameter", async () => {
+    vi.mocked(folderForgeRemote).mockResolvedValue(GITEA)
+    mount()
+
+    // Waited for through something the page only renders once the remote has
+    // resolved — otherwise this passes on the frame before the control would
+    // have appeared, whichever provider it is.
+    await waitFor(() => expect(forgeListIssues).toHaveBeenCalled())
+    expect(
+      screen.queryByRole("combobox", { name: "Sort" })
+    ).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * A repository codeg cannot read at all — Bitbucket, Gitee, an unrecognized
+ * self-hosted instance.
  *
  * Its remote parses perfectly well and resolves to a provider, because the
  * backend's last resort for an unrecognized host is GitHub. What it does NOT
@@ -385,13 +427,13 @@ describe("ForgePage on a host that is neither forge", () => {
     supported: false,
   }
 
-  it("says only GitHub and GitLab are supported, and asks nothing of either", async () => {
+  it("names the forges it does support, and asks nothing of either", async () => {
     vi.mocked(folderForgeRemote).mockResolvedValue(UNSUPPORTED)
     mount()
 
     expect(
       await screen.findByText(
-        "The repository panel supports GitHub and GitLab only, and gitee.com is not recognized as either. If it is a self-hosted GitHub Enterprise or GitLab instance, add an account for it under Settings → Version Control."
+        "The repository panel supports GitHub, GitLab and Gitea only, and gitee.com is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea or Forgejo instance, add an account for it under Settings → Version Control."
       )
     ).toBeInTheDocument()
     // No request is worth spending on a host no credential of ours fits — not

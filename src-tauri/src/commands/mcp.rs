@@ -71,13 +71,70 @@ pub enum McpAppType {
     Qoder,
     /// Serializes as `antigravity`, matching `AgentType::as_wire`.
     Antigravity,
+    /// Serializes as `pi`, matching `AgentType::as_wire`. Scan-only: codeg
+    /// reads and round-trips the pi MCP EXTENSION's config, but pi is not an
+    /// assignable target and gets no MCP over the ACP wire. See the pi section
+    /// below.
+    Pi,
 }
+
+/// Every app the local-MCP write paths walk, in the order they walk it.
+///
+/// `mcp_upsert_local_server` means "these agents and NO others": it upserts into
+/// each targeted app and REMOVES the server from each of the rest, so an app
+/// missing here silently keeps a stale entry that the next scan reports as a
+/// live assignment. `mcp_remove_server`'s "remove from everywhere" branch has
+/// the same requirement, and missing an app there is what makes an uninstalled
+/// server come back on the next refresh. Both used to keep their own hand-typed
+/// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
+/// (which fails to compile when a variant is added) is what keeps them honest.
+const ALL_MCP_APPS: [McpAppType; 15] = [
+    McpAppType::ClaudeCode,
+    McpAppType::Codex,
+    McpAppType::Gemini,
+    McpAppType::OpenClaw,
+    McpAppType::OpenCode,
+    McpAppType::Cline,
+    McpAppType::Hermes,
+    McpAppType::CodeBuddy,
+    McpAppType::KimiCode,
+    McpAppType::Grok,
+    McpAppType::Cursor,
+    McpAppType::DeepSeek,
+    McpAppType::Qoder,
+    McpAppType::Antigravity,
+    McpAppType::Pi,
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalMcpServer {
     pub id: String,
     pub spec: Value,
     pub apps: Vec<McpAppType>,
+}
+
+/// One agent whose config the scan could not read.
+///
+/// Carries the reader's own message so the user can go fix the file — the
+/// alternative (swallowing it) would leave that agent's servers missing from
+/// the list with nothing to explain why.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalMcpSourceWarning {
+    pub app: McpAppType,
+    pub message: String,
+}
+
+/// A local scan: every server codeg could read, plus a warning per source it
+/// could not.
+///
+/// Deliberately not a bare `Vec<LocalMcpServer>` with a fail-fast error. These
+/// config files are owned by other agents and by the user, so any one of them
+/// can be half-written at any moment; letting a single unreadable file abort
+/// the scan hid EVERY agent's servers behind one error banner (issue #632).
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalMcpScan {
+    pub servers: Vec<LocalMcpServer>,
+    pub warnings: Vec<LocalMcpSourceWarning>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,7 +210,7 @@ pub struct McpMarketplaceServerDetail {
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_scan_local() -> Result<Vec<LocalMcpServer>, AppCommandError> {
+pub async fn mcp_scan_local() -> LocalMcpScan {
     scan_local_servers()
 }
 
@@ -376,7 +433,7 @@ pub async fn mcp_install_from_marketplace(
         upsert_server_for_app(app, &server_id, &canonical_spec)?;
     }
 
-    find_local_server(&server_id)?.ok_or_else(|| {
+    find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
             "installed server '{server_id}', but failed to load it from local configuration"
         ))
@@ -412,28 +469,13 @@ pub async fn mcp_upsert_local_server(
             "none of the selected agents can host this MCP server's transport (e.g. Codex does not support SSE)",
         ));
     }
-    let all_apps = [
-        McpAppType::ClaudeCode,
-        McpAppType::Codex,
-        McpAppType::Gemini,
-        McpAppType::OpenClaw,
-        McpAppType::OpenCode,
-        McpAppType::Cline,
-        McpAppType::Hermes,
-        McpAppType::CodeBuddy,
-        McpAppType::KimiCode,
-        McpAppType::Grok,
-        McpAppType::Cursor,
-        McpAppType::DeepSeek,
-        McpAppType::Qoder,
-        McpAppType::Antigravity,
-    ];
 
     // Nothing below is reversible, and the walk REMOVES the server from every
     // non-target agent, so a target whose config cannot take it has to be
     // caught before the first write rather than halfway through.
+    require_complete_scan(&scan_local_servers())?;
     with_upsert_preflight(&target_set, || {
-        for app in all_apps {
+        for app in ALL_MCP_APPS {
             if target_set.contains(&app) {
                 upsert_server_for_app(app, &server_id, &canonical_spec)?;
             } else {
@@ -443,7 +485,7 @@ pub async fn mcp_upsert_local_server(
         Ok(())
     })?;
 
-    find_local_server(&server_id)?.ok_or_else(|| {
+    find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
             "saved local MCP server '{server_id}', but failed to reload it"
         ))
@@ -456,7 +498,12 @@ pub async fn mcp_set_server_apps(
     apps: Vec<McpAppType>,
 ) -> Result<Option<LocalMcpServer>, AppCommandError> {
     let target_apps = normalize_apps(apps);
-    let current = find_local_server(&server_id)?
+    let scan = scan_local_servers();
+    require_complete_scan(&scan)?;
+    let current = scan
+        .servers
+        .into_iter()
+        .find(|item| item.id == server_id)
         .ok_or_else(|| mcp_not_found(format!("local MCP server not found: {server_id}")))?;
 
     // Preflight-exclude apps whose config can't host this transport (e.g. Codex +
@@ -492,7 +539,7 @@ pub async fn mcp_set_server_apps(
         Ok(())
     })?;
 
-    find_local_server(&server_id)
+    Ok(find_local_server(&server_id))
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -502,22 +549,7 @@ pub async fn mcp_remove_server(
 ) -> Result<bool, AppCommandError> {
     let target_apps = match apps {
         Some(selected) => normalize_apps(selected),
-        None => vec![
-            McpAppType::ClaudeCode,
-            McpAppType::Codex,
-            McpAppType::Gemini,
-            McpAppType::OpenClaw,
-            McpAppType::OpenCode,
-            McpAppType::Cline,
-            McpAppType::Hermes,
-            McpAppType::CodeBuddy,
-            McpAppType::KimiCode,
-            McpAppType::Grok,
-            McpAppType::Cursor,
-            McpAppType::DeepSeek,
-            McpAppType::Qoder,
-            McpAppType::Antigravity,
-        ],
+        None => ALL_MCP_APPS.to_vec(),
     };
 
     if target_apps.is_empty() {
@@ -744,12 +776,56 @@ fn cline_config_path() -> PathBuf {
         .join("cline_mcp_settings.json")
 }
 
+/// Read a file that is absent for most users, distinguishing "nobody has
+/// configured this agent" from "this agent's config exists and codeg could not
+/// read it".
+///
+/// The absence test is the read itself, not `Path::exists()`: `exists()`
+/// answers `false` for ANY failed stat — a permission wall on a parent
+/// directory, a symlink loop — so it would report a file codeg simply could not
+/// open as an empty config. `scan_local_servers` would then leave that agent
+/// out with no warning, and `require_complete_scan` would wave through a
+/// reassignment that strips the server from the agents it COULD read and then
+/// fails on the write to this one.
+fn read_config_to_string(path: &Path) -> Result<Option<String>, AppCommandError> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => {
+            // `AppCommandError::io` flattens the kind to "Permission denied" /
+            // "I/O operation failed" and keeps only the OS text, neither of
+            // which names the file. The scan warning built from this is the
+            // user's only pointer to what to go fix, so put the path in.
+            let detail = format!("{}: {err}", path.display());
+            Err(AppCommandError::io(err).with_detail(detail))
+        }
+    }
+}
+
 fn read_json_file(path: &Path) -> Result<Value, AppCommandError> {
-    if !path.exists() {
+    let Some(raw) = read_config_to_string(path)? else {
+        return Ok(json!({}));
+    };
+    // A 0-byte (or whitespace-only) config means "nothing configured", exactly
+    // like an absent one: several of these agents touch the file into existence
+    // before they ever write a server into it. serde has no such notion and
+    // reports `EOF while parsing a value at line 1 column 0`, which used to be
+    // raised as a hard configuration error (issue #632). The Hermes writer
+    // already applies this rule to its own config; it belongs here for every
+    // JSON-backed source.
+    //
+    // The writers share this reader, so an agent that truncates its config
+    // before rewriting it can be caught mid-write and have codeg start from
+    // `{}` — and unlike the ordinary stale read this subsystem already lives
+    // with (nothing locks these files), that one loses settings even when the
+    // agent's rewrite changed nothing. It is accepted deliberately: the window
+    // is one non-atomic rewrite wide, while REFUSING empty files would leave a
+    // user whose config is PERSISTENTLY 0 bytes — the reported case — unable to
+    // assign a server to that agent at all, and codeg cannot tell the two
+    // apart from a single read.
+    if raw.trim().is_empty() {
         return Ok(json!({}));
     }
-
-    let raw = fs::read_to_string(path).map_err(AppCommandError::io)?;
     serde_json::from_str::<Value>(&raw)
         .map_err(|e| mcp_configuration_invalid(format!("invalid JSON at {}: {e}", path.display())))
 }
@@ -769,11 +845,9 @@ fn write_json_file(path: &Path, value: &Value) -> Result<(), AppCommandError> {
 
 fn read_codex_root_toml() -> Result<toml::Value, AppCommandError> {
     let path = codex_config_toml_path();
-    if !path.exists() {
+    let Some(raw) = read_config_to_string(&path)? else {
         return Ok(toml::Value::Table(toml::map::Map::new()));
-    }
-
-    let raw = fs::read_to_string(&path).map_err(AppCommandError::io)?;
+    };
     let parsed = raw.parse::<toml::Value>().map_err(|e| {
         mcp_configuration_invalid(format!("invalid TOML at {}: {e}", path.display()))
     })?;
@@ -2543,6 +2617,125 @@ fn remove_deepseek_server_at(path: &Path, id: &str) -> Result<bool, AppCommandEr
 }
 
 // ---------------------------------------------------------------------------
+// pi  (<PI_CODING_AGENT_DIR|~/.pi/agent>/mcp.json  →  top-level `mcpServers`)
+//
+// The odd one out: this file belongs to neither pi nor codeg but to a
+// THIRD-PARTY pi extension — pi itself has no MCP support, and the extension is
+// what reads `mcpServers` and mounts the servers. The schema it accepts is
+// Claude Code's (`command`/`args`/`env` | `url`/`headers`), which is codeg's
+// canonical shape, so no translation layer is needed (issue #653).
+//
+// SCAN-ONLY, in both directions:
+//
+//   - Not an assignable target. `APP_OPTIONS` in `mcp-settings.tsx` omits pi, so
+//     no checkbox can add a server here; the settings page carries an existing
+//     `pi` assignment forward on save instead (`hiddenLegacyApps`), exactly as
+//     it does for OpenClaw. Writing here for a user without the extension would
+//     create a file nothing on the machine reads.
+//   - Still fully round-trippable. `Pi` IS in `ALL_MCP_APPS`, so editing an
+//     entry rewrites it in place and "uninstall" clears it — without that, a
+//     removed server would reappear at the next scan.
+//   - Nothing reaches pi over the wire. `read_servers_for_agent_type` returns an
+//     empty map for `AgentType::Pi` on purpose (pi-acp drops `session/new`'s
+//     `mcpServers`); do NOT wire it to `read_pi_servers` to "fix" the asymmetry.
+//
+// Registered LAST in `local_mcp_readers`, so on an id shared with an assignable
+// agent that agent's spec wins the merge — and a later save writes THAT spec
+// into this file. Any extension-specific key on the losing pi entry is lost
+// (Kimi has a `KIMI_SHARED_KEYS` carve-out for the same hazard; pi gets none
+// because the extension's schema beyond `mcpServers` is not pinned anywhere).
+//
+// Resolves the agent dir from the PROCESS env, like pi's `settings.json` /
+// `auth.json` / `models.json` writers in `commands::acp` — a per-agent BYO
+// `PI_CODING_AGENT_DIR` override is not visible here, the same known limitation
+// those three already have.
+// ---------------------------------------------------------------------------
+
+fn pi_mcp_path() -> PathBuf {
+    super::acp::pi_agent_dir().join("mcp.json")
+}
+
+fn read_pi_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+    read_pi_servers_at(&pi_mcp_path())
+}
+
+fn read_pi_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCommandError> {
+    let root = read_json_file(path)?;
+    let mut out = BTreeMap::new();
+
+    let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else {
+        return Ok(out);
+    };
+
+    for (id, spec) in servers {
+        match canonicalize_spec(spec, "pi config") {
+            Ok(normalized) => {
+                out.insert(id.to_string(), normalized);
+            }
+            Err(err) => {
+                tracing::warn!("[MCP] skip invalid pi MCP entry id={id}: {err}");
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+fn upsert_pi_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    upsert_pi_server_at(&pi_mcp_path(), id, spec)
+}
+
+fn upsert_pi_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
+    if !root.is_object() {
+        root = json!({});
+    }
+
+    let canonical = canonicalize_spec(spec, "pi write")?;
+
+    let obj = root.as_object_mut().ok_or_else(|| {
+        mcp_configuration_invalid(format!("invalid JSON root in {}", path.display()))
+    })?;
+    if !obj.get("mcpServers").map(Value::is_object).unwrap_or(false) {
+        obj.insert("mcpServers".to_string(), Value::Object(Map::new()));
+    }
+
+    let map = obj
+        .get_mut("mcpServers")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            mcp_configuration_invalid(format!("invalid mcpServers in {}", path.display()))
+        })?;
+    map.insert(id.to_string(), canonical);
+
+    write_json_file(path, &root)
+}
+
+fn remove_pi_server(id: &str) -> Result<bool, AppCommandError> {
+    remove_pi_server_at(&pi_mcp_path(), id)
+}
+
+fn remove_pi_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let mut root = read_json_file(path)?;
+    let Some(obj) = root.as_object_mut() else {
+        return Ok(false);
+    };
+    let Some(servers) = obj.get_mut("mcpServers").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+
+    let removed = servers.remove(id).is_some();
+    if removed {
+        write_json_file(path, &root)?;
+    }
+    Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
 // Qoder  (~/.qoder/settings.json  →  top-level `mcpServers`)
 //
 // Qoder inherits gemini-cli's settings schema: user-global MCP servers live in
@@ -2865,142 +3058,168 @@ fn remove_antigravity_server_at(path: &Path, id: &str) -> Result<bool, AppComman
     Ok(removed)
 }
 
-fn scan_local_servers() -> Result<Vec<LocalMcpServer>, AppCommandError> {
+type LocalMcpReadResult = Result<BTreeMap<String, Value>, AppCommandError>;
+type LocalMcpReadFn = fn() -> LocalMcpReadResult;
+
+#[derive(Clone, Copy)]
+struct LocalMcpReader {
+    source: &'static str,
+    app: McpAppType,
+    read: LocalMcpReadFn,
+}
+
+impl LocalMcpReader {
+    const fn new(source: &'static str, app: McpAppType, read: LocalMcpReadFn) -> Self {
+        Self { source, app, read }
+    }
+}
+
+fn local_mcp_readers() -> [LocalMcpReader; 15] {
+    [
+        LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, read_claude_servers),
+        LocalMcpReader::new("Codex", McpAppType::Codex, read_codex_servers),
+        LocalMcpReader::new("OpenCode", McpAppType::OpenCode, read_opencode_servers),
+        LocalMcpReader::new("Gemini", McpAppType::Gemini, read_gemini_servers),
+        LocalMcpReader::new("OpenClaw", McpAppType::OpenClaw, read_openclaw_servers),
+        LocalMcpReader::new("Cline", McpAppType::Cline, read_cline_servers),
+        LocalMcpReader::new("Hermes", McpAppType::Hermes, read_hermes_servers),
+        LocalMcpReader::new("CodeBuddy", McpAppType::CodeBuddy, read_codebuddy_servers),
+        LocalMcpReader::new("Kimi Code", McpAppType::KimiCode, read_kimi_code_servers),
+        LocalMcpReader::new("Grok", McpAppType::Grok, read_grok_servers),
+        LocalMcpReader::new("Cursor", McpAppType::Cursor, read_cursor_servers),
+        LocalMcpReader::new("DeepSeek", McpAppType::DeepSeek, read_deepseek_servers),
+        LocalMcpReader::new(
+            "Antigravity",
+            McpAppType::Antigravity,
+            read_antigravity_servers,
+        ),
+        LocalMcpReader::new("Qoder", McpAppType::Qoder, read_qoder_servers),
+        LocalMcpReader::new("pi", McpAppType::Pi, read_pi_servers),
+    ]
+}
+
+/// Merge every agent's MCP config into one list, degrading a source that cannot
+/// be read into a warning instead of failing the whole scan.
+///
+/// These files belong to the other agents and to the user, so any of them can be
+/// empty, half-written or hand-edited into something codeg cannot parse. A
+/// fail-fast `?` here meant one such file hid every OTHER agent's servers too
+/// (issue #632: an empty `~/.gemini/config/mcp_config.json` emptied the entire
+/// local MCP list). The broken source drops out; the rest of the scan stands.
+///
+/// Reading degrades. WRITING does not: callers that mutate must first clear the
+/// scan through [`require_complete_scan`].
+fn scan_local_servers_from_readers(readers: &[LocalMcpReader]) -> LocalMcpScan {
     let mut merged: BTreeMap<String, (Value, BTreeSet<McpAppType>)> = BTreeMap::new();
-
-    for (id, spec) in read_claude_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::ClaudeCode);
-    }
-
-    for (id, spec) in read_codex_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Codex);
-    }
-
-    for (id, spec) in read_opencode_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::OpenCode);
-    }
-
-    for (id, spec) in read_gemini_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Gemini);
-    }
-
+    let mut warnings: Vec<LocalMcpSourceWarning> = Vec::new();
     // OpenClaw is the one agent that shares a key with Kimi (`auth`), so keep
     // what its own config declares: below, that is what tells Kimi's pass an
     // OpenClaw setting from an echo codeg once wrote into some other agent's
     // file — and it has to be the VALUE, since the agent that wins the merge may
     // carry neither. See `KIMI_SHARED_KEYS`.
     let mut openclaw_declares: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
-    for (id, spec) in read_openclaw_servers()? {
-        let declared: Map<String, Value> = KIMI_SHARED_KEYS
-            .iter()
-            .filter_map(|key| {
-                spec.get(*key)
-                    .map(|value| ((*key).to_string(), value.clone()))
-            })
-            .collect();
-        if !declared.is_empty() {
-            openclaw_declares.insert(id.clone(), declared);
+
+    for reader in readers {
+        let servers = match (reader.read)() {
+            Ok(servers) => servers,
+            Err(err) => {
+                tracing::warn!(
+                    source = reader.source,
+                    app = ?reader.app,
+                    error = ?err,
+                    "[MCP] failed to scan local MCP source; skipping"
+                );
+                // A parse failure's own message names the offending file; an I/O
+                // failure's does not (`AppCommandError::io` flattens those to
+                // "Permission denied" and parks the specifics in `detail`), so
+                // carry both or the warning cannot be acted on.
+                warnings.push(LocalMcpSourceWarning {
+                    app: reader.app,
+                    message: match err.detail {
+                        Some(detail) => format!("{}: {detail}", err.message),
+                        None => err.message,
+                    },
+                });
+                continue;
+            }
+        };
+
+        for (id, spec) in servers {
+            if reader.app == McpAppType::OpenClaw {
+                let declared: Map<String, Value> = KIMI_SHARED_KEYS
+                    .iter()
+                    .filter_map(|key| {
+                        spec.get(*key)
+                            .map(|value| ((*key).to_string(), value.clone()))
+                    })
+                    .collect();
+                if !declared.is_empty() {
+                    openclaw_declares.insert(id.clone(), declared);
+                }
+            }
+
+            let entry = merged
+                .entry(id.clone())
+                .or_insert_with(|| (spec.clone(), BTreeSet::new()));
+            if reader.app == McpAppType::KimiCode {
+                // Kimi models fields no other agent does, and this merge is
+                // first-writer-wins — so when an earlier agent already claimed the id,
+                // fold Kimi's own fields back in or they never reach the editor (and the
+                // next save writes them off disk). See `merge_kimi_extension_fields`.
+                let owner_values = openclaw_declares.remove(&id).unwrap_or_default();
+                merge_kimi_extension_fields(&mut entry.0, &spec, &owner_values);
+            }
+            entry.1.insert(reader.app);
         }
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::OpenClaw);
     }
 
-    for (id, spec) in read_cline_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Cline);
+    LocalMcpScan {
+        servers: merged
+            .into_iter()
+            .map(|(id, (spec, apps))| LocalMcpServer {
+                id,
+                spec,
+                apps: apps.into_iter().collect(),
+            })
+            .collect(),
+        warnings,
     }
-
-    for (id, spec) in read_hermes_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Hermes);
-    }
-
-    for (id, spec) in read_codebuddy_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::CodeBuddy);
-    }
-
-    for (id, spec) in read_kimi_code_servers()? {
-        let owner_values = openclaw_declares.remove(&id).unwrap_or_default();
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        // Kimi models fields no other agent does, and this merge is
-        // first-writer-wins — so when an earlier agent already claimed the id,
-        // fold Kimi's own fields back in or they never reach the editor (and the
-        // next save writes them off disk). See `merge_kimi_extension_fields`.
-        merge_kimi_extension_fields(&mut entry.0, &spec, &owner_values);
-        entry.1.insert(McpAppType::KimiCode);
-    }
-
-    for (id, spec) in read_grok_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Grok);
-    }
-
-    for (id, spec) in read_cursor_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Cursor);
-    }
-
-    for (id, spec) in read_deepseek_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::DeepSeek);
-    }
-
-    for (id, spec) in read_antigravity_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Antigravity);
-    }
-
-    for (id, spec) in read_qoder_servers()? {
-        let entry = merged
-            .entry(id)
-            .or_insert_with(|| (spec.clone(), BTreeSet::new()));
-        entry.1.insert(McpAppType::Qoder);
-    }
-
-    Ok(merged
-        .into_iter()
-        .map(|(id, (spec, apps))| LocalMcpServer {
-            id,
-            spec,
-            apps: apps.into_iter().collect(),
-        })
-        .collect())
 }
 
-fn find_local_server(server_id: &str) -> Result<Option<LocalMcpServer>, AppCommandError> {
-    let servers = scan_local_servers()?;
-    Ok(servers.into_iter().find(|item| item.id == server_id))
+fn scan_local_servers() -> LocalMcpScan {
+    scan_local_servers_from_readers(&local_mcp_readers())
+}
+
+fn find_local_server(server_id: &str) -> Option<LocalMcpServer> {
+    scan_local_servers()
+        .servers
+        .into_iter()
+        .find(|item| item.id == server_id)
+}
+
+/// Refuse a reassignment that would act on an INCOMPLETE picture of who holds
+/// the server.
+///
+/// `mcp_upsert_local_server` and `mcp_set_server_apps` both mean "these agents,
+/// and no others" — every agent absent from the list they are handed gets the
+/// server REMOVED. That list is seeded from a scan, so an agent whose config
+/// could not be read is absent for that reason alone, and acting on it would
+/// strip the server from an agent the user never unchecked (and then, in
+/// `mcp_set_server_apps`, report it as held by nobody).
+///
+/// So: READING degrades past an unreadable source (issue #632 — one bad file
+/// must not hide every agent's servers), WRITING does not. Blocking the save
+/// costs the user one "fix this file" round trip; guessing costs them an
+/// assignment they never asked to lose.
+fn require_complete_scan(scan: &LocalMcpScan) -> Result<(), AppCommandError> {
+    let Some(warning) = scan.warnings.first() else {
+        return Ok(());
+    };
+    Err(mcp_configuration_invalid(format!(
+        "cannot change MCP server assignments while {:?}'s configuration cannot be read \
+         ({}). Fix or remove that file, then try again.",
+        warning.app, warning.message
+    )))
 }
 
 fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), AppCommandError> {
@@ -3019,6 +3238,7 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
         McpAppType::DeepSeek => upsert_deepseek_server(id, spec),
         McpAppType::Qoder => upsert_qoder_server(id, spec),
         McpAppType::Antigravity => upsert_antigravity_server(id, spec),
+        McpAppType::Pi => upsert_pi_server(id, spec),
     }
 }
 
@@ -3039,7 +3259,8 @@ pub fn read_servers_for_agent_type(
         AgentType::Grok => read_grok_servers(),
         AgentType::Cursor => read_cursor_servers(),
         // pi-acp drops ACP-wire MCP and pi has no native MCP (it needs a
-        // third-party extension), so codeg manages no MCP servers for pi (v1).
+        // third-party extension). Scanning its extension config must not
+        // change the servers forwarded to a pi ACP session.
         AgentType::Pi => Ok(BTreeMap::new()),
         // deepseek-acp has no native MCP config file: it takes servers only
         // as `session/new`'s `mcpServers`. `$DSH_HOME/mcp.json` is codeg's own
@@ -3097,8 +3318,9 @@ fn read_kimi_code_servers() -> Result<BTreeMap<String, Value>, AppCommandError> 
 /// (Kimi ignores it). `transport` is then dropped from the canonical spec so it
 /// can't leak into another agent's config on a cross-agent sync. See issue #325.
 ///
-/// Schema last checked against 0.40.1 (byte-identical to 0.39.1): unchanged
-/// since 0.23.3 apart from the optional `runtime_id` stdio field 0.38.0 added.
+/// Schema last checked against 0.42.0: unchanged since 0.23.3 apart from the
+/// optional `runtime_id` stdio field 0.38.0 added. 0.42.0 rewrote the agent
+/// loop but left `mcpCore/config-schema.ts` byte-identical.
 fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppCommandError> {
     let Some(obj) = spec.as_object() else {
         return canonicalize_spec(spec, "Kimi Code config");
@@ -3412,10 +3634,9 @@ fn grok_config_toml_path() -> PathBuf {
 }
 
 fn read_grok_root_toml_at(path: &Path) -> Result<toml::Value, AppCommandError> {
-    if !path.exists() {
+    let Some(raw) = read_config_to_string(path)? else {
         return Ok(toml::Value::Table(toml::map::Map::new()));
-    }
-    let raw = fs::read_to_string(path).map_err(AppCommandError::io)?;
+    };
     let parsed = raw.parse::<toml::Value>().map_err(|e| {
         mcp_configuration_invalid(format!("invalid TOML at {}: {e}", path.display()))
     })?;
@@ -3965,21 +4186,31 @@ fn canonical_to_hermes_entry(spec: &Value) -> Result<serde_yaml::Value, AppComma
     })
 }
 
-/// Read Hermes' MCP servers from `~/.hermes/config.yaml` (`mcp_servers`). A
-/// missing or unparseable config.yaml surfaces no servers rather than failing
-/// the whole MCP scan — the file is large and user-owned.
+/// Read Hermes' MCP servers from `~/.hermes/config.yaml` (`mcp_servers`).
+///
+/// An absent or empty config.yaml is simply "no Hermes servers" — most machines
+/// have no Hermes at all. Anything else that stops the file being read is an
+/// `Err`, like every other source: `scan_local_servers` turns that into a
+/// warning rather than a failed scan, and `require_complete_scan` needs to see
+/// it. Swallowing it here (as this once did, back when an `Err` would have
+/// aborted the whole scan) would leave Hermes silently missing from a scan that
+/// still claims to be complete — and a reassignment computed from that scan
+/// would strip the server from the agents that DID load, then fail on the
+/// Hermes write.
 fn read_hermes_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
-    let path = crate::commands::acp::hermes_config_yaml_path();
-    let Ok(raw) = fs::read_to_string(&path) else {
+    read_hermes_servers_at(&crate::commands::acp::hermes_config_yaml_path())
+}
+
+fn read_hermes_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCommandError> {
+    let Some(raw) = read_config_to_string(path)? else {
         return Ok(BTreeMap::new());
     };
-    let root: serde_yaml::Value = match serde_yaml::from_str(&raw) {
-        Ok(value) => value,
-        Err(err) => {
-            tracing::warn!("[MCP] skip Hermes mcp_servers: invalid config.yaml: {err}");
-            return Ok(BTreeMap::new());
-        }
-    };
+    if raw.trim().is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let root: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|err| {
+        mcp_configuration_invalid(format!("invalid YAML at {}: {err}", path.display()))
+    })?;
 
     let mut out = BTreeMap::new();
     let Some(servers) = root
@@ -4111,6 +4342,7 @@ fn remove_server_for_app(app: McpAppType, id: &str) -> Result<bool, AppCommandEr
         McpAppType::DeepSeek => remove_deepseek_server(id),
         McpAppType::Qoder => remove_qoder_server(id),
         McpAppType::Antigravity => remove_antigravity_server(id),
+        McpAppType::Pi => remove_pi_server(id),
     }
 }
 
@@ -5867,6 +6099,287 @@ fn resolve_smithery_install_spec_with_selection(
 mod tests {
     use super::*;
 
+    fn test_claude_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Ok(BTreeMap::from([
+            (
+                "claude-only".to_string(),
+                json!({"type": "stdio", "command": "claude-only"}),
+            ),
+            (
+                "shared".to_string(),
+                json!({"type": "stdio", "command": "claude-wins"}),
+            ),
+        ]))
+    }
+
+    fn test_gemini_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Ok(BTreeMap::from([
+            (
+                "gemini-only".to_string(),
+                json!({"type": "stdio", "command": "gemini-only"}),
+            ),
+            (
+                "shared".to_string(),
+                json!({"type": "stdio", "command": "gemini-loses"}),
+            ),
+        ]))
+    }
+
+    fn test_broken_antigravity_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Err(mcp_configuration_invalid("broken Antigravity fixture"))
+    }
+
+    fn test_openclaw_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Ok(BTreeMap::from([(
+            "shared-remote".to_string(),
+            json!({
+                "type": "http",
+                "url": "https://example.test/mcp",
+                "auth": "oauth"
+            }),
+        )]))
+    }
+
+    fn test_kimi_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Ok(BTreeMap::from([(
+            "shared-remote".to_string(),
+            json!({
+                "type": "http",
+                "url": "https://example.test/mcp",
+                "bearerTokenEnvVar": "MCP_TOKEN"
+            }),
+        )]))
+    }
+
+    #[test]
+    fn pi_mcp_source_is_registered() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        let raw = json!({"mcpServers": {
+            "shared": {"command": "pi-shared"},
+            "pi-only": {"command": "npx", "args": ["-y", "test-mcp"],
+                        "env": {"TEST_KEY": "fixture"}},
+            "remote": {"url": "https://example.test/mcp", "headers": {"X-Test": "fixture"}},
+            "invalid": {"command": ""}
+        }})
+        .to_string();
+        fs::write(&path, &raw).unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let pi = local_mcp_readers()
+                .into_iter()
+                .find(|reader| serde_json::to_value(reader.app).unwrap() == json!("pi"))
+                .expect("pi must be a registered scan source");
+            let scan = scan_local_servers_from_readers(&[
+                LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
+                pi,
+            ]);
+            assert!(scan.warnings.is_empty());
+            assert_eq!(scan.servers.len(), 4);
+            let shared = scan
+                .servers
+                .iter()
+                .find(|server| server.id == "shared")
+                .unwrap();
+            assert_eq!(shared.apps, [McpAppType::ClaudeCode, McpAppType::Pi]);
+            assert_eq!(shared.spec["command"], "claude-wins");
+            let local = scan
+                .servers
+                .iter()
+                .find(|server| server.id == "pi-only")
+                .unwrap();
+            assert_eq!(local.apps, [McpAppType::Pi]);
+            assert_eq!(local.spec["type"], "stdio");
+            assert_eq!(local.spec["args"], json!(["-y", "test-mcp"]));
+            assert_eq!(local.spec["env"]["TEST_KEY"], "fixture");
+            let remote = scan
+                .servers
+                .iter()
+                .find(|server| server.id == "remote")
+                .unwrap();
+            assert_eq!(remote.spec["type"], "http");
+            assert_eq!(remote.spec["headers"]["X-Test"], "fixture");
+            // Discovery must neither rewrite the extension's file nor change ACP forwarding.
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+            assert!(
+                read_servers_for_agent_type(crate::models::agent::AgentType::Pi)
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
+
+    #[test]
+    fn pi_mcp_missing_empty_and_invalid_configs_follow_scan_policy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        assert!(read_pi_servers_at(&path).unwrap().is_empty());
+        assert!(!remove_pi_server_at(&path, "missing").unwrap());
+        assert!(!path.exists());
+        for raw in ["", "  \n", "{}", r#"{"mcpServers":{}}"#] {
+            fs::write(&path, raw).unwrap();
+            assert!(read_pi_servers_at(&path).unwrap().is_empty());
+        }
+        fs::write(&path, "{broken").unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let scan = scan_local_servers_from_readers(&[
+                LocalMcpReader::new("pi", McpAppType::Pi, read_pi_servers),
+                LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
+            ]);
+            assert_eq!(scan.servers.len(), 2);
+            assert_eq!(scan.warnings.len(), 1);
+            assert_eq!(scan.warnings[0].app, McpAppType::Pi);
+            assert!(scan.warnings[0].message.contains(path.to_str().unwrap()));
+            assert!(require_complete_scan(&scan).is_err());
+            assert!(
+                upsert_server_for_app(McpAppType::Pi, "test", &json!({"command": "test"})).is_err()
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), "{broken");
+        });
+    }
+
+    #[test]
+    fn pi_mcp_edit_and_remove_preserve_other_extension_settings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        let original = json!({
+            "settings": {"toolPrefix": "mcp"},
+            "mcpServers": {
+                "existing": {"command": "keep-me", "extensionOption": true},
+                "editable": {"command": "before", "extensionOption": {"enabled": true}}
+            }
+        });
+        fs::write(&path, original.to_string()).unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let mut spec = read_pi_servers().unwrap().remove("editable").unwrap();
+            spec["command"] = json!("after");
+            upsert_server_for_app(McpAppType::Pi, "editable", &spec).unwrap();
+            let edited = read_json_file(&path).unwrap();
+            assert_eq!(edited["settings"], original["settings"]);
+            assert_eq!(
+                edited["mcpServers"]["existing"],
+                original["mcpServers"]["existing"]
+            );
+            assert_eq!(edited["mcpServers"]["editable"]["command"], "after");
+            assert_eq!(
+                edited["mcpServers"]["editable"]["extensionOption"],
+                json!({"enabled": true})
+            );
+            assert!(remove_server_for_app(McpAppType::Pi, "editable").unwrap());
+            assert!(!remove_server_for_app(McpAppType::Pi, "editable").unwrap());
+            let removed = read_json_file(&path).unwrap();
+            assert_eq!(removed["settings"], original["settings"]);
+            assert_eq!(
+                removed["mcpServers"]["existing"],
+                original["mcpServers"]["existing"]
+            );
+            assert!(removed["mcpServers"].get("editable").is_none());
+        });
+    }
+
+    #[test]
+    fn best_effort_scan_keeps_valid_sources_around_a_failed_source() {
+        let readers = [
+            LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
+            LocalMcpReader::new(
+                "Antigravity",
+                McpAppType::Antigravity,
+                test_broken_antigravity_servers,
+            ),
+            LocalMcpReader::new("Gemini", McpAppType::Gemini, test_gemini_servers),
+        ];
+
+        let scan = scan_local_servers_from_readers(&readers);
+
+        assert_eq!(
+            scan.servers
+                .iter()
+                .map(|server| server.id.as_str())
+                .collect::<Vec<_>>(),
+            ["claude-only", "gemini-only", "shared"]
+        );
+        let shared = scan
+            .servers
+            .iter()
+            .find(|server| server.id == "shared")
+            .expect("shared server");
+        assert_eq!(shared.spec["command"], "claude-wins");
+        assert_eq!(shared.apps, [McpAppType::ClaudeCode, McpAppType::Gemini]);
+
+        // Dropping the source silently would leave the user staring at an
+        // Antigravity column that is simply blank, with nothing to act on.
+        assert_eq!(
+            scan.warnings
+                .iter()
+                .map(|warning| warning.app)
+                .collect::<Vec<_>>(),
+            [McpAppType::Antigravity]
+        );
+    }
+
+    #[test]
+    fn a_failed_source_is_refused_by_the_write_guard() {
+        let readers = [
+            LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
+            LocalMcpReader::new(
+                "Antigravity",
+                McpAppType::Antigravity,
+                test_broken_antigravity_servers,
+            ),
+            LocalMcpReader::new("Gemini", McpAppType::Gemini, test_gemini_servers),
+        ];
+
+        // The list survives the broken source; a reassignment computed from that
+        // same list must not, or Antigravity is dropped from the "keep it here"
+        // set purely because codeg could not read it.
+        let err = require_complete_scan(&scan_local_servers_from_readers(&readers))
+            .expect_err("writers must stay fail-closed on a degraded scan");
+        assert!(
+            err.message.contains("Antigravity"),
+            "the refusal has to name the file to go fix: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn empty_antigravity_file_reads_as_no_servers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp_config.json");
+        std::fs::write(&path, "").expect("seed empty config");
+
+        // Issue #632 verbatim: Antigravity touches this file into existence
+        // before it ever writes a server, and a 0-byte config means "nothing
+        // configured", not "corrupt". Treating it as a reader error deadlocks
+        // the user — every writer starts by reading the file it is about to
+        // change, so nothing can ever put content into it again.
+        assert_eq!(
+            read_antigravity_servers_at(&path).expect("empty config is not an error"),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn successful_scan_preserves_openclaw_and_kimi_merge_rules() {
+        let readers = [
+            LocalMcpReader::new("OpenClaw", McpAppType::OpenClaw, test_openclaw_servers),
+            LocalMcpReader::new("Kimi Code", McpAppType::KimiCode, test_kimi_servers),
+        ];
+
+        let scan = scan_local_servers_from_readers(&readers);
+
+        assert!(
+            scan.warnings.is_empty(),
+            "readable sources must not warn: {:?}",
+            scan.warnings
+        );
+        let servers = scan.servers;
+        assert_eq!(servers.len(), 1);
+        let shared = &servers[0];
+        assert_eq!(shared.id, "shared-remote");
+        assert_eq!(shared.spec["auth"], "oauth");
+        assert_eq!(shared.spec["bearerTokenEnvVar"], "MCP_TOKEN");
+        assert_eq!(shared.apps, [McpAppType::OpenClaw, McpAppType::KimiCode]);
+    }
+
     #[test]
     fn normalize_mcp_type_canonical_pass_through() {
         assert_eq!(normalize_mcp_type("stdio"), Some("stdio"));
@@ -6294,6 +6807,229 @@ mod tests {
     }
 
     #[test]
+    fn empty_json_config_reads_as_no_servers() {
+        // Issue #632: a 0-byte `~/.gemini/config/mcp_config.json` made serde
+        // report `EOF while parsing a value at line 1 column 0`, which the
+        // reader raised as a hard configuration error. An empty file is
+        // "nothing configured", exactly like an absent one.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (name, body) in [("empty.json", ""), ("blank.json", "  \r\n\t ")] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).expect("seed file");
+
+            assert_eq!(read_json_file(&path).expect(name), json!({}));
+            assert!(read_antigravity_servers_at(&path).expect(name).is_empty());
+            assert!(read_cursor_servers_at(&path).expect(name).is_empty());
+            assert!(read_kimi_code_servers_at(&path).expect(name).is_empty());
+            assert!(read_qoder_servers_at(&path).expect(name).is_empty());
+            assert!(read_deepseek_servers_at(&path).expect(name).is_empty());
+
+            // Writing into one still works — there is nothing in an empty file
+            // to preserve, so the save must not refuse either.
+            upsert_antigravity_server_at(&path, "ctx7", &json!({ "command": "npx" }))
+                .expect("upsert into an empty config");
+            assert!(read_antigravity_servers_at(&path)
+                .expect("read back")
+                .contains_key("ctx7"));
+        }
+
+        // A file with actual content that is not JSON is still an error: codeg
+        // must not overwrite something the user wrote and it failed to read.
+        let broken = dir.path().join("broken.json");
+        std::fs::write(&broken, "{ not json").expect("seed broken");
+        assert!(read_json_file(&broken).is_err());
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_stat_ed_is_an_error_not_an_empty_one() {
+        // Absence is decided by the read, not by `Path::exists()`: `exists()`
+        // answers `false` for any failed stat, so a config codeg cannot open
+        // would be reported as "this agent has none" — silently, with no
+        // warning for `require_complete_scan` to refuse a reassignment on.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let absent = dir.path().join("absent.json");
+        assert!(read_config_to_string(&absent)
+            .expect("absent is Ok")
+            .is_none());
+        assert_eq!(read_json_file(&absent).expect("absent"), json!({}));
+
+        // A symlink loop: present enough to matter, unreadable, and `exists()`
+        // reports it as absent. (Only the construction is unix-specific; the
+        // rule it pins is not.)
+        #[cfg(unix)]
+        {
+            let loop_a = dir.path().join("loop-a.json");
+            let loop_b = dir.path().join("loop-b.json");
+            std::os::unix::fs::symlink(&loop_b, &loop_a).expect("link a->b");
+            std::os::unix::fs::symlink(&loop_a, &loop_b).expect("link b->a");
+            assert!(!loop_a.exists(), "exists() cannot tell this from absent");
+
+            let err = read_config_to_string(&loop_a).expect_err("unreadable");
+            // The kind alone ("Permission denied", "I/O operation failed")
+            // names no file, so the path has to survive into the detail or the
+            // scan warning tells the user nothing they can act on.
+            assert!(
+                err.detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains(&loop_a.display().to_string())),
+                "{err:?}"
+            );
+
+            assert!(read_json_file(&loop_a).is_err(), "must not read as {{}}");
+            assert!(read_hermes_servers_at(&loop_a).is_err());
+            assert!(read_grok_root_toml_at(&loop_a).is_err());
+        }
+    }
+
+    fn test_one_readable_server() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Ok(BTreeMap::from([(
+            "ctx7".to_string(),
+            json!({ "command": "npx" }),
+        )]))
+    }
+
+    fn test_parse_failure() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Err(mcp_configuration_invalid(
+            "invalid JSON at /x/mcp_config.json: boom",
+        ))
+    }
+
+    fn test_io_failure() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Err(AppCommandError::io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied (os error 13)",
+        )))
+    }
+
+    fn test_late_server() -> Result<BTreeMap<String, Value>, AppCommandError> {
+        Ok(BTreeMap::from([(
+            "later".to_string(),
+            json!({ "command": "later-bin" }),
+        )]))
+    }
+
+    #[test]
+    fn one_unreadable_source_warns_instead_of_emptying_the_scan() {
+        // Issue #632: `scan_local_servers` read every agent behind a fail-fast
+        // `?`, so a single broken config hid EVERY agent's servers behind one
+        // "load failed" banner. A bad source must degrade to a warning.
+        let scan = scan_local_servers_from_readers(&[
+            LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_one_readable_server),
+            LocalMcpReader::new("Antigravity", McpAppType::Antigravity, test_parse_failure),
+            LocalMcpReader::new("Cursor", McpAppType::Cursor, test_io_failure),
+            LocalMcpReader::new("Codex", McpAppType::Codex, test_late_server),
+        ]);
+
+        // Readable sources on BOTH sides of the failures still land.
+        assert_eq!(
+            scan.servers
+                .iter()
+                .map(|server| server.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ctx7", "later"]
+        );
+        assert_eq!(
+            scan.warnings
+                .iter()
+                .map(|warning| warning.app)
+                .collect::<Vec<_>>(),
+            [McpAppType::Antigravity, McpAppType::Cursor]
+        );
+
+        // The reader's own message names the offending file, so the user can go
+        // fix it rather than just seeing that agent's servers go missing.
+        assert!(
+            scan.warnings[0].message.contains("/x/mcp_config.json"),
+            "{:?}",
+            scan.warnings[0].message
+        );
+
+        // An I/O failure carries its specifics in `detail` rather than in
+        // `message`, so the warning has to fold both in or it reads as a bare
+        // "Permission denied" with nothing to act on.
+        assert!(
+            scan.warnings[1].message.contains("os error 13"),
+            "{:?}",
+            scan.warnings[1].message
+        );
+    }
+
+    #[test]
+    fn hermes_reports_an_unreadable_config_instead_of_swallowing_it() {
+        // Hermes used to answer `Ok(empty)` for a config.yaml it could not
+        // parse, back when an `Err` would have aborted the whole scan. Now that
+        // a failure only warns, swallowing it would leave Hermes missing from a
+        // scan that still reports itself complete — and `require_complete_scan`
+        // would wave through a reassignment that strips the server from the
+        // agents that DID load and then fails on the Hermes write.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Absent and empty stay "no Hermes servers": most machines have none.
+        let missing = dir.path().join("nope.yaml");
+        assert!(read_hermes_servers_at(&missing).expect("absent").is_empty());
+        let empty = dir.path().join("empty.yaml");
+        std::fs::write(&empty, "  \n").expect("seed empty");
+        assert!(read_hermes_servers_at(&empty).expect("empty").is_empty());
+
+        // Unparseable is an error that names the file.
+        let broken = dir.path().join("config.yaml");
+        std::fs::write(&broken, "mcp_servers: [unclosed\n").expect("seed broken");
+        let err = read_hermes_servers_at(&broken).expect_err("invalid YAML");
+        assert!(
+            err.message.contains(&broken.display().to_string()),
+            "{:?}",
+            err.message
+        );
+
+        // A valid document still reads.
+        std::fs::write(
+            &broken,
+            "model:\n  provider: openai\nmcp_servers:\n  ctx7:\n    command: npx\n",
+        )
+        .expect("seed valid");
+        let servers = read_hermes_servers_at(&broken).expect("valid");
+        assert!(servers.contains_key("ctx7"), "{servers:?}");
+    }
+
+    #[test]
+    fn the_write_guard_accepts_a_clean_scan_and_refuses_a_degraded_one() {
+        // Reading past an unreadable source is the whole point of #632. WRITING
+        // past one is not: the app list a save is handed comes from the scan,
+        // and every agent missing from it gets the server removed — so an agent
+        // that is missing only because its file could not be read would be
+        // stripped without the user ever unchecking it.
+        //
+        // This covers the guard itself. That the two write commands actually
+        // CALL it before their first write is asserted by
+        // `a_failed_source_is_refused_by_the_write_guard` plus the call sites.
+        let clean = LocalMcpScan {
+            servers: vec![LocalMcpServer {
+                id: "ctx7".to_string(),
+                spec: json!({ "command": "npx" }),
+                apps: vec![McpAppType::ClaudeCode],
+            }],
+            warnings: Vec::new(),
+        };
+        require_complete_scan(&clean).expect("a complete scan may be written from");
+
+        let degraded = LocalMcpScan {
+            warnings: vec![LocalMcpSourceWarning {
+                app: McpAppType::Antigravity,
+                message: "invalid JSON at /x/mcp_config.json: boom".to_string(),
+            }],
+            ..clean
+        };
+        let err = require_complete_scan(&degraded).expect_err("a degraded scan may not");
+        // The refusal has to name the file, or the user cannot clear the block.
+        assert!(
+            err.message.contains("Antigravity") && err.message.contains("/x/mcp_config.json"),
+            "{:?}",
+            err.message
+        );
+    }
+
+    #[test]
     fn qoder_settings_json_round_trips_and_preserves_foreign_keys() {
         // `~/.qoder/settings.json` is QODER'S file, not codeg's: the CLI owns
         // unrelated keys beside `mcpServers` (`securityScan`, `security.auth`,
@@ -6413,6 +7149,64 @@ mod tests {
     }
 
     #[test]
+    fn all_mcp_apps_is_exhaustive() {
+        // `ALL_MCP_APPS` drives BOTH write paths' "and no others" semantics:
+        // `mcp_upsert_local_server` removes the server from every app it lists
+        // but was not handed, and `mcp_remove_server`'s `apps: None` branch
+        // deletes it from every app it lists. An app missing from it fails
+        // SILENTLY — the stale entry stays on disk and the very next scan
+        // reports it as a live assignment, so an "uninstalled" server reappears
+        // on refresh. Nothing else catches that: the per-app dispatchers are
+        // exhaustive `match`es, but a constant is just data.
+        //
+        // The `match` below is the guard. It has no `_` arm, so adding a
+        // variant to `McpAppType` stops COMPILING here until whoever added it
+        // decides — deliberately — whether the write paths must reach it.
+        for app in ALL_MCP_APPS {
+            match app {
+                McpAppType::ClaudeCode
+                | McpAppType::Codex
+                | McpAppType::OpenCode
+                | McpAppType::Gemini
+                | McpAppType::OpenClaw
+                | McpAppType::Cline
+                | McpAppType::Hermes
+                | McpAppType::CodeBuddy
+                | McpAppType::KimiCode
+                | McpAppType::Grok
+                | McpAppType::Cursor
+                | McpAppType::DeepSeek
+                | McpAppType::Qoder
+                | McpAppType::Antigravity
+                | McpAppType::Pi => {}
+            }
+        }
+
+        // No duplicates: `mcp_upsert_local_server` walks this list once per app,
+        // so a repeat would upsert (or remove) the same file twice per save.
+        let unique = ALL_MCP_APPS.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            ALL_MCP_APPS.len(),
+            "ALL_MCP_APPS must not repeat an app"
+        );
+
+        // Every app the scan can ATTRIBUTE a server to must also be one the
+        // write paths can reach; otherwise the UI shows an assignment codeg can
+        // neither edit nor clear. (The reverse is allowed: a write-only target
+        // with no reader would just never show up.)
+        let scannable = local_mcp_readers()
+            .iter()
+            .map(|reader| reader.app)
+            .collect::<BTreeSet<_>>();
+        assert!(
+            scannable.is_subset(&unique),
+            "every scanned source must be writable: {:?}",
+            scannable.difference(&unique).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn mcp_app_type_wire_names_match_the_agent_type_they_name() {
         use crate::models::agent::AgentType;
 
@@ -6437,6 +7231,8 @@ mod tests {
             (McpAppType::Cursor, AgentType::Cursor),
             (McpAppType::DeepSeek, AgentType::DeepSeek),
             (McpAppType::Qoder, AgentType::Qoder),
+            (McpAppType::Antigravity, AgentType::Antigravity),
+            (McpAppType::Pi, AgentType::Pi),
         ] {
             let wire = serde_json::to_value(app).expect("serialize app type");
             assert_eq!(

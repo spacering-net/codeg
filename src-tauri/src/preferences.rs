@@ -1,9 +1,9 @@
 //! User-scoped preferences stored at `~/.codeg/preferences.json`.
 //!
 //! These are settings that must be readable **before** the Tauri builder and
-//! tokio runtime start (e.g. WebView2 rendering flags applied via
-//! `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`). All access is synchronous I/O so
-//! the data must stay tiny.
+//! tokio runtime start (e.g. the webview rendering flags applied via
+//! `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` on Windows and `WEBKIT_DISABLE_*`
+//! on Linux). All access is synchronous I/O so the data must stay tiny.
 
 use std::fs;
 use std::io;

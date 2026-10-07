@@ -14,8 +14,6 @@ import { useTranslations } from "next-intl"
 import {
   Check,
   ChevronRight,
-  FolderIcon,
-  FolderOpenIcon,
   Home,
   Loader2,
   UndoDot,
@@ -47,6 +45,11 @@ import type { DirectoryEntry } from "@/lib/types"
  */
 export const normalizeFsPath = (path: string) =>
   path.replace(/[/\\]+$/, "") || path
+
+// One nesting level, in px. Matches the file tree's own step
+// (FILE_TREE_INDENT_STEP_REM) so every tree in the app indents alike — roughly
+// one leading-glyph width, which keeps deep paths inside a dialog's width.
+const INDENT_STEP_PX = 16
 
 // Synchronous layout effect on the client (so the session/selection guards see
 // the latest committed values before any pending async work resolves), but a
@@ -351,7 +354,7 @@ export const DirectoryBrowser = forwardRef<
       return (
         <div
           className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
-          style={{ paddingLeft: `${depth * 20 + 8}px` }}
+          style={{ paddingLeft: `${depth * INDENT_STEP_PX + 8}px` }}
         >
           <Loader2 className="size-3.5 animate-spin" />
           <span>{t("loading")}</span>
@@ -365,7 +368,7 @@ export const DirectoryBrowser = forwardRef<
       return (
         <div
           className="py-2 text-sm text-muted-foreground"
-          style={{ paddingLeft: `${depth * 20 + 28}px` }}
+          style={{ paddingLeft: `${depth * INDENT_STEP_PX + 28}px` }}
         >
           {t("emptyDirectory")}
         </div>
@@ -386,7 +389,7 @@ export const DirectoryBrowser = forwardRef<
               !multiple && isCursor && "bg-accent text-accent-foreground",
               multiple && isChecked && "bg-accent/60 text-accent-foreground"
             )}
-            style={{ paddingLeft: `${depth * 20 + 8}px` }}
+            style={{ paddingLeft: `${depth * INDENT_STEP_PX + 8}px` }}
             onClick={() => {
               onValueChange(entry.path)
               if (multiple) onToggleSelected?.(entry.path)
@@ -437,11 +440,8 @@ export const DirectoryBrowser = forwardRef<
                 {isChecked ? <Check className="size-3" /> : null}
               </span>
             ) : null}
-            {isExpanded ? (
-              <FolderOpenIcon className="size-4 shrink-0 text-blue-500" />
-            ) : (
-              <FolderIcon className="size-4 shrink-0 text-blue-500" />
-            )}
+            {/* Chevron only: every row here IS a directory, so a folder icon
+                beside the expand arrow adds nothing but width. */}
             <span className="truncate">{entry.name}</span>
           </button>
           {isExpanded && renderEntries(entry.path, depth + 1)}

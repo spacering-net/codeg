@@ -155,6 +155,7 @@ function emptySession(conversationId: number): ConversationRuntimeSession {
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
 }
@@ -573,9 +574,10 @@ describe("syncTurnMetadata windowed gate", () => {
     )
     actions().syncTurnMetadata(CID)
     await vi.advanceTimersByTimeAsync(1600)
-    // Retry fires once (metadata still missing), then gives up — usage must
-    // never be pinned from an unverified window.
-    await vi.advanceTimersByTimeAsync(3100)
+    // The poll keeps retrying (the metadata never lands), but usage must
+    // never be pinned from an unverified window — however many rounds it
+    // takes.
+    await vi.advanceTimersByTimeAsync(120_000)
     expect(session()?.localTurns[0]?.usage).toBeUndefined()
   })
 
@@ -610,6 +612,208 @@ describe("syncTurnMetadata windowed gate", () => {
     await vi.advanceTimersByTimeAsync(1600)
     expect(mockGet).toHaveBeenCalledWith(CID, undefined)
     expect(session()?.localTurns[0]?.usage?.input_tokens).toBe(42)
+  })
+})
+
+/**
+ * The agent's transcript flush races the ACP turn-end that starts this sync,
+ * and for a batched/compressed log (deepseek) it can lose that race by many
+ * seconds. Everything the reply's footer shows — model, tokens, completion
+ * time — plus EVERY earlier reply's fork name rides on this one poll, so it
+ * has to outlast the flush rather than give up at a fixed 4.5s and leave the
+ * session stuck until the user reopens it.
+ */
+describe("syncTurnMetadata transcript-lag polling", () => {
+  const BOUNDARY = 6
+  /** Two live rounds: user, reply, user, reply (assistants at 1 and 3). */
+  const liveTurns: MessageTurn[] = [
+    turn("live-77-a", "user", 6),
+    turn("live-77-b", "assistant", 7),
+    turn("live-77-c", "user", 8),
+    turn("live-77-d", "assistant", 9),
+  ]
+  const usage = {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  }
+  /** What the parser eventually writes for those same four turns. */
+  const parsed: MessageTurn[] = [
+    turn("turn-6", "user", 6),
+    { ...turn("turn-7", "assistant", 7), usage, completed_at: ts(7) },
+    turn("turn-8", "user", 8),
+    { ...turn("turn-9", "assistant", 9), usage, completed_at: ts(9) },
+  ]
+
+  function parseWindow(upTo: number): DbConversationDetail {
+    return windowedDetail(BOUNDARY, {
+      turns: parsed.slice(0, upTo),
+      turns_total: BOUNDARY + upTo,
+    })
+  }
+
+  function seedBatch(overrides: Partial<ConversationRuntimeSession> = {}) {
+    seed({
+      localTurns: liveTurns,
+      historyAssistantBaseline: 3,
+      batchBoundaryIndex: BOUNDARY,
+      batchBoundaryPrefixHash: hashPrefix(BOUNDARY),
+      ...overrides,
+    })
+  }
+
+  it("polls past the old two-attempt budget until the reply reaches disk", async () => {
+    vi.useFakeTimers()
+    seedBatch()
+    // The prompt is on disk, the reply is not — twice over, i.e. past the
+    // 1.5s + 3s this used to allow.
+    mockGet
+      .mockResolvedValueOnce(parseWindow(3))
+      .mockResolvedValueOnce(parseWindow(3))
+      .mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(1600)
+    await vi.advanceTimersByTimeAsync(3100)
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(session()?.localTurns[3]?.usage).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(5100)
+    expect(mockGet).toHaveBeenCalledTimes(3)
+    expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
+    expect(session()?.localTurns[3]?.completed_at).toBe(ts(9))
+  })
+
+  it("names EARLIER replies once the lagging tail lands", async () => {
+    vi.useFakeTimers()
+    seedBatch()
+    mockGet
+      .mockResolvedValueOnce(parseWindow(3))
+      .mockResolvedValueOnce(parseWindow(3))
+      .mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(1600)
+    await vi.advanceTimersByTimeAsync(3100)
+    // One reply short, the parse can name nothing — including the FIRST
+    // reply, which is no longer the thread tail and therefore greys its
+    // "fork from here" out until it has a name the backend can resolve.
+    expect(session()?.localTurns[1]?.source_turn_id).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(5100)
+    expect(session()?.localTurns[1]?.source_turn_id).toBe("turn-7")
+    expect(session()?.localTurns[3]?.source_turn_id).toBe("turn-9")
+  })
+
+  it("stops as soon as the newest reply is covered", async () => {
+    vi.useFakeTimers()
+    seedBatch()
+    mockGet.mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(mockGet).toHaveBeenCalledTimes(1)
+  })
+
+  it("takes ONE more look when only the usage is outstanding", async () => {
+    vi.useFakeTimers()
+    // codex writes its `token_count` record as the line AFTER the agent
+    // message, so a read can land with the reply (and its completion time)
+    // on disk and the usage one line behind. One extra round covers that;
+    // an agent that never reports usage at all (Cursor) costs the same one
+    // extra round rather than the whole schedule.
+    const noUsage = windowedDetail(BOUNDARY, {
+      turns: parsed.map((t) => ({ ...t, usage: null })),
+      turns_total: BOUNDARY + parsed.length,
+    })
+    seedBatch()
+    mockGet.mockResolvedValue(noUsage)
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(session()?.localTurns[3]?.completed_at).toBe(ts(9))
+
+    mockGet.mockReset()
+    seedBatch()
+    mockGet.mockResolvedValueOnce(noUsage).mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
+  })
+
+  it("stops on a window that can never verify, keeps trying one that is merely behind", async () => {
+    vi.useFakeTimers()
+    // Same offset, rewritten prefix: compaction moved history under us, so
+    // patches are pinned to [] for this batch however long we poll.
+    seedBatch()
+    mockGet.mockResolvedValue(
+      windowedDetail(BOUNDARY, {
+        turns: parsed,
+        turns_total: BOUNDARY + parsed.length,
+        prefix_hash: "00000000000000ff",
+      })
+    )
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(mockGet).toHaveBeenCalledTimes(1)
+
+    // An offset SHORT of the boundary is the transcript being behind
+    // (`fromIndex` clamps to the total) — that one resolves itself.
+    mockGet.mockReset()
+    seedBatch()
+    mockGet
+      .mockResolvedValueOnce(
+        windowedDetail(BOUNDARY - 1, { turns: [], turns_total: BOUNDARY - 1 })
+      )
+      .mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
+  })
+
+  it("skips the roundtrip while a prompt is in flight, then resumes", async () => {
+    vi.useFakeTimers()
+    seedBatch({ syncState: "awaiting_persist" })
+    mockGet.mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(mockGet).not.toHaveBeenCalled()
+    actions().setSyncState(CID, "idle")
+    await vi.advanceTimersByTimeAsync(3100)
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
+  })
+
+  it("stays on the schedule after a failed read", async () => {
+    vi.useFakeTimers()
+    seedBatch()
+    mockGet
+      .mockRejectedValueOnce(new Error("mid-write"))
+      .mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(1600)
+    await vi.advanceTimersByTimeAsync(3100)
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
+    expect(session()?.detailError).toBeNull()
+  })
+
+  it("gives up after the last delay rather than polling forever", async () => {
+    vi.useFakeTimers()
+    seedBatch()
+    mockGet.mockResolvedValue(parseWindow(3))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(mockGet).toHaveBeenCalledTimes(5)
+  })
+
+  it("cancelling stops the poll mid-schedule", async () => {
+    vi.useFakeTimers()
+    seedBatch()
+    mockGet.mockResolvedValue(parseWindow(3))
+    const cancel = actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    cancel()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(mockGet).toHaveBeenCalledTimes(1)
   })
 })
 

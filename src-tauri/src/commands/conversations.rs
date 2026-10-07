@@ -69,13 +69,17 @@ pub(crate) async fn list_all_conversations_core(
     .await
 }
 
+/// Blocking Codex list scan: titles map plus the rollout-presence walk.
+type CodexListScan =
+    Result<(HashMap<String, String>, Result<HashSet<String>, std::io::Error>), String>;
+
 /// Map the blocking Codex title+presence scan into list_all inputs.
 ///
 /// `Ok((_, Err(_)))` and join failures both yield `present = None` so prune is
 /// skipped; only a successful walk (including a successful empty set) enables
 /// prune.
 fn resolve_codex_list_scan(
-    scan: Result<(HashMap<String, String>, Result<HashSet<String>, std::io::Error>), String>,
+    scan: CodexListScan,
 ) -> (HashMap<String, String>, Option<HashSet<String>>) {
     match scan {
         Ok((titles, Ok(present))) => (titles, Some(present)),
@@ -588,6 +592,10 @@ struct ScanFolderRow {
     path: String,
     name: String,
     deleted: bool,
+    /// The root folder this row was registered under, when it is a worktree
+    /// child. Import reconciliation uses it to flatten and validate new parent
+    /// relationships.
+    parent_id: Option<i32>,
 }
 
 async fn load_folder_rows(
@@ -606,6 +614,7 @@ async fn load_folder_rows(
             path: f.path,
             name: f.name,
             deleted: f.deleted_at.is_some(),
+            parent_id: f.parent_id,
         })
         .collect())
 }
@@ -622,6 +631,47 @@ fn index_folder_rows(rows: &[ScanFolderRow]) -> HashMap<String, &ScanFolderRow> 
         }
     }
     index
+}
+
+/// The main working tree an imported session's cwd belongs to, as a
+/// [`normalize_path_for_matching`] key — `None` when the cwd is not a linked git
+/// worktree (a plain repo, a submodule, a directory that is gone), which is
+/// top-level by definition.
+///
+/// Resolving the ROOT rather than a folder id keeps the "is this a worktree"
+/// question separate from "is that repo a folder codeg has", which the importer
+/// answers later and against folders it may not have created yet.
+fn worktree_root_key(path: &str) -> Option<String> {
+    let root = crate::git_repo::main_worktree_root(std::path::Path::new(path))?;
+    let key = normalize_path_for_matching(&root.to_string_lossy());
+    // Nothing may be its own parent: the sidebar drops a self-parented folder
+    // from the top level and then renders it under itself, i.e. nowhere. Only a
+    // corrupt `commondir` can land here, and the guard costs one compare.
+    (key != normalize_path_for_matching(path)).then_some(key)
+}
+
+/// Normalized path → the candidate root folder id a linked worktree of that
+/// path should hang off. Seeded from the folder rows on disk; the importer adds
+/// the folders it creates as it goes. The write side separately verifies that
+/// the candidate is still a live top-level row.
+///
+/// The id is FLATTENED the way `open_worktree_folder_core` flattens: a repo
+/// folder that is itself recorded as somebody's worktree child hands down its
+/// own root. A two-level chain would be worse than no grouping at all — the
+/// sidebar's worktree merge is single-level, so a grandchild's conversations
+/// bucket under a folder that is itself merged away and stop rendering.
+///
+/// Soft-deleted rows are left out: a deleted repo renders nowhere, and a child
+/// of it would render nowhere either, which is worse than the top-level folder
+/// the user gets today.
+fn worktree_parent_folder_ids(
+    folder_index: &HashMap<String, &ScanFolderRow>,
+) -> HashMap<String, i32> {
+    folder_index
+        .iter()
+        .filter(|(_, row)| !row.deleted)
+        .map(|(key, row)| (key.clone(), row.parent_id.unwrap_or(row.id)))
+        .collect()
 }
 
 /// Pure grouping/reconciliation for the import-picker scan.
@@ -891,6 +941,7 @@ pub(crate) async fn import_selected_from_summaries(
         imported: 0,
         updated: 0,
         skipped: 0,
+        restored: 0,
         not_found,
         failed: 0,
         created_folders: 0,
@@ -899,42 +950,174 @@ pub(crate) async fn import_selected_from_summaries(
     };
     let mut touched_folder_ids: Vec<i32> = Vec::new();
 
-    // Deterministic folder order (normalized path) so results and tests are
-    // stable regardless of HashMap iteration.
-    let mut ordered: Vec<(String, Vec<(AgentType, ConversationSummary)>)> =
-        groups.into_iter().collect();
-    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+    // Resolve every group's target path and worktree root BEFORE importing any
+    // of them, so the order they are imported in can depend on it.
+    struct PendingImport {
+        norm_key: String,
+        target_path: String,
+        created: bool,
+        /// The main working tree of this cwd, when it is a linked worktree —
+        /// a normalized path, not yet a folder id (see [`worktree_root_key`]).
+        root_key: Option<String>,
+        items: Vec<(AgentType, ConversationSummary)>,
+    }
 
-    for (norm_key, items) in ordered {
-        let row = folder_index.get(&norm_key).copied();
-        // Import into the stored row's exact path when one normalize-matches
-        // (see build_scan_result); otherwise the parser cwd creates the folder.
-        let target_path = row.map(|r| r.path.clone()).unwrap_or_else(|| {
-            items[0]
-                .1
-                .folder_path
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string()
-        });
-        let created = row.map(|r| r.deleted).unwrap_or(true);
+    let mut ordered: Vec<PendingImport> = groups
+        .into_iter()
+        .map(|(norm_key, items)| {
+            let row = folder_index.get(&norm_key).copied();
+            // Import into the stored row's exact path when one normalize-matches
+            // (see build_scan_result); otherwise the parser cwd creates the folder.
+            let target_path = row.map(|r| r.path.clone()).unwrap_or_else(|| {
+                items[0]
+                    .1
+                    .folder_path
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string()
+            });
+            PendingImport {
+                created: row.map(|r| r.deleted).unwrap_or(true),
+                root_key: worktree_root_key(&target_path),
+                norm_key,
+                target_path,
+                items,
+            }
+        })
+        .collect();
+
+    // Deterministic folder order (normalized path) so results and tests are
+    // stable regardless of HashMap iteration — but every plain folder is
+    // imported BEFORE any linked worktree, so a repo and a worktree of it
+    // selected in the same run still group. One pass suffices, no topological
+    // sort: a main working tree is never itself a linked worktree, so a repo can
+    // never be waiting on another group. Without the split, whether the two end
+    // up grouped would come down to which of their paths sorts first.
+    ordered.sort_by(|a, b| {
+        a.root_key
+            .is_some()
+            .cmp(&b.root_key.is_some())
+            .then_with(|| a.norm_key.cmp(&b.norm_key))
+    });
+    let mut worktree_parents = worktree_parent_folder_ids(&folder_index);
+    // Parent ids are not protected by a foreign key. Restrict new writes to
+    // live top-level rows so a stale/dangling id or a pre-existing parent chain
+    // cannot turn this import into a chain or cycle of its own. Plain folders
+    // selected in this batch join the set after `add_folder` revives them.
+    let mut top_level_parent_ids: HashSet<i32> = folder_rows
+        .iter()
+        .filter(|row| !row.deleted && row.parent_id.is_none())
+        .map(|row| row.id)
+        .collect();
+    // Reparenting a folder that already owns children would make those rows
+    // grandchildren. Track counts through this batch so that operation falls
+    // back to Preserve as well.
+    let mut folder_child_counts: HashMap<i32, usize> = HashMap::new();
+    for row in &folder_rows {
+        if let Some(parent_id) = row.parent_id {
+            *folder_child_counts.entry(parent_id).or_default() += 1;
+        }
+    }
+
+    for pending in ordered {
+        let PendingImport {
+            norm_key,
+            target_path,
+            created,
+            root_key,
+            items,
+        } = pending;
 
         // `add_folder` is the only fallible step here — `import_summaries` is
         // resilient (per-row failures are counted, never aborting the group), so
         // a partial failure still commits and reports its good rows and still
         // broadcasts the folder it created.
-        match folder_service::add_folder(conn, &target_path)
-            .await
-            .map_err(AppCommandError::from)
-        {
+        //
+        // A cwd that is a linked worktree of a repo codeg has goes in as a CHILD
+        // of that repo, the way `open_worktree_folder_core` records one. Plain
+        // `add_folder` leaves `parent_id` NULL, which is exactly the sidebar's
+        // test for "top-level folder", so the same worktree lands beside its
+        // repo instead of under it (and the branch-label backfill, which selects
+        // on `parent_id IS NOT NULL`, never reaches it). Falling back to
+        // `add_folder` when nothing resolves keeps `ParentWrite::Preserve` for
+        // every other case, so a reopen can never demote a folder that a
+        // worktree open already parented. See issue #552.
+        let target_row = folder_index.get(&norm_key).copied();
+        let target_folder_id = target_row.map(|row| row.id);
+        let existing_parent_id = target_row.and_then(|row| row.parent_id);
+        let target_has_children = target_folder_id.is_some_and(|folder_id| {
+            folder_child_counts.get(&folder_id).copied().unwrap_or(0) > 0
+        });
+        let parent_id = root_key
+            .as_ref()
+            .and_then(|key| worktree_parents.get(key).copied())
+            // A historical top-level worktree can have its main-tree row
+            // recorded underneath it. Flattening through that row points back
+            // at the worktree's own folder id even though their PATHS differ,
+            // so the path-level guard in `worktree_root_key` cannot catch it.
+            .filter(|parent_id| Some(*parent_id) != target_folder_id)
+            .filter(|parent_id| top_level_parent_ids.contains(parent_id))
+            // Moving an existing parent under the repo would strand its current
+            // children one level deeper. Rewriting the same established edge is
+            // harmless; any new edge requires a childless target.
+            .filter(|parent_id| existing_parent_id == Some(*parent_id) || !target_has_children);
+        let add = match parent_id {
+            Some(parent_id) => {
+                folder_service::add_folder_with_parent(conn, &target_path, Some(parent_id)).await
+            }
+            None => folder_service::add_folder(conn, &target_path).await,
+        };
+        match add.map_err(AppCommandError::from) {
             Ok(entry) => {
                 let folder_id = entry.id;
+                // `add_folder_with_parent` sets the resolved parent; the
+                // fallback `add_folder` preserves an existing row's parent and
+                // inserts a new row at the top level. Keep the safety set in
+                // step with that exact persisted state.
+                let persisted_parent_id = parent_id.or(existing_parent_id);
+                if persisted_parent_id != existing_parent_id {
+                    if let Some(old_parent_id) = existing_parent_id {
+                        if let Some(count) = folder_child_counts.get_mut(&old_parent_id) {
+                            *count = count.saturating_sub(1);
+                        }
+                    }
+                    if let Some(new_parent_id) = persisted_parent_id {
+                        *folder_child_counts.entry(new_parent_id).or_default() += 1;
+                    }
+                }
+                if persisted_parent_id.is_none() {
+                    top_level_parent_ids.insert(folder_id);
+                } else {
+                    top_level_parent_ids.remove(&folder_id);
+                }
+                // This folder can now be the repo a LATER group's worktree hangs
+                // off — the sort above put every plain folder ahead of every
+                // worktree precisely so this lands in time. Only plain folders
+                // are recorded: a linked worktree is never anyone's main working
+                // tree. The candidate is flattened by the seed's rule, off the
+                // parent this row actually ended up with.
+                if root_key.is_none() {
+                    let root = persisted_parent_id.unwrap_or(folder_id);
+                    worktree_parents.insert(norm_key, root);
+                }
+                // `DeletedPolicy::Restore`: every item here is a session the
+                // user explicitly checked in the picker, which badges a
+                // soft-deleted row as such — so a deleted one in this list is a
+                // deliberate "bring it back", not a sweep. (The whole-folder
+                // import and the scan's drive-by refresh both stay on `Skip`.)
                 let (tally, _updated_ids, failed_in_group) =
-                    import_service::import_summaries_resilient(conn, folder_id, &items).await;
+                    import_service::import_summaries_resilient(
+                        conn,
+                        folder_id,
+                        &items,
+                        import_service::DeletedPolicy::Restore,
+                    )
+                    .await;
                 result.imported += tally.imported;
                 result.updated += tally.updated;
                 result.skipped += tally.skipped;
+                result.restored += tally.restored;
                 result.failed += failed_in_group;
                 if created {
                     result.created_folders += 1;
@@ -947,6 +1130,7 @@ pub(crate) async fn import_selected_from_summaries(
                     imported: tally.imported,
                     updated: tally.updated,
                     skipped: tally.skipped,
+                    restored: tally.restored,
                 });
                 if failed_in_group > 0 && result.errors.len() < MAX_ERRORS {
                     result
@@ -973,8 +1157,12 @@ pub(crate) async fn import_selected_from_summaries(
     }
 
     // One nudge instead of per-row upserts: clients answer with a single full
-    // refetch, which also covers refreshed titles (see the event's doc).
-    if result.imported > 0 || result.updated > 0 {
+    // refetch, which also covers refreshed titles (see the event's doc) and the
+    // rows this run brought back from a soft delete — a restore adds a row to
+    // every open sidebar just like a fresh import does, so it must fire the
+    // event too. (The counts stay faithful to their own tallies; subscribers
+    // read only the channel and answer with a full refetch.)
+    if result.imported > 0 || result.updated > 0 || result.restored > 0 {
         emit_event(
             emitter,
             CONVERSATIONS_BULK_CHANGED_EVENT,
@@ -1300,14 +1488,20 @@ pub async fn get_folder_conversation_core(
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
             let parser = build_agent_parser(at);
             match parser.get_conversation(&eid) {
-                Ok(d) => Ok((
-                    d.turns,
-                    d.session_stats,
-                    None,
-                    d.summary.title,
-                    d.summary.model,
-                    d.transcript_watermark,
-                )),
+                Ok(d) => {
+                    // Claude `/clear` (and similar on-disk id changes) make
+                    // the parser resolve a different uuid than we asked for.
+                    // Persist that so reopen/reconnect follow the live file.
+                    let resolved = (d.summary.id != eid).then(|| d.summary.id.clone());
+                    Ok((
+                        d.turns,
+                        d.session_stats,
+                        resolved,
+                        d.summary.title,
+                        d.summary.model,
+                        d.transcript_watermark,
+                    ))
+                }
                 Err(crate::parsers::ParseError::ConversationNotFound(_)) => {
                     // The external_id may no longer match any local file —
                     // e.g. an ACP session UUID (OpenClaw, Cline) or a stale
@@ -1368,26 +1562,57 @@ pub async fn get_folder_conversation_core(
         (vec![], None, None, None, None, None)
     };
 
-    // If we resolved a different external_id (e.g. ACP UUID → parser branch ID),
-    // update the database so future lookups are direct.
+    // If we resolved a different external_id (e.g. ACP UUID → parser branch ID,
+    // or a Claude `/clear` transcript rollover), update the database so future
+    // lookups are direct. Also patch the summary this call returns so the
+    // caller reconnects with the id that actually has the turns.
     //
-    // This is an ALIAS normalization — both ids denote the same session — so it
-    // uses the narrow CAS rather than `bind_external_id`, whose history-split
-    // would manufacture a phantom conversation for the old spelling. The
-    // expected-old value is the exact id this parse ran against, so a
-    // `SessionStarted` that rebound the row while we were parsing leaves this
-    // write matching nothing instead of clobbering the newer binding.
-    if let Some(new_ext_id) = resolved_ext_id {
-        let _ = conversation_service::renormalize_external_id_alias(
-            conn,
-            conversation_id,
-            summary.external_id.as_deref(),
-            new_ext_id,
-        )
-        .await;
-    }
-
+    // Gemini/Cline is an ALIAS normalization — both ids denote the same
+    // session — so it uses the narrow CAS rather than `bind_external_id`,
+    // whose history-split would manufacture a phantom conversation for the
+    // old spelling. Claude `/clear` is a real new transcript file of the
+    // SAME conversation; passing the outgoing id as `continues` advances
+    // in place instead of splitting a sidebar clone.
     let mut summary = summary;
+    if let Some(new_ext_id) = resolved_ext_id {
+        if matches!(summary.agent_type, AgentType::ClaudeCode) {
+            let continues: Vec<String> = summary.external_id.iter().cloned().collect();
+            // Refused when another row already holds the successor — the
+            // rollover's own file can have been imported as its own
+            // conversation. The summary must then keep the id this row
+            // actually owns: handing the caller an id it does not hold is
+            // what sends the next prompt into the HOLDER's transcript while
+            // every event names this row (see `bind_external_id`).
+            match conversation_service::bind_external_id(
+                conn,
+                conversation_id,
+                &new_ext_id,
+                &continues,
+            )
+            .await
+            {
+                Ok(_) => summary.external_id = Some(new_ext_id),
+                Err(e) => {
+                    tracing::warn!(
+                        conversation_id,
+                        to_session = %new_ext_id,
+                        error = %e,
+                        "[conversations] could not follow the transcript rollover; \
+                         keeping the id this row holds"
+                    );
+                }
+            }
+        } else {
+            let _ = conversation_service::renormalize_external_id_alias(
+                conn,
+                conversation_id,
+                summary.external_id.as_deref(),
+                new_ext_id.clone(),
+            )
+            .await;
+            summary.external_id = Some(new_ext_id);
+        }
+    }
     summary.message_count = turns.len() as u32;
     // The transcript is the richer source for the session's model. Codex is
     // the concrete case: an ACP-driven row is created before any
@@ -1484,6 +1709,21 @@ fn sig_from_turn_blocks(blocks: &[ContentBlock]) -> Option<Vec<UserContentSig>> 
     Some(sig)
 }
 
+/// How many USER turns [`apply_in_flight_message_id`]'s walk will compare
+/// before giving up.
+///
+/// A cost bound, not a correctness one — the ambiguity check inside the walk is
+/// what keeps it from stamping an earlier round's prompt. `sig_from_turn_blocks`
+/// copies each candidate's text and image bytes, and the walk runs on every
+/// detail fetch, so a transcript whose timestamps are all parse instants (see
+/// the walk) must not turn that into a scan of every prompt ever sent.
+///
+/// Counts USER turns only, deliberately. Counting turns would count the length
+/// of the reply, which is unrelated to the hazard and routinely in the
+/// hundreds: a real window holds the prompt and whatever the user sent
+/// mid-turn, so 32 is never reached by a turn with usable timestamps.
+const MAX_IN_FLIGHT_WALK_USER_TURNS: usize = 32;
+
 /// Stamp the persisted in-flight user turn with the broadcast `message_id`.
 ///
 /// A cross-client viewer renders the in-flight prompt from two sources that use
@@ -1493,12 +1733,23 @@ fn sig_from_turn_blocks(blocks: &[ContentBlock]) -> Option<Vec<UserContentSig>> 
 /// frontend's id-dedup collapse the two into one instead of showing the prompt
 /// twice.
 ///
-/// The in-flight prompt is located tail-bounded:
-///   - the trailing user turn (Claude/Codex write the assistant turn only on
-///     completion, so mid-stream the transcript ends exactly at the prompt); or
-///   - the user turn immediately before a *single* trailing assistant turn
-///     (OpenCode and Gemini persist a partial assistant turn mid-stream, so the
-///     transcript tail is `[.., user X, partial assistant Y]`).
+/// The in-flight prompt is located by walking back from the transcript tail
+/// over the turns this turn produced — those persisted at/after `started_at`,
+/// comparing at most [`MAX_IN_FLIGHT_WALK_USER_TURNS`] user turns of them — and
+/// keeping the EARLIEST user turn whose content matches. The tail itself is the
+/// prompt only for Claude/Codex, which write the assistant turn on completion;
+/// OpenCode and Gemini persist a partial reply mid-stream (which a parser may
+/// split), and a message the user sends mid-turn is written after the prompt as
+/// a user turn of its own. Earliest, because the agent writes the prompt before
+/// anything it produces in reply, so a mid-turn message repeating the prompt's
+/// own words cannot take the stamp from it.
+///
+/// That "earliest" only orders the round's own turns, which presumes the walk
+/// stopped at the round's start. It does when the gate below fires. When it
+/// never fires — every turn in hand is at/after `started_at`, which a parser
+/// stamping parse instants makes routine — the walk saw the whole transcript
+/// and earliest means nothing, so a second matching copy leaves it unable to
+/// say which round it is in: it then stamps nothing rather than guess.
 ///
 /// A recency check then disambiguates: the in-flight prompt was persisted by the
 /// agent CLI at/after `started_at` (the agent — a local subprocess sharing this
@@ -1542,14 +1793,39 @@ fn apply_in_flight_message_id(
         return None;
     }
     let started_at = started_at?;
-    let target_idx = match turns[n - 1].role {
-        TurnRole::User => n - 1,
-        TurnRole::Assistant if n >= 2 && matches!(turns[n - 2].role, TurnRole::User) => n - 2,
-        _ => return None,
-    };
-    // Recency gate. `started_at` is recorded when the backend broadcasts the
-    // `UserMessage` event, which happens *before* the agent request is issued
-    // (see `connection.rs`), so the agent — a local subprocess on this machine's
+    let want = sig_from_user_message_blocks(&pending.blocks);
+
+    // Walk back over the turns THIS turn produced and keep the EARLIEST user
+    // turn whose content is the pending prompt's.
+    //
+    // A walk, not the tail. The prompt is the last turn only while the agent
+    // has written nothing else, and what trails it is not bounded to one
+    // assistant turn:
+    //
+    //   * a message the user sends MID-TURN (`/steering`) is written into the
+    //     transcript as a USER turn after the prompt, so the tail becomes that
+    //     message, whose content is not the prompt's;
+    //   * OpenCode and Gemini persist the reply as it goes, and a parser that
+    //     splits it leaves two or more assistant turns behind the prompt.
+    //
+    // Anchoring on the last one or two turns lost the stamp in the middle of
+    // exactly those turns, and every consumer reads a missing stamp as "this
+    // detail is settled, the turn is over": `computeTimelinePrefix` stops
+    // hiding the persisted half of the reply the live stream is re-showing (so
+    // the first half renders twice), the runtime store's `detailIsInFlight`
+    // lets a mid-turn refetch clear `liveMessage` / `localTurns` /
+    // `optimisticTurns`, and `collectInFlightPersistedToolCalls` stops marking
+    // the round's unfinished tool calls, which then paint as completed.
+    //
+    // EARLIEST, not last: the agent writes the prompt before anything it
+    // produces in reply, so within one turn the first copy of those words is
+    // the prompt itself. That is what keeps a mid-turn message repeating the
+    // prompt's own text ("continue" twice) from taking the stamp off it.
+    //
+    // Recency gate, which is both what makes the walk safe and what bounds it.
+    // `started_at` is recorded when the backend broadcasts the `UserMessage`
+    // event, which happens *before* the agent request is issued (see
+    // `connection.rs`), so the agent — a local subprocess on this machine's
     // clock — necessarily persists the in-flight prompt at a wall-clock instant
     // at or after `started_at`. A *prior* identical prompt was persisted during
     // an earlier turn and is therefore strictly older. We allow no backward
@@ -1558,29 +1834,85 @@ fn apply_in_flight_message_id(
     // second), and stamping it would HIDE the genuinely new prompt via the
     // frontend's keep-first user dedup. Erring the other way only ever yields a
     // recoverable visible duplicate, so the strict bound is the safe one.
-    if turns[target_idx].timestamp < started_at {
-        return None;
-    }
-    let want = sig_from_user_message_blocks(&pending.blocks);
-    if sig_from_turn_blocks(&turns[target_idx].blocks) == Some(want) {
-        // Never create a duplicate id. The broadcast id is normally disjoint from
-        // parser `turn-N` ids (and `is_reserved_turn_id` in the manager rejects a
-        // client id of that shape), but defend the invariant here too: if the id
-        // already exists on another turn, stamping would make two turns share an
-        // id and the frontend's id-keyed dedup could hide one. Leave the turn
-        // under its parser id — a recoverable visible duplicate, never a hidden
-        // prompt — and report nothing.
-        let collides = turns
-            .iter()
-            .enumerate()
-            .any(|(i, t)| i != target_idx && t.id == pending.message_id);
-        if collides {
+    //
+    // Turns are in transcript order, so the first one older than the start ends
+    // the search — the walk never reads past the running turn, and an
+    // out-of-order timestamp can only cut it short, which stamps nothing.
+    //
+    // …unless the timestamps are not the agent's at all. Two shipping parsers
+    // fall back to the PARSE INSTANT when a record carries no usable time:
+    // `cline.rs` seeds `last_ts` from `Utc::now()` when the manifest has no
+    // `started_at` and hands it to every message with `ts` missing or 0, and
+    // `antigravity.rs` writes `ts.unwrap_or_else(Utc::now)` per step. A parse
+    // instant is by construction at/after `started_at`, so there the gate never
+    // fires, the "window" is the whole transcript, and "earliest match" could
+    // reach an identical prompt from an earlier round — stamping THAT makes
+    // `visiblePersistedTurns` hide every assistant turn after it.
+    //
+    // `gate_fired` is what distinguishes the two. It is false in exactly two
+    // shapes: the transcript holds nothing older than this turn (a first turn —
+    // there is no earlier round to confuse anything with), or the timestamps are
+    // parse instants (there may be). Both are covered by asking whether the
+    // decision was AMBIGUOUS: one matching user turn in the whole transcript is
+    // the prompt whatever the clocks say, because the text is then unique to it.
+    // Two or more, with nothing proving where this turn began, is a guess — and
+    // guessing wrong here hides turns, so it refuses instead.
+    //
+    // NOT a cap on turns walked. The obvious bound — stop after N turns — counts
+    // the LENGTH OF THE REPLY, which is the one quantity that has nothing to do
+    // with the hazard: every mid-turn-persisting parser emits one assistant turn
+    // per assistant record (`claude.rs`, `opencode.rs`, `gemini.rs` all keep
+    // turns small for virtualization), so a measured Claude round runs to a
+    // median of 44 and a p90 of 317. Any N small enough to bound the hazard
+    // voids the stamp part-way through most ordinary rounds, mid-turn, which is
+    // the exact failure this walk exists to remove.
+    let mut target_idx: Option<usize> = None;
+    let mut matched = 0usize;
+    let mut user_turns_seen = 0usize;
+    let mut gate_fired = false;
+    for i in (0..n).rev() {
+        if turns[i].timestamp < started_at {
+            gate_fired = true;
+            break;
+        }
+        if !matches!(turns[i].role, TurnRole::User) {
+            continue;
+        }
+        // A cost bound, not a correctness one — `sig_from_turn_blocks` copies
+        // each turn's text and image bytes, and this runs on every detail
+        // fetch. Only reachable when the gate never fires (a real window holds
+        // the prompt plus the handful of messages sent mid-turn), and refusing
+        // there is the same safe direction as the ambiguity check below.
+        user_turns_seen += 1;
+        if user_turns_seen > MAX_IN_FLIGHT_WALK_USER_TURNS {
             return None;
         }
-        turns[target_idx].id = pending.message_id.clone();
-        return Some(pending.message_id.clone());
+        if sig_from_turn_blocks(&turns[i].blocks).as_ref() == Some(&want) {
+            matched += 1;
+            target_idx = Some(i);
+        }
     }
-    None
+    if !gate_fired && matched > 1 {
+        return None;
+    }
+    let target_idx = target_idx?;
+
+    // Never create a duplicate id. The broadcast id is normally disjoint from
+    // parser `turn-N` ids (and `is_reserved_turn_id` in the manager rejects a
+    // client id of that shape), but defend the invariant here too: if the id
+    // already exists on another turn, stamping would make two turns share an
+    // id and the frontend's id-keyed dedup could hide one. Leave the turn
+    // under its parser id — a recoverable visible duplicate, never a hidden
+    // prompt — and report nothing.
+    let collides = turns
+        .iter()
+        .enumerate()
+        .any(|(i, t)| i != target_idx && t.id == pending.message_id);
+    if collides {
+        return None;
+    }
+    turns[target_idx].id = pending.message_id.clone();
+    Some(pending.message_id.clone())
 }
 
 /// Resolve the raw `tailTurns` / `fromIndex` request fields into a window
@@ -2628,6 +2960,7 @@ mod tests {
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
             origin_cwd: None,
+            tag_ids: Vec::new(),
         }
     }
 
@@ -2799,32 +3132,195 @@ mod tests {
     }
 
     #[test]
-    fn does_not_reach_back_past_the_last_two_turns() {
+    fn does_not_reach_back_into_an_earlier_round() {
         // The matching prompt sits buried before another full user/assistant
-        // round; only the trailing user turn or the user-before-trailing-
-        // assistant are eligible, so it is never stamped.
+        // round. The walk is bounded by the recency gate, not by a turn count:
+        // it stops at the first turn older than this turn's start, which is the
+        // completed reply above — so the identical prompt behind it is out of
+        // reach however short the transcript is.
         let mut turns = vec![
             user_text_turn("turn-0", "hello", at(-30)),
             assistant_text_turn("turn-1", "a", at(-29), true),
             user_text_turn("turn-2", "ok", at(1)),
             assistant_text_turn("turn-3", "b", at(2), false),
         ];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        let stamped =
+            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        assert_eq!(stamped, None, "nothing in the running turn matches");
         assert_eq!(turns[0].id, "turn-0");
         assert_eq!(turns[2].id, "turn-2", "non-matching tail user turn untouched");
     }
 
     #[test]
-    fn does_not_stamp_with_two_trailing_assistant_turns() {
-        // Bounded to a single trailing assistant: a deeper assistant tail means
-        // we can't be sure the user prompt is the in-flight one, so bail.
+    fn stamps_nothing_when_the_clocks_cannot_say_which_continue_this_is() {
+        // `cline.rs` and `antigravity.rs` fall back to the PARSE INSTANT when a
+        // record carries no usable time, and a parse instant is by construction
+        // at or after `started_at` — so for those the recency gate never fires
+        // and NOTHING here says where this turn began. Two rounds of "continue"
+        // are then indistinguishable from one round the user steered with the
+        // same word, and stamping the older one would make
+        // `visiblePersistedTurns` hide every assistant turn after it.
+        let parsed_at = at(1);
+        let mut turns = vec![
+            user_text_turn("turn-0", "continue", parsed_at),
+            assistant_text_turn("turn-1", "done", parsed_at, true),
+            user_text_turn("turn-2", "continue", parsed_at),
+        ];
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "continue"),
+            Some(turn_started()),
+        );
+        assert_eq!(stamped, None, "ambiguous and unprovable → stamp nothing");
+        assert_eq!(turns[0].id, "turn-0", "untouched");
+        assert_eq!(turns[2].id, "turn-2", "untouched");
+    }
+
+    #[test]
+    fn stamps_an_unambiguous_match_even_with_no_proof_of_where_the_turn_began() {
+        // Same parse-instant transcript, but the prompt's text occurs once. A
+        // single candidate in the WHOLE transcript cannot be an earlier round's
+        // prompt confused with this one — the text is unique to it — so the
+        // clocks have nothing left to disambiguate and the stamp is safe.
+        //
+        // This is also the ordinary first turn of a conversation, where there is
+        // simply nothing older than `started_at` for the gate to find.
+        let parsed_at = at(1);
+        let mut turns = vec![
+            user_text_turn("turn-0", "run the tests", parsed_at),
+            assistant_text_turn("turn-1", "first half", parsed_at, false),
+            user_text_turn("turn-2", "also lint", parsed_at),
+        ];
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "run the tests"),
+            Some(turn_started()),
+        );
+        assert_eq!(stamped.as_deref(), Some("msg-live"));
+        assert_eq!(turns[0].id, "msg-live");
+    }
+
+    #[test]
+    fn a_long_reply_never_costs_the_stamp() {
+        // The bound counts USER turns, not turns. Every mid-turn-persisting
+        // parser emits one assistant turn per assistant record, so a real
+        // Claude round runs to a median of 44 of them and a p90 of 317 — a
+        // bound on turns walked would void the stamp part-way through most
+        // ordinary rounds, mid-turn, which is the failure this walk removes.
+        let mut turns = vec![
+            user_text_turn("old", "earlier", at(-30)),
+            assistant_text_turn("old-a", "done", at(-29), true),
+            user_text_turn("turn-0", "hello", at(1)),
+        ];
+        for i in 0..400 {
+            turns.push(assistant_text_turn(
+                &format!("a-{i}"),
+                "step",
+                at(2),
+                false,
+            ));
+        }
+        let stamped =
+            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        assert_eq!(stamped.as_deref(), Some("msg-live"));
+        assert_eq!(turns[2].id, "msg-live");
+    }
+
+    #[test]
+    fn stops_comparing_prompts_once_the_walk_is_plainly_not_in_one_turn() {
+        // The cost bound. Only reachable when the gate never fires, since a real
+        // window holds the prompt plus whatever was sent mid-turn; here every
+        // turn is a user turn with a parse instant, so the walk would otherwise
+        // rebuild a content signature for every prompt ever sent, on every
+        // detail fetch. Refusing is the same safe direction as ambiguity.
+        let parsed_at = at(1);
+        let mut turns = vec![user_text_turn("wanted", "hello", parsed_at)];
+        for i in 0..MAX_IN_FLIGHT_WALK_USER_TURNS {
+            turns.push(user_text_turn(&format!("u-{i}"), "filler", parsed_at));
+        }
+        let stamped =
+            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        assert_eq!(stamped, None, "past the cost bound, stamp nothing");
+        assert_eq!(turns[0].id, "wanted", "untouched");
+
+        // One fewer and the same transcript is inside the bound, so it is the
+        // bound that refused above and not some other gate.
+        turns.pop();
+        let stamped =
+            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        assert_eq!(stamped.as_deref(), Some("msg-live"));
+    }
+
+    #[test]
+    fn stamps_the_prompt_behind_a_reply_the_parser_split() {
+        // Previously refused: the rule was "the tail, or the user before a
+        // SINGLE trailing assistant", so a deeper assistant tail bailed.
+        //
+        // That bound predates the recency gate and is redundant beside it. A
+        // user turn at or after this turn's start was persisted DURING it, and
+        // its content is the pending prompt's — there is nothing else it could
+        // be, whatever the agent has written since. Refusing here instead cost
+        // the stamp for the whole of every OpenCode/Gemini turn whose partial
+        // reply the parser split in two, which is exactly the shape the
+        // frontend's partial suppression exists for.
         let mut turns = vec![
             user_text_turn("turn-0", "hello", at(1)),
             assistant_text_turn("turn-1", "a", at(2), false),
             assistant_text_turn("turn-2", "b", at(3), false),
         ];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
-        assert_eq!(turns[0].id, "turn-0", "left untouched");
+        let stamped =
+            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        assert_eq!(stamped.as_deref(), Some("msg-live"));
+        assert_eq!(turns[0].id, "msg-live");
+    }
+
+    #[test]
+    fn stamps_the_prompt_behind_a_message_sent_mid_turn() {
+        // The steering shape. The agent writes a message the user sent DURING
+        // the turn into its own transcript, so the tail is that message and its
+        // content is not the prompt's. The old tail rule reported nothing here,
+        // in the middle of the turn, and every consumer reads that as "settled".
+        let mut turns = vec![
+            user_text_turn("turn-0", "hello", at(1)),
+            assistant_text_turn("turn-1", "first half", at(2), false),
+            user_text_turn("turn-2", "also check the tests", at(3)),
+        ];
+        let stamped =
+            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        assert_eq!(stamped.as_deref(), Some("msg-live"));
+        assert_eq!(turns[0].id, "msg-live", "the prompt keeps the stamp");
+        assert_eq!(turns[2].id, "turn-2", "the mid-turn message is untouched");
+    }
+
+    #[test]
+    fn stamps_the_prompt_not_a_mid_turn_message_repeating_its_words() {
+        // "continue" is the most repeatable thing a person steers with, and the
+        // prompt itself may have been the same word. Both copies match by
+        // content and both are inside the turn, so recency cannot separate
+        // them — ORDER does: the agent writes the prompt before anything it
+        // produces, so the earliest copy in the turn is the prompt. Stamping
+        // the later one would move the anchor past the reply's first half and
+        // leave it beside the live copy of itself.
+        //
+        // An earlier round sits in front, which is what lets the recency gate
+        // fire and prove where this turn begins; without that proof the two
+        // copies are ambiguous and the walk refuses instead (see below).
+        let mut turns = vec![
+            user_text_turn("old", "hello", at(-30)),
+            assistant_text_turn("old-a", "hi", at(-29), true),
+            user_text_turn("turn-0", "continue", at(1)),
+            assistant_text_turn("turn-1", "working", at(2), false),
+            user_text_turn("turn-2", "continue", at(3)),
+        ];
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "continue"),
+            Some(turn_started()),
+        );
+        assert_eq!(stamped.as_deref(), Some("msg-live"));
+        assert_eq!(turns[2].id, "msg-live", "the earliest copy is the prompt");
+        assert_eq!(turns[4].id, "turn-2", "the mid-turn repeat is untouched");
+        assert_eq!(turns[0].id, "old", "the earlier round is untouched");
     }
 
     #[test]
@@ -5368,12 +5864,14 @@ mod tests {
                 path: "/tmp/proj/".into(),
                 name: "proj-deleted".into(),
                 deleted: true,
+                parent_id: None,
             },
             ScanFolderRow {
                 id: 2,
                 path: "/tmp/proj".into(),
                 name: "proj".into(),
                 deleted: false,
+                parent_id: None,
             },
         ];
         let summaries = vec![scan_summary(
@@ -5398,6 +5896,7 @@ mod tests {
             path: "/tmp/gone".into(),
             name: "gone".into(),
             deleted: true,
+            parent_id: None,
         }];
         let summaries = vec![scan_summary(
             "s1",
@@ -5468,6 +5967,444 @@ mod tests {
         let convs = conversation::Entity::find().all(&db.conn).await.unwrap();
         assert_eq!(convs.len(), 2);
         assert!(convs.iter().all(|c| c.folder_id == folder_rows[0].id));
+    }
+
+    // A session whose cwd is a linked git worktree of an open repo belongs
+    // UNDER that repo. `parent_id` is exactly the sidebar's test for "worktree
+    // of" versus "one more top-level folder", and the branch-label backfill
+    // selects on it too, so leaving it NULL strands the folder twice. #552.
+    #[tokio::test]
+    async fn batch_import_nests_a_worktree_cwd_under_its_repo() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+        let repo_id = seed_folder(&db, &repo.to_string_lossy()).await;
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        let result = import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        assert_eq!(result.imported, 1);
+        let rows = crate::db::entities::folder::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap();
+        let worktree_row = rows
+            .iter()
+            .find(|r| r.id != repo_id)
+            .expect("worktree folder row");
+        assert_eq!(
+            worktree_row.parent_id,
+            Some(repo_id),
+            "imported worktree must group under the repo it belongs to"
+        );
+    }
+
+    // Selecting a repo's sessions and one of its worktrees' in the SAME import
+    // is the first-time-import shape, and the repo folder it needs exists by the
+    // time the worktree is written — as long as the two are not imported in
+    // whatever order their paths happen to sort in.
+    #[tokio::test]
+    async fn batch_import_nests_a_worktree_under_a_repo_created_in_the_same_run() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+
+        let summaries = vec![
+            scan_summary("s0", AgentType::Codex, Some(&repo.to_string_lossy()), at(0)),
+            scan_summary(
+                "s1",
+                AgentType::Codex,
+                Some(&worktree.to_string_lossy()),
+                at(1),
+            ),
+        ];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![
+                key_of(AgentType::Codex, "s0"),
+                key_of(AgentType::Codex, "s1"),
+            ],
+        )
+        .await
+        .expect("batch import");
+
+        let rows = crate::db::entities::folder::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap();
+        let repo_row = rows
+            .iter()
+            .find(|r| path_eq_for_matching(&r.path, &repo.to_string_lossy()))
+            .expect("repo folder row");
+        let worktree_row = rows
+            .iter()
+            .find(|r| path_eq_for_matching(&r.path, &worktree.to_string_lossy()))
+            .expect("worktree folder row");
+        assert_eq!(repo_row.parent_id, None);
+        assert_eq!(
+            worktree_row.parent_id,
+            Some(repo_row.id),
+            "a repo created earlier in the same run is still the worktree's repo"
+        );
+    }
+
+    // The repo folder a worktree resolves to can itself be recorded as somebody
+    // else's worktree child (`open_worktree_folder_core` writes that whenever the
+    // branch switcher adopts an unregistered checkout). Hanging off it directly
+    // would build a two-level chain, and the sidebar's merge is single-level: the
+    // grandchild's conversations would bucket under a folder that is itself
+    // merged away, and render nowhere. Flatten, exactly as the worktree open does.
+    #[tokio::test]
+    async fn batch_import_flattens_onto_the_repos_own_root() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+        let outer_id = seed_folder(&db, "/tmp/outer-root").await;
+        let repo_id = folder_service::add_folder_with_parent(
+            &db.conn,
+            &repo.to_string_lossy(),
+            Some(outer_id),
+        )
+        .await
+        .expect("seed repo folder")
+        .id;
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        let rows = crate::db::entities::folder::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap();
+        let worktree_row = rows
+            .iter()
+            .find(|r| r.id != outer_id && r.id != repo_id)
+            .expect("worktree folder row");
+        assert_eq!(worktree_row.parent_id, Some(outer_id));
+    }
+
+    // Before imported worktrees were grouped, one could exist as a top-level
+    // folder while its main working tree was still unregistered. Navigating
+    // from that worktree to a branch checked out in the main tree then recorded
+    // the main-tree row under the worktree. Flattening through that row points
+    // straight back at the import target's own id; refuse it or the sidebar
+    // filters the self-parented folder out completely.
+    #[tokio::test]
+    async fn batch_import_refuses_a_parent_that_flattens_to_the_target() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+        let worktree_id = seed_folder(&db, &worktree.to_string_lossy()).await;
+        let repo_id = folder_service::add_folder_with_parent(
+            &db.conn,
+            &repo.to_string_lossy(),
+            Some(worktree_id),
+        )
+        .await
+        .expect("seed inverted main-tree folder")
+        .id;
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        let result = import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        assert_eq!(result.imported, 1);
+        let worktree_row = crate::db::entities::folder::Entity::find_by_id(worktree_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(worktree_row.parent_id, None);
+        let repo_row = crate::db::entities::folder::Entity::find_by_id(repo_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(repo_row.parent_id, Some(worktree_id));
+    }
+
+    // Historical top-level worktrees can also leave a longer inverted chain.
+    // If the main-tree row points at a folder whose own parent is the import
+    // target, using that one-hop "root" would create a two-node cycle. Only an
+    // actual live top-level row is safe to write as a new parent.
+    #[tokio::test]
+    async fn batch_import_refuses_a_flattened_parent_that_is_itself_a_child() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+        let worktree_id = seed_folder(&db, &worktree.to_string_lossy()).await;
+        let middle_id = folder_service::add_folder_with_parent(
+            &db.conn,
+            &root.join("middle").to_string_lossy(),
+            Some(worktree_id),
+        )
+        .await
+        .expect("seed middle folder")
+        .id;
+        let repo_id = folder_service::add_folder_with_parent(
+            &db.conn,
+            &repo.to_string_lossy(),
+            Some(middle_id),
+        )
+        .await
+        .expect("seed chained main-tree folder")
+        .id;
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        let worktree_row = crate::db::entities::folder::Entity::find_by_id(worktree_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(worktree_row.parent_id, None);
+        let middle_row = crate::db::entities::folder::Entity::find_by_id(middle_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(middle_row.parent_id, Some(worktree_id));
+        let repo_row = crate::db::entities::folder::Entity::find_by_id(repo_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(repo_row.parent_id, Some(middle_id));
+    }
+
+    // A worktree imported before grouping existed may already be acting as the
+    // root for worktrees created from it. Moving that row under the real repo
+    // without moving its children would create a two-level chain and hide the
+    // children's conversations in the single-level sidebar merge.
+    #[tokio::test]
+    async fn batch_import_does_not_reparent_a_folder_that_already_has_children() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+        let repo_id = seed_folder(&db, &repo.to_string_lossy()).await;
+        let worktree_id = seed_folder(&db, &worktree.to_string_lossy()).await;
+        let child_id = folder_service::add_folder_with_parent(
+            &db.conn,
+            &root.join("child").to_string_lossy(),
+            Some(worktree_id),
+        )
+        .await
+        .expect("seed existing child")
+        .id;
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        let worktree_row = crate::db::entities::folder::Entity::find_by_id(worktree_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(worktree_row.parent_id, None);
+        let child_row = crate::db::entities::folder::Entity::find_by_id(child_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(child_row.parent_id, Some(worktree_id));
+        let repo_row = crate::db::entities::folder::Entity::find_by_id(repo_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(repo_row.parent_id, None);
+    }
+
+    // Grouping under a repo codeg has never opened would invent a workspace row
+    // the user did not ask for, so an unknown repo leaves the folder top-level.
+    #[tokio::test]
+    async fn batch_import_leaves_a_worktree_top_level_when_its_repo_is_unopened() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (_repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        let rows = crate::db::entities::folder::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].parent_id, None);
+    }
+
+    // A soft-deleted repo renders nowhere, so a child of it would render
+    // nowhere either. Top-level is the better of the two.
+    #[tokio::test]
+    async fn batch_import_leaves_a_worktree_top_level_when_its_repo_is_deleted() {
+        use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+        let db = fresh_in_memory_db().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(temp.path()).expect("canonicalize root");
+        let (repo, worktree) = crate::git_repo::fixture_linked_worktree(&root);
+        let repo_id = seed_folder(&db, &repo.to_string_lossy()).await;
+
+        let row = crate::db::entities::folder::Entity::find_by_id(repo_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut active = row.into_active_model();
+        active.deleted_at = Set(Some(chrono::Utc::now()));
+        active.is_open = Set(false);
+        active.update(&db.conn).await.unwrap();
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some(&worktree.to_string_lossy()),
+            at(0),
+        )];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        let rows = crate::db::entities::folder::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap();
+        let worktree_row = rows
+            .iter()
+            .find(|r| r.id != repo_id)
+            .expect("worktree folder row");
+        assert_eq!(worktree_row.parent_id, None);
+    }
+
+    // The fallback stays on `add_folder`'s Preserve semantics, so re-importing
+    // into a folder a worktree open already parented cannot demote it, not even
+    // when the directory is gone from disk and resolves to nothing.
+    #[tokio::test]
+    async fn batch_import_preserves_a_recorded_worktree_parent() {
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let repo_id = seed_folder(&db, "/tmp/proj-repo").await;
+        folder_service::add_folder_with_parent(&db.conn, "/tmp/proj-wt", Some(repo_id))
+            .await
+            .expect("seed worktree folder");
+
+        let summaries = vec![scan_summary(
+            "s1",
+            AgentType::Codex,
+            Some("/tmp/proj-wt"),
+            at(0),
+        )];
+        import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            summaries,
+            vec![key_of(AgentType::Codex, "s1")],
+        )
+        .await
+        .expect("batch import");
+
+        let rows = crate::db::entities::folder::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap();
+        let worktree_row = rows
+            .iter()
+            .find(|r| r.path == "/tmp/proj-wt")
+            .expect("worktree folder row");
+        assert_eq!(worktree_row.parent_id, Some(repo_id));
     }
 
     #[tokio::test]
@@ -5592,7 +6529,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batch_import_never_resurrects_a_deleted_conversation() {
+    async fn batch_import_restores_a_deleted_conversation_in_place() {
         use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
             Set};
         let db = fresh_in_memory_db().await;
@@ -5620,10 +6557,15 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        let original_id = row.id;
         let mut active = row.into_active_model();
         active.deleted_at = Set(Some(chrono::Utc::now()));
         active.update(&db.conn).await.unwrap();
 
+        // Deleting a conversation is a soft delete, so re-picking the session
+        // in the import window brings the ORIGINAL row back rather than
+        // inserting a second one — every selection here is a session the user
+        // checked while it was badged "deleted".
         let again = import_selected_from_summaries(
             &db.conn,
             &EventEmitter::Noop,
@@ -5632,15 +6574,64 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(again.imported, 0);
-        assert_eq!(again.skipped, 1);
+        assert_eq!(again.imported, 0, "restored, not re-imported");
+        assert_eq!(again.restored, 1);
+        assert_eq!(again.skipped, 0);
+        assert_eq!(again.folders[0].restored, 1);
 
         let rows = conversation::Entity::find().all(&db.conn).await.unwrap();
+        assert_eq!(rows.len(), 1, "no duplicate row");
+        assert_eq!(rows[0].id, original_id);
+        assert!(rows[0].deleted_at.is_none(), "back in the sidebar");
+    }
+
+    #[tokio::test]
+    async fn whole_folder_import_still_never_resurrects_a_deleted_conversation() {
+        use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+            Set};
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/proj-sweep").await;
+        let items = vec![scan_summary(
+            "s1",
+            AgentType::ClaudeCode,
+            Some("/tmp/proj-sweep"),
+            at(0),
+        )];
+
+        import_service::import_summaries(
+            &db.conn,
+            folder_id,
+            &items,
+            import_service::DeletedPolicy::Skip,
+        )
+        .await
+        .unwrap();
+        let row = conversation::Entity::find()
+            .filter(conversation::Column::ExternalId.eq("s1"))
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut active = row.into_active_model();
+        active.deleted_at = Set(Some(chrono::Utc::now()));
+        active.update(&db.conn).await.unwrap();
+
+        // The legacy sweep imports a whole FOLDER, not sessions the user picked
+        // one by one, so it must not bring back everything they ever deleted
+        // under it.
+        let (tally, _ids) = import_service::import_summaries(
+            &db.conn,
+            folder_id,
+            &items,
+            import_service::DeletedPolicy::Skip,
+        )
+        .await
+        .unwrap();
+        assert_eq!(tally.restored, 0);
+        assert_eq!(tally.skipped, 1);
+        let rows = conversation::Entity::find().all(&db.conn).await.unwrap();
         assert_eq!(rows.len(), 1);
-        assert!(
-            rows[0].deleted_at.is_some(),
-            "a deleted conversation stays deleted"
-        );
+        assert!(rows[0].deleted_at.is_some(), "stays deleted");
     }
 
     #[tokio::test]
@@ -5778,7 +6769,13 @@ mod tests {
         ];
 
         let (tally, updated_ids, failed) =
-            import_service::import_summaries_resilient(&db.conn, 999_999, &items).await;
+            import_service::import_summaries_resilient(
+                &db.conn,
+                999_999,
+                &items,
+                import_service::DeletedPolicy::Skip,
+            )
+            .await;
         assert_eq!(failed, 2, "both rows fail the folder FK and are counted");
         assert_eq!(tally.imported, 0);
         assert_eq!(tally.updated, 0);
@@ -5788,7 +6785,13 @@ mod tests {
         // not corrupt state or leave a half-open transaction.
         let folder_id = seed_folder(&db, "/tmp/x").await;
         let (tally2, _ids, failed2) =
-            import_service::import_summaries_resilient(&db.conn, folder_id, &items).await;
+            import_service::import_summaries_resilient(
+                &db.conn,
+                folder_id,
+                &items,
+                import_service::DeletedPolicy::Skip,
+            )
+            .await;
         assert_eq!(failed2, 0);
         assert_eq!(tally2.imported, 2);
     }
@@ -5807,9 +6810,14 @@ mod tests {
             at(0),
         )];
         assert!(
-            import_service::import_summaries(&db.conn, 999_999, &items)
-                .await
-                .is_err(),
+            import_service::import_summaries(
+                &db.conn,
+                999_999,
+                &items,
+                import_service::DeletedPolicy::Skip
+            )
+            .await
+            .is_err(),
             "a row FK violation must propagate through the strict importer"
         );
     }
@@ -5840,6 +6848,7 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                tag_ids: Vec::new(),
             },
             turns,
             session_stats: None,

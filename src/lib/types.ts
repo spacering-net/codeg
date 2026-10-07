@@ -453,6 +453,51 @@ export type FolderGroupChange =
 export const FOLDER_GROUP_CHANGED_EVENT = "folder-group://changed"
 
 /**
+ * A conversation tag: a label (name + one colour) the user can put on
+ * conversations, several per conversation.
+ *
+ * `folder_id` is the tag's scope: `null` for a GLOBAL tag, offered on every
+ * conversation (chat-mode ones included); otherwise the ROOT folder that owns
+ * it, offered only on that folder's conversations and its worktrees'. A
+ * worktree child never owns tags — creating one there lands on its root.
+ *
+ * `color` is always a normalized `#rrggbb`; both theme treatments are derived
+ * from it (see `tagChipStyle`). `sort_order` is the position within the scope.
+ */
+export interface ConversationTagDetail {
+  id: number
+  folder_id: number | null
+  name: string
+  color: string
+  sort_order: number
+}
+
+/**
+ * The branch tag: every conversation's `git_branch` drawn as a chip beside its
+ * tags — whether at all, and in which colour (normalized `#rrggbb`). One
+ * setting for the whole app. Mirrors the Rust `ConversationBranchTag`.
+ */
+export interface ConversationBranchTag {
+  enabled: boolean
+  color: string
+}
+
+/**
+ * Payload for `conversation-tag://changed` — tag DEFINITIONS, plus the branch
+ * tag setting. Which tags a conversation carries rides on
+ * `conversation://changed` instead (the summary's `tag_ids`). `reordered`
+ * carries nothing on purpose: re-read the list. Mirrors the Rust
+ * `ConversationTagChange` (serde `tag = "kind"`).
+ */
+export type ConversationTagChange =
+  | { kind: "upsert"; tag: ConversationTagDetail }
+  | { kind: "deleted"; id: number }
+  | { kind: "reordered" }
+  | { kind: "branch_tag"; setting: ConversationBranchTag }
+
+export const CONVERSATION_TAG_CHANGED_EVENT = "conversation-tag://changed"
+
+/**
  * Result of `createChatConversation`: the new conversation id plus the hidden
  * chat folder backing it, so the caller can drop the folder straight into
  * `allFolders` (resolving cwd / active-folder) without a refetch.
@@ -515,6 +560,14 @@ export interface DbConversationSummary {
    *  worktree path it originally ran in. Drives the "source worktree removed"
    *  badge. */
   origin_cwd?: string | null
+  /**
+   * Ids of the {@link ConversationTagDetail tags} on this conversation,
+   * ascending. Absent when it has none (the backend omits an empty list). May
+   * name a tag this client has already seen deleted — the tag-deleted broadcast
+   * is not followed by per-conversation upserts — so always resolve ids against
+   * the tag store and skip unknown ones rather than trusting the count.
+   */
+  tag_ids?: number[]
 }
 
 /** Payload for the global `conversation://changed` side-channel that keeps
@@ -557,6 +610,33 @@ export const FOLDER_LINKS_CHANGED_EVENT = "folder://links-changed"
  *  frontend-only cache. Mirrors the Rust `FEEDBACK_SETTINGS_CHANGED_EVENT`. */
 export const FEEDBACK_SETTINGS_CHANGED_EVENT = "feedback-settings://changed"
 
+/** Global side-channel announcing a create-from-chat switch move (payload is
+ *  `ChatAuthoringSettings`). Load-bearing rather than cosmetic: these two flags
+ *  share one record and have two editors — the settings form, which writes the
+ *  pair, and the status-bar codeg-mcp popover, which writes one key. Without
+ *  this broadcast an open settings form keeps a stale value for the switch it
+ *  did not touch and reverts it on the next save. Mirrors the Rust
+ *  `CHAT_AUTHORING_SETTINGS_CHANGED_EVENT`. */
+export const CHAT_AUTHORING_SETTINGS_CHANGED_EVENT =
+  "chat-authoring-settings://changed"
+
+/** Global side-channel announcing a browser-tools switch move (payload is
+ *  `BrowserToolsSettings`). The same two-editor problem as
+ *  [CHAT_AUTHORING_SETTINGS_CHANGED_EVENT], and for the same reason: the
+ *  group and `browser_eval` are two keys of one record, the settings form
+ *  writes the pair, and the status-bar codeg-mcp popover — which now carries
+ *  both rows — writes one key. Mirrors the Rust
+ *  `BROWSER_TOOLS_SETTINGS_CHANGED_EVENT`. */
+export const BROWSER_TOOLS_SETTINGS_CHANGED_EVENT =
+  "browser-tools-settings://changed"
+
+/** Global side-channel announcing a delegation-settings write (payload is
+ *  `DelegationSettings`). Same two-editor problem as
+ *  [CHAT_AUTHORING_SETTINGS_CHANGED_EVENT]: the settings form writes all four
+ *  keys, the status-bar codeg-mcp popover writes only `enabled`. Mirrors the
+ *  Rust `DELEGATION_SETTINGS_CHANGED_EVENT`. */
+export const DELEGATION_SETTINGS_CHANGED_EVENT = "delegation-settings://changed"
+
 /** Payload for the global `tabs://changed` side-channel that keeps every
  *  client's open-tab set in sync across desktop + browsers. Mirrors the Rust
  *  `TabsChanged` struct. The full conversation-bound tab set is sent as a
@@ -592,11 +672,17 @@ export interface ImportResult {
   imported: number
   updated: number
   skipped: number
+  /** Soft-deleted conversations this import brought back. Only ever non-zero
+   *  for the picker, which imports sessions the user checked one by one. */
+  restored: number
 }
 
 /** Mirrors Rust `ScanSessionStatus` — how one locally-discovered session
  *  reconciles against the DB by `(external_id, agent_type)`. `deleted` means
- *  only soft-deleted rows exist; import never resurrects those. */
+ *  only soft-deleted rows exist — deletion is a soft delete, so importing such
+ *  a session RESTORES the existing row (id, history and all) instead of
+ *  inserting a second one. The picker gates that behind an explicit
+ *  "include deleted" opt-in so a select-all can never mass-resurrect. */
 export type ScanSessionStatus = "new" | "imported" | "deleted"
 
 /** Mirrors Rust `ScanSession`: one locally-discovered agent session in the
@@ -649,6 +735,7 @@ export interface ImportFolderOutcome {
   imported: number
   updated: number
   skipped: number
+  restored: number
 }
 
 /** Mirrors Rust `ImportSelectedResult` — response of
@@ -657,6 +744,8 @@ export interface ImportSelectedResult {
   imported: number
   updated: number
   skipped: number
+  /** Soft-deleted conversations the user re-selected, brought back in place. */
+  restored: number
   not_found: number
   failed: number
   created_folders: number
@@ -698,14 +787,20 @@ export type CanvasNodeKind =
   | "conversation"
   | "custom"
   | "note"
+  | "file"
+  | "terminal"
 
 /** One element on the conversation canvas. Mirrors the Rust `CanvasNode`:
  *  a binding region (folder / folder group / agent / single conversation), a
- *  hand-curated `custom` region, or a sticky `note`. `folder_id` /
- *  `folder_group_id` / `conversation_id` are soft references — a binding whose
- *  target is gone renders as unresolved. */
+ *  hand-curated `custom` region, a sticky `note`, a read-only `file` card or a
+ *  `terminal`. `folder_id` / `folder_group_id` / `conversation_id` / `path` are
+ *  soft references — a binding whose target is gone renders as unresolved. */
 export interface CanvasNode {
   id: number
+  /** The canvas (`CanvasBoard.id`) this node sits on. Fixed for the node's
+   *  life — which is what lets a client scope the global event stream to the
+   *  one board it shows. */
+  board_id: number
   kind: CanvasNodeKind
   folder_id: number | null
   /** kind=group: the sidebar folder group this region mirrors. */
@@ -716,6 +811,9 @@ export interface CanvasNode {
   member_ids: number[]
   title: string | null
   content: string | null
+  /** kind=file: the document's absolute path. kind=terminal: the working
+   *  directory its shell runs in. `null` for every other kind. */
+  path: string | null
   color: string | null
   collapsed: boolean
   /**
@@ -734,9 +832,13 @@ export interface CanvasNode {
   updated_at: string
 }
 
-/** Response of `canvas_list_nodes`: the full node set plus the revision it was
- *  read at (single read transaction server-side). Seeds `lastRevision`. */
+/** Response of `canvas_list_nodes`: one board's full node set plus the
+ *  revision it was read at (single read transaction server-side). Seeds
+ *  `lastRevision`. The revision is workspace-global, not per board. */
 export interface CanvasSnapshot {
+  /** The board `nodes` belongs to — echoed so an answer that arrives after the
+   *  client switched boards can be recognised as someone else's. */
+  board_id: number
   nodes: CanvasNode[]
   revision: number
 }
@@ -784,6 +886,49 @@ export type CanvasChange =
     }
 
 export const CANVAS_CHANGED_EVENT = "canvas://changed"
+
+/** One canvas on the canvas list. Mirrors the Rust `CanvasBoard`. `name` is
+ *  null until the user names it (render a localized "Untitled canvas"). */
+export interface CanvasBoard {
+  id: number
+  name: string | null
+  description: string | null
+  /** Theme-preset color name (FolderThemeColor vocabulary), or null. */
+  color: string | null
+  created_at: string
+  /** Last change to the board OR anything on it — node writes stamp it too,
+   *  which is what the list is ordered by. */
+  updated_at: string
+}
+
+/** One node's footprint on a board's list card. */
+export interface CanvasBoardPreviewRect {
+  kind: CanvasNodeKind
+  x: number
+  y: number
+  width: number
+  height: number
+  color: string | null
+}
+
+/** Row of `canvas_list_boards`: the board plus what its card shows about the
+ *  nodes on it. Mirrors the Rust `CanvasBoardSummary`. */
+export interface CanvasBoardSummary {
+  board: CanvasBoard
+  node_count: number
+  /** Terminal cards on the board — shells a board delete would stop. */
+  terminal_count: number
+  /** Largest-first footprints, capped server-side (a thumbnail, not a render). */
+  preview: CanvasBoardPreviewRect[]
+}
+
+/** Payload of the `canvas-board://changed` side-channel: a board was created
+ *  or edited (full row), or deleted. Mirrors the Rust `CanvasBoardChange`. */
+export type CanvasBoardChange =
+  | { kind: "upsert"; board: CanvasBoard }
+  | { kind: "deleted"; id: number }
+
+export const CANVAS_BOARD_CHANGED_EVENT = "canvas-board://changed"
 
 export interface DbConversationDetail {
   summary: DbConversationSummary
@@ -1427,6 +1572,13 @@ export interface SessionConfigOptionInfo {
   description?: string | null
   category?: string | null
   kind: SessionConfigKindInfo
+  /** The value the AGENT recommends (JetBrains AIR `recommendedValue`; codex-acp
+   *  1.11.0+ names its default model and the current model's default reasoning
+   *  effort, claude-agent-acp 0.76.0+ the same pair for model and effort).
+   *  A hint only — `current_value` still says what is selected, and a
+   *  recommendation matching no option simply marks nothing. Absent for agents
+   *  that publish none, and on payloads predating the field. */
+  recommended_value?: string | null
 }
 
 export interface AgentOptionsSnapshot {
@@ -1567,6 +1719,12 @@ export interface WorkTaskConfig {
   mode_id?: string | null
   config_values: Record<string, string>
   label_snapshot?: AutomationLabelSnapshot | null
+  /** The branch this task is FOR: its worktree branches from that branch's tip
+   *  and the merge lands back onto it. Absent/blank = the project folder's
+   *  current branch when the task starts (and what every task created before
+   *  the choice existed does). The branch actually used is recorded on
+   *  `WorkTask.base_branch` once the worktree exists. */
+  base_branch?: string | null
 }
 
 export interface WorkTask {
@@ -1628,8 +1786,14 @@ export interface WorkTask {
   source_key?: string | null
   /** Source snapshot (url, title, numbers …); shape mirrors ForgeSourceMeta. */
   source_meta?: ForgeSourceMeta | null
-  /** Latest agent_progress milestone — present on live (running/awaiting/merging) rows only. */
+  /** Latest agent_progress milestone OF THIS GENERATION — present on live
+   *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a
+   *  merge in flight never narrates the work round it is landing. */
   latest_progress?: string | null
+  /** This generation is parked on its pre-prompt context compaction: the agent
+   *  is working, but on shrinking the session rather than on the task. The one
+   *  thing that explains a card sitting in 准备中 / 合并中 for minutes. */
+  compacting?: boolean
   created_at: string
   updated_at: string
   started_at: string | null
@@ -2366,8 +2530,10 @@ export interface ToolCallImageWire {
  * launch card in-memory (rewriting its `[[codeg-background-task]]` marker via
  * `resolveBackgroundTask`) instead of a `refetchDetail` — which double-rendered
  * the #870-held turn and raced the transcript's last write. `tool_use_id` is
- * the launching tool call's id (`toolu_…`), NOT `task_id`; absent for a
- * background shell (no marker card to flip).
+ * the launching tool call's id (`toolu_…`), NOT `task_id`. A background shell's
+ * notification names its `Bash` call too, whose card has no marker to flip (the
+ * store leaves it alone); absent when the notification names no call (an MCP
+ * call moved to the background).
  */
 export interface BackgroundSettledInfo {
   task_id: string
@@ -2478,6 +2644,13 @@ export type AcpEvent =
       title: string
     }
   | {
+      // Claude `/clear` rolled the on-disk transcript to a new uuid. The
+      // backend re-points conversation.external_id; the frontend does not
+      // apply this event itself.
+      type: "transcript_rolled_over"
+      transcript_id: string
+    }
+  | {
       type: "conversation_status_changed"
       conversation_id: number
       status: ConversationStatus
@@ -2501,6 +2674,11 @@ export type AcpEvent =
       option_name: string
       requested: string
       actual: string
+      /** The same two as RAW value ids — what `agent-label-vocabulary` keys on.
+       *  Optional so a client stays compatible with a server that predates
+       *  them. */
+      requested_value?: string
+      actual_value?: string
     }
   | {
       type: "selectors_ready"
@@ -2576,7 +2754,32 @@ export type AcpEvent =
       record: SessionFailureRecord
     }
   /**
-   * A JetBrains AIR async-task delta (claude only — see `AsyncTaskDelta`).
+   * One ACP Session Notice (claude-agent-acp 0.81+/codex-acp 1.13+; published
+   * because codeg advertises `clientCapabilities.session.notices`).
+   *
+   * NOT a record — no id, no revision, no history position, and never replayed
+   * (the backend drops these on the replay seam). Every emission is a distinct
+   * event, so the consumer raises a toast rather than merging anything. The
+   * `warning`/`error` mirror into `sessionFailures` is a presentation choice
+   * made in `acp-connections-context`, not something the wire carries.
+   */
+  | {
+      type: "session_notice"
+      notice: SessionNotice
+    }
+  /**
+   * Plugins Claude Code could not load (CLI 2.1.283+, see `PluginLoadFailure`).
+   * The backend reads them off the raw SDK stream's `system/init` frames and
+   * forwards a set once per connection, again only when it changes. NOT
+   * replayed and not kept in the snapshot — like a notice, it is an event.
+   */
+  | {
+      type: "plugin_load_failures"
+      failures: PluginLoadFailure[]
+    }
+  /**
+   * A JetBrains AIR async-task delta (claude + codex, and Grok workflows
+   * translated to the same shape — see `AsyncTaskDelta`).
    * PARTIAL by design: the reducer merges it into the connection's task table
    * by the same rule the backend snapshot applies, and only a `spawned` delta
    * may create a row.
@@ -2594,8 +2797,10 @@ export type AcpEvent =
        * `"session_unavailable"`, `"session_archived"`, or `"session_busy"`.
        *
        * The first three mean the session is gone. `"session_busy"` does not —
-       * another live session holds it (codex keeps the parent thread's writer
-       * after a fork), and it clears when that one closes.
+       * another live holder has it open (another Codex client — the app, the
+       * CLI or an IDE extension — or, for about a minute after a fork, the
+       * forking session, until codex unloads the parent it closed), and it
+       * clears when that one lets go.
        */
       code: string
     }
@@ -2894,6 +3099,15 @@ export interface FeedbackItem {
   created_at: string
   status: FeedbackStatus
   delivered_at?: string | null
+  /** What the user actually sent, when the note carried more than plain text
+   *  (image attachments). Absent for a text-only note — every pull-channel one,
+   *  and the historical native one — where `text` is the whole message.
+   *
+   *  Needed because `text` is the DISPLAY form the composer collapses a draft
+   *  into, so a steered image would otherwise reach the live transcript as
+   *  words about an image. Backend-projected by `user_blocks_from_prompt`
+   *  after hydration, the same shape `user_message` broadcasts. */
+  blocks?: UserMessageBlock[] | null
 }
 
 /** Snapshot of the most recent ACP runtime error. */
@@ -2922,6 +3136,42 @@ export interface SessionLastError {
  * doubles as its id's revision watermark — dropping one would let a delayed
  * stale upsert resurrect it.
  */
+/**
+ * One ACP Session Notice (mirror of Rust `SessionNotice`) — fire-and-forget
+ * advisory text from the Session Notices RFD.
+ *
+ * Replaces, on connections that advertise the capability, the `**bold label:**`
+ * agent-message line both adapters used to fold these into, and it OUTRANKS the
+ * AIR advisory lane — which is why `warning`/`error` notices are mirrored into
+ * a synthetic {@link SessionFailureRecord} so the banner keeps working.
+ */
+export interface SessionNotice {
+  /** `info` | `warning` | `error` today; an unrecognized level renders as
+   *  `info` rather than being dropped. */
+  severity: string
+  /** Adapter-authored, non-empty, in the adapter's own English — passed through
+   *  verbatim, exactly as `SessionFailureRecord.title` already is. */
+  title: string
+  description?: string | null
+}
+
+/**
+ * One entry of Claude Code's `system/init.plugin_errors` (CLI 2.1.283+): a
+ * plugin that did not load, or loaded without one of its components.
+ */
+export interface PluginLoadFailure {
+  /** `name@marketplace`, or the positional `inline[N]` / `synced[N]` tag of a
+   *  directory entry that failed before it had a name. */
+  plugin: string
+  /** The CLI's category, from an open set (`path-not-found`, `generic-error`,
+   *  `manifest-validation-error`, `dependency-unsatisfied`, …). */
+  kind: string
+  /** CLI-authored English, shown verbatim. */
+  message: string
+  /** The entry's path, for a directory entry that did not load at all. */
+  path?: string | null
+}
+
 export interface SessionFailureRecord {
   id: string
   /** Per-id upsert revision, from 1. */
@@ -2960,29 +3210,40 @@ export interface AsyncTaskUsage {
 
 /**
  * One JetBrains AIR async task (mirror of Rust `AsyncTaskRecord`;
- * claude-agent-acp 0.73+, published only because codeg advertises the
- * `asyncTasks` AIR capability — codex-acp has no such channel).
+ * claude-agent-acp 0.73+ and codex-acp 1.10+, published only because codeg
+ * advertises the `asyncTasks` AIR capability — plus Grok's background
+ * workflows, which the backend translates from Grok's own `workflow_updated`).
  *
- * Claude's NON-AGENT background work: background shells, workflows, monitors.
- * Sub-agents are excluded by the adapter itself. This is the MERGED row, not a
- * wire frame — the adapter announces a task once and then revises it with
- * partial deltas (`AsyncTaskDelta`), and the reducer applies the same merge as
- * the backend's `SessionState::apply_event` so a client hydrating from the
- * snapshot and one that saw every delta agree.
+ * The agent's NON-AGENT background work: Claude's background shells, workflows
+ * and monitors; codex's background terminals; Grok's workflows. Sub-agents are
+ * excluded by the adapters themselves. This is the MERGED row, not a wire
+ * frame — the adapter announces a task once and then revises it with partial
+ * deltas (`AsyncTaskDelta`), and the reducer applies the same merge as the
+ * backend's `SessionState::apply_event` so a client hydrating from the snapshot
+ * and one that saw every delta agree.
+ *
+ * codex fills in far less than claude: no `description`, `usage` or
+ * `output_file_path`, and `task_id` simply EQUALS `tool_call_id` for a
+ * root-session task. Every one of those is optional by design, so the strip
+ * degrades to a name-only row rather than rendering blanks.
  */
 export interface AsyncTaskRecord {
   task_id: string
-  /** Adapter-authored label — the workflow name, else the description. */
+  /** Adapter-authored label — claude: the workflow name, else the description;
+   *  codex: the launching tool call's title, else the raw command; Grok: the
+   *  workflow name. */
   name: string
   /** Already friendly: `shell` | `workflow` | `monitor` | `task`, or an
-   *  unmapped future value rendered as itself. NOT the SDK's raw type. */
+   *  unmapped future value rendered as itself. NOT the SDK's raw type.
+   *  codex publishes `shell` for every background terminal. */
   task_type: string
   description: string
   /** Whether the task earns its own transcript card upstream. The strip renders
    *  either way and does not read this today; `false` marks work already drawn
    *  as an ordinary tool call (a background `Bash` is). */
   show_in_transcript: boolean
-  /** Whether `_session/async_task/stop` is offered for this task. */
+  /** Whether `_session/async_task/stop` is offered for this task. Always
+   *  `false` for Grok, which has no such request. */
   can_stop: boolean
   /** `running` | `paused` | `completed` | `failed` | `stopped`. Anything
    *  outside the terminal three is treated as still live. */
@@ -2994,6 +3255,12 @@ export interface AsyncTaskRecord {
   output_file_path?: string | null
   /** The tool call this task belongs to, when it has one. */
   tool_call_id?: string | null
+  /** The phase a multi-step task is in (a Grok workflow's current phase).
+   *  Empty = none right now. */
+  phase?: string | null
+  /** The child agent the task is running right now (a Grok workflow's current
+   *  agent). Empty = none right now. */
+  current_agent?: string | null
 }
 
 /**
@@ -3004,9 +3271,10 @@ export interface AsyncTaskRecord {
  */
 export interface AsyncTaskDelta {
   task_id: string
-  /** True only for `async_task_spawned`, the only frame carrying a task's
-   *  identity. A delta naming an unknown task is dropped rather than creating a
-   *  nameless placeholder row. */
+  /** True only for a frame carrying a task's identity: AIR's
+   *  `async_task_spawned`, and every Grok workflow frame (each restates the
+   *  whole run). A delta naming an unknown task is dropped rather than
+   *  creating a nameless placeholder row. */
   spawned: boolean
   name?: string | null
   task_type?: string | null
@@ -3019,6 +3287,10 @@ export interface AsyncTaskDelta {
   usage?: AsyncTaskUsage | null
   output_file_path?: string | null
   tool_call_id?: string | null
+  /** Grok restates its whole workflow on every frame, so an EMPTY string here
+   *  means "none any more" — absent still means unchanged. */
+  phase?: string | null
+  current_agent?: string | null
 }
 
 export interface LiveSessionSnapshot {
@@ -3346,6 +3618,14 @@ export interface CursorAuthStatus {
    * builds a copy-pasteable `"<binary_path>" login` command from it (the
    * managed binary isn't on PATH). Null when not installed. */
   binary_path?: string | null
+  /** Whether the stored login actually worked against Cursor's backend, as
+   * opposed to merely existing on disk. `is_authenticated` only means "both
+   * tokens are present" — the CLI never checks the access token's expiry there,
+   * while the ACP path does and has no refresh-token grant to recover with. So
+   * `false` here is the state where the card would otherwise show a green
+   * "signed in" next to sessions that all fail with `Authentication required`.
+   * Null when there is no login to verify. */
+  credential_verified?: boolean | null
 }
 
 /** One `cursor-agent models` entry: `<id> - <label> [(default)]`. The picker
@@ -3381,6 +3661,13 @@ export interface QoderAuthStatus {
   /** Absolute path to the qoder binary codeg would launch; the panel builds a
    * copy-pasteable `"<binary_path>" login` command from it. */
   binary_path?: string | null
+}
+
+// The newest upstream release of an agent, newer than codeg's pinned version,
+// returned by acp_fetch_agent_latest_release. Unreviewed by codeg; `version` is
+// already in the form Custom install accepts.
+export interface AgentLatestRelease {
+  version: string
 }
 
 // Lightweight agent status returned by acp_get_agent_status
@@ -3612,6 +3899,9 @@ export interface SkillSyncReport {
 export interface SystemProxySettings {
   enabled: boolean
   proxy_url: string | null
+  // Hosts that bypass the proxy, comma-separated. Optional because a server
+  // that predates the setting (a remote workspace) never sends it.
+  no_proxy?: string | null
 }
 
 export type AppLocale =
@@ -3634,6 +3924,15 @@ export interface SystemLanguageSettings {
 
 export interface SystemTerminalSettings {
   default_shell: string | null
+  /**
+   * Force ANSI color out of agent-run commands (`CLICOLOR=1`,
+   * `CLICOLOR_FORCE=1`, `FORCE_COLOR=1` and `TERM=xterm-256color` on the agent
+   * process) so their output renders colored in the transcript's terminal card.
+   * Off by default: those are inherited by every command the agent runs, the
+   * force flags outrank `NO_COLOR`, and so they break machine parsing of things
+   * like `gh … --json`.
+   */
+  colorize_command_output: boolean
 }
 
 export interface TerminalShellOption {
@@ -3658,6 +3957,43 @@ export interface SystemRenderingSettings {
  * was requested (e.g. Windows Task Manager vetoing the Run entry). */
 export interface SystemAutostartSettings {
   enabled: boolean
+}
+
+/**
+ * What the main window's close button does.
+ *
+ * `ask` is the shipped default and exists for discoverability: codeg has always
+ * hidden to tray, and a user who believes the app exited never goes looking for
+ * a preference. The first close offers the choice, then pins itself to one of
+ * the other two.
+ */
+export type CloseWindowBehavior = "ask" | "minimize" | "exit"
+
+/**
+ * What the settings UI reads: the stored preference plus a live platform
+ * capability, same shape of pairing as {@link LogSettingsView}. `tray_available`
+ * is never persisted — where the tray is unusable (Linux without one, failed
+ * tray install) hiding the window would strand the workspace, so the close
+ * button force-exits and the preference cannot apply; the UI disables the
+ * control and says so.
+ *
+ * Named for the Rust `SystemCloseBehaviorSettingsView` it mirrors: the Rust
+ * `SystemCloseBehaviorSettings` is the stored row alone and has no
+ * `tray_available`.
+ */
+export interface SystemCloseBehaviorSettingsView {
+  behavior: CloseWindowBehavior
+  tray_available: boolean
+}
+
+/**
+ * `ask` — offer both actions plus "remember my choice".
+ * `confirm_terminals` — the action is already pinned to exit; confirm the loss
+ * of `running_terminals` live terminals.
+ */
+export interface CloseRequestPayload {
+  mode: "ask" | "confirm_terminals"
+  running_terminals: number
 }
 
 // --- Logging ---
@@ -3758,7 +4094,10 @@ export interface GitHubAccount {
   provider?: ForgeProviderId | null
 }
 
-export type ForgeProviderId = "github" | "gitlab"
+/** Mirrors `forge::ForgeProvider`. `"gitea"` covers Forgejo too — it is a
+ *  Gitea fork serving the same `/api/v1`, and one wire value keeps one
+ *  instance's accounts and provenance keys from splitting in two. */
+export type ForgeProviderId = "github" | "gitlab" | "gitea"
 
 export interface GitHubAccountsSettings {
   accounts: GitHubAccount[]
@@ -3787,11 +4126,28 @@ export type McpAppType =
   | "deepseek"
   | "qoder"
   | "antigravity"
+  | "pi"
 
 export interface LocalMcpServer {
   id: string
   spec: Record<string, unknown>
   apps: McpAppType[]
+}
+
+/** One agent whose MCP config the scan could not read. */
+export interface LocalMcpSourceWarning {
+  app: McpAppType
+  message: string
+}
+
+/**
+ * A local MCP scan: everything codeg could read, plus a warning per source it
+ * could not. A single unreadable config degrades to a warning instead of
+ * failing the whole scan (issue #632).
+ */
+export interface LocalMcpScan {
+  servers: LocalMcpServer[]
+  warnings: LocalMcpSourceWarning[]
 }
 
 export interface McpMarketplaceProvider {
@@ -3883,6 +4239,25 @@ export interface QuickMessage {
 export interface GitStatusEntry {
   status: string
   file: string
+}
+
+/**
+ * A file's raw bytes at a git ref (mirrors Rust `GitBlobBase64`). The binary
+ * counterpart of `gitShowFile`, which refuses anything with a NUL byte — image
+ * diffs read their "before" side through this.
+ */
+export interface GitBlobBase64 {
+  /** False when the path does not exist at that ref: an added or deleted file. */
+  exists: boolean
+  /** True when the *revision* is what did not resolve, rather than the path in
+   *  it — only the caller knows whether that is expected (the parent of a root
+   *  commit) or a failure (a branch that stopped resolving). */
+  ref_missing: boolean
+  /** Base64 of the blob; empty when `exists` is false or `too_large` is true. */
+  data: string
+  /** Size git records for the blob, reported even when the bytes were skipped. */
+  byte_size: number
+  too_large: boolean
 }
 
 export type GitResetMode = "soft" | "mixed" | "hard" | "keep"
@@ -4197,6 +4572,20 @@ export interface TerminalInfo {
 export interface TerminalEvent {
   terminal_id: string
   data: string
+  /** Cumulative chunk counter, this chunk included. A viewer that subscribes
+   *  before asking for a `TerminalSnapshot` uses it to drop the events the
+   *  snapshot already contains (`seq <= snapshot.seq`). Absent on the exit
+   *  event, which carries no output. */
+  seq?: number
+}
+
+/** Recent output of a live terminal plus the cursor it was read at. `alive`
+ *  false means no such terminal is running — the caller should spawn one
+ *  rather than attach. */
+export interface TerminalSnapshot {
+  alive: boolean
+  data: string
+  seq: number
 }
 
 export interface TokenBreakdown {
@@ -4271,13 +4660,48 @@ export interface PreflightResult {
 
 // ─── OpenCode Plugins ───
 
-export type PluginStatus = "installed" | "missing"
+// ─── Leaked temp reclamation ───
+
+/** One reclaimable artifact left by an agent launch from before temp isolation. */
+export interface LeakedTempEntry {
+  path: string
+  bytes: number
+  age_hours: number
+  is_dir: boolean
+}
+
+export interface LeakedTempScan {
+  root: string
+  entries: LeakedTempEntry[]
+  total_bytes: number
+  /** Matched the leak shape but is still in use, or too recent to touch. */
+  skipped: number
+}
+
+export interface LeakedTempReclaim {
+  removed: number
+  freed_bytes: number
+  failed: string[]
+}
+
+/// `needs_migration` = present only under the pre-1.18 flat `node_modules/`,
+/// which current opencode never reads. Not installed, from opencode's side.
+export type PluginStatus =
+  | "installed"
+  | "needs_migration"
+  | "missing"
+  /** Loaded off disk by opencode itself — nothing to install. */
+  | "path"
+  /** Declared as a path plugin, but nothing exists at the resolved path. */
+  | "path_missing"
 
 export interface PluginInfo {
   name: string
   declared_spec: string
   installed_version: string | null
   status: PluginStatus
+  /** Where opencode will look for a path plugin; null for package plugins. */
+  resolved_path: string | null
 }
 
 export interface PluginCheckSummary {
@@ -4399,7 +4823,8 @@ export interface ModelProviderInfo {
   agent_type: AgentType
   /**
    * Model value, interpretation depends on agent_type:
-   * - claude_code: JSON string of {main, reasoning, haiku, sonnet, opus}
+   * - claude_code: JSON string of {main, reasoning, haiku, sonnet, opus,
+   *   fable} plus the custom model option trio
    * - codex / gemini / others: plain model name string
    */
   model: string | null
@@ -4422,6 +4847,7 @@ export interface ClaudeProviderModel {
   haiku?: string
   sonnet?: string
   opus?: string
+  fable?: string
   /** ANTHROPIC_CUSTOM_MODEL_OPTION — id of a custom entry appended to the
    *  in-session /model picker (e.g. a model the gateway serves). */
   customOption?: string
@@ -4445,6 +4871,7 @@ export function parseClaudeProviderModel(
       "haiku",
       "sonnet",
       "opus",
+      "fable",
       "customOption",
       "customOptionName",
       "customOptionDescription",
@@ -4468,6 +4895,7 @@ export function serializeClaudeProviderModel(
   if (obj.haiku?.trim()) cleaned.haiku = obj.haiku.trim()
   if (obj.sonnet?.trim()) cleaned.sonnet = obj.sonnet.trim()
   if (obj.opus?.trim()) cleaned.opus = obj.opus.trim()
+  if (obj.fable?.trim()) cleaned.fable = obj.fable.trim()
   if (obj.customOption?.trim()) cleaned.customOption = obj.customOption.trim()
   if (obj.customOptionName?.trim())
     cleaned.customOptionName = obj.customOptionName.trim()
@@ -4747,4 +5175,63 @@ export function isCodexCompatEntry(
   return Object.entries(CODEX_COMPAT_OVERRIDES).every(([key, value]) =>
     Object.is(key in overrides ? overrides[key] : base[key], value)
   )
+}
+
+// ── DeepSeek Harness model catalog ──
+//
+// Mirrors `src-tauri/src/commands/deepseek_settings.rs`, which reads and writes
+// the `llm-deepseek.models` section of `$DSH_HOME/settings.yaml` — the advisory
+// catalog `deepseek-acp` turns into the composer's model dropdown. Field names
+// are the document's own, so the wire shape and the YAML shape are one thing.
+
+/** One entry of the DeepSeek Harness advisory model catalog. Every field but
+ *  `id` is optional, and an absent field is not the same as an empty one: the
+ *  agent falls back to its own default for what is missing. */
+export interface DeepSeekCatalogModel {
+  /** Wire model id sent to the endpoint. Required, unique within the list. */
+  id: string
+  /** Selector label; the agent shows `id` when absent. */
+  name?: string
+  /** Selector detail, for deployments carrying similar variants. */
+  description?: string
+  /** Combined request/response capacity, in tokens. */
+  contextWindow?: number
+  /** Per-request output cap, in tokens. */
+  maxTokens?: number
+  /** Accepted request modalities; absent means text-only, and sending an image
+   *  to a model without `image` here is refused by the agent. */
+  inputModalities?: ("text" | "image")[]
+  /** Total-pixel budget for one request preview, or `"low"` for the agent's
+   *  named low-detail tier (512×512). Vision entries only. */
+  imagePixelBudget?: number | "low"
+  /** Encoded-byte cap for one request preview. Vision entries only. */
+  imageMaxBytes?: number
+  /** How the system prompt is delivered to this route; the agent accepts only
+   *  `"in-history"`, and its own default entry declares it.
+   *
+   *  The editor has no control for this — it carries the value through
+   *  untouched. Dropping it does not fail: it silently moves that model to the
+   *  other delivery mode, which is why it must survive a round trip. */
+  systemPromptUpdate?: "in-history"
+}
+
+/** What the settings panel reads about the stored catalog. */
+export interface DeepSeekModelCatalog {
+  /** Resolved `settings.yaml` path (shown so the file can be found by hand). */
+  path: string
+  /** Whether that document exists at all. */
+  exists: boolean
+  /** Whether it declares `llm-deepseek.models`. `false` means `models` below is
+   *  the agent's built-in list, inherited rather than stored. */
+  configured: boolean
+  /** The effective catalog: what is stored, else the built-in defaults. */
+  models: DeepSeekCatalogModel[]
+  /** Why the stored document could not be read. Set only when the file exists
+   *  and is unusable — editing is refused rather than overwriting it blind. */
+  error: string | null
+  /** Why the stored list is one the agent refuses (duplicate ids, a
+   *  non-positive context window, image limits on a text-only entry…). The
+   *  document was understood, so the rows stay editable — but until they are
+   *  fixed, sessions run on the agent's built-in catalog instead. */
+  invalid: string | null
 }

@@ -23,10 +23,14 @@
 //!
 //! 1. **The agent prints the authorization URL.** `_run_redirect_server` ends
 //!    with an unconditional `print("Open the following link to authenticate the
-//!    ACP server: {url}")`. It lands on the process's stdout — the same pipe
-//!    that carries JSON-RPC — and, because CPython block-buffers a piped
-//!    stdout, it normally sits in that buffer indefinitely. `PYTHONUNBUFFERED=1`
-//!    flushes it immediately, which is why this module sets it.
+//!    ACP server: {url}")`. WHICH pipe it lands on is a version detail and has
+//!    already moved once: 1.0.0 printed it to stdout, alongside the JSON-RPC
+//!    frames, and 1.1.1 prints it to stderr. So both streams are scanned for
+//!    it (see [`AuthUrlSink`]) — a sign-in that reads only one of them silently
+//!    waits out [`URL_WAIT`] and reports that the agent produced no link.
+//!    `PYTHONUNBUFFERED=1` is set for the stdout case, where CPython
+//!    block-buffers a pipe and the line would otherwise sit in that buffer
+//!    indefinitely; stderr is unbuffered either way.
 //!
 //! 2. **The loopback server accepts the redirect from anyone.** It records
 //!    whatever single request it receives and hands the query string to
@@ -67,6 +71,17 @@
 //! so even a compromised upstream cannot redirect codeg off the loopback. The
 //! request also bypasses any configured proxy: a loopback address must never
 //! leave the machine.
+//!
+//! # Signing out
+//!
+//! Signing in is only half an account: once a credential exists the agent
+//! refreshes it silently and `authenticate` returns without opening anything,
+//! so the sign-in above can never reach a second Google account. [`sign_out`]
+//! is the other half, and it drives the agent's own ACP `logout` for the same
+//! reason [`start`] drives its `authenticate` — where the credential lives
+//! (a macOS login-keychain item, or a file under `GEMINI_HOME`) is decided by
+//! rules inside the agent, so deleting it from here would be codeg guessing at
+//! someone else's storage layout.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -80,12 +95,15 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::acp::error::AcpError;
 use crate::acp::registry::{self, AgentDistribution};
+use crate::acp::scratch_dir::LaunchScratch;
 use crate::acp::stderr_tail::StderrTail;
 use crate::models::agent::AgentType;
 
 /// The exact line `oauth/credential_manager.py` prints before it starts waiting
-/// for the redirect. Matched as a substring, not a prefix: the agent's protocol
-/// writes go to the same fd, so a concurrent JSON-RPC frame can share the line.
+/// for the redirect. Matched as a substring, not a prefix: on stdout the
+/// agent's protocol writes go to the same fd, so a concurrent JSON-RPC frame
+/// can share the line, and on stderr absl may prefix it with its own log
+/// header.
 const AUTH_PROMPT_MARKER: &str = "Open the following link to authenticate the ACP server: ";
 
 /// The only redirect host the agent ever uses (`_LOOPBACK_HOST` in
@@ -114,14 +132,42 @@ const AUTHENTICATE_WAIT: Duration = Duration::from_secs(180);
 /// answers with a static page, so anything slower is a wedged agent.
 const REDIRECT_WAIT: Duration = Duration::from_secs(20);
 
+/// How long to wait for `logout` to answer. Everything it does is local — drop
+/// a keychain item or unlink a file, then rewrite `settings.json` — so the only
+/// part that can take real time is the agent reaching it.
+const LOGOUT_WAIT: Duration = Duration::from_secs(60);
+
 /// After this a pending sign-in is stale: the agent's own
 /// `_LOGIN_TIMEOUT_SECONDS` has expired, the one-shot listener is closed, and
 /// delivering a redirect would only fail with "connection refused".
 const PENDING_TTL: Duration = Duration::from_secs(300);
 
-/// JSON-RPC ids for the two requests this module ever sends.
+/// How long a helper gets to exit on its own after its stdin is closed.
+///
+/// Worth spending, and not only for politeness: the ACP server reads stdin EOF
+/// as "the client is gone" and shuts down, and a graceful exit is the one path
+/// on which a self-extracting build removes its OWN unpacked directory. Every
+/// hard kill below leaves that to codeg's scratch cleanup instead.
+const STDIN_EOF_GRACE: Duration = Duration::from_millis(1_500);
+
+/// How long the tree gets to honor `SIGTERM` before the escalation to
+/// `SIGKILL`. Mirrors `terminal_runtime::KILL_ESCALATE_GRACE`: `kill_tree`
+/// sends only `SIGTERM` by default, which a process that traps it can ignore
+/// forever.
+const KILL_ESCALATE_GRACE: Duration = Duration::from_secs(2);
+
+/// How long teardown waits to be able to REPORT the tree gone before returning
+/// anyway. Bounding this is what keeps a wedged helper from pinning the
+/// single sign-in slot — the process is already under `SIGKILL`, and whatever
+/// it leaves on disk is the scratch sweep's problem, not this caller's.
+const KILL_REPORT_BUDGET: Duration = Duration::from_secs(5);
+
+/// JSON-RPC ids for the three requests this module ever sends. `authenticate`
+/// and `logout` never share a child, so their ids only have to differ from
+/// `initialize`'s.
 const ID_INITIALIZE: i64 = 1;
 const ID_AUTHENTICATE: i64 = 2;
+const ID_LOGOUT: i64 = 3;
 
 /// What the panel needs to render step one of the sign-in.
 ///
@@ -189,13 +235,18 @@ struct Pending {
     /// instead of oauthlib's `MismatchingStateError` three layers down.
     state: String,
     credential_path: Option<PathBuf>,
-    child: tokio::process::Child,
+    /// Ended as a TREE, and still ended if this `Pending` is dropped rather
+    /// than torn down — see [`HelperChild`].
+    child: HelperChild,
     /// Held open for the child's whole life. The ACP server treats stdin EOF as
     /// "the client is gone" and shuts down — which would abort the very
     /// `authenticate` call this sign-in is waiting on.
     _stdin: tokio::process::ChildStdin,
     responses: mpsc::UnboundedReceiver<serde_json::Value>,
     stderr: Arc<StderrTail>,
+    /// The helper's per-launch temp directory, carried so every teardown path
+    /// — delivered, rejected, stale, cancelled, displaced — can hand it back.
+    scratch: Option<LaunchScratch>,
     started: Instant,
 }
 
@@ -204,10 +255,148 @@ impl Pending {
         self.started.elapsed() >= PENDING_TTL
     }
 
-    /// Best-effort teardown. The child has no session, so it has no localharness
-    /// descendants to reap — killing the direct process is enough.
-    async fn kill(mut self) {
-        let _ = self.child.kill().await;
+    /// Teardown: end the helper's whole process TREE, then hand its scratch
+    /// directory back.
+    ///
+    /// This used to be a bare `child.kill()`, justified by "the child has no
+    /// session, so it has no localharness descendants to reap". That reasoning
+    /// covered the wrong descendant. The Windows build is a PyInstaller
+    /// *onefile*, whose bootloader unpacks ~1.17 GB and then runs the real
+    /// program as a CHILD of itself — so killing the direct process leaves the
+    /// payload alive, holding the very files the next step wants to delete.
+    async fn kill(self) {
+        let Pending {
+            child,
+            _stdin,
+            scratch,
+            ..
+        } = self;
+        reap_and_release(child, _stdin, scratch).await;
+    }
+}
+
+/// End a helper's process tree and release its scratch directory.
+///
+/// Graceful first, bounded throughout: closing stdin lets the ACP server exit
+/// on its own (and clean up its own unpacked directory, on the builds that do),
+/// and every wait afterwards has a ceiling so a process that refuses to die can
+/// never pin the single sign-in slot. Scratch removal is not on this path at
+/// all — [`LaunchScratch::release`] retries in the background and the sweeps
+/// are the backstop.
+async fn reap_and_release(
+    mut helper: HelperChild,
+    stdin: tokio::process::ChildStdin,
+    scratch: Option<LaunchScratch>,
+) {
+    // EOF on stdin is the agent's own shutdown signal.
+    drop(stdin);
+
+    let Some(child) = helper.child.as_mut() else {
+        return;
+    };
+    let exited = match child.id() {
+        // Already reaped by someone else; nothing to signal.
+        None => true,
+        Some(pid) => {
+            if tokio::time::timeout(STDIN_EOF_GRACE, child.wait())
+                .await
+                .is_ok()
+            {
+                true
+            } else {
+                kill_tree_signal(pid, "SIGTERM").await;
+                if tokio::time::timeout(KILL_ESCALATE_GRACE, child.wait())
+                    .await
+                    .is_ok()
+                {
+                    true
+                } else {
+                    kill_tree_signal(pid, "SIGKILL").await;
+                    tokio::time::timeout(KILL_REPORT_BUDGET, child.wait())
+                        .await
+                        .is_ok()
+                }
+            }
+        }
+    };
+    if !exited {
+        tracing::warn!(
+            "[ACP][Antigravity] helper did not confirm exit within the kill budget; \
+             its scratch directory is left to the sweep"
+        );
+    }
+
+    // Disarm LAST. Everything above is `.await`, so this function is itself
+    // cancellable, and until this line the guard is what covers that.
+    drop(helper.child.take());
+
+    if let Some(scratch) = scratch {
+        scratch.release();
+    }
+}
+
+/// A helper process that is ended as a TREE even if the future holding it is
+/// dropped instead of run to completion.
+///
+/// `kill_on_drop` — which this spawn does set — signals only the DIRECT
+/// process, and the Windows build is a PyInstaller onefile whose bootloader
+/// runs the real program as a child of itself. So an unwind that relies on
+/// `kill_on_drop` alone leaves the payload running with its ~1.17 GB unpacked
+/// tree open, which is the original bug wearing a different hat. And an unwind
+/// is reachable in ordinary operation: the HTTP handlers await these futures
+/// directly, so a client that disconnects mid-sign-in cancels one.
+///
+/// [`reap_and_release`] disarms this on every path that completes.
+#[derive(Debug)]
+struct HelperChild {
+    /// `None` once teardown has run. The `Option` is what makes "already
+    /// handled" and "dropped early" distinguishable inside `Drop`.
+    child: Option<tokio::process::Child>,
+}
+
+impl HelperChild {
+    fn new(child: tokio::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+}
+
+impl Drop for HelperChild {
+    fn drop(&mut self) {
+        let Some(child) = self.child.take() else {
+            return;
+        };
+        let Some(pid) = child.id() else {
+            return;
+        };
+        tracing::warn!(
+            "[ACP][Antigravity] teardown was cancelled; ending helper tree {pid} out of band"
+        );
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // No runtime to finish the job on. `kill_on_drop` still gets the
+            // direct process as `child` falls out of scope here.
+            return;
+        };
+        handle.spawn(async move {
+            // The `Child` moves INTO the task and is not dropped until the wait
+            // returns. That is deliberate: releasing it first would let the OS
+            // recycle the pid while `kill_tree` is still walking it, and the
+            // tree we ended would not be the tree we meant.
+            let mut child = child;
+            kill_tree_signal(pid, "SIGKILL").await;
+            let _ = child.wait().await;
+        });
+    }
+}
+
+/// One signal pass over the process tree rooted at `pid`. Windows ignores the
+/// signal name and terminates unconditionally.
+async fn kill_tree_signal(pid: u32, signal: &str) {
+    let config = kill_tree::Config {
+        signal: signal.to_string(),
+        ..Default::default()
+    };
+    if let Err(e) = kill_tree::tokio::kill_tree_with_config(pid, &config).await {
+        tracing::debug!("[ACP][Antigravity] kill_tree({signal}) for pid {pid}: {e}");
     }
 }
 
@@ -260,6 +449,16 @@ fn pending_slot() -> &'static Mutex<Slot> {
 /// credential, and letting a second agent start now is the one overlap that can
 /// leave the wrong account signed in.
 async fn claim_slot() -> Result<u64, AcpError> {
+    claim_slot_as(SlotState::Starting).await
+}
+
+/// [`claim_slot`], parking the slot in `next` instead of [`SlotState::Starting`].
+///
+/// A sign-out needs the exclusive state from the instant it is granted: unlike
+/// a `start`, whose unlocked stretch only produces a link, it is already on its
+/// way to erasing the credential. Installing that state here rather than in a
+/// second lock acquisition is what keeps a `start` from slipping in between.
+async fn claim_slot_as(next: SlotState) -> Result<u64, AcpError> {
     let mut slot = pending_slot().lock().await;
     if let SlotState::Finishing { until } = slot.state {
         if Instant::now() < until {
@@ -272,7 +471,7 @@ async fn claim_slot() -> Result<u64, AcpError> {
         // disconnected and the future was dropped), so the slot is ours.
     }
     slot.generation += 1;
-    let displaced = match std::mem::replace(&mut slot.state, SlotState::Starting) {
+    let displaced = match std::mem::replace(&mut slot.state, next) {
         SlotState::Waiting(pending) => Some(pending),
         _ => None,
     };
@@ -361,12 +560,11 @@ async fn start_claimed(
     method_id: &str,
     generation: u64,
 ) -> Result<AntigravityLoginStart, AcpError> {
-    let binary = resolve_binary()?;
-    let mut env = crate::acp::connection::antigravity_launch_env(runtime_env);
+    let mut sign_in_env = Vec::new();
     // Without this the agent's `print` of the authorization URL sits in
     // CPython's block buffer for a piped stdout and never reaches us — see the
     // module docs. It is the whole reason this flow can see the link at all.
-    env.push(("PYTHONUNBUFFERED".to_string(), "1".to_string()));
+    sign_in_env.push(("PYTHONUNBUFFERED".to_string(), "1".to_string()));
     // Point `webbrowser` at a no-op so it cannot do something worse than
     // nothing. On a server with a TEXT browser installed (`lynx`, `w3m`,
     // `links`) CPython picks a `GenericBrowser` and **`wait()`s on it**, so the
@@ -374,79 +572,29 @@ async fn start_claimed(
     // value is not an option: the spawn layer reads that as "remove the
     // variable" and the search runs anyway.
     if let Some(noop) = noop_browser() {
-        env.push(("BROWSER".to_string(), noop));
+        sign_in_env.push(("BROWSER".to_string(), noop));
     }
 
-    let mut command = crate::process::tokio_command(&binary);
-    command
-        .args(antigravity_launch_args())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Backstop for every path that drops a `Pending` without going through
-        // `kill()`. Dropping a tokio `Child` detaches by default, and a
-        // detached agent here is not merely a stray process: it holds a
-        // loopback listener open for the rest of its 300 s wait, so the port
-        // and the attempt both linger with nothing able to reach them.
-        .kill_on_drop(true);
-    for (key, value) in &env {
-        // Mirrors the spawn layer's convention (vendored sacp-tokio): an empty
-        // value means "do not let the child inherit this one".
-        if value.is_empty() {
-            command.env_remove(key);
-        } else {
-            command.env(key, value);
-        }
-    }
-
-    let mut child = crate::process::spawn_retrying_exec_busy(|| command.spawn())
-        .await
-        .map_err(|e| AcpError::SpawnFailed(e.to_string()))?;
-
-    let mut stdin = child.stdin.take().ok_or_else(|| {
-        AcpError::SpawnFailed("the Antigravity sign-in process has no stdin".to_string())
-    })?;
-    let stdout = child.stdout.take().ok_or_else(|| {
-        AcpError::SpawnFailed("the Antigravity sign-in process has no stdout".to_string())
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        AcpError::SpawnFailed("the Antigravity sign-in process has no stderr".to_string())
-    })?;
-
-    let (response_tx, mut responses) = mpsc::unbounded_channel::<serde_json::Value>();
-    let (url_tx, mut url_rx) = oneshot::channel::<String>();
-    tokio::spawn(read_agent_stdout(stdout, response_tx, url_tx));
-
-    // Redacted on write and bounded, so it is safe to put in an error message.
-    let tail = Arc::new(StderrTail::new());
-    tokio::spawn({
-        let tail = Arc::clone(&tail);
-        async move {
-            let reader = BufReader::new(stderr);
-            crate::process::collect_lines_lossy(reader, |line| tail.push(line)).await;
-        }
-    });
+    let AgentChild {
+        child,
+        mut stdin,
+        mut responses,
+        url: mut url_rx,
+        stderr: tail,
+        scratch,
+    } = spawn_agent(runtime_env, sign_in_env).await?;
 
     // `initialize` first, and its answer awaited before `authenticate` goes
     // out. Not just protocol politeness: it keeps the URL `print` — which the
     // agent emits during `authenticate`, onto the same fd as the JSON-RPC
     // frames — from racing a response codeg still has to parse.
-    let init = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": ID_INITIALIZE,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": 1,
-            "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false } },
-            "clientInfo": { "name": "codeg", "version": env!("CARGO_PKG_VERSION") },
-        },
-    });
-    write_frame(&mut stdin, &init).await?;
-    await_response(&mut responses, ID_INITIALIZE, INITIALIZE_WAIT, &tail)
-        .await
-        .map_err(|reason| {
-            AcpError::protocol(format!("Antigravity did not accept `initialize`: {reason}"))
-        })?;
+    // Not `?`: an early return here would drop `child` — which `kill_on_drop`
+    // turns into a signal to the DIRECT process only, leaving a onefile
+    // payload alive — and strand the scratch directory with it.
+    if let Err(e) = initialize(&mut stdin, &mut responses, &tail).await {
+        reap_and_release(child, stdin, scratch).await;
+        return Err(e);
+    }
 
     let authenticate = serde_json::json!({
         "jsonrpc": "2.0",
@@ -454,7 +602,10 @@ async fn start_claimed(
         "method": "authenticate",
         "params": { "methodId": method_id },
     });
-    write_frame(&mut stdin, &authenticate).await?;
+    if let Err(e) = write_frame(&mut stdin, &authenticate).await {
+        reap_and_release(child, stdin, scratch).await;
+        return Err(e);
+    }
 
     // From here the agent is inside its 300 s redirect wait, so any failure
     // must kill the child rather than leave it blocked.
@@ -470,7 +621,8 @@ async fn start_claimed(
             tokio::select! {
                 biased;
                 url = &mut url_rx => {
-                    // `Err` means the sender dropped, i.e. stdout hit EOF.
+                    // `Err` means every clone of the sink dropped, i.e. BOTH
+                    // output streams hit EOF — the process is gone.
                     return url.map_or(StartSignal::Gone, StartSignal::Url);
                 }
                 message = responses.recv() => {
@@ -494,7 +646,7 @@ async fn start_claimed(
     let auth_url = match signal {
         StartSignal::Url(url) => url,
         StartSignal::Authenticated => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             tracing::info!(
                 "[ACP][Antigravity] {method_id} was already signed in; no link needed"
             );
@@ -508,13 +660,13 @@ async fn start_claimed(
             });
         }
         StartSignal::Failed(reason) => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             return Err(AcpError::protocol(format!(
                 "Antigravity refused to start a sign-in: {reason}"
             )));
         }
         StartSignal::Gone | StartSignal::TimedOut => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             let reported = drain_error(&mut responses, ID_AUTHENTICATE);
             return Err(AcpError::protocol(match reported {
                 Some(message) => format!("Antigravity refused to start a sign-in: {message}"),
@@ -529,7 +681,7 @@ async fn start_claimed(
     let redirect_uri = match extract_redirect_uri(&auth_url) {
         Ok(uri) => uri,
         Err(reason) => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             return Err(AcpError::protocol(reason));
         }
     };
@@ -547,6 +699,7 @@ async fn start_claimed(
         _stdin: stdin,
         responses,
         stderr: tail,
+        scratch,
         started: Instant::now(),
     });
     // The spawn and handshake above ran OUTSIDE the lock, so a newer `start`
@@ -571,6 +724,151 @@ async fn start_claimed(
         method_id: method_id.to_string(),
         expires_in_secs: PENDING_TTL.as_secs(),
     })
+}
+
+/// A short-lived Antigravity process driven over raw JSON-RPC, with its three
+/// streams already split apart.
+struct AgentChild {
+    child: HelperChild,
+    /// Must stay open for the child's whole life: the ACP server reads stdin
+    /// EOF as "the client is gone" and shuts down — which would abort whatever
+    /// request is in flight.
+    stdin: tokio::process::ChildStdin,
+    responses: mpsc::UnboundedReceiver<serde_json::Value>,
+    /// Resolves with the authorization URL the agent prints during an OAuth
+    /// `authenticate`. Nothing else it does produces one.
+    url: oneshot::Receiver<String>,
+    stderr: Arc<StderrTail>,
+    /// See [`Pending::scratch`]. Moves into the `Pending` on the sign-in path
+    /// and is consumed directly by [`sign_out_claimed`].
+    scratch: Option<LaunchScratch>,
+}
+
+/// Spawn the installed Antigravity binary with a launch-identical environment.
+///
+/// Shared by the two flows that reach the agent outside a session, and the
+/// environment is why: `GEMINI_HOME` decides WHICH credential store the child
+/// touches and `AGY_ACP_FORCE_FILE_STORAGE` decides whether that store is a
+/// file or the macOS keychain. A child built any other way would faithfully
+/// sign the user in — or out — of something no session ever reads.
+///
+/// `extra_env` is layered on top afterwards, so a caller can add the variables
+/// only its own flow needs.
+async fn spawn_agent(
+    runtime_env: &BTreeMap<String, String>,
+    extra_env: Vec<(String, String)>,
+) -> Result<AgentChild, AcpError> {
+    let binary = resolve_binary()?;
+    // Same per-launch temp isolation the session path gets, and for the same
+    // reason: this spawns the identical self-extracting binary, so sign-in and
+    // sign-out each unpack a full copy. They were invisible in the leak report
+    // because neither emits the `[ACP] spawning connection` line the user
+    // counted — the directories were there all the same.
+    let scratch = crate::acp::scratch_dir::create();
+    let mut env = crate::acp::connection::antigravity_launch_env(
+        runtime_env,
+        scratch.as_ref().map(|s| s.path()),
+    );
+    env.extend(extra_env);
+
+    let mut command = crate::process::tokio_command(&binary);
+    command
+        .args(antigravity_launch_args())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Backstop for every path that drops a child without going through
+        // `kill()`. Dropping a tokio `Child` detaches by default, and a
+        // detached agent here is not merely a stray process: mid-sign-in it
+        // holds a loopback listener open for the rest of its 300 s wait, so
+        // the port and the attempt both linger with nothing able to reach them.
+        .kill_on_drop(true);
+    for (key, value) in &env {
+        // Mirrors the spawn layer's convention (`acp::agent_process`): an empty
+        // value means "do not let the child inherit this one".
+        if value.is_empty() {
+            command.env_remove(key);
+        } else {
+            command.env(key, value);
+        }
+    }
+
+    // Every `?` from here down would drop `scratch` on the floor, so the
+    // fallible stretch is fenced and its failures release the directory before
+    // propagating. `LaunchScratch` deliberately has no `Drop`: removal needs to
+    // retry across a process tree that is still dying, which a synchronous drop
+    // cannot do without blocking whoever happens to drop it.
+    let spawned = async {
+        let mut child = crate::process::spawn_retrying_exec_busy(|| command.spawn())
+            .await
+            .map_err(|e| AcpError::SpawnFailed(e.to_string()))?;
+
+        let stdin = child.stdin.take().ok_or_else(|| {
+            AcpError::SpawnFailed("the Antigravity process has no stdin".to_string())
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            AcpError::SpawnFailed("the Antigravity process has no stdout".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            AcpError::SpawnFailed("the Antigravity process has no stderr".to_string())
+        })?;
+        Ok::<_, AcpError>((child, stdin, stdout, stderr))
+    }
+    .await;
+    let (child, stdin, stdout, stderr) = match spawned {
+        Ok(parts) => parts,
+        Err(e) => {
+            if let Some(scratch) = scratch {
+                scratch.release();
+            }
+            return Err(e);
+        }
+    };
+
+    let (response_tx, responses) = mpsc::unbounded_channel::<serde_json::Value>();
+    let (url_sink, url) = AuthUrlSink::new();
+    tokio::spawn(read_agent_stdout(stdout, response_tx, url_sink.clone()));
+
+    // Redacted on write and bounded, so it is safe to put in an error message.
+    let tail = Arc::new(StderrTail::new());
+    tokio::spawn(read_agent_stderr(stderr, Arc::clone(&tail), url_sink));
+
+    Ok(AgentChild {
+        child: HelperChild::new(child),
+        stdin,
+        responses,
+        url,
+        stderr: tail,
+        scratch,
+    })
+}
+
+/// Send `initialize` and hand back the agent's answer.
+///
+/// Takes the three streams rather than the whole [`AgentChild`] because both
+/// callers destructure it on the way in — a sign-in has to hold `url` and
+/// `child` across the same await.
+async fn initialize(
+    stdin: &mut tokio::process::ChildStdin,
+    responses: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    stderr: &StderrTail,
+) -> Result<serde_json::Value, AcpError> {
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": ID_INITIALIZE,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false } },
+            "clientInfo": { "name": "codeg", "version": env!("CARGO_PKG_VERSION") },
+        },
+    });
+    write_frame(stdin, &init).await?;
+    await_response(responses, ID_INITIALIZE, INITIALIZE_WAIT, stderr)
+        .await
+        .map_err(|reason| {
+            AcpError::protocol(format!("Antigravity did not accept `initialize`: {reason}"))
+        })
 }
 
 /// The first thing the agent does after `authenticate` that codeg can act on.
@@ -701,16 +999,17 @@ async fn finish_delivering(target: String, pending: Pending) -> AntigravityLogin
     let Pending {
         method_id,
         credential_path,
-        mut child,
+        child,
         mut responses,
         stderr,
         _stdin,
+        scratch,
         ..
     } = pending;
     let credential_path = display_path(&credential_path);
 
     if let Err(reason) = deliver_redirect(&target).await {
-        let _ = child.kill().await;
+        reap_and_release(child, _stdin, scratch).await;
         return AntigravityLoginOutcome {
             signed_in: false,
             message: Some(reason),
@@ -720,10 +1019,10 @@ async fn finish_delivering(target: String, pending: Pending) -> AntigravityLogin
     }
 
     let outcome = await_response(&mut responses, ID_AUTHENTICATE, AUTHENTICATE_WAIT, &stderr).await;
-    let _ = child.kill().await;
+    reap_and_release(child, _stdin, scratch).await;
 
     match outcome {
-        Ok(()) => {
+        Ok(_) => {
             tracing::info!("[ACP][Antigravity] browser-free sign-in succeeded for {method_id}");
             AntigravityLoginOutcome {
                 signed_in: true,
@@ -794,6 +1093,115 @@ pub async fn cancel(handle: &str) -> Result<(), AcpError> {
     };
     abandoned.kill().await;
     Ok(())
+}
+
+/// Ceiling on how long a sign-out may hold the slot exclusively.
+///
+/// Its own two waits bound the work, and the slack covers the code around them.
+/// It exists for the same reason [`FINISH_BUDGET`] does: in server mode a
+/// client disconnect drops the handler future mid-`await`, and an exclusive
+/// state nothing ever clears would refuse every later sign-in for the life of
+/// the process.
+const SIGN_OUT_BUDGET: Duration =
+    Duration::from_secs(INITIALIZE_WAIT.as_secs() + LOGOUT_WAIT.as_secs() + 30);
+
+/// Discard the credential Antigravity is holding, so the next sign-in can reach
+/// a different Google account.
+///
+/// This is what makes [`start`] usable more than once. The agent refreshes a
+/// cached token silently, so a second `authenticate` for an account that is
+/// already signed in returns immediately and prints no link — the panel can
+/// only report `already_signed_in`, and the first account a user picks is the
+/// last one they ever get. Nothing the user can reasonably reach fixes that
+/// either: the credential is a login-keychain item on macOS and a file under
+/// `GEMINI_HOME` elsewhere, so it outlives uninstalling the Antigravity CLI and
+/// reinstalling codeg.
+///
+/// Driven through the agent's own ACP `logout` rather than by deleting the
+/// store from here. Which backend holds the credential is decided inside the
+/// agent (`credential_store.py::create_default_store` probes for a usable
+/// keychain and falls back to the file), and its `clear` deliberately wipes
+/// BOTH so an older plaintext token cannot survive — rules codeg would have to
+/// copy, and re-copy whenever they change.
+///
+/// `logout` also removes `auth.type` from the server's `settings.json`, which
+/// is codeg's business: a session whose `auth.type` is missing fails outright
+/// with `Authentication required`. The caller puts the saved method back (see
+/// `acp_antigravity_sign_out_core`).
+pub async fn sign_out(runtime_env: &BTreeMap<String, String>) -> Result<(), AcpError> {
+    // Exclusive from the instant it is granted, unlike a `start`: this call is
+    // already on its way to erasing the credential, and a sign-in overlapping
+    // it would race the same store. Any published attempt is displaced and
+    // reaped — the user asking to sign out has abandoned the link on screen.
+    let generation = claim_slot_as(SlotState::Finishing {
+        until: Instant::now() + SIGN_OUT_BUDGET,
+    })
+    .await?;
+    let outcome = sign_out_claimed(runtime_env).await;
+    release_finishing(generation).await;
+    outcome
+}
+
+/// [`sign_out`] with the slot already held.
+async fn sign_out_claimed(runtime_env: &BTreeMap<String, String>) -> Result<(), AcpError> {
+    let mut agent = spawn_agent(runtime_env, Vec::new()).await?;
+    let outcome = request_logout(&mut agent).await;
+    // Reaped once here rather than on each early return inside: unlike a
+    // sign-in, `logout` opens no listener and holds no port, so the only thing
+    // a failure leaves behind is the process — and, since this spawns the same
+    // self-extracting binary, its unpacked copy.
+    let AgentChild {
+        child,
+        stdin,
+        scratch,
+        ..
+    } = agent;
+    reap_and_release(child, stdin, scratch).await;
+    match &outcome {
+        Ok(()) => tracing::info!("[ACP][Antigravity] signed out; the stored credential is gone"),
+        Err(e) => tracing::warn!("[ACP][Antigravity] sign-out failed: {e}"),
+    }
+    outcome
+}
+
+/// Handshake, check the capability, ask the agent to sign out.
+async fn request_logout(agent: &mut AgentChild) -> Result<(), AcpError> {
+    let handshake = initialize(&mut agent.stdin, &mut agent.responses, &agent.stderr).await?;
+    if !advertises_logout(&handshake) {
+        return Err(AcpError::protocol(
+            "this version of Google Antigravity cannot sign out. Update it in Agent Settings, \
+             or delete its stored credential yourself.",
+        ));
+    }
+
+    let logout = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": ID_LOGOUT,
+        "method": "logout",
+        "params": {},
+    });
+    write_frame(&mut agent.stdin, &logout).await?;
+    await_response(
+        &mut agent.responses,
+        ID_LOGOUT,
+        LOGOUT_WAIT,
+        &agent.stderr,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|reason| AcpError::protocol(format!("Antigravity refused to sign out: {reason}")))
+}
+
+/// Whether the agent's `initialize` answer offers the ACP `logout` method.
+///
+/// Checked rather than assumed because the protocol says to — the agent's own
+/// comment beside the capability reads "Clients MUST NOT call `logout` unless
+/// this is advertised" — and because the alternative is a bare `-32601` where
+/// the actionable answer is "your Antigravity is too old to sign out".
+fn advertises_logout(handshake: &serde_json::Value) -> bool {
+    handshake
+        .pointer("/result/agentCapabilities/auth/logout")
+        .is_some_and(|value| !value.is_null())
 }
 
 /// The bits of a pasted redirect codeg is willing to act on.
@@ -928,16 +1336,20 @@ async fn deliver_redirect(target: &str) -> Result<(), String> {
     }
 }
 
-/// Wait for the JSON-RPC response with `id`, translating it into ok-or-why-not.
+/// Wait for the JSON-RPC response with `id`, translating it into
+/// the-message-or-why-not.
 ///
 /// Anything that is not that response is dropped: the only other traffic on
-/// this connection is notifications the sign-in has no use for.
+/// this connection is notifications these flows have no use for. `Ok` carries
+/// the whole message rather than `()` because `initialize`'s answer is where
+/// the agent's capabilities are, and a sign-out has to read one before it may
+/// ask for it.
 async fn await_response(
     responses: &mut mpsc::UnboundedReceiver<serde_json::Value>,
     id: i64,
     wait: Duration,
     stderr: &StderrTail,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         let message = match tokio::time::timeout_at(deadline, responses.recv()).await {
@@ -962,7 +1374,7 @@ async fn await_response(
         }
         return match error_message(&message) {
             Some(reason) => Err(reason),
-            None => Ok(()),
+            None => Ok(message),
         };
     }
 }
@@ -995,38 +1407,109 @@ fn drain_error(
 }
 
 /// A short, already-redacted excerpt of the agent's stderr for an error message.
+///
+/// The prompt line is dropped rather than quoted. It is not a diagnostic, and
+/// the tail holds it truncated to `MAX_LINE_BYTES` — so a message complaining
+/// that no link appeared would end in two thirds of a consent URL, which reads
+/// as corruption rather than as the link it is.
 fn stderr_hint(stderr: &StderrTail) -> String {
     let slice = stderr.tail_since(0, 4, 600);
-    if slice.is_empty() {
+    let lines: Vec<&str> = slice
+        .lines
+        .iter()
+        .map(String::as_str)
+        .filter(|line| !line.contains(AUTH_PROMPT_MARKER))
+        .collect();
+    if lines.is_empty() {
         return String::new();
     }
-    format!(" Last output: {}", slice.lines.join(" / "))
+    format!(" Last output: {}", lines.join(" / "))
 }
 
-/// Read the child's stdout, routing JSON-RPC frames to `responses` and the
-/// printed authorization URL to `url_tx`.
+/// The authorization URL, from whichever of the child's two streams prints it.
 ///
-/// Both are checked on every line rather than one-or-the-other: the URL `print`
-/// and the protocol frames share a file descriptor, so a line can in principle
-/// carry both.
-async fn read_agent_stdout(
-    stdout: tokio::process::ChildStdout,
+/// Which one that is depends on the agent's version and has already moved once
+/// — 1.0.0 printed it to stdout, 1.1.1 prints it to stderr — so both pumps
+/// offer their lines here and the first match wins. Scanning only the stream
+/// this build happens to pin would make a sign-in against the other one hang
+/// for [`URL_WAIT`] and then report, wrongly, that no link was produced.
+///
+/// A `oneshot::Sender` cannot be cloned, hence the shared slot. The lock is
+/// held for a single `take`, never across an await.
+#[derive(Clone)]
+struct AuthUrlSink(Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>>);
+
+impl AuthUrlSink {
+    /// The sink and the receiver that resolves with the first URL offered.
+    ///
+    /// The receiver also errs once EVERY clone is dropped, which is how
+    /// [`start_claimed`] learns the child's output closed — so no clone may
+    /// outlive the two pumps.
+    fn new() -> (Self, oneshot::Receiver<String>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(Arc::new(std::sync::Mutex::new(Some(tx)))), rx)
+    }
+
+    /// Offer one raw output line; a no-op unless it carries the prompt and
+    /// nothing has claimed the channel yet.
+    fn offer(&self, line: &str) {
+        let Some(url) = find_auth_url(line) else {
+            return;
+        };
+        // A poisoned lock is recovered rather than propagated: losing the URL
+        // would strand the user on a spinner, and there is no invariant here a
+        // panicking holder could have broken — the slot is one `Option`.
+        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = slot.take() {
+            let _ = tx.send(url);
+        }
+    }
+}
+
+/// Read the child's stdout, routing JSON-RPC frames to `responses` and any
+/// printed authorization URL to `url_sink`.
+///
+/// Both are checked on every line rather than one-or-the-other: when the agent
+/// prints the URL here it shares the file descriptor with the protocol frames,
+/// so a line can in principle carry both.
+///
+/// Generic over the reader rather than taking a [`tokio::process::ChildStdout`]
+/// so a test can drive the real pump over a cursor. Which stream feeds the sink
+/// is exactly what regressed, and a test of [`AuthUrlSink`] alone would not
+/// have noticed.
+async fn read_agent_stdout<R>(
+    stdout: R,
     responses: mpsc::UnboundedSender<serde_json::Value>,
-    url_tx: oneshot::Sender<String>,
-) {
-    let mut url_tx = Some(url_tx);
+    url_sink: AuthUrlSink,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
     let reader = BufReader::new(stdout);
     crate::process::collect_lines_lossy(reader, |line| {
-        if let Some(url) = find_auth_url(line) {
-            if let Some(tx) = url_tx.take() {
-                let _ = tx.send(url);
-            }
-        }
+        url_sink.offer(line);
         if let Some(start) = line.find('{') {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line[start..]) {
                 let _ = responses.send(value);
             }
         }
+    })
+    .await;
+}
+
+/// Read the child's stderr into `tail`, offering every line to `url_sink` on
+/// the way.
+///
+/// The offer happens on the RAW line and before `push`, because the tail
+/// redacts and truncates to `MAX_LINE_BYTES` on the way in — which would slice
+/// a ~510-character consent URL off mid-query.
+async fn read_agent_stderr<R>(stderr: R, tail: Arc<StderrTail>, url_sink: AuthUrlSink)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let reader = BufReader::new(stderr);
+    crate::process::collect_lines_lossy(reader, |line| {
+        url_sink.offer(line);
+        tail.push(line);
     })
     .await;
 }
@@ -1204,6 +1687,7 @@ async fn write_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     /// A stand-in for a real attempt: the slot lifecycle cares about the
     /// handle, the generation and whether the child gets reaped, none of which
@@ -1229,10 +1713,11 @@ mod tests {
             redirect_uri: "http://127.0.0.1:1/".to_string(),
             state: "st".to_string(),
             credential_path: None,
-            child,
+            child: HelperChild::new(child),
             _stdin: stdin,
             responses,
             stderr: Arc::new(StderrTail::new()),
+            scratch: None,
             started: Instant::now(),
         });
         (pending, stdout)
@@ -1366,6 +1851,67 @@ mod tests {
             pending_slot().lock().await.state,
             SlotState::Idle
         ));
+
+        // A sign-out takes the same exclusive state, and takes it in ONE lock
+        // acquisition. It is about to erase the credential from the moment it
+        // is granted, so unlike a `start` there is no window in which another
+        // agent may be put on the same store — and any link already on screen
+        // belongs to a sign-in the user has just abandoned, so it is displaced
+        // and its child reaped.
+        let before_sign_out = claim_slot().await.expect("idle again");
+        let (p3, out3) = fake_pending("h3").await;
+        assert!(install(before_sign_out, p3).await.is_ok());
+        let sign_out = claim_slot_as(SlotState::Finishing {
+            until: Instant::now() + SIGN_OUT_BUDGET,
+        })
+        .await
+        .expect("a published attempt is displaceable by a sign-out");
+        assert_reaped(out3, "the attempt a sign-out displaced").await;
+        assert!(
+            claim_slot().await.is_err(),
+            "a sign-in during a sign-out must be refused"
+        );
+        release_finishing(sign_out).await;
+        assert!(matches!(
+            pending_slot().lock().await.state,
+            SlotState::Idle
+        ));
+    }
+
+    /// The protocol requires the check ("Clients MUST NOT call `logout` unless
+    /// this is advertised"), and without it an Antigravity too old to sign out
+    /// answers `-32601` instead of saying so.
+    #[test]
+    fn reads_the_logout_capability_out_of_the_handshake() {
+        let advertised = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": 1,
+                "agentCapabilities": { "loadSession": true, "auth": { "logout": {} } },
+            },
+        });
+        assert!(advertises_logout(&advertised));
+
+        // An older build: same handshake, no `auth` block at all.
+        let older = serde_json::json!({
+            "id": 1,
+            "result": { "agentCapabilities": { "loadSession": true } },
+        });
+        assert!(!advertises_logout(&older));
+        // An `auth` block that offers other things but not this one.
+        let no_logout = serde_json::json!({
+            "id": 1,
+            "result": { "agentCapabilities": { "auth": {} } },
+        });
+        assert!(!advertises_logout(&no_logout));
+        // Present-but-null is the same as absent: `pointer` finds a value
+        // either way, so the emptiness has to be tested separately.
+        let nulled = serde_json::json!({
+            "id": 1,
+            "result": { "agentCapabilities": { "auth": { "logout": null } } },
+        });
+        assert!(!advertises_logout(&nulled));
     }
 
     #[test]
@@ -1400,6 +1946,106 @@ mod tests {
             find_auth_url("Open the following link to authenticate the ACP server: ftp://x"),
             None
         );
+    }
+
+    /// The regression that made "Get sign-in link" spin for the full 90s and
+    /// then claim the agent produced no link: 1.1.1 moved the prompt from
+    /// stdout to stderr, and only stdout was scanned. Both PUMPS are driven
+    /// here, not just the sink — the sink was never the broken part.
+    #[tokio::test]
+    async fn either_pump_delivers_the_sign_in_link() {
+        const URL: &str = "https://accounts.google.com/o/oauth2/v2/auth?state=s1";
+        let prompt = format!("{AUTH_PROMPT_MARKER}{URL}");
+
+        // stderr: where 1.1.1 prints it, interleaved with the absl log lines
+        // that share the stream.
+        let (sink, rx) = AuthUrlSink::new();
+        let tail = Arc::new(StderrTail::new());
+        let stderr = format!(
+            "I0909 08:14:14.490210 credential_manager.py:553] Launching browser login flow\n\
+             {prompt}\n"
+        );
+        read_agent_stderr(Cursor::new(stderr.into_bytes()), Arc::clone(&tail), sink).await;
+        assert_eq!(rx.await.expect("a link on stderr must reach the sink"), URL);
+
+        // stdout: where 1.0.0 printed it. Still scanned, because a user may pin
+        // that version — and the JSON frames sharing the stream must survive.
+        let (sink, rx) = AuthUrlSink::new();
+        let (tx, mut responses) = mpsc::unbounded_channel();
+        let stdout = format!("{prompt}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{}}}}\n");
+        read_agent_stdout(Cursor::new(stdout.into_bytes()), tx, sink).await;
+        assert_eq!(rx.await.expect("a link on stdout must reach the sink"), URL);
+        assert_eq!(
+            responses
+                .recv()
+                .await
+                .and_then(|m| m.get("id").and_then(serde_json::Value::as_i64)),
+            Some(2),
+            "the protocol frames must still be parsed"
+        );
+    }
+
+    /// Two pumps, one channel: whoever matches first wins and the other's offer
+    /// is inert. Without this a build that printed the prompt to BOTH streams
+    /// would panic or lose the link on the second send.
+    #[tokio::test]
+    async fn the_first_stream_to_see_the_link_wins() {
+        let (sink, rx) = AuthUrlSink::new();
+        let other = sink.clone();
+        sink.offer(
+            "Open the following link to authenticate the ACP server: https://example.test/a?state=1",
+        );
+        other.offer(
+            "Open the following link to authenticate the ACP server: https://example.test/b?state=2",
+        );
+        // And a line that carries no prompt never claims the channel.
+        other.offer("I0909 08:14:14.317436 server.py:2390] Authenticate called");
+        assert_eq!(rx.await.unwrap(), "https://example.test/a?state=1");
+    }
+
+    /// `start_claimed` reads a closed channel as `StartSignal::Gone`, so the
+    /// sink must not survive its pumps — a clone parked anywhere else would
+    /// turn a dead child into a silent 90s wait.
+    #[tokio::test]
+    async fn dropping_both_pumps_closes_the_channel() {
+        let (sink, mut rx) = AuthUrlSink::new();
+        let other = sink.clone();
+        drop(sink);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut rx)
+                .await
+                .is_err(),
+            "one live pump must keep the channel open"
+        );
+        drop(other);
+        assert!(rx.await.is_err(), "the last clone must close the channel");
+    }
+
+    /// The prompt line is the last thing on stderr when the URL scan misses, so
+    /// an unfiltered hint would append a truncated consent URL to "no link was
+    /// produced".
+    #[test]
+    fn the_stderr_hint_never_quotes_the_sign_in_link() {
+        let tail = StderrTail::new();
+        tail.push("I0909 08:14:14.490210 credential_manager.py:553] Launching browser login flow");
+        tail.push(&format!(
+            "{AUTH_PROMPT_MARKER}https://accounts.google.com/o/oauth2/v2/auth?state=s&code_challenge=x"
+        ));
+        let hint = stderr_hint(&tail);
+        assert!(
+            !hint.contains("accounts.google.com") && !hint.contains(AUTH_PROMPT_MARKER),
+            "the hint leaked the link: {hint}"
+        );
+        assert!(
+            hint.contains("Launching browser login flow"),
+            "the real diagnostic must survive: {hint}"
+        );
+
+        // With nothing but the prompt to report, the hint is empty rather than
+        // a dangling "Last output:".
+        let only_prompt = StderrTail::new();
+        only_prompt.push(&format!("{AUTH_PROMPT_MARKER}https://accounts.google.com/x"));
+        assert_eq!(stderr_hint(&only_prompt), "");
     }
 
     #[test]

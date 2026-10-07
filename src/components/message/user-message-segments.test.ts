@@ -122,6 +122,40 @@ describe("parseUserMessageSegments", () => {
         { kind: "text", text: "a/b/c" },
       ])
     })
+
+    describe("restricted to an agent's advertised invocations", () => {
+      const knownInvocations = new Set(["/review"])
+
+      it("badges only a token on the list", () => {
+        expect(
+          parseUserMessageSegments("run /review please", { knownInvocations })
+        ).toHaveLength(3)
+        expect(
+          parseUserMessageSegments("run /notacommand please", {
+            knownInvocations,
+          })
+        ).toEqual([{ kind: "text", text: "run /notacommand please" }])
+      })
+
+      it("keeps unbadged tokens inside one contiguous text run", () => {
+        // Two skipped tokens must not split the prose into three segments the
+        // renderer would then have to stitch back together.
+        expect(
+          parseUserMessageSegments("/a and /b", { knownInvocations })
+        ).toEqual([{ kind: "text", text: "/a and /b" }])
+      })
+
+      it("still badges the reference links around an unknown token", () => {
+        expect(
+          parseUserMessageSegments("/nope [a.ts](file:///a.ts)", {
+            knownInvocations,
+          })
+        ).toEqual([
+          { kind: "text", text: "/nope " },
+          { kind: "reference", attrs: expect.objectContaining({ id: "a.ts" }) },
+        ])
+      })
+    })
   })
 
   // Guardrail: the render tokenizer must invert referenceToMarkdown (the wire

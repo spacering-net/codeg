@@ -1,11 +1,17 @@
-//! ACP `session/fork` support via raw JSON-RPC messages.
+//! ACP `session/fork` support.
 //!
-//! The `sacp` crate does not yet provide typed request/response types for
-//! `session/fork`, so we use `UntypedMessage` (the same pattern used for
-//! `session/set_config_option` in connection.rs).
+//! The request is the schema's typed `ForkSessionRequest` (behind
+//! `unstable_session_fork`). It goes out untyped for the one reason
+//! `session/new` and `session/resume` do: grok's top-level `models` has no field
+//! on the typed response, so [`send_capturing_models`] reads it off the raw
+//! reply first.
 
-use sacp::schema::{ForkSessionRequest, ForkSessionResponse, SessionId};
-use sacp::{Agent, ConnectionTo, UntypedMessage};
+use agent_client_protocol::schema::v1::{
+    ForkSessionRequest, ForkSessionResponse, Meta, SessionId, AGENT_METHOD_NAMES,
+};
+use agent_client_protocol::{Agent, ConnectionTo};
+
+use crate::acp::connection::send_capturing_models;
 
 use crate::acp::error::AcpError;
 use crate::models::agent::AgentType;
@@ -19,10 +25,18 @@ use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
 ///
 /// They resolve it differently, which is why all three halves exist:
 ///
-/// * **claude-agent-acp 0.73.0** matches `message_id` against its own
-///   `messageIdForGrouping` (the API message id, else the record uuid) and
-///   ignores the fingerprint entirely. `crate::parsers::claude` derives exactly
-///   that id into [`crate::models::MessageTurn::agent_message_id`].
+/// * **claude-agent-acp 0.75.1** resolves in three levels: `message_id` against
+///   the live id map, then against `messageIdForGrouping` (the API message id,
+///   else the record uuid) along the ACTIVE parentUuid chain, then — new in
+///   0.75.1 — against the full persisted transcript INCLUDING abandoned
+///   branches, where a failed id finally falls through to the fingerprint. Up
+///   to 0.74.0 it ignored the fingerprint entirely, so codeg sent the id alone;
+///   from 0.75.1 both halves are sent, which is what turns a fork point on an
+///   abandoned branch from a silent tail-fork into an exact hit.
+///   `crate::parsers::claude` derives the id into
+///   [`crate::models::MessageTurn::agent_message_id`], and the hash side is
+///   byte-compatible with what `fingerprint_agent_message` computes (a single
+///   fingerprint match even wins regardless of occurrence).
 /// * **codex-acp 1.8.0** first matches `message_id` against `items[].id`, then
 ///   falls back to hashing each agent message and taking the
 ///   `message_occurrence`-th match. Codex rollout files record NO item ids, so
@@ -102,12 +116,6 @@ pub fn resolve_fork_point(
     let turn = &turns[idx];
 
     match agent_type {
-        // Claude names its own messages and matches on nothing else.
-        AgentType::ClaudeCode => turn.agent_message_id.clone().map(|message_id| ForkPoint {
-            message_id,
-            message_fingerprint: None,
-            message_occurrence: None,
-        }),
         // Codex rollouts carry no item ids, so the id can never match and the
         // fingerprint is the only thing that resolves. `message_id` is still
         // required by the wire contract, so it carries codeg's own turn id —
@@ -126,13 +134,23 @@ pub fn resolve_fork_point(
                 message_occurrence: u32::try_from(occurrence).ok(),
             })
         }
-        // DeepSeek reads both halves, so send both. The id resolves on its own
-        // whenever the log named the message, and the fingerprint is what still
-        // resolves when it did not (a log written without an `id`, or a parse
-        // that began mid-log). Sending the fingerprint alongside an id costs
-        // nothing: the adapter stops at the first id that matches and never
-        // looks at it.
-        AgentType::DeepSeek => {
+        // DeepSeek and Claude 0.75.1 both read the two halves in the same
+        // order, so both are sent. The id resolves on its own whenever the
+        // transcript named the message, and the fingerprint is what still
+        // resolves when it did not — a DeepSeek log written without an `id` or
+        // a parse that began mid-log; on Claude, a fork point that has drifted
+        // off the active parentUuid chain onto an abandoned branch. Sending the
+        // fingerprint alongside an id costs nothing: both adapters stop at the
+        // first id that matches and never look at it.
+        //
+        // The `text.trim().is_empty()` guard below is load-bearing on Claude,
+        // not just tidiness. Every turn `parsers::claude` leaves unnamed is one
+        // codeg SYNTHESIZED with no text of its own (a `/goal` marker, a bare
+        // top-level `tool_use`, a bare `tool_result`); `fingerprint("")` would
+        // match every text-free grouping on the agent's side at once and then
+        // pick between them by occurrence, forking somewhere arbitrary. A tail
+        // fork is the honest answer for those.
+        AgentType::ClaudeCode | AgentType::DeepSeek => {
             let text = turn_text(turn);
             let fingerprint = (!text.trim().is_empty()).then(|| fingerprint_agent_message(&text));
             // Neither half can name this turn — an assistant bubble opened by a
@@ -144,9 +162,10 @@ pub fn resolve_fork_point(
                 .as_ref()
                 .map(|fp| fingerprint_occurrence(turns, idx, fp));
             Some(ForkPoint {
-                // Same reasoning as codex when the log named nothing: the field
-                // is required, and codeg's own turn id is deliberately
-                // something DeepSeek will not find, which is what makes it fall
+                // Same reasoning as codex when the transcript named nothing:
+                // the field is required, and codeg's own turn id (`turn-<n>`,
+                // a position, never a record uuid) is deliberately something
+                // neither adapter will find, which is what makes it fall
                 // through to the fingerprint.
                 message_id: turn
                     .agent_message_id
@@ -163,7 +182,7 @@ pub fn resolve_fork_point(
 }
 
 impl ForkPoint {
-    fn to_meta(&self) -> serde_json::Value {
+    fn to_meta(&self) -> Meta {
         let mut fork = serde_json::Map::new();
         fork.insert("version".into(), serde_json::json!(1));
         fork.insert("messageId".into(), serde_json::json!(self.message_id));
@@ -173,17 +192,33 @@ impl ForkPoint {
         if let Some(n) = self.message_occurrence {
             fork.insert("messageOccurrence".into(), serde_json::json!(n));
         }
-        serde_json::json!({ "jetbrains": { "air": { "fork": fork } } })
+        let mut meta = Meta::new();
+        meta.insert(
+            "jetbrains".into(),
+            serde_json::json!({ "air": { "fork": fork } }),
+        );
+        meta
     }
 }
 
 /// Send a `session/fork` request over an existing ACP connection.
 ///
-/// Returns the full `ForkSessionResponse` so the caller can attach directly
-/// without a separate `session/load` round-trip, plus the raw top-level `models`
-/// value (captured before the typed deserialize drops it) so the Grok path can
-/// parse per-model reasoning-effort data. `None` when the response has no
-/// `models` field.
+/// Returns the full `ForkSessionResponse` — what the caller attaches when the
+/// agent cannot resume the fork — plus the raw top-level `models` value so the
+/// Grok path can parse per-model reasoning-effort data (`None` when the
+/// response has none).
+///
+/// The fork names no MCP servers, on purpose. It is not the request that makes
+/// the forked session usable: `handle_fork_or_exit` resumes it straight away,
+/// with the connection's servers, and every adapter checked mounts them there.
+/// Naming them on the fork too only starts them twice — codex-acp 1.13 builds
+/// the forked thread from the fork's list, then the resume finds that thread
+/// idle and unsubscribed and cold-restarts it with the resume's config;
+/// glm-acp-agent connects them on the fork and reconnects on the resume;
+/// deepseek-acp mounts them on a session handle the resume replaces with a new
+/// one. claude-agent-acp ignores the field. When there is no resume — the agent
+/// does not advertise it, or it fails — the fork is attached as-is, without
+/// servers, as it always has been.
 ///
 /// `fork_point` forks at a chosen message instead of the tail; see [`ForkPoint`].
 /// An agent that does not implement it ignores the unknown `_meta` key, so this
@@ -196,29 +231,25 @@ pub async fn fork_session(
     cwd: &str,
     fork_point: Option<&ForkPoint>,
 ) -> Result<(ForkSessionResponse, Option<serde_json::Value>), AcpError> {
+    send_capturing_models(
+        cx,
+        AGENT_METHOD_NAMES.session_fork,
+        build_fork_request(session_id, cwd, fork_point),
+    )
+    .await
+    .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))
+}
+
+fn build_fork_request(
+    session_id: &SessionId,
+    cwd: &str,
+    fork_point: Option<&ForkPoint>,
+) -> ForkSessionRequest {
     let req = ForkSessionRequest::new(session_id.clone(), cwd);
-    // Built through a Value so the AIR block can be attached: `_meta` is not a
-    // settable field on the typed request, and the bytes are otherwise
-    // identical to the typed send.
-    let mut req = serde_json::to_value(&req)
-        .map_err(|e| AcpError::protocol(format!("Failed to build fork request: {e}")))?;
-    if let (Some(point), Some(obj)) = (fork_point, req.as_object_mut()) {
-        obj.insert("_meta".into(), point.to_meta());
+    match fork_point {
+        Some(point) => req.meta(point.to_meta()),
+        None => req,
     }
-    let untyped_req = UntypedMessage::new("session/fork", &req)
-        .map_err(|e| AcpError::protocol(format!("Failed to build fork request: {e}")))?;
-
-    let raw_response: serde_json::Value = cx
-        .send_request_to(Agent, untyped_req)
-        .block_task()
-        .await
-        .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))?;
-
-    let models = raw_response.get("models").cloned();
-    let response: ForkSessionResponse = serde_json::from_value(raw_response)
-        .map_err(|e| AcpError::protocol(format!("Failed to parse fork response: {e}")))?;
-
-    Ok((response, models))
 }
 
 #[cfg(test)]
@@ -240,30 +271,54 @@ mod tests {
         }
     }
 
-    /// The shape both adapters parse: version 1, and the id under
-    /// `jetbrains.air.fork`.
+    /// The shape both adapters parse — version 1, and the id under
+    /// `jetbrains.air.fork` — as the request's own top-level `_meta`, which is
+    /// where the typed request puts it.
     #[test]
-    fn meta_matches_the_air_fork_block() {
-        let meta = ForkPoint {
+    fn fork_request_carries_the_air_fork_block_as_its_meta() {
+        let point = ForkPoint {
             message_id: "msg_01".into(),
             message_fingerprint: Some("sha256:ab".into()),
             message_occurrence: Some(2),
-        }
-        .to_meta();
+        };
+        let wire = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            "/work",
+            Some(&point),
+        ))
+        .unwrap();
         assert_eq!(
-            meta,
-            serde_json::json!({"jetbrains": {"air": {"fork": {
-                "version": 1,
-                "messageId": "msg_01",
-                "messageFingerprint": "sha256:ab",
-                "messageOccurrence": 2,
-            }}}})
+            wire,
+            serde_json::json!({
+                "sessionId": "sess-1",
+                "cwd": "/work",
+                "_meta": {"jetbrains": {"air": {"fork": {
+                    "version": 1,
+                    "messageId": "msg_01",
+                    "messageFingerprint": "sha256:ab",
+                    "messageOccurrence": 2,
+                }}}},
+            })
         );
     }
 
-    /// Claude's optional halves stay absent rather than null — it validates the
-    /// fingerprint's shape when present, so sending `null` would be worse than
-    /// sending nothing.
+    /// A tail fork is the bare request: no fork point, and no MCP servers — the
+    /// resume that follows every fork is what mounts them (see
+    /// [`fork_session`]), so naming them here would start them twice.
+    #[test]
+    fn a_tail_fork_names_neither_a_fork_point_nor_mcp_servers() {
+        let wire =
+            serde_json::to_value(build_fork_request(&SessionId::new("sess-1"), "/work", None))
+                .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({"sessionId": "sess-1", "cwd": "/work"})
+        );
+    }
+
+    /// The optional halves stay absent rather than null — every adapter
+    /// validates the fingerprint's shape when present, so sending `null` would
+    /// be worse than sending nothing.
     #[test]
     fn meta_omits_absent_fingerprint_and_occurrence() {
         let meta = ForkPoint {
@@ -277,24 +332,66 @@ mod tests {
         assert!(fork.get("messageOccurrence").is_none());
     }
 
+    /// The id the parser derived leads, and 0.75.1 also reads the fingerprint,
+    /// so both go out: the id resolves on the active chain, the fingerprint is
+    /// what still resolves once the point has drifted onto an abandoned branch.
     #[test]
-    fn claude_forks_by_the_id_the_parser_derived() {
+    fn claude_sends_the_derived_id_and_the_fingerprint_together() {
         let turns = vec![
             turn("turn-0", TurnRole::User, "hi", None),
             turn("turn-1", TurnRole::Assistant, "hello", Some("msg_01")),
         ];
         let point = resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).unwrap();
         assert_eq!(point.message_id, "msg_01");
-        // Claude ignores the fingerprint, so sending one would be noise.
-        assert!(point.message_fingerprint.is_none());
+        assert_eq!(
+            point.message_fingerprint.as_deref(),
+            Some(fingerprint_agent_message("hello").as_str())
+        );
+        // Claude needs BOTH halves to use the fingerprint at all, so an
+        // occurrence must ride along with it.
+        assert_eq!(point.message_occurrence, Some(1));
     }
 
-    /// A turn Claude never named cannot be forked at; the caller degrades to a
-    /// tail fork rather than sending an id the agent would reject.
+    /// A turn Claude never named still forks by content — 0.75.1 falls through
+    /// to the fingerprint when the id misses, and `turn-<n>` is a position that
+    /// can never collide with a record uuid.
     #[test]
-    fn claude_declines_a_turn_with_no_agent_id() {
+    fn claude_falls_back_to_the_fingerprint_with_no_agent_id() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", None)];
-        assert!(resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).is_none());
+        let point = resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).unwrap();
+        assert_eq!(point.message_id, "turn-1");
+        assert_eq!(
+            point.message_fingerprint.as_deref(),
+            Some(fingerprint_agent_message("hello").as_str())
+        );
+    }
+
+    /// The one case that must stay a tail fork: a turn codeg synthesized with
+    /// no text and no id. `fingerprint("")` would match every text-free
+    /// grouping on Claude's side, so guessing between them by occurrence is
+    /// strictly worse than not naming a point at all.
+    #[test]
+    fn claude_declines_a_synthesized_turn_with_neither_id_nor_text() {
+        let mut t = turn("turn-1", TurnRole::Assistant, "", None);
+        t.blocks = vec![ContentBlock::ToolUse {
+            tool_use_id: Some("tl-tool-0".into()),
+            tool_name: "Bash".into(),
+            input_preview: None,
+            status: None,
+            meta: None,
+        }];
+        assert!(resolve_fork_point(&[t], "turn-1", AgentType::ClaudeCode).is_none());
+    }
+
+    /// A textless turn Claude DID name is still a fork point by id alone.
+    #[test]
+    fn claude_forks_a_textless_named_turn_by_its_id_alone() {
+        let mut t = turn("turn-1", TurnRole::Assistant, "", Some("msg_01"));
+        t.blocks = Vec::new();
+        let point = resolve_fork_point(&[t], "turn-1", AgentType::ClaudeCode).unwrap();
+        assert_eq!(point.message_id, "msg_01");
+        assert!(point.message_fingerprint.is_none());
+        assert!(point.message_occurrence.is_none());
     }
 
     #[test]
@@ -359,8 +456,8 @@ mod tests {
         assert!(resolve_fork_point(&[t], "turn-1", AgentType::Codex).is_none());
     }
 
-    /// DeepSeek is the one adapter that reads BOTH halves, so both are sent —
-    /// unlike Claude, whose arm must leave the fingerprint out.
+    /// DeepSeek reads BOTH halves, so both are sent — unlike codex, whose id
+    /// half can never resolve.
     #[test]
     fn deepseek_sends_the_log_id_and_the_fingerprint_together() {
         let turns = vec![

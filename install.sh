@@ -2,13 +2,13 @@
 #
 # Codeg Server installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/xintaofei/codeg/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/xintaofei/codeg/main/install.sh | bash -s -- --version v0.5.0
+#   curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash -s -- --version v0.5.0
 #
 
 set -euo pipefail
 
-REPO="xintaofei/codeg"
+REPO="spacering-net/codeg"
 INSTALL_DIR="${CODEG_INSTALL_DIR:-/usr/local/bin}"
 WEB_DIR="${CODEG_WEB_DIR:-/usr/local/share/codeg/web}"
 VERSION=""
@@ -394,6 +394,18 @@ _install_one() {
 for _name in "${MANAGED_BINS[@]}"; do
   _install_one "$_name"
 done
+# codeg-computer-helper: computer use, which codeg-server offers only when
+# started with CODEG_COMPUTER_USE=1 in a desktop session. Installed when the
+# release ships it (older ones do not). It exits with the codeg-server that
+# started it, but may still be on its way out — and `cp` onto a running
+# executable fails (text file busy) — so a copy is renamed over it instead:
+# the one still running keeps its old file to the end.
+if [ -f "${TMP_DIR}/${ARTIFACT}/codeg-computer-helper" ]; then
+  _helper_staged="${INSTALL_DIR}/.codeg-computer-helper.new"
+  priv_run cp "${TMP_DIR}/${ARTIFACT}/codeg-computer-helper" "$_helper_staged"
+  priv_run chmod +x "$_helper_staged"
+  priv_run mv -f "$_helper_staged" "${INSTALL_DIR}/codeg-computer-helper"
+fi
 
 # Re-canonicalize destination now that the file exists. Pre-install canon may
 # leave the final non-existent component unresolved (notably macOS readlink -f),

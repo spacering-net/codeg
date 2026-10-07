@@ -108,13 +108,18 @@ export function isValidDeepSeekBaseUrl(value: string): boolean {
  * Dedicated settings panel for DeepSeek Harness (through the `deepseek-acp`
  * bridge). Deliberately small: endpoint and key, in that order.
  *
- * Nothing else belongs here. Model and reasoning effort are ACP config options
- * the bridge advertises per session, so the composer's own selectors are where
- * they are chosen; duplicating them here only creates two places to disagree
- * about what a session actually starts on. The model's launch default is still
- * settable by hand as `DEEPSEEK_ACP_MODEL` in the raw env editor below.
+ * No per-session selector belongs here. Model and reasoning effort are ACP
+ * config options the bridge advertises per session, so the composer's own
+ * selectors are where they are chosen; duplicating them here only creates two
+ * places to disagree about what a session actually starts on. The model's
+ * launch default is still settable by hand as `DEEPSEEK_ACP_MODEL` in the raw
+ * env editor below.
  *
- * Both fields are plain per-agent env vars, read at spawn — a save reaches
+ * The list those selectors choose FROM is a different thing and lives in a
+ * different file — `llm-deepseek.models` in the harness settings document,
+ * edited by the sibling `DeepSeekModelListEditor` under its own section.
+ *
+ * Both fields here are plain per-agent env vars, read at spawn — a save reaches
  * sessions started after it, not the ones already running.
  */
 export function DeepSeekConfigPanel({

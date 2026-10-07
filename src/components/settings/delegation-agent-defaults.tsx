@@ -39,6 +39,7 @@ import {
 import { getAgentLabel, isCustomAgentType } from "@/lib/custom-agents"
 import { describeAgentOptions } from "@/lib/api"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import { toErrorMessage } from "@/lib/app-error"
 
 // Sentinel `value` slot used by the top "Default" Select item in mode +
@@ -118,7 +119,15 @@ export function DelegationAgentDefaultsPanel({
     [agents]
   )
   const [selectedAgent, setSelectedAgent] = useState<AgentType>("claude_code")
-  const [snapshot, setSnapshot] = useState<AgentOptionsSnapshot | null>(null)
+  // Snapshot and the agent it was probed from, in ONE state value: the tab
+  // switch below is debounced, so for that whole window `selectedAgent` is
+  // already the new tab while the snapshot on screen is still the old agent's.
+  // Localising the agent's own vocabulary has to key on the producer, or a
+  // switch would briefly paint one agent's options in another's wording.
+  const [loaded, setLoaded] = useState<{
+    agent: AgentType
+    snapshot: AgentOptionsSnapshot
+  } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const reqIdRef = useRef(0)
@@ -127,7 +136,7 @@ export function DelegationAgentDefaultsPanel({
     if (!force) {
       const cached = readCache(agent)
       if (cached) {
-        setSnapshot(cached)
+        setLoaded({ agent, snapshot: cached })
         setError(null)
         setLoading(false)
         return
@@ -136,12 +145,12 @@ export function DelegationAgentDefaultsPanel({
     const reqId = ++reqIdRef.current
     setLoading(true)
     setError(null)
-    setSnapshot(null)
+    setLoaded(null)
     try {
       const fresh = await describeAgentOptions(agent)
       if (reqIdRef.current !== reqId) return
       writeCache(agent, fresh)
-      setSnapshot(fresh)
+      setLoaded({ agent, snapshot: fresh })
     } catch (err: unknown) {
       if (reqIdRef.current !== reqId) return
       setError(toErrorMessage(err))
@@ -262,9 +271,10 @@ export function DelegationAgentDefaultsPanel({
           </div>
         )}
 
-        {!loading && !error && snapshot && (
+        {!loading && !error && loaded && (
           <SnapshotEditor
-            snapshot={snapshot}
+            agentType={loaded.agent}
+            snapshot={loaded.snapshot}
             overrideModeId={currentModeId}
             overrideConfigValues={currentConfigValues}
             onModeChange={setMode}
@@ -278,6 +288,9 @@ export function DelegationAgentDefaultsPanel({
 }
 
 interface SnapshotEditorProps {
+  /** Localises the agent's own mode / option vocabulary; see
+   *  `lib/agent-label-vocabulary`. */
+  agentType: AgentType
   snapshot: AgentOptionsSnapshot
   overrideModeId: string | null
   overrideConfigValues: Record<string, string>
@@ -287,6 +300,7 @@ interface SnapshotEditorProps {
 }
 
 function SnapshotEditor({
+  agentType,
   snapshot,
   overrideModeId,
   overrideConfigValues,
@@ -295,6 +309,10 @@ function SnapshotEditor({
   disabled,
 }: SnapshotEditorProps) {
   const t = useTranslations("AcpAgentSettings.multiAgent")
+  // Localised once here rather than inside the rows: `ModeRow` derives the
+  // "agent default" caption from the same list, so translating at the row
+  // would leave that caption in the agent's language.
+  const vocabulary = useAgentVocabulary(agentType)
   const hasModes =
     snapshot.modes !== null &&
     snapshot.modes !== undefined &&
@@ -316,7 +334,7 @@ function SnapshotEditor({
     <div className="space-y-4">
       {showStandaloneMode && snapshot.modes && (
         <ModeRow
-          modes={snapshot.modes.available_modes}
+          modes={vocabulary.modes(snapshot.modes.available_modes)}
           agentDefaultModeId={snapshot.modes.current_mode_id}
           overrideModeId={overrideModeId}
           onChange={onModeChange}
@@ -326,7 +344,7 @@ function SnapshotEditor({
       {snapshot.config_options.map((option) => (
         <ConfigOptionRow
           key={option.id}
-          option={option}
+          option={vocabulary.configOption(option)}
           overrideValue={overrideConfigValues[option.id] ?? null}
           onChange={(valueId) => onConfigChange(option.id, valueId)}
           disabled={disabled}

@@ -8,6 +8,7 @@ import {
   extractClaudeCodeSkillName,
   inferLiveToolName,
   normalizeToolName,
+  toolCallMovedToBackground,
 } from "./tool-call-normalization"
 
 describe("aliasToolInputKeys", () => {
@@ -377,6 +378,119 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
   })
 })
 
+describe("inferLiveToolName query-bearing MCP calls", () => {
+  it("keeps an explicit OpenCode MCP tool title", () => {
+    expect(
+      inferLiveToolName({
+        title: "codegraph_explore",
+        kind: "other",
+        rawInput: JSON.stringify({ query: "find the auth flow" }),
+      })
+    ).toBe("codegraph_explore")
+  })
+
+  it("still classifies a query as websearch when the wire names websearch", () => {
+    expect(
+      inferLiveToolName({
+        title: "web_search",
+        kind: "other",
+        rawInput: JSON.stringify({ query: "Codeg" }),
+      })
+    ).toBe("websearch")
+
+    expect(
+      inferLiveToolName({
+        title: "Search",
+        kind: "websearch",
+        rawInput: JSON.stringify({ query: "Codeg" }),
+      })
+    ).toBe("websearch")
+  })
+
+  it("recognizes Codex web-search action frames", () => {
+    expect(
+      inferLiveToolName({
+        title: "Open page: https://example.com",
+        kind: "search",
+        rawInput: JSON.stringify({
+          query: "Codeg",
+          action: { type: "openPage", url: "https://example.com" },
+        }),
+      })
+    ).toBe("websearch")
+
+    // session/load replay omits the `type` marker, but keeps the action title
+    // and payload. `kind: "search"` must not be enough on its own because
+    // local fuzzy-file searches use the same ACP kind.
+    expect(
+      inferLiveToolName({
+        title: "Find in page for 'ACP' in https://example.com",
+        kind: "search",
+        rawInput: JSON.stringify({
+          query: "Codeg",
+          action: {
+            type: "findInPage",
+            pattern: "ACP",
+            url: "https://example.com",
+          },
+        }),
+      })
+    ).toBe("websearch")
+
+    // The marker is also sufficient when a title is too generic to identify
+    // the action on its own.
+    expect(
+      inferLiveToolName({
+        title: "Search",
+        kind: "other",
+        rawInput: JSON.stringify({ type: "webSearch", query: "Codeg" }),
+      })
+    ).toBe("websearch")
+  })
+
+  it("recognizes Gemini web-search frames by their title", () => {
+    // gemini's `google_web_search` reports `kind: "search"` — the same kind as
+    // its glob and grep — so the title is the only "web" signal. The backend
+    // synthesizes `{query}` from that title because gemini sends no rawInput
+    // at all (`gemini_synthesize_tool_input`).
+    expect(
+      inferLiveToolName({
+        title: 'Searching the web for: "ACP protocol"',
+        kind: "search",
+        rawInput: JSON.stringify({ query: "ACP protocol" }),
+      })
+    ).toBe("websearch")
+
+    // Still not enough on its own: the phrase has to START the title, so a
+    // tool merely mentioning it stays unclassified.
+    expect(
+      inferLiveToolName({
+        title: 'Explain searching the web for: "x"',
+        kind: "search",
+        rawInput: JSON.stringify({ query: "x" }),
+      })
+    ).not.toBe("websearch")
+  })
+
+  it("does not infer websearch from a query field alone", () => {
+    expect(
+      inferLiveToolName({
+        title: "MCP: tool",
+        kind: "other",
+        rawInput: JSON.stringify({ query: "find usages" }),
+      })
+    ).not.toBe("websearch")
+
+    expect(
+      inferLiveToolName({
+        title: "Search for 'find usages'",
+        kind: "search",
+        rawInput: JSON.stringify({ query: "find usages" }),
+      })
+    ).toBe("grep")
+  })
+})
+
 describe("normalizeToolName collapses delegate_to_agent across hosts", () => {
   // The codeg multi-agent delegation MCP tool is named the same across hosts
   // (`delegate_to_agent`) but each host serializes the server prefix
@@ -554,6 +668,52 @@ describe("normalizeToolName Grok terminal tool", () => {
     // via the generic tool shell (raw ANSI, no terminal title) instead of the
     // Terminal card.
     expect(normalizeToolName("run_terminal_command")).toBe("bash")
+  })
+})
+
+describe("normalizeToolName Windows shell tool", () => {
+  it("aliases PowerShell to bash in every spelling the parsers store", () => {
+    // Claude Code's CLI runs commands through a `PowerShell` tool when Windows
+    // has no Git Bash (claude-agent-acp ≥0.79.0 gives it Bash's `kind:
+    // "execute"` + command title); pi uses the lower-case name for the same
+    // thing. Both history parsers keep the raw name, so without the alias the
+    // reload path rendered a terminal icon over a raw-JSON dump — the card body
+    // dispatches on the normalized name.
+    expect(normalizeToolName("PowerShell")).toBe("bash")
+    expect(normalizeToolName("powershell")).toBe("bash")
+  })
+
+  it("does not sweep in unrelated names that merely contain 'shell'", () => {
+    expect(normalizeToolName("powershell_profile_lint")).toBe(
+      "powershell_profile_lint"
+    )
+  })
+
+  it("agrees with the live path, which classifies on the input shape", () => {
+    // claude-agent-acp ≥0.79.0 streams `rawInput` for PowerShell exactly as it
+    // does for Bash, so the live and reload paths must land on the same name.
+    expect(
+      inferLiveToolName({
+        title: "Get-ChildItem -Recurse",
+        kind: "execute",
+        rawInput: JSON.stringify({
+          command: "Get-ChildItem -Recurse",
+          description: "List files",
+        }),
+        meta: { claudeCode: { toolName: "PowerShell", title: "List files" } },
+      })
+    ).toBe("bash")
+    // …including before `rawInput` streams, when the meta name is all there is.
+    expect(
+      normalizeToolName(
+        inferLiveToolName({
+          title: "PowerShell",
+          kind: "execute",
+          rawInput: null,
+          meta: { claudeCode: { toolName: "PowerShell" } },
+        })
+      )
+    ).toBe("bash")
   })
 })
 
@@ -1112,6 +1272,50 @@ describe("inferLiveToolName resolves Qoder's authoritative _meta.qoder.toolName"
   })
 })
 
+describe("toolCallMovedToBackground", () => {
+  it("reads the codex-acp 1.10 marker verbatim off the wire", () => {
+    // The whole `tool_call_update` codex sends when a command goes background —
+    // no status, no content, no output, and crucially NO `version` key inside
+    // `air` (its `sessionFailure` sibling has one; gating on it here would make
+    // the badge never appear).
+    expect(
+      toolCallMovedToBackground({
+        jetbrains: { air: { asyncTasks: { backgrounded: true } } },
+      })
+    ).toBe(true)
+    // A `version` alongside it must not break the read either, in case the
+    // adapter ever starts stamping one.
+    expect(
+      toolCallMovedToBackground({
+        jetbrains: { air: { version: 1, asyncTasks: { backgrounded: true } } },
+      })
+    ).toBe(true)
+  })
+
+  it("stays false for every other meta shape", () => {
+    for (const meta of [
+      null,
+      undefined,
+      {},
+      // The AIR sibling that DOES ride this envelope — reading it as a
+      // background marker would badge every failing turn's tool calls.
+      { jetbrains: { air: { version: 1, sessionFailure: { id: "x" } } } },
+      { jetbrains: { air: { asyncTasks: {} } } },
+      // Strict equality: only a literal `true` counts.
+      { jetbrains: { air: { asyncTasks: { backgrounded: false } } } },
+      { jetbrains: { air: { asyncTasks: { backgrounded: "true" } } } },
+      { jetbrains: { air: { asyncTasks: { backgrounded: 1 } } } },
+      // Missing a level, or the wrong nesting.
+      { air: { asyncTasks: { backgrounded: true } } },
+      { jetbrains: { asyncTasks: { backgrounded: true } } },
+      { asyncTasks: { backgrounded: true } },
+      { jetbrains: { air: "backgrounded" } },
+    ] as (Record<string, unknown> | null | undefined)[]) {
+      expect(toolCallMovedToBackground(meta)).toBe(false)
+    }
+  })
+})
+
 // The historical path reads the raw `mcp__codeg-mcp__<tool>` name straight out
 // of the transcript, so every host prefix/separator must collapse to the same
 // canonical name the live path now produces — otherwise a reload swaps a card
@@ -1146,5 +1350,122 @@ describe("normalizeToolName collapses the codeg-mcp workbench companions", () =>
     // …without disturbing the generic task tools that rule exists for.
     expect(normalizeToolName("task")).toBe("task")
     expect(normalizeToolName("task_update")).toBe("taskupdate")
+  })
+})
+
+describe("inferLiveToolName meta.opencode.toolName override", () => {
+  // Every row below is a frame captured from opencode 1.18.30 driven over real
+  // ACP: the arg-less opening `tool_call`, the `in_progress` update that fills
+  // `rawInput`, and the completion, which drops `kind`/`rawInput` and rewrites
+  // `title` into a display label. The backend records the opening frame's title
+  // as `_meta.opencode.toolName` (`stamp_opencode_tool_name`); the merged block
+  // the renderer classifies therefore carries the completion's title with the
+  // opening frame's meta.
+  const meta = (toolName: string) => ({ opencode: { toolName } })
+  const call = (
+    toolName: string,
+    completedTitle: string | null,
+    kind: string | null,
+    rawInput: unknown
+  ) =>
+    inferLiveToolName({
+      title: completedTitle,
+      kind,
+      rawInput: JSON.stringify(rawInput),
+      meta: meta(toolName),
+    })
+
+  it("names the tools whose input shape is ambiguous", () => {
+    // `glob` and `grep` take the SAME `{pattern, path}` arguments, so the input
+    // shape alone resolved both to "grep" — while the history parser, reading
+    // `part.tool`, kept them apart. Same story for `lsp_*` ({path} → "read") and
+    // an MCP tool taking `{query}` (→ "websearch").
+    expect(call("glob", null, "search", { pattern: "*.txt" })).toBe("glob")
+    expect(
+      call("grep", "third", "search", { pattern: "third", path: "/w" })
+    ).toBe("grep")
+    expect(
+      call("lsp_diagnostics", "3 errors", "other", { path: "/w/a.ts" })
+    ).toBe("lsp")
+    expect(
+      call("context7_query-docs", "docs", "other", { query: "effect" })
+    ).toBe("context7_query-docs")
+  })
+
+  it("keeps the classification the input shape already got right", () => {
+    expect(
+      call("read", "notes.txt", "read", { filePath: "/w/notes.txt" })
+    ).toBe("read")
+    expect(
+      call("edit", "notes.txt", "edit", {
+        filePath: "/w/notes.txt",
+        oldString: "a",
+        newString: "b",
+      })
+    ).toBe("edit")
+    expect(
+      call("write", "a.ts", "edit", { filePath: "/w/a.ts", content: "x" })
+    ).toBe("write")
+    expect(
+      call("bash", "echo probe-ok", "execute", { command: "echo probe-ok" })
+    ).toBe("bash")
+    expect(call("todowrite", "3 todos", "other", { todos: [] })).toBe(
+      "todowrite"
+    )
+    expect(call("webfetch", "webfetch", "fetch", { url: "https://x" })).toBe(
+      "webfetch"
+    )
+    expect(
+      call("apply_patch", "apply_patch", "edit", {
+        patchText: "*** Begin Patch\n*** End Patch",
+      })
+    ).toBe("apply_patch")
+  })
+
+  it("still routes a delegation companion by its own markers", () => {
+    // OpenCode names an MCP tool `<server>_<tool>`; the suffix rules collapse it
+    // to the canonical companion name the delegation cards dispatch on.
+    expect(
+      call("codeg-mcp_get_delegation_status", "status", "other", {
+        task_ids: ["t1"],
+      })
+    ).toBe("get_delegation_status")
+    expect(
+      call("codeg-mcp_ask_user_question", "asked", "other", { questions: [] })
+    ).toBe("question")
+  })
+
+  it("never overrides the backend's authoritative sub-agent title", () => {
+    // OpenCode's sub-agent launcher IS the `task` tool; the backend rewrites the
+    // title to the "agent" sentinel once `subagent_type` arrives, and the marker
+    // recorded from the arg-less opening frame must not pull it back to "task".
+    expect(
+      inferLiveToolName({
+        title: "agent",
+        kind: "think",
+        rawInput: JSON.stringify({
+          description: "explore",
+          prompt: "look around",
+          subagent_type: "general",
+        }),
+        meta: meta("task"),
+      })
+    ).toBe("agent")
+  })
+
+  it("ignores a malformed or absent marker", () => {
+    const shape = {
+      title: "notes.txt",
+      kind: null,
+      rawInput: JSON.stringify({ filePath: "/w/notes.txt" }),
+    }
+    expect(inferLiveToolName({ ...shape, meta: null })).toBe("read")
+    expect(inferLiveToolName({ ...shape, meta: { opencode: {} } })).toBe("read")
+    expect(
+      inferLiveToolName({ ...shape, meta: { opencode: { toolName: "  " } } })
+    ).toBe("read")
+    expect(inferLiveToolName({ ...shape, meta: { opencode: "glob" } })).toBe(
+      "read"
+    )
   })
 })

@@ -460,7 +460,8 @@ function ChangeTreeOverflowRow({
       onClick={onReveal}
       className="flex w-full min-w-full items-center gap-1 rounded px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
     >
-      <span className="size-4 shrink-0" />
+      {/* Starts in the same leading column as its sibling rows' first glyph
+          (a folder's chevron, a file's status letter or icon). */}
       <span className="truncate">{label}</span>
     </button>
   )
@@ -1195,7 +1196,10 @@ export function GitChangesTab() {
               title={file.path}
             >
               <>
-                <span className="size-4 shrink-0" />
+                {/* The status letter is this row's LEADING glyph, sitting in
+                    the same column as a sibling folder's chevron — no spacer
+                    in front of it, or every file would hang one glyph right of
+                    the directory it lives in. */}
                 <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
                   <CommitFileStatus status={mapStatus(file.status)}>
                     {file.status}
@@ -1377,7 +1381,9 @@ export function GitChangesTab() {
               title={file.path}
             >
               <>
-                <span className="size-4 shrink-0" />
+                {/* Untracked rows carry no status letter, so the file icon is
+                    the leading glyph and lines up with a sibling folder's
+                    chevron. See the tracked renderer above. */}
                 <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
                   <CommitFileIcon />
                   <CommitFilePath title={file.path}>{node.name}</CommitFilePath>

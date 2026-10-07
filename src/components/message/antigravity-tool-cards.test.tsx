@@ -132,8 +132,9 @@ describe("Antigravity run_command renders as a terminal", () => {
 
 describe("Antigravity MCP calls reach their dedicated cards", () => {
   it("reads the delegated task out of the unwrapped envelope", () => {
-    // `{arguments: {…}, prompt: …}` is what `unwrap_mcp_tool_call` puts on the
-    // live wire and what `parsers/antigravity.rs` now emits for history. The
+    // `{arguments: {…}, prompt: …}` is what the live stream carries (1.1 sent it
+    // as-is; 1.2's flattened copy is folded back in `acp/connection.rs`) and
+    // what `parsers/antigravity.rs` now emits for history. The
     // card's argument walker peels `arguments`; the RAW envelope it replaces
     // (`{Arguments, ServerName, ToolName}`) is not a shape it can read, which
     // is why the unwrap has to happen in the parser.

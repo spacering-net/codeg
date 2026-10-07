@@ -1,5 +1,9 @@
 import type { Editor } from "@tiptap/core"
 
+import {
+  NO_KNOWN_INVOCATIONS,
+  type KnownInvocations,
+} from "@/lib/invocation-token"
 import type { PromptInputBlock } from "@/lib/types"
 
 import type { InputAttachment } from "../message-input-attachments"
@@ -149,19 +153,22 @@ export function restampSkillPrefixes(
  * references `docToPromptBlocks` serialized INTO that text (it emits one text
  * block with every badge inline) come back as badges instead of raw
  * `[label](uri)` / `/cmd` source — the same treatment paste and the other
- * seeding paths get. Lossless: re-serializing the restored badges reproduces the
- * block text verbatim.
+ * seeding paths get, `known` included: a `/cmd` the agent no longer advertises
+ * comes back as the text it will be sent as, rather than as a badge claiming a
+ * command that isn't there. Lossless either way: re-serializing the restored
+ * content reproduces the block text verbatim.
  */
 export function restoreBlocksIntoEditor(
   editor: Editor,
-  blocks: PromptInputBlock[]
+  blocks: PromptInputBlock[],
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS
 ): InputAttachment[] {
   const { segments, attachments } = blocksToRestoredDraft(blocks)
   let chain = editor.chain().clearContent()
   for (const segment of segments) {
     chain =
       segment.kind === "text"
-        ? chain.insertContent(textToSeededInlineContent(segment.text))
+        ? chain.insertContent(textToSeededInlineContent(segment.text, known))
         : chain.insertReference(segment.attrs)
   }
   chain.focus("end").run()

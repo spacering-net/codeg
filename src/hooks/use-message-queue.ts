@@ -50,8 +50,8 @@ export interface UseMessageQueueReturn {
    * The queue length, read SYNCHRONOUSLY from the authoritative ref — it
    * reflects the same-tick result of an enqueue/requeue/dequeue, before React
    * commits the next render. Callers gating on "is the queue non-empty right
-   * now" (the fork-send guard, the direct-send routing) must use this rather
-   * than `queue.length` (which lags a render).
+   * now" — the direct-send routing — must use this rather than `queue.length`
+   * (which lags a render).
    */
   getQueueLength: () => number
   editingItemId: string | null
@@ -64,11 +64,11 @@ export function useMessageQueue(): UseMessageQueueReturn {
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   // Authoritative copy of the queue, updated SYNCHRONOUSLY by every mutation
   // (before the React state commit). Reads that must observe the same-tick
-  // result of a mutation — the fork-send guard and the direct-send queue
-  // routing — go through this ref / `getQueueLength`, NOT the `queue` state
-  // (which lags until React commits) and NOT a passive-effect-synced mirror
-  // (which lags a full render). Without this, a bounce that re-queues a draft
-  // leaves a window where the guard still sees an empty queue.
+  // result of a mutation — the direct-send queue routing — go through this
+  // ref / `getQueueLength`, NOT the `queue` state (which lags until React
+  // commits) and NOT a passive-effect-synced mirror (which lags a full
+  // render). Without this, a bounce that re-queues a draft leaves a window
+  // where a caller still sees an empty queue.
   const queueRef = useRef<QueuedMessage[]>(queue)
 
   // Update the authoritative ref first, then schedule the render. A plain value

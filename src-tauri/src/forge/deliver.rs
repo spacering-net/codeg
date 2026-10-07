@@ -29,8 +29,84 @@ use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
 use super::{
-    github, gitlab, urlencode_query, web_origin, ForgeError, ForgeItemKind, ForgeProvider,
+    gitea, github, gitlab, urlencode_query, web_origin, ForgeError, ForgeItemKind, ForgeProvider,
 };
+use crate::app_error::AppCommandError;
+
+/// Flatten a classified git failure into one line, git's own words included.
+///
+/// `AppCommandError`'s `Display` is `{message}` alone, and
+/// `classify_remote_git_error` puts everything specific — the whole of git's
+/// stderr — in `detail`. A plain `to_string()` here therefore hands the caller
+/// nothing but "git push failed", and the delivery path has no second channel
+/// to the failure: that one string is what a human reads. Losing the detail
+/// there once cost a reader a long detour, because the caller filled the
+/// silence with a guess about repository permissions when git had actually
+/// said the branch was out of date.
+///
+/// The detail is bounded. It is arbitrary output from another program, and
+/// this string does not just get read once — it is persisted on the task row
+/// and rendered in the UI, so a server-side hook that answers a push with a
+/// screenful of banner would otherwise all end up in the database. Git leads
+/// with the part that identifies the failure and follows with hints, so a
+/// prefix is the right thing to keep.
+const MAX_GIT_DETAIL_CHARS: usize = 800;
+
+fn git_failure_message(err: AppCommandError) -> String {
+    match err
+        .detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        Some(detail) => format!("{}: {}", err.message, truncate_chars(&redact_userinfo(detail))),
+        None => err.message,
+    }
+}
+
+/// Blank out `scheme://user:secret@host` in text about to be shown and stored.
+///
+/// The account's token never travels in a URL — it reaches git through
+/// `GIT_ASKPASS` — so this is not about that. It is about the URL git echoes
+/// back in its errors: `web_origin` returns a self-hosted `server_url` verbatim,
+/// so a user who typed credentials into their own forge address would have them
+/// come back out here, in a string that is persisted and rendered. Cheap to
+/// scrub, and this is a failure path where nothing is worth that risk.
+fn redact_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(scheme_end) = rest.find("://") {
+        let authority_start = scheme_end + "://".len();
+        // The authority runs to the first character that can only follow it.
+        // Quotes count: git wraps the URL in them ('https://…/repo.git/').
+        let authority_end = rest[authority_start..]
+            .find(|c: char| matches!(c, '/' | '?' | '#' | '\'' | '"') || c.is_whitespace())
+            .map(|i| authority_start + i)
+            .unwrap_or(rest.len());
+        let authority = &rest[authority_start..authority_end];
+        match authority.rfind('@') {
+            Some(at) => {
+                out.push_str(&rest[..authority_start]);
+                out.push_str("***@");
+                out.push_str(&authority[at + 1..]);
+            }
+            None => out.push_str(&rest[..authority_end]),
+        }
+        rest = &rest[authority_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Cut on a character boundary, never a byte one — git happily reports branch
+/// names and hook banners in any encoding, and slicing those mid-codepoint
+/// would panic on the failure path.
+fn truncate_chars(text: &str) -> String {
+    match text.char_indices().nth(MAX_GIT_DETAIL_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_string(),
+    }
+}
 
 /// A pull request as far as delivery cares. Deliberately not the full API
 /// object: everything here is either an adoption criterion or shown to the user.
@@ -273,6 +349,9 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::find_merge_requests(&auth, ctx.owner_repo, head_branch).await
             }
+            ForgeProvider::Gitea => {
+                gitea::find_pulls(&auth, ctx.owner_repo, head_branch).await
+            }
         }
         .map_err(|e| e.to_string())
     }
@@ -288,6 +367,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::create_merge_request(&auth, ctx.owner_repo, req).await
             }
+            ForgeProvider::Gitea => gitea::create_pull(&auth, ctx.owner_repo, req).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -299,6 +379,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::get_merge_request(&auth, ctx.owner_repo, number).await
             }
+            ForgeProvider::Gitea => gitea::get_pull(&auth, ctx.owner_repo, number).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -340,6 +421,11 @@ impl ForgeDeliveryApi for ForgeDelivery {
                 // comment. Same one request either way — and an anchor that did
                 // not survive sanitizing must not fail a comment that was
                 // posted (see `create_issue_comment`).
+                .map(|comment| comment.html_url.unwrap_or_default()),
+            // No kind here either: a pull request is an issue at Gitea, exactly
+            // as at GitHub, and one collection serves both.
+            ForgeProvider::Gitea => gitea::create_comment(&auth, ctx.owner_repo, number, body)
+                .await
                 .map(|comment| comment.html_url.unwrap_or_default()),
         }
         .map_err(|e| e.to_string())
@@ -543,9 +629,9 @@ async fn push_work_branch(
         .await
         .map_err(|e| format!("could not run git push: {e}"))?;
     if !output.status.success() {
-        return Err(
-            crate::commands::folders::classify_remote_git_error("push", &output.stderr).to_string(),
-        );
+        return Err(git_failure_message(
+            crate::commands::folders::classify_remote_git_error("push", &output.stderr),
+        ));
     }
     Ok(())
 }
@@ -575,8 +661,9 @@ async fn fetch_into_ref(
         .await
         .map_err(|e| format!("could not run git fetch: {e}"))?;
     if !out.status.success() {
-        return Err(crate::commands::folders::classify_remote_git_error("fetch", &out.stderr)
-            .to_string());
+        return Err(git_failure_message(
+            crate::commands::folders::classify_remote_git_error("fetch", &out.stderr),
+        ));
     }
     crate::work_task::git::rev_parse(repo_path, local_ref)
         .await
@@ -625,11 +712,13 @@ fn with_credentials(cmd: &mut tokio::process::Command, ctx: &DeliveryCtx<'_>, au
     match crate::git_credential::ensure_askpass_script(ctx.data_dir) {
         Ok(askpass) => {
             let username = if auth.username.trim().is_empty() {
-                // Neither forge checks the username when the password is a
-                // token, but git insists on having one; these are each
-                // ecosystem's conventional placeholder.
+                // No forge checks the username when the password is a token
+                // (Gitea looks the token up and authenticates by it, ignoring
+                // whatever name came with it), but git insists on having one;
+                // these are each ecosystem's conventional placeholder — Gitea's
+                // is GitHub's, which is what its own Actions runner sends.
                 match ctx.provider {
-                    ForgeProvider::GitHub => "x-access-token",
+                    ForgeProvider::GitHub | ForgeProvider::Gitea => "x-access-token",
                     ForgeProvider::GitLab => "oauth2",
                 }
             } else {
@@ -683,30 +772,43 @@ pub fn pull_request_body(issue_url: &str, issue_number: i64, task_id: i32) -> St
     )
 }
 
-/// How a task finished, in the only two shapes worth telling the issue about.
+/// How a task finished, in the three shapes worth telling its thread about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskOutcome<'a> {
     /// Landed on the base branch of the local checkout.
     Merged { commit: &'a str, base_branch: &'a str },
     /// Published as a pull request.
     Delivered { pr_url: &'a str },
-    /// The third settlement: accepted without merging. `nothing_to_land` tells
-    /// the two ways that happens apart — an empty diff, versus a worktree that
-    /// was already gone (whose branch may still hold real commits). Saying
-    /// "nothing to land" about the second would contradict the counters printed
-    /// beside it.
+    /// The third settlement: accepted in codeg without anything landing.
+    /// `nothing_to_land` tells the two ways that happens apart — an empty diff,
+    /// versus a worktree that was already gone (whose branch may still hold
+    /// real commits). Saying the task made no changes about the second would
+    /// contradict the counters printed beside it.
     Accepted { nothing_to_land: bool },
 }
 
 /// The comment codeg posts when a task finishes.
 ///
-/// Deliberately built from nothing but the task id, the outcome and the diff
-/// counters: NO agent-written text (result summary, commit message, verdict
-/// note) may reach a thread other people are reading. That is a rule about the
-/// signature, not about the formatting — there is no parameter here that could
-/// carry it, which is what makes the rule hold as this evolves.
+/// Deliberately built from nothing but the task id, the thread it goes to, the
+/// outcome and the diff counters: NO agent-written text (result summary,
+/// commit message, verdict note) may reach a thread other people are reading.
+/// That is a rule about the signature, not about the formatting — there is no
+/// parameter here that could carry it (the thread is named by two enums, not by
+/// a noun string), which is what makes the rule hold as this evolves.
+///
+/// Every sentence reports what happened to the TASK's work, never a verdict on
+/// the item the thread is about. "Accepted" is codeg's word for the user
+/// signing off on a task, and a thread reads it as its own: on a pull request
+/// it says the change was approved, on an issue that the report was accepted.
+/// Neither follows from a task that landed nothing — least of all from a
+/// review that found the pull request's approach unsound and stopped without
+/// committing, whose author would read the opposite of what the review found.
+/// So that settlement says what did NOT happen to this thread's item, in the
+/// thread's own terms: nothing was pushed to this pull request.
 pub fn writeback_comment_body(
     task_id: i32,
+    provider: ForgeProvider,
+    item: ForgeItemKind,
     outcome: &TaskOutcome<'_>,
     stats: Option<(i32, i32, i32)>,
 ) -> String {
@@ -734,11 +836,19 @@ pub fn writeback_comment_body(
         TaskOutcome::Delivered { pr_url } => {
             format!("codeg work task {task} is done — {pr_url}{numbers}.")
         }
-        TaskOutcome::Accepted { nothing_to_land: true } => {
-            format!("codeg work task {task} is done — accepted with nothing to land.")
-        }
-        TaskOutcome::Accepted { nothing_to_land: false } => {
-            format!("codeg work task {task} is done — accepted without merging{numbers}.")
+        TaskOutcome::Accepted { nothing_to_land } => {
+            let noun = provider.change_noun();
+            let what = match (item, *nothing_to_land) {
+                (ForgeItemKind::Change, true) => {
+                    format!("it made no changes, so nothing was pushed to this {noun}")
+                }
+                (ForgeItemKind::Change, false) => {
+                    format!("its work was not pushed to this {noun}{numbers}")
+                }
+                (ForgeItemKind::Issue, true) => "it made no changes".to_string(),
+                (ForgeItemKind::Issue, false) => format!("its work was not merged{numbers}"),
+            };
+            format!("codeg work task {task} is done — {what}.")
         }
     }
 }
@@ -802,6 +912,82 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    /// The delivery error string is the only thing a human sees when a push
+    /// fails, and `classify_remote_git_error` files everything specific under
+    /// `detail`. `Display` prints `message` alone, so flattening has to reach
+    /// for the detail explicitly or the reader is left with "git push failed".
+    #[test]
+    fn a_flattened_git_failure_keeps_what_git_said() {
+        let stderr = b"! [rejected]        task/57 -> feat/x (fetch first)\n\
+                       error: failed to push some refs";
+        let flattened = git_failure_message(crate::commands::folders::classify_remote_git_error(
+            "push", stderr,
+        ));
+        assert!(flattened.starts_with("git push failed"), "{flattened}");
+        assert!(flattened.contains("(fetch first)"), "{flattened}");
+    }
+
+    #[test]
+    fn a_flattened_failure_without_detail_stays_one_clause() {
+        let bare = AppCommandError::network("git push: network error");
+        assert_eq!(git_failure_message(bare), "git push: network error");
+        let blank = AppCommandError::network("git push: network error").with_detail("   ");
+        assert_eq!(git_failure_message(blank), "git push: network error");
+    }
+
+    /// Git echoes the remote URL in its errors, and `web_origin` hands back a
+    /// self-hosted `server_url` verbatim — so credentials a user typed into
+    /// their own forge address would otherwise come back out in a string that
+    /// is persisted and rendered.
+    #[test]
+    fn a_flattened_failure_blanks_credentials_git_echoed_back() {
+        let echoed = "fatal: unable to access \
+             'https://me:s3cret@git.example.com/team/app.git/': The requested URL returned \
+             error: 403";
+        let flattened = git_failure_message(
+            AppCommandError::network("git push failed").with_detail(echoed),
+        );
+        assert!(!flattened.contains("s3cret"), "{flattened}");
+        assert!(flattened.contains("https://***@git.example.com/team/app.git/"), "{flattened}");
+        // The rest of git's sentence has to survive the scrub intact.
+        assert!(flattened.contains("returned error: 403"), "{flattened}");
+    }
+
+    #[test]
+    fn a_flattened_failure_leaves_a_credential_free_url_alone() {
+        let plain = "! [rejected] a -> b (fetch first)\nerror: failed to push some refs to \
+             'https://github.com/owner/repo.git'";
+        let flattened =
+            git_failure_message(AppCommandError::network("git push failed").with_detail(plain));
+        assert!(
+            flattened.contains("'https://github.com/owner/repo.git'"),
+            "{flattened}"
+        );
+        assert!(!flattened.contains("***"), "{flattened}");
+    }
+
+    /// This string is persisted and rendered, and the detail is another
+    /// program's output — a hook that answers a push with a banner must not
+    /// land in the database whole. Multi-byte input is the case that would
+    /// panic if the cut were taken on bytes.
+    #[test]
+    fn a_flattened_failure_bounds_a_runaway_detail() {
+        let banner = "の".repeat(MAX_GIT_DETAIL_CHARS * 2);
+        let flattened =
+            git_failure_message(AppCommandError::network("git push failed").with_detail(&banner));
+        assert!(flattened.starts_with("git push failed: の"), "{flattened}");
+        assert!(flattened.ends_with('…'), "expected an elision marker");
+        assert_eq!(
+            flattened.chars().count(),
+            "git push failed: ".chars().count() + MAX_GIT_DETAIL_CHARS + 1
+        );
+        // Exactly at the limit is kept whole, with no marker implying loss.
+        let exact = "x".repeat(MAX_GIT_DETAIL_CHARS);
+        let kept =
+            git_failure_message(AppCommandError::network("git push failed").with_detail(&exact));
+        assert!(kept.ends_with('x'), "{kept}");
+    }
 
     fn pr(number: i64, head_sha: &str, head_ref: &str, base: &str, repo: &str) -> ForgePr {
         ForgePr {
@@ -1192,8 +1378,11 @@ mod tests {
     /// wrote can appear in a thread other people are reading.
     #[test]
     fn the_write_back_body_is_numbers_and_links_only() {
+        let (gh, issue) = (ForgeProvider::GitHub, ForgeItemKind::Issue);
         let merged = writeback_comment_body(
             12,
+            gh,
+            issue,
             &TaskOutcome::Merged {
                 commit: "abc1234def5678",
                 base_branch: "main",
@@ -1212,6 +1401,8 @@ mod tests {
 
         let delivered = writeback_comment_body(
             12,
+            gh,
+            issue,
             &TaskOutcome::Delivered {
                 pr_url: "https://github.com/acme/app/pull/42",
             },
@@ -1221,21 +1412,99 @@ mod tests {
         assert!(delivered.contains("(1 file, +1/-0)"), "singular: {delivered}");
 
         // No recorded diff → the sentence still stands on its own.
-        let bare = writeback_comment_body(12, &TaskOutcome::Delivered { pr_url: "u" }, None);
+        let bare =
+            writeback_comment_body(12, gh, issue, &TaskOutcome::Delivered { pr_url: "u" }, None);
         assert!(!bare.contains('('), "{bare}");
 
         // The third settlement says so rather than staying silent — the
         // setting promises a comment whenever a forge task finishes.
-        let empty = writeback_comment_body(12, &TaskOutcome::Accepted { nothing_to_land: true }, None);
-        assert!(empty.contains("work task `12`") && empty.contains("nothing to land"));
-        // …and an acceptance whose worktree was gone must NOT claim there was
-        // nothing to land while printing the counters that say otherwise.
+        let empty = writeback_comment_body(
+            12,
+            gh,
+            issue,
+            &TaskOutcome::Accepted { nothing_to_land: true },
+            None,
+        );
+        assert!(empty.contains("work task `12`") && empty.contains("it made no changes"), "{empty}");
+        // …and an acceptance whose worktree was gone must NOT claim the task
+        // made no changes while printing the counters that say otherwise.
         let gone = writeback_comment_body(
             12,
+            gh,
+            issue,
             &TaskOutcome::Accepted { nothing_to_land: false },
             Some((3, 42, 7)),
         );
-        assert!(gone.contains("without merging (3 files, +42/-7)"), "{gone}");
-        assert!(!gone.contains("nothing to land"), "{gone}");
+        assert!(gone.contains("its work was not merged (3 files, +42/-7)"), "{gone}");
+        assert!(!gone.contains("no changes"), "{gone}");
+    }
+
+    /// A task finished with nothing landed must not read as a verdict on the
+    /// item its thread is about. "Accepted" is codeg's word for signing off on
+    /// the TASK, and a thread reads it as its own: a pull request approved, an
+    /// issue accepted. On a pull request whose review stopped at an unsound
+    /// approach — or whose review-only task only ever delivered a report —
+    /// that tells the author the opposite of what the review found.
+    ///
+    /// What the comment says instead is what did not happen to THIS thread's
+    /// item, in the thread's own noun, and it still never claims "no changes"
+    /// beside counters that say otherwise.
+    #[test]
+    fn a_finish_that_landed_nothing_is_never_a_verdict_on_the_item() {
+        for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab, ForgeProvider::Gitea] {
+            let noun = provider.change_noun();
+            for item in [ForgeItemKind::Issue, ForgeItemKind::Change] {
+                for nothing_to_land in [true, false] {
+                    let body = writeback_comment_body(
+                        12,
+                        provider,
+                        item,
+                        &TaskOutcome::Accepted { nothing_to_land },
+                        Some((3, 42, 7)),
+                    );
+                    let at = format!("{provider:?} {item:?} nothing_to_land={nothing_to_land}");
+                    assert!(body.starts_with("codeg work task `12` is done — "), "{at}: {body}");
+                    let lower = body.to_lowercase();
+                    for verdict in ["accept", "approv", "reject", "closed", "lgtm"] {
+                        assert!(!lower.contains(verdict), "{at} reads as a verdict: {body}");
+                    }
+
+                    match (item, nothing_to_land) {
+                        (ForgeItemKind::Change, true) => {
+                            assert!(
+                                body.contains(&format!("nothing was pushed to this {noun}.")),
+                                "{at}: {body}"
+                            );
+                            // Git said there is nothing to land, so a stale
+                            // counter from the settle must not contradict it.
+                            assert!(!body.contains("(3 files"), "{at}: {body}");
+                        }
+                        (ForgeItemKind::Change, false) => {
+                            assert!(
+                                body.contains(&format!(
+                                    "its work was not pushed to this {noun} (3 files, +42/-7)."
+                                )),
+                                "{at}: {body}"
+                            );
+                            assert!(!body.contains("no changes"), "{at}: {body}");
+                        }
+                        (ForgeItemKind::Issue, true) => {
+                            assert!(body.ends_with("— it made no changes."), "{at}: {body}");
+                        }
+                        (ForgeItemKind::Issue, false) => {
+                            assert!(body.contains("(3 files, +42/-7)."), "{at}: {body}");
+                            assert!(!body.contains("no changes"), "{at}: {body}");
+                        }
+                    }
+                    // An issue's thread has no pull request to speak of, and a
+                    // merge request's thread is not a pull request's.
+                    if item == ForgeItemKind::Issue {
+                        assert!(!body.contains(" request"), "{at}: {body}");
+                    } else if provider == ForgeProvider::GitLab {
+                        assert!(!body.contains("pull request"), "{at}: {body}");
+                    }
+                }
+            }
+        }
     }
 }

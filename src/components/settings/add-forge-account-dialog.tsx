@@ -18,6 +18,7 @@ import {
 import {
   validateGitHubToken,
   validateGitLabToken,
+  validateGiteaToken,
   saveAccountToken,
 } from "@/lib/api"
 import type { ForgeProviderId, GitHubAccount } from "@/lib/types"
@@ -41,14 +42,20 @@ interface AddForgeAccountDialogProps {
 }
 
 /** Where each forge lets you mint a token, with the scopes codeg needs
- *  pre-selected. GitLab's single `api` scope covers reads, merge requests and
- *  notes; GitHub wants the classic-token set. */
+ *  pre-selected where the forge's own page accepts them in the query. GitLab's
+ *  single `api` scope covers reads, merge requests and notes; GitHub wants the
+ *  classic-token set; Gitea takes NO query parameters at all — its token page
+ *  is a form with scope checkboxes, so the link only opens it and the hint
+ *  below says which boxes to tick. */
 function tokenPageUrl(provider: ForgeProviderId, serverUrl: string): string {
   const base =
     serverUrl.trim().replace(/\/+$/, "") || defaultServerUrl(provider)
   if (provider === "gitlab") {
     const params = new URLSearchParams({ name: "codeg", scopes: "api" })
     return `${base}/-/user_settings/personal_access_tokens?${params.toString()}`
+  }
+  if (provider === "gitea") {
+    return `${base}/user/settings/applications`
   }
   const params = new URLSearchParams({
     description: "codeg",
@@ -58,18 +65,44 @@ function tokenPageUrl(provider: ForgeProviderId, serverUrl: string): string {
 }
 
 function defaultServerUrl(provider: ForgeProviderId): string {
-  return provider === "gitlab" ? "https://gitlab.com" : "https://github.com"
+  if (provider === "gitlab") return "https://gitlab.com"
+  // gitea.com is the public instance, but a Gitea is far more often somebody's
+  // own — the field stays editable and the placeholder says so.
+  if (provider === "gitea") return "https://gitea.com"
+  return "https://github.com"
 }
+
+/** Which "who am I" endpoint checks the token. Keyed by provider rather than
+ *  branched on one, so a forge added later has exactly one place to appear. */
+const VALIDATORS: Record<ForgeProviderId, typeof validateGitHubToken> = {
+  github: validateGitHubToken,
+  gitlab: validateGitLabToken,
+  gitea: validateGiteaToken,
+}
+
+/** The dialog's own copy, per forge. Same keys, same order, one lookup — which
+ *  is what keeps a new forge from silently inheriting GitHub's wording.
+ *
+ *  `as const satisfies` rather than an annotation: the annotation would widen
+ *  these to `string`, and next-intl checks message keys as literals. */
+const COPY = {
+  github: { description: "githubDescription", tokenHint: "tokenHint" },
+  gitlab: { description: "gitlabDescription", tokenHint: "gitlabTokenHint" },
+  gitea: { description: "giteaDescription", tokenHint: "giteaTokenHint" },
+} as const satisfies Record<
+  ForgeProviderId,
+  { description: string; tokenHint: string }
+>
 
 /**
  * Add a forge credential: type a token, check it against that forge's "who am
  * I" endpoint, store the token in the keyring and the account beside it.
  *
- * One dialog for both forges because the flow is identical — only the endpoint,
- * the token page and the wording differ. GitLab has no `gh auth token`
- * equivalent to lift a credential from, so typing a personal access token is
- * the only way in, which is exactly why it is validated here rather than at
- * delivery time on a task that already ran.
+ * One dialog for every forge because the flow is identical — only the endpoint,
+ * the token page and the wording differ. Neither GitLab nor Gitea has a
+ * `gh auth token` equivalent to lift a credential from, so typing a personal
+ * access token is the only way in, which is exactly why it is validated here
+ * rather than at delivery time on a task that already ran.
  */
 export function AddForgeAccountDialog({
   open,
@@ -80,7 +113,7 @@ export function AddForgeAccountDialog({
   existing,
 }: AddForgeAccountDialogProps) {
   const t = useTranslations("VersionControlSettings")
-  const gitlab = provider === "gitlab"
+  const copy = COPY[provider]
   const rotating = existing != null
 
   const [serverUrl, setServerUrl] = useState(
@@ -128,8 +161,7 @@ export function AddForgeAccountDialog({
     setError(null)
 
     try {
-      const validate = gitlab ? validateGitLabToken : validateGitHubToken
-      const result = await validate(serverUrl.trim(), trimmedToken)
+      const result = await VALIDATORS[provider](serverUrl.trim(), trimmedToken)
 
       if (!result.success) {
         setError(
@@ -162,7 +194,6 @@ export function AddForgeAccountDialog({
     }
   }, [
     existing,
-    gitlab,
     provider,
     serverUrl,
     token,
@@ -182,7 +213,7 @@ export function AddForgeAccountDialog({
           <DialogDescription>
             {rotating
               ? t("updateTokenDescription", { username: existing.username })
-              : t(gitlab ? "gitlabDescription" : "githubDescription")}
+              : t(copy.description)}
           </DialogDescription>
         </DialogHeader>
 
@@ -244,7 +275,7 @@ export function AddForgeAccountDialog({
               </Button>
             </div>
             <p className="text-2xs text-muted-foreground">
-              {t(gitlab ? "gitlabTokenHint" : "tokenHint")}
+              {t(copy.tokenHint)}
             </p>
           </div>
 

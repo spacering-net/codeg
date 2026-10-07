@@ -65,6 +65,27 @@ pub struct AppState {
     /// updated by the chat-authoring settings command on save. Populated at
     /// startup by `apply_persisted_chat_authoring_config`.
     pub chat_authoring_config: crate::acp::chat_authoring::ChatAuthoringRuntimeConfig,
+    /// Hot-swappable browser-tools (`browser_list_tabs` / `browser_snapshot`)
+    /// enable flag. Shared with the `DelegationInjection` so MCP injection
+    /// reads it, and re-read at call time by the access impl so switching it
+    /// off reaches sessions that are already running. Populated at startup by
+    /// `apply_persisted_browser_tools_config`. Carried in both runtimes even
+    /// though only the desktop one has a browser: the status popover lists
+    /// every group, and a flag that existed in one build only would be a
+    /// second shape of `AppState` to keep in step.
+    pub browser_tools_config: crate::acp::browser_tools::BrowserToolsRuntimeConfig,
+    /// Hot-swappable computer-use settings (the group switch, the grant
+    /// timeout, the blocklist). Shared with the `DelegationInjection` so MCP
+    /// injection reads it, re-read at call time by the desktop access impl,
+    /// and watched by the desktop's computer service, which ends every grant
+    /// when the group is switched off. Carried in both runtimes for the same
+    /// reason as `browser_tools_config`: one setting, one popover.
+    pub computer_tools_config: crate::acp::computer_tools::ComputerToolsRuntimeConfig,
+    /// codeg-server's computer service, where the person who runs it has let
+    /// it share the screen it runs on (`CODEG_COMPUTER_USE`) — set once,
+    /// after the persisted settings are applied. Never set in the desktop
+    /// app's web service: its screen is shared from the desktop window.
+    pub computer_service: std::sync::OnceLock<Arc<crate::commands::computer::ComputerService>>,
     /// Serializes mutually-exclusive system operations — in-place
     /// self-update, restart, rollback — so a second click can't race a
     /// download/swap already in flight. Handlers `try_lock` and reject when
@@ -116,6 +137,8 @@ pub fn build_delegation_stack(
     crate::acp::question::QuestionRuntimeConfig,
     crate::acp::session_info::SessionInfoRuntimeConfig,
     crate::acp::chat_authoring::ChatAuthoringRuntimeConfig,
+    crate::acp::browser_tools::BrowserToolsRuntimeConfig,
+    crate::acp::computer_tools::ComputerToolsRuntimeConfig,
 ) {
     use crate::acp::connection::DelegationInjection;
     use crate::acp::delegation::broker::{
@@ -167,6 +190,8 @@ pub fn build_delegation_stack(
     let ask = crate::acp::question::QuestionRuntimeConfig::new();
     let sessions = crate::acp::session_info::SessionInfoRuntimeConfig::new();
     let authoring = crate::acp::chat_authoring::ChatAuthoringRuntimeConfig::new();
+    let browser = crate::acp::browser_tools::BrowserToolsRuntimeConfig::new();
+    let computer = crate::acp::computer_tools::ComputerToolsRuntimeConfig::new();
 
     // Install the injection on the manager so spawn_agent picks it up
     // without an extra parameter at every call site.
@@ -179,6 +204,8 @@ pub fn build_delegation_stack(
         ask: ask.clone(),
         sessions: sessions.clone(),
         authoring: authoring.clone(),
+        browser: browser.clone(),
+        computer: computer.clone(),
         // Same backing manager as the listener's question lookup; used only by
         // the run_connection teardown guard to reclaim a parked ask.
         questions: Arc::new(crate::acp::manager::ConnectionManagerQuestionLookup {
@@ -191,7 +218,9 @@ pub fn build_delegation_stack(
         }) as Arc<dyn crate::acp::plan_approval::SessionPlanApprovalAccess>,
     });
 
-    (broker, tokens, socket_path, feedback, ask, sessions, authoring)
+    (
+        broker, tokens, socket_path, feedback, ask, sessions, authoring, browser, computer,
+    )
 }
 
 impl AppState {
@@ -220,6 +249,8 @@ impl AppState {
             question_config,
             session_info_config,
             chat_authoring_config,
+            browser_tools_config,
+            computer_tools_config,
         ) = build_delegation_stack(&connection_manager, db.conn.clone(), data_dir.clone());
 
         Self {
@@ -245,6 +276,9 @@ impl AppState {
             question_config,
             session_info_config,
             chat_authoring_config,
+            browser_tools_config,
+            computer_tools_config,
+            computer_service: std::sync::OnceLock::new(),
             system_op_lock: default_system_op_lock(),
             update_state: default_update_state(),
         }

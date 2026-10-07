@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{oneshot, Mutex, Notify};
 use tokio::time::MissedTickBehavior;
 
 use crate::acp::manager::ConnectionManager;
@@ -98,17 +98,45 @@ pub(crate) const RETRY_THE_CLEANUP: &str = "Remove them, then retry the cleanup.
 /// The probe every worktree-removal gate shares: does this checkout still hold
 /// work (tracked edits or files git has never seen)?
 ///
-/// FAILS CLOSED. Exactly one reason for git being unable to answer is safe to
-/// read as "clean" — the checkout is already off disk, so there is nothing left
-/// to lose, and the removal paths handle a missing directory on their own. Any
-/// OTHER failure (a corrupt index, a permission error, a transient git fault)
-/// means we could not prove the directory is safe to destroy, and the operation
-/// waiting on this answer is `git worktree remove --force`. Guessing "clean"
+/// FAILS CLOSED. Only two reasons for git being unable to answer are safe to
+/// read as "clean": the checkout is already off disk, or git removed its
+/// registration and contents but left a readable, strictly empty directory
+/// behind. Any entry in that shell (ignored and hidden files included), a
+/// corrupt index, a permission error, or another transient filesystem failure
+/// means we could not prove the directory is safe to destroy. The operation
+/// waiting on this answer is `git worktree remove --force`, so guessing "clean"
 /// there trades a recoverable stall for unrecoverable files.
+///
+/// The `.git` marker is checked FIRST, and not as an optimization: `has_changes`
+/// runs `git status` with the path as its working directory, and git walks UP
+/// from there. A shell with no marker left is not a checkout git can speak for,
+/// so whatever it answers is about the repository that ENCLOSES the shell — the
+/// project itself whenever the folder's worktree root is a path inside it. That
+/// answer is a clean `Ok(false)` or a dirty `Ok(true)` about somebody else's
+/// files, and neither is this path's; only the directory probe below is.
 async fn path_holds_uncommitted(path: &str) -> bool {
+    match std::fs::symlink_metadata(Path::new(path).join(".git")) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return shell_holds_entries(path),
+        // Could not even look at the marker — no proof of anything. Fail closed.
+        Err(_) => return true,
+    }
     match task_git::has_changes(path).await {
         Ok(dirty) => dirty,
-        Err(_) => Path::new(path).exists(),
+        Err(_) => shell_holds_entries(path),
+    }
+}
+
+/// The one thing left to ask about a directory git has stopped speaking for: is
+/// it strictly empty? Anything else — an entry of any kind, or a failure to read
+/// the directory at all — is "holds work", because a `--force` removal is what
+/// waits on the answer. Only a path that is gone reads as nothing to lose.
+fn shell_holds_entries(path: &str) -> bool {
+    match std::fs::read_dir(path) {
+        // `Some(Err(_))` is deliberately still "holds work": even learning
+        // whether an entry exists has to succeed before removal is safe.
+        Ok(mut entries) => entries.next().is_some(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     }
 }
 
@@ -1020,7 +1048,7 @@ impl TaskEngine {
             // while a slow setup is still unwinding, and failing the row by its
             // *current* sequence would kill the fresh run instead.
             let launched_seq = LaunchSeq::default();
-            let result = engine.launch(task_id, mode, &launched_seq).await;
+            let result = engine.launch(task_id, mode, &launched_seq, None).await;
             let errored = result.is_err();
             if let Err(e) = result {
                 tracing::info!("[work_task] launch {task_id}: {e}");
@@ -1055,11 +1083,18 @@ impl TaskEngine {
 
     // ── launch ──────────────────────────────────────────────────────────────
 
+    /// `dispatched` is fired once the generation is LIVE — the agent answered,
+    /// the conversation is bound and the row carries both coordinates — which
+    /// is the point a caller that only wanted to start the run can stop
+    /// waiting. Everything after it (the pre-prompt compaction turn, the
+    /// prompt itself) belongs to the run, not to the click that asked for it.
+    /// See [`DispatchSignal`]; `None` for the launches nobody awaits.
     async fn launch(
         self: &Arc<Self>,
         task_id: i32,
         mode: LaunchMode,
         launched_seq: &LaunchSeq,
+        dispatched: Option<&DispatchSignal>,
     ) -> Result<(), String> {
         let lock = self.task_lock(task_id).await;
         let _guard = lock.lock().await;
@@ -1288,6 +1323,61 @@ impl TaskEngine {
         };
         emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
 
+        // Publish the run's live coordinates NOW, while the status stays what
+        // it was (`preparing`, or `merging` for a merge round).
+        //
+        // A resumed launch may spend minutes on the pre-prompt compaction just
+        // below, and until this write the row named the previous generation's
+        // dead connection or nothing at all — so every surface that streams a
+        // task's session (the board's 查看会话 drawer above all) showed the
+        // LAST round's finished transcript while this one's agent was visibly
+        // working. Only for a resume: a fresh session cannot compact, reaches
+        // `mark_running` in the next breath, and would only gain a row pointing
+        // at a conversation its own failure path may still cancel.
+        //
+        // Losing the CAS means a cancel or a newer generation got here first,
+        // and the rest of this launch is that generation's to skip — unwound
+        // exactly like the `mark_running` loss below.
+        if resumed {
+            let bound = if matches!(mode, LaunchMode::Merge { .. }) {
+                work_task_service::mark_merging_live(
+                    &self.db.conn,
+                    task_id,
+                    run_seq,
+                    conversation_id,
+                    &conn_id,
+                )
+                .await
+            } else {
+                work_task_service::mark_preparing_live(
+                    &self.db.conn,
+                    task_id,
+                    run_seq,
+                    conversation_id,
+                    &conn_id,
+                )
+                .await
+            };
+            match bound {
+                Ok(true) => self.emit_upsert(task_id),
+                Ok(false) => {
+                    let _ = self.manager.disconnect(&conn_id).await;
+                    return Ok(());
+                }
+                Err(e) => {
+                    let _ = self.manager.disconnect(&conn_id).await;
+                    return Err(e.to_string());
+                }
+            }
+        }
+
+        // The generation is live: whoever was only waiting for the dispatch to
+        // START (the merge click) is released here, before the compaction turn
+        // that would otherwise hold their dialog open for its whole duration.
+        if let Some(dispatched) = dispatched {
+            dispatched.fire(Ok(()));
+        }
+
         // A resumed session carries every earlier round's context. Give the
         // folder's threshold (when set) a chance to shrink it BEFORE this
         // round's prompt goes in — see `compact_before_prompt` for why this
@@ -1473,20 +1563,45 @@ impl TaskEngine {
 
         // Where the task's branch starts, and what its diff is measured
         // against. Normally both are the project folder's current HEAD; a task
-        // that IS a pull request starts at that pull request's head instead,
+        // created FOR a particular branch starts at that branch's tip instead,
+        // and a task that IS a pull request starts at that pull request's head
         // and measures against the merge base (see `pr_checkout_point`).
         let (base_branch, base_sha, start_at) = match self.pr_checkout_point(task, root).await? {
             Some(point) => point,
-            None => {
-                let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
-                let base_branch = head.branch.ok_or_else(|| {
-                    "project folder is not on a branch (detached HEAD?)".to_string()
-                })?;
-                let base_sha = task_git::rev_parse(&root.path, "HEAD")
-                    .await
-                    .map_err(|e| e.to_string())?;
-                (base_branch, base_sha.clone(), base_sha)
-            }
+            None => match chosen_base_branch(task) {
+                Some(branch) => {
+                    // A branch that is gone by the time the task is claimed
+                    // FAILS the setup: the choice exists so the work lands
+                    // somewhere specific, and quietly branching from the
+                    // checkout instead would be the wrong answer delivered
+                    // without a word. The LOCAL branch specifically — the
+                    // merge lands into the project checkout, which can only be
+                    // on a local branch — and looking it up this way is also
+                    // what keeps an arbitrary string out of the git commands
+                    // (and out of the merge prompt) downstream: only a name
+                    // git itself resolved under `refs/heads/` gets through.
+                    let tip = task_git::local_branch_tip(&root.path, &branch)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| {
+                            format!(
+                                "the task's base branch '{branch}' does not exist in the \
+                                 project folder"
+                            )
+                        })?;
+                    (branch, tip.clone(), tip)
+                }
+                None => {
+                    let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
+                    let base_branch = head.branch.ok_or_else(|| {
+                        "project folder is not on a branch (detached HEAD?)".to_string()
+                    })?;
+                    let base_sha = task_git::rev_parse(&root.path, "HEAD")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    (base_branch, base_sha.clone(), base_sha)
+                }
+            },
         };
 
         let branch = format!("task/{}", task.id);
@@ -1946,6 +2061,12 @@ impl TaskEngine {
     /// turn, and the alternative (indexing it) trades a rare stall for a
     /// systematic mis-settle of every task that compacts.
     ///
+    /// Out of `index` is NOT out of sight, though. The launch publishes the
+    /// run's connection on the row before calling this (see `mark_preparing_live`
+    /// / `mark_merging_live`), and this records a `started` timeline entry once
+    /// the turn is away, so a wait that can run for minutes is watchable rather
+    /// than a card that has apparently stopped.
+    ///
     /// Never fails the launch. A compaction that could not be measured, has no
     /// command to run, or ends badly records itself on the timeline and lets
     /// the round proceed: an over-full context makes the next prompt likely to
@@ -1975,6 +2096,7 @@ impl TaskEngine {
             // result the user needs an explanation for.
             self.record_compact_event(
                 task_id,
+                run_seq,
                 serde_json::json!({
                     "status": "skipped",
                     "reason": "usage_unknown",
@@ -1999,6 +2121,7 @@ impl TaskEngine {
         ) else {
             self.record_compact_event(
                 task_id,
+                run_seq,
                 serde_json::json!({
                     "status": "skipped",
                     "reason": "no_command",
@@ -2054,6 +2177,7 @@ impl TaskEngine {
             self.release_compact_slot(task_id, run_seq).await;
             self.record_compact_event(
                 task_id,
+                run_seq,
                 serde_json::json!({
                     "status": "failed",
                     "command": command,
@@ -2065,6 +2189,25 @@ impl TaskEngine {
             .await;
             return;
         }
+        // The turn is away and the wait below is unbounded, so this is the only
+        // thing that can explain the gap while it runs: a round that sits for
+        // minutes between its dispatch and its prompt is otherwise a timeline
+        // with nothing in it, and a compaction that never returns leaves no
+        // trace at all. Recorded AFTER the send so it never claims a turn that
+        // was refused, and paired with the outcome event below.
+        self.record_compact_event(
+            task_id,
+            run_seq,
+            serde_json::json!({
+                "status": "started",
+                "command": command,
+                "threshold_percent": threshold,
+                "before_percent": round1(before.percent),
+                "before_source": before.source,
+            }),
+        )
+        .await;
+        self.emit_upsert(task_id);
 
         let outcome = self.await_compaction_turn(&mut rx, conn_id).await;
         self.release_compact_slot(task_id, run_seq).await;
@@ -2097,7 +2240,7 @@ impl TaskEngine {
                 map.insert("detail".into(), detail.into());
             }
         }
-        self.record_compact_event(task_id, payload).await;
+        self.record_compact_event(task_id, run_seq, payload).await;
     }
 
     /// Wait out the compaction turn on `conn_id`.
@@ -2142,6 +2285,26 @@ impl TaskEngine {
                         return match stop_reason.as_str() {
                             "cancelled" | "canceled" => CompactOutcome::new("canceled", None),
                             "end_turn" | "" => CompactOutcome::new("ok", None),
+                            // The agent REFUSED to run the compaction prompt —
+                            // nothing was compacted, so this is not an "ok" with
+                            // a footnote. It reaches this arm at all only because
+                            // a prompt rejection stopped tearing the connection
+                            // down (it used to arrive as the terminal `Error`
+                            // below, and settled as `failed`); mapping it
+                            // anywhere else would silently promote a failed
+                            // compaction to a successful one.
+                            "rejected" => CompactOutcome::new(
+                                "failed",
+                                Some("the agent rejected the compaction prompt".into()),
+                            ),
+                            // The agent REFUSED to run the compaction prompt —
+                            // nothing was compacted, so this is not an "ok" with
+                            // a footnote. It reaches this arm at all only because
+                            // a prompt rejection stopped tearing the connection
+                            // down (it used to arrive as the terminal `Error`
+                            // below, and settled as `failed`); mapping it
+                            // anywhere else would silently promote a failed
+                            // compaction to a successful one.
                             other => CompactOutcome::new("ok", Some(other.to_string())),
                         };
                     }
@@ -2301,7 +2464,22 @@ impl TaskEngine {
         }
     }
 
-    async fn record_compact_event(&self, task_id: i32, payload: serde_json::Value) {
+    /// Record one step of a compaction on the timeline, stamped with the
+    /// generation it belongs to.
+    ///
+    /// The stamp is load-bearing, not decoration: the board decides "this card
+    /// is compacting right now" from the LAST `context_compact` of the current
+    /// generation being a `started` with no outcome after it, and an unstamped
+    /// event from an earlier round would answer for a round that has moved on.
+    async fn record_compact_event(
+        &self,
+        task_id: i32,
+        run_seq: i32,
+        mut payload: serde_json::Value,
+    ) {
+        if let Some(map) = payload.as_object_mut() {
+            map.insert("run_seq".into(), run_seq.into());
+        }
         let _ = work_task_service::record_event(
             &self.db.conn,
             task_id,
@@ -2901,7 +3079,11 @@ impl TaskEngine {
             task_id,
             "agent_progress",
             "agent",
-            Some(serde_json::json!({ "message": message })),
+            // Stamped with the generation that reported it: the card's progress
+            // line is a claim about what the run is doing NOW, and a merge (or
+            // a retry, or a follow-up) that inherited the previous round's last
+            // milestone was narrating work it is not doing.
+            Some(serde_json::json!({ "message": message, "run_seq": run_seq })),
         )
         .await
         {
@@ -3178,9 +3360,11 @@ impl TaskEngine {
         }
         self.emit_upsert(task_id);
         // The third settlement gets a comment too: the setting promises one
-        // whenever a forge task finishes, and "accepted, nothing to land" is
-        // an outcome the issue's readers want as much as the other two. The
-        // CAS above is what makes it one comment and not one per attempt.
+        // whenever a forge task finishes, and a task that landed nothing is an
+        // outcome the thread's readers want as much as the other two — told as
+        // what did not happen to their item, never as "accepted" (see
+        // `writeback_comment_body`). The CAS above is what makes it one comment
+        // and not one per attempt.
         self.spawn_forge_writeback(task_id, WritebackOutcome::Accepted { nothing_to_land });
 
         if live_wt.is_none() {
@@ -3340,6 +3524,14 @@ impl TaskEngine {
     /// review column is one pass of clicks instead of a wait per landing. An
     /// unattended dispatch never queues — the sweep runs its own train.
     ///
+    /// Returns as soon as the generation is LIVE — the CAS committed and the
+    /// agent answered — not when the merge lands, and not when the round's
+    /// prompt goes in either: a resumed session may compact first, and that
+    /// turn is the run's own work (see [`Self::spawn_merge_launch`]). So the
+    /// errors this reports are the ones a caller can act on — a refusal that
+    /// left the task untouched, or a dispatch that could not get an agent up —
+    /// while anything after that reaches the user on the card.
+    ///
     /// `claim` is set only when the pump is spending a merge the user queued
     /// earlier; it binds every write here to that exact parked intent (see
     /// [`QueuedMergeClaim`]). A click passes `None` and always wins.
@@ -3457,8 +3649,12 @@ impl TaskEngine {
         }
         let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
         if head.branch.as_deref() != Some(base_branch.as_str()) {
+            // Not necessarily a branch the user wandered off: a task created
+            // FOR another branch has a base the project folder may never have
+            // been on. So the ask is "put it there", not "put it back".
             return Err(format!(
-                "project folder is on '{}', expected '{base_branch}' — switch back to merge",
+                "project folder is on '{}', expected '{base_branch}' — switch it to \
+                 '{base_branch}' to merge",
                 head.branch.as_deref().unwrap_or("detached HEAD")
             ));
         }
@@ -3503,7 +3699,7 @@ impl TaskEngine {
         // dispatch to that exact generation, so waiting out the lock behind an
         // attempt that failed (and bannered the row) misses instead of
         // redispatching — the auto path's no-retry latch depends on this.
-        let result = match work_task_service::begin_merge(
+        let began = work_task_service::begin_merge(
             &self.db.conn,
             task_id,
             &state,
@@ -3511,8 +3707,13 @@ impl TaskEngine {
             auto,
             claim.map(|c| c.raw.as_str()),
         )
-        .await
-        {
+        .await;
+        // The folder lock covered what it is for: validating the base state and
+        // committing the CAS as one step. The row now reads `merging`, which is
+        // what makes the next dispatch queue, and the launch below wants the
+        // TASK lock — which `remove_worktree_locked` takes before this one.
+        drop(_guard);
+        let result = match began {
             Err(e) => Err(e.to_string()),
             Ok(None) => Err(match claim {
                 Some(_) => missed_queue_cas(claim),
@@ -3520,13 +3721,12 @@ impl TaskEngine {
             }),
             Ok(Some(_run_seq)) => {
                 self.emit_upsert(task_id);
-                // A merge generation never transitions out of `merging` here,
-                // so the sequence sink stays unused — the failure is handled by
-                // the match below (residue cleanup + back to review).
-                let merge_seq = LaunchSeq::default();
-                match self
-                    .launch(
+                // The claim goes with it: from here the launch owns this
+                // generation, and it is the only thing that releases it.
+                return self
+                    .spawn_merge_launch(
                         task_id,
+                        task.folder_id,
                         LaunchMode::Merge {
                             root_path: root.path.clone(),
                             base_branch: base_branch.clone(),
@@ -3535,22 +3735,79 @@ impl TaskEngine {
                             message,
                             instructions,
                         },
-                        &merge_seq,
+                        in_flight,
                     )
-                    .await
-                {
-                    Ok(()) => Ok(MergeDispatch::Dispatched),
-                    Err(e) => {
-                        self.back_to_review(task_id, format!("merge dispatch failed: {e}"), None)
-                            .await;
-                        Err(e)
-                    }
-                }
+                    .await;
             }
         };
+        // Only a dispatch that never spent the CAS gets here, so the claim is
+        // still this call's to give back.
         self.release_in_flight(task_id, in_flight).await;
         self.emit_upsert(task_id);
         result
+    }
+
+    /// Run a merge generation's launch off-thread and wait only for it to
+    /// become LIVE (see [`Self::launch`]'s `dispatched`).
+    ///
+    /// The caller is a click on the merge dialog's button, and everything past
+    /// the live agent — the pre-prompt context compaction above all, which is
+    /// deliberately unbounded in time — is the run's own work, reported on the
+    /// card through `task://changed` like every other round. Awaiting it here
+    /// is what used to hold that dialog open, spinner and all, for the whole
+    /// compaction of a full context window.
+    ///
+    /// Inherits the in-flight claim: it must outlive the WHOLE launch (it is
+    /// what keeps `recover_merging` off a generation that is still setting up),
+    /// so releasing it at dispatch would hand a compacting merge to the very
+    /// recovery pass this registry exists to hold back.
+    ///
+    /// A launch that fails before going live is reported to the caller AND
+    /// settled here, so the two never disagree about a merge that never ran.
+    async fn spawn_merge_launch(
+        self: &Arc<Self>,
+        task_id: i32,
+        folder_id: i32,
+        mode: LaunchMode,
+        in_flight: u64,
+    ) -> Result<MergeDispatch, String> {
+        let (dispatched, live) = DispatchSignal::new();
+        let engine = self.clone();
+        tokio::spawn(async move {
+            // A merge generation never transitions out of `merging` here, so
+            // the sequence sink stays unused — a failure goes back to review
+            // through `back_to_review` below.
+            let merge_seq = LaunchSeq::default();
+            let result = engine
+                .launch(task_id, mode, &merge_seq, Some(&dispatched))
+                .await;
+            if let Err(e) = &result {
+                engine
+                    .back_to_review(task_id, format!("merge dispatch failed: {e}"), None)
+                    .await;
+            }
+            // Settle first, THEN release, and only then let the caller go: a
+            // dispatch that returns an error has to leave a task nothing is
+            // holding — otherwise the click's next act (re-merging, say) races
+            // this generation's own teardown.
+            engine.release_in_flight(task_id, in_flight).await;
+            // Whatever happened, the caller stops waiting: `fire` is a no-op
+            // once the launch has already reported itself live, so a failure
+            // AFTER the dispatch (the round's own prompt refused, say) is left
+            // to the card rather than replayed into a dialog that has closed.
+            dispatched.fire(result.clone());
+            engine.emit_upsert(task_id);
+            if result.is_err() {
+                // The folder's merge slot never really got spent — let the next
+                // queued landing (or the auto-merge train) have it.
+                engine.spawn_merge_pump(folder_id);
+            }
+        });
+        // A sender dropped without firing means the launch returned early
+        // without dispatching (a cancel gate, a lost CAS): the row is still
+        // `merging` and nobody failed it, exactly as before this ran off-thread
+        // — `recover_merging` settles it from git truth on the next tick.
+        live.await.unwrap_or(Ok(())).map(|()| MergeDispatch::Dispatched)
     }
 
     /// Settle a finished merge generation from git truth: landed ⟺ the base
@@ -4248,19 +4505,30 @@ impl TaskEngine {
                 .push_branch(&ctx, wt_path, &push_repo, work_branch, remote_branch)
                 .await
                 .map_err(|e| {
-                    if crate::forge::same_repo(&push_repo, &meta.owner_repo) {
-                        format!("could not push back to '{remote_branch}': {e}")
+                    let own_repo = crate::forge::same_repo(&push_repo, &meta.owner_repo);
+                    let where_ = if own_repo {
+                        format!("could not push back to '{remote_branch}'")
                     } else {
-                        // The push went to the FORK. The by-far most common
-                        // refusal there is permission: forges only let this
-                        // account push when the author allowed maintainer
-                        // edits on the pull request.
-                        format!(
-                            "could not push back to '{remote_branch}' on {push_repo}: {e} — \
-                             pushing to a fork needs its author to allow edits from \
-                             maintainers on the {}",
+                        format!("could not push back to '{remote_branch}' on {push_repo}")
+                    };
+                    // A hint is only added when git actually said something we
+                    // recognise. The fork case used to carry the permission
+                    // hint unconditionally, which reads as a finding rather
+                    // than the guess it was: a push refused for being out of
+                    // date came back advising the reader to go change a
+                    // setting on the pull request that was already correct.
+                    match classify_push_refusal(&e) {
+                        PushRefusal::Permission if !own_repo => format!(
+                            "{where_}: {e} — pushing to a fork needs its author to allow edits \
+                             from maintainers on the {}",
                             meta.provider.change_noun()
-                        )
+                        ),
+                        PushRefusal::BranchMoved => format!(
+                            "{where_}: {e} — that branch has commits this task does not have, so \
+                             the push is not a fast-forward. Bring them into the task's branch, \
+                             then deliver again"
+                        ),
+                        _ => format!("{where_}: {e}"),
                     }
                 })?;
 
@@ -4559,7 +4827,9 @@ impl TaskEngine {
                 nothing_to_land: *nothing_to_land,
             },
         };
-        let body = writeback_comment_body(task_id, &outcome, stats);
+        // Where it is posted shapes what it may say: a pull request's thread
+        // hears what happened to that pull request, in its forge's own noun.
+        let body = writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats);
 
         let ctx = DeliveryCtx {
             conn: &self.db.conn,
@@ -4939,8 +5209,9 @@ impl TaskEngine {
 
     // ── auto-merge (unattended landing) ─────────────────────────────────────
 
-    /// Fire-and-forget [`Self::merge_pump`] — a dispatch holds the folder's git
-    /// lock for the whole launch, which must not stall the engine's event loop.
+    /// Fire-and-forget [`Self::merge_pump`] — a dispatch takes the folder's git
+    /// lock to validate and commit its CAS, and waits on the agent coming up
+    /// after that, neither of which may stall the engine's event loop.
     fn spawn_merge_pump(self: &Arc<Self>, folder_id: i32) {
         let engine = self.clone();
         tokio::spawn(async move {
@@ -5861,6 +6132,67 @@ fn is_queued_merge_superseded(error: &str) -> bool {
     error.contains("changed or withdrawn")
 }
 
+/// What a refused push-back most likely means, read off git's own words.
+///
+/// Deliberately narrow. Whatever this returns is printed to a human as advice,
+/// so the only two shapes recognised are the ones git states plainly, and
+/// everything else is `Unknown` — which prints no advice at all. An unhelpful
+/// message costs a reader a moment; a confident wrong one sends them to change
+/// a setting that was never the problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushRefusal {
+    /// The remote refused the account: no write access, or a fork whose author
+    /// did not allow maintainer edits.
+    Permission,
+    /// The branch has commits the task's branch does not, so a fast-forward
+    /// push cannot apply. Routine on a long-lived pull request: the author
+    /// pushed, or merged the base branch in, after this task was triggered.
+    BranchMoved,
+    Unknown,
+}
+
+/// Match on git's stderr, which reaches here inside the delivery error string.
+/// Permission is tested first: a forge that refuses the push outright can also
+/// mention "rejected", and being told the wrong one of these two is precisely
+/// the failure this classification exists to stop.
+fn classify_push_refusal(error: &str) -> PushRefusal {
+    let lower = error.to_lowercase();
+    // The status codes are matched in the phrasing git and curl actually
+    // print, not as bare digits: "403" on its own also matches a branch called
+    // `fix/403-page` or a repository named after an issue number, and the whole
+    // point of this function is to stop it handing out confident wrong advice.
+    let permission = [
+        "permission to",
+        "denied to",
+        "error: 403",
+        "error: 401",
+        "http 403",
+        "http 401",
+        "status code 403",
+        "status code 401",
+        "authentication failed",
+        "write access",
+        "read-only",
+        "protected branch",
+        "pre-receive hook declined",
+    ];
+    if permission.iter().any(|needle| lower.contains(needle)) {
+        return PushRefusal::Permission;
+    }
+    let moved = [
+        "non-fast-forward",
+        "fetch first",
+        "updates were rejected",
+        "[rejected]",
+        "behind its remote",
+        "stale info",
+    ];
+    if moved.iter().any(|needle| lower.contains(needle)) {
+        return PushRefusal::BranchMoved;
+    }
+    PushRefusal::Unknown
+}
+
 /// The repository a pull-request task's push-back lands in: the HEAD
 /// repository recorded at trigger time — the fork, when the pull request comes
 /// from one. A row that recorded none falls back to the source repository:
@@ -5887,14 +6219,33 @@ fn pull_push_repo(meta: &ForgeSourceMeta) -> Result<String, String> {
 }
 
 /// Pick the launch mode for a pump-driven launch from the task's history: a
-/// task with a prior conversation continues (retry semantics); a pristine one
-/// starts fresh. Explicit returns launch directly with `LaunchMode::Return`.
+/// task with a prior conversation continues (retry semantics); one with no
+/// session to continue starts fresh. Explicit returns launch directly with
+/// `LaunchMode::Return`.
+///
+/// The bound session IS the whole criterion, which is what lets a transition
+/// decide how the next start behaves: `retry` (failed → queued) keeps the link
+/// and therefore continues, while `requeue_canceled` drops it so a task the
+/// user put back on the board runs from the top. `compose_prompt` must not
+/// read `Fresh` as "this task has no history" — see its doc.
 fn launch_mode_for(task: &crate::db::entities::work_task::Model) -> LaunchMode {
     if task.conversation_id.is_some() {
         LaunchMode::Retry
     } else {
         LaunchMode::Fresh
     }
+}
+
+/// The branch the task was created FOR, if its config names one. A blank
+/// choice is no choice: the editor writes the empty string for "the project
+/// folder's current branch", which is also what every task predating the
+/// field carries.
+fn chosen_base_branch(task: &crate::db::entities::work_task::Model) -> Option<String> {
+    serde_json::from_str::<WorkTaskConfig>(&task.config)
+        .ok()?
+        .base_branch
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
 }
 
 /// Layered agent config: task override wins wholesale; else the folder's task
@@ -5935,6 +6286,11 @@ fn effective_agent_config(
 /// already carries the task context, while a fresh fallback session needs the
 /// full original description again. Every prompt ends with the worktree guard,
 /// then with whatever the folder's settings add for this stage.
+///
+/// "Fresh" is a mode, NOT a promise that the task is pristine: `requeue_canceled`
+/// drops the session link so a re-queued task starts over, which sends a task
+/// that already ran — worktree, branch and all — back through the fresh arm. Both
+/// replaying arms therefore read the instruction log rather than the mode.
 async fn compose_prompt(
     cfg: &WorkTaskConfig,
     task: &crate::db::entities::work_task::Model,
@@ -5957,29 +6313,43 @@ async fn compose_prompt(
     // changes on its original order, but a returned "now apply the fix" turn
     // is precisely a change order and must get the normal write licence.
     let mut original_work_order = false;
-    // A retry standing in for an unanswered question: its replay already says
-    // "do not change any files for it", so the guard must not hand back the
-    // commit grant three blocks later.
-    let mut retried_question = false;
+    // A replay standing in for an unanswered question: it already says "do not
+    // change any files for it", so the guard must not hand back the commit
+    // grant three blocks later.
+    let mut replayed_question = false;
 
     match mode {
         LaunchMode::Fresh => {
-            original_work_order = true;
             if original.is_empty() {
                 return Err("prompt is empty".to_string());
             }
-            blocks.extend(original);
-            // A task can reach a fresh launch carrying a restart note: it was
-            // canceled (or failed during setup) before it ever had a session,
-            // and the user attached a note when re-queueing it. Review feedback
-            // cannot exist here — that needs a session — but match on the kind
-            // rather than assume it.
-            if let Some(outstanding) = outstanding_instruction(conn, task.id).await {
-                if matches!(outstanding.kind, OutstandingKind::Restart) {
-                    blocks.push(restart_note_block(&outstanding.text));
-                    blocks.extend(attachment_blocks(&outstanding.attachments, task.id));
-                }
+            // Read the log, not the mode. A fresh launch used to mean a task
+            // with no history at all; since a requeue drops the session link it
+            // also means "run this again from the top", and that task may owe
+            // the user an instruction its stopped generation never answered —
+            // a returned "rework this" is silently lost otherwise, and a
+            // returned question comes back as a work order with a full commit
+            // grant. Same two reads as the retry arm, for the same reasons.
+            let scan = instruction_scan(conn, task.id).await;
+            original_work_order = scan.interrupted.is_none();
+            replayed_question = matches!(scan.interrupted, Some(FollowUpIntent::Question));
+            // Only when a generation actually got as far as its own turn
+            // (`started_at` is written by `mark_running` and never cleared): a
+            // task canceled during setup has nothing in its worktree to warn
+            // about, and its prompt stays byte-identical to a first run's.
+            if task.started_at.is_some() {
+                blocks.push(PromptInputBlock::Text {
+                    text: "You are running this task again from the top: an earlier run was \
+                           stopped and the task was put back on the board, so this session \
+                           carries none of that run's context. Its worktree may still hold \
+                           that run's work — check the current state first and build on \
+                           whatever is already there instead of redoing it. The original task \
+                           was:"
+                        .to_string(),
+                });
             }
+            blocks.extend(original);
+            push_replay(&mut blocks, &scan, resumed, task.id);
         }
         LaunchMode::Retry => {
             blocks.push(PromptInputBlock::Text {
@@ -6004,26 +6374,8 @@ async fn compose_prompt(
             // no unsettled follow-up underneath, this is the original order
             // again.
             original_work_order = scan.interrupted.is_none();
-            retried_question = matches!(scan.interrupted, Some(FollowUpIntent::Question));
-            if let Some(outstanding) = scan.outstanding {
-                blocks.push(match outstanding.kind {
-                    OutstandingKind::Restart => restart_note_block(&outstanding.text),
-                    OutstandingKind::Review(FollowUpIntent::Question) => PromptInputBlock::Text {
-                        text: format!(
-                            "The user asked this question before the interruption and never \
-                             got an answer. Answer it, and do not change any files for it:\
-                             \n\n{}",
-                            outstanding.text
-                        ),
-                    },
-                    OutstandingKind::Review(_) => PromptInputBlock::Text {
-                        text: format!("Latest review feedback to address:\n{}", outstanding.text),
-                    },
-                });
-                // Whatever the user attached to that instruction follows it, so
-                // the replay carries the screenshot as well as the sentence.
-                blocks.extend(attachment_blocks(&outstanding.attachments, task.id));
-            }
+            replayed_question = matches!(scan.interrupted, Some(FollowUpIntent::Question));
+            push_replay(&mut blocks, &scan, resumed, task.id);
         }
         LaunchMode::Return {
             intent,
@@ -6130,7 +6482,7 @@ async fn compose_prompt(
             .as_deref()
             .map(|b| format!(" (`{b}`)"))
             .unwrap_or_default();
-        let licence = if mode.is_read_only() || retried_question {
+        let licence = if mode.is_read_only() || replayed_question {
             format!(
                 "This turn is a question, not a work order: answer it in your reply and do NOT \
                  create, edit, delete or commit any file, and do not merge into, rebase onto, or \
@@ -6390,6 +6742,17 @@ struct InstructionScan {
     /// The unsettled `return` intent beneath any retry/requeue notes; `None`
     /// when the generation was (re)doing the task's original order.
     interrupted: Option<FollowUpIntent>,
+    /// That same `return` as an INSTRUCTION, and only when a newer
+    /// retry/requeue note took the `outstanding` slot away from it.
+    ///
+    /// A resumed session already has those words in its transcript, so the
+    /// note alone is the right replay there — that is what "a note refines the
+    /// turn it interrupts" means. A session with no context (a re-queued
+    /// task's fresh launch, a resume that failed over) has nothing: replaying
+    /// only the note hands the agent "take this into account" with no account
+    /// to take it into, and for a question it pairs a read-only licence with a
+    /// question the agent was never shown.
+    interrupted_instruction: Option<Outstanding>,
 }
 
 async fn instruction_scan(
@@ -6412,6 +6775,7 @@ async fn instruction_scan(
     let mut scan = InstructionScan {
         outstanding: None,
         interrupted: None,
+        interrupted_instruction: None,
     };
     for event in events {
         match event.kind.as_str() {
@@ -6442,16 +6806,23 @@ async fn instruction_scan(
                             payload.get("intent").and_then(|v| v.as_str()),
                         )
                         .unwrap_or_default();
+                        let returned =
+                            payload.get("feedback").and_then(|v| v.as_str()).map(|text| {
+                                Outstanding {
+                                    kind: OutstandingKind::Review(intent),
+                                    text: text.to_string(),
+                                    attachments: payload_blocks(&payload),
+                                }
+                            });
                         if scan.outstanding.is_none() {
-                            let Some(text) = payload.get("feedback").and_then(|v| v.as_str())
-                            else {
+                            let Some(returned) = returned else {
                                 break;
                             };
-                            scan.outstanding = Some(Outstanding {
-                                kind: OutstandingKind::Review(intent),
-                                text: text.to_string(),
-                                attachments: payload_blocks(&payload),
-                            });
+                            scan.outstanding = Some(returned);
+                        } else {
+                            // A retry/requeue note already claimed the newest
+                            // slot. Keep the returned words too — see the field.
+                            scan.interrupted_instruction = returned;
                         }
                         // The newest unsettled return IS the interrupted turn
                         // (a second return needs another review in between,
@@ -6484,14 +6855,54 @@ async fn instruction_scan(
     scan
 }
 
-/// The newest instruction a launch still owes the user — the replay half of
-/// [`instruction_scan`], for callers that do not pick a licence (Fresh only
-/// ever replays restart notes).
-async fn outstanding_instruction(
-    conn: &sea_orm::DatabaseConnection,
+/// Replay everything the launch still owes the user, oldest first, with each
+/// instruction's own attachments right behind the sentence that framed it.
+///
+/// `resumed` is the whole difference. A resumed session carries the interrupted
+/// turn in its transcript, so the newest instruction is the entire replay — a
+/// retry/requeue note refines a turn the agent can still read. A session with
+/// no context has to be given that turn as well, or the note lands on nothing:
+/// see [`InstructionScan::interrupted_instruction`].
+///
+/// Shared by both replaying arms — a re-queued task reaches `Fresh` with
+/// exactly the same debt to the user as an interrupted one reaching `Retry`,
+/// so the two must not drift apart in what they replay or how they word it.
+fn push_replay(
+    blocks: &mut Vec<PromptInputBlock>,
+    scan: &InstructionScan,
+    resumed: bool,
     task_id: i32,
-) -> Option<Outstanding> {
-    instruction_scan(conn, task_id).await.outstanding
+) {
+    let mut push = |instruction: &Outstanding| {
+        blocks.push(outstanding_block(instruction));
+        blocks.extend(attachment_blocks(&instruction.attachments, task_id));
+    };
+    if !resumed {
+        if let Some(interrupted) = &scan.interrupted_instruction {
+            push(interrupted);
+        }
+    }
+    if let Some(outstanding) = &scan.outstanding {
+        push(outstanding);
+    }
+}
+
+/// The block that replays one outstanding instruction, framed the way the user
+/// meant it: an unanswered question must not come back as a work order.
+fn outstanding_block(outstanding: &Outstanding) -> PromptInputBlock {
+    match outstanding.kind {
+        OutstandingKind::Restart => restart_note_block(&outstanding.text),
+        OutstandingKind::Review(FollowUpIntent::Question) => PromptInputBlock::Text {
+            text: format!(
+                "The user asked this question before the interruption and never got an \
+                 answer. Answer it, and do not change any files for it:\n\n{}",
+                outstanding.text
+            ),
+        },
+        OutstandingKind::Review(_) => PromptInputBlock::Text {
+            text: format!("Latest review feedback to address:\n{}", outstanding.text),
+        },
+    }
 }
 
 /// One-shot sink for the generation a launch actually operated on. The launch
@@ -6501,12 +6912,48 @@ async fn outstanding_instruction(
 struct LaunchSeq(std::sync::Mutex<Option<i32>>);
 
 impl LaunchSeq {
+    // Poison-tolerant, matching the locks in `office_watch` and
+    // `background_watch`. The guarded value is a plain `Option<i32>` that
+    // cannot be left half-written, so a panic elsewhere in the launch has
+    // nothing to corrupt here, while `expect` would turn that unrelated panic
+    // into a permanent failure of every later launch. The schedule tick reaches
+    // this with nobody at the keyboard.
     fn set(&self, run_seq: i32) {
-        *self.0.lock().expect("launch seq mutex") = Some(run_seq);
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(run_seq);
     }
 
     fn get(&self) -> Option<i32> {
-        *self.0.lock().expect("launch seq mutex")
+        *self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// One-shot "this generation is live" report from a launch to whoever asked
+/// for it — today the merge click, which must not sit on the rest of the run.
+///
+/// Fire-once by construction, and callable from either side of the launch: the
+/// launch itself fires `Ok` the moment the agent is up and the row carries its
+/// coordinates, while the task that drives it fires the launch's error for
+/// every way of failing before that point. Whichever comes first wins; the
+/// other is a no-op, so a failure AFTER a successful dispatch stays on the card
+/// instead of being reported to a caller that has already been told the merge
+/// started.
+struct DispatchSignal(std::sync::Mutex<Option<oneshot::Sender<Result<(), String>>>>);
+
+impl DispatchSignal {
+    fn new() -> (Self, oneshot::Receiver<Result<(), String>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(std::sync::Mutex::new(Some(tx))), rx)
+    }
+
+    fn fire(&self, result: Result<(), String>) {
+        // Poison-tolerant for the same reason as `LaunchSeq`: the fire-once
+        // guarantee is the `take()`, not the lock's poison flag, and refusing
+        // to fire after an unrelated panic would leave the caller waiting on a
+        // oneshot that is never sent.
+        let sender = self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
     }
 }
 
@@ -6851,6 +7298,73 @@ mod tests {
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
 
+    /// The stderr shapes below are what git and the forges actually print. A
+    /// push-back refused for being out of date used to come back advising the
+    /// reader to turn on maintainer edits — a setting that, in the report that
+    /// prompted this, was already on. So the two must never be confused.
+    #[test]
+    fn a_stale_push_back_is_not_read_as_a_permission_problem() {
+        let out_of_date = "git push failed: ! [rejected]        task/57 -> feat/x \
+             (fetch first)\nerror: failed to push some refs to \
+             'https://github.com/owner/repo.git'\nhint: Updates were rejected because the \
+             remote contains work that you do not have locally.";
+        assert_eq!(classify_push_refusal(out_of_date), PushRefusal::BranchMoved);
+        assert_eq!(
+            classify_push_refusal("git push failed: ! [rejected] a -> b (non-fast-forward)"),
+            PushRefusal::BranchMoved
+        );
+    }
+
+    #[test]
+    fn a_refused_fork_push_is_read_as_a_permission_problem() {
+        let denied = "git push: authentication failed. Configure a GitHub account in \
+             Settings → Version Control.: remote: Permission to author/repo.git denied to \
+             maintainer.\nfatal: unable to access \
+             'https://github.com/author/repo.git/': The requested URL returned error: 403";
+        assert_eq!(classify_push_refusal(denied), PushRefusal::Permission);
+        assert_eq!(
+            classify_push_refusal(
+                "remote: GitLab: You are not allowed to push code to \
+                 protected branches on this project."
+            ),
+            PushRefusal::Permission
+        );
+        // A forge that refuses outright can also say "rejected"; permission
+        // has to win, or the advice sends the reader to rebase for nothing.
+        assert_eq!(
+            classify_push_refusal(
+                "! [remote rejected] a -> b (pre-receive hook declined)\nerror: failed to push"
+            ),
+            PushRefusal::Permission
+        );
+    }
+
+    /// Anything unrecognised must stay `Unknown`, because `Unknown` is what
+    /// prints no advice — the whole point of the split.
+    #[test]
+    fn an_unrecognised_push_failure_gets_no_advice() {
+        assert_eq!(
+            classify_push_refusal("git push failed: fatal: the remote end hung up unexpectedly"),
+            PushRefusal::Unknown
+        );
+        assert_eq!(classify_push_refusal(""), PushRefusal::Unknown);
+    }
+
+    /// A status code has to be matched in the phrasing that carries it. Branch
+    /// and repository names are part of every push error, and plenty of them
+    /// are named after an issue number.
+    #[test]
+    fn a_number_in_a_branch_name_is_not_a_status_code() {
+        let stale_on_an_issue_branch = "git push failed: ! [rejected] fix/403-page -> \
+             fix/401-redirect (fetch first)\nerror: failed to push some refs to \
+             'https://github.com/owner/repo-403.git'";
+        assert_eq!(
+            classify_push_refusal(stale_on_an_issue_branch),
+            PushRefusal::BranchMoved,
+            "a 403 in a ref name must not be read as a permission refusal"
+        );
+    }
+
     #[test]
     fn worktree_names_carry_ids() {
         assert_eq!(basename("/home/me/repo"), "repo");
@@ -7027,6 +7541,21 @@ mod tests {
         assert_eq!(prompt_head(&[]), "");
     }
 
+    /// #649: the pump reads nothing but the conversation link to decide
+    /// whether a launch continues or starts over, so a row that still points
+    /// at an earlier run is dispatched as `Retry` no matter how it got back to
+    /// the queue. `requeue_canceled` clears the link precisely so a task the
+    /// user put back on the board comes through here as `Fresh`.
+    #[test]
+    fn launch_mode_follows_the_conversation_link() {
+        let mut task = task_row();
+        task.conversation_id = None;
+        assert!(matches!(launch_mode_for(&task), LaunchMode::Fresh));
+
+        task.conversation_id = Some(41);
+        assert!(matches!(launch_mode_for(&task), LaunchMode::Retry));
+    }
+
     /// The sweep's row-level gate: exactly the tasks whose merge button the
     /// board would show — and whose light is green — land unattended.
     #[test]
@@ -7145,7 +7674,7 @@ mod tests {
             "another task of this project is already merging — wait for it"
         ));
         assert!(!is_benign_merge_race(
-            "project folder is on 'feature', expected 'main' — switch back to merge"
+            "project folder is on 'feature', expected 'main' — switch it to 'main' to merge"
         ));
         assert!(!is_benign_merge_race(
             "the task worktree no longer exists on disk"
@@ -7309,6 +7838,15 @@ mod tests {
         )
         .await
         .expect("record settle");
+    }
+
+    /// The replay half of [`instruction_scan`], for the cases that assert on
+    /// the instruction alone and not on the licence it implies.
+    async fn outstanding_instruction(
+        conn: &sea_orm::DatabaseConnection,
+        task_id: i32,
+    ) -> Option<Outstanding> {
+        instruction_scan(conn, task_id).await.outstanding
     }
 
     /// Each scenario reframes the SAME user text — that is the whole point of
@@ -7757,6 +8295,245 @@ mod tests {
         // The task's own brief still opens the prompt, so the transcript's
         // phase divider keeps matching on it.
         assert_eq!(prompt_head(&blocks), "Fix the login flow and add tests.");
+        // Nothing ever ran (`started_at` is unset), so nothing warns about a
+        // worktree that cannot hold an earlier run's work.
+        assert!(!joined.contains("running this task again from the top"));
+    }
+
+    /// A requeue drops the session link, so the run the user put back on the
+    /// board comes through `Fresh` — in the SAME worktree, carrying whatever
+    /// the stopped generation left there. The prompt has to say so: read as a
+    /// first run it would have the agent redo work that is already committed on
+    /// the branch.
+    #[tokio::test]
+    async fn a_requeued_run_says_its_worktree_is_not_empty() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&blocks).join("\n");
+        assert!(
+            joined.contains("Its worktree may still hold that run's work"),
+            "a re-run must not read as a first run: {joined}"
+        );
+        // The brief itself still reaches the agent — the framing precedes it,
+        // exactly as the retry / return arms do when their session is new.
+        assert!(joined.contains("Fix the login flow and add tests."));
+        // The original order is still an order: the licence stays the working
+        // one (nothing was returned, so there is no follow-up underneath).
+        assert!(joined.contains("Commit to the current branch as you like"));
+    }
+
+    /// #649's requeue lands on `Fresh`, and a task can be sitting on a
+    /// follow-up when the user stops it: review → "rework this" → cancel →
+    /// requeue. The feedback is the whole point of that generation, so the
+    /// arm that replaces it must replay it — dropping it sends the agent back
+    /// to the original order in a worktree where that order is already done.
+    #[tokio::test]
+    async fn a_requeued_run_replays_the_follow_up_it_interrupted() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "revise",
+                "feedback": "the empty-state copy is still wrong",
+            }),
+        )
+        .await;
+        // A requeue with neither note nor attachment records no action at all
+        // (`requeue_canceled` writes one only when the user wrote something),
+        // so the returned feedback is still the newest instruction.
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&blocks).join("\n");
+        assert!(
+            joined.contains("the empty-state copy is still wrong"),
+            "the returned feedback must survive the requeue: {joined}"
+        );
+        assert!(joined.contains("Latest review feedback to address"));
+    }
+
+    /// And the licence follows that same turn. A question the user asked before
+    /// stopping the run is still a question after the requeue: the guard's
+    /// "commit as you like" is the last thing the agent reads, so it has to be
+    /// withdrawn here just as the retry arm withdraws it.
+    #[tokio::test]
+    async fn a_requeued_question_keeps_its_read_only_licence() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "question",
+                "feedback": "why did you pick a map here?",
+            }),
+        )
+        .await;
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = texts(&blocks)
+            .into_iter()
+            .find(|t| t.starts_with("—— Work task context ——"))
+            .expect("guard block");
+        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(guard.contains("do NOT create, edit, delete or commit any file"));
+    }
+
+    /// …and the note the user types INTO the requeue box must not bury it. The
+    /// scan stops at the newest instruction, so a note takes the `outstanding`
+    /// slot and only the returned turn's *intent* survives — fine for a resumed
+    /// session, which still has the words, and useless for the session a
+    /// requeue now starts, which would get a read-only licence for a question
+    /// it was never shown, or "take this note into account" with no account.
+    #[tokio::test]
+    async fn a_requeue_note_does_not_bury_the_turn_it_refines() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "question",
+                "feedback": "why did you pick a map here?",
+            }),
+        )
+        .await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({ "action": "requeue", "note": "check the logs first" }),
+        )
+        .await;
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&blocks).join("\n");
+        assert!(
+            joined.contains("why did you pick a map here?"),
+            "the question the note refines has to reach a context-less session: {joined}"
+        );
+        assert!(joined.contains("check the logs first"));
+        // Oldest first: the turn, then the note that refines it.
+        let question = joined.find("why did you pick a map here?").expect("question");
+        let note = joined.find("check the logs first").expect("note");
+        assert!(question < note, "the note refines the turn, so it follows it");
+        // And it is still a question, so the licence stays read-only.
+        let guard = texts(&blocks)
+            .into_iter()
+            .find(|t| t.starts_with("—— Work task context ——"))
+            .expect("guard block");
+        assert!(guard.contains("do NOT create, edit, delete or commit any file"));
+    }
+
+    /// The mirror image, and the reason the extra replay is gated on `resumed`:
+    /// a session that really did resume already holds the returned turn, and
+    /// replaying it a second time would re-ask a question the transcript above
+    /// already shows being asked.
+    #[tokio::test]
+    async fn a_resumed_retry_replays_only_the_newest_instruction() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return", "intent": "revise", "feedback": "rename the column",
+            }),
+        )
+        .await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({ "action": "retry", "note": "install deps first" }),
+        )
+        .await;
+
+        let mut row = task_row();
+        row.id = id;
+        let resumed = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&resumed).join("\n");
+        assert!(joined.contains("install deps first"));
+        assert!(
+            !joined.contains("rename the column"),
+            "the resumed transcript already carries it: {joined}"
+        );
+
+        // …while the fallback session that never resumed needs both.
+        let fell_back = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&fell_back).join("\n");
+        assert!(joined.contains("rename the column"));
+        assert!(joined.contains("install deps first"));
     }
 
     /// A screenshot pasted into the follow-up box has to reach the agent as an
@@ -9814,6 +10591,40 @@ mod tests {
         );
     }
 
+    /// Completing a pull-request task that pushed nothing — a review-only
+    /// report, or a review that stopped at an unsound approach — must not tell
+    /// the pull request's thread it was "accepted". That is codeg's word for
+    /// signing off on the TASK; on a pull request it reads as approval of the
+    /// change, which may be the opposite of what the review found. The thread
+    /// hears what happened to its pull request: nothing was pushed to it.
+    #[tokio::test]
+    async fn completing_a_pull_request_task_tells_its_thread_nothing_was_pushed() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The pull request's head IS the task branch's head: the task made no
+        // changes of its own, which is when the board offers "complete".
+        let pr = open_pull(&f.head, "feature", "acme/app");
+        as_pull_request_task(&f, pr).await;
+        enable_writeback(&f).await;
+
+        f.engine
+            .complete_task(f.task_id, false)
+            .await
+            .expect("completed with nothing to push");
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(comments.len(), 1, "one settle, one comment");
+        let (kind, number, body) = &comments[0];
+        assert_eq!((*kind, *number), (ForgeItemKind::Change, 7));
+        assert!(body.contains("nothing was pushed to this pull request"), "{body}");
+        assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
+    }
+
     /// The comment is a fact sheet: the link and the counters. Nothing the
     /// agent wrote may reach a thread other people are reading.
     #[tokio::test]
@@ -10129,6 +10940,192 @@ mod tests {
         assert_eq!(task.worktree_folder_id, None, "detached");
         assert!(!f.worktree.exists(), "and really gone from disk");
         assert!(!f.engine.index.lock().await.contains_key(ZOMBIE), "retired");
+    }
+
+    /// Git for Windows can finish the destructive part of `worktree remove`
+    /// (registration and checkout contents) but fail to remove the now-empty
+    /// directory. That first pass leaves the task flagged for cleanup; its retry
+    /// must recognize the harmless shell, finish the branch/DB cleanup, and not
+    /// report files that do not exist.
+    #[tokio::test]
+    async fn worktree_cleanup_retry_converges_an_empty_detached_shell() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let worktree = f.worktree.to_str().expect("utf-8 worktree");
+        git_run(&f.root, &["worktree", "remove", "--force", worktree]);
+        std::fs::create_dir(&f.worktree).expect("empty shell");
+        work_task_service::set_cleanup_state(
+            &f.engine.db.conn,
+            f.task_id,
+            true,
+            Some("the first removal stopped after git detached it".into()),
+        )
+        .await
+        .expect("flag failed cleanup");
+
+        f.engine
+            .cleanup_task(f.task_id)
+            .await
+            .expect("retry cleanup");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.cleanup_state, None, "the retry is fully settled");
+        assert_eq!(
+            task.worktree_folder_id, None,
+            "folder bookkeeping converged"
+        );
+        assert!(!f.worktree.exists(), "the empty shell is gone");
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+                .await
+                .is_err(),
+            "the requested work branch goes too"
+        );
+    }
+
+    /// A missing `.git` file alone is not proof that the directory is a harmless
+    /// post-removal shell. Files may have appeared after the partial teardown,
+    /// and none of them is recoverable through git, so the retry must preserve
+    /// both the sentinel and the branch.
+    #[tokio::test]
+    async fn worktree_cleanup_retry_preserves_a_file_in_a_detached_shell() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let worktree = f.worktree.to_str().expect("utf-8 worktree");
+        git_run(&f.root, &["worktree", "remove", "--force", worktree]);
+        std::fs::create_dir(&f.worktree).expect("empty shell");
+        std::fs::write(f.worktree.join("sentinel.txt"), "not in git\n").expect("sentinel");
+
+        let err = f
+            .engine
+            .cleanup_task(f.task_id)
+            .await
+            .expect_err("a non-empty shell is not removable");
+
+        assert!(err.holds_work, "the retry is refused as a data-safety gate");
+        assert_eq!(
+            std::fs::read_to_string(f.worktree.join("sentinel.txt")).expect("read sentinel"),
+            "not in git\n"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert!(
+            task.worktree_folder_id.is_some(),
+            "the retry remains available"
+        );
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+                .await
+                .is_ok(),
+            "the branch survives with the sentinel"
+        );
+    }
+
+    /// A repository with `layout` applied to it, for the probe tests below:
+    /// returns `(tempdir, repo path, worktree path)`. The two tests that pass
+    /// `"sibling"` reproduce the DEFAULT worktree layout — beside the project,
+    /// with no repository of the fixture's own above it, which is the layout in
+    /// which a shell has no enclosing repository for `git status` to answer
+    /// about instead. (Nothing here can rule out a repository ABOVE the system
+    /// temp directory; in that environment the sibling pair still asserts the
+    /// right answers, but it is `an_empty_shell_inside_a_dirty_project_reads_as_clean`
+    /// — which builds its own enclosing repository — that pins the regression
+    /// unconditionally.)
+    fn probe_repo(layout: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        git_run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        git_run(&repo, &["add", "-A"]);
+        git_run(&repo, &["commit", "-q", "-m", "base"]);
+        let worktree = match layout {
+            "sibling" => dir.path().join("wt"),
+            _ => repo.join("wt"),
+        };
+        (dir, repo, worktree)
+    }
+
+    /// THE probe behind issue #642's dead-end retry, exercised where the bug
+    /// actually happens. `has_changes` runs `git status` from the path itself,
+    /// so a shell in the default layout — beside the project, no repository
+    /// above it — makes git error, and reading that error as "dirty" is what
+    /// made the retry offer the same refusal forever. An empty shell has, by
+    /// definition, nothing a `--force` removal could take.
+    #[tokio::test]
+    async fn an_empty_shell_beside_a_project_reads_as_clean() {
+        let (_dir, _repo, worktree) = probe_repo("sibling");
+        std::fs::create_dir(&worktree).expect("empty shell");
+
+        assert!(
+            !path_holds_uncommitted(worktree.to_str().expect("utf-8")).await,
+            "an empty post-removal shell holds nothing"
+        );
+    }
+
+    /// The other half of the same answer: outside a repository git errors on a
+    /// shell whatever is in it, so emptiness is the ONLY thing separating a
+    /// harmless leftover from files nothing can give back.
+    #[tokio::test]
+    async fn a_file_in_a_shell_beside_a_project_still_reads_as_dirty() {
+        let (_dir, _repo, worktree) = probe_repo("sibling");
+        std::fs::create_dir(&worktree).expect("shell");
+        std::fs::write(worktree.join("sentinel.txt"), "not in git\n").expect("sentinel");
+
+        assert!(
+            path_holds_uncommitted(worktree.to_str().expect("utf-8")).await,
+            "a shell with an entry in it is not removable"
+        );
+    }
+
+    /// A worktree root configured INSIDE the project (a relative
+    /// `worktree_root`, which the setting takes at face value) puts the shell
+    /// under the project's own `.git`. `git status` then answers happily — about
+    /// the PROJECT — so a project with a stray file of its own would answer
+    /// "dirty" for a shell holding nothing, and #642's retry would still never
+    /// converge. Without a `.git` marker the path is not a checkout git speaks
+    /// for, and its answer must not be read as this path's.
+    ///
+    /// The project's dirt is an edit to a TRACKED file, not a stray untracked
+    /// one: `has_changes` spawns git through `crate::process`, which inherits
+    /// the real environment, so an untracked fixture is only as visible as the
+    /// developer's global `core.excludesFile` lets it be — and a fixture git
+    /// silently ignores would make this test pass against the very bug it
+    /// exists to pin. No ignore rule can hide a modified tracked file.
+    #[tokio::test]
+    async fn an_empty_shell_inside_a_dirty_project_reads_as_clean() {
+        let (_dir, repo, worktree) = probe_repo("nested");
+        std::fs::write(repo.join("a.txt"), "the project's own mess\n").expect("dirty project");
+        std::fs::create_dir(&worktree).expect("empty shell");
+
+        assert!(
+            !path_holds_uncommitted(worktree.to_str().expect("utf-8")).await,
+            "the project's dirt is not the shell's"
+        );
+    }
+
+    /// And the marker check must not short-circuit the case it is guarding: a
+    /// checkout that still HAS its `.git` is exactly what `git status` is for,
+    /// uncommitted work included. Tracked and modified for the reason above —
+    /// an untracked fixture would read as clean under a global ignore rule that
+    /// happens to match it, and fail this assertion on that developer's machine
+    /// alone.
+    #[tokio::test]
+    async fn an_intact_worktree_is_still_measured_by_git() {
+        let (_dir, repo, worktree) = probe_repo("sibling");
+        let worktree_path = worktree.to_str().expect("utf-8");
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/probe", worktree_path],
+        );
+        assert!(
+            !path_holds_uncommitted(worktree_path).await,
+            "a fresh checkout holds nothing"
+        );
+
+        std::fs::write(worktree.join("a.txt"), "unstaged\n").expect("edit");
+
+        assert!(
+            path_holds_uncommitted(worktree_path).await,
+            "an uncommitted edit in a live checkout is work"
+        );
     }
 
     /// The removal underneath is `worktree remove --force`, and a stop pressed
@@ -10574,6 +11571,131 @@ mod tests {
             head_repo: head_repo.into(),
             base_ref: "main".into(),
         }
+    }
+
+    /// A repository on `main` that also carries a `feature` branch the project
+    /// checkout is NOT on. Returns `(engine, task id, home, feature tip, main
+    /// tip)`; the task's config is whatever the caller passes.
+    async fn branch_choice_fixture(
+        config: serde_json::Value,
+    ) -> (Arc<TaskEngine>, i32, tempfile::TempDir, String, String) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let root = home.path().join("repo");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        git_run(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "base"]);
+        // The branch the user wants this task to work on…
+        git_run(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("feature.txt"), "the feature\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "the feature so far"]);
+        let feature_tip = task_git::rev_parse(root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("feature tip");
+        // …and the branch the project folder happens to be sitting on.
+        git_run(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("b.txt"), "meanwhile\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "main moves on"]);
+        let main_tip = task_git::rev_parse(root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("main tip");
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder_id = crate::db::test_helpers::seed_folder(&db, root.to_str().unwrap()).await;
+        let now = chrono::Utc::now();
+        let task = crate::db::entities::work_task::ActiveModel {
+            folder_id: Set(folder_id),
+            title: Set("Polish the feature".to_string()),
+            config: Set(config.to_string()),
+            status: Set(WorkTaskStatus::Todo),
+            run_seq: Set(1),
+            sort_order: Set(0),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .expect("insert task");
+
+        (test_engine(db), task.id, home, feature_tip, main_tip)
+    }
+
+    /// The task says which branch it is for, and that is where it starts and
+    /// what it lands back onto — whatever the project folder happens to be
+    /// checked out on when the task is claimed.
+    #[tokio::test]
+    async fn a_task_starts_on_the_base_branch_it_was_created_for() {
+        let (engine, task_id, home, feature_tip, _main_tip) =
+            branch_choice_fixture(serde_json::json!({ "base_branch": "feature" })).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        assert_eq!(
+            task_git::rev_parse(&wt.path, "HEAD").await.expect("head"),
+            feature_tip,
+            "the worktree starts at the chosen branch's tip"
+        );
+        let after = row(&engine, task_id).await;
+        assert_eq!(
+            after.base_branch.as_deref(),
+            Some("feature"),
+            "the merge lands back onto the branch the task was created for"
+        );
+        assert_eq!(after.base_sha.as_deref(), Some(feature_tip.as_str()));
+        drop(home);
+    }
+
+    /// No choice recorded — every task created before this existed, and every
+    /// task of a user who does not care — keeps branching from the project
+    /// folder's current checkout.
+    #[tokio::test]
+    async fn a_task_without_a_chosen_branch_still_follows_the_checkout() {
+        let (engine, task_id, home, _feature_tip, main_tip) =
+            branch_choice_fixture(serde_json::json!({})).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        let after = row(&engine, task_id).await;
+        assert_eq!(after.base_branch.as_deref(), Some("main"));
+        assert_eq!(after.base_sha.as_deref(), Some(main_tip.as_str()));
+        drop(home);
+    }
+
+    /// A branch that is gone by the time the task is claimed must not quietly
+    /// fall back to the checkout: the whole point of the choice is that the
+    /// work lands somewhere specific, and starting from `main` instead would
+    /// be a wrong answer delivered silently.
+    #[tokio::test]
+    async fn a_chosen_branch_that_disappeared_refuses_instead_of_falling_back() {
+        let (engine, task_id, home, _feature_tip, _main_tip) =
+            branch_choice_fixture(serde_json::json!({ "base_branch": "gone" })).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let err = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .err()
+            .expect("must refuse");
+        assert!(err.contains("gone"), "{err}");
+        assert!(row(&engine, task_id).await.worktree_folder_id.is_none());
+        drop(home);
     }
 
     /// A repository that HAS a proposed change: `origin` carries `main` (moved
@@ -11285,6 +12407,70 @@ mod tests {
         assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
     }
 
+    /// The merge dispatch runs its launch off-thread so the click is not held
+    /// for the run (a resumed session may compact first — an unbounded turn).
+    /// What must NOT change with it: a launch that never gets an agent up still
+    /// reports its reason to the caller, and leaves the row settled and unowned
+    /// by the time it does. Anything less and the dialog would close on a merge
+    /// that silently never started.
+    #[tokio::test]
+    async fn a_merge_whose_launch_never_goes_live_still_reports_and_settles() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Neither the task nor its folder names an agent, so the launch fails
+        // where every launch checks first — before any connection exists.
+        let err = f
+            .engine
+            .merge_task(f.task_id, None, false, None, false)
+            .await
+            .expect_err("a launch that cannot start must not read as dispatched");
+        assert!(err.contains("no agent configured"), "{err}");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review, "settled before we returned");
+        assert!(
+            task.last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("merge dispatch failed"),
+            "{:?}",
+            task.last_error
+        );
+        assert!(
+            f.engine.merging.lock().await.is_empty(),
+            "the generation must own nothing once its failure is reported"
+        );
+    }
+
+    /// Fire-once, from either side. The launch reports itself live; the task
+    /// driving it reports every way of failing before that point. A second
+    /// report — a launch that fails AFTER going live — must not overwrite the
+    /// first, or a dispatch the user was told succeeded would come back as an
+    /// error into a dialog that has already closed.
+    #[tokio::test]
+    async fn the_dispatch_signal_reports_exactly_once() {
+        let (signal, live) = DispatchSignal::new();
+        signal.fire(Ok(()));
+        signal.fire(Err("the round's prompt was refused".to_string()));
+        assert_eq!(live.await.expect("sender fired"), Ok(()));
+
+        // …and the other way round: nothing went live, so the failure is what
+        // the caller gets.
+        let (signal, live) = DispatchSignal::new();
+        signal.fire(Err("no agent configured".to_string()));
+        signal.fire(Ok(()));
+        assert_eq!(
+            live.await.expect("sender fired"),
+            Err("no agent configured".to_string())
+        );
+
+        // A sender dropped without firing is the launch returning early without
+        // dispatching (a cancel gate, a lost CAS) — the caller has to notice
+        // rather than hang.
+        let (signal, live) = DispatchSignal::new();
+        drop(signal);
+        assert!(live.await.is_err());
+    }
+
     /// Recovery of an interrupted push-back settles on ONE piece of evidence:
     /// the pull request's head IS the commit this delivery was pushing.
     #[tokio::test]
@@ -11498,13 +12684,41 @@ mod tests {
 
         assert_eq!(sent.as_deref(), Some("/compact"));
         let events = compact_events(&f.engine, f.task_id).await;
-        assert_eq!(events.len(), 1, "{events:?}");
-        assert_eq!(events[0]["status"], "ok");
+        // A pair: the turn is announced when it goes out (the wait after it is
+        // unbounded, and a card with nothing on its timeline is how a compaction
+        // that never returns used to look) and again when it lands.
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0]["status"], "started");
         assert_eq!(events[0]["before_percent"], 90.0);
-        assert_eq!(events[0]["before_source"], "live");
         assert_eq!(events[0]["command"], "/compact");
+        assert_eq!(events[1]["status"], "ok");
+        assert_eq!(events[1]["before_percent"], 90.0);
+        assert_eq!(events[1]["before_source"], "live");
+        assert_eq!(events[1]["command"], "/compact");
         // The slot the canceller reaches through must not outlive the turn.
         assert!(f.engine.compacting.lock().await.is_empty());
+    }
+
+    /// A compaction the agent REFUSED is a failure, not an "ok" with a
+    /// footnote. `rejected` reaches the `TurnComplete` arm at all only because
+    /// a prompt rejection stopped tearing the connection down (issue #797); it
+    /// used to arrive as the terminal `Error` the waiter settles as `failed`,
+    /// and the catch-all below it would otherwise have promoted a compaction
+    /// that never ran to a successful one.
+    #[tokio::test]
+    async fn a_rejected_compaction_prompt_is_recorded_as_a_failure() {
+        let mut f = compact_fixture(Some((90_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, None), "rejected").await;
+
+        assert_eq!(sent.as_deref(), Some("/compact"));
+        let events = compact_events(&f.engine, f.task_id).await;
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[1]["status"], "failed");
+        assert_eq!(
+            events[1]["detail"], "the agent rejected the compaction prompt",
+            "{events:?}"
+        );
     }
 
     /// Below the threshold nothing is sent and nothing is written — the
@@ -11572,7 +12786,8 @@ mod tests {
 
         assert_eq!(sent.as_deref(), Some("/compact"));
         let events = compact_events(&f.engine, f.task_id).await;
-        assert_eq!(events[0]["status"], "canceled");
+        assert_eq!(events[0]["status"], "started");
+        assert_eq!(events[1]["status"], "canceled");
         assert!(f.engine.compacting.lock().await.is_empty());
     }
 

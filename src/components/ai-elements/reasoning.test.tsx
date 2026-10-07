@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
@@ -55,9 +56,9 @@ function renderReasoning(isStreaming: boolean) {
 }
 
 describe("ReasoningContent", () => {
-  // Reasoning auto-opens while the model is thinking, so this panel is on the
-  // streaming hot path: pinning it static would re-parse the whole block on
-  // every delta instead of only its tail.
+  // A reader who opens the panel mid-turn keeps it mounted across every delta,
+  // so this panel is still on the streaming hot path: pinning it static would
+  // re-parse the whole block on every delta instead of only its tail.
   it("keeps the live block in streaming mode", () => {
     renderReasoning(true)
 
@@ -90,5 +91,59 @@ describe("ReasoningContent", () => {
     const root = screen.getByTestId("streamdown-root")
     expect(root).toHaveAttribute("data-mode", "static")
     expect(root).toHaveAttribute("data-parse-incomplete", "false")
+  })
+})
+
+function foldedTree(isStreaming: boolean) {
+  return (
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <Reasoning isStreaming={isStreaming}>
+        <ReasoningTrigger />
+        <ReasoningContent>{"pondering."}</ReasoningContent>
+      </Reasoning>
+    </NextIntlClientProvider>
+  )
+}
+
+describe("Reasoning fold", () => {
+  // Opening on the first delta shoves the reply down the viewport mid-turn,
+  // and upstream's follow-up auto-close then pulls the text back out from
+  // under anyone who started reading it. The block waits to be asked instead.
+  it("stays folded while the model is thinking", () => {
+    render(foldedTree(true))
+
+    expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByTestId("streamdown-root")).toBeNull()
+  })
+
+  it("keeps a block the reader opened mid-turn open once thinking ends", async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(foldedTree(true))
+
+    await user.click(screen.getByRole("button"))
+    expect(screen.getByTestId("streamdown-root")).not.toBeNull()
+
+    rerender(foldedTree(false))
+
+    expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByTestId("streamdown-root")).not.toBeNull()
+  })
+
+  // The glyph is the only affordance saying the block can be opened at all, so
+  // it has to read as "folded" (pointing at the summary) vs "open" (pointing
+  // down into the body), like every other disclosure row in the app.
+  it("points the chevron right when folded and down when open", async () => {
+    const user = userEvent.setup()
+    const { container } = render(foldedTree(false))
+
+    const chevron = container.querySelector(".lucide-chevron-right")
+    expect(chevron).not.toBeNull()
+    expect(chevron).toHaveClass("rotate-0")
+    expect(chevron).not.toHaveClass("rotate-90")
+
+    await user.click(screen.getByRole("button"))
+
+    expect(chevron).toHaveClass("rotate-90")
+    expect(chevron).not.toHaveClass("rotate-0")
   })
 })

@@ -43,6 +43,8 @@ interface ChatInputProps {
   /** Pass-through: see `MessageInput`. */
   folderPickerOverride?: ConversationFolderPickerOverride
   draftStorageKey?: string | null
+  /** Pass-through: see `MessageInput.getSentHistory`. */
+  getSentHistory?: () => string[]
   isActive?: boolean
   /** Show the composer's flowing active-session border. Set only for the active
    *  tab when tiled across multiple sessions; passed through to MessageInput. */
@@ -52,18 +54,31 @@ interface ChatInputProps {
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
+  /** Insert one queued item into the RUNNING turn over the session's
+   *  live-feedback channel (see `MessageQueueDisplayProps.onSteerItem`).
+   *  Threaded straight through; present only while a turn is in flight and
+   *  the session has a working channel. */
+  onQueueSteer?: (id: string) => Promise<void> | void
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  /** Inject the draft's text into the RUNNING turn over the native steering
-   *  channel. Present only when the session's live-feedback channel is native
-   *  (`useSessionFeedback().channel === "native"`); resolves once recorded,
-   *  rejects on any failure (incl. the turn-end race) so MessageInput can run
-   *  its own enqueue fallback / draft preservation. */
-  onSteer?: (text: string) => Promise<void>
+  /** Send the draft into the RUNNING turn over the session's live-feedback
+   *  channel. Present only when the session has a working delivery channel
+   *  (`useSessionFeedback().steerAvailable`); resolves once recorded, rejects
+   *  on any failure (incl. the turn-end race) so MessageInput can run its own
+   *  enqueue fallback / draft preservation. `blocks` carries the full draft
+   *  when it holds more than plain text (image attachments, file badges);
+   *  `text` stays the recorded/display form. Must stay in sync with
+   *  `MessageInputProps.onSteer` — the optional second parameter makes a
+   *  stale one-arg declaration here assignable, so tsc would NOT catch a
+   *  wrapper that silently drops the blocks. */
+  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  /** Which channel `onSteer` rides (`useSessionFeedback().channel`); picks
+   *  the composer's honest copy. See `MessageInput`. */
+  steerChannel?: "native" | "pull"
   onAddFeedback?: () => void
   feedbackAddDisabled?: boolean
   /**
@@ -106,6 +121,7 @@ export const ChatInput = memo(function ChatInput({
   attachmentTabId,
   folderPickerOverride,
   draftStorageKey,
+  getSentHistory,
   isActive,
   showActiveFlow,
   queue,
@@ -113,6 +129,7 @@ export const ChatInput = memo(function ChatInput({
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
+  onQueueSteer,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -120,6 +137,7 @@ export const ChatInput = memo(function ChatInput({
   onSaveQueueEdit,
   onCancelQueueEdit,
   onSteer,
+  steerChannel,
   onAddFeedback,
   feedbackAddDisabled,
   allowOfflineCompose = false,
@@ -178,6 +196,8 @@ export const ChatInput = memo(function ChatInput({
             onEdit={onQueueEdit}
             onDelete={onQueueDelete}
             editingItemId={editingItemId ?? null}
+            onSteerItem={onQueueSteer}
+            steerChannel={steerChannel}
           />
         )}
       <MessageInput
@@ -205,6 +225,7 @@ export const ChatInput = memo(function ChatInput({
         attachmentTabId={attachmentTabId}
         folderPickerOverride={folderPickerOverride}
         draftStorageKey={draftStorageKey}
+        getSentHistory={getSentHistory}
         isActive={isActive}
         showActiveFlow={showActiveFlow}
         onEnqueue={onEnqueue}
@@ -215,6 +236,7 @@ export const ChatInput = memo(function ChatInput({
         onSaveQueueEdit={onSaveQueueEdit}
         onCancelQueueEdit={onCancelQueueEdit}
         onSteer={onSteer}
+        steerChannel={steerChannel}
         onAddFeedback={onAddFeedback}
         feedbackAddDisabled={feedbackAddDisabled}
         injectContent={injectContent}
@@ -226,7 +248,11 @@ export const ChatInput = memo(function ChatInput({
               ? t("agentResponding", { agent: agentName ?? "Agent" })
               : t("sendMessage")
         }
-        className={cn(tall ? "min-h-30" : "min-h-24", "max-h-60")}
+        // The floor goes through `tall`, not through a `min-h-*` here: the box
+        // and its editable area carry two halves of the same number, and only
+        // MessageInput knows the action row that divides them.
+        tall={tall}
+        className="max-h-60"
       />
     </div>
   )

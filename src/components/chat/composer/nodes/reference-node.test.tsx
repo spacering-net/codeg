@@ -131,6 +131,35 @@ describe("Reference node", () => {
     expect(badge).toHaveAccessibleName("agent: Claude Code")
   })
 
+  it("deletes a just-inserted badge on one Backspace", async () => {
+    const { ref, container } = await mountEditor()
+    const editor = editorOf(ref)
+    // How every insertion path leaves it: badge, separating space, caret after
+    // both (see `insertFileReferences`).
+    act(() => {
+      editor.chain().focus().insertReference(fileRef).insertContent(" ").run()
+    })
+    await waitFor(() =>
+      expect(container.querySelector("[data-reference-badge]")).not.toBeNull()
+    )
+
+    // Through the keymap, not the command: a shortcut the editor never receives
+    // is the bug this guards.
+    act(() => {
+      editor.view.dom.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Backspace",
+          keyCode: 8,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+
+    expect(findReference(editor.getJSON())).toBeUndefined()
+    expect(ref.current?.isEmpty()).toBe(true)
+  })
+
   it("round-trips through HTML (renderHTML → parseHTML)", async () => {
     const { ref } = await mountEditor()
     const editor = editorOf(ref)

@@ -383,6 +383,10 @@ impl AutomationEngine {
             config_values: cfg.config_values.clone(),
             label_snapshot: cfg.label_snapshot.clone(),
             deliverable: None,
+            // An automation's own branch never applies to an enqueued task
+            // (the editor blanks it for this mode), so the task branches from
+            // the project folder's checkout like any unspecified one.
+            base_branch: None,
         };
         let draft = crate::models::WorkTaskDraft {
             folder_id,

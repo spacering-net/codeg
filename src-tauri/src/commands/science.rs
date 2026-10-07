@@ -607,8 +607,13 @@ pub async fn science_get_install_status(
 }
 
 fn supported_agents() -> Vec<AgentType> {
-    // Science mode ships for this built-in subset (Grok and Cursor are not
-    // listed); the subset is preserved as-is here.
+    // Every built-in that declares a skill store, same order as `experts.rs` /
+    // `office_tools.rs`. This is not a curated subset: the matrix renders one
+    // column per `skills_capable` agent (`acp_list_agents`), so a built-in
+    // missing here gets a column whose authoritative status never arrives — the
+    // cell the user just enabled flips straight back off, and re-enabling walks
+    // into the already-created link (#718). The test at the bottom of this file
+    // is the gate that keeps the list complete.
     const ALL: &[AgentType] = &[
         AgentType::ClaudeCode,
         AgentType::Codex,
@@ -620,6 +625,11 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::CodeBuddy,
         AgentType::KimiCode,
         AgentType::Pi,
+        AgentType::Grok,
+        AgentType::Cursor,
+        AgentType::DeepSeek,
+        AgentType::Qoder,
+        AgentType::Antigravity,
     ];
     // Custom agents that declared the shared skills store join the built-in
     // set — the same `skill_storage_spec` gate every skills surface uses, so
@@ -725,8 +735,10 @@ pub async fn science_unlink_from_agent(
 fn unlink_one_locked(skill_id: &str, agent_type: AgentType) -> Result<(), ScienceError> {
     let skill_id = validate_skill_id(skill_id).map_err(|e| ScienceError::Metadata(e.to_string()))?;
 
-    // Scan ALL global dirs for this agent to handle shared-dir agents (Codex,
-    // Gemini and Cline all also point at `~/.agents/skills/`).
+    // Scan ALL global dirs for this agent to handle shared-dir agents — most
+    // built-ins also point at the cross-agent `~/.agents/skills/` store, so the
+    // link may sit in either. `skill_storage_spec` is the live list; do not
+    // enumerate them here, it drifts.
     let dirs = scoped_skill_dirs(agent_type, AgentSkillScope::Global, None)
         .map_err(|_| ScienceError::UnsupportedAgent(agent_type))?;
 
@@ -966,12 +978,70 @@ mod tests {
     }
 
     #[tokio::test]
+    // The hydrate guard is held across the await on purpose — see the
+    // identical note in `custom_agent_service`.
+    #[allow(clippy::await_holding_lock)]
     async fn list_all_install_statuses_covers_every_skill_agent_pair() {
+        // A test hydrating a custom agent that declares a store would add a
+        // column between the snapshot and the count below.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
         let rows = science_list_all_install_statuses()
             .await
             .expect("snapshot returns Ok");
         let expected = bundled_metadata().len() * supported_agents().len();
         assert_eq!(rows.len(), expected);
+    }
+
+    /// #718: the matrix renders a column per `skills_capable` agent, but the
+    /// backend snapshot came from a hand-maintained subset. Antigravity had a
+    /// column and no row, so the authoritative refresh that follows a toggle
+    /// read the freshly linked cell back as unlinked and flipped it off — and
+    /// the re-enable then collided with the link the first one had created.
+    /// Both status endpoints must therefore cover every built-in that declares
+    /// a skill store.
+    ///
+    /// Built-ins only: `all_acp_agents()` also reads the process-global custom
+    /// registry, which `a_declared_custom_agent_gains_a_column_here_too`
+    /// rewrites from another test thread.
+    #[tokio::test]
+    async fn supported_agents_cover_every_skills_capable_builtin() {
+        let expected: Vec<AgentType> = crate::acp::registry::builtin_acp_agents()
+            .into_iter()
+            .filter(|a| skill_storage_spec(*a).is_some())
+            .collect();
+        assert!(
+            expected.contains(&AgentType::Antigravity),
+            "Antigravity declares a skill store, so it is one of the columns"
+        );
+
+        let skill_id = bundled_metadata()
+            .first()
+            .expect("science bundle should be non-empty")
+            .id
+            .clone();
+        let one_skill: Vec<AgentType> = science_get_install_status(skill_id)
+            .await
+            .expect("status lookup returns Ok")
+            .into_iter()
+            .map(|row| row.agent_type)
+            .collect();
+        let whole_grid: Vec<AgentType> = science_list_all_install_statuses()
+            .await
+            .expect("snapshot returns Ok")
+            .into_iter()
+            .map(|row| row.agent_type)
+            .collect();
+
+        for agent in expected {
+            assert!(
+                one_skill.contains(&agent),
+                "science_get_install_status drops {agent:?}"
+            );
+            assert!(
+                whole_grid.contains(&agent),
+                "science_list_all_install_statuses drops {agent:?}"
+            );
+        }
     }
 
     #[test]

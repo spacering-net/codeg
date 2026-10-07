@@ -50,10 +50,13 @@ import {
 } from "@/lib/canvas-view-storage"
 import { cn } from "@/lib/utils"
 import { AddNodeMenu } from "./add-node-menu"
+import type { CanvasNode } from "@/lib/types"
 import type {
   ConversationCardData,
+  FileNodeData,
   NoteNodeData,
   RegionNodeData,
+  TerminalNodeData,
 } from "./canvas-model"
 import { regionHeightForRows, regionWidthForColumns } from "./canvas-model"
 import {
@@ -474,6 +477,37 @@ function NoteActions({ data }: { data: NoteNodeData }) {
   )
 }
 
+/** File and terminal cards keep their own verbs in their title bar (reload,
+ *  preview toggle, restart …) — those depend on state only the card holds. The
+ *  dock carries the two every element on the board shares. */
+function PlacedCardActions({
+  dbNode,
+  removeLabel,
+}: {
+  dbNode: CanvasNode
+  removeLabel: string
+}) {
+  const t = useTranslations("Canvas")
+  const { patchNode, deleteNode } = useCanvasView()
+  return (
+    <>
+      <DockMenu label={t("color")} trigger={<Palette className="size-4" />}>
+        <ColorPalette
+          value={dbNode.color}
+          onSelect={(color) => void patchNode(dbNode.id, { color })}
+        />
+      </DockMenu>
+      <DockButton
+        label={removeLabel}
+        danger
+        onClick={() => void deleteNode(dbNode.id)}
+      >
+        <Trash2 className="size-4" />
+      </DockButton>
+    </>
+  )
+}
+
 function CardActions({
   data,
   detail,
@@ -677,6 +711,22 @@ export function CanvasDock({
       case "note":
         elementActions = (
           <NoteActions data={single.data as unknown as NoteNodeData} />
+        )
+        break
+      case "file":
+        elementActions = (
+          <PlacedCardActions
+            dbNode={(single.data as unknown as FileNodeData).dbNode}
+            removeLabel={t("removeFileCard")}
+          />
+        )
+        break
+      case "terminal":
+        elementActions = (
+          <PlacedCardActions
+            dbNode={(single.data as unknown as TerminalNodeData).dbNode}
+            removeLabel={t("removeTerminalCard")}
+          />
         )
         break
       case "conversationCard":

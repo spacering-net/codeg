@@ -158,7 +158,9 @@ export function useWorkspaceBackground() {
     setWorkspaceBgFillMode,
     workspaceBgImageUrl,
     setWorkspaceBackgroundImage,
+    downloadMarketWorkspaceBackground,
     removeWorkspaceBackground,
+    workspaceBgSourceUrl,
   } = useAppearance()
   return {
     workspaceBgEnabled,
@@ -173,6 +175,8 @@ export function useWorkspaceBackground() {
     setWorkspaceBgFillMode,
     workspaceBgImageUrl,
     setWorkspaceBackgroundImage,
+    downloadMarketWorkspaceBackground,
     removeWorkspaceBackground,
+    workspaceBgSourceUrl,
   }
 }

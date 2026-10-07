@@ -102,6 +102,7 @@ import type {
   ForgeIssueList,
   ForgeIssueRow,
   ForgeLabel,
+  ForgeProviderId,
   ForgeRemote,
   ForgeSort,
   ForgeTab,
@@ -175,7 +176,7 @@ const STATE_OPTIONS = [
 const PILL =
   "h-8 gap-1.5 rounded-full bg-muted/70 px-3 text-[0.8125rem] font-medium ws-msg-chip hover:bg-muted"
 
-/** The four orders both forges can honour, in the order they are offered.
+/** The four orders GitHub and GitLab can honour, in the order they are offered.
  *  `as const` so the label keys stay literal and next-intl can check them. */
 const SORT_OPTIONS = [
   { value: "newest", labelKey: "sortNewest" },
@@ -183,6 +184,20 @@ const SORT_OPTIONS = [
   { value: "recently_updated", labelKey: "sortRecentlyUpdated" },
   { value: "least_recently_updated", labelKey: "sortLeastRecentlyUpdated" },
 ] as const satisfies ReadonlyArray<{ value: ForgeSort; labelKey: string }>
+
+/** Whether this forge can order its list at all.
+ *
+ *  Gitea cannot: its issues endpoint hard-codes newest-first and takes no sort
+ *  parameter, so the control is HIDDEN there rather than left showing a choice
+ *  the server ignores. A select that silently does nothing is worse than an
+ *  absent one — it reads as a list that is sorted the way it says it is.
+ *
+ *  Hiding it is safe for everything that reads `sort`: the state stays at its
+ *  `newest` default, which is exactly the order Gitea serves, so
+ *  `belongsOnPage` keeps placing a new issue where it will actually appear. */
+function canSort(provider: ForgeProviderId | undefined): boolean {
+  return provider !== "gitea"
+}
 
 /** The raw thrown value, boxed. Boxed for two reasons: `setState` would CALL a
  *  bare thrown function as an updater, and a raw `null` is indistinguishable
@@ -1541,26 +1556,30 @@ export function ForgePage() {
           ) : null}
 
           {/* Trails the row on a wide screen; on a phone it just wraps in
-              flow, because `ms-auto` there would strand it on its own line. */}
-          <Select
-            value={sort}
-            onValueChange={(v) => resetTo(() => setSort(v as ForgeSort))}
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label={t("sortBy")}
-              className="h-8 w-auto gap-1.5 rounded-full border-transparent px-3 text-[0.8125rem] font-medium text-muted-foreground shadow-none hover:bg-muted sm:ms-auto"
+              flow, because `ms-auto` there would strand it on its own line.
+              Absent entirely on a forge that cannot order its list — see
+              `canSort`. */}
+          {canSort(remote?.provider) ? (
+            <Select
+              value={sort}
+              onValueChange={(v) => resetTo(() => setSort(v as ForgeSort))}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {SORT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {t(option.labelKey)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                size="sm"
+                aria-label={t("sortBy")}
+                className="h-8 w-auto gap-1.5 rounded-full border-transparent px-3 text-[0.8125rem] font-medium text-muted-foreground shadow-none hover:bg-muted sm:ms-auto"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {SORT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {t(option.labelKey)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
         </div>
 
         {pending ? <PendingBar /> : null}

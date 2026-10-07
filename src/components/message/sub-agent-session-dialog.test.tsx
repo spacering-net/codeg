@@ -85,6 +85,7 @@ vi.mock("@/contexts/acp-connections-context", async () => {
         }
       },
       getConnection: () => mockChildConnection,
+      getConnectPending: () => undefined,
       getActiveKey: () => null,
       subscribeActiveKey: () => () => {},
     }),
@@ -212,6 +213,7 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     sessionFailures: [],
     asyncTasks: [],
     error: null,
+    errorLevel: "error",
     loadError: null,
     loadErrorCommand: null,
     lastAppliedSeq: 0,
@@ -220,6 +222,7 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     parentConnectionId: "p1",
     isViewer: false,
     pendingUserMessage: null,
+    steeredMessageIds: [],
     configStale: false,
     configStaleKind: null,
     configStaleDismissed: false,

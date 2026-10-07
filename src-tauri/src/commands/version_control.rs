@@ -421,3 +421,85 @@ pub async fn validate_gitlab_token(
         message: None,
     })
 }
+
+// ---------------------------------------------------------------------------
+// Gitea token validation
+// ---------------------------------------------------------------------------
+
+/// Validate a Gitea (or Forgejo) access token against `GET /api/v1/user`.
+///
+/// The response is GitHub's shape — `login`, `avatar_url` — which is the first
+/// of many places Gitea is easier to read as a GitHub dialect than as its own
+/// thing. The AUTH is not: `Authorization: token <t>`, not `Bearer`.
+///
+/// Scopes come back EMPTY, always, and that is a limitation rather than an
+/// oversight: Gitea reports a token's scopes only from
+/// `GET /users/{name}/tokens`, which requires basic auth with the user's
+/// password and refuses the very token being checked. An empty list is
+/// already what a GitHub fine-grained token produces, and nothing gates on it
+/// (see `ResolvedAuth::scopes`) — it is shown, not enforced.
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn validate_gitea_token(
+    server_url: String,
+    token: String,
+) -> Result<GitHubTokenValidation, AppCommandError> {
+    let trimmed_token = token.trim();
+    if trimmed_token.is_empty() {
+        return Err(AppCommandError::invalid_input("Token cannot be empty"));
+    }
+    // No public-service special case, unlike GitHub's `api.github.com`: every
+    // Gitea — gitea.com and codeberg.org included — mounts its API under its
+    // own origin, so there is one derivation and no host to exempt from it.
+    let origin = {
+        let base = server_url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Err(AppCommandError::invalid_input(
+                "A Gitea server URL is required",
+            ));
+        } else if base.contains("://") {
+            base.to_string()
+        } else {
+            format!("https://{base}")
+        }
+    };
+
+    let response = reqwest::Client::new()
+        .get(format!("{origin}/api/v1/user"))
+        .header("Authorization", format!("token {trimmed_token}"))
+        .header("User-Agent", "codeg")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| {
+            AppCommandError::network("Failed to connect to Gitea API").with_detail(e.to_string())
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        let message = if status == 401 {
+            "Invalid or expired token".to_string()
+        } else {
+            format!("Gitea API returned status {status}: {body}")
+        };
+        return Ok(GitHubTokenValidation {
+            success: false,
+            username: None,
+            scopes: vec![],
+            avatar_url: None,
+            message: Some(message),
+        });
+    }
+
+    let user = response.json::<GitHubUserResponse>().await.map_err(|e| {
+        AppCommandError::network("Failed to parse Gitea API response").with_detail(e.to_string())
+    })?;
+
+    Ok(GitHubTokenValidation {
+        success: true,
+        username: Some(user.login),
+        scopes: vec![],
+        avatar_url: user.avatar_url,
+        message: None,
+    })
+}

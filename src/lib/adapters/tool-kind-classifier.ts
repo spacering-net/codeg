@@ -142,6 +142,10 @@ export function classifyToolKind(toolName: string): ToolKindLabel {
     name === "glob" ||
     name === "search" ||
     name === "find" ||
+    // pi's directory listing (`ls`), which sits with `find`/`grep` in its
+    // built-in set (`bash`/`edit`/`find`/`grep`/`ls`/`powershell`/`read`/`write`)
+    // and answers the same "where is it" question.
+    name === "ls" ||
     name === "list_files" ||
     name === "list_code_definition_names"
   ) {
@@ -152,6 +156,11 @@ export function classifyToolKind(toolName: string): ToolKindLabel {
     name === "bash" ||
     name === "exec_command" ||
     name === "shell" ||
+    // Windows swaps `bash` for `powershell` — pi always, Claude Code whenever
+    // the machine has no Git Bash. Same tool, same tally. Kept even though
+    // `normalizeToolName` now aliases the name: this classifier is fed the RAW
+    // tool name (see the tool-group builder in `ai-elements-adapter`).
+    name === "powershell" ||
     name === "execute_command" ||
     name === "run_command" ||
     // codex's unified-exec session tools continue a background shell started by

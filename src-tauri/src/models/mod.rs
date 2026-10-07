@@ -19,14 +19,15 @@ pub use automation::{
     AutomationAction, AutomationConfig, AutomationDraft, AutomationInfo, AutomationRunInfo,
     AutomationRunStatus, IsolationMode, TriggerKind,
 };
-pub use canvas::{CanvasMutation, CanvasNode, CanvasSnapshot};
+pub use canvas::{CanvasBoard, CanvasBoardSummary, CanvasMutation, CanvasNode, CanvasSnapshot};
 #[allow(unused_imports)]
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use conversation::{
-    AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,
-    ConversationTurnsPage, DbConversationDetail, DbConversationSummary, FolderInfo,
-    ImportFolderOutcome, ImportResult, ImportSelectedResult, ScanFolder, ScanResult, ScanSession,
-    ScanSessionStatus, SelectedSessionKey, SessionStats, SidebarData,
+    AgentConversationCount, AgentStats, ConversationBranchTag, ConversationDetail,
+    ConversationSummary, ConversationTagDetail, ConversationTurnsPage, DbConversationDetail,
+    DbConversationSummary, FolderInfo, ImportFolderOutcome, ImportResult, ImportSelectedResult,
+    ScanFolder, ScanResult, ScanSession, ScanSessionStatus, SelectedSessionKey, SessionStats,
+    SidebarData,
 };
 pub use folder::{
     FolderCommandInfo, FolderDetail, FolderGroupDetail, FolderHistoryEntry, OpenedTab,
@@ -53,7 +54,10 @@ pub use work_task::{
     WorkTaskTemplateInfo, DELIVERABLE_REPORT, STAGE_PROMPT_ALL,
 };
 #[cfg(feature = "tauri-runtime")]
-pub use system::{SystemAutostartSettings, SystemRenderingSettings};
+pub use system::{
+    CloseWindowBehavior, SystemAutostartSettings, SystemCloseBehaviorSettings,
+    SystemCloseBehaviorSettingsView, SystemRenderingSettings,
+};
 pub use system::{
     AvailableTerminalShells, GitCredentials, GitDetectResult, GitHubAccount,
     GitHubAccountsSettings, GitHubTokenValidation, GitSettings, SystemLanguageSettings,

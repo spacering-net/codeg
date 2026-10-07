@@ -10,8 +10,8 @@ let reconnectHandler: (() => void) | null = null
 vi.mock("@/lib/api", () => ({
   workTaskList: (...args: unknown[]) => listMock(...args),
 }))
-vi.mock("@/lib/notification", () => ({
-  sendSystemNotification: (...args: unknown[]) => notifyMock(...args),
+vi.mock("@/lib/desktop-notification", () => ({
+  notifyDesktop: (...args: unknown[]) => notifyMock(...args),
 }))
 // Stable t — a fresh function per render loops the notification effect.
 const stableT = (key: string, values?: Record<string, unknown>) =>
@@ -160,9 +160,11 @@ describe("TasksViewProvider", () => {
       changedHandler?.()
     })
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1))
-    expect(notifyMock).toHaveBeenCalledWith(
-      "proj - Codeg",
-      expect.stringContaining("notifyFailed")
-    )
+    expect(notifyMock).toHaveBeenCalledWith("work_task", {
+      title: "proj - Codeg",
+      body: expect.stringContaining("notifyFailed"),
+      // Carries the task title, so it needs a variant that doesn't.
+      redactedBody: "notifyFailedRedacted",
+    })
   })
 })

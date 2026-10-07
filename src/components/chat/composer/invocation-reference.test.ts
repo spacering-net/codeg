@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { AgentSkillItem, AvailableCommandInfo } from "@/lib/types"
 
 import {
+  buildKnownInvocations,
   commandInvocationToken,
   commandToReference,
   skillToReference,
@@ -83,5 +84,27 @@ describe("skillToReference", () => {
 
   it("falls back to the id when the skill has no name", () => {
     expect(skillToReference(skill("only-id", ""), "/").label).toBe("only-id")
+  })
+})
+
+describe("buildKnownInvocations", () => {
+  it("keys commands and skills by the token they are sent as", () => {
+    const known = buildKnownInvocations(
+      [cmd("review"), cmd("$deploy")],
+      [skill("ship", "Ship")],
+      "$"
+    )
+    expect([...known].sort()).toEqual(["$deploy", "$ship", "/review"])
+  })
+
+  it("uses `/` for skills when no Codex prefix is given", () => {
+    expect([...buildKnownInvocations(null, [skill("ship", "Ship")])]).toEqual([
+      "/ship",
+    ])
+  })
+
+  it("is empty for an agent that has advertised nothing yet", () => {
+    expect(buildKnownInvocations(null).size).toBe(0)
+    expect(buildKnownInvocations([]).size).toBe(0)
   })
 })

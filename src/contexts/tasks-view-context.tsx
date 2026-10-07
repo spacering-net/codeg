@@ -12,7 +12,7 @@ import {
 } from "react"
 import { useTranslations } from "next-intl"
 import { workTaskList } from "@/lib/api"
-import { sendSystemNotification } from "@/lib/notification"
+import { notifyDesktop } from "@/lib/desktop-notification"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
   loadTasksViewMode,
@@ -156,13 +156,20 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
 /**
  * System notification when a task flips into review (ready for acceptance) or
  * failed. The engine runs headless, so this fetch-to-fetch diff is the only
- * place that sees the transition; `sendSystemNotification` itself stays silent
- * while the window is visible.
+ * place that sees the transition; the window-state gate and the user's
+ * per-event switch live inside `notifyDesktop`.
  */
 function notifyFlips(
   prev: Map<number, WorkTask["status"]> | null,
   list: WorkTask[],
-  t: (key: "notifyReview" | "notifyFailed", values: { title: string }) => string
+  t: (
+    key:
+      | "notifyReview"
+      | "notifyFailed"
+      | "notifyReviewRedacted"
+      | "notifyFailedRedacted",
+    values?: { title: string }
+  ) => string
 ) {
   if (prev == null) return
   for (const task of list) {
@@ -174,10 +181,18 @@ function notifyFlips(
       .folders.find((f) => f.id === task.folder_id)
     const folderName = folder ? (folder.alias ?? folder.name) : null
     const title = folderName ? `${folderName} - Codeg` : "Codeg"
-    const body =
-      task.status === "review"
+    const review = task.status === "review"
+    void notifyDesktop("work_task", {
+      title,
+      body: review
         ? t("notifyReview", { title: task.title })
-        : t("notifyFailed", { title: task.title })
-    void sendSystemNotification(title, body)
+        : t("notifyFailed", { title: task.title }),
+      // The task title is user-authored prose that can name a customer, a
+      // ticket or an incident — not something to leave sitting in an OS
+      // notification centre when the user asked for contents to be hidden.
+      redactedBody: review
+        ? t("notifyReviewRedacted")
+        : t("notifyFailedRedacted"),
+    })
   }
 }

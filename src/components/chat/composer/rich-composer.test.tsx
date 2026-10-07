@@ -412,7 +412,7 @@ describe("RichComposer text paste (plain-text schema)", () => {
   })
 
   it("hydrates serialized references in a plain-text paste into badges", async () => {
-    const { ref } = await mount()
+    const { ref } = await mount({ knownInvocations: new Set(["$deploy"]) })
     act(() => ref.current?.focus())
     const dom = ref.current?.getEditor()?.view.dom as HTMLElement
     // The wire form of a sent message (file link + Codex `$` skill token): the
@@ -428,6 +428,35 @@ describe("RichComposer text paste (plain-text schema)", () => {
     expect(ref.current?.getText()).toBe(wire)
   })
 
+  it("pastes a slash word the agent does not advertise as editable text", async () => {
+    const { ref } = await mount({ knownInvocations: new Set(["/review"]) })
+    act(() => ref.current?.focus())
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+    dispatchPaste(dom, { text: "try /notacommand on /tmp/x" })
+    expect(JSON.stringify(ref.current?.getJSON())).not.toContain(
+      '"type":"reference"'
+    )
+    expect(ref.current?.getText()).toBe("try /notacommand on /tmp/x")
+  })
+
+  it("seeds a slash word as text until the agent's list says it is a command", async () => {
+    // The list arrives with the connection, so a composer that seeds before it
+    // lands must not guess — and must honor it once it is there.
+    const { ref, rerender } = await mount()
+    act(() => ref.current?.setText("/review it"))
+    expect(JSON.stringify(ref.current?.getJSON())).not.toContain(
+      '"type":"reference"'
+    )
+    expect(ref.current?.getText()).toBe("/review it")
+
+    rerender(<RichComposer ref={ref} knownInvocations={new Set(["/review"])} />)
+    act(() => ref.current?.setText("/review it"))
+    expect(JSON.stringify(ref.current?.getJSON())).toContain(
+      '"refType":"skill"'
+    )
+    expect(ref.current?.getText()).toBe("/review it")
+  })
+
   it("does not insert text when the host consumes the paste as files", async () => {
     const onPasteFiles = vi.fn(() => true)
     const { ref } = await mount({ onPasteFiles })
@@ -436,5 +465,209 @@ describe("RichComposer text paste (plain-text schema)", () => {
     dispatchPaste(dom, { html: "<a href='x'>x</a>", text: "some text" })
     expect(onPasteFiles).toHaveBeenCalledTimes(1)
     expect(ref.current?.getText()).toBe("")
+  })
+})
+
+describe("RichComposer prompt-history Arrow routing", () => {
+  it("routes ArrowUp to onHistoryKeyDown at the document start and consumes it", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("hello"))
+    act(() => ref.current?.getEditor()?.commands.focus("start"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    const event = pressKey(dom, { key: "ArrowUp" })
+
+    expect(onHistoryKeyDown).toHaveBeenCalledWith("older", expect.anything())
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it("routes ArrowDown to onHistoryKeyDown at the document end", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("hello"))
+    act(() => ref.current?.getEditor()?.commands.focus("end"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    const event = pressKey(dom, { key: "ArrowDown" })
+
+    expect(onHistoryKeyDown).toHaveBeenCalledWith("newer", expect.anything())
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it("leaves the Arrow keys to the caret away from the edge", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("hello"))
+    // Caret at the END: ArrowUp is not "older" here, so it stays a caret move
+    // and the host is never asked.
+    act(() => ref.current?.getEditor()?.commands.focus("end"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    const event = pressKey(dom, { key: "ArrowUp" })
+
+    expect(onHistoryKeyDown).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it("keeps the Arrow keys to the caret between paragraphs of one document", async () => {
+    // A native paste can leave the box holding SEVERAL paragraphs. The start of
+    // the second one is the start of its block but not of the document, so it
+    // is a plain "move up a line" — recalling there would swap the whole draft
+    // out from under the caret.
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() =>
+      ref.current?.setDoc({
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "one" }] },
+          { type: "paragraph", content: [{ type: "text", text: "two" }] },
+        ],
+      })
+    )
+    const editor = ref.current?.getEditor()
+    const dom = editor?.view.dom as HTMLElement
+
+    // Start of paragraph two.
+    act(() => editor?.commands.setTextSelection(6))
+    expect(pressKey(dom, { key: "ArrowUp" }).defaultPrevented).toBe(false)
+    // End of paragraph one.
+    act(() => editor?.commands.setTextSelection(4))
+    expect(pressKey(dom, { key: "ArrowDown" }).defaultPrevented).toBe(false)
+
+    expect(onHistoryKeyDown).not.toHaveBeenCalled()
+
+    // The document's own edges still route: start of the first paragraph,
+    // end of the last.
+    act(() => editor?.commands.setTextSelection(1))
+    pressKey(dom, { key: "ArrowUp" })
+    expect(onHistoryKeyDown).toHaveBeenLastCalledWith(
+      "older",
+      expect.anything()
+    )
+    act(() => editor?.commands.setTextSelection(9))
+    pressKey(dom, { key: "ArrowDown" })
+    expect(onHistoryKeyDown).toHaveBeenLastCalledWith(
+      "newer",
+      expect.anything()
+    )
+  })
+
+  it("keeps Arrow keys for the IME while a composition is in flight", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("ni"))
+    act(() => ref.current?.getEditor()?.commands.focus("start"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    const event = pressKey(dom, { key: "ArrowUp", isComposing: true })
+
+    expect(onHistoryKeyDown).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it("defers to an open menu before history", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const onExternalMenuKeyDown = vi.fn(() => true)
+    const { ref } = await mount({
+      onHistoryKeyDown,
+      onExternalMenuKeyDown,
+      isExternalMenuOpen: true,
+    })
+    act(() => ref.current?.setText("hello"))
+    act(() => ref.current?.getEditor()?.commands.focus("start"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    pressKey(dom, { key: "ArrowUp" })
+
+    expect(onExternalMenuKeyDown).toHaveBeenCalled()
+    expect(onHistoryKeyDown).not.toHaveBeenCalled()
+  })
+
+  it("does not consume the key when the host declines", async () => {
+    const onHistoryKeyDown = vi.fn(() => false)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("hello"))
+    act(() => ref.current?.getEditor()?.commands.focus("start"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    const event = pressKey(dom, { key: "ArrowUp" })
+
+    expect(onHistoryKeyDown).toHaveBeenCalledWith("older", expect.anything())
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it("keeps Shift+Arrow for selection instead of history", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("hello"))
+    act(() => ref.current?.getEditor()?.commands.focus("start"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    const event = pressKey(dom, { key: "ArrowUp", shiftKey: true })
+
+    expect(onHistoryKeyDown).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it("keeps Ctrl/Alt+Arrow for word and line jumps", async () => {
+    const onHistoryKeyDown = vi.fn(() => true)
+    const { ref } = await mount({ onHistoryKeyDown })
+    act(() => ref.current?.setText("hello"))
+    act(() => ref.current?.getEditor()?.commands.focus("start"))
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+
+    expect(
+      pressKey(dom, { key: "ArrowUp", ctrlKey: true }).defaultPrevented
+    ).toBe(false)
+    expect(
+      pressKey(dom, { key: "ArrowUp", altKey: true }).defaultPrevented
+    ).toBe(false)
+    expect(onHistoryKeyDown).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Guards the sizing contract the mobile-web composer regressed on (#746).
+ *
+ * jsdom has no layout engine, so these assert the declared box model rather
+ * than measured pixels — the real geometry is covered by the manual pass
+ * described in the PR. What they do catch is the exact edit that broke it:
+ * swapping a content flex basis back to a zero one, which lets an engine that
+ * distributes no free space in a min-height-only flex column collapse the
+ * editable area to 0px.
+ */
+describe("RichComposer editable-area sizing (#746)", () => {
+  it("grows the editable area off a content basis, never a zero basis", async () => {
+    const { container } = await mount()
+    const scroll = container.querySelector(".codeg-composer-scroll")
+    expect(scroll).not.toBeNull()
+
+    const classes = scroll!.className.split(/\s+/)
+    // `flex-1` is `flex: 1 1 0%`. With nothing to grow into, that zero basis is
+    // the collapsed, untappable composer from #746.
+    expect(classes).not.toContain("flex-1")
+    expect(classes).toContain("grow")
+    // Still free to shrink and scroll when the composer hits its max height.
+    expect(classes).toContain("min-h-0")
+    expect(classes).toContain("overflow-y-auto")
+  })
+
+  it("lets the contenteditable fill the editable area so taps land on it", async () => {
+    const { container } = await mount()
+    const scroll = container.querySelector(".codeg-composer-scroll")
+    const editable = container.querySelector('[contenteditable="true"]')
+    expect(editable).not.toBeNull()
+
+    // The scroll area is the column the editable node grows inside of.
+    const scrollClasses = scroll!.className.split(/\s+/)
+    expect(scrollClasses).toContain("flex")
+    expect(scrollClasses).toContain("flex-col")
+    // …and the editable node is the child that takes the leftover, so the
+    // blank space under a short draft is still the contenteditable and a tap
+    // there focuses it natively (touch has no chrome-mousedown fallback).
+    expect(editable!.className.split(/\s+/)).toContain("grow")
+    expect(scroll!.contains(editable)).toBe(true)
   })
 })

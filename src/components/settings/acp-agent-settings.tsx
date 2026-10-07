@@ -92,6 +92,7 @@ import {
   acpClearBinaryCache,
   acpDetectAgentLocalVersion,
   acpDownloadAgentBinary,
+  acpFetchAgentLatestRelease,
   acpInstallUvTool,
   acpGetAgentStatus,
   acpListAgents,
@@ -113,6 +114,7 @@ import {
 import type {
   AcpAgentInfo,
   AdapterInfo,
+  AgentLatestRelease,
   AgentType,
   CheckStatus,
   CodexGranularApproval,
@@ -136,6 +138,7 @@ import {
   OpenCodeConnectDialog,
   OpenCodeCustomProviderDialog,
 } from "@/components/settings/opencode-connect-dialog"
+import { OpenCodeBehaviorSection } from "@/components/settings/opencode-behavior-section"
 import { OpenCodePermissionsSection } from "@/components/settings/opencode-permissions-section"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
 import {
@@ -162,6 +165,7 @@ import {
   DEEPSEEK_PANEL_ENV_KEYS,
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
+import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 import { QoderConfigPanel } from "./qoder-config-panel"
@@ -227,6 +231,7 @@ interface AgentDraft {
   claudeDefaultHaikuModel: string
   claudeDefaultSonnetModel: string
   claudeDefaultOpusModel: string
+  claudeDefaultFableModel: string
   claudeCustomModelOption: string
   claudeCustomModelOptionName: string
   claudeCustomModelOptionDescription: string
@@ -285,6 +290,7 @@ type RunningActionKind =
   | "uninstall_npx"
   | "redownload_binary"
   | "custom_install"
+  | "upgrade_latest"
   | "install_uv"
 
 type UiFixAction =
@@ -300,6 +306,8 @@ type UiFixAction =
         | "uninstall_npx"
         | "install_opencode_plugins"
         | "custom_install"
+        // Payload is the version to install, not the agent type.
+        | "upgrade_latest"
       payload: string
       // When true, the fix renders as a greyed-out button (e.g. the uvx
       // agent-install action while the uv runtime isn't ready yet).
@@ -312,6 +320,9 @@ interface UiCheckItem {
   status: CheckStatus
   message: string
   fixes: UiFixAction[]
+  /** Actions on a row of their own along the card's bottom edge, right-aligned
+   * and never wrapped apart (see `renderCheck`). */
+  footerFixes?: UiFixAction[]
 }
 
 /**
@@ -330,6 +341,7 @@ const PACKAGE_ACTION_FIX_KINDS: ReadonlyArray<UiFixAction["kind"]> = [
   "redownload_binary",
   "install_opencode_plugins",
   "custom_install",
+  "upgrade_latest",
   "install_uv",
 ]
 
@@ -560,6 +572,7 @@ const CLAUDE_MODEL_ENV_KEYS = {
   claudeDefaultHaikuModel: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
   claudeDefaultSonnetModel: "ANTHROPIC_DEFAULT_SONNET_MODEL",
   claudeDefaultOpusModel: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  claudeDefaultFableModel: "ANTHROPIC_DEFAULT_FABLE_MODEL",
   claudeCustomModelOption: "ANTHROPIC_CUSTOM_MODEL_OPTION",
   claudeCustomModelOptionName: "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
   claudeCustomModelOptionDescription:
@@ -613,19 +626,74 @@ const OPENCLAW_ENV_KEYS = {
   sessionKey: "OPENCLAW_SESSION_KEY",
 } as const
 
-const CLINE_PROVIDERS = [
+/** Cline provider ids, as the CLI's own registry keys them (`cline auth -p`).
+ *
+ * `openai-compatible` is NOT interchangeable with `openai`: the `auth`
+ * subcommand aliases the latter, but the ACP path does not, so an `openai`
+ * selection reaches `session/new` as an unknown provider with an empty model
+ * list. The backend's `normalize_cline_provider_id` maps the legacy value on
+ * read so an existing config still lands on the right row here. */
+/** Cline's own sign-in providers, labelled as its registry labels them. Their
+ * credential is an OAuth token cline obtains through a device-code flow and
+ * stores itself, so this panel shows the command that starts it rather than a
+ * key field — and the backend neither overwrites those entries nor exports
+ * `CLINE_PROVIDER`/`CLINE_API_KEY` for them (see `cline_provider_is_agent_managed`). */
+const CLINE_SIGNIN_PROVIDERS = [
+  { value: "cline", label: "Cline Usage-Billing" },
+  { value: "cline-pass", label: "ClinePass" },
+  { value: "openai-codex", label: "OpenAI ChatGPT Subscription" },
+] as const
+
+/** Bring-your-own providers this panel can actually configure — every one is
+ * authenticated by a single API key, which is all the three fields below can
+ * express.
+ *
+ * Deliberately a subset of cline's ~50-provider registry. AWS Bedrock and GCP
+ * Vertex used to be listed and never worked: cline authenticates them with
+ * `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` and
+ * `GOOGLE_VERTEX_PROJECT`/`GOOGLE_VERTEX_LOCATION`/`GOOGLE_APPLICATION_CREDENTIALS`
+ * respectively, none of which a lone `apiKey` string can carry. They are
+ * reachable through `cline auth bedrock`, and an entry made that way is read
+ * back and preserved here rather than clobbered.
+ *
+ * `openai-compatible` is NOT interchangeable with `openai`: the `auth`
+ * subcommand aliases the latter, but the ACP path does not, so an `openai`
+ * selection reaches `session/new` as an unknown provider with an empty model
+ * list. The backend's `normalize_cline_provider_id` maps the legacy value on
+ * read so an existing config still lands on the right row here. */
+const CLINE_BYO_PROVIDERS = [
   { value: "anthropic", label: "Anthropic" },
   { value: "openai-native", label: "OpenAI" },
-  { value: "openai", label: "OpenAI Compatible" },
+  { value: "openai-compatible", label: "OpenAI Compatible" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "gemini", label: "Gemini" },
   { value: "deepseek", label: "DeepSeek" },
-  { value: "bedrock", label: "AWS Bedrock" },
-  { value: "vertex", label: "GCP Vertex" },
   { value: "ollama", label: "Ollama" },
+  { value: "lmstudio", label: "LM Studio" },
 ] as const
 
-type ClineProvider = (typeof CLINE_PROVIDERS)[number]["value"]
+type ClineProvider =
+  | (typeof CLINE_SIGNIN_PROVIDERS)[number]["value"]
+  | (typeof CLINE_BYO_PROVIDERS)[number]["value"]
+  // A provider configured outside codeg (`cline auth bedrock`, a registry id
+  // this list does not carry) still has to select a row, or saving from this
+  // panel would silently retarget the user's store at whatever the dropdown
+  // fell back to.
+  | (string & {})
+
+/** Whether cline owns this provider's credential (OAuth), rather than codeg.
+ *  Mirrors the backend `cline_provider_is_agent_managed`. */
+function isClineSignInProvider(provider: string): boolean {
+  return CLINE_SIGNIN_PROVIDERS.some((p) => p.value === provider)
+}
+
+/** The terminal command that starts (or repairs) a sign-in. cline drives a
+ *  device-code flow: it prints a code and an `authkit.cline.bot/device` URL and
+ *  waits for the browser half, which is why this is a command to run rather
+ *  than a button to press. */
+function clineAuthCommand(provider: string): string {
+  return `cline auth ${provider}`
+}
 
 type ClaudeModelKey = keyof typeof CLAUDE_MODEL_ENV_KEYS
 type ImportantConfigKey = "apiBaseUrl" | "apiKey" | "model" | ClaudeModelKey
@@ -926,6 +994,7 @@ function extractImportantConfigValues(
   claudeDefaultHaikuModel: string
   claudeDefaultSonnetModel: string
   claudeDefaultOpusModel: string
+  claudeDefaultFableModel: string
   claudeCustomModelOption: string
   claudeCustomModelOptionName: string
   claudeCustomModelOptionDescription: string
@@ -963,6 +1032,9 @@ function extractImportantConfigValues(
   ])
   const claudeDefaultOpusModel = findEnvValue(mergedEnv, [
     CLAUDE_MODEL_ENV_KEYS.claudeDefaultOpusModel,
+  ])
+  const claudeDefaultFableModel = findEnvValue(mergedEnv, [
+    CLAUDE_MODEL_ENV_KEYS.claudeDefaultFableModel,
   ])
   const claudeCustomModelOption = findEnvValue(mergedEnv, [
     CLAUDE_MODEL_ENV_KEYS.claudeCustomModelOption,
@@ -1007,6 +1079,8 @@ function extractImportantConfigValues(
       agentType === "claude_code" ? claudeDefaultSonnetModel : "",
     claudeDefaultOpusModel:
       agentType === "claude_code" ? claudeDefaultOpusModel : "",
+    claudeDefaultFableModel:
+      agentType === "claude_code" ? claudeDefaultFableModel : "",
     claudeCustomModelOption:
       agentType === "claude_code" ? claudeCustomModelOption : "",
     claudeCustomModelOptionName:
@@ -1112,13 +1186,22 @@ interface ClineImportantValues {
   baseUrl: string
 }
 
+/** Mirrors the backend `normalize_cline_provider_id`, so a legacy `"openai"`
+ * typed into the advanced JSON editor still selects a row instead of leaving the
+ * provider dropdown blank. */
+function normalizeClineProvider(provider: string): ClineProvider {
+  return provider === "openai" ? "openai-compatible" : provider
+}
+
 function extractClineImportantValues(configText: string): ClineImportantValues {
   const parseResult = parseConfigJsonText(configText)
   const config = parseResult.config
   return {
-    provider: (typeof config.apiProvider === "string" && config.apiProvider
-      ? config.apiProvider
-      : "anthropic") as ClineProvider,
+    provider: normalizeClineProvider(
+      typeof config.apiProvider === "string" && config.apiProvider
+        ? config.apiProvider
+        : "anthropic"
+    ),
     apiKey: typeof config.apiKey === "string" ? config.apiKey : "",
     model: typeof config.model === "string" ? config.model : "",
     baseUrl: typeof config.apiBaseUrl === "string" ? config.apiBaseUrl : "",
@@ -1908,14 +1991,15 @@ export function codexSandboxSeedsAcpPreset(shadowed: boolean): boolean {
 }
 
 /**
- * Whether to warn that the ACP adapter cannot honor a read-only sandbox.
+ * Whether to say that codex-acp 1.7.0–1.13.x cannot honor a read-only sandbox
+ * (2.0.0 restored it; an adapter resolved off PATH may still be older).
  *
  * Fires exactly when codeg will inject the `read-only` preset, because the
- * warning's second half promises that every escalation reaches the user — true
- * of that preset on codex-acp ≥1.7.0 (`approvalsReviewer: "user"`), and false
- * of the `agent` default a shadowed config falls back to (`auto_review`, where
- * a model forwards only what it judges unsafe). Showing it for a shadowed
- * config would pair "your sandbox key is ignored" with "you will be asked about
+ * note promises that every escalation reaches the user — true of that preset
+ * on every codex-acp since 1.7.0 (`approvalsReviewer: "user"`), and false of
+ * the `agent` default a shadowed config falls back to (`auto_review`, where a
+ * model forwards only what it judges unsafe). Showing it for a shadowed config
+ * would pair "your sandbox key is ignored" with "you will be asked about
  * everything" — the second being a guarantee codeg is not making.
  */
 export function showsCodexReadOnlyAcpWarning(
@@ -3255,6 +3339,10 @@ export function patchImportantConfigText(
       patch.claudeDefaultOpusModel
     )
     assignEnv(
+      CLAUDE_MODEL_ENV_KEYS.claudeDefaultFableModel,
+      patch.claudeDefaultFableModel
+    )
+    assignEnv(
       CLAUDE_MODEL_ENV_KEYS.claudeCustomModelOption,
       patch.claudeCustomModelOption
     )
@@ -3308,6 +3396,7 @@ export function applyClaudeProviderToConfigText(
     claudeDefaultHaikuModel: model.haiku ?? "",
     claudeDefaultSonnetModel: model.sonnet ?? "",
     claudeDefaultOpusModel: model.opus ?? "",
+    claudeDefaultFableModel: model.fable ?? "",
     claudeCustomModelOption: model.customOption ?? "",
     claudeCustomModelOptionName: model.customOptionName ?? "",
     claudeCustomModelOptionDescription: model.customOptionDescription ?? "",
@@ -3449,6 +3538,9 @@ function applyImportantFieldToDraft(
   if (key === "claudeDefaultOpusModel") {
     return { ...draft, claudeDefaultOpusModel: value }
   }
+  if (key === "claudeDefaultFableModel") {
+    return { ...draft, claudeDefaultFableModel: value }
+  }
   if (key === "claudeCustomModelOption") {
     return { ...draft, claudeCustomModelOption: value }
   }
@@ -3468,6 +3560,7 @@ function buildImportantPatchFromDraft(draft: AgentDraft): ImportantDraftPatch {
     claudeDefaultHaikuModel: draft.claudeDefaultHaikuModel,
     claudeDefaultSonnetModel: draft.claudeDefaultSonnetModel,
     claudeDefaultOpusModel: draft.claudeDefaultOpusModel,
+    claudeDefaultFableModel: draft.claudeDefaultFableModel,
     claudeCustomModelOption: draft.claudeCustomModelOption,
     claudeCustomModelOptionName: draft.claudeCustomModelOptionName,
     claudeCustomModelOptionDescription:
@@ -3668,6 +3761,7 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     claudeDefaultHaikuModel: important.claudeDefaultHaikuModel,
     claudeDefaultSonnetModel: important.claudeDefaultSonnetModel,
     claudeDefaultOpusModel: important.claudeDefaultOpusModel,
+    claudeDefaultFableModel: important.claudeDefaultFableModel,
     claudeCustomModelOption: important.claudeCustomModelOption,
     claudeCustomModelOptionName: important.claudeCustomModelOptionName,
     claudeCustomModelOptionDescription:
@@ -3741,6 +3835,122 @@ function hasComparableVersion(
 function isValidCustomVersion(value: string): boolean {
   const normalized = value.trim().replace(/^[vV]/, "")
   return /^[0-9][0-9A-Za-z.\-+]*$/.test(normalized) && normalized.includes(".")
+}
+
+// SemVer 2.0.0; group 4 is the prerelease.
+const SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/
+
+// Digit strings compared as numbers, without Number's precision limits.
+function compareDigits(a: string, b: string): number {
+  const left = a.replace(/^0+(?=\d)/, "")
+  const right = b.replace(/^0+(?=\d)/, "")
+  if (left.length !== right.length) return left.length > right.length ? 1 : -1
+  return left === right ? 0 : left > right ? 1 : -1
+}
+
+function comparePrerelease(
+  a: string | undefined,
+  b: string | undefined
+): number {
+  if (a === b) return 0
+  // A release outranks its own prereleases.
+  if (a === undefined) return 1
+  if (b === undefined) return -1
+  const left = a.split(".")
+  const right = b.split(".")
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const l = left[i]
+    const r = right[i]
+    if (l === undefined) return -1
+    if (r === undefined) return 1
+    const lNumeric = /^\d+$/.test(l)
+    const rNumeric = /^\d+$/.test(r)
+    if (lNumeric && rNumeric) {
+      const order = compareDigits(l, r)
+      if (order !== 0) return order
+    } else if (lNumeric !== rNumeric) {
+      return lNumeric ? -1 : 1
+    } else if (l !== r) {
+      return l > r ? 1 : -1
+    }
+  }
+  return 0
+}
+
+/**
+ * Which of two release versions is newer: semver precedence when both parse
+ * as semver (so `0.85.0-rc.1` sorts below `0.85.0`), otherwise the leading
+ * digits of each dot-separated segment, compared in order. Equal digits
+ * throughout is equal even when a suffix differs, so Cursor's same-day builds
+ * (`2026.09.26-dd393fe`) tie. Same rules as the backend's `is_strictly_newer`,
+ * which decides what the unreviewed-latest offer carries. `compareVersion`
+ * ignores prerelease suffixes, which is why this exists.
+ *
+ * Orders versions; it does not tell whether two strings name the same build.
+ */
+export function compareReleaseVersion(a: string, b: string): number {
+  const left = a.trim().replace(/^[vV]+/, "")
+  const right = b.trim().replace(/^[vV]+/, "")
+  const l = SEMVER_PATTERN.exec(left)
+  const r = SEMVER_PATTERN.exec(right)
+  if (l && r) {
+    for (let i = 1; i <= 3; i += 1) {
+      const order = compareDigits(l[i], r[i])
+      if (order !== 0) return order
+    }
+    return comparePrerelease(l[4], r[4])
+  }
+  const segments = (value: string) =>
+    value.split(".").map((segment) => /^\d*/.exec(segment)?.[0] || "0")
+  const ls = segments(left)
+  const rs = segments(right)
+  for (let i = 0; i < Math.max(ls.length, rs.length); i += 1) {
+    const order = compareDigits(ls[i] ?? "0", rs[i] ?? "0")
+    if (order !== 0) return order
+  }
+  return 0
+}
+
+/**
+ * Whether Version Status can offer this agent's unreviewed latest release.
+ * Custom install has to be able to fetch it (an npx package or a binary whose
+ * URL carries its version, never uvx), and there has to be a recommended
+ * version to be newer than, which a manually written definition does not
+ * have. Also decides whether the settings page asks the backend at all.
+ */
+export function canCheckLatestRelease(agent: AcpAgentInfo): boolean {
+  return (
+    (agent.distribution_type === "npx" ||
+      agent.distribution_type === "binary") &&
+    agent.supports_custom_version &&
+    agent.custom_source !== "manual" &&
+    agent.available &&
+    Boolean(agent.registry_version)
+  )
+}
+
+/**
+ * The unreviewed latest version to offer, or `null`. The backend already
+ * vouches that `release` is newer than the recommended version and that Custom
+ * install accepts it; this only drops the offer once the installed version
+ * reaches it. An installed version that cannot be compared keeps the offer,
+ * and so does an agent that is not installed.
+ */
+export function latestReleaseOffer(
+  agent: AcpAgentInfo,
+  release: AgentLatestRelease | null | undefined
+): string | null {
+  if (!release || !canCheckLatestRelease(agent)) return null
+  const installed = agent.installed_version
+  if (
+    installed &&
+    hasComparableVersion(installed) &&
+    compareReleaseVersion(installed, release.version) >= 0
+  ) {
+    return null
+  }
+  return release.version
 }
 
 /**
@@ -3819,15 +4029,44 @@ export function buildAcpAdapterCheck(
   }
 }
 
+/**
+ * Which provider an agent should land on when it returns to "model_provider"
+ * auth mode with no binding in the draft.
+ *
+ * In order: `lastPick`, the user's own last pick for this agent in this panel;
+ * `savedBinding`, the provider the agent is bound to on disk; then the head of
+ * the list. Each candidate counts only while it is still listed (not deleted,
+ * not moved to another agent), so a stale pick falls through to a saved
+ * binding that is still good rather than straight to the head. Going straight
+ * to `available[0]` rebound the agent to its OLDEST provider (the list arrives
+ * ordered by row id) whenever the auth-mode dropdown round-tripped through
+ * another mode, and the rebind copies that provider's model names into the
+ * draft, the env text and the config text. The head stays the fallback for a
+ * first-time pick.
+ */
+export function providerToRebindTo(
+  available: readonly ModelProviderInfo[],
+  lastPick: number | null | undefined,
+  savedBinding: number | null | undefined
+): ModelProviderInfo | null {
+  const listed = (id: number | null | undefined) =>
+    id == null ? undefined : available.find((provider) => provider.id === id)
+  return listed(lastPick) ?? listed(savedBinding) ?? available[0] ?? null
+}
+
 // `uvReady` reports whether the uv runtime (uvx) is installed — only meaningful
 // for uvx agents (custom Python-package agents; built-in Hermes moved to the
 // npm bridge). Derived from the uv preflight check by the caller. uvx agents
 // need uv installed before their package can be prepared, so when uv isn't
 // ready every managed install/upgrade action is surfaced disabled and the
 // user is pointed at the separate "Install uv" preflight action.
+//
+// `latestRelease` is the unreviewed latest release looked up when the user
+// opened this agent, if one was found (see `latestReleaseOffer`).
 export function buildVersionCheck(
   agent: AcpAgentInfo,
-  uvReady: boolean = true
+  uvReady: boolean = true,
+  latestRelease: AgentLatestRelease | null = null
 ): UiCheckItem | null {
   if (
     agent.distribution_type !== "binary" &&
@@ -3836,19 +4075,20 @@ export function buildVersionCheck(
   )
     return null
 
-  const remoteVersion = agent.registry_version ?? "unknown"
+  // The version codeg has reviewed and pinned for this agent.
+  const recommendedVersion = agent.registry_version ?? "unknown"
   const localVersion =
     agent.installed_version ?? acpText("version.notInstalled", "Not installed")
   // A manually written definition has no registry behind it — its stored
-  // version is whatever the user typed — so "Remote:" would be comparing
+  // version is whatever the user typed — so "Recommended:" would be comparing
   // against noise. Every message shows the local side alone.
   const manualSource = agent.custom_source === "manual"
   const versionText = manualSource
     ? acpText("version.localOnly", "Local: {localVersion}", { localVersion })
     : acpText(
-        "version.remoteLocal",
-        "Remote: {remoteVersion} · Local: {localVersion}",
-        { remoteVersion, localVersion }
+        "version.recommendedLocal",
+        "Recommended: {recommendedVersion} · Local: {localVersion}",
+        { recommendedVersion, localVersion }
       )
   const installAction: RunningActionKind =
     agent.distribution_type === "binary" ? "download_binary" : "install_npx"
@@ -3927,8 +4167,24 @@ export function buildVersionCheck(
     kind: "custom_install",
     payload: agent.agent_type,
   }
-  const withCustomInstall = (fixes: UiFixAction[]): UiFixAction[] =>
-    supportsCustomInstall ? [...fixes, customInstallFix] : fixes
+  // Offered on the card's bottom row, which it shares with Custom install:
+  // both install a version other than the recommended one, through the same
+  // path. The offer never changes a branch's status, which still judges the
+  // installed version against the recommended one.
+  const latestVersion = latestReleaseOffer(agent, latestRelease)
+  const footerFixes: UiFixAction[] = []
+  if (latestVersion) {
+    footerFixes.push({
+      label: acpText(
+        "actions.upgradeToLatest",
+        "Upgrade to unreviewed latest {version}",
+        { version: latestVersion }
+      ),
+      kind: "upgrade_latest",
+      payload: latestVersion,
+    })
+  }
+  if (supportsCustomInstall) footerFixes.push(customInstallFix)
 
   if (!agent.installed_version) {
     return {
@@ -3940,13 +4196,14 @@ export function buildVersionCheck(
         "{versionText}. Click Install on the right.",
         { versionText }
       ),
-      fixes: withCustomInstall([
+      fixes: [
         {
           label: acpText("actions.install", "Install"),
           kind: installAction,
           payload: agent.agent_type,
         },
-      ]),
+      ],
+      footerFixes,
     }
   }
 
@@ -3961,13 +4218,14 @@ export function buildVersionCheck(
       message: acpText("version.localInstalled", "{versionText}. Installed.", {
         versionText,
       }),
-      fixes: withCustomInstall([
+      fixes: [
         {
           label: acpText("actions.uninstall", "Uninstall"),
           kind: uninstallAction,
           payload: agent.agent_type,
         },
-      ]),
+      ],
+      footerFixes,
     }
   }
 
@@ -3985,7 +4243,7 @@ export function buildVersionCheck(
         "{versionText}. Local version is not comparable; try upgrade to overwrite install.",
         { versionText }
       ),
-      fixes: withCustomInstall([
+      fixes: [
         {
           label: acpText("actions.upgrade", "Upgrade"),
           kind: upgradeAction,
@@ -3996,7 +4254,8 @@ export function buildVersionCheck(
           kind: uninstallAction,
           payload: agent.agent_type,
         },
-      ]),
+      ],
+      footerFixes,
     }
   }
 
@@ -4014,7 +4273,7 @@ export function buildVersionCheck(
         "{versionText}. Upgrade available.",
         { versionText }
       ),
-      fixes: withCustomInstall([
+      fixes: [
         {
           label: acpText("actions.upgrade", "Upgrade"),
           kind: upgradeAction,
@@ -4025,7 +4284,8 @@ export function buildVersionCheck(
           kind: uninstallAction,
           payload: agent.agent_type,
         },
-      ]),
+      ],
+      footerFixes,
     }
   }
 
@@ -4035,40 +4295,51 @@ export function buildVersionCheck(
       label: acpText("version.statusLabel", "Version Status"),
       status: "warn",
       message: acpText(
-        "version.remoteUnavailable",
-        "{versionText}. Remote version is currently unavailable.",
+        "version.recommendedUnavailable",
+        "{versionText}. No recommended version is available.",
         { versionText }
       ),
-      fixes: withCustomInstall([
+      fixes: [
         {
           label: acpText("actions.uninstall", "Uninstall"),
           kind: uninstallAction,
           payload: agent.agent_type,
         },
-      ]),
+      ],
+      footerFixes,
     }
   }
 
+  // At or past the recommended version. "Already latest" would contradict an
+  // offer of a newer release beside it, so name the newer release instead.
   return {
     check_id: "version_status",
     label: acpText("version.statusLabel", "Version Status"),
     status: "pass",
-    message: acpText("version.latest", "{versionText}. Already latest.", {
-      versionText,
-    }),
-    fixes: withCustomInstall([
+    message: latestVersion
+      ? acpText(
+          "version.unreviewedAvailable",
+          "{versionText}. A newer, unreviewed release is available.",
+          { versionText }
+        )
+      : acpText("version.latest", "{versionText}. Already latest.", {
+          versionText,
+        }),
+    fixes: [
       {
         label: acpText("actions.uninstall", "Uninstall"),
         kind: uninstallAction,
         payload: agent.agent_type,
       },
-    ]),
+    ],
+    footerFixes,
   }
 }
 
 export function getAgentChecks(
   agent: AcpAgentInfo,
-  current?: AgentCheckState
+  current?: AgentCheckState,
+  latestRelease?: AgentLatestRelease | null
 ): UiCheckItem[] {
   // For uvx agents, only treat uv as not-ready when the preflight result is
   // present AND its uv check isn't passing. With no result yet (or an errored
@@ -4081,7 +4352,7 @@ export function getAgentChecks(
   )
   const uvReady =
     agent.distribution_type !== "uvx" || !uvCheck || uvCheck.status === "pass"
-  const versionCheck = buildVersionCheck(agent, uvReady)
+  const versionCheck = buildVersionCheck(agent, uvReady, latestRelease ?? null)
   const remoteChecks: UiCheckItem[] = (current?.result?.checks ?? []).map(
     (check) => ({
       ...check,
@@ -4210,6 +4481,18 @@ export function AcpAgentSettings() {
   const [customInstallAgent, setCustomInstallAgent] =
     useState<AcpAgentInfo | null>(null)
   const [customVersionInput, setCustomVersionInput] = useState("")
+  // The "Upgrade to unreviewed latest" awaiting confirmation.
+  const [upgradeLatestTarget, setUpgradeLatestTarget] = useState<{
+    agent: AcpAgentInfo
+    version: string
+  } | null>(null)
+  // The unreviewed latest release found for the agent the detail pane shows,
+  // looked up once per visit (see the effect below). Tagged with its agent so
+  // it can never surface on another one.
+  const [visitLatestRelease, setVisitLatestRelease] = useState<{
+    agentType: AgentType
+    release: AgentLatestRelease
+  } | null>(null)
   const [pluginModalOpen, setPluginModalOpen] = useState(false)
   const [pluginModalAgent, setPluginModalAgent] = useState<AgentType | null>(
     null
@@ -4217,6 +4500,8 @@ export function AcpAgentSettings() {
   const [expandedChecks, setExpandedChecks] = useState<Record<string, boolean>>(
     {}
   )
+  // Check cards the user folded or unfolded by hand since this page mounted.
+  const userToggledChecksRef = useRef<Set<string>>(new Set())
   const [selectedAgentType, setSelectedAgentType] = useState<AgentType | null>(
     null
   )
@@ -4530,6 +4815,34 @@ export function AcpAgentSettings() {
     })
   }, [sortedAgents])
 
+  // Look up the selected agent's unreviewed latest release once per visit:
+  // selecting it (by click, the first auto-select, or `?agent=`) is a visit,
+  // and leaving it ends one. Re-renders, agent list refreshes and preflight
+  // runs do not ask again, so the lookup keys on the agent's identity only.
+  // Every visit starts empty and shows nothing but its own answer: while the
+  // lookup runs, or after it fails, there is no offer.
+  const latestLookupTarget =
+    selectedAgent && canCheckLatestRelease(selectedAgent)
+      ? selectedAgent.agent_type
+      : null
+  useEffect(() => {
+    setVisitLatestRelease(null)
+    if (!latestLookupTarget) return
+    let current = true
+    acpFetchAgentLatestRelease(latestLookupTarget)
+      .then((release) => {
+        if (current && release) {
+          setVisitLatestRelease({ agentType: latestLookupTarget, release })
+        }
+      })
+      .catch((err) => {
+        console.warn("[Settings] latest release lookup failed:", err)
+      })
+    return () => {
+      current = false
+    }
+  }, [latestLookupTarget])
+
   // A settings save (env or native config) only takes effect on the NEXT agent
   // start, so any running session of that agent stays on its launch-time config
   // until restarted. The backend returns how many running sessions were left
@@ -4797,11 +5110,14 @@ export function AcpAgentSettings() {
       // A custom-version install must replace whatever is cached, otherwise a
       // higher cached version would still win on connect.
       const clearCache = mode === "upgrade" || Boolean(versionOverride)
-      const actionLabel = versionOverride
-        ? t("actions.customInstall")
-        : mode === "upgrade"
+      const actionLabel =
+        kind === "upgrade_latest"
           ? t("actions.upgrade")
-          : t("actions.install")
+          : versionOverride
+            ? t("actions.customInstall")
+            : mode === "upgrade"
+              ? t("actions.upgrade")
+              : t("actions.install")
       const taskId = randomUUID()
       setStreamAgentType(agent.agent_type)
       await installStream.start(taskId)
@@ -4885,27 +5201,33 @@ export function AcpAgentSettings() {
     async (
       agent: AcpAgentInfo,
       mode: "install" | "upgrade",
-      versionOverride?: string
+      versionOverride?: string,
+      kind?: RunningActionKind
     ) => {
       if (busyActionRef.current.has(agent.agent_type)) return
       busyActionRef.current.add(agent.agent_type)
       setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: true }))
       setRunningActionKind((prev) => ({
         ...prev,
-        [agent.agent_type]: versionOverride
-          ? "custom_install"
-          : mode === "install"
-            ? "install_npx"
-            : "upgrade_npx",
+        [agent.agent_type]:
+          kind ??
+          (versionOverride
+            ? "custom_install"
+            : mode === "install"
+              ? "install_npx"
+              : "upgrade_npx"),
       }))
       // A custom-version install forces a clean reinstall so the requested
       // version replaces whatever is currently installed.
       const cleanFirst = mode === "upgrade" || Boolean(versionOverride)
-      const actionLabel = versionOverride
-        ? t("actions.customInstall")
-        : mode === "upgrade"
+      const actionLabel =
+        kind === "upgrade_latest"
           ? t("actions.upgrade")
-          : t("actions.install")
+          : versionOverride
+            ? t("actions.customInstall")
+            : mode === "upgrade"
+              ? t("actions.upgrade")
+              : t("actions.install")
       const taskId = randomUUID()
       setStreamAgentType(agent.agent_type)
       await installStream.start(taskId)
@@ -5162,6 +5484,10 @@ export function AcpAgentSettings() {
       setCustomInstallAgent(agent)
       return
     }
+    if (action.kind === "upgrade_latest") {
+      setUpgradeLatestTarget({ agent, version: action.payload })
+      return
+    }
     await runPreflight(agent.agent_type)
   }
 
@@ -5206,6 +5532,21 @@ export function AcpAgentSettings() {
     setCustomInstallAgent(null)
   }, [customInstallAgent, customVersionInput, runBinaryAction, runNpxAction])
 
+  // Custom install's path with the offered version filled in — the same clean
+  // reinstall, never a fallback to the recommended version on failure.
+  const confirmUpgradeLatest = useCallback(() => {
+    if (!upgradeLatestTarget) return
+    const { agent, version } = upgradeLatestTarget
+    const run =
+      agent.distribution_type === "binary"
+        ? runBinaryAction(agent, "upgrade", "upgrade_latest", version)
+        : runNpxAction(agent, "upgrade", version, "upgrade_latest")
+    run.catch((err) => {
+      console.error("[Settings] upgrade to latest failed:", err)
+    })
+    setUpgradeLatestTarget(null)
+  }, [runBinaryAction, runNpxAction, upgradeLatestTarget])
+
   const persistReorder = useCallback(
     async (order: AgentType[]) => {
       if (order.length === 0) return
@@ -5242,9 +5583,72 @@ export function AcpAgentSettings() {
   // spinner stays precise via the per-agent `runningActionKind`.
   const anyBinaryActionBusy = Object.values(busyBinaryAction).some(Boolean)
 
+  const renderFixButton = (
+    agent: AcpAgentInfo,
+    fix: UiFixAction,
+    index: number,
+    className?: string
+  ) => {
+    const busyGated =
+      anyBinaryActionBusy && PACKAGE_ACTION_FIX_KINDS.includes(fix.kind)
+    const running = runningActionKind[agent.agent_type] === fix.kind
+    return (
+      <Button
+        key={`${fix.label}-${index}`}
+        size="xs"
+        variant="outline"
+        className={cn(
+          "h-6 bg-muted/30 hover:bg-muted/50",
+          // Two disabled looks: while the global one-package-op-
+          // at-a-time gate is busy, every parked package action
+          // dims (backend-disabled or not) so the lockout shows
+          // on agents other than the busy one; only the button
+          // showing the spinner, and — when the gate is idle — a
+          // backend-declared inapplicable fix, keep the full-
+          // opacity chip look.
+          busyGated && !running
+            ? "disabled:opacity-50"
+            : "disabled:bg-muted/30 disabled:opacity-100",
+          // The unreviewed-latest offer installs a release nobody has vetted,
+          // so it wears the warning tone, disabled or not.
+          fix.kind === "upgrade_latest" &&
+            "border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 disabled:bg-amber-500/10 dark:text-amber-300 dark:hover:text-amber-200",
+          className
+        )}
+        disabled={("disabled" in fix && fix.disabled === true) || busyGated}
+        onClick={() => {
+          handleFixAction(agent, fix).catch((err) => {
+            console.error("[Settings] fix action failed:", err)
+          })
+        }}
+      >
+        {running ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : fix.kind === "download_binary" ||
+          fix.kind === "install_npx" ||
+          fix.kind === "install_uv" ? (
+          <Download className="h-3 w-3" />
+        ) : fix.kind === "upgrade_binary" ||
+          fix.kind === "upgrade_npx" ||
+          fix.kind === "redownload_binary" ||
+          fix.kind === "upgrade_latest" ? (
+          <Wrench className="h-3 w-3" />
+        ) : fix.kind === "uninstall_binary" || fix.kind === "uninstall_npx" ? (
+          <Trash2 className="h-3 w-3" />
+        ) : fix.kind === "install_opencode_plugins" ? (
+          <Download className="h-3 w-3" />
+        ) : fix.kind === "custom_install" ? (
+          <PackagePlus className="h-3 w-3" />
+        ) : null}
+        {fix.label}
+      </Button>
+    )
+  }
+
   const renderCheck = (agent: AcpAgentInfo, check: UiCheckItem) => {
     const checkKey = `${agent.agent_type}:${check.check_id}`
     const expanded = expandedChecks[checkKey] ?? check.status !== "pass"
+    const footerFixes = check.footerFixes ?? []
 
     return (
       <div
@@ -5255,6 +5659,7 @@ export function AcpAgentSettings() {
           type="button"
           className="w-full flex items-center justify-between gap-2 text-left"
           onClick={() => {
+            userToggledChecksRef.current.add(checkKey)
             setExpandedChecks((prev) => ({
               ...prev,
               [checkKey]: !expanded,
@@ -5283,63 +5688,37 @@ export function AcpAgentSettings() {
             </div>
             {check.fixes.length > 0 && (
               <div className="flex flex-wrap gap-1.5 justify-end max-w-[13.75rem] shrink-0">
-                {check.fixes.map((fix, index) => {
-                  const busyGated =
-                    anyBinaryActionBusy &&
-                    PACKAGE_ACTION_FIX_KINDS.includes(fix.kind)
-                  const running =
-                    runningActionKind[agent.agent_type] === fix.kind
-                  return (
-                    <Button
-                      key={`${fix.label}-${index}`}
-                      size="xs"
-                      variant="outline"
-                      className={cn(
-                        "h-6 bg-muted/30 hover:bg-muted/50",
-                        // Two disabled looks: while the global one-package-op-
-                        // at-a-time gate is busy, every parked package action
-                        // dims (backend-disabled or not) so the lockout shows
-                        // on agents other than the busy one; only the button
-                        // showing the spinner, and — when the gate is idle — a
-                        // backend-declared inapplicable fix, keep the full-
-                        // opacity chip look.
-                        busyGated && !running
-                          ? "disabled:opacity-50"
-                          : "disabled:bg-muted/30 disabled:opacity-100"
-                      )}
-                      disabled={
-                        ("disabled" in fix && fix.disabled === true) ||
-                        busyGated
-                      }
-                      onClick={() => {
-                        handleFixAction(agent, fix).catch((err) => {
-                          console.error("[Settings] fix action failed:", err)
-                        })
-                      }}
-                    >
-                      {runningActionKind[agent.agent_type] === fix.kind ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : fix.kind === "download_binary" ||
-                        fix.kind === "install_npx" ||
-                        fix.kind === "install_uv" ? (
-                        <Download className="h-3 w-3" />
-                      ) : fix.kind === "upgrade_binary" ||
-                        fix.kind === "upgrade_npx" ||
-                        fix.kind === "redownload_binary" ? (
-                        <Wrench className="h-3 w-3" />
-                      ) : fix.kind === "uninstall_binary" ||
-                        fix.kind === "uninstall_npx" ? (
-                        <Trash2 className="h-3 w-3" />
-                      ) : fix.kind === "install_opencode_plugins" ? (
-                        <Download className="h-3 w-3" />
-                      ) : fix.kind === "custom_install" ? (
-                        <PackagePlus className="h-3 w-3" />
-                      ) : null}
-                      {fix.label}
-                    </Button>
-                  )
-                })}
+                {check.fixes.map((fix, index) =>
+                  renderFixButton(agent, fix, index)
+                )}
               </div>
+            )}
+          </div>
+        )}
+        {/*
+          Never wrapped apart: the unreviewed-latest offer holds the row's
+          start and Custom install its end, the offer's auto end margin taking
+          up the slack. When the row runs out of width the labels wrap instead
+          (Button's base classes forbid both shrinking and wrapping, hence the
+          overrides). Custom install gives way down to its longest word, the
+          flex default minimum; the offer takes what is left and only below
+          its own longest word breaks inside one, which
+          `overflow-wrap: anywhere` allows for a long version such as
+          `2026.10.03-abcdef1`.
+        */}
+        {expanded && footerFixes.length > 0 && (
+          <div className="flex flex-nowrap items-start justify-end gap-1.5">
+            {footerFixes.map((fix, index) =>
+              renderFixButton(
+                agent,
+                fix,
+                index,
+                cn(
+                  "h-auto min-h-6 shrink rounded-2xl py-1 text-left whitespace-normal",
+                  fix.kind === "upgrade_latest" &&
+                    "me-auto min-w-0 [overflow-wrap:anywhere]"
+                )
+              )
             )}
           </div>
         )}
@@ -5382,6 +5761,14 @@ export function AcpAgentSettings() {
       (p) => p.agent_type === selectedAgent.agent_type
     )
   }, [modelProviders, selectedAgent])
+
+  // The provider each agent was last bound to, remembered across auth-mode
+  // changes. The auth-mode handlers drop `draft.modelProviderId` whenever the
+  // mode leaves "model_provider", so that a save in another mode cannot
+  // persist a binding. Without this memory, coming BACK to provider mode falls
+  // through to the auto-select below, which had no record of the user's own
+  // choice. See `providerToRebindTo`.
+  const lastBoundProviderRef = useRef<Partial<Record<AgentType, number>>>({})
 
   const selectedNeedsModelProvider = useMemo(() => {
     if (!selectedDraft) return false
@@ -5494,10 +5881,15 @@ export function AcpAgentSettings() {
       })
   }, [selectedAgentKind])
 
+  const selectedLatestRelease =
+    selectedAgent && visitLatestRelease?.agentType === selectedAgent.agent_type
+      ? visitLatestRelease.release
+      : null
+
   const selectedChecks = useMemo(() => {
     if (!selectedAgent || !locale) return []
-    return getAgentChecks(selectedAgent, selectedCurrent)
-  }, [locale, selectedAgent, selectedCurrent])
+    return getAgentChecks(selectedAgent, selectedCurrent, selectedLatestRelease)
+  }, [locale, selectedAgent, selectedCurrent, selectedLatestRelease])
 
   useEffect(() => {
     if (!selectedAgent || selectedChecks.length === 0) return
@@ -5511,6 +5903,22 @@ export function AcpAgentSettings() {
       }
       return next
     })
+  }, [selectedAgent, selectedChecks])
+
+  // A passing Version Status card starts folded, and the unreviewed latest
+  // release arrives a moment after it, so unfold the card for the offer. A card
+  // the user has folded or unfolded by hand is left as they set it.
+  useEffect(() => {
+    if (!selectedAgent) return
+    const offered = selectedChecks.some(
+      (check) =>
+        check.check_id === "version_status" &&
+        check.footerFixes?.some((fix) => fix.kind === "upgrade_latest")
+    )
+    if (!offered) return
+    const key = `${selectedAgent.agent_type}:version_status`
+    if (userToggledChecksRef.current.has(key)) return
+    setExpandedChecks((prev) => (prev[key] ? prev : { ...prev, [key]: true }))
   }, [selectedAgent, selectedChecks])
 
   useEffect(() => {
@@ -5638,6 +6046,7 @@ export function AcpAgentSettings() {
         claudeDefaultHaikuModel: important.claudeDefaultHaikuModel,
         claudeDefaultSonnetModel: important.claudeDefaultSonnetModel,
         claudeDefaultOpusModel: important.claudeDefaultOpusModel,
+        claudeDefaultFableModel: important.claudeDefaultFableModel,
         claudeCustomModelOption: important.claudeCustomModelOption,
         claudeCustomModelOptionName: important.claudeCustomModelOptionName,
         claudeCustomModelOptionDescription:
@@ -5814,6 +6223,9 @@ export function AcpAgentSettings() {
     (providerIdStr: string) => {
       if (!selectedAgent || !selectedDraft) return
       const providerId = providerIdStr ? Number(providerIdStr) : null
+      if (providerId != null) {
+        lastBoundProviderRef.current[selectedAgent.agent_type] = providerId
+      }
       const provider = providerId
         ? modelProviders.find((p) => p.id === providerId)
         : null
@@ -5830,6 +6242,7 @@ export function AcpAgentSettings() {
         const claudeHaiku = claudeModel.haiku ?? ""
         const claudeSonnet = claudeModel.sonnet ?? ""
         const claudeOpus = claudeModel.opus ?? ""
+        const claudeFable = claudeModel.fable ?? ""
         const claudeCustomOption = claudeModel.customOption ?? ""
         const claudeCustomOptionName = claudeModel.customOptionName ?? ""
         const claudeCustomOptionDescription =
@@ -5846,8 +6259,9 @@ export function AcpAgentSettings() {
             claudeDefaultHaikuModel: claudeHaiku,
             claudeDefaultSonnetModel: claudeSonnet,
             claudeDefaultOpusModel: claudeOpus,
+            claudeDefaultFableModel: claudeFable,
             // The custom model option travels with the provider's model JSON,
-            // authoritative like the five model fields: a defined value sets it,
+            // authoritative like the six model fields: a defined value sets it,
             // an empty/omitted value clears the key from config.env.
             claudeCustomModelOption: claudeCustomOption,
             claudeCustomModelOptionName: claudeCustomOptionName,
@@ -5904,6 +6318,12 @@ export function AcpAgentSettings() {
           nextEnvText = patchEnvByImportantKey(
             agentType,
             nextEnvText,
+            "claudeDefaultFableModel",
+            claudeFable
+          )
+          nextEnvText = patchEnvByImportantKey(
+            agentType,
+            nextEnvText,
             "claudeCustomModelOption",
             claudeCustomOption
           )
@@ -5929,6 +6349,7 @@ export function AcpAgentSettings() {
             claudeDefaultHaikuModel: claudeHaiku,
             claudeDefaultSonnetModel: claudeSonnet,
             claudeDefaultOpusModel: claudeOpus,
+            claudeDefaultFableModel: claudeFable,
             claudeCustomModelOption: claudeCustomOption,
             claudeCustomModelOptionName: claudeCustomOptionName,
             claudeCustomModelOptionDescription: claudeCustomOptionDescription,
@@ -6025,15 +6446,26 @@ export function AcpAgentSettings() {
     [selectedAgent, selectedDraft, modelProviders, updateSelectedDraft]
   )
 
-  // Auto-select the first available provider when the user switches an agent to
-  // "model_provider" auth mode and hasn't picked one yet. If the list is empty,
-  // the existing "noModelProviderAvailable" hint handles the empty state.
+  // Auto-select a provider when the user switches an agent to
+  // "model_provider" auth mode and the draft holds no binding. If the list is
+  // empty, the existing "noModelProviderAvailable" hint handles the empty
+  // state. The user's own last pick (then the saved binding) wins over the head
+  // of the list, because an auth-mode round trip lands here too and rebinding
+  // to whichever provider happens to be first copies ITS model names over the
+  // one the user was actually on.
   useEffect(() => {
     if (!selectedNeedsModelProvider) return
     if (selectedDraft?.modelProviderId != null) return
-    if (selectedModelProviders.length === 0) return
-    handleModelProviderSelect(String(selectedModelProviders[0].id))
+    if (!selectedAgent) return
+    const target = providerToRebindTo(
+      selectedModelProviders,
+      lastBoundProviderRef.current[selectedAgent.agent_type],
+      selectedAgent.model_provider_id
+    )
+    if (!target) return
+    handleModelProviderSelect(String(target.id))
   }, [
+    selectedAgent,
     selectedNeedsModelProvider,
     selectedDraft?.modelProviderId,
     selectedModelProviders,
@@ -8448,18 +8880,18 @@ export function AcpAgentSettings() {
                             {t("codex.sandboxModeSeedsPresetHint")}
                           </p>
                         ) : null}
-                        {/* codex-acp 1.7.0 redefined its `read-only` preset to
-                            carry a workspace-write sandbox, and it re-sends
-                            that policy every turn — so an ACP session cannot
-                            honor a read-only sandbox at all any more. This
-                            control keeps working for codex CLI/IDE sessions,
-                            which is exactly why the divergence has to be said
-                            out loud rather than left to look effective. */}
+                        {/* codex-acp 1.7.0–1.13.x gave their `read-only`
+                            preset a workspace-write sandbox and re-send that
+                            policy every turn, so an ACP session on one of them
+                            cannot honor a read-only sandbox. 2.0.0 restored it,
+                            but launch prefers an adapter on PATH, which may be
+                            older — so the caveat stays, stated as a version
+                            note rather than a warning about the pinned one. */}
                         {showsCodexReadOnlyAcpWarning(
                           selectedDraft.codexSandboxMode,
                           selectedDraft.codexSandboxShadowed
                         ) ? (
-                          <p className="text-3xs text-yellow-500">
+                          <p className="text-3xs text-muted-foreground">
                             {t("codex.sandboxModeReadOnlyAcpWarning")}
                           </p>
                         ) : null}
@@ -8557,7 +8989,7 @@ export function AcpAgentSettings() {
                           handleCodexConfigTomlTextChange(event.target.value)
                         }}
                         placeholder={`disable_response_storage = true
-model = "gpt-5"
+model = "gpt-6-astra"
 model_reasoning_effort = "high"
 model_provider = "codeg"
 
@@ -9743,6 +10175,17 @@ supports_websockets = true`}
                       disabled={selectedIsSavingConfig}
                     />
 
+                    {/*
+                      Same contract as the permissions editor above: it owns a
+                      disjoint set of top-level keys, rewrites the whole
+                      document, and leaves the write to this card's Save button.
+                    */}
+                    <OpenCodeBehaviorSection
+                      configText={selectedDraft.configText}
+                      onChange={handleConfigTextChange}
+                      disabled={selectedIsSavingConfig}
+                    />
+
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
                         {t("openCode.nativeJsonConfig")}
@@ -9839,60 +10282,122 @@ supports_websockets = true`}
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {CLINE_PROVIDERS.map((p) => (
-                            <SelectItem key={p.value} value={p.value}>
-                              {p.label}
-                            </SelectItem>
-                          ))}
+                          <SelectGroup>
+                            <SelectLabel>{t("cline.signInGroup")}</SelectLabel>
+                            {CLINE_SIGNIN_PROVIDERS.map((p) => (
+                              <SelectItem key={p.value} value={p.value}>
+                                {p.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                          <SelectGroup>
+                            <SelectLabel>{t("cline.byoGroup")}</SelectLabel>
+                            {CLINE_BYO_PROVIDERS.map((p) => (
+                              <SelectItem key={p.value} value={p.value}>
+                                {p.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                          {/* A provider configured outside codeg (e.g. `cline
+                              auth bedrock`) keeps its own row, so opening this
+                              panel can't silently retarget the store. */}
+                          {!isClineSignInProvider(
+                            selectedDraft.clineProvider
+                          ) &&
+                            !CLINE_BYO_PROVIDERS.some(
+                              (p) => p.value === selectedDraft.clineProvider
+                            ) && (
+                              <SelectGroup>
+                                <SelectLabel>
+                                  {t("cline.externalGroup")}
+                                </SelectLabel>
+                                <SelectItem value={selectedDraft.clineProvider}>
+                                  {selectedDraft.clineProvider}
+                                </SelectItem>
+                              </SelectGroup>
+                            )}
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-2xs text-muted-foreground">
-                        API Key
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type={
-                            showApiKeys[selectedAgent.agent_type]
-                              ? "text"
-                              : "password"
-                          }
-                          value={selectedDraft.clineApiKey}
-                          onChange={(event) => {
-                            handleClineFieldChange(
-                              "clineApiKey",
-                              event.target.value
-                            )
-                          }}
-                          placeholder="sk-..."
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setShowApiKeys((prev) => ({
-                              ...prev,
-                              [selectedAgent.agent_type]:
-                                !prev[selectedAgent.agent_type],
-                            }))
-                          }}
-                          title={
-                            showApiKeys[selectedAgent.agent_type]
-                              ? t("actions.hideApiKey")
-                              : t("actions.showApiKey")
-                          }
-                        >
-                          {showApiKeys[selectedAgent.agent_type] ? (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Eye className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
+                    {isClineSignInProvider(selectedDraft.clineProvider) ? (
+                      // Sign-in: cline holds the credential, so there is nothing
+                      // here to fill in — only the command that obtains it. The
+                      // launch path deliberately exports no provider/key pair
+                      // for these, leaving `tryRestoreAuth` to find the token.
+                      <div className="space-y-1.5">
+                        <p className="text-2xs text-muted-foreground">
+                          {t("cline.signInHint")}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
+                            {clineAuthCommand(selectedDraft.clineProvider)}
+                          </code>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 shrink-0 p-0"
+                            onClick={async () => {
+                              const ok = await copyTextToClipboard(
+                                clineAuthCommand(selectedDraft.clineProvider)
+                              )
+                              if (ok) toast.success(t("grok.commandCopied"))
+                            }}
+                            title={t("grok.copyCommand")}
+                            aria-label={t("grok.copyCommand")}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <label className="text-2xs text-muted-foreground">
+                          API Key
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type={
+                              showApiKeys[selectedAgent.agent_type]
+                                ? "text"
+                                : "password"
+                            }
+                            value={selectedDraft.clineApiKey}
+                            onChange={(event) => {
+                              handleClineFieldChange(
+                                "clineApiKey",
+                                event.target.value
+                              )
+                            }}
+                            placeholder="sk-..."
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setShowApiKeys((prev) => ({
+                                ...prev,
+                                [selectedAgent.agent_type]:
+                                  !prev[selectedAgent.agent_type],
+                              }))
+                            }}
+                            title={
+                              showApiKeys[selectedAgent.agent_type]
+                                ? t("actions.hideApiKey")
+                                : t("actions.showApiKey")
+                            }
+                          >
+                            {showApiKeys[selectedAgent.agent_type] ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
@@ -9906,25 +10411,34 @@ supports_websockets = true`}
                             event.target.value
                           )
                         }}
-                        placeholder="claude-sonnet-5"
+                        placeholder="claude-sonnet-5-5"
                       />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-2xs text-muted-foreground">
-                        API URL
-                      </label>
-                      <Input
-                        value={selectedDraft.clineBaseUrl}
-                        onChange={(event) => {
-                          handleClineFieldChange(
-                            "clineBaseUrl",
-                            event.target.value
-                          )
-                        }}
-                        placeholder="https://api.openai.com"
-                      />
-                    </div>
+                    {/* Endpoint, like the key, is cline's own for a sign-in
+                        provider — its account service, not something to point
+                        elsewhere. */}
+                    {!isClineSignInProvider(selectedDraft.clineProvider) && (
+                      <div className="space-y-1.5">
+                        <label className="text-2xs text-muted-foreground">
+                          API URL
+                        </label>
+                        {/* Cline stores this as `settings.baseUrl`, which its
+                            own schema validates as a full URL — and an
+                            OpenAI-compatible endpoint wants the version suffix,
+                            so the placeholder shows the whole shape. */}
+                        <Input
+                          value={selectedDraft.clineBaseUrl}
+                          onChange={(event) => {
+                            handleClineFieldChange(
+                              "clineBaseUrl",
+                              event.target.value
+                            )
+                          }}
+                          placeholder="https://api.openai.com/v1"
+                        />
+                      </div>
+                    )}
 
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
@@ -9939,7 +10453,7 @@ supports_websockets = true`}
                         placeholder={`{
   "apiProvider": "anthropic",
   "apiKey": "sk-...",
-  "model": "claude-sonnet-5"
+  "model": "claude-sonnet-5-5"
 }`}
                       />
                       {selectedConfigError && (
@@ -10491,29 +11005,39 @@ supports_websockets = true`}
                     onAffectedSessions={reportAffectedSessions}
                   />
                 ) : selectedAgent.agent_type === "deepseek" ? (
-                  <DeepSeekConfigPanel
-                    agent={selectedAgent}
-                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
-                    onSaveEnv={(env, enabled) =>
-                      persistEnv(
-                        selectedAgent.agent_type,
-                        enabled,
-                        envMapToText(env),
-                        selectedAgent.model_provider_id,
-                        // The keys this panel owns, folded into the raw
-                        // editor's draft (which the enable switch persists
-                        // wholesale) so the two can never disagree.
-                        // `DEEPSEEK_ACP_MODEL` is NOT one of them — the raw
-                        // editor owns it, and folding it in would overwrite a
-                        // model line being typed there.
-                        {
-                          DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
-                          DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL,
-                          DEEPSEEK_ACP_PROVIDER: env.DEEPSEEK_ACP_PROVIDER,
-                        }
-                      )
-                    }
-                  />
+                  <>
+                    <DeepSeekConfigPanel
+                      agent={selectedAgent}
+                      saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                      onSaveEnv={(env, enabled) =>
+                        persistEnv(
+                          selectedAgent.agent_type,
+                          enabled,
+                          envMapToText(env),
+                          selectedAgent.model_provider_id,
+                          // The keys this panel owns, folded into the raw
+                          // editor's draft (which the enable switch persists
+                          // wholesale) so the two can never disagree.
+                          // `DEEPSEEK_ACP_MODEL` is NOT one of them — the raw
+                          // editor owns it, and folding it in would overwrite a
+                          // model line being typed there.
+                          {
+                            DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
+                            DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL,
+                            DEEPSEEK_ACP_PROVIDER: env.DEEPSEEK_ACP_PROVIDER,
+                          }
+                        )
+                      }
+                    />
+                    {/* The deployment's model catalog. It lives in the harness'
+                      own `settings.yaml`, not in the agent env, so it has its
+                      own section and its own save — and it is what the
+                      composer's per-session model selector gets to choose
+                      from. */}
+                    <DeepSeekModelListEditor
+                      launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
+                    />
+                  </>
                 ) : selectedAgent.agent_type === "qoder" ? (
                   <QoderConfigPanel
                     agent={selectedAgent}
@@ -11399,7 +11923,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-sonnet-5"
+                              placeholder="claude-sonnet-5-5"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -11418,7 +11942,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5"
+                              placeholder="claude-opus-5-5"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -11456,10 +11980,10 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-sonnet-5"
+                              placeholder="claude-sonnet-5-5"
                             />
                           </div>
-                          <div className="space-y-1.5 md:col-span-2">
+                          <div className="space-y-1.5">
                             <label className="text-2xs text-muted-foreground">
                               {t("claude.opusDefaultModel")}
                             </label>
@@ -11475,7 +11999,26 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5"
+                              placeholder="claude-opus-5-5"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("claude.fableDefaultModel")}
+                            </label>
+                            <Input
+                              value={selectedDraft.claudeDefaultFableModel}
+                              readOnly={
+                                selectedDraft.claudeAuthMode ===
+                                "model_provider"
+                              }
+                              onChange={(event) => {
+                                handleImportantConfigChange(
+                                  "claudeDefaultFableModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-fable-5-1"
                             />
                           </div>
                         </div>
@@ -11500,7 +12043,7 @@ supports_websockets = true`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="my-gateway/claude-opus-5"
+                                placeholder="my-gateway/claude-opus-5-5"
                               />
                             </div>
                             <div className="space-y-1.5">
@@ -11608,7 +12151,7 @@ supports_websockets = true`}
                                 event.target.value
                               )
                             }}
-                            placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                            placeholder="gpt-6-astra / claude-sonnet-5-5 / gemini-3.1-pro-preview"
                           />
                         </div>
                       )
@@ -11626,7 +12169,7 @@ supports_websockets = true`}
                         placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
-  "model": "gpt-5",
+  "model": "gpt-6-astra",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }
@@ -11968,6 +12511,41 @@ supports_websockets = true`}
             >
               <PackagePlus className="h-3.5 w-3.5" />
               {t("dialogs.customInstallSubmit")}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(upgradeLatestTarget)}
+        onOpenChange={(open) => {
+          if (!open) setUpgradeLatestTarget(null)
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("dialogs.confirmUpgradeToLatest", {
+                name: upgradeLatestTarget?.agent.name ?? "Agent",
+                version: upgradeLatestTarget?.version ?? "",
+              })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("dialogs.confirmUpgradeToLatestDescription", {
+                name: upgradeLatestTarget?.agent.name ?? "Agent",
+                recommendedVersion:
+                  upgradeLatestTarget?.agent.registry_version ?? "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
+            <Button
+              onClick={confirmUpgradeLatest}
+              disabled={anyBinaryActionBusy}
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              {t("actions.upgrade")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

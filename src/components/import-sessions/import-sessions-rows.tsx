@@ -6,7 +6,7 @@ import { ChevronRight, FolderOpen } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import type { ScanFolder, ScanSession } from "@/lib/types"
+import type { ScanFolder, ScanSession, ScanSessionStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { formatConversationTitle } from "@/lib/conversation-title"
 
@@ -17,6 +17,23 @@ export function sessionKey(session: {
   external_id: string
 }): string {
   return `${session.agent_type}:${session.external_id}`
+}
+
+/** Whether a scanned session can be checked for the next import run.
+ *
+ *  `new` always is. `deleted` is only reachable behind `includeDeleted`: codeg
+ *  soft-deletes, so importing such a session restores the existing row rather
+ *  than inserting a duplicate — but a deletion was deliberate, so it takes an
+ *  explicit opt-in before select-all and the folder tri-state can sweep it up.
+ *  `imported` never is: there is nothing to do to a live row here (the scan
+ *  already refreshed it in place). */
+export function isSessionSelectable(
+  session: { status: ScanSessionStatus },
+  includeDeleted: boolean
+): boolean {
+  return (
+    session.status === "new" || (includeDeleted && session.status === "deleted")
+  )
 }
 
 function formatRelative(iso: string): string {
@@ -126,6 +143,8 @@ interface SessionRowProps {
   session: ScanSession
   checked: boolean
   disabled: boolean
+  /** Whether deleted sessions are currently offered for restore. */
+  includeDeleted: boolean
   onToggle: (key: string) => void
 }
 
@@ -133,10 +152,11 @@ export const SessionRow = memo(function SessionRow({
   session,
   checked,
   disabled,
+  includeDeleted,
   onToggle,
 }: SessionRowProps) {
   const t = useTranslations("ImportSessions")
-  const selectable = session.status === "new" && !disabled
+  const selectable = isSessionSelectable(session, includeDeleted) && !disabled
   const key = sessionKey(session)
   const title = formatConversationTitle(session.title) || t("untitled")
 
@@ -151,7 +171,7 @@ export const SessionRow = memo(function SessionRow({
       data-session-key={key}
     >
       <Checkbox
-        checked={session.status === "new" ? checked : false}
+        checked={isSessionSelectable(session, includeDeleted) ? checked : false}
         disabled={!selectable}
         onCheckedChange={() => onToggle(key)}
         onClick={(e) => e.stopPropagation()}
@@ -167,7 +187,14 @@ export const SessionRow = memo(function SessionRow({
         </Badge>
       )}
       {session.status === "deleted" && (
-        <Badge variant="destructive" className="shrink-0 text-3xs">
+        // Stays "deleted" even when it is selectable: that IS the state the row
+        // is in, and it is what tells the user this checkbox restores rather
+        // than imports. The tooltip spells out the difference.
+        <Badge
+          variant="destructive"
+          className="shrink-0 text-3xs"
+          title={includeDeleted ? t("statusDeletedRestorable") : undefined}
+        >
           {t("statusDeleted")}
         </Badge>
       )}

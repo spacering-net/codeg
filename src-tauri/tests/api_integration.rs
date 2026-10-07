@@ -9,8 +9,13 @@
 //! - Authentication matrix on a representative protected endpoint
 //! - Public endpoint (`get_system_language_settings`) reachable without token
 //! - DB-backed endpoints (`load_folder_history`, `list_open_folders`) return
-//!   the expected JSON shape. `list_folders` is NOT one of them — it parses
-//!   the real home directory and ignores the test DB entirely.
+//!   the expected JSON shape.
+//!
+//! No test here may call `list_folders`, `get_stats`, `get_sidebar_data` or
+//! `list_conversations`, not even just for a status code: they ignore the test
+//! DB and parse every agent's session history under the real home directory.
+//! That is instant on a clean CI runner and over ten minutes on a developer
+//! machine with a few gigabytes of history.
 //!
 //! Not covered: WebSocket attach (separate concern), endpoints that touch the
 //! Tauri webview (those are gated behind `tauri-runtime`).
@@ -53,7 +58,7 @@ async fn build_test_server() -> (TestServer, tempfile::TempDir, tempfile::TempDi
 #[tokio::test]
 async fn protected_endpoint_rejects_missing_token() {
     let (server, _data, _static) = build_test_server().await;
-    let resp = server.post("/api/list_folders").json(&json!({})).await;
+    let resp = server.post("/api/list_open_folders").json(&json!({})).await;
     assert_eq!(resp.status_code(), 401);
 }
 
@@ -61,7 +66,7 @@ async fn protected_endpoint_rejects_missing_token() {
 async fn protected_endpoint_rejects_wrong_token() {
     let (server, _data, _static) = build_test_server().await;
     let resp = server
-        .post("/api/list_folders")
+        .post("/api/list_open_folders")
         .add_header("authorization", "Bearer wrong-token")
         .json(&json!({}))
         .await;
@@ -72,11 +77,13 @@ async fn protected_endpoint_rejects_wrong_token() {
 async fn protected_endpoint_accepts_correct_token() {
     let (server, _data, _static) = build_test_server().await;
     let resp = server
-        .post("/api/list_folders")
+        .post("/api/list_open_folders")
         .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
         .json(&json!({}))
         .await;
     assert_eq!(resp.status_code(), 200);
+    // The handler's own answer from the fresh DB, not just a status code.
+    assert_eq!(resp.json::<Value>(), json!([]));
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -99,11 +106,6 @@ async fn public_language_settings_reachable_without_token() {
 // ────────────────────────────────────────────────────────────────────────────
 // DB-backed endpoint
 // ────────────────────────────────────────────────────────────────────────────
-
-// Note: `/api/list_folders` invokes every parser against the *real* user home
-// directory, so it can't be asserted to-be-empty without elaborate filesystem
-// isolation. We test DB-backed endpoints (`load_folder_history`,
-// `list_open_folders`) instead — those only touch the in-memory SQLite.
 
 #[tokio::test]
 async fn load_folder_history_returns_empty_array_on_fresh_db() {
@@ -424,4 +426,218 @@ async fn get_folder_conversation_accepts_turn_window_params() {
     assert_eq!(body["turns_total"], 0);
     assert!(body["prefix_hash"].is_string());
     assert!(body["prefix_hash_before_index"].is_string());
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// codeg-mcp service status
+// ────────────────────────────────────────────────────────────────────────────
+
+/// The status endpoint has to answer even in a runtime that never bound a
+/// broker socket — that IS the "not running" case the workspace indicator
+/// exists to show, so a 500 here would blind exactly the situation it reports.
+/// `AppState::new_for_test` installs no service handle, which is that runtime.
+#[tokio::test]
+async fn codeg_mcp_service_status_reports_a_socketless_runtime_as_stopped() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/get_codeg_mcp_service_status")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.json::<Value>();
+    assert_eq!(body["state"], "stopped");
+    assert_eq!(body["listening"], false);
+    // No handle ⇒ nothing this process can start; the UI hides its button on
+    // this flag rather than offering one that can only fail.
+    assert_eq!(body["can_start"], false);
+    // The switches ride along regardless of socket health, so the popover can
+    // explain a healthy-but-toolless service without a second round trip.
+    let groups = body["tool_groups"].as_array().expect("tool_groups array");
+    let keys: Vec<&str> = groups.iter().filter_map(|g| g["key"].as_str()).collect();
+    assert!(keys.contains(&"delegation"), "got {keys:?}");
+    assert!(keys.contains(&"feedback"), "got {keys:?}");
+}
+
+/// Starting without a handle must fail loudly rather than report success the
+/// UI would then paint as a running service.
+#[tokio::test]
+async fn starting_codeg_mcp_service_without_a_handle_is_rejected() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/start_codeg_mcp_service")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 422);
+}
+
+#[tokio::test]
+async fn codeg_mcp_service_status_requires_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/get_codeg_mcp_service_status")
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// DeepSeek Harness model catalog
+//
+// Read-only side only: the update route writes the caller's real
+// `$DSH_HOME/settings.yaml`, which a test must never do. The assertions stay
+// content-agnostic for the same reason — the host may or may not have a
+// harness settings document, and either is a valid answer here.
+// ────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn deepseek_model_catalog_is_readable_and_shaped_for_the_panel() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_model_catalog")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    // camelCase on the wire, and every field the panel branches on is present
+    // — a missing document is reported in-band, never as an error status.
+    assert!(body["path"].is_string(), "got {body}");
+    assert!(body["exists"].is_boolean(), "got {body}");
+    assert!(body["configured"].is_boolean(), "got {body}");
+    assert!(body["models"].is_array(), "got {body}");
+    assert!(body["error"].is_string() || body["error"].is_null(), "got {body}");
+}
+
+#[tokio::test]
+async fn deepseek_model_catalog_requires_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_model_catalog")
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Computer use
+//
+// Served only by a codeg-server its operator let share the screen it runs on
+// (`CODEG_COMPUTER_USE`): everywhere else every call is refused, and
+// `computer_available` says so up front. Nothing here reaches a helper — no
+// screen is read in a test.
+// ────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn computer_use_is_refused_where_it_is_not_served() {
+    let (server, _data, _static) = build_test_server().await;
+    let auth = format!("Bearer {TEST_TOKEN}");
+    let resp = server
+        .post("/api/computer_available")
+        .add_header("authorization", auth.clone())
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    assert_eq!(body["available"], false, "got {body}");
+    assert!(body["platform"].is_string(), "got {body}");
+    for (route, args) in [
+        ("/api/computer_status", json!({})),
+        ("/api/computer_shared_state", json!({})),
+        (
+            "/api/computer_share_window",
+            json!({ "targetId": "w1", "level": "control" }),
+        ),
+        ("/api/computer_share_screen", json!({ "level": "read" })),
+        ("/api/computer_stop", json!({})),
+    ] {
+        let resp = server
+            .post(route)
+            .add_header("authorization", auth.clone())
+            .json(&args)
+            .await;
+        assert_eq!(resp.status_code(), 422, "{route}");
+        let body: Value = resp.json();
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("CODEG_COMPUTER_USE")),
+            "{route}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn computer_use_requires_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    for route in ["/api/computer_available", "/api/computer_share_screen"] {
+        let resp = server.post(route).json(&json!({ "level": "read" })).await;
+        assert_eq!(resp.status_code(), 401, "{route}");
+    }
+}
+
+/// A server let share its screen answers its web clients from its own
+/// service — what is shared, and refusals of its own (here: computer use is
+/// switched off, which a share needs first).
+#[tokio::test]
+async fn a_server_that_shares_its_screen_answers_its_web_clients() {
+    let data_dir = tempfile::tempdir().expect("data dir");
+    let static_dir = tempfile::tempdir().expect("static dir");
+    let db = fresh_in_memory_db().await;
+    let state = Arc::new(AppState::new_for_test(db, data_dir.path().to_path_buf()));
+    let service = codeg_lib::commands::computer::ComputerService::start(
+        codeg_lib::commands::computer::ComputerHost::Server {
+            broadcaster: state.event_broadcaster.clone(),
+            emitter: state.emitter.clone(),
+        },
+        state.computer_tools_config.clone(),
+    );
+    assert!(state.computer_service.set(service).is_ok());
+    assert!(state.computer_tools_config.is_served());
+    let router = build_router(
+        state,
+        TEST_TOKEN.to_string(),
+        static_dir.path().to_path_buf(),
+        Arc::new(ShutdownSignal::new()),
+    );
+    let server = TestServer::new(router).expect("test server");
+    let auth = format!("Bearer {TEST_TOKEN}");
+
+    let resp = server
+        .post("/api/computer_available")
+        .add_header("authorization", auth.clone())
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.json::<Value>()["available"], true);
+
+    let resp = server
+        .post("/api/computer_shared_state")
+        .add_header("authorization", auth.clone())
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.json::<Value>(), json!({ "shared": [], "apps": [] }));
+
+    let resp = server
+        .post("/api/computer_share_screen")
+        .add_header("authorization", auth.clone())
+        .json(&json!({ "level": "read" }))
+        .await;
+    assert_eq!(resp.status_code(), 422);
+    let body: Value = resp.json();
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("switched off") || m.contains("not offered on Linux")),
+        "got {body}"
+    );
+
+    let resp = server
+        .post("/api/computer_stop_key_status")
+        .add_header("authorization", auth)
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.json::<Value>(), json!({}));
 }

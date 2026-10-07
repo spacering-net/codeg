@@ -6,11 +6,18 @@ import { Button } from "@/components/ui/button"
 import { acpRespondPermission } from "@/lib/api"
 import { parsePermissionToolCall } from "@/lib/permission-request"
 import type { PetPermissionSummary } from "@/lib/pet/types"
+import type { AgentType } from "@/lib/types"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import { cn } from "@/lib/utils"
 
 interface PanelPermissionCardProps {
   connectionId: string
   permission: PetPermissionSummary
+  /**
+   * Which agent asked — only used to localise option labels an agent hardcodes
+   * in one language. Optional so a caller without it keeps verbatim rendering.
+   */
+  agentType?: AgentType | null
 }
 
 /**
@@ -23,9 +30,13 @@ interface PanelPermissionCardProps {
 export function PanelPermissionCard({
   connectionId,
   permission,
+  agentType,
 }: PanelPermissionCardProps) {
   const [busy, setBusy] = useState(false)
   const parsed = parsePermissionToolCall(permission.toolCall)
+  const options = useAgentVocabulary(agentType).permissionOptions(
+    permission.options
+  )
 
   const respond = (optionId: string) => {
     if (busy) return
@@ -61,7 +72,9 @@ export function PanelPermissionCard({
       <div className="flex items-center gap-1.5 text-xs font-medium">
         <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-500" />
         {/* Same precedence as PermissionDialog: description (≥0.63 meta)
-            over the raw command title — the command row below shows it. */}
+            over the raw command title — the command row below shows it, and
+            `parsePermissionToolCall` keeps a description that merely repeats
+            the command from taking the heading. */}
         <span className="truncate">{parsed.description ?? parsed.title}</span>
       </div>
 
@@ -81,7 +94,7 @@ export function PanelPermissionCard({
       ) : null}
 
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {permission.options.map((opt) => {
+        {options.map((opt) => {
           const isReject = opt.kind.startsWith("reject")
           return (
             <Button
