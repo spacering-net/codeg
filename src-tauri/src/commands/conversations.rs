@@ -69,13 +69,17 @@ pub(crate) async fn list_all_conversations_core(
     .await
 }
 
+/// Blocking Codex list scan: titles map plus the rollout-presence walk.
+type CodexListScan =
+    Result<(HashMap<String, String>, Result<HashSet<String>, std::io::Error>), String>;
+
 /// Map the blocking Codex title+presence scan into list_all inputs.
 ///
 /// `Ok((_, Err(_)))` and join failures both yield `present = None` so prune is
 /// skipped; only a successful walk (including a successful empty set) enables
 /// prune.
 fn resolve_codex_list_scan(
-    scan: Result<(HashMap<String, String>, Result<HashSet<String>, std::io::Error>), String>,
+    scan: CodexListScan,
 ) -> (HashMap<String, String>, Option<HashSet<String>>) {
     match scan {
         Ok((titles, Ok(present))) => (titles, Some(present)),
