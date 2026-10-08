@@ -390,14 +390,12 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         return;
     };
     match event {
-        tauri::WindowEvent::Focused(true) => {
+        tauri::WindowEvent::Focused(true) if window.is_visible().unwrap_or(false) => {
             // Focus means the window is open — unless it was hidden again
             // before the event got here, which is how a `main` that the
             // window-state plugin showed while it was built, and the launch
             // then hid, reports in.
-            if window.is_visible().unwrap_or(false) {
-                note_opened(window.app_handle(), workspace);
-            }
+            note_opened(window.app_handle(), workspace);
         }
         tauri::WindowEvent::Destroyed => {
             record(window.app_handle(), |state| state.mark_closed(workspace));

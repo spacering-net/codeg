@@ -49,6 +49,7 @@ cargo test --no-default-features --features test-utils --test message_edit_live 
 - TypeScript、改动文件 ESLint、Next.js 静态生产构建均通过。完整前端 lint 在与 CI 一致的 LF 换行检出方式下通过。
 - Windows 服务器库全量通过 4635 项，包含 1867 项 ACP 回归；Linux 文件检查点回归通过 58 项。桌面和服务器编译检查通过。
 - 服务器模式严格 Clippy 使用 `-D warnings` 通过，没有告警豁免。
+- 桌面 CI 命令 `cargo clippy --all-targets --features test-utils -- -D warnings` 也已通过。为保持现有扁平 IPC 参数格式，四个 Tauri 命令边界保留了注明原因的局部 `too_many_arguments` 例外，其余检查问题已修正。编译检查使用的伴生进程占位文件不代表已经构建可分发安装包。
 - 真实 Claude Code 和 Codex 测试验证了持久消息身份、首条和历史消息编辑、丢弃后续上下文、保留原始会话、拒绝向过时会话发送及重试，以及文件字节精确恢复。
 - 真实 Codex 取消场景通过：原生命令约 31 秒后结束，期间拒绝恢复；两个实际写入的文件均被恢复，恢复后观察 35 秒未出现新写入。
 - macOS 在仓库现有 CI 矩阵内，但没有在本地执行；DeepSeek 未进行真实模型测试。

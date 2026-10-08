@@ -11164,6 +11164,10 @@ pub async fn acp_connect(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Tauri maps the existing flat IPC payload and injected state to separate arguments"
+)]
 pub async fn acp_prompt(
     connection_id: String,
     blocks: Vec<PromptInputBlock>,
@@ -11282,6 +11286,10 @@ pub async fn acp_cancel(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Preserve the flat Tauri IPC contract shared with the web transport"
+)]
 pub async fn acp_fork(
     connection_id: String,
     conversation_id: Option<i32>,
@@ -11316,6 +11324,10 @@ pub async fn acp_fork(
 /// not found, rather than ignore new fields and silently fork at the tail.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Keep strict edit identity fields explicit in the flat Tauri IPC contract"
+)]
 pub async fn acp_edit_fork(
     connection_id: String,
     conversation_id: Option<i32>,
@@ -11420,6 +11432,10 @@ pub async fn acp_resolve_edit_turn(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Tauri decodes the strict edit identity, preview token and injected state separately"
+)]
 pub async fn acp_restore_edit_fork(
     connection_id: String,
     conversation_id: i32,

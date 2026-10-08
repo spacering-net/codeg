@@ -115,14 +115,13 @@ async fn spawn_upstream() -> u16 {
                 .await;
             while let Some(Ok(message)) = socket.recv().await {
                 match message {
-                    Message::Text(text) => {
+                    Message::Text(text)
                         if socket
                             .send(Message::Text(format!("echo:{text}").into()))
                             .await
-                            .is_err()
-                        {
-                            break;
-                        }
+                            .is_err() =>
+                    {
+                        break;
                     }
                     Message::Close(_) => break,
                     _ => {}

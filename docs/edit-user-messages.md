@@ -77,6 +77,11 @@ were restored, and no new writes occurred during the 35-second observation.
 macOS is covered by the existing CI matrix but was not executed locally. DeepSeek
 was not exercised against a real model. Strict server Clippy passes with
 `-D warnings`, without lint exceptions.
+The desktop CI command `cargo clippy --all-targets --features test-utils -- -D warnings`
+also passes. Four Tauri command boundaries have documented, local
+`too_many_arguments` allowances to preserve the existing flat IPC payload;
+all other reported findings were fixed. Sidecar build-script placeholders used
+for these compile checks are not a packaged installer.
 
 The debug-build capture benchmark is explicitly runnable via
 `cargo test --no-default-features --features server-bin --lib capture_performance_reports_small_and_large_fixtures -- --ignored --nocapture`.

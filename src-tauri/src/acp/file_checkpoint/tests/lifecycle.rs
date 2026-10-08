@@ -174,7 +174,7 @@ fn configuration_defaults_off_persists_and_disabling_preserves_coverage() {
         &f,
         "session",
         0,
-        &[id.clone()],
+        std::slice::from_ref(&id),
         chrono::Utc::now().timestamp_millis(),
     );
     f.store.set_enabled(true).unwrap();
@@ -225,14 +225,14 @@ fn gc_applies_age_and_newest_100_limits_across_sessions() {
         &f,
         "expired",
         0,
-        &[shared.clone()],
+        std::slice::from_ref(&shared),
         now - chrono::Duration::days(31).num_milliseconds(),
     );
     let recent = completed(
         &f,
         "recent",
         0,
-        &[shared.clone()],
+        std::slice::from_ref(&shared),
         now - chrono::Duration::days(29).num_milliseconds(),
     );
     assert_eq!(sweep(&f), 6);
@@ -243,7 +243,7 @@ fn gc_applies_age_and_newest_100_limits_across_sessions() {
             &f,
             if index % 2 == 0 { "parent" } else { "child" },
             index,
-            &[shared.clone()],
+            std::slice::from_ref(&shared),
             now - 1000 + index as i64,
         );
     }
@@ -265,7 +265,7 @@ fn gc_reclaims_dropped_captures_orphans_and_atomic_write_temporary_files() {
         &f,
         "other",
         0,
-        &[live.clone()],
+        std::slice::from_ref(&live),
         chrono::Utc::now().timestamp_millis(),
     );
     f.write("a", b"abandoned");
@@ -300,7 +300,7 @@ fn quota_pressure_evicts_oldest_records_until_unique_bytes_fit() {
     let newest_only = object(&f, b"new!");
     let oldest = completed(&f, "session", 0, &[shared.clone(), oldest_only], now - 2);
     let middle = completed(&f, "session", 1, &[shared.clone(), shared.clone()], now - 1);
-    let newest = completed(&f, "session", 2, &[newest_only.clone()], now);
+    let newest = completed(&f, "session", 2, std::slice::from_ref(&newest_only), now);
     f.store.object_limit = Some(8);
     let _guard = f.store.lock().unwrap();
     let mut budget = ObjectBudget::default();
@@ -325,7 +325,7 @@ fn deduplicated_scan_objects_are_pinned_before_quota_gc_evicts_their_record() {
         &f,
         "session",
         0,
-        &[shared.clone()],
+        std::slice::from_ref(&shared),
         chrono::Utc::now().timestamp_millis(),
     );
     f.store.object_limit = Some(8);
@@ -387,7 +387,7 @@ fn pending_record_and_scan_pins_survive_expiration_and_quota_pressure() {
     let scan = object(&f, b"scan");
     let discard = object(&f, b"drop");
     let old = chrono::Utc::now().timestamp_millis() - chrono::Duration::days(31).num_milliseconds();
-    let mut pending = completed(&f, "session", 0, &[baseline.clone()], old);
+    let mut pending = completed(&f, "session", 0, std::slice::from_ref(&baseline), old);
     pending.finished_ms = None;
     pending.after = None;
     f.store.write_record(&pending).unwrap();
@@ -649,12 +649,12 @@ fn fork_inheritance_preserves_gaps_agent_prompt_and_original_ordinals() {
     let f = Fixture::new();
     let now = chrono::Utc::now().timestamp_millis();
     let id = object(&f, b"shared");
-    let first = completed(&f, "parent", 0, &[id.clone()], now);
-    let third = completed(&f, "parent", 2, &[id.clone()], now);
-    completed(&f, "parent", 4, &[id.clone()], now);
+    let first = completed(&f, "parent", 0, std::slice::from_ref(&id), now);
+    let third = completed(&f, "parent", 2, std::slice::from_ref(&id), now);
+    completed(&f, "parent", 4, std::slice::from_ref(&id), now);
     let incomplete = Record::new(AgentType::Codex, "parent", 1);
     f.store.write_record(&incomplete).unwrap();
-    let mut other_agent = completed(&f, "other", 3, &[id.clone()], now);
+    let mut other_agent = completed(&f, "other", 3, std::slice::from_ref(&id), now);
     other_agent.agent = AgentType::ClaudeCode;
     other_agent.session = "parent".into();
     f.store.write_record(&other_agent).unwrap();
@@ -706,7 +706,7 @@ fn conflicting_child_prefix_is_rejected_before_copying_any_new_slot() {
     let now = chrono::Utc::now().timestamp_millis();
     let parent = object(&f, b"parent");
     let child = object(&f, b"child");
-    completed(&f, "parent", 0, &[parent.clone()], now);
+    completed(&f, "parent", 0, std::slice::from_ref(&parent), now);
     completed(&f, "parent", 1, &[parent], now);
     let conflict = completed(&f, "child", 1, &[child], now);
     let _guard = f.store.lock().unwrap();
@@ -732,7 +732,7 @@ fn fork_metadata_burst_is_bounded_at_201_without_gc_or_partial_quota_copy() {
             &f,
             "parent",
             index,
-            &[shared.clone()],
+            std::slice::from_ref(&shared),
             now - 1000 + index as i64,
         );
     }
