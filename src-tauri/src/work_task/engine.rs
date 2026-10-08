@@ -2634,28 +2634,26 @@ impl TaskEngine {
             AcpEvent::DelegationStarted {
                 child_connection_id,
                 ..
-            } => {
+            } if self.task_for_connection(&env.connection_id).await.is_some() => {
                 // Scoped to task runs: a delegation from an ordinary chat tab
                 // has no board row to flip, and mapping it would grow this map
                 // for the life of the process. Resolved through
                 // `task_for_connection` rather than `index` alone so a nested
                 // delegation (a sub-agent delegating further) maps to the same
                 // run — its prompts block the task just as much.
-                if self.task_for_connection(&env.connection_id).await.is_some() {
-                    self.delegation_parents
-                        .lock()
-                        .await
-                        .insert(child_connection_id.clone(), env.connection_id.clone());
-                    // The broker starts the child's turn BEFORE announcing it
-                    // (`send_prompt_linked_for_delegation` precedes
-                    // `emit_started_if_real`), so a child that blocks
-                    // immediately raised its prompt while we had no mapping and
-                    // we dropped it. Recover from live state now that we do —
-                    // otherwise the board sits at `running` for a run that is
-                    // already parked on the user.
-                    self.backfill_child_blocking_prompts(child_connection_id)
-                        .await;
-                }
+                self.delegation_parents
+                    .lock()
+                    .await
+                    .insert(child_connection_id.clone(), env.connection_id.clone());
+                // The broker starts the child's turn BEFORE announcing it
+                // (`send_prompt_linked_for_delegation` precedes
+                // `emit_started_if_real`), so a child that blocks
+                // immediately raised its prompt while we had no mapping and
+                // we dropped it. Recover from live state now that we do —
+                // otherwise the board sits at `running` for a run that is
+                // already parked on the user.
+                self.backfill_child_blocking_prompts(child_connection_id)
+                    .await;
             }
             AcpEvent::DelegationCompleted {
                 child_connection_id,

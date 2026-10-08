@@ -415,6 +415,73 @@ pub struct FileRestoreRecoveryParams {
     pub connection_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckpointEnabledParams {
+    pub connection_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolveEditTurnParams {
+    pub connection_id: String,
+    pub expected_session_id: String,
+    pub client_message_id: String,
+}
+
+pub async fn acp_checkpoint_status(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FileRestoreRecoveryParams>,
+) -> Result<Json<crate::acp::file_checkpoint::CheckpointStatus>, AppCommandError> {
+    state
+        .connection_manager
+        .checkpoint_status(&params.connection_id)
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn acp_set_checkpoint_enabled(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CheckpointEnabledParams>,
+) -> Result<Json<crate::acp::file_checkpoint::CheckpointStatus>, AppCommandError> {
+    state
+        .connection_manager
+        .configure_checkpoints(&params.connection_id, Some(params.enabled))
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn acp_cleanup_checkpoints(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FileRestoreRecoveryParams>,
+) -> Result<Json<crate::acp::file_checkpoint::CheckpointStatus>, AppCommandError> {
+    state
+        .connection_manager
+        .configure_checkpoints(&params.connection_id, None)
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn acp_resolve_edit_turn(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ResolveEditTurnParams>,
+) -> Result<Json<crate::models::message::MessageTurn>, AppCommandError> {
+    state
+        .connection_manager
+        .resolve_edit_turn(
+            &params.connection_id,
+            &params.expected_session_id,
+            &params.client_message_id,
+        )
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
 pub async fn acp_recover_file_restore(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<FileRestoreRecoveryParams>,

@@ -1991,6 +1991,98 @@ impl ConnectionManager {
         Ok(())
     }
 
+    pub async fn checkpoint_status(
+        &self,
+        conn_id: &str,
+    ) -> Result<crate::acp::file_checkpoint::CheckpointStatus, AcpError> {
+        let state = self
+            .get_state(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        let root = state
+            .read()
+            .await
+            .working_dir
+            .clone()
+            .ok_or_else(|| AcpError::protocol("No workspace"))?;
+        crate::acp::file_checkpoint::status(&root)
+            .await
+            .map_err(AcpError::protocol)
+    }
+
+    pub async fn configure_checkpoints(
+        &self,
+        conn_id: &str,
+        enabled: Option<bool>,
+    ) -> Result<crate::acp::file_checkpoint::CheckpointStatus, AcpError> {
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _guard = prompt_lock.lock_owned().await;
+        let state = self
+            .get_state(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        let root = state
+            .read()
+            .await
+            .working_dir
+            .clone()
+            .ok_or_else(|| AcpError::protocol("No workspace"))?;
+        let _activity = crate::acp::file_checkpoint_activity::RestoreActivity::begin(&root)
+            .map_err(AcpError::protocol)?;
+        self.require_workspace_idle(&root).await?;
+        match enabled {
+            Some(value) => crate::acp::file_checkpoint::set_enabled(&root, value).await,
+            None => crate::acp::file_checkpoint::cleanup(&root).await,
+        }
+        .map_err(AcpError::protocol)
+    }
+
+    pub async fn resolve_edit_turn(
+        &self,
+        conn_id: &str,
+        expected_session_id: &str,
+        client_message_id: &str,
+    ) -> Result<crate::models::message::MessageTurn, AcpError> {
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _guard = prompt_lock.lock_owned().await;
+        let state = self
+            .get_state(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        let (agent, root) = {
+            let state = state.read().await;
+            if state.external_id.as_deref() != Some(expected_session_id) || state.turn_in_flight {
+                return Err(AcpError::protocol("Session changed or a turn is running"));
+            }
+            (
+                state.agent_type,
+                state
+                    .working_dir
+                    .clone()
+                    .ok_or_else(|| AcpError::protocol("No workspace"))?,
+            )
+        };
+        let sid = expected_session_id.to_string();
+        let detail = tokio::task::spawn_blocking(move || {
+            crate::parsers::build_agent_parser(agent).get_conversation(&sid)
+        })
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
+        if detail.summary.id != expected_session_id {
+            return Err(AcpError::protocol("Transcript identity changed"));
+        }
+        crate::acp::prompt_identity::resolve(
+            agent,
+            expected_session_id,
+            client_message_id,
+            &root,
+            &detail.turns,
+        )
+        .await
+        .map_err(AcpError::protocol)
+    }
+
     pub async fn recover_file_restore(
         &self,
         db: &AppDatabase,
@@ -2352,6 +2444,25 @@ impl ConnectionManager {
         let db_conn = db.conn.clone();
         let conn_id_for_task = conn_id.to_string();
         let file_restore = strict.as_ref().and_then(|s| s.file_restore.clone());
+        let inherit_after_commit = if file_restore.is_none() {
+            let state = state_arc.read().await;
+            strict.as_ref().and_then(|edit| {
+                state.working_dir.clone().map(|root| {
+                    (
+                        state.agent_type,
+                        root,
+                        edit.prefix
+                            .iter()
+                            .filter(|turn| {
+                                matches!(turn.role, crate::models::message::TurnRole::User)
+                            })
+                            .count(),
+                    )
+                })
+            })
+        } else {
+            None
+        };
         let handle = tokio::spawn(async move {
             // Holding the owned guard for the whole task is what shields the
             // persistence from caller cancellation.
@@ -2371,7 +2482,7 @@ impl ConnectionManager {
                     .send(ConnectionCommand::Fork {
                         publication,
                         fork_point,
-                        strict,
+                        strict: strict.map(Box::new),
                         reply: reply_tx,
                     })
                     .await
@@ -2398,6 +2509,21 @@ impl ConnectionManager {
                 // `conversation://changed` so every other client converges in
                 // real time instead of waiting for a manual refresh. Both rows
                 // are roots; the helper still guards `parent_id` internally.
+                if let Some((agent, root, count)) = &inherit_after_commit {
+                    if let Err(error) = crate::acp::file_checkpoint::inherit_prefix(
+                        *agent,
+                        &original_session_id,
+                        &forked_session_id,
+                        root,
+                        *count,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            "[ACP] committed fork checkpoint inheritance unavailable: {error}"
+                        );
+                    }
+                }
                 crate::commands::conversations::emit_conversation_upsert(
                     &emitter,
                     &db_conn,

@@ -117,10 +117,20 @@ pub fn verify_fork_prefix(
     actual: &[MessageTurn],
 ) -> Result<(), AcpError> {
     if expected.len() != actual.len()
-        || !expected
-            .iter()
-            .zip(actual)
-            .all(|(a, b)| same_turn_content(a, b))
+        || !expected.iter().zip(actual).all(|(a, b)| {
+            let same_time_or_native_assistant = a.timestamp == b.timestamp
+                || (matches!(a.role, TurnRole::Assistant)
+                    && a.agent_message_id
+                        .as_deref()
+                        .is_some_and(|id| !id.is_empty())
+                    && a.agent_message_id == b.agent_message_id);
+            // Claude's native fork can re-stamp copied assistant records.
+            // Only the same immutable native assistant id permits that;
+            // user timestamps and every content block remain exact.
+            std::mem::discriminant(&a.role) == std::mem::discriminant(&b.role)
+                && same_time_or_native_assistant
+                && serde_json::to_value(&a.blocks).ok() == serde_json::to_value(&b.blocks).ok()
+        })
     {
         return Err(AcpError::protocol(
             "Provider did not preserve the exact prefix before the edited user turn; original session retained",
@@ -797,5 +807,25 @@ mod tests {
             fingerprint_agent_message("abc"),
             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn fork_allows_retimestamping_only_for_the_same_native_assistant() {
+        let parent = edit_history()[..2].to_vec();
+        let mut child = parent.clone();
+        child[1].timestamp += chrono::Duration::milliseconds(53309);
+        verify_fork_prefix(&parent, &child).unwrap();
+        child[1].agent_message_id = Some("different-native-message".into());
+        assert!(verify_fork_prefix(&parent, &child).is_err());
+        child[1].agent_message_id = None;
+        assert!(verify_fork_prefix(&parent, &child).is_err());
+        child[1].agent_message_id = parent[1].agent_message_id.clone();
+        child[1].blocks = vec![ContentBlock::Text {
+            text: "different".into(),
+        }];
+        assert!(verify_fork_prefix(&parent, &child).is_err());
+        child = parent.clone();
+        child[0].timestamp += chrono::Duration::milliseconds(53309);
+        assert!(verify_fork_prefix(&parent, &child).is_err());
     }
 }

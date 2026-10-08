@@ -1,4 +1,4 @@
-use super::storage::{hash, sync_dir, RootGuard, Store};
+use super::storage::{hash, sync_dir, Record, RootGuard, Store};
 use super::workspace::{self, Entry};
 use crate::models::agent::AgentType;
 use crate::models::message::MessageTurn;
@@ -39,14 +39,39 @@ pub(super) struct Plan {
 #[derive(Debug, Serialize, Deserialize)]
 struct Journal {
     version: u32,
+    /// Version 2 publishes this immutable plan once. The small progress file is
+    /// tied to this id so an interrupted cleanup cannot replay an older cursor.
+    #[serde(default)]
+    transaction_id: String,
     #[serde(default)]
     committed: bool,
     #[serde(default)]
     binding: Option<RecoveryBinding>,
     root: PathBuf,
     changes: Vec<Change>,
-    /// Persisted BEFORE each write, allowing recovery after an interrupted rename.
+    /// Legacy v1 cursor. For v2, read_journal overlays the durable progress file.
     attempted: usize,
+    #[serde(default)]
+    inherited: Vec<InheritedRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Progress {
+    version: u32,
+    transaction_id: String,
+    attempted: usize,
+    committed: bool,
+    binding: Option<RecoveryBinding>,
+}
+
+/// Only records absent at preflight belong to this transaction. Hashing the
+/// serialized record lets cleanup refuse a subsequently replaced child slot.
+#[derive(Debug, Serialize, Deserialize)]
+struct InheritedRecord {
+    agent: AgentType,
+    session: String,
+    user_index: usize,
+    fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +124,7 @@ pub(super) fn plan(
         records.push(record);
     }
     let first = &records[0];
-    if first.prompt != super::target_fingerprint(target)? {
+    if first.prompt != super::target_fingerprint(agent, target)? {
         return Err("Checkpoint target prompt fingerprint changed".into());
     }
     // Native parsers with no timestamp use the epoch. Otherwise bind the target
@@ -229,12 +254,14 @@ pub(super) fn prepare(
         ));
     }
     let journal = Journal {
-        version: 1,
+        version: 2,
+        transaction_id: uuid::Uuid::new_v4().to_string(),
         committed: false,
         binding: None,
         root: store.root.clone(),
         changes: plan.changes,
         attempted: 0,
+        inherited: Vec::new(),
     };
     Ok(PreparedRestore {
         store,
@@ -250,6 +277,74 @@ pub(super) fn prepare(
 }
 
 impl PreparedRestore {
+    /// Copy fork coverage under the lease already held by this transaction.
+    /// Invoke off-runtime after fork creation and before database persistence.
+    pub fn inherit_prefix(
+        &mut self,
+        agent: AgentType,
+        parent: &str,
+        child: &str,
+        retained_user_count: usize,
+    ) -> Result<(), String> {
+        if self.settled || self.journal_written {
+            return Err("Checkpoint restore already settled".into());
+        }
+        if parent == child {
+            return Err("Checkpoint destination must be a new session".into());
+        }
+        let records = self.store.records(None)?;
+        let mut copies = Vec::new();
+        for (_, record) in &records {
+            if record.agent != agent
+                || record.session != parent
+                || record.user_index >= retained_user_count
+                || !super::retention::complete(record)
+            {
+                continue;
+            }
+            let mut copy = record.clone();
+            copy.session = child.into();
+            let path = self.store.record_path(&copy);
+            if path.try_exists().map_err(|e| e.to_string())? {
+                let old: Record = self.store.read_json(&path)?;
+                if record_fingerprint(&old)? != record_fingerprint(&copy)? {
+                    return Err("Checkpoint child prefix already differs".into());
+                }
+            } else {
+                copies.push(copy);
+            }
+        }
+        if records.len() + copies.len() > super::retention::MAX_RECORD_FILES {
+            return Err(
+                "Checkpoint prefix metadata quota exceeded; run cleanup before editing".into(),
+            );
+        }
+        self.journal.inherited = copies
+            .iter()
+            .map(|record| {
+                Ok(InheritedRecord {
+                    agent: record.agent,
+                    session: record.session.clone(),
+                    user_index: record.user_index,
+                    fingerprint: record_fingerprint(record)?,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        // The manifest precedes even the first metadata write. A crash before
+        // bind_fork has no file/DB side effects, and plain recovery can abort it.
+        self.persist_plan()?;
+        for record in copies {
+            if let Err(error) = self.store.write_record(&record) {
+                return match self.rollback() {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => {
+                        Err(format!("{error}; inheritance cleanup required: {cleanup}"))
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
     /// Recorded before the first file write, so crash recovery can consult the
     /// transaction's conversation row instead of guessing whether DB commit won.
     pub fn bind_fork(
@@ -258,7 +353,7 @@ impl PreparedRestore {
         original: &str,
         forked: &str,
     ) -> Result<(), String> {
-        if self.applied || self.journal_written {
+        if self.settled || self.applied || self.journal.attempted != 0 {
             return Err("Cannot change a started restore transaction".into());
         }
         if original == forked {
@@ -269,6 +364,9 @@ impl PreparedRestore {
             original_session_id: original.into(),
             forked_session_id: forked.into(),
         });
+        if self.journal_written {
+            write_progress(&self.store, &self.journal)?;
+        }
         Ok(())
     }
     /// Apply the plan with automatic compensation on failure. The journal and
@@ -280,7 +378,9 @@ impl PreparedRestore {
         if self.applied {
             return Ok(());
         }
-        self.store.ensure_recovered()?;
+        if !self.journal_written {
+            self.store.ensure_recovered()?;
+        }
         if workspace::current_scope(&self.store)? != self.scope {
             return Err("Workspace ignore policy changed since restore preparation".into());
         }
@@ -296,9 +396,6 @@ impl PreparedRestore {
                 self.store.object(&state.object)?;
             }
         }
-        // Treat a failed durable write as possibly published. Rollback/Drop will
-        // inspect its existence instead of guessing whether rename completed.
-        self.journal_written = true;
         let result = self.apply_inner();
         if let Err(error) = result {
             return match self.rollback() {
@@ -312,17 +409,29 @@ impl PreparedRestore {
         Ok(())
     }
 
+    fn persist_plan(&mut self) -> Result<(), String> {
+        if !self.journal_written {
+            self.store.ensure_recovered()?;
+            // Remove a sidecar left after durable plan removal. No live plan
+            // exists here and the root lease excludes another transaction.
+            remove_progress(&self.store)?;
+            // Failed rename/fsync may still publish the plan; Drop must clean it.
+            self.journal_written = true;
+            self.store
+                .write_json(&self.store.journal_path(), &self.journal)?;
+        }
+        Ok(())
+    }
+
     fn apply_inner(&mut self) -> Result<(), String> {
-        self.store
-            .write_json(&self.store.journal_path(), &self.journal)?;
+        self.persist_plan()?;
         for (i, change) in self.journal.changes.iter().enumerate() {
             #[cfg(test)]
             if self.fail_after == Some(i) {
                 return Err("Injected write failure".into());
             }
             self.journal.attempted = i + 1;
-            self.store
-                .write_json(&self.store.journal_path(), &self.journal)?;
+            write_progress(&self.store, &self.journal)?;
             workspace::replace(&self.store, &change.path, &change.original, &change.desired)?;
         }
         Ok(())
@@ -334,7 +443,21 @@ impl PreparedRestore {
             return Ok(());
         }
         if self.journal_written {
-            compensate(&self.store, &self.journal)?;
+            // A failed progress write may have failed before or after rename.
+            // Only the durable cursor identifies files we could have touched.
+            if self
+                .store
+                .journal_path()
+                .try_exists()
+                .map_err(|e| e.to_string())?
+            {
+                let durable = read_journal(&self.store)?;
+                if durable.transaction_id != self.journal.transaction_id {
+                    return Err("Checkpoint recovery journal belongs to another transaction".into());
+                }
+                compensate(&self.store, &durable)?;
+                cleanup_inherited(&self.store, &durable)?;
+            }
             remove_journal(&self.store)?;
         }
         self.settled = true;
@@ -356,10 +479,28 @@ impl PreparedRestore {
         // even if journal persistence/cleanup reports an IO error.
         self.settled = true;
         self.journal.committed = true;
-        self.store
-            .write_json(&self.store.journal_path(), &self.journal)?;
+        write_progress(&self.store, &self.journal)?;
         remove_journal(&self.store)
     }
+}
+
+/// Retention reads this before any unlink. Even a committed journal pins bytes
+/// until durable journal removal; malformed journals stop collection entirely.
+pub(super) fn recovery_objects(store: &Store) -> Result<std::collections::HashSet<String>, String> {
+    if !store
+        .journal_path()
+        .try_exists()
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(Default::default());
+    }
+    let journal = read_journal(store)?;
+    Ok(journal
+        .changes
+        .iter()
+        .flat_map(|c| c.original.iter().chain(c.desired.iter()))
+        .map(|e| e.object.clone())
+        .collect())
 }
 
 impl Drop for PreparedRestore {
@@ -373,12 +514,7 @@ impl Drop for PreparedRestore {
 }
 
 fn compensate(store: &Store, journal: &Journal) -> Result<(), String> {
-    if journal.version != 1
-        || journal.root != store.root
-        || journal.attempted > journal.changes.len()
-    {
-        return Err("Invalid checkpoint recovery journal".into());
-    }
+    validate_journal(store, journal)?;
     if journal.committed {
         return Ok(());
     }
@@ -411,10 +547,13 @@ fn compensate(store: &Store, journal: &Journal) -> Result<(), String> {
 fn remove_journal(store: &Store) -> Result<(), String> {
     workspace::validate_absolute(&store.journal_path())?;
     match fs::remove_file(store.journal_path()) {
-        Ok(()) => sync_dir(&store.dir),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Ok(()) => sync_dir(&store.dir)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
     }
+    // Plan removal must be durable BEFORE removing its progress; otherwise a
+    // surviving plan could be mistaken for a transaction that wrote no files.
+    remove_progress(store)
 }
 
 pub(super) fn recover(store: &Store) -> Result<(), String> {
@@ -425,11 +564,12 @@ pub(super) fn recover(store: &Store) -> Result<(), String> {
     {
         return Ok(());
     }
-    let journal: Journal = store.read_json(&store.journal_path())?;
+    let journal = read_journal(store)?;
     if journal.binding.is_some() && !journal.committed {
         return Err("File restore requires database reconciliation before recovery".into());
     }
     compensate(store, &journal)?;
+    cleanup_inherited(store, &journal)?;
     remove_journal(store)
 }
 
@@ -441,7 +581,7 @@ pub(super) fn recovery_binding(store: &Store) -> Result<Option<RecoveryBinding>,
     {
         return Ok(None);
     }
-    let journal: Journal = store.read_json(&store.journal_path())?;
+    let journal = read_journal(store)?;
     if journal.committed {
         return Ok(None);
     }
@@ -456,8 +596,106 @@ pub(super) fn recover_decided(store: &Store, committed: bool) -> Result<(), Stri
     {
         return Ok(());
     }
-    let mut journal: Journal = store.read_json(&store.journal_path())?;
+    let mut journal = read_journal(store)?;
     journal.committed |= committed;
     compensate(store, &journal)?;
+    cleanup_inherited(store, &journal)?;
     remove_journal(store)
+}
+
+fn progress_path(store: &Store) -> PathBuf {
+    store.dir.join("recovery-progress.json")
+}
+
+fn remove_progress(store: &Store) -> Result<(), String> {
+    let path = progress_path(store);
+    workspace::validate_absolute(&path)?;
+    match fs::remove_file(path) {
+        Ok(()) => sync_dir(&store.dir),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn write_progress(store: &Store, journal: &Journal) -> Result<(), String> {
+    store.write_json(
+        &progress_path(store),
+        &Progress {
+            version: 1,
+            transaction_id: journal.transaction_id.clone(),
+            attempted: journal.attempted,
+            committed: journal.committed,
+            binding: journal.binding.clone(),
+        },
+    )
+}
+
+fn validate_journal(store: &Store, journal: &Journal) -> Result<(), String> {
+    if !matches!(journal.version, 1 | 2)
+        || journal.root != store.root
+        || journal.attempted > journal.changes.len()
+        || (journal.version == 2 && journal.transaction_id.is_empty())
+        || (journal.version == 1 && !journal.inherited.is_empty())
+    {
+        return Err("Invalid checkpoint recovery journal".into());
+    }
+    Ok(())
+}
+
+fn read_journal(store: &Store) -> Result<Journal, String> {
+    let mut journal: Journal = store.read_json(&store.journal_path())?;
+    validate_journal(store, &journal)?;
+    if journal.version == 2
+        && progress_path(store)
+            .try_exists()
+            .map_err(|e| e.to_string())?
+    {
+        let progress: Progress = store.read_json(&progress_path(store))?;
+        if progress.version != 1 || progress.transaction_id != journal.transaction_id {
+            return Err("Checkpoint recovery progress belongs to another transaction".into());
+        }
+        journal.attempted = progress.attempted;
+        journal.committed |= progress.committed;
+        journal.binding = progress.binding;
+        validate_journal(store, &journal)?;
+    }
+    Ok(journal)
+}
+
+fn record_fingerprint(record: &Record) -> Result<String, String> {
+    Ok(hash(
+        &serde_json::to_vec(record).map_err(|e| e.to_string())?,
+    ))
+}
+
+fn cleanup_inherited(store: &Store, journal: &Journal) -> Result<(), String> {
+    if journal.committed {
+        return Ok(());
+    }
+    // Validate all still-present copies before unlinking any. Never remove a
+    // parent's record or an independently replaced child slot. Missing copies
+    // are normal after a partial copy, interrupted cleanup, or retention.
+    let mut paths = Vec::new();
+    for inherited in &journal.inherited {
+        let identity = Record::new(inherited.agent, &inherited.session, inherited.user_index);
+        let path = store.record_path(&identity);
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            continue;
+        }
+        let record: Record = store.read_json(&path)?;
+        if record.agent != inherited.agent
+            || record.session != inherited.session
+            || record.user_index != inherited.user_index
+            || record_fingerprint(&record)? != inherited.fingerprint
+        {
+            return Err("Inherited checkpoint changed; refusing transaction cleanup".into());
+        }
+        paths.push(path);
+    }
+    for path in paths {
+        workspace::validate_absolute(&path)?;
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    // Do not sweep objects: a prepared plan or remaining parent may need them.
+    sync_dir(&store.dir.join("records"))
 }

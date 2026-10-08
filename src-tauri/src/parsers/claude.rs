@@ -97,7 +97,7 @@ pub(crate) fn capture_tag(re: &Regex, text: &str) -> Option<String> {
 
 /// Strip system-injected XML tags from text content.
 /// Returns None if the text becomes empty after stripping.
-fn strip_system_tags(text: &str) -> Option<String> {
+pub(crate) fn strip_system_tags(text: &str) -> Option<String> {
     let cleaned = system_tag_regex().replace_all(text, "");
     let trimmed = cleaned.trim();
     if trimmed.is_empty() {

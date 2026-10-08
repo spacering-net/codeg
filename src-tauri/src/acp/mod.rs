@@ -23,6 +23,8 @@ pub mod feedback;
 pub mod file_system_runtime;
 pub mod file_checkpoint;
 pub mod file_checkpoint_activity;
+pub mod prompt_identity;
+mod prompt_preparation;
 pub mod fork;
 pub mod host_tools_policy;
 pub mod idle_sweep;

@@ -48,7 +48,7 @@ import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
 import { MessageListView } from "@/components/message/message-list-view"
 import { EditUserMessageDialog } from "@/components/message/edit-user-message-dialog"
-import { resolveEditableUserTurn } from "@/lib/message-edit"
+import { resolveEditableUserTurn, needsEditReceipt } from "@/lib/message-edit"
 import {
   GoalControlProvider,
   type GoalControlValue,
@@ -85,6 +85,10 @@ import {
   acpFork,
   acpForkBeforeUserTurn,
   acpPreviewFileRestore,
+  acpResolveEditTurn,
+  acpCheckpointStatus,
+  acpSetCheckpointEnabled,
+  acpCleanupCheckpoints,
   acpRecoverFileRestore,
   acpStopAsyncTask,
   createChatConversation,
@@ -1554,20 +1558,18 @@ const ConversationTabView = memo(function ConversationTabView({
       setEditInFlight(true)
       try {
         if (!editedBranchRef.current) {
+          const receipt = needsEditReceipt(editTarget.turn)
+            ? await acpResolveEditTurn(
+                current.connectionId,
+                expectedSessionId,
+                editTarget.turn.id
+              )
+            : undefined
           const source = await getFolderConversation(persistedId)
-          const runtime = getRuntimeSession(effectiveConversationId)
           const target = resolveEditableUserTurn(
             editTarget.turn,
             source.turns,
-            {
-              timeline: getTimelineTurns(effectiveConversationId).map(
-                (entry) => entry.turn
-              ),
-              loadedFromStart:
-                !runtime?.detail ||
-                !isWindowedDetail(runtime.detail) ||
-                runtime.detail.turns_offset === 0,
-            }
+            receipt
           )
           if (source.summary.external_id !== expectedSessionId || !target) {
             throw new Error(tMessageList("editNotReady"))
@@ -1674,17 +1676,19 @@ const ConversationTabView = memo(function ConversationTabView({
     ) {
       throw new Error(tMessageList("editNotReady"))
     }
+    const receipt = needsEditReceipt(editTarget.turn)
+      ? await acpResolveEditTurn(
+          current.connectionId,
+          editTarget.sessionId,
+          editTarget.turn.id
+        )
+      : undefined
     const source = await getFolderConversation(persistedId)
-    const runtime = getRuntimeSession(effectiveConversationId)
-    const target = resolveEditableUserTurn(editTarget.turn, source.turns, {
-      timeline: getTimelineTurns(effectiveConversationId).map(
-        (entry) => entry.turn
-      ),
-      loadedFromStart:
-        !runtime?.detail ||
-        !isWindowedDetail(runtime.detail) ||
-        runtime.detail.turns_offset === 0,
-    })
+    const target = resolveEditableUserTurn(
+      editTarget.turn,
+      source.turns,
+      receipt
+    )
     if (!target || source.summary.external_id !== editTarget.sessionId) {
       throw new Error(tMessageList("editNotReady"))
     }
@@ -1695,14 +1699,7 @@ const ConversationTabView = memo(function ConversationTabView({
       editTarget.sessionId,
       target
     )
-  }, [
-    connectionStore,
-    editTarget,
-    effectiveConversationId,
-    folderId,
-    tMessageList,
-    tabId,
-  ])
+  }, [connectionStore, editTarget, folderId, tMessageList, tabId])
 
   const handleRecoverEditFiles = useCallback(async () => {
     const current = connectionStore.getConnection(tabId)
@@ -2757,6 +2754,24 @@ const ConversationTabView = memo(function ConversationTabView({
           }
           onSubmit={handleSaveMessageEdit}
           onPreviewFiles={handlePreviewEditFiles}
+          onLoadCheckpointStatus={() => {
+            const current = connectionStore.getConnection(tabId)
+            if (!current)
+              return Promise.reject(new Error(tMessageList("editNotReady")))
+            return acpCheckpointStatus(current.connectionId)
+          }}
+          onSetCheckpointEnabled={(enabled) => {
+            const current = connectionStore.getConnection(tabId)
+            if (!current)
+              return Promise.reject(new Error(tMessageList("editNotReady")))
+            return acpSetCheckpointEnabled(current.connectionId, enabled)
+          }}
+          onCleanupCheckpoints={() => {
+            const current = connectionStore.getConnection(tabId)
+            if (!current)
+              return Promise.reject(new Error(tMessageList("editNotReady")))
+            return acpCleanupCheckpoints(current.connectionId)
+          }}
           onRecoverFiles={handleRecoverEditFiles}
           filesRestored={editFilesRestored}
           onCancel={handleCancelMessageEdit}

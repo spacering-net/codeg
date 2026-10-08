@@ -170,17 +170,15 @@ async fn open_stream(
         }
     };
     match connected {
-        Some(Ok(connection)) => {
-            if frames.send(Frame::Opened { stream: id }).await.is_ok() {
-                let end = pump(connection, id, events, frames).await;
-                tracing::debug!("[browser-tunnel] stream {id} to {host}:{port} ended: {end:?}");
-            }
+        Some(Ok(connection)) if frames.send(Frame::Opened { stream: id }).await.is_ok() => {
+            let end = pump(connection, id, events, frames).await;
+            tracing::debug!("[browser-tunnel] stream {id} to {host}:{port} ended: {end:?}");
         }
         Some(Err((code, message))) => {
             tracing::debug!("[browser-tunnel] stream {id} to {host}:{port}: {message}");
             let _ = frames.send(Frame::Close { stream: id, code, message }).await;
         }
-        None => {}
+        None | Some(Ok(_)) => {}
     }
     let _ = ended.send(id);
 }

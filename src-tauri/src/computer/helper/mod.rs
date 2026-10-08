@@ -664,7 +664,7 @@ impl HelperState {
     /// [`shutdown`]: Self::shutdown
     async fn halt(&self, stop: u64) {
         let mut slot = self.driver.lock().await;
-        if !slot.as_ref().is_some_and(|d| d.stop < stop) {
+        if slot.as_ref().is_none_or(|d| d.stop >= stop) {
             return;
         }
         let driver = slot.take();

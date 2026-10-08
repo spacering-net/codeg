@@ -1,5 +1,7 @@
-use super::storage::{hash, sync_dir, Store};
+use super::storage::{hash, sync_dir, ObjectBudget, Record, Store};
+use super::CaptureControl;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{Read, Write};
@@ -8,6 +10,12 @@ use std::path::{Component, Path, PathBuf};
 pub(super) const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_SNAPSHOT: u64 = 128 * 1024 * 1024;
 const MAX_FILES: usize = 20_000;
+#[cfg(test)]
+thread_local! {
+    // Per-thread instrumentation proves scope verification never hashes regular
+    // workspace contents without introducing timing-sensitive assertions.
+    pub(super) static HASHED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 const EXCLUDED: &[&str] = &[
     ".git",
     ".hg",
@@ -37,21 +45,47 @@ pub(super) struct Snapshot {
     pub scope: String,
 }
 
+#[cfg(test)]
 pub(super) fn capture(store: &Store) -> Result<Snapshot, String> {
-    scan(store, true)
+    scan(
+        store,
+        Some(ObjectBudget::default()),
+        &CaptureControl::default(),
+    )
+}
+
+pub(super) fn capture_controlled(
+    store: &Store,
+    record: &Record,
+    control: &CaptureControl,
+) -> Result<Snapshot, String> {
+    scan(
+        store,
+        Some(ObjectBudget {
+            active: Some(store.record_path(record)),
+            ..Default::default()
+        }),
+        control,
+    )
 }
 
 /// Bounded read-only verification; never adds objects to checkpoint storage.
 pub(super) fn current_scope(store: &Store) -> Result<String, String> {
-    Ok(scan(store, false)?.scope)
+    Ok(scan(store, None, &CaptureControl::default())?.scope)
 }
 
-fn scan(store: &Store, persist: bool) -> Result<Snapshot, String> {
+fn scan(
+    store: &Store,
+    mut budget: Option<ObjectBudget>,
+    control: &CaptureControl,
+) -> Result<Snapshot, String> {
+    control.check()?;
     validate_absolute(&store.root)?;
     let root = store.root.clone();
     let filter_root = root.clone();
     let boundaries = std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::new()));
     let found_boundaries = boundaries.clone();
+    let filter_control = control.clone();
     let mut walker = ignore::WalkBuilder::new(&root);
     walker
         .hidden(false)
@@ -63,6 +97,9 @@ fn scan(store: &Store, persist: bool) -> Result<Snapshot, String> {
         .require_git(false)
         .follow_links(false)
         .filter_entry(move |entry| {
+            if filter_control.check().is_err() {
+                return false;
+            }
             if entry.path() == filter_root {
                 return true;
             }
@@ -80,8 +117,16 @@ fn scan(store: &Store, persist: bool) -> Result<Snapshot, String> {
             if entry.file_type().is_some_and(|t| t.is_dir())
                 && fs::symlink_metadata(entry.path().join(".git")).is_ok()
             {
-                found_boundaries.lock().unwrap_or_else(|e| e.into_inner())
-                    .insert(entry.path().strip_prefix(&filter_root).unwrap_or(entry.path()).to_path_buf());
+                found_boundaries
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(
+                        entry
+                            .path()
+                            .strip_prefix(&filter_root)
+                            .unwrap_or(entry.path())
+                            .to_path_buf(),
+                    );
                 return false;
             }
             true
@@ -90,8 +135,10 @@ fn scan(store: &Store, persist: bool) -> Result<Snapshot, String> {
     let mut policy = BTreeMap::new();
     let mut bytes = 0_u64;
     let mut visited = 0_usize;
-    let mut quota = None;
+    let mut file_count = 0;
+    let mut canonical_dirs = BTreeSet::new();
     for item in walker.build() {
+        control.check()?;
         let item = item.map_err(|e| format!("Incomplete checkpoint walk: {e}"))?;
         if let Some(error) = item.error() {
             return Err(format!("Incomplete checkpoint ignore policy: {error}"));
@@ -107,7 +154,8 @@ fn scan(store: &Store, persist: bool) -> Result<Snapshot, String> {
                         .to_str()
                         .ok_or("Non-UTF8 ignore policy path")?
                         .replace(std::path::MAIN_SEPARATOR, "/");
-                    let (state, _) = read_file(&root, &name)?;
+                    let (state, _) =
+                        read_file_cached(&root, &name, Some(control), &mut canonical_dirs)?;
                     policy.insert(name, state.object);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -132,23 +180,45 @@ fn scan(store: &Store, persist: bool) -> Result<Snapshot, String> {
             .ok_or("Non-UTF8 checkpoint path")?
             .replace(std::path::MAIN_SEPARATOR, "/");
         validate_relative(&name)?;
-        let (state, data) = read_file(&root, &name)?;
-        bytes = bytes
-            .checked_add(data.len() as u64)
-            .ok_or("Checkpoint size overflow")?;
-        if bytes > MAX_SNAPSHOT || files.len() >= MAX_FILES {
+        // Scope checks inspect only policy bytes and regular-file metadata. A
+        // restore preview must not read/hash unrelated workspace file contents.
+        let captured = if budget.is_some() {
+            Some(read_file_cached(
+                &root,
+                &name,
+                Some(control),
+                &mut canonical_dirs,
+            )?)
+        } else {
+            None
+        };
+        let size = if let Some((_, data)) = &captured {
+            // Use the bytes actually read. A file can grow between the walk's
+            // metadata read and the stable read_file_controlled snapshot.
+            data.len() as u64
+        } else {
+            regular_handle(&open_read(item.path())?)?.len()
+        };
+        if size > MAX_FILE {
+            return Err(format!("Checkpoint file exceeds 16 MiB: {name}"));
+        }
+        bytes = bytes.checked_add(size).ok_or("Checkpoint size overflow")?;
+        file_count += 1;
+        if bytes > MAX_SNAPSHOT || file_count > MAX_FILES {
             return Err("Checkpoint snapshot limit exceeded".into());
         }
-        if persist {
-            store.put_object(&data, &mut quota)?;
+        if let (Some(budget), Some((state, data))) = (&mut budget, captured) {
+            store.put_object_controlled(&data, &state.object, budget, control)?;
+            if relative.file_name().is_some_and(|n| n == ".gitignore") {
+                policy.insert(name.clone(), state.object.clone());
+            }
+            files.insert(name, state);
         }
-        if relative.file_name().is_some_and(|n| n == ".gitignore") {
-            policy.insert(name.clone(), state.object.clone());
-        }
-        files.insert(name, state);
     }
+    control.check()?;
     let boundaries = boundaries.lock().unwrap_or_else(|e| e.into_inner());
     let scope = hash(&serde_json::to_vec(&(policy, &*boundaries)).map_err(|e| e.to_string())?);
+    control.check()?;
     Ok(Snapshot { files, scope })
 }
 
@@ -228,14 +298,31 @@ pub(super) fn validate_absolute(path: &Path) -> Result<(), String> {
 }
 
 pub(super) fn checked_path(root: &Path, name: &str) -> Result<PathBuf, String> {
+    checked_path_cached(root, name, &mut BTreeSet::new())
+}
+
+// Cache canonical directory spellings only within one bounded workspace scan.
+// Link/reparse-point, ancestor type and nested-repository checks remain fresh on
+// EVERY access. Ordinary directory replacement keeps the same canonical spelling;
+// link substitution is rejected before consulting this cache. Restore operations
+// use checked_path above and never share this cache across operations.
+fn checked_path_cached(
+    root: &Path,
+    name: &str,
+    canonical_dirs: &mut BTreeSet<PathBuf>,
+) -> Result<PathBuf, String> {
     validate_relative(name)?;
-    validate_absolute(root)?;
-    let canonical = fs::canonicalize(root).map_err(|e| e.to_string())?;
-    if canonical != root {
-        return Err("Checkpoint root identity changed".into());
-    }
     let path = root.join(name);
+    // This validates root and all its ancestors as well as the complete leaf
+    // path, so a second validate_absolute(root) would repeat the same syscalls.
     validate_absolute(&path)?;
+    if !canonical_dirs.contains(root) {
+        let canonical = fs::canonicalize(root).map_err(|e| e.to_string())?;
+        if canonical != root {
+            return Err("Checkpoint root identity changed".into());
+        }
+        canonical_dirs.insert(root.to_path_buf());
+    }
     let mut parent = path.parent();
     while let Some(p) = parent {
         if p == root {
@@ -247,12 +334,16 @@ pub(super) fn checked_path(root: &Path, name: &str) -> Result<PathBuf, String> {
         if fs::symlink_metadata(p.join(".git")).is_ok() {
             return Err("Checkpoint path became a nested repository".into());
         }
-        if p.exists()
-            && !fs::canonicalize(p)
+        if !canonical_dirs.contains(p) && p.exists() {
+            if !fs::canonicalize(p)
                 .map_err(|e| e.to_string())?
                 .starts_with(root)
-        {
-            return Err("Checkpoint ancestor escapes root".into());
+            {
+                return Err("Checkpoint ancestor escapes root".into());
+            }
+            if canonical_dirs.len() < MAX_FILES * 2 + 1 {
+                canonical_dirs.insert(p.to_path_buf());
+            }
         }
         parent = p.parent();
     }
@@ -337,17 +428,64 @@ fn mode(meta: &Metadata) -> u32 {
 }
 
 fn read_file(root: &Path, name: &str) -> Result<(Entry, Vec<u8>), String> {
-    let path = checked_path(root, name)?;
+    read_file_controlled(root, name, None)
+}
+
+/// Chunked IO/hash checks bound CPU work and avoid a single 16 MiB uninterruptible
+/// hash/read loop. The operating system may still stall an individual disk call.
+pub(super) fn read_hashed(
+    file: &mut File,
+    control: Option<&CaptureControl>,
+) -> Result<(Vec<u8>, String), String> {
+    let mut data = Vec::new();
+    let mut hasher = Sha256::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        let count = file.read(&mut chunk).map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        HASHED_BYTES.with(|bytes| bytes.set(bytes.get() + count));
+        if let Some(control) = control {
+            control.check()?;
+        }
+        if count == 0 {
+            break;
+        }
+        if data.len() as u64 + count as u64 > MAX_FILE {
+            return Err("Checkpoint file exceeds 16 MiB".into());
+        }
+        hasher.update(&chunk[..count]);
+        data.extend_from_slice(&chunk[..count]);
+    }
+    Ok((data, format!("{:x}", hasher.finalize())))
+}
+
+fn read_file_controlled(
+    root: &Path,
+    name: &str,
+    control: Option<&CaptureControl>,
+) -> Result<(Entry, Vec<u8>), String> {
+    read_file_cached(root, name, control, &mut BTreeSet::new())
+}
+
+fn read_file_cached(
+    root: &Path,
+    name: &str,
+    control: Option<&CaptureControl>,
+    canonical_dirs: &mut BTreeSet<PathBuf>,
+) -> Result<(Entry, Vec<u8>), String> {
+    if let Some(control) = control {
+        control.check()?;
+    }
+    let path = checked_path_cached(root, name, canonical_dirs)?;
     let mut file = open_read(&path)?;
     let before = regular_handle(&file)?;
     if before.len() > MAX_FILE {
         return Err(format!("Checkpoint file exceeds 16 MiB: {name}"));
     }
-    let mut data = Vec::new();
-    (&mut file)
-        .take(MAX_FILE + 1)
-        .read_to_end(&mut data)
-        .map_err(|e| e.to_string())?;
+    let (data, object) = read_hashed(&mut file, control)?;
     let after = regular_handle(&file)?;
     if data.len() as u64 > MAX_FILE
         || data.len() as u64 != after.len()
@@ -357,10 +495,10 @@ fn read_file(root: &Path, name: &str) -> Result<(Entry, Vec<u8>), String> {
     {
         return Err(format!("Checkpoint file changed during capture: {name}"));
     }
-    checked_path(root, name)?;
+    checked_path_cached(root, name, canonical_dirs)?;
     Ok((
         Entry {
-            object: hash(&data),
+            object,
             mode: mode(&after),
         },
         data,
@@ -424,4 +562,50 @@ pub(super) fn replace(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod path_cache_tests {
+    use super::*;
+
+    #[test]
+    fn cached_directories_still_reject_new_repository_boundaries_and_non_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/a"), b"a").unwrap();
+        let mut cache = BTreeSet::new();
+        checked_path_cached(&root, "src/a", &mut cache).unwrap();
+        assert_eq!(cache.len(), 2);
+        checked_path_cached(&root, "src/a", &mut cache).unwrap();
+        assert_eq!(cache.len(), 2);
+        fs::create_dir(root.join("src/.git")).unwrap();
+        assert!(checked_path_cached(&root, "src/a", &mut cache)
+            .unwrap_err()
+            .contains("nested repository"));
+        fs::remove_dir(root.join("src/.git")).unwrap();
+        fs::remove_file(root.join("src/a")).unwrap();
+        fs::remove_dir(root.join("src")).unwrap();
+        fs::write(root.join("src"), b"now a file").unwrap();
+        assert!(checked_path_cached(&root, "src/a", &mut cache)
+            .unwrap_err()
+            .contains("not a directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_directory_spelling_does_not_allow_symlink_substitution() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("a"), b"outside").unwrap();
+        let mut cache = BTreeSet::new();
+        checked_path_cached(&root, "src/a", &mut cache).unwrap();
+        fs::remove_dir(root.join("src")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("src")).unwrap();
+        assert!(checked_path_cached(&root, "src/a", &mut cache)
+            .unwrap_err()
+            .contains("Symlinks"));
+    }
 }

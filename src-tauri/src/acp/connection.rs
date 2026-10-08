@@ -1212,7 +1212,7 @@ pub enum ConnectionCommand {
         /// tail-fork the fork-send composer has always done; see
         /// [`crate::acp::fork::ForkPoint`] for how each agent resolves it.
         fork_point: Option<crate::acp::fork::ForkPoint>,
-        strict: Option<crate::acp::fork::StrictFork>,
+        strict: Option<Box<crate::acp::fork::StrictFork>>,
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     },
@@ -7069,6 +7069,7 @@ async fn run_connection(
                             Some(sid.as_str()),
                         )
                         .await;
+                        state.write().await.edit_history_known_empty = true;
                         emit_with_state(
                             &state,
                             &emitter_clone,
@@ -7156,6 +7157,7 @@ async fn run_connection(
                     pi_startup_banner(agent_type, new_resp.meta.as_ref());
                 let mut session = AgentSession::attach(&cx, new_resp)?;
                 record_transcript_header(agent_type, &sid, &cwd.to_string_lossy());
+                state.write().await.edit_history_known_empty = true;
                 emit_with_state(
                     &state,
                     &emitter_clone,
@@ -9848,6 +9850,8 @@ async fn begin_file_checkpoint(
     session_id: &str,
     cwd: &Path,
     blocks: &[PromptInputBlock],
+    prefix: &[crate::models::message::MessageTurn],
+    control: crate::acp::file_checkpoint::CaptureControl,
 ) -> Option<crate::acp::file_checkpoint::PendingCheckpoint> {
     if !matches!(
         agent_type,
@@ -9855,32 +9859,179 @@ async fn begin_file_checkpoint(
     ) {
         return None;
     }
-    let id = session_id.to_string();
-    let count = tokio::task::spawn_blocking(move || {
-        match crate::parsers::build_agent_parser(agent_type).get_conversation(&id) {
-            Ok(detail) if detail.summary.id == id => Ok(detail
-                .turns
-                .iter()
-                .filter(|turn| matches!(turn.role, crate::models::message::TurnRole::User))
-                .count()),
-            Err(crate::parsers::ParseError::ConversationNotFound(_)) => Ok(0),
-            Err(error) => Err(error.to_string()),
-            Ok(_) => Err("Checkpoint session identity changed".to_string()),
-        }
-    })
+    if !crate::acp::file_checkpoint::enabled(cwd)
+        .await
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let count = prefix
+        .iter()
+        .filter(|turn| matches!(turn.role, crate::models::message::TurnRole::User))
+        .count();
+    let result = crate::acp::file_checkpoint::begin_turn_controlled(
+        agent_type, session_id, cwd, count, blocks, control,
+    )
     .await;
-    let result = match count {
-        Ok(Ok(count)) => {
-            crate::acp::file_checkpoint::begin_turn(agent_type, session_id, cwd, count, blocks)
-                .await
-        }
-        Ok(Err(error)) => Err(error),
-        Err(error) => Err(error.to_string()),
-    };
     match result {
         Ok(checkpoint) => Some(checkpoint),
         Err(error) => {
             tracing::warn!("[ACP] file checkpoint unavailable: {error}");
+            None
+        }
+    }
+}
+
+async fn discard_prepared_prompt(
+    agent: AgentType,
+    session: &str,
+    client: &str,
+    reservation: Option<&str>,
+    root: Option<&Path>,
+    index: Option<usize>,
+) {
+    let Some(root) = root.filter(|_| {
+        matches!(
+            agent,
+            AgentType::ClaudeCode | AgentType::Codex | AgentType::DeepSeek
+        )
+    }) else {
+        return;
+    };
+    if let Some(reservation) = reservation {
+        if let Err(error) = crate::acp::prompt_identity::discard_unsubmitted(
+            agent,
+            session,
+            client,
+            reservation,
+            root,
+        )
+        .await
+        {
+            tracing::warn!("[ACP] canceled prompt receipt cleanup failed: {error}");
+        }
+    }
+    if let Some(index) = index {
+        if let Err(error) =
+            crate::acp::file_checkpoint::discard_unsubmitted(agent, session, root, index).await
+        {
+            tracing::warn!("[ACP] canceled checkpoint cleanup failed: {error}");
+        }
+    }
+}
+
+async fn finish_file_checkpoint(
+    checkpoint: &mut Option<crate::acp::file_checkpoint::PendingCheckpoint>,
+    activity: Option<&crate::acp::file_checkpoint_activity::TurnActivity>,
+    state: &Arc<RwLock<SessionState>>,
+) {
+    if activity.is_some_and(|a| a.is_exclusive())
+        && checkpoint_background_idle(&*state.read().await)
+    {
+        if let Some(pending) = checkpoint.take() {
+            let publisher = activity.expect("checked exclusive").publisher();
+            if let Err(error) =
+                crate::acp::file_checkpoint::finish_turn_guarded(pending, move |publish| {
+                    publisher.publish(publish)
+                })
+                .await
+            {
+                tracing::warn!("[ACP] file checkpoint unavailable: {error}");
+            }
+        }
+    }
+    drop(checkpoint.take());
+}
+
+/// Cancellation responses and background-task deltas travel on different ACP
+/// channels. Let the idle reader drain those deltas, then capture only after the
+/// provider reports no background work and the stream has stopped changing.
+pub(super) async fn finish_canceled_checkpoint(
+    checkpoint: &mut Option<crate::acp::file_checkpoint::PendingCheckpoint>,
+    activity: Option<&crate::acp::file_checkpoint_activity::TurnActivity>,
+    state: &Arc<RwLock<SessionState>>,
+) {
+    let Some(activity) = activity.filter(|a| a.is_exclusive()) else {
+        return;
+    };
+    if checkpoint.is_none() {
+        return;
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut quiet = None;
+    loop {
+        if !activity.is_exclusive() || tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        let state_now = state.read().await;
+        if matches!(
+            state_now.status,
+            ConnectionStatus::Error | ConnectionStatus::Disconnected
+        ) {
+            return;
+        }
+        let seq = state_now.event_seq;
+        if checkpoint_background_idle(&state_now) {
+            match quiet {
+                Some((previous, since)) if previous == seq => {
+                    if tokio::time::Instant::now().duration_since(since)
+                        >= std::time::Duration::from_secs(1)
+                    {
+                        drop(state_now);
+                        let publisher = activity.publisher();
+                        let state = state.clone();
+                        if let Some(pending) = checkpoint.take() {
+                            let result = crate::acp::file_checkpoint::finish_turn_guarded(pending, move |publish| {
+                                let state = state.blocking_read();
+                                if state.event_seq != seq || !checkpoint_background_idle(&state) {
+                                    return Err("Provider activity changed during canceled checkpoint capture".into());
+                                }
+                                publisher.publish(publish)
+                            }).await;
+                            if let Err(error) = result {
+                                tracing::warn!("[ACP] canceled checkpoint unavailable: {error}");
+                            }
+                        }
+                        return;
+                    }
+                }
+                _ => quiet = Some((seq, tokio::time::Instant::now())),
+            }
+        } else {
+            quiet = None;
+        }
+        drop(state_now);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn read_prompt_prefix(
+    agent: AgentType,
+    session: &str,
+    known_empty: bool,
+) -> Option<Vec<crate::models::message::MessageTurn>> {
+    if !matches!(
+        agent,
+        AgentType::ClaudeCode | AgentType::Codex | AgentType::DeepSeek
+    ) {
+        return None;
+    }
+    let sid = session.to_string();
+    let parsed = tokio::task::spawn_blocking(move || {
+        match crate::parsers::build_agent_parser(agent).get_conversation(&sid) {
+            Ok(detail) if detail.summary.id == sid => Ok(detail.turns),
+            Err(crate::parsers::ParseError::ConversationNotFound(_)) if known_empty => {
+                Ok(Vec::new())
+            }
+            Ok(_) => Err("Prompt receipt session changed".to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await;
+    match parsed {
+        Ok(Ok(prefix)) => Some(prefix),
+        result => {
+            tracing::warn!("[ACP] prompt history unavailable: {result:?}");
             None
         }
     }
@@ -10137,6 +10288,7 @@ async fn handle_fork_or_exit(
     // starts empty and accumulates from the fork point — the pre-fork turns
     // stay in the parent's transcript, which is what forking means.
     record_transcript_header(agent_type, &new_sid, cwd_string);
+    state.write().await.edit_history_known_empty = fork_info.fresh;
     emit_with_state(
         state,
         emitter,
@@ -10984,12 +11136,13 @@ async fn run_conversation_loop(
     // loop ends while `read_update` holds `session`. A fork restarts this loop
     // with the new session, so it cannot go stale in here.
     let agent_turn_session_id = session.session_id().0.to_string();
-    loop {
+    let mut deferred_commands = VecDeque::new();
+    'conversation: loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
             tokio::select! {
                 biased;
-                cmd = cmd_rx.recv() => break cmd,
+                cmd = async { match deferred_commands.pop_front() { Some(cmd) => Some(cmd), None => cmd_rx.recv().await } } => break cmd,
                 update = session.read_update() => {
                     // An `Err` is the session's router going away, not one bad
                     // message (see `AgentSession::read_update`): the connection
@@ -11076,9 +11229,15 @@ async fn run_conversation_loop(
                 );
                 let cx = session.connection();
                 let sid = session.session_id().clone();
-                if let Err(e) =
-                    set_session_config_option(&cx, &sid, state, emitter, config_id.clone(), value_id)
-                        .await
+                if let Err(e) = set_session_config_option(
+                    &cx,
+                    &sid,
+                    state,
+                    emitter,
+                    config_id.clone(),
+                    value_id,
+                )
+                .await
                 {
                     // Advisory: the agent is running what it pushed and has already
                     // told the frontend so. Failing the connection over a selector
@@ -11093,21 +11252,179 @@ async fn run_conversation_loop(
                 user_message,
                 mut checkpoint_activity,
             }) => {
-                let mut file_checkpoint = if checkpoint_activity
+                let control = crate::acp::file_checkpoint::CaptureControl::default();
+                let (receipt_root, known_empty) = {
+                    let state = state.read().await;
+                    (state.working_dir.clone(), state.edit_history_known_empty)
+                };
+                let message_id = user_message
                     .as_ref()
-                    .is_some_and(|a| a.is_exclusive())
-                    && checkpoint_background_idle(&*state.read().await)
-                {
-                    begin_file_checkpoint(
-                        agent_type,
-                        &session.session_id().0,
-                        Path::new(cwd),
-                        &blocks,
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let mut checkpoint_index = None;
+                let mut receipt_reservation = None;
+                let mut file_checkpoint = {
+                    let preparation = async {
+                        let prefix = if receipt_root.is_some() {
+                            read_prompt_prefix(agent_type, &session.session_id().0, known_empty)
+                                .await
+                        } else {
+                            None
+                        };
+                        let checkpoint = if let Some(prefix) = prefix.as_deref() {
+                            checkpoint_index = Some(
+                                prefix
+                                    .iter()
+                                    .filter(|t| {
+                                        matches!(t.role, crate::models::message::TurnRole::User)
+                                    })
+                                    .count(),
+                            );
+                            if checkpoint_activity
+                                .as_ref()
+                                .is_some_and(|a| a.is_exclusive())
+                                && checkpoint_background_idle(&*state.read().await)
+                            {
+                                begin_file_checkpoint(
+                                    agent_type,
+                                    &session.session_id().0,
+                                    Path::new(cwd),
+                                    &blocks,
+                                    prefix,
+                                    control.clone(),
+                                )
+                                .await
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(root) = receipt_root.as_ref().filter(|_| {
+                            matches!(
+                                agent_type,
+                                AgentType::ClaudeCode | AgentType::Codex | AgentType::DeepSeek
+                            )
+                        }) {
+                            if let Some(prefix) = &prefix {
+                                if control.cancel.load(std::sync::atomic::Ordering::Acquire) {
+                                    return Ok(checkpoint);
+                                }
+                                receipt_reservation = Some(
+                                    crate::acp::prompt_identity::record(
+                                        agent_type,
+                                        &session.session_id().0,
+                                        &message_id,
+                                        root,
+                                        prefix,
+                                        &blocks,
+                                    )
+                                    .await?,
+                                );
+                            } else {
+                                crate::acp::prompt_identity::invalidate(
+                                    agent_type,
+                                    &session.session_id().0,
+                                    root,
+                                )
+                                .await?;
+                            }
+                        }
+                        Ok::<_, String>(checkpoint)
+                    };
+                    match crate::acp::prompt_preparation::prepare(
+                        preparation,
+                        &control,
+                        cmd_rx,
+                        &mut deferred_commands,
                     )
                     .await
-                } else {
-                    None
+                    {
+                        crate::acp::prompt_preparation::Prepared::Canceled => {
+                            discard_prepared_prompt(
+                                agent_type,
+                                &session.session_id().0,
+                                &message_id,
+                                receipt_reservation.as_deref(),
+                                receipt_root.as_deref(),
+                                checkpoint_index,
+                            )
+                            .await;
+                            drain_permissions_then_emit(
+                                perms,
+                                state,
+                                emitter,
+                                AcpEvent::TurnComplete {
+                                    session_id: session.session_id().0.to_string(),
+                                    stop_reason: "cancelled".into(),
+                                    agent_type: agent_type.to_string(),
+                                },
+                            )
+                            .await;
+                            emit_with_state(
+                                state,
+                                emitter,
+                                AcpEvent::StatusChanged {
+                                    status: ConnectionStatus::Connected,
+                                },
+                            )
+                            .await;
+                            continue 'conversation;
+                        }
+                        crate::acp::prompt_preparation::Prepared::Disconnected => {
+                            discard_prepared_prompt(
+                                agent_type,
+                                &session.session_id().0,
+                                &message_id,
+                                receipt_reservation.as_deref(),
+                                receipt_root.as_deref(),
+                                checkpoint_index,
+                            )
+                            .await;
+                            break 'conversation;
+                        }
+                        crate::acp::prompt_preparation::Prepared::Ready(Ok(prepared)) => prepared,
+                        crate::acp::prompt_preparation::Prepared::Ready(Err(error)) => {
+                            discard_prepared_prompt(
+                                agent_type,
+                                &session.session_id().0,
+                                &message_id,
+                                receipt_reservation.as_deref(),
+                                receipt_root.as_deref(),
+                                checkpoint_index,
+                            )
+                            .await;
+                            emit_with_state(
+                                state,
+                                emitter,
+                                AcpEvent::Error {
+                                    message: AcpError::protocol(format!(
+                                        "Cannot save prompt identity: {error}"
+                                    ))
+                                    .to_string(),
+                                    agent_type: agent_type.to_string(),
+                                    code: None,
+                                    details: None,
+                                    terminal: false,
+                                },
+                            )
+                            .await;
+                            drain_permissions_then_emit(
+                                perms,
+                                state,
+                                emitter,
+                                AcpEvent::TurnComplete {
+                                    session_id: session.session_id().0.to_string(),
+                                    stop_reason: "error".into(),
+                                    agent_type: agent_type.to_string(),
+                                },
+                            )
+                            .await;
+                            continue 'conversation;
+                        }
+                    }
                 };
+                state.write().await.edit_history_known_empty = false;
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
                 // consumed: the transcript record this prompt becomes must
@@ -11525,6 +11842,8 @@ async fn run_conversation_loop(
                             let response = match prompt_result {
                                 Ok(response) => response,
                                 Err(e) if !prompt_rejection_is_terminal(&e) => {
+                                    finish_file_checkpoint(&mut file_checkpoint, checkpoint_activity.as_ref(), state).await;
+                                    drop(checkpoint_activity.take());
                                     let auth_required = matches!(
                                         e.code,
                                         agent_client_protocol::schema::v1::ErrorCode::AuthRequired
@@ -11701,17 +12020,7 @@ async fn run_conversation_loop(
                             if reason_str == "end_turn" {
                                 journal_turn_span(&mut turn_timing_probe, conn_id, &sid.0).await;
                             }
-                            if reason_str == "end_turn"
-                                && checkpoint_activity.as_ref().is_some_and(|a| a.is_exclusive())
-                                && checkpoint_background_idle(&*state.read().await)
-                            {
-                                if let Some(checkpoint) = file_checkpoint.take() {
-                                    let publisher = checkpoint_activity.as_ref().expect("checked exclusive").publisher();
-                                    if let Err(error) = crate::acp::file_checkpoint::finish_turn_guarded(checkpoint, move |action| publisher.publish(action)).await {
-                                        tracing::warn!("[ACP] file checkpoint unavailable: {error}");
-                                    }
-                                }
-                            }
+                            finish_file_checkpoint(&mut file_checkpoint, checkpoint_activity.as_ref(), state).await;
                             // The response settled and the after-snapshot is
                             // durable before clients may enqueue the next turn.
                             // Release admission before publishing TurnComplete.
@@ -11813,7 +12122,7 @@ async fn run_conversation_loop(
                             )
                             .await;
                         }
-                        cmd = cmd_rx.recv() => {
+                        cmd = async { match deferred_commands.pop_front() { Some(cmd) => Some(cmd), None => cmd_rx.recv().await } } => {
                             match cmd {
                                 Some(ConnectionCommand::RespondPermission {
                                     request_id,
@@ -12092,14 +12401,16 @@ async fn run_conversation_loop(
                                     // `$/cancel_request` on top of the
                                     // `session/cancel` above — a second
                                     // cancellation of the same turn.
+                                    let checkpoint_state = Arc::clone(state);
                                     tokio::spawn(async move {
                                         // Cancel is optimistic in the UI; the
                                         // native agent may still be writing until
                                         // its response arrives. Keep overlapping
                                         // checkpoints invalid during that window.
-                                        let _activity = checkpoint_activity;
-                                        let _checkpoint = file_checkpoint;
-                                        let _ = prompt_response.await;
+                                        let response = prompt_response.await;
+                                        if match &response { Ok(_) => true, Err(error) => !prompt_rejection_is_terminal(error) } {
+                                            finish_canceled_checkpoint(&mut file_checkpoint, checkpoint_activity.as_ref(), &checkpoint_state).await;
+                                        }
                                     });
                                     break;
                                 }
@@ -12423,6 +12734,13 @@ async fn run_conversation_loop(
                                     continue;
                                 }
                             }
+                            let retained_users = edit
+                                .prefix
+                                .iter()
+                                .filter(|turn| {
+                                    matches!(turn.role, crate::models::message::TurnRole::User)
+                                })
+                                .count();
                             if let Some(restore) = &edit.file_restore {
                                 let restore = restore.clone();
                                 let (cid, original, child) = (
@@ -12432,6 +12750,12 @@ async fn run_conversation_loop(
                                 );
                                 let result = tokio::task::spawn_blocking(move || {
                                     let mut restore = restore.blocking_lock();
+                                    restore.inherit_prefix(
+                                        agent_type,
+                                        &original,
+                                        &child,
+                                        retained_users,
+                                    )?;
                                     restore.bind_fork(cid, &original, &child)?;
                                     restore.apply()
                                 })

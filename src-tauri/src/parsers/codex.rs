@@ -610,7 +610,7 @@ impl CodexParser {
                                     plan_counted = true;
                                 }
                             }
-                            "thread_goal_updated" => {
+                            "thread_goal_updated" if goal_objective.is_none() => {
                                 // Capture the first OPENING goal for the fallback,
                                 // through the SAME shared mapping the detail parser
                                 // uses — so the summary keys off exactly the objective
@@ -618,28 +618,26 @@ impl CodexParser {
                                 // `create_goal` (an active goal with an objective),
                                 // never a `goal:null` clear, a blank objective, or a
                                 // terminal-status goal.
-                                if goal_objective.is_none() {
-                                    if let Some(marker) = payload
-                                        .get("goal")
-                                        .and_then(crate::acp::codex_goal::goal_marker)
-                                    {
-                                        if marker.tool_name == "create_goal" {
-                                            // Positional, mirroring the detail parser:
-                                            // the goal opened the session iff no real
-                                            // user turn preceded it. Claim the title
-                                            // from the objective HERE, in stream order,
-                                            // so a later `user_message` can't steal it
-                                            // while a native `thread_name_updated` still
-                                            // overrides it.
-                                            goal_opens_session = !has_real_user;
-                                            if goal_opens_session && title.is_none() {
-                                                title = extract_codex_title_candidate(
-                                                    &marker.objective,
-                                                    true,
-                                                );
-                                                if title.is_some() {
-                                                    title_source_ordinal = Some(record_ordinal);
-                                                }
+                                if let Some(marker) = payload
+                                    .get("goal")
+                                    .and_then(crate::acp::codex_goal::goal_marker)
+                                {
+                                    if marker.tool_name == "create_goal" {
+                                        // Positional, mirroring the detail parser:
+                                        // the goal opened the session iff no real
+                                        // user turn preceded it. Claim the title
+                                        // from the objective HERE, in stream order,
+                                        // so a later `user_message` can't steal it
+                                        // while a native `thread_name_updated` still
+                                        // overrides it.
+                                        goal_opens_session = !has_real_user;
+                                        if goal_opens_session && title.is_none() {
+                                            title = extract_codex_title_candidate(
+                                                &marker.objective,
+                                                true,
+                                            );
+                                            if title.is_some() {
+                                                title_source_ordinal = Some(record_ordinal);
                                             }
                                             goal_objective = Some(marker.objective);
                                             first_goal_ordinal = Some(record_ordinal);
@@ -6678,7 +6676,7 @@ fn decode_user_text(raw: &str) -> std::borrow::Cow<'_, str> {
 /// fingerprints the summary parser keeps in step with the detail parser's
 /// blocks go through this one function, so a record decodes the same on every
 /// path that compares or counts it.
-fn normalize_user_text(raw: &str) -> String {
+pub(crate) fn normalize_user_text(raw: &str) -> String {
     strip_blocked_resource_mentions(&decode_user_text(raw))
 }
 

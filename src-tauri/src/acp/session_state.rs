@@ -616,6 +616,11 @@ pub struct SessionState {
     /// not part of the client-visible snapshot.
     pub turn_in_flight: bool,
 
+    /// Only session/new proves that a missing native transcript is an empty
+    /// prefix. Consumed when the first prompt is dispatched; never inferred
+    /// from the absence of a history file on a resumed session.
+    pub edit_history_known_empty: bool,
+
     /// Whether the open turn is one the AGENT started on its own (Grok's
     /// follow-up to a background workflow), which the idle loop renders as a
     /// turn so its content isn't dropped between turns. Such a turn never took
@@ -742,6 +747,7 @@ impl SessionState {
             pending_user_message: None,
             pending_user_message_started_at: None,
             turn_in_flight: false,
+            edit_history_known_empty: false,
             agent_initiated_turn: false,
             turns_completed: 0,
             last_turn_ended_abnormally: false,

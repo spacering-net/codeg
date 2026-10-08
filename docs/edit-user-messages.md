@@ -21,8 +21,11 @@ file changes before saving.
 - The first message opens a fresh session. Later messages fork at the preceding
   assistant boundary, then verify that the child contains exactly the retained
   prefix. The connection keeps its model/mode selectors and MCP configuration.
-- Local messages are matched to persisted users in order, from a verified
-  history anchor. An unflushed repeated prompt cannot match an earlier copy.
+- Local messages carry durable client-message receipts bound to the exact
+  preceding history, session and workspace. Provider text normalization is shared
+  with the parsers. No timestamp window or text search chooses a target.
+  Unflushed repeated prompts are ambiguous and require reloading native history.
+  Patch preview positions derived from current files do not change the receipt.
 - Switching the runtime history invalidates old fetches and clears old live,
   optimistic, background and metadata buffers together.
 - Edited prompts include `expectedSessionId`; the prompt lock protects the
@@ -41,31 +44,53 @@ file changes before saving.
 
 ## Validation
 
-The conversation-edit implementation was checked with TypeScript, changed-file ESLint, a Next.js
-production static build, the full frontend suite (8,418 tests), and subsequent
-focused frontend regressions (258 tests after review fixes). Both desktop and
-server Rust `cargo check` passed. The Rust fork regression filter passed 69
-tests, including strict boundary checks and existing fork/session transitions.
+Validation commands and the opt-in real-adapter harness are included with this
+change. The harness uses temporary workspaces and an in-memory Codeg database;
+it does not replace the installed app. Native adapters use their existing auth
+and leave their small test sessions in native history. Live runs consume model
+usage, so they require both `--ignored` and `CODEG_MESSAGE_EDIT_LIVE=1`.
 
-No installed application was replaced and no model-billed live conversation was
-used for testing. Run the checkout using `pnpm tauri dev`, or build an installer
-using `pnpm tauri build`; the configured hooks prepare the required sidecars.
+From `src-tauri`, compile/run the deterministic suite with
+`cargo test --no-default-features --features server-bin --lib acp::`.
+For the real providers, enable `CODEG_MESSAGE_EDIT_LIVE=1`,
+`CODEG_MESSAGE_EDIT_LIVE_PROVIDERS=claude,codex`,
+`CODEG_MESSAGE_EDIT_LIVE_RESTORE=1`, then run
+`cargo test --no-default-features --features test-utils --test message_edit_live -- --ignored --test-threads=1 --nocapture`.
+`CODEG_MESSAGE_EDIT_LIVE_CANCEL=1` additionally checks cancellation settlement,
+file restoration, and 35 seconds without further writes after restoration.
+The sanitized Claude fork-timestamp regression runs without live opt-in.
+
+The full frontend suite passed 8,460 tests; subsequent receipt-normalization
+regressions passed seven targeted tests. TypeScript, changed-file ESLint and the
+Next.js static build passed. Windows server library tests passed 4,635 tests
+(including 1,867 ACP regressions) and Linux
+checkpoint regressions passed 58 tests. Real Claude Code and Codex scenarios
+verified durable identity, first/history edits, discarded context, original
+history preservation, stale-session rejection/retry and exact file restoration.
+The Codex cancellation scenario also passed: its native command settled after
+about 31 seconds, restoration remained blocked meanwhile, both written files
+were restored, and no new writes occurred during the 35-second observation.
+macOS is covered by the existing CI matrix but was not executed locally.
+
+The debug-build capture benchmark is explicitly runnable via
+`cargo test --no-default-features --features server-bin --lib capture_performance_reports_small_and_large_fixtures -- --ignored --nocapture`.
+On this Windows host, 24 files/96 KiB took about 148 ms before and 82 ms after;
+520 files/34 MiB took 4.36 s before and 3.93 s after with the benchmark's extended
+budget. The latter exceeds the production two-second budget and would have
+unavailable coverage. These are local debug timings, not a universal speed claim.
+
+Run the checkout using `pnpm tauri dev`, or build an installer using
+`pnpm tauri build`; the configured hooks prepare the required sidecars.
 
 
 ## File restoration
 
-The extension passed the desktop and server Rust checks, frontend production
-build, TypeScript and changed-file ESLint. Focused frontend suites cover file
-preview, conflicts, retained drafts, interrupted-restore recovery and all ten
-locales. Strict Clippy reports four pre-existing warnings in unrelated modules;
-the run allowing only `nonminimal_bool` and `collapsible_match` passes. The final
-file-related Rust regression run passed 136 tests, including the DB-publication
-handshake and nested-repository boundary regressions. The final UI/transport/i18n
-run passed 56 tests (31 dialog, 6 transport, 19 locale).
+Checkpoint recording is disabled by default. Enable it in the edit dialog for
+future Claude Code, Codex or DeepSeek prompts. Disabling recording keeps retained
+coverage available for restoration. Status shows counts, storage and the latest
+capture error; cleanup removes expired and abandoned records.
 
-
-Codeg captures a bounded before/after workspace checkpoint for each completed
-Claude Code, Codex or DeepSeek prompt. It uses content-addressed byte snapshots
+Codeg captures bounded before/after workspace checkpoints. It uses content-addressed byte snapshots
 outside the workspace, without changing the Git index, HEAD or branch. An edited
 message can restore the files before that prompt, including deleted files,
 original dirty or untracked contents, binary bytes and file modes. Files newly
@@ -85,10 +110,19 @@ for the duration of the operation. Do not run another Codeg process or external
 writer against the same files during restoration; filesystem path checks do not
 provide a sandbox against hostile concurrent OS modifications.
 
-Coverage starts after this build is running. Old messages, canceled/failed turns,
-mid-turn steering, overlapping turns and resource/resource-link payloads without
-lossless transcript identity have no usable checkpoint. Retained messages inherited
-by a fork currently keep no checkpoint lineage; new turns in that fork are captured.
+Coverage starts after recording is enabled. A canceled or failed turn can have
+coverage once the native provider has actually settled and background work is idle.
+Native shell cancellation may be delayed by the adapter. After a cancellation
+response, the connection continues consuming background events and keeps restore
+admission blocked until known background work settles and the event stream is
+quiet for one second. Activity during the final capture rejects publication.
+Waiting is bounded at two minutes; timeout or overlapping work leaves coverage
+unavailable. This relies on the adapter reporting its native background work;
+unreported external processes cannot be proven stopped by ACP.
+Stopping before dispatch removes the unused checkpoint and receipt reservations.
+Old messages, mid-turn steering, overlapping turns and resource/resource-link
+payloads without lossless transcript identity have no usable checkpoint. Retained
+messages inherit available checkpoint coverage on a successful edit fork.
 Ordinary inline file references and image attachments remain supported.
 
 Only regular workspace files are covered. Workspace `.gitignore`, Git internals,
@@ -97,13 +131,25 @@ Changes to nested repository boundaries invalidate coverage. Global
 Git ignore configuration and `.git/info/exclude` are not used. A symlink, junction,
 hard link, nonregular entry, non-UTF8 path, changed ignore policy or size overflow
 makes the checkpoint unavailable instead of silently producing partial coverage.
-Limits: 16 MiB/file, 128 MiB/snapshot, 20,000 files; 512 MiB of objects and 512 turn
-records per canonical workspace. Quota exhaustion disables new coverage without
-evicting existing records.
+Limits: 16 MiB/file, 128 MiB/snapshot, 20,000 files and 512 MiB of objects per
+canonical workspace. Automatic collection retains up to 100 recent completed
+turns, no older than 30 days, and evicts older coverage under quota pressure.
+Copying a fork prefix temporarily allows up to 201 metadata records; cleanup or
+the next capture restores the normal retention limit. Pending capture objects and
+both sides of a recovery journal are protected from collection.
+
+Before/after scans have separate two-second cooperative budgets. Stop cancels
+preparation before dispatch. Oversized, slow or canceled scans report unavailable
+coverage instead of a partial checkpoint; operating-system calls themselves cannot
+be interrupted. Disabled recording never scans workspace file contents.
+Strict server Clippy passes with `-D warnings`, without lint exceptions.
 
 Snapshots are stored in `file-checkpoints/<workspace-hash>` under `CODEG_HOME`,
 otherwise `CODEG_DATA_DIR` in server mode, otherwise `~/.codeg`. Each root has an OS
 lock, hashed immutable objects, atomic metadata and a durable recovery journal.
+The immutable restore plan is written once; a small transaction-bound progress
+record advances before each file write. Failed transactions remove their tentative
+inherited metadata. Legacy recovery journals remain readable.
 The journal records the original/forked session and conversation row before writes.
 If interrupted, **Recover interrupted restore** uses the database to distinguish
 committed restoration from work needing compensation. Changed files or an ambiguous

@@ -31,12 +31,26 @@ type FileRestoreState =
   | { status: "ready"; preview: FileRestorePreview }
   | { status: "error"; message: string }
 
+export interface CheckpointStatus {
+  enabled: boolean
+  recordCount: number
+  objectBytes: number
+  maxRecords: number
+  maxObjectBytes: number
+  lastError: string | null
+}
+
+type CheckpointAction = "load" | "toggle" | "cleanup"
+
 export interface EditUserMessageDialogProps {
   turn: MessageTurn
   busy?: boolean
   onSubmit: (draft: PromptDraft, restoreToken?: string) => Promise<void>
   onPreviewFiles?: () => Promise<FileRestorePreview>
   onRecoverFiles?: () => Promise<void>
+  onLoadCheckpointStatus?: () => Promise<CheckpointStatus>
+  onSetCheckpointEnabled?: (enabled: boolean) => Promise<CheckpointStatus>
+  onCleanupCheckpoints?: () => Promise<CheckpointStatus>
   filesRestored?: boolean
   onCancel: () => void
 }
@@ -52,25 +66,70 @@ function EditUserMessageEditor({
   onSubmit,
   onPreviewFiles,
   onRecoverFiles,
+  onLoadCheckpointStatus,
+  onSetCheckpointEnabled,
+  onCleanupCheckpoints,
   filesRestored = false,
   onCancel,
 }: EditUserMessageDialogProps) {
   const t = useTranslations("Folder.chat.messageList")
   const restoreId = useId()
+  const checkpointId = useId()
   const composerRef = useRef<RichComposerHandle>(null)
   const submittingRef = useRef(false)
   const mountedRef = useRef(false)
   const previewRequestRef = useRef(0)
   const restoreRef = useRef<FileRestoreState>({ status: "off" })
   const [restore, setRestore] = useState<FileRestoreState>({ status: "off" })
+  // Capture the opening callback: parent refetches must not reload or reset edits.
+  const [loadCheckpointStatus] = useState(() => onLoadCheckpointStatus)
+  const checkpointRequestRef = useRef(0)
+  const checkpointActionRef = useRef<CheckpointAction | null>(
+    loadCheckpointStatus ? "load" : null
+  )
+  const [checkpointAction, setCheckpointAction] =
+    useState<CheckpointAction | null>(loadCheckpointStatus ? "load" : null)
+  const [checkpointStatus, setCheckpointStatus] =
+    useState<CheckpointStatus | null>(null)
+  const [checkpointError, setCheckpointError] = useState<{
+    action: CheckpointAction
+    message: string
+  } | null>(null)
+  const checkpointMutating =
+    checkpointAction === "toggle" || checkpointAction === "cleanup"
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       previewRequestRef.current += 1
+      checkpointRequestRef.current += 1
     }
   }, [])
+
+  useEffect(() => {
+    if (!loadCheckpointStatus) return
+    const request = ++checkpointRequestRef.current
+    const current = () =>
+      mountedRef.current && request === checkpointRequestRef.current
+    void (async () => {
+      try {
+        const status = await loadCheckpointStatus()
+        if (current()) setCheckpointStatus(status)
+      } catch (cause) {
+        if (current())
+          setCheckpointError({ action: "load", message: toErrorMessage(cause) })
+      } finally {
+        if (current()) {
+          checkpointActionRef.current = null
+          setCheckpointAction(null)
+        }
+      }
+    })()
+    return () => {
+      checkpointRequestRef.current += 1
+    }
+  }, [loadCheckpointStatus])
 
   const [original] = useState(() => ({
     role: turn.role,
@@ -107,7 +166,15 @@ function EditUserMessageEditor({
       state.preview.conflicts.length > 0)
 
   const selectRestore = async (checked: boolean) => {
-    if (busy || submittingRef.current || filesRestored || invalid) return
+    if (
+      busy ||
+      submittingRef.current ||
+      checkpointActionRef.current === "toggle" ||
+      checkpointActionRef.current === "cleanup" ||
+      filesRestored ||
+      invalid
+    )
+      return
     const request = ++previewRequestRef.current
     const update = (state: FileRestoreState) => {
       restoreRef.current = state
@@ -141,12 +208,60 @@ function EditUserMessageEditor({
     }
   }
 
+  const updateCheckpoints = async (
+    action: "toggle" | "cleanup",
+    operation: (() => Promise<CheckpointStatus>) | undefined
+  ) => {
+    if (
+      !operation ||
+      busy ||
+      submittingRef.current ||
+      checkpointActionRef.current
+    )
+      return
+    const request = ++checkpointRequestRef.current
+    const current = () =>
+      mountedRef.current && request === checkpointRequestRef.current
+    checkpointActionRef.current = action
+    setCheckpointAction(action)
+    setCheckpointError(null)
+    // Cleanup can expire a selected checkpoint, including an in-flight preview.
+    const refreshPreview =
+      action === "cleanup" &&
+      !filesRestored &&
+      restoreRef.current.status !== "off"
+    if (refreshPreview) {
+      previewRequestRef.current += 1
+      restoreRef.current = { status: "loading" }
+      setRestore(restoreRef.current)
+    }
+    try {
+      const status = await operation()
+      if (current()) setCheckpointStatus(status)
+    } catch (cause) {
+      if (current())
+        setCheckpointError({ action, message: toErrorMessage(cause) })
+    } finally {
+      if (current()) {
+        checkpointActionRef.current = null
+        setCheckpointAction(null)
+        if (refreshPreview) await selectRestore(true)
+      }
+    }
+  }
+
   const cancel = () => {
     if (!submittingRef.current) onCancel()
   }
 
   const recoverFiles = async () => {
-    if (!onRecoverFiles || busy || submittingRef.current) return
+    if (
+      !onRecoverFiles ||
+      busy ||
+      submittingRef.current ||
+      checkpointActionRef.current
+    )
+      return
     submittingRef.current = true
     setSubmitting(true)
     try {
@@ -175,6 +290,8 @@ function EditUserMessageEditor({
     if (
       busy ||
       submittingRef.current ||
+      checkpointActionRef.current === "toggle" ||
+      checkpointActionRef.current === "cleanup" ||
       invalid ||
       restoreBlocked(currentRestore)
     )
@@ -255,6 +372,108 @@ function EditUserMessageEditor({
             )}
           </div>
         )}
+        {(onLoadCheckpointStatus ||
+          onSetCheckpointEnabled ||
+          onCleanupCheckpoints) && (
+          <div className="space-y-2 rounded-md border p-3 text-sm">
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id={checkpointId}
+                checked={checkpointStatus?.enabled ?? false}
+                disabled={
+                  busy ||
+                  submitting ||
+                  checkpointAction !== null ||
+                  !onSetCheckpointEnabled
+                }
+                aria-describedby={`${checkpointId}-description`}
+                onCheckedChange={(checked) =>
+                  void updateCheckpoints(
+                    "toggle",
+                    onSetCheckpointEnabled
+                      ? () => onSetCheckpointEnabled(checked === true)
+                      : undefined
+                  )
+                }
+                className="mt-0.5"
+              />
+              <label htmlFor={checkpointId}>{t("editCheckpointRecord")}</label>
+            </div>
+            <p
+              id={`${checkpointId}-description`}
+              className="text-muted-foreground"
+            >
+              {t("editCheckpointFuture")}
+            </p>
+            <p role="status">
+              {checkpointAction
+                ? t(
+                    checkpointAction === "load"
+                      ? "editCheckpointLoading"
+                      : "editCheckpointSaving"
+                  )
+                : checkpointStatus
+                  ? t(
+                      checkpointStatus.enabled
+                        ? "editCheckpointEnabled"
+                        : "editCheckpointDisabled"
+                    )
+                  : t("editCheckpointUnknown")}
+            </p>
+            {checkpointStatus && (
+              <>
+                <p>
+                  {t("editCheckpointCount", {
+                    count: checkpointStatus.recordCount,
+                    max: checkpointStatus.maxRecords,
+                  })}
+                </p>
+                <p>
+                  {t("editCheckpointStorage", {
+                    bytes: checkpointStatus.objectBytes,
+                    max: checkpointStatus.maxObjectBytes,
+                  })}
+                </p>
+                {checkpointStatus.lastError && (
+                  <p role="alert" className="break-words text-destructive">
+                    {t("editCheckpointLastError", {
+                      message: checkpointStatus.lastError,
+                    })}
+                  </p>
+                )}
+              </>
+            )}
+            {checkpointError && (
+              <p role="alert" className="break-words text-destructive">
+                {t(
+                  checkpointError.action === "load"
+                    ? "editCheckpointLoadFailed"
+                    : checkpointError.action === "toggle"
+                      ? "editCheckpointSaveFailed"
+                      : "editCheckpointCleanupFailed",
+                  { message: checkpointError.message }
+                )}
+              </p>
+            )}
+            {onCleanupCheckpoints && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy || submitting || checkpointAction !== null}
+                  onClick={() =>
+                    void updateCheckpoints("cleanup", onCleanupCheckpoints)
+                  }
+                >
+                  {t("editCheckpointCleanup")}
+                </Button>
+                <p className="text-muted-foreground">
+                  {t("editCheckpointCleanupHint")}
+                </p>
+              </>
+            )}
+          </div>
+        )}
         {(onPreviewFiles || filesRestored || restore.status !== "off") && (
           <div className="space-y-3 rounded-md border p-3 text-sm">
             {onPreviewFiles && (
@@ -262,7 +481,13 @@ function EditUserMessageEditor({
                 <Checkbox
                   id={restoreId}
                   checked={filesRestored || restore.status !== "off"}
-                  disabled={busy || submitting || invalid || filesRestored}
+                  disabled={
+                    busy ||
+                    submitting ||
+                    checkpointMutating ||
+                    invalid ||
+                    filesRestored
+                  }
                   onCheckedChange={(checked) =>
                     void selectRestore(checked === true)
                   }
@@ -320,7 +545,9 @@ function EditUserMessageEditor({
                           <Button
                             type="button"
                             variant="outline"
-                            disabled={busy || submitting}
+                            disabled={
+                              busy || submitting || checkpointAction !== null
+                            }
                             onClick={() => void recoverFiles()}
                           >
                             {t("editRestoreRecovery")}
@@ -411,6 +638,7 @@ function EditUserMessageEditor({
             disabled={
               busy ||
               submitting ||
+              checkpointMutating ||
               !ready ||
               invalid ||
               empty ||

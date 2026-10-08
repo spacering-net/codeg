@@ -1,4 +1,5 @@
 use super::workspace::{self, Snapshot};
+use super::{retention::MAX_RECORD_FILES, CaptureControl};
 use crate::models::agent::AgentType;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,8 +9,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-const MAX_STORE_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_RECORDS: usize = 512;
 const MAX_JSON: u64 = 16 * 1024 * 1024;
 
 pub(super) fn hash(bytes: &[u8]) -> String {
@@ -49,6 +48,8 @@ impl Record {
 pub(super) struct Store {
     pub root: PathBuf,
     pub dir: PathBuf,
+    #[cfg(test)]
+    pub object_limit: Option<u64>,
 }
 
 fn held_roots() -> &'static Mutex<HashSet<PathBuf>> {
@@ -130,7 +131,12 @@ impl Store {
                     .map_err(|e| e.to_string())?;
             }
         }
-        Ok(Self { root, dir })
+        Ok(Self {
+            root,
+            dir,
+            #[cfg(test)]
+            object_limit: None,
+        })
     }
 
     pub fn lock(&self) -> Result<RootGuard, String> {
@@ -191,7 +197,7 @@ impl Store {
             && fs::read_dir(self.dir.join("records"))
                 .map_err(|e| e.to_string())?
                 .count()
-                >= MAX_RECORDS
+                >= MAX_RECORD_FILES
         {
             return Err("Checkpoint record quota exceeded; coverage unavailable".into());
         }
@@ -208,6 +214,28 @@ impl Store {
             return Err("Checkpoint record identity mismatch".into());
         }
         Ok(r)
+    }
+    /// Caller holds the root lease and knows this prompt was never submitted.
+    pub fn discard_incomplete(
+        &self,
+        agent: AgentType,
+        session: &str,
+        index: usize,
+    ) -> Result<(), String> {
+        let path = self.record_path(&Record::new(agent, session, index));
+        workspace::validate_absolute(&path)?;
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(());
+        }
+        let record = self.read_record(agent, session, index)?;
+        // Preserve even partially malformed publication markers: discard must
+        // never erase a previously completed turn just because other fields fail.
+        if record.finished_ms.is_some() || record.after.is_some() {
+            return Ok(());
+        }
+        workspace::validate_absolute(&path)?;
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+        sync_dir(&self.dir.join("records"))
     }
     pub fn read_json<T: DeserializeOwned>(&self, path: &Path) -> Result<T, String> {
         workspace::validate_absolute(path)?;
@@ -232,38 +260,74 @@ impl Store {
         }
         atomic_write(path, &data)
     }
-    pub fn put_object(&self, data: &[u8], quota: &mut Option<u64>) -> Result<String, String> {
-        let id = hash(data);
-        let path = self.dir.join("objects").join(&id);
+    pub fn put_object_controlled(
+        &self,
+        data: &[u8],
+        id: &str,
+        budget: &mut ObjectBudget,
+        control: &CaptureControl,
+    ) -> Result<(), String> {
+        control.check()?;
+        // Pin BEFORE quota GC: even a deduplicated object may otherwise lose its
+        // last old-record reference during this scan.
+        budget.pins.insert(id.to_owned());
+        let path = self.dir.join("objects").join(id);
         if path.try_exists().map_err(|e| e.to_string())? {
-            if self.object(&id)? != data {
+            if self.object_controlled(id, Some(control))? != data {
                 return Err("Checkpoint object hash mismatch".into());
             }
+            return control.check();
+        }
+        if budget
+            .bytes
+            .is_none_or(|n| n.saturating_add(data.len() as u64) > self.max_object_bytes())
+        {
+            budget.bytes = Some(self.collect(
+                budget.active.as_deref(),
+                &budget.pins,
+                data.len() as u64,
+                Some(control),
+            )?);
+        }
+        control.check()?;
+        atomic_write(&path, data)?;
+        budget.bytes = Some(budget.bytes.unwrap() + data.len() as u64);
+        control.check()
+    }
+
+    #[cfg(test)]
+    pub fn put_object(&self, data: &[u8], quota: &mut Option<u64>) -> Result<String, String> {
+        // Legacy test helper does not GC: callers may be assembling references.
+        let id = hash(data);
+        let path = self.dir.join("objects").join(&id);
+        if path.exists() {
+            self.object(&id)?;
             return Ok(id);
         }
-        // Bounded per-root store; abandoned captures also count against quota.
+        let mut bytes = quota.unwrap_or(0);
         if quota.is_none() {
-            let mut bytes = 0_u64;
             for entry in fs::read_dir(self.dir.join("objects")).map_err(|e| e.to_string())? {
-                let entry = entry.map_err(|e| e.to_string())?;
-                bytes = bytes
-                    .checked_add(workspace::regular_metadata(&entry.path())?.len())
-                    .ok_or("Checkpoint quota overflow")?;
+                bytes +=
+                    workspace::regular_metadata(&entry.map_err(|e| e.to_string())?.path())?.len();
             }
-            *quota = Some(bytes);
         }
-        let bytes = quota
-            .unwrap()
-            .checked_add(data.len() as u64)
-            .ok_or("Checkpoint quota overflow")?;
-        if bytes > MAX_STORE_BYTES {
-            return Err("Checkpoint object quota exceeded; coverage unavailable".into());
+        if bytes.saturating_add(data.len() as u64) > self.max_object_bytes() {
+            return Err("Checkpoint object quota exceeded".into());
         }
         atomic_write(&path, data)?;
-        *quota = Some(bytes);
+        *quota = Some(bytes + data.len() as u64);
         Ok(id)
     }
+
     pub fn object(&self, id: &str) -> Result<Vec<u8>, String> {
+        self.object_controlled(id, None)
+    }
+
+    fn object_controlled(
+        &self,
+        id: &str,
+        control: Option<&CaptureControl>,
+    ) -> Result<Vec<u8>, String> {
         if id.len() != 64
             || !id
                 .bytes()
@@ -273,16 +337,20 @@ impl Store {
         }
         let path = self.dir.join("objects").join(id);
         workspace::validate_absolute(&path)?;
-        let file = workspace::open_read(&path)?;
-        let mut bytes = Vec::new();
-        file.take(workspace::MAX_FILE + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > workspace::MAX_FILE || hash(&bytes) != id {
+        let mut file = workspace::open_read(&path)?;
+        let (bytes, actual) = workspace::read_hashed(&mut file, control)?;
+        if actual != id {
             return Err("Checkpoint object corrupted".into());
         }
         Ok(bytes)
     }
+}
+
+#[derive(Default)]
+pub(super) struct ObjectBudget {
+    pub active: Option<PathBuf>,
+    pub pins: HashSet<String>,
+    pub bytes: Option<u64>,
 }
 
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {

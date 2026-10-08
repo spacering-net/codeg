@@ -3,6 +3,9 @@ use crate::models::message::{ContentBlock, TurnRole};
 use std::fs;
 use tempfile::{tempdir, TempDir};
 
+mod lifecycle;
+mod transaction;
+
 struct Fixture {
     _dir: TempDir,
     store: Store,
@@ -31,11 +34,13 @@ async fn fork_bound_recovery_requires_decision_and_preserves_committed_files() {
     transaction.bind_fork(7, "parent", "child").unwrap();
     transaction.apply().unwrap();
     let journal: serde_json::Value = f.store.read_json(&f.store.journal_path()).unwrap();
+    let progress = fs::read(f.store.dir.join("recovery-progress.json")).unwrap();
     transaction.commit().unwrap();
     drop(transaction);
     f.store
         .write_json(&f.store.journal_path(), &journal)
         .unwrap();
+    fs::write(f.store.dir.join("recovery-progress.json"), &progress).unwrap();
     let binding = restore::recovery_binding(&f.store).unwrap().unwrap();
     assert_eq!(binding.conversation_id, 7);
     assert_eq!(binding.forked_session_id, "child");
@@ -46,6 +51,7 @@ async fn fork_bound_recovery_requires_decision_and_preserves_committed_files() {
     f.store
         .write_json(&f.store.journal_path(), &journal)
         .unwrap();
+    fs::write(f.store.dir.join("recovery-progress.json"), &progress).unwrap();
     restore::recover_decided(&f.store, false).unwrap();
     assert_eq!(f.read("a"), b"after");
 }
@@ -56,6 +62,7 @@ impl Fixture {
         let root = dir.path().join("workspace");
         fs::create_dir(&root).unwrap();
         let store = Store::at(&root, &dir.path().join("data")).unwrap();
+        store.set_enabled(true).unwrap();
         Self { _dir: dir, store }
     }
     fn write(&self, name: &str, bytes: &[u8]) {
@@ -458,25 +465,32 @@ fn fingerprint_normalizes_text_image_interleaving_but_preserves_payloads() {
         mime_type: "image/png".into(),
         uri: None,
     };
-    let original = prompt_fingerprint(&[text("a"), image("1"), text("b"), image("2")]).unwrap();
+    let original = prompt_fingerprint(
+        AgentType::Codex,
+        &[text("a"), image("1"), text("b"), image("2")],
+    )
+    .unwrap();
     assert_eq!(
         original,
-        prompt_fingerprint(&[image("1"), image("2"), text("ab")]).unwrap()
+        prompt_fingerprint(AgentType::Codex, &[image("1"), image("2"), text("a\nb")]).unwrap()
     );
     assert_ne!(
         original,
-        prompt_fingerprint(&[image("2"), image("1"), text("ab")]).unwrap()
+        prompt_fingerprint(AgentType::Codex, &[image("2"), image("1"), text("a\nb")]).unwrap()
     );
     assert_ne!(
         original,
-        prompt_fingerprint(&[image("1"), image("2"), text("a b")]).unwrap()
+        prompt_fingerprint(AgentType::Codex, &[image("1"), image("2"), text("a b")]).unwrap()
     );
-    assert!(prompt_fingerprint(&[PromptInputBlock::ResourceLink {
-        uri: "file:///a".into(),
-        name: "a".into(),
-        mime_type: None,
-        description: None
-    }])
+    assert!(prompt_fingerprint(
+        AgentType::Codex,
+        &[PromptInputBlock::ResourceLink {
+            uri: "file:///a".into(),
+            name: "a".into(),
+            mime_type: None,
+            description: None
+        }]
+    )
     .is_err());
 }
 
@@ -509,14 +523,17 @@ async fn committed_recovery_never_compensates_and_commit_io_error_cannot_drop_ro
     finish_turn(p).await.unwrap();
     let mut restore = f.prepare(1);
     restore.apply().unwrap();
-    let mut journal: serde_json::Value = f.store.read_json(&f.store.journal_path()).unwrap();
-    journal["committed"] = serde_json::Value::Bool(true);
+    let journal: serde_json::Value = f.store.read_json(&f.store.journal_path()).unwrap();
+    let progress_path = f.store.dir.join("recovery-progress.json");
+    let mut progress: serde_json::Value = f.store.read_json(&progress_path).unwrap();
+    progress["committed"] = serde_json::Value::Bool(true);
     restore.commit().unwrap();
     drop(restore);
-    // Simulate cleanup interrupted after the committed flag reached disk.
+    // Simulate cleanup interrupted after the sidecar's committed flag reached disk.
     f.store
         .write_json(&f.store.journal_path(), &journal)
         .unwrap();
+    f.store.write_json(&progress_path, &progress).unwrap();
     restore::recover(&f.store).unwrap();
     assert_eq!(f.read("a"), b"before");
     // Start from end state again, then inject journal-persistence failure after
@@ -524,8 +541,8 @@ async fn committed_recovery_never_compensates_and_commit_io_error_cannot_drop_ro
     f.write("a", b"after");
     let mut restore = f.prepare(1);
     restore.apply().unwrap();
-    fs::remove_file(f.store.journal_path()).unwrap();
-    fs::create_dir(f.store.journal_path()).unwrap();
+    fs::remove_file(&progress_path).unwrap();
+    fs::create_dir(&progress_path).unwrap();
     assert!(restore.commit().is_err());
     drop(restore);
     assert_eq!(f.read("a"), b"before");

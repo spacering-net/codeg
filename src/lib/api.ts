@@ -424,6 +424,49 @@ export interface FileRestorePreview {
   conflicts: string[]
 }
 
+export interface CheckpointStatus {
+  enabled: boolean
+  recordCount: number
+  objectBytes: number
+  maxRecords: number
+  maxObjectBytes: number
+  lastError: string | null
+}
+
+export async function acpCheckpointStatus(
+  connectionId: string
+): Promise<CheckpointStatus> {
+  return getTransport().call("acp_checkpoint_status", { connectionId })
+}
+
+export async function acpSetCheckpointEnabled(
+  connectionId: string,
+  enabled: boolean
+): Promise<CheckpointStatus> {
+  return getTransport().call("acp_set_checkpoint_enabled", {
+    connectionId,
+    enabled,
+  })
+}
+
+export async function acpCleanupCheckpoints(
+  connectionId: string
+): Promise<CheckpointStatus> {
+  return getTransport().call("acp_cleanup_checkpoints", { connectionId })
+}
+
+export async function acpResolveEditTurn(
+  connectionId: string,
+  expectedSessionId: string,
+  clientMessageId: string
+): Promise<MessageTurn> {
+  return getTransport().call("acp_resolve_edit_turn", {
+    connectionId,
+    expectedSessionId,
+    clientMessageId,
+  })
+}
+
 export async function acpRecoverFileRestore(
   connectionId: string
 ): Promise<void> {

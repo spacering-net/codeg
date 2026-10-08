@@ -11377,6 +11377,49 @@ pub async fn acp_recover_file_restore(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn acp_checkpoint_status(
+    connection_id: String,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::acp::file_checkpoint::CheckpointStatus, AcpError> {
+    manager.checkpoint_status(&connection_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_set_checkpoint_enabled(
+    connection_id: String,
+    enabled: bool,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::acp::file_checkpoint::CheckpointStatus, AcpError> {
+    manager
+        .configure_checkpoints(&connection_id, Some(enabled))
+        .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_cleanup_checkpoints(
+    connection_id: String,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::acp::file_checkpoint::CheckpointStatus, AcpError> {
+    manager.configure_checkpoints(&connection_id, None).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_resolve_edit_turn(
+    connection_id: String,
+    expected_session_id: String,
+    client_message_id: String,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::models::message::MessageTurn, AcpError> {
+    manager
+        .resolve_edit_turn(&connection_id, &expected_session_id, &client_message_id)
+        .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn acp_restore_edit_fork(
     connection_id: String,
     conversation_id: i32,

@@ -975,6 +975,10 @@ pub fn build_router(
             "/acp_edit_fork",
             post(handlers::acp::acp_edit_fork).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
         )
+        .route("/acp_checkpoint_status", post(handlers::acp::acp_checkpoint_status))
+        .route("/acp_set_checkpoint_enabled", post(handlers::acp::acp_set_checkpoint_enabled))
+        .route("/acp_cleanup_checkpoints", post(handlers::acp::acp_cleanup_checkpoints))
+        .route("/acp_resolve_edit_turn", post(handlers::acp::acp_resolve_edit_turn))
         .route(
             "/acp_preview_file_restore",
             post(handlers::acp::acp_preview_file_restore)
