@@ -1,5 +1,7 @@
 # Edit and resend user messages
 
+[English](edit-user-messages.md) | [简体中文](edit-user-messages.zh-CN.md)
+
 User messages in connected Codex, Claude Code and DeepSeek conversations now
 offer **Edit message**. **Save and resend** starts from the history immediately
 before the selected message. The existing conversation row follows the edited
@@ -61,8 +63,10 @@ file restoration, and 35 seconds without further writes after restoration.
 The sanitized Claude fork-timestamp regression runs without live opt-in.
 
 The full frontend suite passed 8,460 tests; subsequent receipt-normalization
-regressions passed seven targeted tests. TypeScript, changed-file ESLint and the
-Next.js static build passed. Windows server library tests passed 4,635 tests
+regressions passed seven targeted tests and the final UI/identity/transport/i18n
+run passed 84 tests. TypeScript, changed-file ESLint and the Next.js static build
+passed. Complete frontend lint passed with LF checkout line endings as in CI.
+Windows server library tests passed 4,635 tests
 (including 1,867 ACP regressions) and Linux
 checkpoint regressions passed 58 tests. Real Claude Code and Codex scenarios
 verified durable identity, first/history edits, discarded context, original
@@ -70,7 +74,9 @@ history preservation, stale-session rejection/retry and exact file restoration.
 The Codex cancellation scenario also passed: its native command settled after
 about 31 seconds, restoration remained blocked meanwhile, both written files
 were restored, and no new writes occurred during the 35-second observation.
-macOS is covered by the existing CI matrix but was not executed locally.
+macOS is covered by the existing CI matrix but was not executed locally. DeepSeek
+was not exercised against a real model. Strict server Clippy passes with
+`-D warnings`, without lint exceptions.
 
 The debug-build capture benchmark is explicitly runnable via
 `cargo test --no-default-features --features server-bin --lib capture_performance_reports_small_and_large_fixtures -- --ignored --nocapture`.
@@ -142,7 +148,6 @@ Before/after scans have separate two-second cooperative budgets. Stop cancels
 preparation before dispatch. Oversized, slow or canceled scans report unavailable
 coverage instead of a partial checkpoint; operating-system calls themselves cannot
 be interrupted. Disabled recording never scans workspace file contents.
-Strict server Clippy passes with `-D warnings`, without lint exceptions.
 
 Snapshots are stored in `file-checkpoints/<workspace-hash>` under `CODEG_HOME`,
 otherwise `CODEG_DATA_DIR` in server mode, otherwise `~/.codeg`. Each root has an OS
