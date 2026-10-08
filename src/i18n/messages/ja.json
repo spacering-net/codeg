@@ -3410,6 +3410,16 @@
         "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "messageList": {
+        "editMessage": "メッセージを編集",
+        "editAndResend": "保存して再送信",
+        "editDescription": "編集したメッセージとそれ以降のすべてのメッセージが現在のブランチで置き換えられます。元の会話は別途保存されます。ワークスペースのファイルは変更されません。",
+        "editCancel": "キャンセル",
+        "editBusy": "現在の操作が完了するまでお待ちください。",
+        "editFailed": "メッセージを編集できませんでした：{message}",
+        "editNotReady": "メッセージエディターの準備ができていません。もう一度お試しください。",
+        "editAttachmentsUnavailable": "元の画像データが利用できないため、このメッセージを安全に再送信できません。",
+        "editUnsupported": "このメッセージには未対応の内容が含まれているため、安全に編集できません。",
+        "editImage": "添付画像 {number}",
         "attachedResources": "添付リソース",
         "loading": "読み込み中...",
         "loadBackgroundActivity": "バックグラウンドの動作を読み込む",

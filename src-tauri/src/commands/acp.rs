@@ -11170,11 +11170,12 @@ pub async fn acp_prompt(
     folder_id: Option<i32>,
     conversation_id: Option<i32>,
     client_message_id: Option<String>,
+    expected_session_id: Option<String>,
     db: State<'_, crate::db::AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
     manager
-        .send_prompt_linked_with_message_id(
+        .send_prompt_linked_guarded(
             &db,
             &connection_id,
             blocks,
@@ -11182,6 +11183,7 @@ pub async fn acp_prompt(
             conversation_id,
             None,
             client_message_id,
+            expected_session_id,
         )
         .await
         .map(|_| ())
@@ -11287,16 +11289,54 @@ pub async fn acp_fork(
     // "Fork from here": the rendered turn to fork at. `None` = fork at the
     // tail, the composer's fork-send behaviour.
     fork_from_turn_id: Option<String>,
+    fork_before_turn_id: Option<String>,
+    expected_session_id: Option<String>,
+    expected_turn: Option<crate::models::message::MessageTurn>,
     db: State<'_, AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<ForkResultInfo, AcpError> {
     manager
-        .fork_session(
+        .fork_session_with_options(
             &db,
             &connection_id,
             conversation_id,
             folder_id,
-            fork_from_turn_id,
+            crate::acp::fork::ForkOptions {
+                fork_from_turn_id,
+                fork_before_turn_id,
+                expected_session_id,
+                expected_turn,
+            },
+        )
+        .await
+}
+
+/// Dedicated strict edit entry point: an older backend must fail with command
+/// not found, rather than ignore new fields and silently fork at the tail.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_edit_fork(
+    connection_id: String,
+    conversation_id: Option<i32>,
+    folder_id: Option<i32>,
+    fork_before_turn_id: String,
+    expected_session_id: String,
+    expected_turn: crate::models::message::MessageTurn,
+    db: State<'_, AppDatabase>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<ForkResultInfo, AcpError> {
+    manager
+        .fork_session_with_options(
+            &db,
+            &connection_id,
+            conversation_id,
+            folder_id,
+            crate::acp::fork::ForkOptions {
+                fork_before_turn_id: Some(fork_before_turn_id),
+                expected_session_id: Some(expected_session_id),
+                expected_turn: Some(expected_turn),
+                ..Default::default()
+            },
         )
         .await
 }

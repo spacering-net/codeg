@@ -296,6 +296,11 @@ const EMPTY_TIMELINE: ConversationTimelineTurn[] = []
 
 type Action =
   | {
+      type: "REPLACE_EDITED_SESSION"
+      conversationId: number
+      detail: DbConversationDetail
+    }
+  | {
       type: "FETCH_DETAIL_START"
       conversationId: number
     }
@@ -1886,6 +1891,30 @@ function reducer(
   action: Action
 ): ConversationRuntimeState {
   switch (action.type) {
+    case "REPLACE_EDITED_SESSION": {
+      const current = state.byConversationId.get(action.conversationId)
+      const externalId = action.detail.summary.external_id ?? null
+      const session: ConversationRuntimeSession = {
+        ...createEmptySession(action.conversationId),
+        dbConversationId: current?.dbConversationId ?? null,
+        pendingCleanup: current?.pendingCleanup ?? false,
+        externalId,
+        detail: action.detail,
+        sessionStats: action.detail.session_stats ?? null,
+      }
+      const byConversationId = new Map(state.byConversationId)
+      byConversationId.set(action.conversationId, session)
+      return {
+        byConversationId,
+        conversationIdByExternalId: upsertExternalIdIndex(
+          state.conversationIdByExternalId,
+          current?.externalId ?? null,
+          externalId,
+          action.conversationId
+        ),
+      }
+    }
+
     case "FETCH_DETAIL_START":
       return updateSessionInState(state, action.conversationId, (current) => ({
         ...current,
@@ -2716,6 +2745,11 @@ function reducer(
 // ─────────────────────────────────────────────────────────────────────────
 
 export interface RuntimeActions {
+  /** Install an edit's exact prefix and discard buffers from the old branch. */
+  replaceEditedSession: (
+    conversationId: number,
+    detail: DbConversationDetail
+  ) => void
   fetchDetail: (conversationId: number) => void
   refetchDetail: (
     conversationId: number,
@@ -4195,6 +4229,11 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
   }
 
   const actions: RuntimeActions = {
+    replaceEditedSession: (conversationId, detail) => {
+      bumpFetchGeneration(conversationId)
+      cancelViewerDetailSync(conversationId)
+      dispatch({ type: "REPLACE_EDITED_SESSION", conversationId, detail })
+    },
     fetchDetail,
     refetchDetail,
     loadOlderTurns,

@@ -1210,6 +1210,7 @@ pub enum ConnectionCommand {
         /// tail-fork the fork-send composer has always done; see
         /// [`crate::acp::fork::ForkPoint`] for how each agent resolves it.
         fork_point: Option<crate::acp::fork::ForkPoint>,
+        strict: Option<crate::acp::fork::StrictFork>,
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     },
@@ -6502,6 +6503,9 @@ async fn run_connection(
                 // that needs no tool; OpenClaw-style `supports_mcp: false`
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
+                s.strict_fork_supported = supports_fork
+                    && strict_fork_version_ok(agent_type, init_resp.agent_info.as_ref());
+                s.session_mcp_servers = mcp_servers.clone();
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
@@ -9799,6 +9803,8 @@ fn live_mode_for_fork(
 /// Result when the conversation loop exits due to a fork request.
 struct ForkExitInfo {
     fork_response: agent_client_protocol::schema::v1::ForkSessionResponse,
+    /// Fresh first-message edits already opened the child with session/new.
+    fresh: bool,
     /// Raw top-level `models` from the fork response (Grok per-model effort data),
     /// captured before the typed deserialize drops it. `None` when absent.
     fork_models_raw: Option<serde_json::Value>,
@@ -9816,6 +9822,25 @@ struct ForkExitInfo {
     original_session_id: String,
     reply: tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     connection: ConnectionTo<Agent>,
+}
+
+async fn read_strict_fork_history(
+    agent_type: AgentType,
+    session_id: &str,
+) -> Result<crate::models::conversation::ConversationDetail, AcpError> {
+    let id = session_id.to_string();
+    let detail = tokio::task::spawn_blocking(move || {
+        crate::parsers::build_agent_parser(agent_type).get_conversation(&id)
+    })
+    .await
+    .map_err(|e| AcpError::protocol(e.to_string()))?
+    .map_err(|e| AcpError::protocol(format!("Cannot verify strict fork transcript: {e}")))?;
+    if detail.summary.id != session_id {
+        return Err(AcpError::protocol(
+            "Strict fork transcript resolved another session",
+        ));
+    }
+    Ok(detail)
 }
 
 /// After `run_conversation_loop` returns, handle normal exit or fork transition.
@@ -9908,12 +9933,6 @@ async fn handle_fork_or_exit(
     // Reply protocol-level result to manager.fork_session, which will combine
     // it with the freshly-created sibling row id to produce the wire ForkResultInfo.
     let original_session_id = fork_info.original_session_id;
-    let _ = fork_info
-        .reply
-        .send(Ok(crate::acp::types::ForkProtocolResult {
-            forked_session_id: new_sid.clone(),
-            original_session_id: original_session_id.clone(),
-        }));
 
     // Make the forked session REAL on the agent before anything prompts on it.
     //
@@ -9944,7 +9963,7 @@ async fn handle_fork_or_exit(
     // advertising resume, or whose resume fails, falls back to attaching the
     // fork response exactly as before. Neither is worse off than it was before
     // this call existed.
-    let resumed = if supports_resume {
+    let resumed = if supports_resume && !fork_info.fresh {
         let resume_req = build_resume_session_request(
             agent_type,
             SessionId::new(new_sid.clone()),
@@ -10063,6 +10082,21 @@ async fn handle_fork_or_exit(
     );
     emit_selectors_ready(state, emitter).await;
 
+    // Publish the destination and restore selectors before acknowledging the
+    // fork. The manager persists its two-row reshuffle while the new loop starts;
+    // a subsequent prompt cannot run on the outgoing session.
+    let _ = fork_info
+        .reply
+        .send(Ok(crate::acp::types::ForkProtocolResult {
+            forked_session_id: new_sid.clone(),
+            original_session_id,
+        }));
+    let child_supports_fork = if fork_info.fresh {
+        state.read().await.fork_supported
+    } else {
+        true
+    };
+
     let loop_result = run_conversation_loop(
         &mut session,
         conn_id,
@@ -10073,7 +10107,7 @@ async fn handle_fork_or_exit(
         cmd_rx,
         terminal_runtime.clone(),
         cwd_string,
-        true, // fork already succeeded on this process
+        child_supports_fork,
         prompt_ledger,
         delegation_injection,
         stderr_tail,
@@ -12142,8 +12176,13 @@ async fn run_conversation_loop(
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
                 }
             }
-            Some(ConnectionCommand::Fork { fork_point, reply }) => {
-                if !supports_fork {
+            Some(ConnectionCommand::Fork {
+                fork_point,
+                strict,
+                reply,
+            }) => {
+                let fresh = strict.as_ref().is_some_and(|s| s.prefix.is_empty());
+                if !supports_fork && !fresh {
                     let _ = reply.send(Err(AcpError::protocol(
                         "This agent does not support session/fork".to_string(),
                     )));
@@ -12158,6 +12197,37 @@ async fn run_conversation_loop(
                 }
                 let cx = session.connection();
                 let sid = session.session_id().clone();
+                if let Some(edit) = strict.as_ref() {
+                    if edit.original_session_id != sid.0.as_ref() {
+                        let _ =
+                            reply.send(Err(AcpError::protocol("Session changed before edit fork")));
+                        continue;
+                    }
+                    // Recheck after queueing, immediately before the protocol
+                    // mutation. Never resolve an edit through a tail fallback.
+                    let current = read_strict_fork_history(agent_type, &edit.original_session_id)
+                        .await
+                        .and_then(|detail| {
+                            let (_, prefix) = crate::acp::fork::resolve_fork_before_user(
+                                &detail.turns,
+                                &edit.target.id,
+                                &edit.target,
+                                agent_type,
+                            )?;
+                            crate::acp::fork::verify_fork_prefix(&edit.prefix, &prefix)
+                        });
+                    if let Err(e) = current {
+                        let _ = reply.send(Err(e));
+                        continue;
+                    }
+                    if !fresh && (fork_point.is_none() || !state.read().await.strict_fork_supported)
+                    {
+                        let _ = reply.send(Err(AcpError::protocol(
+                            "Strict message fork is unsupported",
+                        )));
+                        continue;
+                    }
+                }
                 let inherited_mode_id =
                     live_mode_for_fork(&*state.read().await, session.modes().as_ref());
                 tracing::info!(
@@ -12172,16 +12242,64 @@ async fn run_conversation_loop(
                 // brought; only one landing from now on can be newer than that
                 // handshake (see `SessionState::grok_catalog_broadcast`).
                 state.write().await.grok_catalog_broadcast = None;
-                let result =
-                    crate::acp::fork::fork_session(&cx, &sid, cwd, fork_point.as_ref()).await;
+                let result = if fresh {
+                    let servers = state.read().await.session_mcp_servers.clone();
+                    send_new_session_capturing_models(
+                        &cx,
+                        build_new_session_request(agent_type, Path::new(cwd), servers),
+                    )
+                    .await
+                    .map(|(response, models)| {
+                        (
+                            agent_client_protocol::schema::v1::ForkSessionResponse::new(
+                                response.session_id,
+                            )
+                            .modes(response.modes)
+                            .config_options(response.config_options)
+                            .meta(response.meta),
+                            models,
+                        )
+                    })
+                    .map_err(|e| AcpError::protocol(format!("Fresh edit session failed: {e}")))
+                } else {
+                    crate::acp::fork::fork_session(&cx, &sid, cwd, fork_point.as_ref()).await
+                };
                 match result {
                     Ok((fork_response, fork_models_raw)) => {
+                        if let Some(edit) = strict.as_ref() {
+                            let child_id = fork_response.session_id.0.to_string();
+                            if child_id == edit.original_session_id {
+                                let _ = reply.send(Err(AcpError::protocol(
+                                    "Provider returned the original session for edit",
+                                )));
+                                continue;
+                            }
+                            if !fresh {
+                                let checked = read_strict_fork_history(agent_type, &child_id)
+                                    .await
+                                    .and_then(|detail| {
+                                        crate::acp::fork::verify_fork_prefix(
+                                            &edit.prefix,
+                                            &detail.turns,
+                                        )
+                                    });
+                                if let Err(e) = checked {
+                                    // Leave the original live session and both DB
+                                    // pointers untouched. Release a rejected child
+                                    // where supported; its native file may remain.
+                                    close_forked_parent(&cx, &child_id, &edit.original_session_id);
+                                    let _ = reply.send(Err(e));
+                                    continue;
+                                }
+                            }
+                        }
                         tracing::info!(
                             "[ACP] Fork succeeded: new_session_id={}",
                             fork_response.session_id.0
                         );
                         return Ok(Some(ForkExitInfo {
                             fork_response,
+                            fresh,
                             fork_models_raw,
                             inherited_mode_id,
                             original_session_id: sid.0.to_string(),
@@ -14600,8 +14718,24 @@ fn version_at_least(version: &str, min: &str) -> bool {
 /// the pinned npx package (see `commands::acp::acp_get_agent_status_core`) —
 /// report an `agent_info.version` at or above the registry minimum? Fail
 /// closed on a missing `agent_info` or an unparseable version.
-fn steering_version_ok(agent_info: Option<&agent_client_protocol::schema::v1::Implementation>, min: &str) -> bool {
+fn steering_version_ok(
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+    min: &str,
+) -> bool {
     agent_info.is_some_and(|info| version_at_least(&info.version, min))
+}
+
+fn strict_fork_version_ok(
+    agent_type: AgentType,
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    let min = match agent_type {
+        AgentType::ClaudeCode => "0.75.1",
+        AgentType::Codex => "1.8.0",
+        AgentType::DeepSeek => "0.8.0",
+        _ => return false,
+    };
+    steering_version_ok(agent_info, min)
 }
 
 /// Synthesize `SessionState.native_steering_available` from an `initialize`
@@ -31883,6 +32017,7 @@ mod tests {
         let (reply, answer) = oneshot::channel();
         grok.send(ConnectionCommand::Fork {
             fork_point: None,
+            strict: None,
             reply,
         })
         .await;
@@ -32333,6 +32468,7 @@ mod tests {
         let (reply, answer) = oneshot::channel();
         grok.send(ConnectionCommand::Fork {
             fork_point: None,
+            strict: None,
             reply,
         })
         .await;
@@ -32910,6 +33046,7 @@ mod tests {
             self.cmd_tx
                 .send(ConnectionCommand::Fork {
                     fork_point: None,
+                    strict: None,
                     reply,
                 })
                 .await

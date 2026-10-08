@@ -17,6 +17,109 @@ use crate::acp::error::AcpError;
 use crate::models::agent::AgentType;
 use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
 
+/// Optional additions to the existing fork API. Edit targets require a snapshot
+/// from a full detail parse; live UI ids are deliberately never guessed.
+#[derive(Debug, Default)]
+pub struct ForkOptions {
+    pub fork_from_turn_id: Option<String>,
+    pub fork_before_turn_id: Option<String>,
+    pub expected_session_id: Option<String>,
+    pub expected_turn: Option<MessageTurn>,
+}
+
+impl ForkOptions {
+    pub fn validate(&self) -> Result<(), AcpError> {
+        if self.fork_from_turn_id.is_some() && self.fork_before_turn_id.is_some() {
+            return Err(AcpError::protocol(
+                "forkFromTurnId and forkBeforeTurnId are mutually exclusive",
+            ));
+        }
+        if self.fork_before_turn_id.is_some()
+            && (self
+                .expected_session_id
+                .as_deref()
+                .is_none_or(str::is_empty)
+                || self.expected_turn.is_none())
+        {
+            return Err(AcpError::protocol(
+                "forkBeforeTurnId requires expectedSessionId and expectedTurn",
+            ));
+        }
+        if self.expected_turn.is_some() && self.fork_before_turn_id.is_none() {
+            return Err(AcpError::protocol("expectedTurn requires forkBeforeTurnId"));
+        }
+        Ok(())
+    }
+}
+
+/// An empty prefix means session/new, never an unqualified session/fork.
+#[derive(Debug, Clone)]
+pub struct StrictFork {
+    pub original_session_id: String,
+    pub prefix: Vec<MessageTurn>,
+    pub target: MessageTurn,
+}
+
+fn same_turn_content(left: &MessageTurn, right: &MessageTurn) -> bool {
+    std::mem::discriminant(&left.role) == std::mem::discriminant(&right.role)
+        && left.timestamp == right.timestamp
+        && serde_json::to_value(&left.blocks).ok() == serde_json::to_value(&right.blocks).ok()
+}
+
+/// Fail closed on positional-id drift and on boundaries the AIR assistant-point
+/// extension cannot express. The forked transcript is verified again before
+/// attaching, since Codex/DeepSeek can retain an entire native agent turn.
+pub fn resolve_fork_before_user(
+    turns: &[MessageTurn],
+    turn_id: &str,
+    expected: &MessageTurn,
+    agent_type: AgentType,
+) -> Result<(Option<ForkPoint>, Vec<MessageTurn>), AcpError> {
+    let idx = turns.iter().position(|t| t.id == turn_id).ok_or_else(|| {
+        AcpError::protocol("Edit target not found in the current transcript; reload history")
+    })?;
+    let target = &turns[idx];
+    if expected.id != turn_id
+        || !matches!(target.role, TurnRole::User)
+        || !same_turn_content(target, expected)
+    {
+        return Err(AcpError::protocol(
+            "Edit target changed or is not a user turn; reload history",
+        ));
+    }
+    if idx == 0 {
+        return Ok((None, Vec::new()));
+    }
+    if !matches!(turns[idx - 1].role, TurnRole::Assistant) {
+        return Err(AcpError::protocol(
+            "Cannot preserve the exact prefix before this user turn (consecutive user or system boundary)",
+        ));
+    }
+    let point = resolve_fork_point(turns, &turns[idx - 1].id, agent_type).ok_or_else(|| {
+        AcpError::protocol("This provider cannot name the exact assistant boundary before the edit")
+    })?;
+    Ok((Some(point), turns[..idx].to_vec()))
+}
+
+/// Compare every retained block, including tools and attachments, without
+/// depending on session-local positional ids or backfilled usage metadata.
+pub fn verify_fork_prefix(
+    expected: &[MessageTurn],
+    actual: &[MessageTurn],
+) -> Result<(), AcpError> {
+    if expected.len() != actual.len()
+        || !expected
+            .iter()
+            .zip(actual)
+            .all(|(a, b)| same_turn_content(a, b))
+    {
+        return Err(AcpError::protocol(
+            "Provider did not preserve the exact prefix before the edited user turn; original session retained",
+        ));
+    }
+    Ok(())
+}
+
 /// Where in the history to fork, for the agents that can honour it.
 ///
 /// Rides as `_meta.jetbrains.air.fork` on `session/fork`. Every adapter that
@@ -551,6 +654,130 @@ mod tests {
     fn unknown_turn_id_is_not_a_fork_point() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", Some("msg_01"))];
         assert!(resolve_fork_point(&turns, "turn-9", AgentType::ClaudeCode).is_none());
+    }
+
+    fn edit_history() -> Vec<MessageTurn> {
+        vec![
+            turn("turn-0", TurnRole::User, "original", None),
+            turn("turn-1", TurnRole::Assistant, "answer", Some("msg-1")),
+            turn("turn-2", TurnRole::User, "edit me", None),
+        ]
+    }
+
+    #[test]
+    fn strict_edit_requires_snapshot_and_session_and_excludes_ordinary_point() {
+        let mut options = ForkOptions {
+            fork_before_turn_id: Some("turn-0".into()),
+            ..Default::default()
+        };
+        assert!(options.validate().is_err());
+        options.expected_session_id = Some("s1".into());
+        assert!(options.validate().is_err());
+        options.expected_turn = Some(edit_history().remove(0));
+        assert!(options.validate().is_ok());
+        options.fork_from_turn_id = Some("turn-1".into());
+        assert!(options.validate().is_err());
+    }
+
+    #[test]
+    fn strict_first_edit_is_fresh_even_for_a_provider_without_fork() {
+        let mut turns = edit_history();
+        // Image-only prompts need no textual fingerprint.
+        turns[0].blocks = vec![ContentBlock::Image {
+            data: "original-bytes".into(),
+            mime_type: "image/png".into(),
+            uri: None,
+        }];
+        let (point, prefix) =
+            resolve_fork_before_user(&turns, "turn-0", &turns[0], AgentType::Gemini).unwrap();
+        assert!(point.is_none());
+        assert!(prefix.is_empty());
+        let mut stale = turns[0].clone();
+        stale.blocks = vec![ContentBlock::Image {
+            data: "different-bytes".into(),
+            mime_type: "image/png".into(),
+            uri: None,
+        }];
+        assert!(resolve_fork_before_user(&turns, "turn-0", &stale, AgentType::Gemini).is_err());
+    }
+
+    #[test]
+    fn strict_edit_resolves_immediate_predecessor_for_supported_providers() {
+        let turns = edit_history();
+        for agent in [AgentType::ClaudeCode, AgentType::Codex, AgentType::DeepSeek] {
+            let (point, prefix) =
+                resolve_fork_before_user(&turns, "turn-2", &turns[2], agent).unwrap();
+            assert!(point.is_some());
+            assert_eq!(prefix.len(), 2);
+            verify_fork_prefix(&turns[..2], &prefix).unwrap();
+        }
+        assert!(resolve_fork_before_user(&turns, "turn-2", &turns[2], AgentType::Gemini).is_err());
+    }
+
+    #[test]
+    fn strict_edit_rejects_missing_live_wrong_role_and_shifted_ids() {
+        let turns = edit_history();
+        for id in ["live-7-user", "turn-99", "turn-1"] {
+            assert!(
+                resolve_fork_before_user(&turns, id, &turns[2], AgentType::ClaudeCode).is_err()
+            );
+        }
+        let mut stale = turns[2].clone();
+        stale.timestamp += chrono::Duration::milliseconds(1);
+        assert!(resolve_fork_before_user(&turns, "turn-2", &stale, AgentType::ClaudeCode).is_err());
+        stale = turns[2].clone();
+        stale.blocks = turns[0].blocks.clone();
+        assert!(resolve_fork_before_user(&turns, "turn-2", &stale, AgentType::ClaudeCode).is_err());
+    }
+
+    #[test]
+    fn strict_edit_rejects_consecutive_user_system_and_unnamed_boundaries() {
+        let mut turns = edit_history();
+        turns[1].role = TurnRole::User;
+        assert!(
+            resolve_fork_before_user(&turns, "turn-2", &turns[2], AgentType::ClaudeCode).is_err()
+        );
+        turns[1].role = TurnRole::System;
+        assert!(
+            resolve_fork_before_user(&turns, "turn-2", &turns[2], AgentType::ClaudeCode).is_err()
+        );
+        turns[1].role = TurnRole::Assistant;
+        turns[1].blocks.clear();
+        turns[1].agent_message_id = None;
+        assert!(
+            resolve_fork_before_user(&turns, "turn-2", &turns[2], AgentType::ClaudeCode).is_err()
+        );
+    }
+
+    #[test]
+    fn strict_prefix_rejects_tail_steering_and_lost_attachments_or_tools() {
+        let mut turns = edit_history();
+        turns[0].blocks.push(ContentBlock::Image {
+            data: "bytes".into(),
+            mime_type: "image/png".into(),
+            uri: Some("file:///image".into()),
+        });
+        turns[1].blocks.push(ContentBlock::ToolUse {
+            tool_use_id: Some("tool-1".into()),
+            tool_name: "Bash".into(),
+            input_preview: None,
+            status: None,
+            meta: None,
+        });
+        let prefix = &turns[..2];
+        assert!(verify_fork_prefix(prefix, &turns).is_err());
+        let mut child = prefix.to_vec();
+        child[0].blocks.pop();
+        assert!(verify_fork_prefix(prefix, &child).is_err());
+        child = prefix.to_vec();
+        child[1].blocks.pop();
+        assert!(verify_fork_prefix(prefix, &child).is_err());
+        child = prefix.to_vec();
+        child[0].id = "child-positional-id".into();
+        child[1].agent_message_id = Some("child-native-id".into());
+        verify_fork_prefix(prefix, &child).unwrap();
+        child.insert(1, turns[2].clone());
+        assert!(verify_fork_prefix(prefix, &child).is_err());
     }
 
     /// Pinned against a digest computed outside this crate, so a change of hash

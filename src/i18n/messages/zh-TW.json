@@ -3410,6 +3410,16 @@
         "downloadFailed": "下載 {name} 失敗"
       },
       "messageList": {
+        "editMessage": "編輯訊息",
+        "editAndResend": "儲存並重新傳送",
+        "editDescription": "編輯後的訊息及其後的所有訊息將取代目前分支中的對應內容。原始對話將另行儲存。工作區檔案保持不變。",
+        "editCancel": "取消",
+        "editBusy": "請等待目前操作完成。",
+        "editFailed": "無法編輯訊息：{message}",
+        "editNotReady": "訊息編輯器尚未就緒，請重試。",
+        "editAttachmentsUnavailable": "原始圖片資料無法使用，無法安全地重新傳送此訊息。",
+        "editUnsupported": "此訊息包含不支援的內容，無法安全編輯。",
+        "editImage": "附件圖片 {number}",
         "attachedResources": "附加資源",
         "loading": "載入中...",
         "loadBackgroundActivity": "載入背景活動",

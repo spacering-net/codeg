@@ -56,6 +56,7 @@ import type {
   WorkTaskTemplate,
   ConversationSummary,
   ConversationDetail,
+  MessageTurn,
   ConversationTurnsPage,
   DbConversationDetail,
   FolderInfo,
@@ -296,7 +297,8 @@ export async function acpPrompt(
   blocks: PromptInputBlock[],
   folderId: number | null = null,
   conversationId: number | null = null,
-  clientMessageId: string | null = null
+  clientMessageId: string | null = null,
+  expectedSessionId?: string | null
 ): Promise<void> {
   try {
     await getTransport().call("acp_prompt", {
@@ -310,6 +312,7 @@ export async function acpPrompt(
       folderId,
       conversationId,
       clientMessageId,
+      ...(expectedSessionId ? { expectedSessionId } : {}),
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
@@ -382,6 +385,29 @@ export async function acpFork(
     // A fork is serialized with prompts on the backend: it returns
     // TurnInProgress while a turn is in flight. Surface it as TurnBusyError so
     // callers can treat it as transient (re-queue) rather than a fork failure.
+    if (isTurnInProgressRejection(e)) throw new TurnBusyError()
+    throw e
+  }
+}
+
+/** Fork strictly BEFORE a parsed user message; never fall back to the tail. */
+export async function acpForkBeforeUserTurn(
+  connectionId: string,
+  conversationId: number,
+  folderId: number,
+  expectedSessionId: string,
+  expectedTurn: MessageTurn
+): Promise<ForkResult> {
+  try {
+    return await getTransport().call("acp_edit_fork", {
+      connectionId,
+      conversationId,
+      folderId,
+      forkBeforeTurnId: expectedTurn.id,
+      expectedSessionId,
+      expectedTurn,
+    })
+  } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
     throw e
   }

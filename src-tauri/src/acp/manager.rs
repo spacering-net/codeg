@@ -1117,11 +1117,38 @@ impl ConnectionManager {
         &self,
         db: &AppDatabase,
         conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
+        client_message_id: Option<String>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_guarded(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            delegation,
+            client_message_id,
+            None,
+        )
+        .await
+    }
+
+    /// Edited resends name the destination returned by acp_edit_fork. Validate
+    /// under the same lock as forks, before any prompt admission side effects.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_linked_guarded(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
         mut blocks: Vec<PromptInputBlock>,
         folder_id: Option<i32>,
         conversation_id: Option<i32>,
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
+        expected_session_id: Option<String>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1189,6 +1216,14 @@ impl ConnectionManager {
                 in_flight,
             )
         };
+
+        if let Some(expected) = expected_session_id.as_deref() {
+            if state_arc.read().await.external_id.as_deref() != Some(expected) {
+                return Err(AcpError::protocol(
+                    "Prompt destination session changed; reload before resending",
+                ));
+            }
+        }
 
         // Reject a concurrent prompt while a turn is already in flight, BEFORE
         // any side effects (row creation, InProgress emit, user-message
@@ -1902,6 +1937,27 @@ impl ConnectionManager {
         &self,
         db: &AppDatabase,
         conn_id: &str,
+        link_conversation_id: Option<i32>,
+        link_folder_id: Option<i32>,
+        fork_from_turn_id: Option<String>,
+    ) -> Result<ForkResultInfo, AcpError> {
+        self.fork_session_with_options(
+            db,
+            conn_id,
+            link_conversation_id,
+            link_folder_id,
+            crate::acp::fork::ForkOptions {
+                fork_from_turn_id,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn fork_session_with_options(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
         // Caller-supplied linkage for a connection that resumed a historical
         // conversation but hasn't sent a prompt through it yet. Such a
         // connection is bound to its session via `session_id` (resume) but its
@@ -1914,12 +1970,9 @@ impl ConnectionManager {
         // `send_prompt_linked`'s Branch A contract).
         link_conversation_id: Option<i32>,
         link_folder_id: Option<i32>,
-        // Fork at this rendered turn instead of at the tail ("fork from here").
-        // Resolved to an agent-specific `ForkPoint` below; a turn this agent
-        // cannot name simply forks at the tail, which is what fork-send has
-        // always done.
-        fork_from_turn_id: Option<String>,
+        options: crate::acp::fork::ForkOptions,
     ) -> Result<ForkResultInfo, AcpError> {
+        options.validate()?;
         let (state_arc, cmd_tx, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
@@ -1944,6 +1997,16 @@ impl ConnectionManager {
         // back to `Cancelled`.
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let prompt_guard = prompt_lock.lock_owned().await;
+
+        // Validate BEFORE linkage or protocol side effects. The prompt lock
+        // serializes this check with every other session-changing fork.
+        if let Some(expected) = options.expected_session_id.as_deref() {
+            if state_arc.read().await.external_id.as_deref() != Some(expected) {
+                return Err(AcpError::protocol(
+                    "Session changed; reload history before editing",
+                ));
+            }
+        }
 
         // Link the conversation row on demand, under the prompt lock so it
         // can't race a concurrent first prompt. A conversation opened from
@@ -1981,43 +2044,99 @@ impl ConnectionManager {
         // a read-only parse, so a caller that disappears here has changed
         // nothing. Failing to resolve is not an error — it degrades to the tail
         // fork rather than refusing the user's click.
-        let fork_point = match fork_from_turn_id {
-            None => None,
-            Some(turn_id) => {
-                let agent_type = state_arc.read().await.agent_type;
-                match crate::commands::conversations::get_folder_conversation_core(
-                    &db.conn,
-                    conversation_id,
-                )
+        let (fork_point, strict) = if let Some(turn_id) = options.fork_before_turn_id {
+            if state_arc.read().await.turn_in_flight {
+                return Err(AcpError::TurnInProgress);
+            }
+            let session_id = state_arc.read().await.external_id.clone().ok_or_else(|| {
+                AcpError::protocol("Cannot edit a conversation without an active session")
+            })?;
+            let row = conversation_service::get_by_id(&db.conn, conversation_id)
                 .await
-                {
-                    Ok((detail, _)) => {
-                        let point = crate::acp::fork::resolve_fork_point(
-                            &detail.turns,
-                            &turn_id,
-                            agent_type,
-                        );
-                        if point.is_none() {
-                            tracing::info!(
+                .map_err(|e| AcpError::protocol(e.to_string()))?;
+            if row.external_id.as_deref() != Some(session_id.as_str()) {
+                return Err(AcpError::protocol(
+                    "Conversation session changed; reload history",
+                ));
+            }
+            let agent_type = state_arc.read().await.agent_type;
+            // Direct parse: the detail helper may follow aliases or /clear and
+            // mutate routing. A strict edit must never normalize to another session.
+            let parse_id = session_id.clone();
+            let detail = tokio::task::spawn_blocking(move || {
+                crate::parsers::build_agent_parser(agent_type).get_conversation(&parse_id)
+            })
+            .await
+            .map_err(|e| AcpError::protocol(e.to_string()))?
+            .map_err(|e| AcpError::protocol(format!("Cannot read edit history: {e}")))?;
+            if detail.summary.id != session_id {
+                return Err(AcpError::protocol(
+                    "Transcript session changed; reload history",
+                ));
+            }
+            let (point, prefix) = crate::acp::fork::resolve_fork_before_user(
+                &detail.turns,
+                &turn_id,
+                options
+                    .expected_turn
+                    .as_ref()
+                    .expect("validated edit snapshot"),
+                agent_type,
+            )?;
+            if point.is_some() && !state_arc.read().await.strict_fork_supported {
+                return Err(AcpError::protocol(
+                    "Running adapter does not support strict message fork points",
+                ));
+            }
+            (
+                point,
+                Some(crate::acp::fork::StrictFork {
+                    original_session_id: session_id,
+                    prefix,
+                    target: options.expected_turn.expect("validated edit snapshot"),
+                }),
+            )
+        } else {
+            let point = match options.fork_from_turn_id {
+                None => None,
+                Some(turn_id) => {
+                    let agent_type = state_arc.read().await.agent_type;
+                    match crate::commands::conversations::get_folder_conversation_core(
+                        &db.conn,
+                        conversation_id,
+                    )
+                    .await
+                    {
+                        Ok((detail, _)) => {
+                            let point = crate::acp::fork::resolve_fork_point(
+                                &detail.turns,
+                                &turn_id,
+                                agent_type,
+                            );
+                            if point.is_none() {
+                                tracing::info!(
+                                    connection_id = %conn_id,
+                                    turn_id = %turn_id,
+                                    agent = %agent_type,
+                                    "[ACP] no fork point for this turn; forking at the tail"
+                                );
+                            }
+                            point
+                        }
+                        Err(e) => {
+                            tracing::warn!(
                                 connection_id = %conn_id,
                                 turn_id = %turn_id,
-                                agent = %agent_type,
-                                "[ACP] no fork point for this turn; forking at the tail"
+                                "[ACP] could not read the conversation to resolve a fork point \
+                                 ({e}); forking at the tail"
                             );
+                            None
                         }
-                        point
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            connection_id = %conn_id,
-                            turn_id = %turn_id,
-                            "[ACP] could not read the conversation to resolve a fork point \
-                             ({e}); forking at the tail"
-                        );
-                        None
                     }
                 }
-            }
+            };
+
+            (point, None)
         };
 
         // Reject if a turn is already in flight. `prompt_lock` is FREE between a
@@ -2063,6 +2182,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Fork {
                         fork_point,
+                        strict,
                         reply: reply_tx,
                     })
                     .await
@@ -4843,6 +4963,45 @@ mod tests {
             .await
             .insert(conn_id.to_string(), conn);
         rx
+    }
+
+    #[tokio::test]
+    async fn edited_prompt_rejects_changed_session_before_any_side_effects() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(&mgr, "edit-destination", AgentType::Codex, None).await;
+        let state = mgr.get_state("edit-destination").await.unwrap();
+        state.write().await.external_id = Some("other-branch".into());
+        let result = mgr.send_prompt_linked_guarded(
+            &db, "edit-destination", one_text_block(), None, None, None, None,
+            Some("edited-branch".into()),
+        ).await;
+        assert!(result.unwrap_err().to_string().contains("destination session changed"));
+        assert!(rx.try_recv().is_err());
+        let current = state.read().await;
+        assert!(!current.turn_in_flight);
+        assert!(current.conversation_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn edit_fork_rejects_stale_session_before_linking_or_protocol() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(&mgr, "edit-source", AgentType::Codex, None).await;
+        let state = mgr.get_state("edit-source").await.unwrap();
+        state.write().await.external_id = Some("newer".into());
+        let result = mgr.fork_session_with_options(
+            &db, "edit-source", Some(123), Some(456),
+            crate::acp::fork::ForkOptions {
+                expected_session_id: Some("stale".into()),
+                ..Default::default()
+            },
+        ).await;
+        assert!(result.unwrap_err().to_string().contains("Session changed"));
+        assert!(rx.try_recv().is_err());
+        assert!(state.read().await.conversation_id.is_none());
     }
 
     /// Put a turn in flight on a connection inserted by

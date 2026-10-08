@@ -402,6 +402,10 @@ pub struct SessionState {
     pub env_pinned_config_option_ids: Vec<String>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
+    /// Running adapter proof, not the registry's preferred package version.
+    pub strict_fork_supported: bool,
+    /// Connection's already-filtered wire MCP configuration for session/new edits.
+    pub session_mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub usage: Option<UsageInfo>,
     /// True once the agent's initial selectors handshake (modes +
@@ -711,6 +715,8 @@ impl SessionState {
             env_pinned_config_option_ids: Vec::new(),
             prompt_capabilities: None,
             fork_supported: false,
+            strict_fork_supported: false,
+            session_mcp_servers: Vec::new(),
             available_commands: Vec::new(),
             usage: None,
             selectors_ready: false,

@@ -47,6 +47,8 @@ import {
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
 import { MessageListView } from "@/components/message/message-list-view"
+import { EditUserMessageDialog } from "@/components/message/edit-user-message-dialog"
+import { resolveEditableUserTurn } from "@/lib/message-edit"
 import {
   GoalControlProvider,
   type GoalControlValue,
@@ -81,6 +83,7 @@ import { isDesktop } from "@/lib/platform"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
   acpFork,
+  acpForkBeforeUserTurn,
   acpStopAsyncTask,
   createChatConversation,
   createChatDir,
@@ -214,6 +217,14 @@ function buildOptimisticUserTurnFromDraft(
 
   return {
     id: `optimistic-${randomUUID()}`,
+    ...(draft.blocks.every((b) => b.type === "text" || b.type === "image")
+      ? {
+          prompt_text: draft.blocks
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("\n"),
+        }
+      : {}),
     role: "user",
     blocks,
     timestamp: new Date().toISOString(),
@@ -306,6 +317,7 @@ const ConversationTabView = memo(function ConversationTabView({
     completeTurn,
     markOutOfTurnContent,
     refetchDetail,
+    replaceEditedSession,
     syncTurnMetadata,
     setAcpLoadError,
     setDbConversationId,
@@ -414,6 +426,15 @@ const ConversationTabView = memo(function ConversationTabView({
   const prepareChatDirPendingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
   const syncCancelRef = useRef<(() => void) | null>(null)
+  const [editTarget, setEditTarget] = useState<{
+    turn: MessageTurn
+    sessionId: string
+  } | null>(null)
+  const [editInFlight, setEditInFlight] = useState(false)
+  const editInFlightRef = useRef(false)
+  // After a successful fork but failed send, retry only the send. Re-forking
+  // would act on a target no longer present in the newly truncated history.
+  const editedBranchRef = useRef<string | null>(null)
 
   useEffect(() => {
     dbConvIdRef.current = dbConversationId
@@ -864,6 +885,7 @@ const ConversationTabView = memo(function ConversationTabView({
     // A row being inserted into the (just-ended) turn is still queued; sending
     // it now would deliver it twice. See `queueSteerInFlight`.
     if (queueSteerInFlight) return
+    if (editInFlightRef.current || editTarget) return
     if (msgQueue.length === 0) return
     // setTimeout (not microtask) so a COMPLETE_TURN commit settles first AND so
     // a just-bounced retry waits out the backoff window before re-sending.
@@ -890,7 +912,14 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => clearTimeout(timer)
     // `connectionReady` subsumes connStatus, the connection's cwd and its agent,
     // so it is the only connection dependency this effect needs.
-  }, [connectionReady, runtimeSyncState, msgQueue.length, queueSteerInFlight])
+  }, [
+    connectionReady,
+    runtimeSyncState,
+    msgQueue.length,
+    queueSteerInFlight,
+    editTarget,
+    editInFlight,
+  ])
 
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage
@@ -1112,6 +1141,7 @@ const ConversationTabView = memo(function ConversationTabView({
       // read a stale "connected" for the old cwd, and an inline send then would
       // deliver to the wrong workspace. Same predicate the flush effect uses.
       if (!connectionReady) return
+      if (editInFlightRef.current || editTarget) return
 
       const fromQueueFlush = opts?.fromQueueFlush ?? false
       // Preserve FIFO: a direct send issued while the queue is non-empty joins
@@ -1341,6 +1371,7 @@ const ConversationTabView = memo(function ConversationTabView({
       canAutoConnect,
       connectionReady,
       effectiveConversationId,
+      editTarget,
       folderId,
       hasPersistedConversation,
       lifecycleSend,
@@ -1384,6 +1415,7 @@ const ConversationTabView = memo(function ConversationTabView({
     async (turnId: string) => {
       const connectionId = conn.connectionId
       if (!connectionId || connStatusRef.current !== "connected") return
+      if (editInFlightRef.current || editTarget) return
       // Snapshot which live turns belong to the PRE-fork session, before the
       // await. The fork RPC is a window in which a send can still start — a
       // queued auto-flush, a fast typist, another client — and such a turn
@@ -1461,6 +1493,164 @@ const ConversationTabView = memo(function ConversationTabView({
       refreshConversations,
       setExternalId,
       t,
+      editTarget,
+    ]
+  )
+
+  const handleEditUserTurn = useCallback(
+    (turn: MessageTurn) => {
+      const current = connectionStore.getConnection(tabId)
+      if (
+        !current ||
+        current.isViewer ||
+        current.status !== "connected" ||
+        !current.sessionId ||
+        editInFlightRef.current ||
+        getRuntimeSession(effectiveConversationId)?.syncState ===
+          "awaiting_persist" ||
+        mqGetQueueLength() > 0 ||
+        turn.role !== "user"
+      ) {
+        return
+      }
+      editedBranchRef.current = null
+      setEditTarget({ turn, sessionId: current.sessionId })
+    },
+    [connectionStore, effectiveConversationId, mqGetQueueLength, tabId]
+  )
+
+  const handleCancelMessageEdit = useCallback(() => {
+    if (editInFlightRef.current) return
+    setEditTarget(null)
+    editedBranchRef.current = null
+  }, [])
+
+  const handleSaveMessageEdit = useCallback(
+    async (draft: PromptDraft) => {
+      if (!editTarget || editInFlightRef.current) {
+        throw new Error(tMessageList("editBusy"))
+      }
+      const current = connectionStore.getConnection(tabId)
+      const persistedId = dbConvIdRef.current
+      const expectedSessionId = editedBranchRef.current ?? editTarget.sessionId
+      if (
+        !current ||
+        current.isViewer ||
+        current.status !== "connected" ||
+        current.sessionId !== expectedSessionId ||
+        !persistedId ||
+        !connectionReadyRef.current ||
+        getRuntimeSession(effectiveConversationId)?.syncState ===
+          "awaiting_persist" ||
+        mqGetQueueLength() > 0
+      ) {
+        throw new Error(tMessageList("editBusy"))
+      }
+      editInFlightRef.current = true
+      setEditInFlight(true)
+      try {
+        if (!editedBranchRef.current) {
+          const source = await getFolderConversation(persistedId)
+          const runtime = getRuntimeSession(effectiveConversationId)
+          const target = resolveEditableUserTurn(
+            editTarget.turn,
+            source.turns,
+            {
+              timeline: getTimelineTurns(effectiveConversationId).map(
+                (entry) => entry.turn
+              ),
+              loadedFromStart:
+                !runtime?.detail ||
+                !isWindowedDetail(runtime.detail) ||
+                runtime.detail.turns_offset === 0,
+            }
+          )
+          if (source.summary.external_id !== expectedSessionId || !target) {
+            throw new Error(tMessageList("editNotReady"))
+          }
+          const targetIndex = source.turns.indexOf(target)
+          const { forkedSessionId } = await acpForkBeforeUserTurn(
+            current.connectionId,
+            persistedId,
+            folderId,
+            expectedSessionId,
+            target
+          )
+          // The backend verified this exact prefix before switching sessions.
+          // Install it atomically rather than waiting for the new transcript
+          // file (session/new may not write one until its first prompt).
+          editedBranchRef.current = forkedSessionId
+          sessionIdRef.current = forkedSessionId
+          syncCancelRef.current?.()
+          syncCancelRef.current = null
+          replaceEditedSession(effectiveConversationId, {
+            summary: {
+              ...source.summary,
+              external_id: forkedSessionId,
+              message_count: targetIndex,
+            },
+            turns: source.turns.slice(0, targetIndex),
+            session_stats: null,
+            in_flight_user_turn_id: null,
+            transcript_watermark: null,
+          })
+          refreshConversations()
+        }
+        // A closed or switched tab must not accidentally send into a replacement
+        // connection. The edit remains a saved branch if the owner went away.
+        const destination = connectionStore.getConnection(tabId)
+        if (
+          !mountedRef.current ||
+          destination?.connectionId !== current.connectionId
+        ) {
+          throw new Error(tMessageList("editNotReady"))
+        }
+        const desiredMode = selectedModeIdRef.current
+        if (desiredMode && desiredMode !== destination.modes?.current_mode_id) {
+          await acpActions.setMode(tabId, desiredMode)
+        }
+        const optimisticTurn = buildOptimisticUserTurnFromDraft(
+          draft,
+          sharedT("attachedResources")
+        )
+        appendOptimisticTurn(
+          effectiveConversationId,
+          optimisticTurn,
+          optimisticTurn.id
+        )
+        setSendSignal((prev) => prev + 1)
+        setSyncState(effectiveConversationId, "awaiting_persist")
+        try {
+          await acpActions.sendPrompt(tabId, draft.blocks, {
+            folderId,
+            conversationId: persistedId,
+            clientMessageId: optimisticTurn.id,
+            expectedSessionId: editedBranchRef.current,
+          })
+        } catch (error) {
+          removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
+          throw error
+        }
+      } finally {
+        editInFlightRef.current = false
+        if (mountedRef.current) setEditInFlight(false)
+      }
+    },
+    [
+      acpActions,
+      appendOptimisticTurn,
+      connectionStore,
+      editTarget,
+      effectiveConversationId,
+      folderId,
+      mqGetQueueLength,
+      refreshConversations,
+      removeOptimisticTurn,
+      replaceEditedSession,
+      setSyncState,
+      sharedT,
+      tMessageList,
+      tabId,
     ]
   )
 
@@ -2118,6 +2308,21 @@ const ConversationTabView = memo(function ConversationTabView({
         // rather than a usable composer here — a transcript whose composer is
         // blocked (session/load failure) can still spawn the question elsewhere.
         onAskSelection={canAskSelection ? handleAskSelection : undefined}
+        onEditUserTurn={
+          hasPersistedConversation &&
+          !conn.isViewer &&
+          conn.supportsFork &&
+          ["codex", "claude_code", "deepseek"].includes(selectedAgent) &&
+          (connStatus === "connected" || connStatus === "prompting")
+            ? handleEditUserTurn
+            : undefined
+        }
+        editDisabled={
+          editInFlight ||
+          Boolean(editTarget) ||
+          runtimeSyncState === "awaiting_persist" ||
+          msgQueue.length > 0
+        }
         // Fork carries no draft, so — unlike a send — a non-empty queue is
         // not at risk of being jumped and needs no guard here. A turn in
         // flight is still rejected, by the backend, which is the only place
@@ -2130,6 +2335,8 @@ const ConversationTabView = memo(function ConversationTabView({
         // every reply's fork icon disappear for the length of each reply.
         // `handleForkFromTurn` re-checks liveness at click time.
         onForkFromTurn={
+          !editInFlight &&
+          !editTarget &&
           (connStatus === "connected" || connStatus === "prompting") &&
           hasPersistedConversation &&
           conn.supportsFork
@@ -2482,6 +2689,17 @@ const ConversationTabView = memo(function ConversationTabView({
         </div>
       ) : (
         messageListNode
+      )}
+      {editTarget && (
+        <EditUserMessageDialog
+          key={`${editTarget.sessionId}:${editTarget.turn.id}`}
+          turn={editTarget.turn}
+          busy={
+            editInFlight || connStatus !== "connected" || msgQueue.length > 0
+          }
+          onSubmit={handleSaveMessageEdit}
+          onCancel={handleCancelMessageEdit}
+        />
       )}
       <FeedbackDialog
         open={feedback.dialogOpen}

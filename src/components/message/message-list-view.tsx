@@ -59,6 +59,7 @@ import {
   AlertCircle,
   CheckIcon,
   CopyIcon,
+  Pencil,
   Loader2,
   Plus,
   RefreshCw,
@@ -153,6 +154,9 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /** Edit any user turn; the owner resolves its backend identity. */
+  onEditUserTurn?: (turn: MessageTurn) => void
+  editDisabled?: boolean
 }
 
 export interface ResolvedMessageGroup {
@@ -921,6 +925,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   foldEpoch = 0,
   onForkFromTurn,
   forkDisabled = false,
+  onEditUserTurn,
+  editDisabled = false,
   isThreadTail = false,
 }: {
   group: ResolvedMessageGroup
@@ -935,10 +941,14 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   foldEpoch?: number
   onForkFromTurn?: (turnId: string) => void
   forkDisabled?: boolean
+  onEditUserTurn?: (turn: MessageTurn) => void
+  editDisabled?: boolean
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
 }) {
+  const t = useTranslations("Folder.chat.messageList")
+  const editTurn = sourceTurns?.[0]
   if (group.role === "system") {
     return <CollapsibleSystemMessage parts={group.parts} />
   }
@@ -958,6 +968,17 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         ) : null}
         {group.role === "user" ? (
           <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
+            {onEditUserTurn && editTurn && (
+              <MessageAction
+                label={t("editMessage")}
+                tooltip={t(editDisabled ? "editBusy" : "editMessage")}
+                className="self-end shrink-0"
+                disabled={editDisabled}
+                onClick={() => onEditUserTurn(editTurn)}
+              >
+                <Pencil size={14} aria-hidden="true" />
+              </MessageAction>
+            )}
             <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
@@ -1078,6 +1099,8 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  onEditUserTurn,
+  editDisabled = false,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1408,6 +1431,8 @@ export function MessageListView({
                 foldEpoch={fold.epoch}
                 onForkFromTurn={onForkFromTurn}
                 forkDisabled={forkBusy}
+                onEditUserTurn={onEditUserTurn}
+                editDisabled={editDisabled || connStatus === "prompting"}
                 isThreadTail={item.isThreadTail}
               />
             </div>
@@ -1438,6 +1463,9 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      onEditUserTurn,
+      editDisabled,
+      connStatus,
     ]
   )
 

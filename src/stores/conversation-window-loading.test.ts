@@ -190,6 +190,71 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+describe("edited session replacement", () => {
+  it("discards every old-branch buffer and resets sync anchors atomically", () => {
+    const old = windowedDetail(0)
+    seed({
+      detail: old,
+      dbConversationId: 123,
+      localTurns: [turn("live-reply", "assistant", 8)],
+      optimisticTurns: [turn("pending", "user", 9)],
+      liveMessage: {
+        id: "old-stream",
+        role: "assistant",
+        content: [],
+        startedAt: 1,
+      },
+      backgroundTurns: [
+        { turn: turn("background", "assistant", 8), watermark: 100 },
+      ],
+      syncState: "awaiting_persist",
+      historyAssistantBaseline: 3,
+      batchBoundaryIndex: 6,
+      batchBoundaryPrefixHash: hashPrefix(6),
+    })
+    const edited = windowedDetail(0, {
+      summary: { ...old.summary, external_id: "edited" },
+      turns: FULL.slice(0, 2),
+    })
+    actions().replaceEditedSession(CID, edited)
+    expect(session()).toMatchObject({
+      detail: edited,
+      externalId: "edited",
+      dbConversationId: 123,
+      localTurns: [],
+      optimisticTurns: [],
+      liveMessage: null,
+      backgroundTurns: [],
+      syncState: "idle",
+      historyAssistantBaseline: null,
+      batchBoundaryIndex: null,
+      batchBoundaryPrefixHash: null,
+    })
+    expect(
+      useConversationRuntimeStore
+        .getState()
+        .conversationIdByExternalId.get("edited")
+    ).toBe(CID)
+  })
+
+  it("an old-session fetch resolving late cannot restore discarded messages", async () => {
+    seed({ detail: windowedDetail(0) })
+    let finish!: (detail: DbConversationDetail) => void
+    mockGet.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    actions().refetchDetail(CID)
+    const edited = windowedDetail(0, { turns: [] })
+    actions().replaceEditedSession(CID, edited)
+    finish(windowedDetail(0))
+    await flush()
+    expect(session()?.detail).toBe(edited)
+    expect(session()?.detail?.turns).toEqual([])
+  })
+})
+
 describe("windowed fetch/refetch", () => {
   it("cold fetch requests the default tail window", async () => {
     seed({})

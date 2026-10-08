@@ -3410,6 +3410,16 @@
         "downloadFailed": "{name} 다운로드 실패"
       },
       "messageList": {
+        "editMessage": "메시지 편집",
+        "editAndResend": "저장 후 다시 보내기",
+        "editDescription": "편집한 메시지와 이후의 모든 메시지가 현재 브랜치에서 교체됩니다. 원래 대화는 별도로 저장됩니다. 작업 공간 파일은 변경되지 않습니다.",
+        "editCancel": "취소",
+        "editBusy": "현재 작업이 완료될 때까지 기다려 주세요.",
+        "editFailed": "메시지를 편집하지 못했습니다: {message}",
+        "editNotReady": "메시지 편집기가 아직 준비되지 않았습니다. 다시 시도해 주세요.",
+        "editAttachmentsUnavailable": "원본 이미지 데이터를 사용할 수 없어 이 메시지를 안전하게 다시 보낼 수 없습니다.",
+        "editUnsupported": "이 메시지에는 지원되지 않는 콘텐츠가 포함되어 있어 안전하게 편집할 수 없습니다.",
+        "editImage": "첨부 이미지 {number}",
         "attachedResources": "첨부된 리소스",
         "loading": "불러오는 중...",
         "loadBackgroundActivity": "백그라운드 활동 불러오기",

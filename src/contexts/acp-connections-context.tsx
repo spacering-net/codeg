@@ -3100,6 +3100,7 @@ export interface AcpActionsValue {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      expectedSessionId?: string | null
     }
   ): Promise<void>
   setMode(contextKey: string, modeId: string): Promise<void>
@@ -7332,9 +7333,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        expectedSessionId?: string | null
       }
     ) => {
       const conn = storeRef.current.connections.get(contextKey)
+      if (!conn && opts?.expectedSessionId) {
+        throw new Error("Prompt destination connection no longer exists")
+      }
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
       try {
@@ -7343,7 +7348,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           blocks,
           opts?.folderId ?? null,
           opts?.conversationId ?? null,
-          opts?.clientMessageId ?? null
+          opts?.clientMessageId ?? null,
+          opts?.expectedSessionId
         )
       } catch (e) {
         // Same reasoning as `cancel`: the backend disowning this id proves the

@@ -158,6 +158,8 @@ pub struct AcpPromptParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub client_message_id: Option<String>,
+    #[serde(default)]
+    pub expected_session_id: Option<String>,
 }
 
 pub async fn acp_prompt(
@@ -166,7 +168,7 @@ pub async fn acp_prompt(
 ) -> Result<Json<()>, AppCommandError> {
     state
         .connection_manager
-        .send_prompt_linked_with_message_id(
+        .send_prompt_linked_guarded(
             &state.db,
             &params.connection_id,
             params.blocks,
@@ -174,6 +176,7 @@ pub async fn acp_prompt(
             params.conversation_id,
             None,
             params.client_message_id,
+            params.expected_session_id,
         )
         .await
         .map_err(|e| {
@@ -354,6 +357,44 @@ pub struct AcpForkParams {
     /// tail, the composer's fork-send behaviour.
     #[serde(default)]
     pub fork_from_turn_id: Option<String>,
+    /// Strict edit boundary, mutually exclusive with fork_from_turn_id.
+    #[serde(default)]
+    pub fork_before_turn_id: Option<String>,
+    #[serde(default)]
+    pub expected_session_id: Option<String>,
+    /// Full parsed user snapshot (id, role, timestamp and blocks are identity).
+    #[serde(default)]
+    pub expected_turn: Option<crate::models::message::MessageTurn>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpEditForkParams {
+    pub connection_id: String,
+    pub conversation_id: Option<i32>,
+    pub folder_id: Option<i32>,
+    pub fork_before_turn_id: String,
+    pub expected_session_id: String,
+    pub expected_turn: crate::models::message::MessageTurn,
+}
+
+pub async fn acp_edit_fork(
+    state: Extension<Arc<AppState>>,
+    Json(params): Json<AcpEditForkParams>,
+) -> Result<Json<ForkResultInfo>, AppCommandError> {
+    acp_fork(
+        state,
+        Json(AcpForkParams {
+            connection_id: params.connection_id,
+            conversation_id: params.conversation_id,
+            folder_id: params.folder_id,
+            fork_from_turn_id: None,
+            fork_before_turn_id: Some(params.fork_before_turn_id),
+            expected_session_id: Some(params.expected_session_id),
+            expected_turn: Some(params.expected_turn),
+        }),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -456,12 +497,17 @@ pub async fn acp_fork(
 ) -> Result<Json<ForkResultInfo>, AppCommandError> {
     let manager = &state.connection_manager;
     let result = manager
-        .fork_session(
+        .fork_session_with_options(
             &state.db,
             &params.connection_id,
             params.conversation_id,
             params.folder_id,
-            params.fork_from_turn_id,
+            crate::acp::fork::ForkOptions {
+                fork_from_turn_id: params.fork_from_turn_id,
+                fork_before_turn_id: params.fork_before_turn_id,
+                expected_session_id: params.expected_session_id,
+                expected_turn: params.expected_turn,
+            },
         )
         .await
         .map_err(|e| {

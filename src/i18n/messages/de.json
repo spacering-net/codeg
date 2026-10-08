@@ -3410,6 +3410,16 @@
         "downloadFailed": "Herunterladen von {name} fehlgeschlagen"
       },
       "messageList": {
+        "editMessage": "Nachricht bearbeiten",
+        "editAndResend": "Speichern und erneut senden",
+        "editDescription": "Die bearbeitete Nachricht und alle späteren Nachrichten werden im aktuellen Zweig ersetzt. Die ursprüngliche Unterhaltung wird separat gespeichert. Die Dateien im Arbeitsbereich bleiben unverändert.",
+        "editCancel": "Abbrechen",
+        "editBusy": "Bitte warten, bis der aktuelle Vorgang abgeschlossen ist.",
+        "editFailed": "Nachricht konnte nicht bearbeitet werden: {message}",
+        "editNotReady": "Der Nachrichteneditor ist noch nicht bereit. Bitte erneut versuchen.",
+        "editAttachmentsUnavailable": "Die ursprünglichen Bilddaten sind nicht verfügbar. Diese Nachricht kann nicht sicher erneut gesendet werden.",
+        "editUnsupported": "Diese Nachricht enthält nicht unterstützte Inhalte und kann nicht sicher bearbeitet werden.",
+        "editImage": "Angehängtes Bild {number}",
         "attachedResources": "Angehängte Ressourcen",
         "loading": "Lädt...",
         "loadBackgroundActivity": "Hintergrundaktivität laden",

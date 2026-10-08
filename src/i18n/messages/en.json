@@ -3410,6 +3410,16 @@
         "downloadFailed": "Failed to download {name}"
       },
       "messageList": {
+        "editMessage": "Edit message",
+        "editAndResend": "Save and resend",
+        "editDescription": "The edited message and all later messages will be replaced in the current branch. The original conversation will be saved separately. Workspace files will remain unchanged.",
+        "editCancel": "Cancel",
+        "editBusy": "Please wait until the current operation finishes.",
+        "editFailed": "Could not edit message: {message}",
+        "editNotReady": "The message editor is not ready yet. Please try again.",
+        "editAttachmentsUnavailable": "The original image data is unavailable. This message cannot be resent safely.",
+        "editUnsupported": "This message contains unsupported content and cannot be edited safely.",
+        "editImage": "Attached image {number}",
         "attachedResources": "Attached resources",
         "loading": "Loading...",
         "loadBackgroundActivity": "Load background activity",

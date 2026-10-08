@@ -3410,6 +3410,16 @@
         "downloadFailed": "Falha ao baixar {name}"
       },
       "messageList": {
+        "editMessage": "Editar mensagem",
+        "editAndResend": "Salvar e reenviar",
+        "editDescription": "A mensagem editada e todas as mensagens posteriores serão substituídas na ramificação atual. A conversa original será salva separadamente. Os arquivos do espaço de trabalho permanecerão inalterados.",
+        "editCancel": "Cancelar",
+        "editBusy": "Aguarde a conclusão da operação atual.",
+        "editFailed": "Não foi possível editar a mensagem: {message}",
+        "editNotReady": "O editor de mensagens ainda não está pronto. Tente novamente.",
+        "editAttachmentsUnavailable": "Os dados da imagem original não estão disponíveis. Esta mensagem não pode ser reenviada com segurança.",
+        "editUnsupported": "Esta mensagem contém conteúdo não compatível e não pode ser editada com segurança.",
+        "editImage": "Imagem anexada {number}",
         "attachedResources": "Recursos anexados",
         "loading": "Carregando...",
         "loadBackgroundActivity": "Carregar atividade em segundo plano",

@@ -965,7 +965,16 @@ pub fn build_router(
             post(handlers::acp::acp_describe_agent_options),
         )
         .route("/acp_cancel", post(handlers::acp::acp_cancel))
-        .route("/acp_fork", post(handlers::acp::acp_fork))
+        .route(
+            "/acp_fork",
+            // expectedTurn contains original image bytes. Match the application's
+            // attachment ceiling rather than Axum's default 2MiB JSON limit.
+            post(handlers::acp::acp_fork).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
+        .route(
+            "/acp_edit_fork",
+            post(handlers::acp::acp_edit_fork).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
         .route(
             "/acp_stop_async_task",
             post(handlers::acp::acp_stop_async_task),

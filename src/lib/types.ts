@@ -276,6 +276,8 @@ export interface SessionStats {
 
 export interface MessageTurn {
   id: string
+  /** Client-only sent prose, excluding image-only display placeholders. */
+  prompt_text?: string
   role: TurnRole
   blocks: ContentBlock[]
   timestamp: string

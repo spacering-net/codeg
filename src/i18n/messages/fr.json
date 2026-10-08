@@ -3410,6 +3410,16 @@
         "downloadFailed": "Échec du téléchargement de {name}"
       },
       "messageList": {
+        "editMessage": "Modifier le message",
+        "editAndResend": "Enregistrer et renvoyer",
+        "editDescription": "Le message modifié et tous les messages suivants seront remplacés dans la branche actuelle. La conversation originale sera enregistrée séparément. Les fichiers de l’espace de travail resteront inchangés.",
+        "editCancel": "Annuler",
+        "editBusy": "Veuillez attendre la fin de l’opération en cours.",
+        "editFailed": "Impossible de modifier le message : {message}",
+        "editNotReady": "L’éditeur de message n’est pas encore prêt. Veuillez réessayer.",
+        "editAttachmentsUnavailable": "Les données de l’image originale sont indisponibles. Ce message ne peut pas être renvoyé en toute sécurité.",
+        "editUnsupported": "Ce message contient du contenu non pris en charge et ne peut pas être modifié en toute sécurité.",
+        "editImage": "Image jointe {number}",
         "attachedResources": "Ressources jointes",
         "loading": "Chargement...",
         "loadBackgroundActivity": "Charger l'activité en arrière-plan",
