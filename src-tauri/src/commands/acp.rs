@@ -11306,6 +11306,7 @@ pub async fn acp_fork(
                 fork_before_turn_id,
                 expected_session_id,
                 expected_turn,
+                restore_files_token: None,
             },
         )
         .await
@@ -11335,6 +11336,69 @@ pub async fn acp_edit_fork(
                 fork_before_turn_id: Some(fork_before_turn_id),
                 expected_session_id: Some(expected_session_id),
                 expected_turn: Some(expected_turn),
+                ..Default::default()
+            },
+        )
+        .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_preview_file_restore(
+    connection_id: String,
+    conversation_id: i32,
+    folder_id: i32,
+    expected_session_id: String,
+    expected_turn: crate::models::message::MessageTurn,
+    db: State<'_, AppDatabase>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::acp::file_checkpoint::RestorePreview, AcpError> {
+    manager
+        .preview_file_restore(
+            &db,
+            &connection_id,
+            conversation_id,
+            folder_id,
+            &expected_session_id,
+            &expected_turn,
+        )
+        .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_recover_file_restore(
+    connection_id: String,
+    db: State<'_, AppDatabase>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<(), AcpError> {
+    manager.recover_file_restore(&db, &connection_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_restore_edit_fork(
+    connection_id: String,
+    conversation_id: i32,
+    folder_id: i32,
+    fork_before_turn_id: String,
+    expected_session_id: String,
+    expected_turn: crate::models::message::MessageTurn,
+    restore_files_token: String,
+    db: State<'_, AppDatabase>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<ForkResultInfo, AcpError> {
+    manager
+        .fork_session_with_options(
+            &db,
+            &connection_id,
+            Some(conversation_id),
+            Some(folder_id),
+            crate::acp::fork::ForkOptions {
+                fork_before_turn_id: Some(fork_before_turn_id),
+                expected_session_id: Some(expected_session_id),
+                expected_turn: Some(expected_turn),
+                restore_files_token: Some(restore_files_token),
                 ..Default::default()
             },
         )

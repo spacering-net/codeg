@@ -398,6 +398,87 @@ pub async fn acp_edit_fork(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileRestoreParams {
+    pub connection_id: String,
+    pub conversation_id: i32,
+    pub folder_id: i32,
+    pub expected_session_id: String,
+    pub expected_turn: crate::models::message::MessageTurn,
+    pub fork_before_turn_id: Option<String>,
+    pub restore_files_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileRestoreRecoveryParams {
+    pub connection_id: String,
+}
+
+pub async fn acp_recover_file_restore(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FileRestoreRecoveryParams>,
+) -> Result<Json<()>, AppCommandError> {
+    state
+        .connection_manager
+        .recover_file_restore(&state.db, &params.connection_id)
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn acp_preview_file_restore(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FileRestoreParams>,
+) -> Result<Json<crate::acp::file_checkpoint::RestorePreview>, AppCommandError> {
+    state
+        .connection_manager
+        .preview_file_restore(
+            &state.db,
+            &params.connection_id,
+            params.conversation_id,
+            params.folder_id,
+            &params.expected_session_id,
+            &params.expected_turn,
+        )
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn acp_restore_edit_fork(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FileRestoreParams>,
+) -> Result<Json<ForkResultInfo>, AppCommandError> {
+    let token = params.restore_files_token.ok_or_else(|| {
+        AppCommandError::task_execution_failed("File restore preview is required")
+    })?;
+    if params.fork_before_turn_id.as_deref() != Some(params.expected_turn.id.as_str()) {
+        return Err(AppCommandError::task_execution_failed(
+            "File restore target mismatch",
+        ));
+    }
+    state
+        .connection_manager
+        .fork_session_with_options(
+            &state.db,
+            &params.connection_id,
+            Some(params.conversation_id),
+            Some(params.folder_id),
+            crate::acp::fork::ForkOptions {
+                fork_before_turn_id: params.fork_before_turn_id,
+                expected_session_id: Some(params.expected_session_id),
+                expected_turn: Some(params.expected_turn),
+                restore_files_token: Some(token),
+                ..Default::default()
+            },
+        )
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpSetModeParams {
     pub connection_id: String,
@@ -507,6 +588,7 @@ pub async fn acp_fork(
                 fork_before_turn_id: params.fork_before_turn_id,
                 expected_session_id: params.expected_session_id,
                 expected_turn: params.expected_turn,
+                restore_files_token: None,
             },
         )
         .await

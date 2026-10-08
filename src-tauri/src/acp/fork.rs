@@ -25,10 +25,16 @@ pub struct ForkOptions {
     pub fork_before_turn_id: Option<String>,
     pub expected_session_id: Option<String>,
     pub expected_turn: Option<MessageTurn>,
+    pub restore_files_token: Option<String>,
 }
 
 impl ForkOptions {
     pub fn validate(&self) -> Result<(), AcpError> {
+        if self.restore_files_token.is_some() && self.fork_before_turn_id.is_none() {
+            return Err(AcpError::protocol(
+                "File restoration requires a strict user-message edit",
+            ));
+        }
         if self.fork_from_turn_id.is_some() && self.fork_before_turn_id.is_some() {
             return Err(AcpError::protocol(
                 "forkFromTurnId and forkBeforeTurnId are mutually exclusive",
@@ -58,6 +64,9 @@ pub struct StrictFork {
     pub original_session_id: String,
     pub prefix: Vec<MessageTurn>,
     pub target: MessageTurn,
+    pub conversation_id: i32,
+    pub file_restore:
+        Option<std::sync::Arc<tokio::sync::Mutex<crate::acp::file_checkpoint::PreparedRestore>>>,
 }
 
 fn same_turn_content(left: &MessageTurn, right: &MessageTurn) -> bool {

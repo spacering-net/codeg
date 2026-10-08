@@ -1019,7 +1019,7 @@ impl ConnectionManager {
             .reserve()
             .await
             .map_err(|_| AcpError::ProcessExited)?;
-        {
+        let checkpoint_activity = {
             let mut s = state_arc.write().await;
             if s.turn_in_flight {
                 // Names the gate, not just the outcome: the linked path checks
@@ -1032,11 +1032,19 @@ impl ConnectionManager {
                 );
                 return Err(AcpError::TurnInProgress);
             }
+            let activity = s
+                .working_dir
+                .as_deref()
+                .map(crate::acp::file_checkpoint_activity::TurnActivity::begin)
+                .transpose()
+                .map_err(AcpError::protocol)?;
             s.turn_in_flight = true;
-        }
+            activity
+        };
         permit.send(ConnectionCommand::Prompt {
             blocks,
             user_message,
+            checkpoint_activity,
         });
         Ok(())
     }
@@ -1954,6 +1962,136 @@ impl ConnectionManager {
         .await
     }
 
+    async fn require_workspace_idle(&self, root: &std::path::Path) -> Result<(), AcpError> {
+        let canonical =
+            std::fs::canonicalize(root).map_err(|e| AcpError::protocol(e.to_string()))?;
+        let states: Vec<_> = self
+            .connections
+            .lock()
+            .await
+            .values()
+            .map(|c| c.state.clone())
+            .collect();
+        for state in states {
+            let state = state.read().await;
+            let overlaps = state
+                .working_dir
+                .as_deref()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .is_some_and(|path| path.starts_with(&canonical) || canonical.starts_with(&path));
+            if overlaps
+                && (state.turn_in_flight
+                    || !crate::acp::connection::checkpoint_background_idle(&state))
+            {
+                return Err(AcpError::protocol(
+                    "Stop foreground and background work in this workspace before restoring files",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn recover_file_restore(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+    ) -> Result<(), AcpError> {
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _prompt_guard = prompt_lock.lock_owned().await;
+        let state = self
+            .get_state(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        let root = state
+            .read()
+            .await
+            .working_dir
+            .clone()
+            .ok_or_else(|| AcpError::protocol("No workspace for recovery"))?;
+        let _activity = crate::acp::file_checkpoint_activity::RestoreActivity::begin(&root)
+            .map_err(AcpError::protocol)?;
+        self.require_workspace_idle(&root).await?;
+        crate::acp::file_checkpoint::recover_for_database(&root, &db.conn)
+            .await
+            .map_err(AcpError::protocol)
+    }
+
+    pub async fn preview_file_restore(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        conversation_id: i32,
+        folder_id: i32,
+        expected_session_id: &str,
+        expected_turn: &crate::models::message::MessageTurn,
+    ) -> Result<crate::acp::file_checkpoint::RestorePreview, AcpError> {
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _prompt_guard = prompt_lock.lock_owned().await;
+        let state = self
+            .get_state(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        let (agent, root) = {
+            let state = state.read().await;
+            if state.external_id.as_deref() != Some(expected_session_id) || state.turn_in_flight {
+                return Err(AcpError::protocol(
+                    "Session changed or a turn is running; reload before restoring files",
+                ));
+            }
+            (
+                state.agent_type,
+                state
+                    .working_dir
+                    .clone()
+                    .ok_or_else(|| AcpError::protocol("No workspace for file restoration"))?,
+            )
+        };
+        let _activity = crate::acp::file_checkpoint_activity::RestoreActivity::begin(&root)
+            .map_err(AcpError::protocol)?;
+        self.require_workspace_idle(&root).await?;
+        let row = conversation_service::get_by_id(&db.conn, conversation_id)
+            .await
+            .map_err(|e| AcpError::protocol(e.to_string()))?;
+        if row.external_id.as_deref() != Some(expected_session_id) || row.folder_id != folder_id {
+            return Err(AcpError::protocol("Conversation identity changed"));
+        }
+        let sid = expected_session_id.to_string();
+        let detail = tokio::task::spawn_blocking(move || {
+            crate::parsers::build_agent_parser(agent).get_conversation(&sid)
+        })
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
+        if detail.summary.id != expected_session_id {
+            return Err(AcpError::protocol("Transcript identity changed"));
+        }
+        let (_, prefix) = crate::acp::fork::resolve_fork_before_user(
+            &detail.turns,
+            &expected_turn.id,
+            expected_turn,
+            agent,
+        )?;
+        let user_index = prefix
+            .iter()
+            .filter(|t| matches!(t.role, crate::models::message::TurnRole::User))
+            .count();
+        let total_users = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, crate::models::message::TurnRole::User))
+            .count();
+        crate::acp::file_checkpoint::preview(
+            agent,
+            expected_session_id,
+            &root,
+            user_index,
+            total_users,
+            expected_turn,
+        )
+        .await
+        .map_err(AcpError::protocol)
+    }
+
     pub async fn fork_session_with_options(
         &self,
         db: &AppDatabase,
@@ -2044,6 +2182,7 @@ impl ConnectionManager {
         // a read-only parse, so a caller that disappears here has changed
         // nothing. Failing to resolve is not an error — it degrades to the tail
         // fork rather than refusing the user's click.
+        let mut restore_activity = None;
         let (fork_point, strict) = if let Some(turn_id) = options.fork_before_turn_id {
             if state_arc.read().await.turn_in_flight {
                 return Err(AcpError::TurnInProgress);
@@ -2088,12 +2227,52 @@ impl ConnectionManager {
                     "Running adapter does not support strict message fork points",
                 ));
             }
+            let file_restore =
+                if let Some(token) = options.restore_files_token.as_deref() {
+                    let root =
+                        state_arc.read().await.working_dir.clone().ok_or_else(|| {
+                            AcpError::protocol("No workspace for file restoration")
+                        })?;
+                    restore_activity = Some(
+                        crate::acp::file_checkpoint_activity::RestoreActivity::begin(&root)
+                            .map_err(AcpError::protocol)?,
+                    );
+                    self.require_workspace_idle(&root).await?;
+                    let user_index = prefix
+                        .iter()
+                        .filter(|t| matches!(t.role, crate::models::message::TurnRole::User))
+                        .count();
+                    let total_users = detail
+                        .turns
+                        .iter()
+                        .filter(|t| matches!(t.role, crate::models::message::TurnRole::User))
+                        .count();
+                    let prepared = crate::acp::file_checkpoint::prepare_restore(
+                        agent_type,
+                        &session_id,
+                        &root,
+                        user_index,
+                        total_users,
+                        options
+                            .expected_turn
+                            .as_ref()
+                            .expect("validated edit snapshot"),
+                        token,
+                    )
+                    .await
+                    .map_err(AcpError::protocol)?;
+                    Some(Arc::new(Mutex::new(prepared)))
+                } else {
+                    None
+                };
             (
                 point,
                 Some(crate::acp::fork::StrictFork {
                     original_session_id: session_id,
                     prefix,
                     target: options.expected_turn.expect("validated edit snapshot"),
+                    conversation_id,
+                    file_restore,
                 }),
             )
         } else {
@@ -2172,15 +2351,25 @@ impl ConnectionManager {
         // caller; the result is harmlessly discarded if the caller is gone.
         let db_conn = db.conn.clone();
         let conn_id_for_task = conn_id.to_string();
+        let file_restore = strict.as_ref().and_then(|s| s.file_restore.clone());
         let handle = tokio::spawn(async move {
             // Holding the owned guard for the whole task is what shields the
             // persistence from caller cancellation.
             let _prompt_guard = prompt_guard;
+            let _restore_activity = restore_activity;
+            let (decision_tx, decision_rx) = tokio::sync::oneshot::channel();
+            let (published_tx, published_rx) = tokio::sync::oneshot::channel();
+            let has_file_restore = file_restore.is_some();
+            let publication = has_file_restore.then_some(crate::acp::connection::ForkPublication {
+                decision: decision_rx,
+                published: published_tx,
+            });
             let outcome: Result<ForkResultInfo, AcpError> = async {
                 // Protocol-only round trip — no DB writes inside the loop.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 cmd_tx
                     .send(ConnectionCommand::Fork {
+                        publication,
                         fork_point,
                         strict,
                         reply: reply_tx,
@@ -2227,6 +2416,43 @@ impl ConnectionManager {
                 })
             }
             .await;
+            if let Some(restore) = file_restore {
+                let success = outcome.is_ok();
+                let result = tokio::task::spawn_blocking(move || {
+                    if success {
+                        restore.blocking_lock().commit()
+                    } else {
+                        restore.blocking_lock().rollback()
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                if let Err(error) = result {
+                    if success {
+                        // The new session and restored bytes are committed. A
+                        // journal cleanup error must not hide the new session id
+                        // or cause the caller to retry a destructive operation.
+                        tracing::error!(
+                            "[ACP] File restore committed; journal cleanup failed: {error}"
+                        );
+                    } else {
+                        return Err(AcpError::protocol(format!(
+                            "File restore recovery requires attention: {error}"
+                        )));
+                    }
+                }
+            }
+            if has_file_restore {
+                let committed = outcome.is_ok();
+                let _ = decision_tx.send(committed);
+                if committed {
+                    // Keep admission locked until connection state and its
+                    // SessionStarted event refer to the committed destination.
+                    if published_rx.await.is_err() {
+                        tracing::error!("[ACP] File restore committed but connection publication failed; reconnect required");
+                    }
+                }
+            }
             // Surface failures even when the caller is gone (the detached task's
             // Result would otherwise be dropped silently).
             if let Err(ref e) = outcome {
@@ -5004,6 +5230,42 @@ mod tests {
         assert!(state.read().await.conversation_id.is_none());
     }
 
+    #[tokio::test]
+    async fn file_restore_admission_blocks_prompt_without_stranding_turn_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = ConnectionManager::new();
+        let mut receiver = insert_live_connection(
+            &mgr,
+            "restore-busy",
+            AgentType::Codex,
+            Some(dir.path().to_path_buf()),
+        )
+        .await;
+        let restore =
+            crate::acp::file_checkpoint_activity::RestoreActivity::begin(dir.path()).unwrap();
+        assert!(mgr
+            .send_prompt("restore-busy", one_text_block())
+            .await
+            .is_err());
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            !mgr.get_state("restore-busy")
+                .await
+                .unwrap()
+                .read()
+                .await
+                .turn_in_flight
+        );
+        drop(restore);
+        mgr.send_prompt("restore-busy", one_text_block())
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ConnectionCommand::Prompt { .. })
+        ));
+    }
+
     /// Put a turn in flight on a connection inserted by
     /// [`insert_live_connection`] (which starts them `Connected`).
     async fn mark_prompting(mgr: &ConnectionManager, conn_id: &str) {
@@ -5258,6 +5520,7 @@ mod tests {
         let ConnectionCommand::Prompt {
             blocks,
             user_message,
+            ..
         } = command
         else {
             panic!("expected prompt command");
@@ -5987,6 +6250,7 @@ mod tests {
                     text: "filler".into(),
                 }],
                 user_message: None,
+                checkpoint_activity: None,
             })
             .await
             .unwrap();

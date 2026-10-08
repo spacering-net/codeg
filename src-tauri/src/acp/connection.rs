@@ -1174,6 +1174,7 @@ pub enum SteerOutcome {
 /// Commands sent from Tauri command handlers to the ACP connection loop.
 pub enum ConnectionCommand {
     Prompt {
+        checkpoint_activity: Option<crate::acp::file_checkpoint_activity::TurnActivity>,
         blocks: Vec<PromptInputBlock>,
         /// Pre-projected cross-client user-message broadcast (`message_id` +
         /// user blocks), computed by the manager under the prompt lock. The
@@ -1206,6 +1207,7 @@ pub enum ConnectionCommand {
         option_id: String,
     },
     Fork {
+        publication: Option<ForkPublication>,
         /// Fork at a chosen message instead of the tail. `None` keeps the
         /// tail-fork the fork-send composer has always done; see
         /// [`crate::acp::fork::ForkPoint`] for how each agent resolves it.
@@ -1246,6 +1248,12 @@ pub enum ConnectionCommand {
         reply: tokio::sync::oneshot::Sender<Result<bool, AcpError>>,
     },
     Disconnect,
+}
+
+/// File restores publish SessionStarted only after the manager commits the DB.
+pub struct ForkPublication {
+    pub decision: tokio::sync::oneshot::Receiver<bool>,
+    pub published: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Sentinel string embedded in a `agent_client_protocol::Error` when the Initialize
@@ -9802,6 +9810,7 @@ fn live_mode_for_fork(
 
 /// Result when the conversation loop exits due to a fork request.
 struct ForkExitInfo {
+    publication: Option<ForkPublication>,
     fork_response: agent_client_protocol::schema::v1::ForkSessionResponse,
     /// Fresh first-message edits already opened the child with session/new.
     fresh: bool,
@@ -9822,6 +9831,59 @@ struct ForkExitInfo {
     original_session_id: String,
     reply: tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     connection: ConnectionTo<Agent>,
+}
+
+pub(crate) fn checkpoint_background_idle(state: &SessionState) -> bool {
+    !state.goal_active
+        && state.active_delegations.is_empty()
+        && state.background_outstanding == 0
+        && state
+            .async_tasks
+            .values()
+            .all(|task| crate::acp::types::async_task_state_is_terminal(&task.state))
+}
+
+async fn begin_file_checkpoint(
+    agent_type: AgentType,
+    session_id: &str,
+    cwd: &Path,
+    blocks: &[PromptInputBlock],
+) -> Option<crate::acp::file_checkpoint::PendingCheckpoint> {
+    if !matches!(
+        agent_type,
+        AgentType::ClaudeCode | AgentType::Codex | AgentType::DeepSeek
+    ) {
+        return None;
+    }
+    let id = session_id.to_string();
+    let count = tokio::task::spawn_blocking(move || {
+        match crate::parsers::build_agent_parser(agent_type).get_conversation(&id) {
+            Ok(detail) if detail.summary.id == id => Ok(detail
+                .turns
+                .iter()
+                .filter(|turn| matches!(turn.role, crate::models::message::TurnRole::User))
+                .count()),
+            Err(crate::parsers::ParseError::ConversationNotFound(_)) => Ok(0),
+            Err(error) => Err(error.to_string()),
+            Ok(_) => Err("Checkpoint session identity changed".to_string()),
+        }
+    })
+    .await;
+    let result = match count {
+        Ok(Ok(count)) => {
+            crate::acp::file_checkpoint::begin_turn(agent_type, session_id, cwd, count, blocks)
+                .await
+        }
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(error.to_string()),
+    };
+    match result {
+        Ok(checkpoint) => Some(checkpoint),
+        Err(error) => {
+            tracing::warn!("[ACP] file checkpoint unavailable: {error}");
+            None
+        }
+    }
 }
 
 async fn read_strict_fork_history(
@@ -10009,7 +10071,7 @@ async fn handle_fork_or_exit(
     // parent's teardown. It is not awaited: a slow close (deepseek-acp waits
     // for the session's MCP servers to exit) must not hold up the child's
     // first prompt.
-    if supports_close {
+    if supports_close && fork_info.publication.is_none() {
         close_forked_parent(&cx, &original_session_id, &new_sid);
     }
 
@@ -10043,6 +10105,33 @@ async fn handle_fork_or_exit(
     let grok_model_specs =
         (agent_type == AgentType::Grok).then(|| parse_grok_model_specs(models_raw.as_ref()));
     let mut session = AgentSession::attach(&cx, new_resp)?;
+    let mut reply = Some(fork_info.reply);
+    let mut publication = fork_info.publication;
+    if let Some(barrier) = publication.as_mut() {
+        let _ = reply
+            .take()
+            .expect("fork reply")
+            .send(Ok(crate::acp::types::ForkProtocolResult {
+                forked_session_id: new_sid.clone(),
+                original_session_id: original_session_id.clone(),
+            }));
+        if !matches!((&mut barrier.decision).await, Ok(true)) {
+            emit_with_state(
+                state,
+                emitter,
+                AcpEvent::StatusChanged {
+                    status: ConnectionStatus::Error,
+                },
+            )
+            .await;
+            return Err(agent_client_protocol::util::internal_error(
+                "File restore transaction did not commit; reconnect the original conversation",
+            ));
+        }
+        if supports_close {
+            close_forked_parent(&cx, &original_session_id, &new_sid);
+        }
+    }
 
     // A fork is a new session id, hence a new transcript file. Its history
     // starts empty and accumulates from the fork point — the pre-fork turns
@@ -10085,12 +10174,15 @@ async fn handle_fork_or_exit(
     // Publish the destination and restore selectors before acknowledging the
     // fork. The manager persists its two-row reshuffle while the new loop starts;
     // a subsequent prompt cannot run on the outgoing session.
-    let _ = fork_info
-        .reply
-        .send(Ok(crate::acp::types::ForkProtocolResult {
+    if let Some(reply) = reply {
+        let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
             forked_session_id: new_sid.clone(),
             original_session_id,
         }));
+    }
+    if let Some(barrier) = publication {
+        let _ = barrier.published.send(());
+    }
     let child_supports_fork = if fork_info.fresh {
         state.read().await.fork_supported
     } else {
@@ -10999,7 +11091,23 @@ async fn run_conversation_loop(
             Some(ConnectionCommand::Prompt {
                 blocks,
                 user_message,
+                mut checkpoint_activity,
             }) => {
+                let mut file_checkpoint = if checkpoint_activity
+                    .as_ref()
+                    .is_some_and(|a| a.is_exclusive())
+                    && checkpoint_background_idle(&*state.read().await)
+                {
+                    begin_file_checkpoint(
+                        agent_type,
+                        &session.session_id().0,
+                        Path::new(cwd),
+                        &blocks,
+                    )
+                    .await
+                } else {
+                    None
+                };
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
                 // consumed: the transcript record this prompt becomes must
@@ -11593,6 +11701,22 @@ async fn run_conversation_loop(
                             if reason_str == "end_turn" {
                                 journal_turn_span(&mut turn_timing_probe, conn_id, &sid.0).await;
                             }
+                            if reason_str == "end_turn"
+                                && checkpoint_activity.as_ref().is_some_and(|a| a.is_exclusive())
+                                && checkpoint_background_idle(&*state.read().await)
+                            {
+                                if let Some(checkpoint) = file_checkpoint.take() {
+                                    let publisher = checkpoint_activity.as_ref().expect("checked exclusive").publisher();
+                                    if let Err(error) = crate::acp::file_checkpoint::finish_turn_guarded(checkpoint, move |action| publisher.publish(action)).await {
+                                        tracing::warn!("[ACP] file checkpoint unavailable: {error}");
+                                    }
+                                }
+                            }
+                            // The response settled and the after-snapshot is
+                            // durable before clients may enqueue the next turn.
+                            // Release admission before publishing TurnComplete.
+                            drop(file_checkpoint.take());
+                            drop(checkpoint_activity.take());
                             // ACP has no turn-end notification — the stop
                             // reason arrives here, in the prompt RESPONSE — so
                             // codeg records it for the history parser. Unlike
@@ -11969,6 +12093,12 @@ async fn run_conversation_loop(
                                     // `session/cancel` above — a second
                                     // cancellation of the same turn.
                                     tokio::spawn(async move {
+                                        // Cancel is optimistic in the UI; the
+                                        // native agent may still be writing until
+                                        // its response arrives. Keep overlapping
+                                        // checkpoints invalid during that window.
+                                        let _activity = checkpoint_activity;
+                                        let _checkpoint = file_checkpoint;
                                         let _ = prompt_response.await;
                                     });
                                     break;
@@ -12177,6 +12307,7 @@ async fn run_conversation_loop(
                 }
             }
             Some(ConnectionCommand::Fork {
+                publication,
                 fork_point,
                 strict,
                 reply,
@@ -12292,12 +12423,33 @@ async fn run_conversation_loop(
                                     continue;
                                 }
                             }
+                            if let Some(restore) = &edit.file_restore {
+                                let restore = restore.clone();
+                                let (cid, original, child) = (
+                                    edit.conversation_id,
+                                    edit.original_session_id.clone(),
+                                    child_id.clone(),
+                                );
+                                let result = tokio::task::spawn_blocking(move || {
+                                    let mut restore = restore.blocking_lock();
+                                    restore.bind_fork(cid, &original, &child)?;
+                                    restore.apply()
+                                })
+                                .await
+                                .unwrap_or_else(|e| Err(e.to_string()));
+                                if let Err(error) = result {
+                                    close_forked_parent(&cx, &child_id, &edit.original_session_id);
+                                    let _ = reply.send(Err(AcpError::protocol(error)));
+                                    continue;
+                                }
+                            }
                         }
                         tracing::info!(
                             "[ACP] Fork succeeded: new_session_id={}",
                             fork_response.session_id.0
                         );
                         return Ok(Some(ForkExitInfo {
+                            publication,
                             fork_response,
                             fresh,
                             fork_models_raw,
@@ -31561,6 +31713,7 @@ mod tests {
                 .send(ConnectionCommand::Prompt {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
+                    checkpoint_activity: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -32016,6 +32169,7 @@ mod tests {
 
         let (reply, answer) = oneshot::channel();
         grok.send(ConnectionCommand::Fork {
+            publication: None,
             fork_point: None,
             strict: None,
             reply,
@@ -32467,6 +32621,7 @@ mod tests {
 
         let (reply, answer) = oneshot::channel();
         grok.send(ConnectionCommand::Fork {
+            publication: None,
             fork_point: None,
             strict: None,
             reply,
@@ -32725,6 +32880,7 @@ mod tests {
                 .send(ConnectionCommand::Prompt {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
+                    checkpoint_activity: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -33045,6 +33201,7 @@ mod tests {
             let (reply, answer) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Fork {
+                    publication: None,
                     fork_point: None,
                     strict: None,
                     reply,
@@ -33084,6 +33241,7 @@ mod tests {
                         text: "go on".into(),
                     }],
                     user_message: None,
+                    checkpoint_activity: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -33127,6 +33285,56 @@ mod tests {
     /// answered on `session`.
     fn answered(session: &str) -> (String, String) {
         (session.to_string(), "empty".to_string())
+    }
+
+    #[tokio::test]
+    async fn file_restore_fork_publishes_only_after_commit_and_never_after_abort() {
+        for commit in [true, false] {
+            let mut fork = ForkTransition::start("child", true, CloseAnswer::Closed).await;
+            let (reply, answer) = oneshot::channel();
+            let (decision, wait_decision) = oneshot::channel();
+            let (published, wait_published) = oneshot::channel();
+            fork.cmd_tx
+                .send(ConnectionCommand::Fork {
+                    publication: Some(ForkPublication {
+                        decision: wait_decision,
+                        published,
+                    }),
+                    fork_point: None,
+                    strict: None,
+                    reply,
+                })
+                .await
+                .unwrap();
+            assert_eq!(answer.await.unwrap().unwrap().forked_session_id, "child");
+            assert_ne!(
+                fork.state.read().await.external_id.as_deref(),
+                Some("child")
+            );
+            assert!(fork.closes.lock().unwrap().is_empty());
+            while let Ok(event) = fork.events.try_recv() {
+                assert!(
+                    !matches!(&event.payload, AcpEvent::SessionStarted { session_id } if session_id == "child")
+                );
+            }
+            decision.send(commit).unwrap();
+            if commit {
+                wait_published.await.unwrap();
+                assert_eq!(
+                    fork.state.read().await.external_id.as_deref(),
+                    Some("child")
+                );
+                assert_eq!(fork.prompt_to_end().await, answered("child"));
+            } else {
+                assert!(wait_published.await.is_err());
+                assert_ne!(
+                    fork.state.read().await.external_id.as_deref(),
+                    Some("child")
+                );
+                assert_eq!(fork.state.read().await.status, ConnectionStatus::Error);
+            }
+            fork.shutdown().await;
+        }
     }
 
     /// The parent a fork leaves is closed on the agent — nothing else is: the

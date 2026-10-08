@@ -976,6 +976,20 @@ pub fn build_router(
             post(handlers::acp::acp_edit_fork).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
         )
         .route(
+            "/acp_preview_file_restore",
+            post(handlers::acp::acp_preview_file_restore)
+                .layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
+        .route(
+            "/acp_recover_file_restore",
+            post(handlers::acp::acp_recover_file_restore),
+        )
+        .route(
+            "/acp_restore_edit_fork",
+            post(handlers::acp::acp_restore_edit_fork)
+                .layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
+        .route(
             "/acp_stop_async_task",
             post(handlers::acp::acp_stop_async_task),
         )

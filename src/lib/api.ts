@@ -396,21 +396,54 @@ export async function acpForkBeforeUserTurn(
   conversationId: number,
   folderId: number,
   expectedSessionId: string,
-  expectedTurn: MessageTurn
+  expectedTurn: MessageTurn,
+  restoreFilesToken?: string
 ): Promise<ForkResult> {
   try {
-    return await getTransport().call("acp_edit_fork", {
-      connectionId,
-      conversationId,
-      folderId,
-      forkBeforeTurnId: expectedTurn.id,
-      expectedSessionId,
-      expectedTurn,
-    })
+    return await getTransport().call(
+      restoreFilesToken ? "acp_restore_edit_fork" : "acp_edit_fork",
+      {
+        connectionId,
+        conversationId,
+        folderId,
+        forkBeforeTurnId: expectedTurn.id,
+        expectedSessionId,
+        expectedTurn,
+        ...(restoreFilesToken ? { restoreFilesToken } : {}),
+      }
+    )
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
     throw e
   }
+}
+
+export interface FileRestorePreview {
+  token: string
+  files: { path: string; change: string }[]
+  conflicts: string[]
+}
+
+export async function acpRecoverFileRestore(
+  connectionId: string
+): Promise<void> {
+  return getTransport().call("acp_recover_file_restore", { connectionId })
+}
+
+export async function acpPreviewFileRestore(
+  connectionId: string,
+  conversationId: number,
+  folderId: number,
+  expectedSessionId: string,
+  expectedTurn: MessageTurn
+): Promise<FileRestorePreview> {
+  return getTransport().call("acp_preview_file_restore", {
+    connectionId,
+    conversationId,
+    folderId,
+    expectedSessionId,
+    expectedTurn,
+  })
 }
 
 /**

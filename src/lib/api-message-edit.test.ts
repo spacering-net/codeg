@@ -11,7 +11,7 @@ vi.mock("@/lib/transport", () => ({
   notifyRemoteDesktopUnauthorized: vi.fn(),
 }))
 
-import { acpForkBeforeUserTurn, acpPrompt } from "./api"
+import { acpForkBeforeUserTurn, acpPreviewFileRestore, acpPrompt } from "./api"
 import { TurnBusyError } from "./turn-busy"
 
 const target: MessageTurn = {
@@ -69,5 +69,41 @@ describe("strict message edit transport", () => {
         blocks,
       })
     )
+  })
+
+  it("previews without mutating and pins restoration to the reviewed token", async () => {
+    call.mockResolvedValue({ token: "reviewed", files: [], conflicts: [] })
+    await acpPreviewFileRestore("connection", 1, 2, "parent", target)
+    expect(call).toHaveBeenLastCalledWith("acp_preview_file_restore", {
+      connectionId: "connection",
+      conversationId: 1,
+      folderId: 2,
+      expectedSessionId: "parent",
+      expectedTurn: target,
+    })
+    await acpForkBeforeUserTurn(
+      "connection",
+      1,
+      2,
+      "parent",
+      target,
+      "reviewed"
+    )
+    expect(call).toHaveBeenLastCalledWith(
+      "acp_restore_edit_fork",
+      expect.objectContaining({
+        restoreFilesToken: "reviewed",
+        expectedTurn: target,
+      })
+    )
+  })
+
+  it("never downgrades a requested file restore on an older server", async () => {
+    call.mockRejectedValue(new Error("Unknown command acp_restore_edit_fork"))
+    await expect(
+      acpForkBeforeUserTurn("connection", 1, 2, "parent", target, "reviewed")
+    ).rejects.toThrow("Unknown command")
+    expect(call).toHaveBeenCalledOnce()
+    expect(call.mock.calls[0][0]).toBe("acp_restore_edit_fork")
   })
 })

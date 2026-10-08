@@ -84,6 +84,8 @@ import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
   acpFork,
   acpForkBeforeUserTurn,
+  acpPreviewFileRestore,
+  acpRecoverFileRestore,
   acpStopAsyncTask,
   createChatConversation,
   createChatDir,
@@ -435,6 +437,7 @@ const ConversationTabView = memo(function ConversationTabView({
   // After a successful fork but failed send, retry only the send. Re-forking
   // would act on a target no longer present in the newly truncated history.
   const editedBranchRef = useRef<string | null>(null)
+  const [editFilesRestored, setEditFilesRestored] = useState(false)
 
   useEffect(() => {
     dbConvIdRef.current = dbConversationId
@@ -1514,6 +1517,7 @@ const ConversationTabView = memo(function ConversationTabView({
         return
       }
       editedBranchRef.current = null
+      setEditFilesRestored(false)
       setEditTarget({ turn, sessionId: current.sessionId })
     },
     [connectionStore, effectiveConversationId, mqGetQueueLength, tabId]
@@ -1526,7 +1530,7 @@ const ConversationTabView = memo(function ConversationTabView({
   }, [])
 
   const handleSaveMessageEdit = useCallback(
-    async (draft: PromptDraft) => {
+    async (draft: PromptDraft, restoreFilesToken?: string) => {
       if (!editTarget || editInFlightRef.current) {
         throw new Error(tMessageList("editBusy"))
       }
@@ -1574,12 +1578,14 @@ const ConversationTabView = memo(function ConversationTabView({
             persistedId,
             folderId,
             expectedSessionId,
-            target
+            target,
+            restoreFilesToken
           )
           // The backend verified this exact prefix before switching sessions.
           // Install it atomically rather than waiting for the new transcript
           // file (session/new may not write one until its first prompt).
           editedBranchRef.current = forkedSessionId
+          if (restoreFilesToken) setEditFilesRestored(true)
           sessionIdRef.current = forkedSessionId
           syncCancelRef.current?.()
           syncCancelRef.current = null
@@ -1653,6 +1659,58 @@ const ConversationTabView = memo(function ConversationTabView({
       tabId,
     ]
   )
+
+  const handlePreviewEditFiles = useCallback(async () => {
+    const current = connectionStore.getConnection(tabId)
+    const persistedId = dbConvIdRef.current
+    if (
+      !editTarget ||
+      !current ||
+      !persistedId ||
+      current.isViewer ||
+      current.status !== "connected" ||
+      current.sessionId !== editTarget.sessionId ||
+      editedBranchRef.current
+    ) {
+      throw new Error(tMessageList("editNotReady"))
+    }
+    const source = await getFolderConversation(persistedId)
+    const runtime = getRuntimeSession(effectiveConversationId)
+    const target = resolveEditableUserTurn(editTarget.turn, source.turns, {
+      timeline: getTimelineTurns(effectiveConversationId).map(
+        (entry) => entry.turn
+      ),
+      loadedFromStart:
+        !runtime?.detail ||
+        !isWindowedDetail(runtime.detail) ||
+        runtime.detail.turns_offset === 0,
+    })
+    if (!target || source.summary.external_id !== editTarget.sessionId) {
+      throw new Error(tMessageList("editNotReady"))
+    }
+    return acpPreviewFileRestore(
+      current.connectionId,
+      persistedId,
+      folderId,
+      editTarget.sessionId,
+      target
+    )
+  }, [
+    connectionStore,
+    editTarget,
+    effectiveConversationId,
+    folderId,
+    tMessageList,
+    tabId,
+  ])
+
+  const handleRecoverEditFiles = useCallback(async () => {
+    const current = connectionStore.getConnection(tabId)
+    if (!current || current.isViewer || current.status !== "connected") {
+      throw new Error(tMessageList("editBusy"))
+    }
+    await acpRecoverFileRestore(current.connectionId)
+  }, [connectionStore, tMessageList, tabId])
 
   /** Stop one AIR async task. Returns the adapter's verdict so the strip can
    *  release its button; `false` (the adapter declined) is reported, because
@@ -2698,6 +2756,9 @@ const ConversationTabView = memo(function ConversationTabView({
             editInFlight || connStatus !== "connected" || msgQueue.length > 0
           }
           onSubmit={handleSaveMessageEdit}
+          onPreviewFiles={handlePreviewEditFiles}
+          onRecoverFiles={handleRecoverEditFiles}
+          filesRestored={editFilesRestored}
           onCancel={handleCancelMessageEdit}
         />
       )}
