@@ -4617,7 +4617,7 @@ fn effective_prompt_capabilities(
     capabilities: &agent_client_protocol::schema::v1::PromptCapabilities,
 ) -> PromptCapabilitiesInfo {
     PromptCapabilitiesInfo {
-        image: capabilities.image || agent_type == AgentType::Grok,
+        image: capabilities.image || agent_type.uses_grok_image_sidecar(),
         audio: capabilities.audio,
         embedded_context: capabilities.embedded_context,
     }
@@ -9786,7 +9786,7 @@ fn prepare_agent_bound_prompt(
     delegation_enabled: bool,
 ) -> Vec<ContentBlock> {
     append_agent_routes(&mut blocks, delegation_enabled);
-    if agent_type == AgentType::Grok {
+    if agent_type.uses_grok_image_sidecar() {
         blocks = normalize_grok_image_blocks(blocks);
     }
     map_prompt_blocks(blocks)
