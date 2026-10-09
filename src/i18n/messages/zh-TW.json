@@ -3113,6 +3113,9 @@
         "sendMessage": "傳送訊息..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "已 @ 其他智慧體：目前「多智慧體協同」未開啟，訊息不會真正委派給對方。可在 設定 → 一般 → 多智慧體協同 中開啟（新會話生效）。",
+        "mentionDelegateDisabledAgentHint": "已 @ {agent}：該智慧體已在 設定 → 智能體 中停用，訊息不會委派給它。可前往重新啟用（新會話生效）。",
+        "mentionHintOpenSettings": "前往設定",
         "askAnything": "請開始輸入...",
         "removeAttachmentAria": "移除 {name}",
         "attachFiles": "附加檔案",

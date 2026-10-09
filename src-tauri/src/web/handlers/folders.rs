@@ -430,6 +430,7 @@ pub async fn open_settings_window(
 ) -> Result<Json<SettingsNavigationResult>, AppCommandError> {
     let route = match params.section.as_deref() {
         Some("appearance") => "settings/appearance",
+        Some("general") => "settings/general",
         Some("agents") => "settings/agents",
         Some("mcp") => "settings/mcp",
         Some("skills") => "settings/skills",

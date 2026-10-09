@@ -3113,6 +3113,9 @@
         "sendMessage": "메시지 보내기..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "에이전트를 @ 멘션했지만 다중 에이전트 협업이 꺼져 있어 메시지가 실제로 위임되지 않습니다. 설정 → 일반 → 다중 에이전트 협업에서 켤 수 있습니다(새 세션부터 적용).",
+        "mentionDelegateDisabledAgentHint": "{agent}을(를) @ 멘션했지만 해당 에이전트가 설정 → 에이전트에서 비활성화되어 위임되지 않습니다. 설정 → 에이전트에서 다시 활성화할 수 있습니다(새 세션부터 적용).",
+        "mentionHintOpenSettings": "설정 열기",
         "askAnything": "무엇이든 물어보세요...",
         "removeAttachmentAria": "{name} 제거",
         "attachFiles": "파일 첨부",

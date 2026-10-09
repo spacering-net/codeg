@@ -3113,6 +3113,9 @@
         "sendMessage": "Envoyer un message..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "Vous avez mentionné un autre agent avec @, mais la Collaboration multi-agent est actuellement désactivée : le message ne sera pas réellement délégué. Activez-la dans Paramètres → Général → Collaboration multi-agent (effectif pour les nouvelles sessions).",
+        "mentionDelegateDisabledAgentHint": "Vous avez mentionné {agent} : cet agent est désactivé dans Paramètres → Agents IA, le message ne lui sera pas délégué. Réactivez-le là (effectif pour les nouvelles sessions).",
+        "mentionHintOpenSettings": "Ouvrir les paramètres",
         "askAnything": "Posez n'importe quelle question...",
         "removeAttachmentAria": "Retirer {name}",
         "attachFiles": "Joindre des fichiers",

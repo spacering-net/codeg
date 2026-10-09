@@ -3113,6 +3113,9 @@
         "sendMessage": "メッセージを送信..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "エージェントを @ でメンションしていますが、「マルチエージェント連携」が無効のため、メッセージは実際には委譲されません。設定 → 一般 → マルチエージェント連携 で有効にできます（新しいセッションから有効）。",
+        "mentionDelegateDisabledAgentHint": "{agent} を @ でメンションしていますが、このエージェントは 設定 → エージェント で無効になっているため委譲されません。そちらで再度有効にしてください（新しいセッションから有効）。",
+        "mentionHintOpenSettings": "設定を開く",
         "askAnything": "何でも質問してください...",
         "removeAttachmentAria": "{name} を削除",
         "attachFiles": "ファイルを添付",

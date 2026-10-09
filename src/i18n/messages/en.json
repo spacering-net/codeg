@@ -3113,6 +3113,9 @@
         "sendMessage": "Send a message..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "You @-mentioned another agent, but Multi-Agent Collaboration is currently off, so this message won't actually be handed off. Enable it under Settings → General → Multi-Agent Collaboration (takes effect for new sessions).",
+        "mentionDelegateDisabledAgentHint": "You @-mentioned {agent}: that agent is disabled under Settings → Agents, so the message won't be delegated to it. Re-enable it there (takes effect for new sessions).",
+        "mentionHintOpenSettings": "Open Settings",
         "askAnything": "Ask anything...",
         "removeAttachmentAria": "Remove {name}",
         "attachFiles": "Attach files",

@@ -3113,6 +3113,9 @@
         "sendMessage": "Envie uma mensagem..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "Você mencionou outro agente com @, mas a Colaboração multiagente está desativada, então a mensagem não será realmente delegada. Ative em Configurações → Geral → Colaboração multiagente (válido para novas sessões).",
+        "mentionDelegateDisabledAgentHint": "Você mencionou {agent}: esse agente está desativado em Configurações → Agentes, então a mensagem não será delegada a ele. Reative-o lá (válido para novas sessões).",
+        "mentionHintOpenSettings": "Abrir configurações",
         "askAnything": "Pergunte qualquer coisa...",
         "removeAttachmentAria": "Remover {name}",
         "attachFiles": "Anexar arquivos",

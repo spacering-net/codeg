@@ -3113,6 +3113,9 @@
         "sendMessage": "发送消息..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "已 @ 其他智能体：当前「多智能体协同」未开启，消息不会真正委托给对方。可在 设置 → 常规 → 多智能体协同 中开启（新会话生效）。",
+        "mentionDelegateDisabledAgentHint": "已 @ {agent}：该智能体已在 设置 → 智能体 中禁用，消息不会委托给它。可前往重新启用（新会话生效）。",
+        "mentionHintOpenSettings": "前往设置",
         "askAnything": "请开始输入...",
         "removeAttachmentAria": "移除 {name}",
         "attachFiles": "附加文件",

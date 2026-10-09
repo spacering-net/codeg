@@ -3113,6 +3113,9 @@
         "sendMessage": "Nachricht senden..."
       },
       "messageInput": {
+        "mentionDelegateOffHint": "Du hast einen anderen Agenten mit @ erwähnt, aber die Multi-Agent-Zusammenarbeit ist derzeit deaktiviert – die Nachricht wird nicht wirklich delegiert. Aktiviere sie unter Einstellungen → Allgemein → Multi-Agent-Zusammenarbeit (wirkt für neue Sitzungen).",
+        "mentionDelegateDisabledAgentHint": "Du hast {agent} erwähnt: Dieser Agent ist unter Einstellungen → Agenten deaktiviert, daher wird die Nachricht nicht delegiert. Dort wieder aktivieren (wirkt für neue Sitzungen).",
+        "mentionHintOpenSettings": "Einstellungen öffnen",
         "askAnything": "Fragen Sie alles...",
         "removeAttachmentAria": "{name} entfernen",
         "attachFiles": "Dateien anhängen",
