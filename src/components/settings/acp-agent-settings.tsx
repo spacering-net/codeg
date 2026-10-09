@@ -3094,44 +3094,59 @@ export function patchCodexConfigTomlText(
   }
   if (typeof patch.apiBaseUrl === "string") {
     const tomlValues = extractCodexTomlImportantValues(nextTomlText)
+    // Falling back to `codeg` is only right when this patch actually carries a
+    // URL for it. Clearing the box must not conjure a provider whose entire
+    // content would be `base_url = ""`. See the websockets arm below.
     const modelProvider =
       patch.modelProvider?.trim() ||
       tomlValues.modelProvider.trim() ||
-      CODEX_DEFAULT_MODEL_PROVIDER
-    if (!tomlValues.modelProvider.trim() && patch.apiBaseUrl.trim()) {
-      nextTomlText = updateTomlRootStringKey(
+      (patch.apiBaseUrl.trim() ? CODEX_DEFAULT_MODEL_PROVIDER : "")
+    if (modelProvider) {
+      if (!tomlValues.modelProvider.trim() && patch.apiBaseUrl.trim()) {
+        nextTomlText = updateTomlRootStringKey(
+          nextTomlText,
+          "model_provider",
+          modelProvider
+        )
+      }
+      nextTomlText = patchCodexProviderBaseUrl(
         nextTomlText,
-        "model_provider",
-        modelProvider
+        modelProvider,
+        patch.apiBaseUrl
       )
+      nextTomlText = ensureCodexProviderDefaults(nextTomlText, modelProvider)
     }
-    nextTomlText = patchCodexProviderBaseUrl(
-      nextTomlText,
-      modelProvider,
-      patch.apiBaseUrl
-    )
-    nextTomlText = ensureCodexProviderDefaults(nextTomlText, modelProvider)
   }
   if (typeof patch.supportsWebsockets === "boolean") {
     const tomlValues = extractCodexTomlImportantValues(nextTomlText)
+    // No `|| CODEX_DEFAULT_MODEL_PROVIDER` here. config.toml is shared with the
+    // codex CLI and the native Codex app, and adopting `codeg` from a switch
+    // that has nothing to do with providers installs
+    // `model_provider = "codeg"` + `[model_providers.codeg] base_url = ""` into
+    // a file the user never pointed at codeg. codex then fails every request at
+    // the builder stage ("stream disconnected before completion: builder
+    // error") in every client, and nothing inside codeg undoes it. See #520.
     const modelProvider =
-      patch.modelProvider?.trim() ||
-      tomlValues.modelProvider.trim() ||
-      CODEX_DEFAULT_MODEL_PROVIDER
-    if (!tomlValues.modelProvider.trim()) {
-      nextTomlText = updateTomlRootStringKey(
+      patch.modelProvider?.trim() || tomlValues.modelProvider.trim()
+    if (modelProvider) {
+      nextTomlText = patchCodexProviderField(
         nextTomlText,
-        "model_provider",
-        modelProvider
+        modelProvider,
+        "supports_websockets",
+        `supports_websockets = ${patch.supportsWebsockets ? "true" : "false"}`
+      )
+      nextTomlText = ensureCodexProviderDefaults(nextTomlText, modelProvider)
+    } else {
+      // Unbound: the `[features]` key IS the setting, and it is what the reader
+      // falls back to. Write it here so the normalization below reads the value
+      // the switch just moved to instead of the one already on disk.
+      nextTomlText = upsertTomlSectionBooleanKey(
+        nextTomlText,
+        "features",
+        "responses_websockets_v2",
+        patch.supportsWebsockets ? true : null
       )
     }
-    nextTomlText = patchCodexProviderField(
-      nextTomlText,
-      modelProvider,
-      "supports_websockets",
-      `supports_websockets = ${patch.supportsWebsockets ? "true" : "false"}`
-    )
-    nextTomlText = ensureCodexProviderDefaults(nextTomlText, modelProvider)
   }
   const normalizedTomlValues = extractCodexTomlImportantValues(nextTomlText)
   if (normalizedTomlValues.model.trim()) {
