@@ -2086,6 +2086,8 @@
       "cacheRead": "キャッシュ読取",
       "contextWindow": "コンテキストウィンドウ",
       "duration": "所要時間",
+      "outputSpeed": "平均出力速度",
+      "outputSpeedTooltip": "モデルが書いている間の平均速度。ツール待ち時間は含めません。",
       "loadingStats": "トークン使用量を読み込み中…",
       "loadFailed": "トークン使用量の読み込みに失敗しました",
       "noStats": "使用量の記録なし",
@@ -3470,8 +3472,8 @@
         "elapsedHours": "{value}時間",
         "elapsedMinutes": "{value}分",
         "elapsedSeconds": "{value}秒",
-        "outputSpeedAria": "推定出力速度",
-        "outputSpeedTooltip": "推定出力速度（テキスト + 思考）"
+        "outputSpeedAria": "出力速度",
+        "outputSpeedTooltip": "モデルが書いている間の速度。ツール待ち時間は含めません。"
       },
       "jsonTree": {
         "viewRaw": "生の JSON を表示",
@@ -6249,6 +6251,8 @@
     "tileTurns": "ターン数",
     "tileActiveDays": "稼働日数",
     "tileGenTime": "生成時間",
+    "avgOutputSpeed": "平均 {speed}",
+    "outputSpeedTooltip": "モデルが書いている間の平均速度。ツール待ち時間は含めません。",
     "vsPrevious": "前期間との比較",
     "deltaNew": "新規",
     "trendTitle": "使用量の推移",

@@ -185,23 +185,38 @@ export class TokenCountAccumulator {
   }
 }
 
+export interface TokenSpeedObserveOptions {
+  /**
+   * True while the turn is blocked on something that is not generation
+   * (an in-flight tool, a permission prompt, a question). Idle time is
+   * skipped: the clock advances so the next generating sample is not
+   * diluted, and the EWMA holds instead of decaying toward zero.
+   */
+  pause?: boolean
+}
+
 /**
  * First-order low-pass over instantaneous token rates. Time-constant based
  * (rather than per-sample alpha) so the reading doesn't depend on how regularly
- * the caller samples, and so a bursty thinking stream followed by a tool pause
- * decays toward zero instead of pinning the old reading.
+ * the caller samples.
+ *
+ * Generation time is the only time that counts. A tool wait, a permission
+ * prompt, or any other pause is `observe(..., { pause: true })`: the last
+ * reading is held and the idle span is excluded from the next sample's `dt`.
+ * Short gaps *while generating* (batched deltas, a slow decode) still feed a
+ * zero instant so a genuinely slow stream is not mistaken for a fast one.
  *
  * The accumulated weight is tracked alongside the average and divided back out
- * (the bias correction Adam uses). Without it the filter cold-starts from its
- * first sample, and a turn's first sample is routinely near-zero — it lands on
- * whatever fraction of a batched content delta had arrived by then. That made
- * the reading open at `0.0` and crawl toward the truth over several seconds.
- * With the correction it is the turn's cumulative average until `TAU_MS` has
+ * (bias correction). Without it the filter cold-starts from its first sample,
+ * and a turn's first sample is routinely near-zero — it lands on whatever
+ * fraction of a batched content delta had arrived by then. That made the
+ * reading open at `0.0` and crawl toward the truth over several seconds. With
+ * the correction it is the turn's cumulative average until `TAU_MS` has
  * elapsed, and an exponential window after that.
  */
 export class TokenSpeedTracker {
   private static readonly TAU_MS = 1500
-  /** Hold the reading back until it covers a meaningful slice of wall clock. */
+  /** Hold the reading back until it covers a meaningful slice of generating time. */
   private static readonly WARMUP_MS = 300
 
   private lastTime: number | null = null
@@ -209,6 +224,8 @@ export class TokenSpeedTracker {
   private elapsed = 0
   private ewma = 0
   private weight = 0
+  private generatingMs = 0
+  private generatingTokens = 0
 
   reset(): void {
     this.lastTime = null
@@ -216,11 +233,36 @@ export class TokenSpeedTracker {
     this.elapsed = 0
     this.ewma = 0
     this.weight = 0
+    this.generatingMs = 0
+    this.generatingTokens = 0
+  }
+
+  /** Generating-only elapsed time, excluding pauses. */
+  get generatingElapsedMs(): number {
+    return this.generatingMs
+  }
+
+  /** Tokens observed during generating windows. */
+  get generatingTokenCount(): number {
+    return this.generatingTokens
+  }
+
+  /**
+   * Tokens / generating-seconds for this tracker (one turn). `null` until
+   * enough generating time has accumulated to be meaningful.
+   */
+  average(): number | null {
+    if (this.generatingMs < TokenSpeedTracker.WARMUP_MS) return null
+    return this.generatingTokens / (this.generatingMs / 1000)
   }
 
   /** Feed the cumulative estimated token count at `nowMs`; returns smoothed
    *  tok/s, or `null` while seeding / warming up. */
-  observe(totalTokens: number, nowMs: number): number | null {
+  observe(
+    totalTokens: number,
+    nowMs: number,
+    options: TokenSpeedObserveOptions = {}
+  ): number | null {
     if (this.lastTime == null) {
       this.lastTime = nowMs
       this.lastTokens = totalTokens
@@ -228,10 +270,20 @@ export class TokenSpeedTracker {
     }
     const dt = nowMs - this.lastTime
     if (dt <= 0) return this.read()
-    const instant = (totalTokens - this.lastTokens) / (dt / 1000)
+    if (options.pause) {
+      // Hold the last reading and drop this span so a later generating
+      // sample is not tokens / (generate + wait).
+      this.lastTime = nowMs
+      this.lastTokens = totalTokens
+      return this.read()
+    }
+    const delta = totalTokens - this.lastTokens
+    const instant = delta / (dt / 1000)
     this.lastTime = nowMs
     this.lastTokens = totalTokens
     this.elapsed += dt
+    this.generatingMs += dt
+    if (delta > 0) this.generatingTokens += delta
     const alpha = 1 - Math.exp(-dt / TokenSpeedTracker.TAU_MS)
     this.ewma = this.ewma * (1 - alpha) + instant * alpha
     // Stays exactly equal to `1 - exp(-elapsed / TAU_MS)`.
@@ -245,4 +297,22 @@ export class TokenSpeedTracker {
     }
     return this.ewma / this.weight
   }
+}
+
+/** Format a tok/s reading the same way the live turn row does. */
+export function formatTokPerSec(tps: number): string {
+  return `${tps.toFixed(1)} tok/s`
+}
+
+/**
+ * Session/dashboard average: output tokens over recorded generation time.
+ * `null` until both sides are meaningful, so a 0ms or 0-output row does not
+ * render as `0.0 tok/s`.
+ */
+export function averageOutputTps(
+  outputTokens: number,
+  durationMs: number
+): number | null {
+  if (!(outputTokens > 0) || durationMs < 300) return null
+  return outputTokens / (durationMs / 1000)
 }

@@ -2086,6 +2086,8 @@
       "cacheRead": "缓存读取",
       "contextWindow": "上下文窗口",
       "duration": "时长",
+      "outputSpeed": "平均输出速度",
+      "outputSpeedTooltip": "模型正在写时的平均速度。等待工具完成的时间不计入。",
       "loadingStats": "正在加载 Token 用量…",
       "loadFailed": "加载 Token 用量失败",
       "noStats": "暂无用量记录",
@@ -3470,8 +3472,8 @@
         "elapsedHours": "{value} 小时",
         "elapsedMinutes": "{value} 分钟",
         "elapsedSeconds": "{value} 秒",
-        "outputSpeedAria": "估算输出速度",
-        "outputSpeedTooltip": "估算输出速度（正文 + 思考）"
+        "outputSpeedAria": "输出速度",
+        "outputSpeedTooltip": "模型正在写时的速度。等待工具完成的时间不计入。"
       },
       "jsonTree": {
         "viewRaw": "查看原始 JSON",
@@ -6249,6 +6251,8 @@
     "tileTurns": "对话轮次",
     "tileActiveDays": "活跃天数",
     "tileGenTime": "生成时长",
+    "avgOutputSpeed": "平均 {speed}",
+    "outputSpeedTooltip": "模型正在写时的平均速度。等待工具完成的时间不计入。",
     "vsPrevious": "对比上一周期",
     "deltaNew": "新增",
     "trendTitle": "用量趋势",

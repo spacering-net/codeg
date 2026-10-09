@@ -2086,6 +2086,8 @@
       "cacheRead": "Cache lu",
       "contextWindow": "Fenêtre de contexte",
       "duration": "Durée",
+      "outputSpeed": "Vitesse de sortie moy.",
+      "outputSpeedTooltip": "Moyenne pendant que le modèle écrit. L'attente des outils n'est pas comptée.",
       "loadingStats": "Chargement de l'utilisation des tokens…",
       "loadFailed": "Échec du chargement de l'utilisation des tokens",
       "noStats": "Aucune utilisation enregistrée",
@@ -3470,8 +3472,8 @@
         "elapsedHours": "{value} h",
         "elapsedMinutes": "{value} min",
         "elapsedSeconds": "{value} s",
-        "outputSpeedAria": "Vitesse de sortie estimée",
-        "outputSpeedTooltip": "Vitesse de sortie estimée (texte + raisonnement)"
+        "outputSpeedAria": "Vitesse de sortie",
+        "outputSpeedTooltip": "Pendant que le modèle écrit. L'attente des outils n'est pas comptée."
       },
       "jsonTree": {
         "viewRaw": "Afficher le JSON brut",
@@ -6249,6 +6251,8 @@
     "tileTurns": "Tours",
     "tileActiveDays": "Jours actifs",
     "tileGenTime": "Temps de génération",
+    "avgOutputSpeed": "Moy. {speed}",
+    "outputSpeedTooltip": "Moyenne pendant que le modèle écrit. L'attente des outils n'est pas comptée.",
     "vsPrevious": "vs période précédente",
     "deltaNew": "nouveau",
     "trendTitle": "Consommation dans le temps",

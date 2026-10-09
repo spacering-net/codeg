@@ -2086,6 +2086,8 @@
       "cacheRead": "캐시 읽기",
       "contextWindow": "컨텍스트 창",
       "duration": "소요 시간",
+      "outputSpeed": "평균 출력 속도",
+      "outputSpeedTooltip": "모델이 쓰는 동안의 평균 속도. 도구 대기 시간은 포함하지 않습니다.",
       "loadingStats": "토큰 사용량 불러오는 중…",
       "loadFailed": "토큰 사용량을 불러오지 못했습니다",
       "noStats": "사용량 기록 없음",
@@ -3470,8 +3472,8 @@
         "elapsedHours": "{value}시간",
         "elapsedMinutes": "{value}분",
         "elapsedSeconds": "{value}초",
-        "outputSpeedAria": "예상 출력 속도",
-        "outputSpeedTooltip": "예상 출력 속도（텍스트 + 추론）"
+        "outputSpeedAria": "출력 속도",
+        "outputSpeedTooltip": "모델이 쓰는 동안의 속도. 도구 대기 시간은 포함하지 않습니다."
       },
       "jsonTree": {
         "viewRaw": "원본 JSON 보기",
@@ -6249,6 +6251,8 @@
     "tileTurns": "대화 턴",
     "tileActiveDays": "활동 일수",
     "tileGenTime": "생성 시간",
+    "avgOutputSpeed": "평균 {speed}",
+    "outputSpeedTooltip": "모델이 쓰는 동안의 평균 속도. 도구 대기 시간은 포함하지 않습니다.",
     "vsPrevious": "이전 기간 대비",
     "deltaNew": "신규",
     "trendTitle": "사용량 추이",

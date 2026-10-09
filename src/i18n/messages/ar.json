@@ -2086,6 +2086,8 @@
       "cacheRead": "قراءة الذاكرة",
       "contextWindow": "نافذة السياق",
       "duration": "المدة",
+      "outputSpeed": "متوسط سرعة الإخراج",
+      "outputSpeedTooltip": "المتوسط أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب.",
       "loadingStats": "جارٍ تحميل استخدام الرموز…",
       "loadFailed": "فشل تحميل استخدام الرموز",
       "noStats": "لا يوجد استخدام مسجّل",
@@ -3470,8 +3472,8 @@
         "elapsedHours": "{value}س",
         "elapsedMinutes": "{value}د",
         "elapsedSeconds": "{value}ث",
-        "outputSpeedAria": "السرعة التقديرية للإخراج",
-        "outputSpeedTooltip": "السرعة التقديرية للإخراج (نص + تفكير)"
+        "outputSpeedAria": "سرعة الإخراج",
+        "outputSpeedTooltip": "أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب."
       },
       "jsonTree": {
         "viewRaw": "عرض JSON الخام",
@@ -6249,6 +6251,8 @@
     "tileTurns": "الأدوار",
     "tileActiveDays": "الأيام النشطة",
     "tileGenTime": "زمن التوليد",
+    "avgOutputSpeed": "متوسط {speed}",
+    "outputSpeedTooltip": "المتوسط أثناء كتابة النموذج. وقت انتظار الأدوات غير محسوب.",
     "vsPrevious": "مقارنة بالفترة السابقة",
     "deltaNew": "جديد",
     "trendTitle": "الاستهلاك عبر الزمن",

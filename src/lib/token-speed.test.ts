@@ -1,10 +1,31 @@
 import { describe, expect, it } from "vitest"
 import {
+  averageOutputTps,
   countChars,
   estimateTokens,
+  formatTokPerSec,
   TokenCountAccumulator,
   TokenSpeedTracker,
 } from "./token-speed"
+
+describe("formatTokPerSec", () => {
+  it("matches the live-turn one-decimal tok/s label", () => {
+    expect(formatTokPerSec(47.23)).toBe("47.2 tok/s")
+    expect(formatTokPerSec(0)).toBe("0.0 tok/s")
+  })
+})
+
+describe("averageOutputTps", () => {
+  it("divides output tokens by recorded generation seconds", () => {
+    expect(averageOutputTps(100, 1000)).toBeCloseTo(100)
+  })
+
+  it("returns null until both sides are meaningful", () => {
+    expect(averageOutputTps(0, 1000)).toBeNull()
+    expect(averageOutputTps(100, 0)).toBeNull()
+    expect(averageOutputTps(100, 200)).toBeNull()
+  })
+})
 
 describe("estimateTokens", () => {
   it("counts latin at 4 chars per token", () => {
@@ -178,11 +199,47 @@ describe("TokenSpeedTracker", () => {
     expect(rate as number).toBeLessThan(200)
   })
 
-  it("decays toward zero over a long pause", () => {
+  it("holds the reading across a paused wait instead of decaying", () => {
+    const tracker = new TokenSpeedTracker()
+    tracker.observe(0, 0)
+    const generating = tracker.observe(100, 1000)
+    expect(generating).toBeCloseTo(100)
+    // 9s of tool wait: same token count, pause=true.
+    const held = tracker.observe(100, 10_000, { pause: true })
+    expect(held).toBeCloseTo(generating as number)
+  })
+
+  it("does not dilute the next generating sample by a paused wait", () => {
     const tracker = new TokenSpeedTracker()
     tracker.observe(0, 0)
     tracker.observe(100, 1000)
-    expect(tracker.observe(100, 10_000)).toBeLessThan(1)
+    tracker.observe(100, 10_000, { pause: true })
+    // 50 tokens in the 1s after the wait — 50 tok/s, not 50 / 10s.
+    const resumed = tracker.observe(150, 11_000)
+    expect(resumed).toBeGreaterThan(40)
+    expect(resumed as number).toBeLessThan(80)
+  })
+
+  it("counts a slow generating gap (no pause) as real time", () => {
+    const tracker = new TokenSpeedTracker()
+    tracker.observe(0, 0)
+    tracker.observe(100, 1000)
+    // 1s of silence while still generating (slow decode) must pull the rate.
+    const slowed = tracker.observe(100, 2000)
+    expect(slowed).toBeLessThan(80)
+    expect(slowed as number).toBeGreaterThan(20)
+  })
+
+  it("reports generating-only average excluding paused waits", () => {
+    const tracker = new TokenSpeedTracker()
+    tracker.observe(0, 0)
+    tracker.observe(100, 1000)
+    tracker.observe(100, 10_000, { pause: true })
+    tracker.observe(200, 11_000)
+    // 200 tokens over 2s generating, not 11s wall.
+    expect(tracker.average()).toBeCloseTo(100)
+    expect(tracker.generatingElapsedMs).toBe(2000)
+    expect(tracker.generatingTokenCount).toBeCloseTo(200)
   })
 
   it("ignores non-positive time deltas", () => {
@@ -205,5 +262,6 @@ describe("TokenSpeedTracker", () => {
     tracker.observe(100, 1000)
     tracker.reset()
     expect(tracker.observe(0, 2000)).toBeNull()
+    expect(tracker.average()).toBeNull()
   })
 })
