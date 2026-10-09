@@ -15398,6 +15398,141 @@ fn map_claude_sdk_ext_notification(notification: &UntypedMessage) -> Option<AcpE
 const GROK_EXT_UPDATE_METHODS: [&str; 2] =
     ["_x.ai/session_notification", "_x.ai/session/update"];
 
+/// Grok's catalog-refresh notification. Not a `session/update` envelope, so it
+/// must not join [`GROK_EXT_UPDATE_METHODS`]: those mappers would claim it and
+/// then drop the payload, and [`is_known_ext_method`] would stop logging the gap.
+///
+/// The stdio client sees the ACP `_` prefix. The name stored on Grok's
+/// `ExtNotification` is unprefixed. The leader gateway may also wrap the body
+/// as `{method, params}`. All three are the same broadcast.
+const GROK_MODELS_UPDATE_METHODS: [&str; 2] = ["_x.ai/models/update", "x.ai/models/update"];
+
+/// `SessionModelState` body of a models-update, unwrapping the leader form
+/// (`params.method` + nested `params`) when that is what arrived.
+fn grok_models_update_body(notification: &UntypedMessage) -> Option<&serde_json::Value> {
+    if !GROK_MODELS_UPDATE_METHODS.contains(&notification.method()) {
+        return None;
+    }
+    let params = notification.params();
+    if params.get("method").is_some() {
+        return params.get("params");
+    }
+    Some(params)
+}
+
+/// Keep a session's effort checkmark when the rebuilt selector still offers it.
+/// The catalog default is what `build_grok_effort_option` just wrote; it is not
+/// the user's selection.
+fn restore_grok_effort_current(opts: &mut [SessionConfigOptionInfo], previous: Option<String>) {
+    let Some(prev) = previous else {
+        return;
+    };
+    let Some(slot) = opts.iter_mut().find(|o| o.id == GROK_EFFORT_OPTION_ID) else {
+        return;
+    };
+    let SessionConfigKindInfo::Select(sel) = &mut slot.kind else {
+        return;
+    };
+    if sel.options.iter().any(|o| o.value == prev) {
+        sel.current_value = prev;
+    }
+}
+
+fn config_select_current<'a>(opts: &'a [SessionConfigOptionInfo], id: &str) -> Option<&'a str> {
+    opts.iter().find(|o| o.id == id).and_then(|o| match &o.kind {
+        SessionConfigKindInfo::Select(sel) => Some(sel.current_value.as_str()),
+        SessionConfigKindInfo::Boolean(_) => None,
+    })
+}
+
+/// Rebuild the composer model list from a `x.ai/models/update` payload.
+///
+/// The checkmark stays on the selection the composer already shows when that
+/// id is still in the new list. `currentModelId` is only a fallback for when
+/// the current id disappeared — Grok's own pager does not treat the broadcast
+/// as a session model switch, and this path does not send `session/set_model`.
+/// A user-set reasoning effort is kept when the new model still offers it;
+/// the catalog default on each model's `_meta` is not the session's choice.
+///
+/// `None` when this notification is not ours, or it carries no usable model
+/// (an empty list must not wipe the picker).
+fn apply_grok_models_update(
+    notification: &UntypedMessage,
+    agent_type: AgentType,
+    current: &[SessionConfigOptionInfo],
+) -> Option<(Vec<SessionConfigOptionInfo>, HashMap<String, GrokModelSpec>)> {
+    if !matches!(agent_type, AgentType::Grok) {
+        return None;
+    }
+    let body = grok_models_update_body(notification)?;
+    let list = body.get("availableModels")?.as_array()?;
+    let mut model_opts: Vec<SessionConfigSelectOptionInfo> = Vec::new();
+    for m in list {
+        let Some(model_id) = m
+            .get("modelId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if model_opts.iter().any(|o| o.value == model_id) {
+            continue;
+        }
+        let name = m
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(model_id);
+        model_opts.push(SessionConfigSelectOptionInfo {
+            value: model_id.to_string(),
+            name: name.to_string(),
+            description: m
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+    if model_opts.is_empty() {
+        tracing::debug!("[ACP] grok models update carried no usable models");
+        return None;
+    }
+    let notified = body
+        .get("currentModelId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let in_list = |id: &str| model_opts.iter().any(|o| o.value == id);
+    let selected = match current_grok_model_id_from_opts(current) {
+        Some(id) if in_list(&id) => id,
+        _ => match notified {
+            Some(id) if in_list(id) => id.to_string(),
+            _ => model_opts[0].value.clone(),
+        },
+    };
+    let previous_effort = config_select_current(current, GROK_EFFORT_OPTION_ID).map(str::to_string);
+    let mut opts = current.to_vec();
+    let model_option = SessionConfigOptionInfo {
+        id: GROK_MODEL_OPTION_ID.to_string(),
+        name: "Model".to_string(),
+        description: None,
+        category: Some("model".to_string()),
+        kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+            current_value: selected.clone(),
+            options: model_opts,
+            groups: Vec::new(),
+        }),
+        recommended_value: None,
+    };
+    if let Some(slot) = opts.iter_mut().find(|o| o.id == GROK_MODEL_OPTION_ID) {
+        *slot = model_option;
+    } else {
+        opts.insert(0, model_option);
+    }
+    let specs = parse_grok_model_specs(Some(body));
+    set_grok_effort_selector_for_model(&mut opts, &selected, &specs);
+    restore_grok_effort_current(&mut opts, previous_effort);
+    Some((opts, specs))
+}
+
 /// A stable id for a synthetic event derived from a grok ext notification —
 /// grok stamps `params._meta.eventId`; fall back to a fresh uuid.
 fn grok_ext_event_id(params: &serde_json::Value) -> String {
@@ -16195,7 +16330,9 @@ fn handle_auth_status_update(agent_type: AgentType, notif: AuthStatusUpdateNotif
 /// direction is the reverse: listing a method no mapper claims would silence
 /// exactly the gap this log exists to expose.
 fn is_known_ext_method(method: &str) -> bool {
-    method == CLAUDE_SDK_EXT_METHOD || GROK_EXT_UPDATE_METHODS.contains(&method)
+    method == CLAUDE_SDK_EXT_METHOD
+        || GROK_EXT_UPDATE_METHODS.contains(&method)
+        || GROK_MODELS_UPDATE_METHODS.contains(&method)
 }
 
 /// Keep the text of a claude `Read` / `Grep` / `Glob` result off the raw SDK
@@ -16374,6 +16511,21 @@ async fn maybe_emit_ext_notification(
     // A grok `subagent_spawned` can yield TWO events (the card's session stamp
     // and the background-activity report), so this mapper hands back a list; an
     // empty one means "not mine", and the chain continues as before.
+    // Catalog refresh is not a session update. Read the current checkmark out
+    // of the snapshot, then drop the guard before emitting (emit takes the
+    // write lock). `currentModelId` does not move the checkmark while the
+    // current id is still offered.
+    if let Some((opts, specs)) = {
+        let current = state.read().await.config_options.clone().unwrap_or_default();
+        apply_grok_models_update(&notification, agent_type, &current)
+    } {
+        {
+            let mut guard = state.write().await;
+            guard.grok_model_specs = (!specs.is_empty()).then_some(specs);
+        }
+        emit_session_config_options_info(state, emitter, opts).await;
+        return;
+    }
     let grok_subagent_events =
         map_grok_subagent_notification(&notification, agent_type, turn_active, cb_state);
     if !grok_subagent_events.is_empty() {
@@ -22296,9 +22448,222 @@ mod tests {
         for method in GROK_EXT_UPDATE_METHODS {
             assert!(is_known_ext_method(method), "{method} must be known");
         }
+        for method in GROK_MODELS_UPDATE_METHODS {
+            assert!(is_known_ext_method(method), "{method} must be known");
+        }
         // A method no mapper claims is exactly what the log is for.
         assert!(!is_known_ext_method("_vendor/somethingNew"));
         assert!(!is_known_ext_method("session/update"));
+    }
+
+    fn grok_select_option(
+        id: &str,
+        name: &str,
+        category: &str,
+        current: &str,
+        values: &[(&str, &str)],
+    ) -> SessionConfigOptionInfo {
+        SessionConfigOptionInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            category: Some(category.to_string()),
+            kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                current_value: current.to_string(),
+                options: values
+                    .iter()
+                    .map(|(value, label)| SessionConfigSelectOptionInfo {
+                        value: (*value).to_string(),
+                        name: (*label).to_string(),
+                        description: None,
+                    })
+                    .collect(),
+                groups: Vec::new(),
+            }),
+            recommended_value: None,
+        }
+    }
+
+    /// The handshake this incident painted: bundled catalog, `grok-4.6` checked,
+    /// user effort `high`. The later broadcast's `currentModelId` is also
+    /// `grok-4.6`, and each model's `_meta.reasoningEffort` is the catalog
+    /// default `low` — not the session's choice.
+    fn bundled_grok_options() -> Vec<SessionConfigOptionInfo> {
+        vec![
+            grok_select_option(
+                GROK_MODEL_OPTION_ID,
+                "Model",
+                "model",
+                "grok-4.6",
+                &[("grok-4.6", "Grok 4.6"), ("grok-4.5", "Grok 4.5")],
+            ),
+            grok_select_option(
+                GROK_EFFORT_OPTION_ID,
+                "Reasoning effort",
+                "mode",
+                "high",
+                &[("high", "High"), ("low", "Low")],
+            ),
+        ]
+    }
+
+    fn four_model_update_body(current_model_id: &str) -> serde_json::Value {
+        let effort = || {
+            serde_json::json!({
+                "supportsReasoningEffort": true,
+                "reasoningEffort": "low",
+                "reasoningEfforts": [
+                    {"id": "low", "label": "Low"},
+                    {"id": "high", "label": "High"}
+                ]
+            })
+        };
+        serde_json::json!({
+            "currentModelId": current_model_id,
+            "availableModels": [
+                {"modelId": "grok-4.7", "name": "Grok 4.7", "_meta": effort()},
+                {"modelId": "grok-4.7-build-fast", "name": "Grok 4.7 Fast"},
+                {"modelId": "grok-4.6", "name": "Grok 4.6", "_meta": effort()},
+                {"modelId": "grok-4.5", "name": "Grok 4.5", "_meta": effort()}
+            ]
+        })
+    }
+
+    fn model_ids(opts: &[SessionConfigOptionInfo]) -> Vec<String> {
+        expect_select(
+            &opts
+                .iter()
+                .find(|o| o.id == GROK_MODEL_OPTION_ID)
+                .expect("model selector")
+                .kind,
+        )
+        .options
+        .iter()
+        .map(|o| o.value.clone())
+        .collect()
+    }
+
+    #[test]
+    fn grok_models_update_refreshes_the_list_and_keeps_the_checkmark() {
+        let raw =
+            UntypedMessage::new("_x.ai/models/update", four_model_update_body("grok-4.6")).unwrap();
+        // The session-update mapper still does not understand this method.
+        // That is the drop: before `apply_grok_models_update`, nothing else did.
+        assert!(map_grok_ext_notification(&raw, AgentType::Grok).is_none());
+
+        let (opts, specs) =
+            apply_grok_models_update(&raw, AgentType::Grok, &bundled_grok_options())
+                .expect("four-model catalog should rebuild the picker");
+        assert_eq!(
+            model_ids(&opts),
+            vec![
+                "grok-4.7".to_string(),
+                "grok-4.7-build-fast".to_string(),
+                "grok-4.6".to_string(),
+                "grok-4.5".to_string(),
+            ]
+        );
+        assert_eq!(
+            current_grok_model_id_from_opts(&opts).as_deref(),
+            Some("grok-4.6"),
+            "currentModelId must not move a checkmark that is still offered"
+        );
+        let effort = opts
+            .iter()
+            .find(|o| o.id == GROK_EFFORT_OPTION_ID)
+            .expect("effort selector");
+        assert_eq!(
+            expect_select(&effort.kind).current_value,
+            "high",
+            "catalog default `low` must not clobber the session effort"
+        );
+        assert!(specs.get("grok-4.7").is_some_and(|s| s.supports));
+
+        let (again, _) =
+            apply_grok_models_update(&raw, AgentType::Grok, &opts).expect("second notify");
+        assert_eq!(
+            serde_json::to_value(&opts).unwrap(),
+            serde_json::to_value(&again).unwrap(),
+            "three notifies in one refresh must be idempotent"
+        );
+    }
+
+    #[test]
+    fn grok_models_update_ignores_notified_current_while_selection_remains() {
+        let mut opts = bundled_grok_options();
+        if let SessionConfigKindInfo::Select(sel) = &mut opts[0].kind {
+            sel.current_value = "grok-4.7".to_string();
+            sel.options.insert(
+                0,
+                SessionConfigSelectOptionInfo {
+                    value: "grok-4.7".to_string(),
+                    name: "Grok 4.7".to_string(),
+                    description: None,
+                },
+            );
+        }
+        let raw =
+            UntypedMessage::new("_x.ai/models/update", four_model_update_body("grok-4.6")).unwrap();
+        let (updated, _) = apply_grok_models_update(&raw, AgentType::Grok, &opts).unwrap();
+        assert_eq!(
+            current_grok_model_id_from_opts(&updated).as_deref(),
+            Some("grok-4.7")
+        );
+    }
+
+    #[test]
+    fn grok_models_update_follows_notified_current_only_when_selection_is_gone() {
+        let opts = vec![grok_select_option(
+            GROK_MODEL_OPTION_ID,
+            "Model",
+            "model",
+            "grok-retired",
+            &[("grok-retired", "Retired")],
+        )];
+        let raw =
+            UntypedMessage::new("_x.ai/models/update", four_model_update_body("grok-4.6")).unwrap();
+        let (updated, _) = apply_grok_models_update(&raw, AgentType::Grok, &opts).unwrap();
+        assert_eq!(
+            current_grok_model_id_from_opts(&updated).as_deref(),
+            Some("grok-4.6")
+        );
+    }
+
+    #[test]
+    fn grok_models_update_accepts_unprefixed_and_wrapped_forms() {
+        let current = bundled_grok_options();
+        let body = four_model_update_body("grok-4.6");
+        let plain = UntypedMessage::new("x.ai/models/update", body.clone()).unwrap();
+        let wrapped = UntypedMessage::new(
+            "_x.ai/models/update",
+            serde_json::json!({"method": "x.ai/models/update", "params": body}),
+        )
+        .unwrap();
+        for raw in [plain, wrapped] {
+            let (opts, _) = apply_grok_models_update(&raw, AgentType::Grok, &current).unwrap();
+            assert!(model_ids(&opts).iter().any(|id| id == "grok-4.7"));
+            assert_eq!(
+                current_grok_model_id_from_opts(&opts).as_deref(),
+                Some("grok-4.6")
+            );
+        }
+    }
+
+    #[test]
+    fn grok_models_update_rejects_unrelated_empty_and_non_grok() {
+        let current = bundled_grok_options();
+        let other = UntypedMessage::new("_vendor/somethingNew", four_model_update_body("grok-4.6"))
+            .unwrap();
+        assert!(apply_grok_models_update(&other, AgentType::Grok, &current).is_none());
+        let empty = UntypedMessage::new(
+            "_x.ai/models/update",
+            serde_json::json!({"currentModelId": "grok-4.6", "availableModels": []}),
+        )
+        .unwrap();
+        assert!(apply_grok_models_update(&empty, AgentType::Grok, &current).is_none());
+        let raw =
+            UntypedMessage::new("_x.ai/models/update", four_model_update_body("grok-4.6")).unwrap();
+        assert!(apply_grok_models_update(&raw, AgentType::Codex, &current).is_none());
     }
 
     #[test]
