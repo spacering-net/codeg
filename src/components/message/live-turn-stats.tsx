@@ -32,11 +32,6 @@ interface LiveEditStats extends LineChangeStats {
   files: number
 }
 
-function formatCompactInt(n: number, formatter: Intl.NumberFormat): string {
-  if (n < 1000) return String(n)
-  return formatter.format(n)
-}
-
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   return value as Record<string, unknown>
@@ -317,14 +312,11 @@ export function LiveTurnStats({
   const [elapsed, setElapsed] = useState(() => Date.now() - message.startedAt)
   const editStats = useMemo(() => extractLiveEditStats(message), [message])
   const tps = useTokenOutputSpeed(message)
-  const compactNumberFormatter = useMemo(
-    () =>
-      new Intl.NumberFormat(locale, {
-        notation: "compact",
-        maximumFractionDigits: 1,
-      }),
-    [locale]
-  )
+
+  // Line counts are shown in full rather than compacted: `+2.8K/-2.7K` asks the
+  // reader to undo the rounding before they can compare the two sides, and
+  // "additions nearly equal deletions" is exactly the reading that matters here.
+  const lineFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -367,11 +359,24 @@ export function LiveTurnStats({
             <span className="hidden text-border leading-none @[24rem]/turnstats:inline">
               |
             </span>
-            <span className="hidden items-center gap-1 leading-none @[24rem]/turnstats:inline-flex">
-              <FilePenLine className="h-3 w-3 shrink-0" />
-              {editStats.files}F +
-              {formatCompactInt(editStats.additions, compactNumberFormatter)}/-
-              {formatCompactInt(editStats.deletions, compactNumberFormatter)}
+            <span
+              className="hidden items-center gap-1 leading-none @[24rem]/turnstats:inline-flex"
+              title={t("editStatsTooltip", {
+                files: editStats.files,
+                additions: lineFormatter.format(editStats.additions),
+                deletions: lineFormatter.format(editStats.deletions),
+              })}
+            >
+              <FilePenLine
+                aria-label={t("editStatsAria")}
+                className="h-3 w-3 shrink-0"
+              />
+              {t("filesChanged", { count: editStats.files })}
+              <span className="text-border">·</span>
+              {t("linesChanged", {
+                additions: lineFormatter.format(editStats.additions),
+                deletions: lineFormatter.format(editStats.deletions),
+              })}
             </span>
           </>
         )}
@@ -392,7 +397,7 @@ export function LiveTurnStats({
                 aria-label={t("outputSpeedAria")}
                 className="h-3 w-3 shrink-0"
               />
-              {tps.toFixed(1)} tok/s
+              {t("outputSpeedValue", { value: tps.toFixed(1) })}
             </span>
           </>
         )}

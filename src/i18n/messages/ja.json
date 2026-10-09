@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value}分",
         "elapsedSeconds": "{value}秒",
         "outputSpeedAria": "推定出力速度",
-        "outputSpeedTooltip": "推定出力速度（テキスト + 思考）"
+        "outputSpeedTooltip": "推定出力速度（テキスト + 思考）",
+        "filesChanged": "{count} 個のファイルを変更",
+        "linesChanged": "{additions} 行追加、{deletions} 行削除",
+        "editStatsAria": "このターンの変更",
+        "editStatsTooltip": "このターンは {files} 個のファイルを変更 — {additions} 行追加、{deletions} 行削除",
+        "outputSpeedValue": "{value} token/秒"
       },
       "jsonTree": {
         "viewRaw": "生の JSON を表示",

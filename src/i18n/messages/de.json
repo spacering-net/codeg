@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value} Min",
         "elapsedSeconds": "{value} Sek",
         "outputSpeedAria": "Geschätzte Ausgabegeschwindigkeit",
-        "outputSpeedTooltip": "Geschätzte Ausgabegeschwindigkeit (Text + Denken)"
+        "outputSpeedTooltip": "Geschätzte Ausgabegeschwindigkeit (Text + Denken)",
+        "filesChanged": "{count, plural, one {# Datei geändert} other {# Dateien geändert}}",
+        "linesChanged": "{additions} Zeilen ergänzt, {deletions} entfernt",
+        "editStatsAria": "Änderungen in diesem Durchlauf",
+        "editStatsTooltip": "{files, plural, one {# Datei} other {# Dateien}} in diesem Durchlauf geändert: {additions} Zeilen ergänzt, {deletions} entfernt",
+        "outputSpeedValue": "{value} Tokens/s"
       },
       "jsonTree": {
         "viewRaw": "Rohes JSON anzeigen",

@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value}분",
         "elapsedSeconds": "{value}초",
         "outputSpeedAria": "예상 출력 속도",
-        "outputSpeedTooltip": "예상 출력 속도（텍스트 + 추론）"
+        "outputSpeedTooltip": "예상 출력 속도（텍스트 + 추론）",
+        "filesChanged": "{count}개 파일 수정",
+        "linesChanged": "{additions}줄 추가, {deletions}줄 삭제",
+        "editStatsAria": "이번 턴 변경",
+        "editStatsTooltip": "이번 턴에 {files}개 파일 수정 — {additions}줄 추가, {deletions}줄 삭제",
+        "outputSpeedValue": "{value} token/초"
       },
       "jsonTree": {
         "viewRaw": "원본 JSON 보기",

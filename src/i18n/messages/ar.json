@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value}د",
         "elapsedSeconds": "{value}ث",
         "outputSpeedAria": "السرعة التقديرية للإخراج",
-        "outputSpeedTooltip": "السرعة التقديرية للإخراج (نص + تفكير)"
+        "outputSpeedTooltip": "السرعة التقديرية للإخراج (نص + تفكير)",
+        "filesChanged": "{count} ملف مُعدَّل",
+        "linesChanged": "إضافة {additions} سطر، حذف {deletions} سطر",
+        "editStatsAria": "تغييرات هذه الجولة",
+        "editStatsTooltip": "غيّرت هذه الجولة {files} ملف — إضافة {additions} سطر، حذف {deletions} سطر",
+        "outputSpeedValue": "{value} رمز/ثانية"
       },
       "jsonTree": {
         "viewRaw": "عرض JSON الخام",

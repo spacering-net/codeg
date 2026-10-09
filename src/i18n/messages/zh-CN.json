@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value} 分钟",
         "elapsedSeconds": "{value} 秒",
         "outputSpeedAria": "估算输出速度",
-        "outputSpeedTooltip": "估算输出速度（正文 + 思考）"
+        "outputSpeedTooltip": "估算输出速度（正文 + 思考）",
+        "filesChanged": "改了 {count} 个文件",
+        "linesChanged": "新增 {additions} 行、删除 {deletions} 行",
+        "editStatsAria": "本轮改动",
+        "editStatsTooltip": "本轮改了 {files} 个文件：新增 {additions} 行、删除 {deletions} 行",
+        "outputSpeedValue": "{value} token/秒"
       },
       "jsonTree": {
         "viewRaw": "查看原始 JSON",

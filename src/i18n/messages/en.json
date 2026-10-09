@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value}m",
         "elapsedSeconds": "{value}s",
         "outputSpeedAria": "Estimated output speed",
-        "outputSpeedTooltip": "Estimated output speed (text + thinking)"
+        "outputSpeedTooltip": "Estimated output speed (text + thinking)",
+        "filesChanged": "{count, plural, one {# file changed} other {# files changed}}",
+        "linesChanged": "{additions} lines added, {deletions} removed",
+        "editStatsAria": "This turn's edits",
+        "editStatsTooltip": "{files, plural, one {# file changed} other {# files changed}} this turn — {additions} lines added, {deletions} removed",
+        "outputSpeedValue": "{value} tokens/sec"
       },
       "jsonTree": {
         "viewRaw": "Show raw JSON",

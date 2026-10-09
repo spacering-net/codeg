@@ -3471,7 +3471,12 @@
         "elapsedMinutes": "{value} min",
         "elapsedSeconds": "{value} s",
         "outputSpeedAria": "Vitesse de sortie estimée",
-        "outputSpeedTooltip": "Vitesse de sortie estimée (texte + raisonnement)"
+        "outputSpeedTooltip": "Vitesse de sortie estimée (texte + raisonnement)",
+        "filesChanged": "{count, plural, one {# fichier modifié} other {# fichiers modifiés}}",
+        "linesChanged": "{additions} lignes ajoutées, {deletions} supprimées",
+        "editStatsAria": "Modifications de ce tour",
+        "editStatsTooltip": "{files, plural, one {# fichier} other {# fichiers}} modifiés ce tour : {additions} lignes ajoutées, {deletions} supprimées",
+        "outputSpeedValue": "{value} jetons/s"
       },
       "jsonTree": {
         "viewRaw": "Afficher le JSON brut",
