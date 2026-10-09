@@ -25,11 +25,17 @@ use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TA
 
 /// Hard cap for one reverse-lookup batch (a screen shows ~30 rows).
 const LOOKUP_KEYS_CAP: usize = 100;
+/// The remote the panel reads when a folder has no saved selection. The
+/// historical default, named once so both the resolution and its docs agree.
+const DEFAULT_FORGE_REMOTE: &str = "origin";
 /// Task card titles inherit the automation convention: 80 chars.
 const TITLE_CAP: usize = 80;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForgeRemote {
+    /// Which remote this was resolved from — echoed back so the panel can show
+    /// the active choice instead of inferring it from the URL.
+    pub remote_name: String,
     pub server_host: String,
     pub owner_repo: String,
     pub remote_url: String,
@@ -451,15 +457,46 @@ pub struct ForgeTaskLink {
 
 // ── shared business logic (both modes) ──────────────────────────────────────
 
-/// The folder's `origin` remote, parsed into forge coordinates. `None` when
-/// there is no origin or its URL is not a recognizable forge repo.
+/// The folder's selected remote — the panel's saved choice, or `origin` when it
+/// has none — parsed into forge coordinates. `None` when the folder has no such
+/// remote or its URL is not a recognizable forge repo.
 pub async fn folder_forge_remote_core(
     db: &AppDatabase,
     folder_id: i32,
 ) -> Result<Option<ForgeRemote>, AppCommandError> {
+    // Resolving the selection HERE is what makes every forge operation follow
+    // it: `resolve_folder_repo` calls this, so lists, comments, merges and task
+    // creation all read the repository the panel is showing.
+    // The selection has a store of its own rather than living in the panel
+    // settings: the picker saves it, and a settings save — including the "use
+    // global defaults" drop — must not be able to take it away. See
+    // `forge::remotes`.
+    let selected = forge::remotes::load_selected(&db.conn, folder_id)
+        .await
+        .map_err(AppCommandError::db)?;
+    folder_remote_named(
+        db,
+        folder_id,
+        selected.as_deref().unwrap_or(DEFAULT_FORGE_REMOTE),
+    )
+    .await
+}
+
+/// One NAMED remote of a folder, parsed into forge coordinates — the same
+/// mechanics as the selection above, for a remote named outright.
+///
+/// Used for the folder's own `origin`, which is a fact about the working copy
+/// rather than about what the panel is showing: the picker can point the panel
+/// at a parent while the branch codeg can write to stays `origin`. See
+/// `ForgeSourceMeta::fork_repo`.
+async fn folder_remote_named(
+    db: &AppDatabase,
+    folder_id: i32,
+    remote_name: &str,
+) -> Result<Option<ForgeRemote>, AppCommandError> {
     let folder = get_folder_core(db, folder_id).await?;
     let output = crate::process::tokio_command("git")
-        .args(["-C", &folder.path, "remote", "get-url", "origin"])
+        .args(["-C", &folder.path, "remote", "get-url", remote_name])
         .output()
         .await
         .map_err(|e| AppCommandError::io_error("failed to run git").with_detail(e.to_string()))?;
@@ -472,6 +509,7 @@ pub async fn folder_forge_remote_core(
     };
     let profile = forge::host_profile(&db.conn, &server_host).await;
     Ok(Some(ForgeRemote {
+        remote_name: remote_name.to_string(),
         server_host,
         // A GitLab mounted under a relative URL root puts that mount path in
         // front of every repository path a git remote carries, while no API
@@ -503,6 +541,16 @@ fn redact_userinfo(url: &str) -> String {
     }
 }
 
+/// The folder's repository, or the configuration error every caller wants.
+async fn folder_forge_remote_required(
+    db: &AppDatabase,
+    folder_id: i32,
+) -> Result<ForgeRemote, AppCommandError> {
+    folder_forge_remote_core(db, folder_id).await?.ok_or_else(|| {
+        AppCommandError::configuration_missing("this folder has no recognizable forge remote")
+    })
+}
+
 /// Resolve the folder's repository AND the credential to read it with — the
 /// two things every workbench read needs and neither of which the client may
 /// supply.
@@ -511,17 +559,54 @@ async fn resolve_folder_repo(
     folder_id: i32,
     account_id: Option<&str>,
 ) -> Result<(ForgeRemote, forge::ResolvedAuth), AppCommandError> {
-    let remote = folder_forge_remote_core(db, folder_id)
-        .await?
-        .ok_or_else(|| {
-            AppCommandError::configuration_missing(
-                "this folder has no recognizable forge remote (origin)",
-            )
-        })?;
+    let remote = folder_forge_remote_required(db, folder_id).await?;
     let auth =
         forge::resolve_forge_auth(&db.conn, remote.provider, &remote.server_host, account_id)
             .await?;
     Ok((remote, auth))
+}
+
+/// Resolve for a WRITE, whose caller also says which repository it believed it
+/// was writing to.
+///
+/// The belief is checked BEFORE the credential is looked up: a stale panel is
+/// told its coordinates are stale — a fact it can act on — rather than about
+/// an account it never asked for. A caller that names no coordinates (an older
+/// client, or one with nothing readable on screen) is resolved exactly as
+/// before, so nothing that worked stops working.
+async fn resolve_folder_repo_for_write(
+    db: &AppDatabase,
+    folder_id: i32,
+    account_id: Option<&str>,
+    expected: Option<(&str, &str)>,
+) -> Result<(ForgeRemote, forge::ResolvedAuth), AppCommandError> {
+    let remote = folder_forge_remote_required(db, folder_id).await?;
+    if let Some((host, repo)) = expected {
+        if remote.server_host != host || !forge::same_repo(&remote.owner_repo, repo) {
+            return Err(write_mismatch(&remote, host, repo));
+        }
+    }
+    let auth =
+        forge::resolve_forge_auth(&db.conn, remote.provider, &remote.server_host, account_id)
+            .await?;
+    Ok((remote, auth))
+}
+
+/// The refusal a stale write gets. Carries the i18n key the panel recognises
+/// so it can re-resolve instead of leaving the reader on a repository the
+/// folder has already left — the same judgement the trigger path makes, in
+/// words that fit a comment, a close or a merge (see the key's own note).
+fn write_mismatch(remote: &ForgeRemote, expected_host: &str, expected_repo: &str) -> AppCommandError {
+    let actual = format!("{}/{}", remote.server_host, remote.owner_repo);
+    let expected = format!("{expected_host}/{expected_repo}");
+    let mut params = std::collections::BTreeMap::new();
+    params.insert("expected".to_string(), expected.clone());
+    params.insert("actual".to_string(), actual.clone());
+    AppCommandError::configuration_invalid(format!(
+        "this panel was showing {expected}, but the folder's remote is now {actual} — the \
+         write was refused rather than sent to the wrong repository"
+    ))
+    .with_i18n(forge::WRITE_MISMATCH_I18N_KEY, params)
 }
 
 pub async fn forge_list_issues_core(
@@ -636,7 +721,9 @@ pub async fn forge_create_comment_core(
     draft: forge::CommentDraft,
 ) -> Result<forge::ForgeComment, AppCommandError> {
     let (kind, number, body) = draft.resolve().map_err(AppCommandError::from)?;
-    let (remote, auth) = resolve_folder_repo(db, folder_id, draft.account_id.as_deref()).await?;
+    let (remote, auth) =
+        resolve_folder_repo_for_write(db, folder_id, draft.account_id.as_deref(), draft.expected.pair())
+            .await?;
     Ok(match remote.provider {
         // No kind: a pull request IS an issue at GitHub, and one endpoint
         // serves both (`/pulls/{n}/comments` is the review-comment collection,
@@ -666,7 +753,13 @@ pub async fn forge_set_item_state_core(
     request: forge::StateChangeRequest,
 ) -> Result<forge::ForgeIssueRow, AppCommandError> {
     let (kind, number, action) = request.resolve().map_err(AppCommandError::from)?;
-    let (remote, auth) = resolve_folder_repo(db, folder_id, request.account_id.as_deref()).await?;
+    let (remote, auth) = resolve_folder_repo_for_write(
+        db,
+        folder_id,
+        request.account_id.as_deref(),
+        request.expected.pair(),
+    )
+    .await?;
     Ok(match remote.provider {
         ForgeProvider::GitHub => {
             forge::github::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
@@ -691,7 +784,9 @@ pub async fn forge_create_issue_core(
     draft: forge::NewIssueDraft,
 ) -> Result<forge::ForgeIssueRow, AppCommandError> {
     let resolved = draft.resolve().map_err(AppCommandError::from)?;
-    let (remote, auth) = resolve_folder_repo(db, folder_id, draft.account_id.as_deref()).await?;
+    let (remote, auth) =
+        resolve_folder_repo_for_write(db, folder_id, draft.account_id.as_deref(), draft.expected.pair())
+            .await?;
     Ok(match remote.provider {
         ForgeProvider::GitHub => {
             forge::github::create_issue(&auth, &remote.owner_repo, &resolved).await?
@@ -819,7 +914,13 @@ pub async fn forge_merge_change_core(
     request: forge::ChangeMergeRequest,
 ) -> Result<Option<forge::ForgeIssueRow>, AppCommandError> {
     let (number, method, head_sha) = request.resolve().map_err(AppCommandError::from)?;
-    let (remote, auth) = resolve_folder_repo(db, folder_id, request.account_id.as_deref()).await?;
+    let (remote, auth) = resolve_folder_repo_for_write(
+        db,
+        folder_id,
+        request.account_id.as_deref(),
+        request.expected.pair(),
+    )
+    .await?;
     let head_sha = head_sha.as_deref();
     Ok(match remote.provider {
         ForgeProvider::GitHub => {
@@ -921,6 +1022,59 @@ pub async fn work_task_create_from_forge_core(
         None
     };
 
+    // ── Which repository the WORK will be pushed to ─────────────────────────
+    //
+    // The panel's selection names the repository being READ (the parent, in the
+    // fork workflow: `origin` is the contributor's own copy); the folder's own
+    // `origin` names the one codeg can WRITE to. Both are known only HERE —
+    // delivery runs long after the panel may have moved on, and the remote list
+    // is the folder's mutable state, so the answer is recorded on the task.
+    let origin_repo = folder_remote_named(db, draft.folder_id, DEFAULT_FORGE_REMOTE)
+        .await?
+        // Only a remote on the SAME host is a candidate: the push spends this
+        // task's credential, which belongs to `server_host`.
+        .filter(|remote| remote.server_host == server_host)
+        .map(|remote| remote.owner_repo);
+    let fork_repo = origin_repo
+        .clone()
+        .filter(|repo| !forge::same_repo(repo, &owner_repo));
+
+    // GitLab spells a cross-project merge request with project IDs rather than a
+    // qualified head ref — BOTH ends of it — so they are resolved HERE, while
+    // the user can still be told, and recorded on the task. The fork's id is the
+    // project the merge request is created ON, and it is also how a retry
+    // recognises its own merge request again: the list payload names a foreign
+    // source project by number alone (see `ForgePr::with_resolved_head`). The
+    // target's id goes in the body, because GitLab does not infer it from the
+    // fork's upstream — a create without it lands on the fork itself.
+    let mut fork_project_id = None;
+    let mut owner_project_id = None;
+    if let Some(fork) = fork_repo.as_deref() {
+        if provider == ForgeProvider::GitLab {
+            let resolved = forge::gitlab::resolve_project_id(&auth, fork).await;
+            fork_project_id = Some(gitlab_project_id(
+                resolved,
+                GitLabEnd::Fork,
+                fork,
+                &owner_repo,
+            )?);
+            let resolved = forge::gitlab::resolve_project_id(&auth, &owner_repo).await;
+            owner_project_id = Some(gitlab_project_id(
+                resolved,
+                GitLabEnd::Target,
+                fork,
+                &owner_repo,
+            )?);
+        }
+    }
+
+    // A review whose head is somebody else's fork is deliberately NOT refused
+    // here. Whether this account may write into that fork is a server-side fact
+    // — the author's "allow edits from maintainers", which codeg cannot read up
+    // front — and a gate here would close a channel that works for exactly the
+    // people this panel is for (a maintainer pushing a fix into a contributor's
+    // review). The push decides instead, and its refusal names the way out.
+
     let key = forge::source_key(
         provider.as_str(),
         &server_host,
@@ -955,6 +1109,9 @@ pub async fn work_task_create_from_forge_core(
         // the task is queued cannot silently change what gets worked on.
         head_sha: pull.as_ref().map(|p| p.head_sha.clone()),
         head_repo: pull.as_ref().map(|p| p.head_repo.clone()),
+        fork_repo,
+        fork_project_id,
+        owner_project_id,
         result_pr: None,
         // Always stamped explicitly, both answers: the engine reads it as the
         // user's decision, and an absent field there means "an older row that
@@ -1077,6 +1234,28 @@ pub async fn forge_settings_set_core(
     Ok(forge::settings::save(&db.conn, folder_id, settings).await?)
 }
 
+/// Every folder's remote selection at once — what the picker reads. Held whole
+/// for the same reason the panel settings are: switching folders costs no round
+/// trip, and a selection that no longer resolves is still shown for what the
+/// folder is set to.
+pub async fn forge_remote_get_core(
+    db: &AppDatabase,
+) -> Result<forge::remotes::ForgeRemoteStore, AppCommandError> {
+    Ok(forge::remotes::load(&db.conn).await?)
+}
+
+/// Save ONE folder's selection and hand back every folder's as stored. `None`
+/// (or a blank name) puts the folder back on the default remote — the picker's
+/// "default (origin)" answer, and what lets a folder be moved off a choice
+/// WITHOUT the settings dialog (which does not edit this at all).
+pub async fn forge_remote_set_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    remote: Option<String>,
+) -> Result<forge::remotes::ForgeRemoteStore, AppCommandError> {
+    Ok(forge::remotes::save(&db.conn, folder_id, remote).await?)
+}
+
 pub async fn work_task_lookup_by_source_core(
     db: &AppDatabase,
     mut source_keys: Vec<String>,
@@ -1109,6 +1288,55 @@ fn truncate_chars(input: &str, cap: usize) -> String {
         return input.to_string();
     }
     input.chars().take(cap).collect()
+}
+
+/// Which end of a cross-project merge request a project id is being resolved
+/// for — the two refusals have different things to tell the user.
+///
+/// Both ends are resolved at the TRIGGER, where the user can still choose
+/// something else, because a project the token cannot read (private without
+/// access, renamed, deleted) leaves the delivery nowhere to go: the merge
+/// request is created ON the fork — GitLab resolves `source_branch` in the
+/// project the request is addressed to — and the target is named in its body.
+/// Every coordinate codeg holds is a path, and GitLab names projects by number,
+/// so the two lookups happen here: once, with the target's id recorded on the
+/// task rather than looked up again on a retry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GitLabEnd {
+    /// The project the merge request is created ON: this folder's `origin`.
+    Fork,
+    /// The project it is aimed at: the repository the panel was reading.
+    Target,
+}
+
+/// A GitLab project id the delivery cannot do without, or the refusal that says
+/// which half it was for.
+///
+/// Resolved at the trigger, both ends, because that is where the user can still
+/// choose something else — and the target is recorded rather than looked up
+/// later so a retry or a recovered delivery has the pair on the task already.
+fn gitlab_project_id(
+    resolved: Result<i64, forge::ForgeError>,
+    end: GitLabEnd,
+    fork_repo: &str,
+    source_repo: &str,
+) -> Result<i64, AppCommandError> {
+    resolved.map_err(|e| {
+        let message = match end {
+            GitLabEnd::Fork => format!(
+                "this folder's `origin` is {fork_repo}, so this task's work would be delivered as a \
+                 merge request FROM that fork — but codeg could not read that GitLab project ({e}), \
+                 so there would be nowhere to open it. Check that the account can see {fork_repo}, \
+                 or point the panel at a folder whose `origin` IS {source_repo}."
+            ),
+            GitLabEnd::Target => format!(
+                "this task's work would be delivered as a merge request from {fork_repo} into \
+                 {source_repo} — but codeg could not read {source_repo} on GitLab ({e}), so there \
+                 would be nowhere to open it. Refresh the workbench and try again."
+            ),
+        };
+        AppCommandError::invalid_input(message)
+    })
 }
 
 // ── Tauri wrappers (desktop mode) ───────────────────────────────────────────
@@ -1280,6 +1508,24 @@ pub async fn forge_settings_set(
     forge_settings_set_core(&db, folder_id, settings).await
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_remote_get(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<forge::remotes::ForgeRemoteStore, AppCommandError> {
+    forge_remote_get_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_remote_set(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    remote: Option<String>,
+) -> Result<forge::remotes::ForgeRemoteStore, AppCommandError> {
+    forge_remote_set_core(&db, folder_id, remote).await
+}
+
 // AppCommandError ← ForgeError conversion lives in `forge::mod` (used above
 // via `?` and the explicit map for `source_key`).
 #[allow(unused)]
@@ -1290,6 +1536,198 @@ fn _assert_forge_error_converts(err: ForgeError) -> AppCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal git fixture: a repo with remotes and no commits needed.
+    fn git_run(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// The panel follows the folder's SAVED remote selection rather than a
+    /// hardcoded `origin` — the fork workflow (`origin` = your fork, `upstream`
+    /// = the parent) is the point of the switch. With nothing saved the read is
+    /// byte-for-byte the old behavior, which is what keeps existing installs
+    /// unchanged.
+    #[tokio::test]
+    async fn folder_forge_remote_follows_the_saved_selection() {
+        use crate::db::service::folder_service;
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["remote", "add", "origin", "https://github.com/me/app.git"]);
+        git_run(dir.path(), &["remote", "add", "upstream", "https://github.com/acme/app.git"]);
+        let folder = folder_service::add_folder(&db.conn, dir.path().to_str().unwrap())
+            .await
+            .expect("folder row");
+
+        // Nothing saved → the historical default.
+        let remote = folder_forge_remote_core(&db, folder.id)
+            .await
+            .expect("resolve")
+            .expect("origin resolves");
+        assert_eq!(remote.remote_name, "origin");
+        assert_eq!(remote.owner_repo, "me/app");
+
+        // A folder-scoped save must change what the very next read resolves.
+        crate::forge::remotes::save(&db.conn, folder.id, Some("upstream".into()))
+            .await
+            .expect("save");
+
+        let remote = folder_forge_remote_core(&db, folder.id)
+            .await
+            .expect("resolve")
+            .expect("upstream resolves");
+        assert_eq!(remote.remote_name, "upstream");
+        assert_eq!(remote.owner_repo, "acme/app");
+    }
+
+    /// A selection naming a remote the folder does not have is `None`, the same
+    /// answer a missing `origin` gives. The panel explains it instead of
+    /// spending a request on the wrong repository.
+    #[tokio::test]
+    async fn a_missing_selected_remote_resolves_to_none() {
+        use crate::db::service::folder_service;
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["remote", "add", "origin", "https://github.com/me/app.git"]);
+        let folder = folder_service::add_folder(&db.conn, dir.path().to_str().unwrap())
+            .await
+            .expect("folder row");
+
+        crate::forge::remotes::save(&db.conn, folder.id, Some("upstream".into()))
+            .await
+            .expect("save");
+
+        assert!(
+            folder_forge_remote_core(&db, folder.id)
+                .await
+                .expect("resolve")
+                .is_none(),
+            "a missing selected remote must not fall back to origin"
+        );
+    }
+
+    /// The maintainer's reproducer as a regression: the trigger dialog's "use
+    /// the global defaults" save DROPS the folder's whole panel-settings row,
+    /// which used to take the picker's remote selection with it — a choice the
+    /// user had watched succeed, gone on the next resolve. The selection is not
+    /// part of that row any more (see `forge::remotes`), so no settings save of
+    /// any shape can reach it.
+    #[tokio::test]
+    async fn a_settings_save_cannot_clear_the_remote_selection() {
+        use crate::db::service::folder_service;
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["remote", "add", "origin", "https://github.com/me/app.git"]);
+        git_run(dir.path(), &["remote", "add", "upstream", "https://github.com/acme/app.git"]);
+        let folder = folder_service::add_folder(&db.conn, dir.path().to_str().unwrap())
+            .await
+            .expect("folder row");
+
+        // The picker's write: the selection, on its own.
+        crate::forge::remotes::save(&db.conn, folder.id, Some("upstream".into()))
+            .await
+            .expect("save the selection");
+
+        // Every shape of panel-settings save: the folder's own row, the global
+        // row, and the drop that "use the global defaults" performs.
+        let settings = crate::forge::settings::ForgePanelSettings {
+            writeback_default: false,
+            ..Default::default()
+        };
+        forge_settings_set_core(&db, Some(folder.id), Some(settings.clone()))
+            .await
+            .expect("folder row");
+        forge_settings_set_core(&db, None, Some(settings))
+            .await
+            .expect("global row");
+        forge_settings_set_core(&db, Some(folder.id), None)
+            .await
+            .expect("drop the folder row");
+
+        let remote = folder_forge_remote_core(&db, folder.id)
+            .await
+            .expect("resolve")
+            .expect("upstream still resolves");
+        assert_eq!(remote.remote_name, "upstream");
+        assert_eq!(remote.owner_repo, "acme/app");
+    }
+
+    /// The maintainer's two-client scenario: one window changes the folder's
+    /// remote, the other sends a write carrying the coordinates it still has on
+    /// screen. The write must be REFUSED — never redirected into the repository
+    /// the selection now names — and the refusal has to be one the panel can
+    /// recognise (its i18n key) and re-resolve from.
+    #[tokio::test]
+    async fn a_write_with_stale_coordinates_is_refused_not_redirected() {
+        use crate::db::service::folder_service;
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["remote", "add", "origin", "https://github.com/me/app.git"]);
+        git_run(dir.path(), &["remote", "add", "upstream", "https://github.com/acme/app.git"]);
+        let folder = folder_service::add_folder(&db.conn, dir.path().to_str().unwrap())
+            .await
+            .expect("folder row");
+
+        // Window B switches the folder to the parent while window A still
+        // shows the fork; A's write names the fork.
+        crate::forge::remotes::save(&db.conn, folder.id, Some("upstream".into()))
+            .await
+            .expect("switch");
+
+        let refused = resolve_folder_repo_for_write(
+            &db,
+            folder.id,
+            None,
+            Some(("github.com", "me/app")),
+        )
+        .await
+        .expect_err("stale coordinates must be refused");
+        assert!(
+            matches!(
+                refused.code,
+                crate::app_error::AppErrorCode::ConfigurationInvalid
+            ),
+            "{:?}",
+            refused.code
+        );
+        assert_eq!(refused.i18n_key.as_deref(), Some(forge::WRITE_MISMATCH_I18N_KEY));
+        let params = refused.i18n_params.expect("both repositories are named");
+        assert_eq!(params.get("expected").map(String::as_str), Some("github.com/me/app"));
+        assert_eq!(params.get("actual").map(String::as_str), Some("github.com/acme/app"));
+
+        // The coordinates the panel is ACTUALLY showing get past the check, and
+        // stop at the next gate (no account is configured here). That is what
+        // proves the refusal above came from the coordinate check rather than
+        // from the folder failing to resolve at all.
+        let past = resolve_folder_repo_for_write(
+            &db,
+            folder.id,
+            None,
+            Some(("github.com", "acme/app")),
+        )
+        .await
+        .expect_err("no account");
+        assert_eq!(past.i18n_key.as_deref(), Some(forge::NO_ACCOUNT_I18N_KEY));
+
+        // Naming nothing behaves exactly as it did before this check existed:
+        // a build that predates it keeps working.
+        let unnamed = resolve_folder_repo_for_write(&db, folder.id, None, None)
+            .await
+            .expect_err("no account");
+        assert_eq!(unnamed.i18n_key.as_deref(), Some(forge::NO_ACCOUNT_I18N_KEY));
+    }
 
     const URL: &str = "https://github.com/acme/app/issues/7";
 
@@ -1802,6 +2240,9 @@ mod tests {
                 head_ref: None,
                 head_sha: None,
                 head_repo: None,
+                fork_repo: None,
+                fork_project_id: None,
+                owner_project_id: None,
                 result_pr: None,
                 writeback: stored,
             };
@@ -1840,5 +2281,39 @@ mod tests {
             let expect = matches!(s, ForgeScenario::PlanFirst | ForgeScenario::ReviewOnly);
             assert_eq!(s.is_report(), expect, "{s:?}");
         }
+    }
+
+    /// GitLab's cross-project delivery needs the fork's project id, and the id
+    /// is resolved at the TRIGGER: failing there refuses the task while the
+    /// user can still choose something else, instead of after the agent's work
+    /// has nowhere to go. GitHub and Gitea never call this.
+    #[test]
+    fn a_gitlab_end_whose_project_id_cannot_be_read_is_refused_at_trigger() {
+        assert_eq!(
+            gitlab_project_id(Ok(4711), GitLabEnd::Fork, "me/app", "acme/app").expect("resolves"),
+            4711
+        );
+
+        let not_found = || forge::ForgeError::Api {
+            status: 404,
+            message: "404 Project Not Found".into(),
+        };
+        let refusal = gitlab_project_id(Err(not_found()), GitLabEnd::Fork, "me/app", "acme/app")
+            .expect_err("unreadable fork");
+        assert!(refusal.message.contains("me/app"), "{}", refusal.message);
+        assert!(refusal.message.contains("acme/app"), "{}", refusal.message);
+        assert!(
+            refusal.message.contains("404"),
+            "the forge's own reason rides along: {}",
+            refusal.message
+        );
+
+        // The other end says which repository it could not read, because that
+        // is the part the user can act on — the fork is already settled.
+        let refusal =
+            gitlab_project_id(Err(not_found()), GitLabEnd::Target, "me/app", "acme/app")
+                .expect_err("unreadable target");
+        assert!(refusal.message.contains("me/app"), "{}", refusal.message);
+        assert!(refusal.message.contains("acme/app"), "{}", refusal.message);
     }
 }

@@ -69,6 +69,20 @@ export function extractAppCommandError(error: unknown): AppCommandError | null {
 // If the backend enum ever renames, both sides must change together.
 export const NOT_A_GIT_REPO_CODE = "not_a_git_repository"
 
+// Must mirror `WRITE_MISMATCH_I18N_KEY` in src-tauri/src/forge/mod.rs. A WRITE
+// that carried coordinates no longer matching the folder's remote comes back
+// with this key, and the panel's job is to re-resolve the repository rather
+// than leave the reader on one the folder has left.
+export const FORGE_WRITE_MISMATCH_I18N_KEY = "Forge.writeMismatch"
+
+/** Whether this failure is that refusal — the one thing a caller must ACT on
+ *  rather than merely report. */
+export function isForgeWriteMismatch(error: unknown): boolean {
+  return (
+    extractAppCommandError(error)?.i18n_key === FORGE_WRITE_MISMATCH_I18N_KEY
+  )
+}
+
 export function isNotAGitRepoError(error: unknown): boolean {
   const appError = extractAppCommandError(error)
   if (appError?.code === NOT_A_GIT_REPO_CODE) return true

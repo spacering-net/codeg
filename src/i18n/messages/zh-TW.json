@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "儲存庫面板",
+    "remote": "遠端",
+    "remoteDefault": "預設（{name}）",
     "pickFolder": "選擇專案資料夾",
-    "noRemote": "該資料夾沒有可識別的程式碼託管遠端（origin）",
+    "noRemote": "該資料夾沒有可識別的程式碼託管遠端",
     "errors": {
       "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。",
       "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab 與 Gitea，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "（無描述）",
     "duplicateBody": "已有一個進行中的任務在處理該條目：{title}（{status}）。仍要再建一個嗎？",
     "folderMismatch": "目前資料夾的遠端是 {remote}，與該 Issue 的儲存庫不一致——請選擇相符的資料夾。",
+    "writeMismatch": "這個面板顯示的是 {expected}，但該資料夾的遠端現在是 {actual} —— 寫入已被拒絕，而不是送到錯誤的儲存庫。面板已重新整理，請重試。",
     "cancel": "取消",
     "create": "建立待辦任務",
     "creating": "建立中…",

@@ -41,6 +41,7 @@ vi.mock("@/contexts/workbench-route-context", () => ({
 }))
 
 const GITHUB: ForgeRemote = {
+  remote_name: "origin",
   server_host: "github.com",
   owner_repo: "o/r",
   remote_url: "https://github.com/o/r.git",
@@ -48,6 +49,7 @@ const GITHUB: ForgeRemote = {
   supported: true,
 }
 const GITLAB: ForgeRemote = {
+  remote_name: "origin",
   server_host: "gitlab.com",
   owner_repo: "group/sub/app",
   remote_url: "https://gitlab.com/group/sub/app.git",

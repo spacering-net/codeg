@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "Panneau du dépôt",
+    "remote": "Remote",
+    "remoteDefault": "Par défaut ({name})",
     "pickFolder": "Choisir un dossier de projet",
-    "noRemote": "Ce dossier n'a pas de remote reconnaissable (origin)",
+    "noRemote": "Ce dossier n'a pas de remote reconnaissable",
     "errors": {
       "noAccount": "Aucun compte {provider} n'est configuré pour {host}. Ajoutez-en un dans Paramètres → Contrôle de version pour charger ce dépôt.",
       "unsupportedHost": "Le panneau du dépôt ne prend en charge que GitHub, GitLab et Gitea, et {host} n'est reconnu comme aucun d'entre eux. S'il s'agit d'une instance auto-hébergée de GitHub Enterprise, GitLab, Gitea ou Forgejo, ajoutez-y un compte dans Paramètres → Contrôle de version.",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "(aucune description)",
     "duplicateBody": "Une tâche active traite déjà cet élément : {title} ({status}). En créer une autre quand même ?",
     "folderMismatch": "Le remote de ce dossier est {remote}, pas le dépôt de cette issue — choisissez le bon dossier.",
+    "writeMismatch": "Ce panneau affichait {expected}, mais le dépôt distant du dossier est désormais {actual} — l’écriture a été refusée plutôt qu’envoyée au mauvais dépôt. Le panneau a été actualisé ; réessayez.",
     "cancel": "Annuler",
     "create": "Créer la tâche",
     "creating": "Création…",

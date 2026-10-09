@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "リポジトリパネル",
+    "remote": "リモート",
+    "remoteDefault": "デフォルト（{name}）",
     "pickFolder": "プロジェクトフォルダを選択",
-    "noRemote": "このフォルダには認識できるリモート（origin）がありません",
+    "noRemote": "このフォルダには認識できるリモートがありません",
     "errors": {
       "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
       "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "（説明なし）",
     "duplicateBody": "この項目はすでにアクティブなタスクが対応中です：{title}（{status}）。それでも作成しますか？",
     "folderMismatch": "このフォルダのリモートは {remote} で、この Issue のリポジトリと一致しません。対応するフォルダを選択してください。",
+    "writeMismatch": "このパネルは {expected} を表示していましたが、フォルダーのリモートは現在 {actual} です — 書き込みは誤ったリポジトリに送られる代わりに拒否されました。パネルを再読み込みしました。もう一度お試しください。",
     "cancel": "キャンセル",
     "create": "タスクを作成",
     "creating": "作成中…",

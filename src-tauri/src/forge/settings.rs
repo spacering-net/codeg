@@ -15,6 +15,12 @@
 //! covers a KIND of work item — how an issue should be handled as opposed to a
 //! review, which is a distinction the task engine has no word for.
 //!
+//! What it does NOT hold either is the panel's remote selection: that lives in
+//! [`super::remotes`], because the picker saves it on every click while this
+//! blob is rewritten WHOLESALE by a dialog — and one field living in the
+//! other's blob is how "use global defaults" came to destroy a choice the
+//! picker had already saved.
+//!
 //! Stored as ONE JSON blob in `app_metadata` — the global row and every
 //! override together — rather than a row per scope. The whole thing is read
 //! once per page load and once per trigger, and a save is a read-modify-write

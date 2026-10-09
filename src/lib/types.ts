@@ -1818,6 +1818,11 @@ export interface ForgeSourceMeta {
   head_ref?: string | null
   head_sha?: string | null
   head_repo?: string | null
+  /** The repository the task's work is pushed to when it is not the source —
+   *  the folder's `origin` recorded at trigger time, for the fork workflow
+   *  (the panel reads the parent; the branch codeg writes is the user's own
+   *  copy). Absent = push to the source. */
+  fork_repo?: string | null
   /** URL of the PR created by the delivery acceptance path (P1). */
   result_pr?: string | null
   /** The trigger dialog's write-back answer, frozen at trigger time. Absent on
@@ -2113,8 +2118,27 @@ export interface ForgeChangedFileList {
   has_next: boolean
 }
 
+/**
+ * Which repository a WRITE believes it is writing to — mirrors
+ * `forge::ExpectedCoordinates`.
+ *
+ * Sent flat beside a write's own fields, checked against what the folder's
+ * remote resolves to at that moment, and refused — never redirected — when the
+ * two disagree. That is what stops a second window or a stale browser tab from
+ * posting, closing, filing or merging into the repository the selection has
+ * since moved to. Absent on a request from a build that predates the check,
+ * which keeps behaving exactly as it did.
+ */
+export interface ForgeExpectedRepo {
+  expectedServerHost: string
+  expectedOwnerRepo: string
+}
+
 /** A folder's `origin` remote parsed into forge coordinates. */
 export interface ForgeRemote {
+  /** Which remote this was resolved from — the panel shows it so the active
+   *  choice is visible rather than inferred from the URL. */
+  remote_name: string
   server_host: string
   owner_repo: string
   remote_url: string
@@ -2223,6 +2247,20 @@ export interface ForgeSettingsStore {
 
 /** Reserved `scenario_prompts` key applied to every scenario. */
 export const FORGE_SCENARIO_PROMPT_ALL = "all"
+
+/** Which git remote each folder's forge panel reads — mirrors
+ *  `forge::remotes::ForgeRemoteStore`.
+ *
+ *  Deliberately NOT a field of `ForgePanelSettings`: the picker saves this on
+ *  every click, while the panel settings are a blob the settings dialog
+ *  rewrites wholesale — so one field living in the other's blob is how "use
+ *  global defaults" came to destroy a choice the picker had already saved. */
+export interface ForgeRemoteStore {
+  /** Keyed by folder id (JSON has no integer keys, so they arrive as strings).
+   *  A folder with no entry reads the historical `origin` — absence IS the
+   *  default answer, so there is no global row to fall back to. */
+  folders: Record<string, string>
+}
 
 /** Discriminated trigger outcome — duplicate/mismatch are answers, not errors. */
 export type ForgeCreateResult =

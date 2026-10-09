@@ -33,6 +33,7 @@ import type {
   ForgeComment,
   ForgeCreateResult,
   ForgeCommentList,
+  ForgeExpectedRepo,
   ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
@@ -41,6 +42,7 @@ import type {
   ForgeMergeOptions,
   ForgePanelSettings,
   ForgeRemote,
+  ForgeRemoteStore,
   ForgeSettingsStore,
   ForgeSort,
   ForgeStateAction,
@@ -5932,6 +5934,22 @@ export async function forgeListComments(
 }
 
 /**
+ * The pair a write should carry, from the repository the panel is SHOWING.
+ *
+ * `null` for a folder with nothing readable on screen: such a write is refused
+ * by the resolution itself, so there is nothing to compare it against.
+ */
+export function forgeExpectedRepo(
+  remote: Pick<ForgeRemote, "server_host" | "owner_repo"> | null | undefined
+): ForgeExpectedRepo | null {
+  if (remote == null) return null
+  return {
+    expectedServerHost: remote.server_host,
+    expectedOwnerRepo: remote.owner_repo,
+  }
+}
+
+/**
  * Post one comment, and get back the comment as the FORGE stored it.
  *
  * The result is what the thread appends — not the text that was sent. They
@@ -5949,7 +5967,8 @@ export async function forgeCreateComment(
     number: number
     body: string
     accountId?: string | null
-  }
+  },
+  expected?: ForgeExpectedRepo | null
 ): Promise<ForgeComment> {
   return getTransport().call("forge_create_comment", {
     folderId,
@@ -5958,6 +5977,7 @@ export async function forgeCreateComment(
       number: draft.number,
       body: draft.body,
       accountId: draft.accountId ?? null,
+      ...(expected ?? {}),
     },
   })
 }
@@ -5977,7 +5997,8 @@ export async function forgeSetItemState(
     number: number
     action: ForgeStateAction
     accountId?: string | null
-  }
+  },
+  expected?: ForgeExpectedRepo | null
 ): Promise<ForgeIssueRow> {
   return getTransport().call("forge_set_item_state", {
     folderId,
@@ -5986,6 +6007,7 @@ export async function forgeSetItemState(
       number: request.number,
       action: request.action,
       accountId: request.accountId ?? null,
+      ...(expected ?? {}),
     },
   })
 }
@@ -6000,7 +6022,8 @@ export async function forgeCreateIssue(
     body?: string | null
     labels?: string[]
     accountId?: string | null
-  }
+  },
+  expected?: ForgeExpectedRepo | null
 ): Promise<ForgeIssueRow> {
   return getTransport().call("forge_create_issue", {
     folderId,
@@ -6009,6 +6032,7 @@ export async function forgeCreateIssue(
       body: draft.body ?? null,
       labels: draft.labels ?? [],
       accountId: draft.accountId ?? null,
+      ...(expected ?? {}),
     },
   })
 }
@@ -6109,7 +6133,8 @@ export async function forgeMergeChange(
     method: ForgeMergeMethod
     headSha?: string | null
     accountId?: string | null
-  }
+  },
+  expected?: ForgeExpectedRepo | null
 ): Promise<ForgeIssueRow | null> {
   return getTransport().call("forge_merge_change", {
     folderId,
@@ -6118,6 +6143,7 @@ export async function forgeMergeChange(
       method: request.method,
       headSha: request.headSha ?? null,
       accountId: request.accountId ?? null,
+      ...(expected ?? {}),
     },
   })
 }
@@ -6159,4 +6185,27 @@ export async function forgeSettingsSet(
   settings: ForgePanelSettings | null
 ): Promise<ForgeSettingsStore> {
   return getTransport().call("forge_settings_set", { folderId, settings })
+}
+
+/** Every folder's remote selection at once — what the panel's picker reads.
+ *  Held as the whole store so switching folders costs no round trip, and a
+ *  selection that no longer resolves is still shown for what the folder is set
+ *  to. */
+export async function forgeRemoteGet(): Promise<ForgeRemoteStore> {
+  return getTransport().call("forge_remote_get", {})
+}
+
+/**
+ * Save ONE folder's remote selection and get every folder's back as stored.
+ *
+ * `remote = null` (or a blank name) puts the folder back on the default
+ * remote — the picker's "default (origin)" answer. Its own command rather than
+ * a field on the settings save: the picker writes this on every click, and a
+ * settings save must not be able to take it away.
+ */
+export async function forgeRemoteSet(
+  folderId: number,
+  remote: string | null
+): Promise<ForgeRemoteStore> {
+  return getTransport().call("forge_remote_set", { folderId, remote })
 }

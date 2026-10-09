@@ -1,5 +1,15 @@
 import type { ForgePanelSettings, ForgeSettingsStore } from "@/lib/types"
 
+/** The built-in defaults for one scope — mirrors `ForgePanelSettings::default`
+ *  (write-back on; everything else unset). Shared so a caller that needs a base
+ *  to spread over does not enumerate the fields it does not edit. */
+export const DEFAULT_FORGE_PANEL_SETTINGS: ForgePanelSettings = {
+  default_issue_scenario: null,
+  default_pr_scenario: null,
+  writeback_default: true,
+  scenario_prompts: {},
+}
+
 /**
  * Sentinel folder id of the global row — the same one the task settings dialog
  * uses for its own "all folders" scope, so the two surfaces speak one language.

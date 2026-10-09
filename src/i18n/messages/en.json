@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "Repository panel",
+    "remote": "Remote",
+    "remoteDefault": "Default ({name})",
     "pickFolder": "Pick a project folder",
-    "noRemote": "This folder has no recognizable forge remote (origin)",
+    "noRemote": "This folder has no recognizable forge remote",
     "errors": {
       "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository.",
       "unsupportedHost": "The repository panel supports GitHub, GitLab and Gitea only, and {host} is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea or Forgejo instance, add an account for it under Settings → Version Control.",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "(no description)",
     "duplicateBody": "An active task already handles this item: {title} ({status}). Create another one anyway?",
     "folderMismatch": "This folder's remote is {remote}, not this issue's repository — pick the matching folder.",
+    "writeMismatch": "This panel was showing {expected}, but the folder's remote is now {actual} — the write was refused rather than sent to the wrong repository. The panel has been refreshed; try again.",
     "cancel": "Cancel",
     "create": "Create task",
     "creating": "Creating…",

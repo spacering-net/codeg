@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "Repository-Panel",
+    "remote": "Remote",
+    "remoteDefault": "Standard ({name})",
     "pickFolder": "Projektordner wählen",
-    "noRemote": "Dieser Ordner hat kein erkennbares Forge-Remote (origin)",
+    "noRemote": "Dieser Ordner hat kein erkennbares Forge-Remote",
     "errors": {
       "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden.",
       "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub, GitLab und Gitea, und {host} wird als keines davon erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise-, GitLab-, Gitea- oder Forgejo-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "(keine Beschreibung)",
     "duplicateBody": "Eine aktive Aufgabe bearbeitet dieses Element bereits: {title} ({status}). Trotzdem eine weitere erstellen?",
     "folderMismatch": "Das Remote dieses Ordners ist {remote}, nicht das Repository dieses Issues — wähle den passenden Ordner.",
+    "writeMismatch": "Dieses Panel zeigte {expected}, aber das Remote des Ordners ist jetzt {actual} — der Schreibvorgang wurde abgelehnt statt an das falsche Repository gesendet. Das Panel wurde neu geladen; bitte erneut versuchen.",
     "cancel": "Abbrechen",
     "create": "Aufgabe erstellen",
     "creating": "Erstelle…",

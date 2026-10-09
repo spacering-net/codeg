@@ -156,6 +156,25 @@ describe("ForgeSettingsDialog global scope", () => {
     expect(onSaved).toHaveBeenCalledWith({ global: settings, folders: {} })
   })
 
+  it("sends nothing about the remote, which the panel's picker owns", async () => {
+    const user = userEvent.setup()
+    await mountLoaded()
+
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(forgeSettingsSet).toHaveBeenCalled())
+    // The selection lives in its own store and is written by the picker alone.
+    // A settings save must not carry a value a later read would treat as
+    // chosen — and must not be able to clear one either: this blob is dropped
+    // wholesale by "use the global defaults".
+    expect(Object.keys(lastSave().settings).sort()).toEqual([
+      "default_issue_scenario",
+      "default_pr_scenario",
+      "scenario_prompts",
+      "writeback_default",
+    ])
+  })
+
   it("keeps each scenario's instruction under its own segment, and marks the ones in use", async () => {
     const user = userEvent.setup()
     await mountLoaded()

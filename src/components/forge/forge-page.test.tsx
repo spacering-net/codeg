@@ -42,6 +42,7 @@ import {
 import { useForgeRefreshStore } from "@/stores/forge-refresh-store"
 
 const REMOTE: ForgeRemote = {
+  remote_name: "origin",
   server_host: "github.com",
   owner_repo: "xintaofei/codeg",
   remote_url: "https://github.com/xintaofei/codeg.git",
@@ -80,6 +81,22 @@ vi.mock("@/lib/api", () => ({
   // each of them.
   forgeSettingsGet: vi.fn(),
   forgeSettingsSet: vi.fn(),
+  // The panel's remote selections — read once on mount, written by the picker.
+  // Its own store, so the settings mocks above never answer for it.
+  forgeRemoteGet: vi.fn(),
+  forgeRemoteSet: vi.fn(),
+  // Called DURING RENDER to build the pair every write carries, so this mock
+  // has to answer like the real helper rather than like a spy.
+  forgeExpectedRepo: (
+    remote: { server_host: string; owner_repo: string } | null
+  ) =>
+    remote === null
+      ? null
+      : {
+          expectedServerHost: remote.server_host,
+          expectedOwnerRepo: remote.owner_repo,
+        },
+  gitListRemotes: vi.fn(),
 }))
 vi.mock("@/lib/platform", () => ({
   subscribe: vi.fn().mockResolvedValue(() => {}),
@@ -109,9 +126,13 @@ import {
   forgeCreateIssue,
   forgeListComments,
   forgeListLabels,
+  forgeRemoteGet,
+  forgeRemoteSet,
   forgeSetItemState,
   forgeSettingsGet,
+  forgeSettingsSet,
   forgeTabCount,
+  gitListRemotes,
   workTaskLookupBySource,
 } from "@/lib/api"
 
@@ -222,6 +243,230 @@ beforeEach(() => {
   vi.mocked(forgeSettingsGet).mockResolvedValue({
     global: { writeback_default: true, scenario_prompts: {} },
     folders: {},
+  })
+  // Nothing picked in any folder: the panel reads the default remote.
+  vi.mocked(forgeRemoteGet).mockResolvedValue({ folders: {} })
+  vi.mocked(gitListRemotes).mockResolvedValue([])
+})
+
+describe("ForgePage remote picker", () => {
+  function mountWithRemotes() {
+    useAppWorkspaceStore.setState({
+      folders: [
+        {
+          id: 1,
+          name: "codeg",
+          path: "/repo",
+          parent_id: null,
+          kind: "regular",
+        },
+      ] as never,
+    })
+    vi.mocked(gitListRemotes).mockResolvedValue([
+      { name: "origin", url: "https://github.com/me/codeg.git" },
+      { name: "upstream", url: "https://github.com/xintaofei/codeg.git" },
+    ])
+    vi.mocked(forgeListIssues).mockResolvedValue(listOf([]))
+    mount()
+  }
+
+  it("lists the folder's remotes and saves the picked one in its own store", async () => {
+    mountWithRemotes()
+    vi.mocked(forgeRemoteSet).mockResolvedValue({
+      folders: { "1": "upstream" },
+    })
+
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Remote" })
+    )
+    await userEvent.click(
+      await screen.findByRole("option", { name: "upstream" })
+    )
+
+    // Its OWN command. A picker click must not land in the panel-settings blob:
+    // that is what used to detach the folder from the global row, and what let
+    // a later "use global defaults" save destroy the choice.
+    await waitFor(() =>
+      expect(vi.mocked(forgeRemoteSet)).toHaveBeenCalledWith(1, "upstream")
+    )
+    expect(vi.mocked(forgeSettingsSet)).not.toHaveBeenCalled()
+    // And the page re-reads the repository it is now pointed at.
+    await waitFor(() =>
+      expect(vi.mocked(folderForgeRemote).mock.calls.length).toBeGreaterThan(1)
+    )
+  })
+
+  it("offers the default explicitly and clears the choice with it", async () => {
+    // The folder is on `upstream`. Nothing in the settings dialog edits the
+    // selection, so this item is the only way back to `origin` — and it has to
+    // CLEAR the entry rather than save the name, or the folder would look like
+    // it had chosen `origin` rather than gone back to the default.
+    vi.mocked(forgeRemoteGet).mockResolvedValue({
+      folders: { "1": "upstream" },
+    })
+    mountWithRemotes()
+    vi.mocked(forgeRemoteSet).mockResolvedValue({ folders: {} })
+
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Remote" })
+    )
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Default (origin)" })
+    )
+
+    await waitFor(() =>
+      expect(vi.mocked(forgeRemoteSet)).toHaveBeenCalledWith(1, null)
+    )
+  })
+})
+
+/**
+ * What a remote switch must TEAR DOWN.
+ *
+ * The picker changes which repository every request is aimed at, so every piece
+ * of state that was only true of the previous one has to go with it. Left
+ * behind, each of these reads as a fact about the NEW repository: a page
+ * number, a label vocabulary, and the previous repository's rows — the last one
+ * painted by a response that was already in flight when the switch happened.
+ */
+describe("ForgePage remote switch", () => {
+  const UPSTREAM: ForgeRemote = {
+    remote_name: "upstream",
+    server_host: "github.com",
+    owner_repo: "acme/codeg-parent",
+    remote_url: "https://github.com/acme/codeg-parent.git",
+    provider: "github",
+    supported: true,
+  }
+
+  function mountWithPicker() {
+    useAppWorkspaceStore.setState({
+      folders: [
+        {
+          id: 1,
+          name: "codeg",
+          path: "/repo",
+          parent_id: null,
+          kind: "regular",
+        },
+      ] as never,
+    })
+    vi.mocked(gitListRemotes).mockResolvedValue([
+      { name: "origin", url: "https://github.com/me/codeg.git" },
+      { name: "upstream", url: "https://github.com/acme/codeg-parent.git" },
+    ])
+    // The first resolution is the fork; every one after the pick is the
+    // parent, which is what makes the switch observable from the outside.
+    vi.mocked(folderForgeRemote)
+      .mockResolvedValueOnce(REMOTE)
+      .mockResolvedValue(UPSTREAM)
+    mount()
+  }
+
+  async function pickUpstream(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("combobox", { name: "Remote" }))
+    await user.click(await screen.findByRole("option", { name: "upstream" }))
+  }
+
+  it("returns to page 1 instead of asking the new repository for the old page", async () => {
+    const user = userEvent.setup()
+    vi.mocked(forgeListIssues).mockImplementation(async (_folderId, req) =>
+      listOf([issue(req.page ?? 1, `row on page ${req.page}`)], {
+        page: req.page ?? 1,
+        total_count: 57,
+        has_next: (req.page ?? 1) < 3,
+      })
+    )
+    mountWithPicker()
+    await screen.findByText("row on page 1")
+    await user.click(screen.getByRole("button", { name: "Go to page 3" }))
+    await screen.findByText("row on page 3")
+
+    const before = sentQueries().length
+    await pickUpstream(user)
+
+    // The FIRST request aimed at the new repository is the one that matters:
+    // page 3 of one repository is a different slice of another, and a header
+    // saying "page 3" over rows the reader never asked for is the same bug the
+    // page-size control already avoids. Asserted over EVERY request since the
+    // pick rather than only the last one: a fetch for the old page can be
+    // overtaken by the refetch that corrects it, and the wasted round trip —
+    // and the rows it briefly paints — would go unnoticed.
+    await waitFor(() => {
+      expect(vi.mocked(folderForgeRemote).mock.calls.length).toBeGreaterThan(1)
+    })
+    expect(lastQuery().page ?? 1).toBe(1)
+    expect(
+      sentQueries()
+        .slice(before)
+        .map((q) => q.page ?? 1)
+    ).not.toContain(3)
+  })
+
+  it("clears the label filter, which belongs to the old repository", async () => {
+    const user = userEvent.setup()
+    // The parent's vocabulary does NOT include `bug`. Left in place, the filter
+    // would come back empty and read as "this repository has no issues".
+    vi.mocked(forgeListIssues).mockResolvedValue(listOf([issue(1, "a row")]))
+    vi.mocked(forgeListLabels)
+      .mockResolvedValueOnce({
+        labels: [{ name: "bug", color: "#d73a4a" }],
+        truncated: false,
+      })
+      .mockResolvedValue({
+        labels: [{ name: "feature", color: "#0e8a16" }],
+        truncated: false,
+      })
+    mountWithPicker()
+    await screen.findByText("a row")
+
+    await user.click(screen.getByRole("button", { name: "Labels" }))
+    await user.click(await screen.findByRole("option", { name: "bug" }))
+    // Closing the popover, so the click that follows reaches the picker.
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(lastQuery().labels).toEqual(["bug"]))
+
+    await pickUpstream(user)
+
+    await waitFor(() => {
+      expect(vi.mocked(folderForgeRemote).mock.calls.length).toBeGreaterThan(1)
+    })
+    expect(lastQuery().labels ?? []).toEqual([])
+    // And the label list on offer is the new repository's, not a filter built
+    // from names that only existed in the old one.
+    expect(vi.mocked(forgeListLabels).mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it("never paints the previous repository's rows over the new one", async () => {
+    const user = userEvent.setup()
+    let releaseOld: ((value: ForgeIssueList) => void) | null = null
+    let calls = 0
+    vi.mocked(forgeListIssues).mockImplementation(async () => {
+      calls += 1
+      // The first page is held in flight and released by the test AFTER the
+      // switch; the second (the parent's) resolves immediately.
+      if (calls === 1) {
+        return new Promise<ForgeIssueList>((resolve) => {
+          releaseOld = resolve
+        })
+      }
+      return listOf([issue(99, "row from the parent")])
+    })
+    mountWithPicker()
+    await screen.findByRole("combobox", { name: "Remote" })
+
+    await pickUpstream(user)
+    // The parent's rows land first…
+    await screen.findByText("row from the parent")
+    // …and only then does the response that was already in flight arrive,
+    // carrying a row from the fork the panel has left.
+    await act(async () => {
+      releaseOld?.(listOf([issue(1, "row from the fork")]))
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText("row from the fork")).toBeNull()
+    expect(screen.getByText("row from the parent")).toBeInTheDocument()
   })
 })
 
@@ -376,6 +621,7 @@ describe("ForgePage list failures", () => {
  */
 describe("ForgePage sort control", () => {
   const GITEA: ForgeRemote = {
+    remote_name: "origin",
     server_host: "git.corp.example",
     owner_repo: "acme/app",
     remote_url: "https://git.corp.example/acme/app.git",
@@ -418,6 +664,7 @@ describe("ForgePage sort control", () => {
  */
 describe("ForgePage on a host that is neither forge", () => {
   const UNSUPPORTED: ForgeRemote = {
+    remote_name: "origin",
     server_host: "gitee.com",
     owner_repo: "someone/thing",
     remote_url: "https://gitee.com/someone/thing.git",
@@ -1715,9 +1962,7 @@ describe("ForgePage writes", () => {
     vi.mocked(folderForgeRemote).mockResolvedValue(null)
     vi.mocked(forgeListIssues).mockResolvedValue(listOf([]))
     mount()
-    await screen.findByText(
-      "This folder has no recognizable forge remote (origin)"
-    )
+    await screen.findByText("This folder has no recognizable forge remote")
     // Nowhere for the issue to go — the backend would refuse it, and a button
     // that can only fail is worse than no button.
     expect(
@@ -1742,7 +1987,13 @@ describe("ForgePage writes", () => {
     await waitFor(() =>
       expect(forgeCreateIssue).toHaveBeenCalledWith(
         1,
-        expect.objectContaining({ title: "Login times out" })
+        expect.objectContaining({ title: "Login times out" }),
+        // The repository the page is SHOWING, handed to the dialog so the
+        // write is refused rather than redirected if the folder has moved.
+        {
+          expectedServerHost: "github.com",
+          expectedOwnerRepo: "xintaofei/codeg",
+        }
       )
     )
     // Straight into the panel on what was just filed: the number and the link
@@ -1757,6 +2008,39 @@ describe("ForgePage writes", () => {
     const rows = await screen.findAllByRole("button", { name: /Login times/ })
     expect(rows.length).toBeGreaterThan(0)
     expect(vi.mocked(forgeListIssues).mock.calls.length).toBe(before)
+  })
+
+  it("re-resolves the repository when a write says the folder has moved on", async () => {
+    const user = userEvent.setup()
+    vi.mocked(forgeListIssues).mockResolvedValue(listOf([]))
+    // What the backend answers with when the coordinates a write carried no
+    // longer match the folder's remote (`WRITE_MISMATCH_I18N_KEY`): the write
+    // was refused, and the page's job is to stop showing a repository the
+    // folder has left.
+    vi.mocked(forgeCreateIssue).mockRejectedValue({
+      code: "configuration_invalid",
+      message: "this panel was showing github.com/xintaofei/codeg",
+      i18n_key: "Forge.writeMismatch",
+      i18n_params: {
+        expected: "github.com/xintaofei/codeg",
+        actual: "github.com/acme/other",
+      },
+    })
+    mount()
+    const before = vi.mocked(folderForgeRemote).mock.calls.length
+
+    await user.click(await screen.findByRole("button", { name: "New issue" }))
+    await user.type(screen.getByLabelText("Title"), "Login times out")
+    await user.click(screen.getByRole("button", { name: "Create issue" }))
+
+    // Re-resolved — which is what tears the stale rows, panel and dialogs
+    // down with it. Merely toasting would leave every later action aimed at
+    // the same repository the refusal was about.
+    await waitFor(() =>
+      expect(vi.mocked(folderForgeRemote).mock.calls.length).toBeGreaterThan(
+        before
+      )
+    )
   })
 
   it("counts the issue it filed onto the tab badge", async () => {

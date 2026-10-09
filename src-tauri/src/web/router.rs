@@ -1749,6 +1749,14 @@ pub fn build_router(
             post(handlers::forge::forge_settings_set),
         )
         .route(
+            "/forge_remote_get",
+            post(handlers::forge::forge_remote_get),
+        )
+        .route(
+            "/forge_remote_set",
+            post(handlers::forge::forge_remote_set),
+        )
+        .route(
             "/work_task_deliver_pr",
             post(handlers::work_task::work_task_deliver_pr),
         )

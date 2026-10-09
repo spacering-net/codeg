@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "Panel del repositorio",
+    "remote": "Remoto",
+    "remoteDefault": "Predeterminado ({name})",
     "pickFolder": "Elige una carpeta de proyecto",
-    "noRemote": "Esta carpeta no tiene un remoto reconocible (origin)",
+    "noRemote": "Esta carpeta no tiene un remoto reconocible",
     "errors": {
       "noAccount": "No hay ninguna cuenta de {provider} configurada para {host}. Añade una en Configuración → Control de versiones para cargar este repositorio.",
       "unsupportedHost": "El panel del repositorio solo admite GitHub, GitLab y Gitea, y {host} no se reconoce como ninguno de ellos. Si es una instancia autoalojada de GitHub Enterprise, GitLab, Gitea o Forgejo, añade una cuenta para ella en Configuración → Control de versiones.",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "(sin descripción)",
     "duplicateBody": "Ya hay una tarea activa para este elemento: {title} ({status}). ¿Crear otra de todos modos?",
     "folderMismatch": "El remoto de esta carpeta es {remote}, no el repositorio de este issue: elige la carpeta correcta.",
+    "writeMismatch": "Este panel mostraba {expected}, pero el remoto de la carpeta ahora es {actual}: la escritura se rechazó en lugar de enviarla al repositorio equivocado. El panel se ha actualizado; inténtalo de nuevo.",
     "cancel": "Cancelar",
     "create": "Crear tarea",
     "creating": "Creando…",

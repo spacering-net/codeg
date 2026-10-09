@@ -6344,8 +6344,10 @@
   },
   "Forge": {
     "title": "仓库面板",
+    "remote": "远端",
+    "remoteDefault": "默认（{name}）",
     "pickFolder": "选择项目文件夹",
-    "noRemote": "该文件夹没有可识别的代码托管远端（origin）",
+    "noRemote": "该文件夹没有可识别的代码托管远端",
     "errors": {
       "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
       "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab 和 Gitea，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 实例，请在「设置 → 版本控制」中为它添加账号。",
@@ -6502,6 +6504,7 @@
     "previewEmpty": "（无描述）",
     "duplicateBody": "已有一个活跃任务在处理该条目：{title}（{status}）。仍要再建一个吗？",
     "folderMismatch": "当前文件夹的远端是 {remote}，与该 Issue 的仓库不一致——请选择匹配的文件夹。",
+    "writeMismatch": "这个面板显示的是 {expected}，但该文件夹的远端现在是 {actual} —— 写入已被拒绝，而不是发到错误的仓库。面板已刷新，请重试。",
     "cancel": "取消",
     "create": "创建待办任务",
     "creating": "创建中…",
