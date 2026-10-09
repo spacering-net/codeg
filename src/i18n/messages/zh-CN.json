@@ -2260,7 +2260,19 @@
       "unsplitAll": "全部取消拆分",
       "closeAll": "关闭所有",
       "tileDisplay": "平铺显示",
-      "untileDisplay": "取消平铺"
+      "untileDisplay": "取消平铺",
+      "arrangeTabs": "排列标签页",
+      "arrangeManual": "手动顺序",
+      "arrangeManualHint": "拖动标签页调整顺序",
+      "arrangeByFolder": "按工作文件夹分组",
+      "arrangeByFolderHint": "同一文件夹的标签页放在一起，并使用该文件夹的颜色",
+      "arrangeByStatus": "按状态排序",
+      "arrangeByStatusHint": "等你处理的会话排在最前",
+      "bandNeedsYou": "需要你处理",
+      "bandAwaitingReply": "等你回复",
+      "bandRunning": "进行中",
+      "bandOther": "其他",
+      "chatGroup": "聊天"
     },
     "fileWorkspace": {
       "files": "文件",

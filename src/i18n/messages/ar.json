@@ -2260,7 +2260,19 @@
       "unsplitAll": "إلغاء كل التقسيمات",
       "closeAll": "إغلاق الكل",
       "tileDisplay": "عرض متجانب",
-      "untileDisplay": "إلغاء التجانب"
+      "untileDisplay": "إلغاء التجانب",
+      "arrangeTabs": "ترتيب علامات التبويب",
+      "arrangeManual": "الترتيب اليدوي",
+      "arrangeManualHint": "اسحب علامات التبويب لإعادة ترتيبها",
+      "arrangeByFolder": "التجميع حسب مجلد العمل",
+      "arrangeByFolderHint": "علامات تبويب كل مجلد معًا وبلونه",
+      "arrangeByStatus": "الترتيب حسب الحالة",
+      "arrangeByStatusHint": "الجلسات التي تنتظرك أولًا",
+      "bandNeedsYou": "تحتاج إليك",
+      "bandAwaitingReply": "بانتظار ردك",
+      "bandRunning": "قيد التشغيل",
+      "bandOther": "أخرى",
+      "chatGroup": "دردشة"
     },
     "fileWorkspace": {
       "files": "الملفات",

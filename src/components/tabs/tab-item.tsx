@@ -1,6 +1,13 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+} from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
 import { X } from "lucide-react"
@@ -87,6 +94,14 @@ interface TabItemProps {
   isTouchSorting: boolean
   onTouchSortingStart: (tabId: string) => void
   onTouchSortingEnd: () => void
+  /** False while the strip is grouped by folder or sorted by status: the
+   *  displayed order is derived there, so a drag would have nothing coherent
+   *  to write back. Defaults to true. */
+  reorderable?: boolean
+  /** Tint vars (`folderTitleTintVars`) for the thin group-color stripe along
+   *  the tab's top edge, shown while grouped / sorted. Must be referentially
+   *  stable per group — this component is memoized. */
+  accentStyle?: CSSProperties
 }
 
 export const TabItem = memo(function TabItem({
@@ -118,6 +133,8 @@ export const TabItem = memo(function TabItem({
   isTouchSorting,
   onTouchSortingStart,
   onTouchSortingEnd,
+  reorderable = true,
+  accentStyle,
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
   const itemRef = useRef<HTMLDivElement>(null)
@@ -142,7 +159,7 @@ export const TabItem = memo(function TabItem({
   )
 
   const { dragControls, gestureHandlers } = useLongPressDrag({
-    enabled: isCoarsePointer,
+    enabled: isCoarsePointer && reorderable,
     onStart: handleLongPressStart,
     onEnd: onTouchSortingEnd,
     onDragSettle: clearResidualStyles,
@@ -240,9 +257,9 @@ export const TabItem = memo(function TabItem({
       as="div"
       value={tab}
       data-tab-id={tab.id}
-      drag="x"
+      drag={reorderable ? "x" : false}
       dragControls={dragControls}
-      dragListener={!isCoarsePointer}
+      dragListener={!isCoarsePointer && reorderable}
       whileDrag={whileDrag}
       {...restGestureHandlers}
       onDragStart={handleDragStart}
@@ -253,7 +270,7 @@ export const TabItem = memo(function TabItem({
       data-active={embedded && isActive ? "true" : undefined}
       data-adjacent-active={embedded ? adjacentActive : undefined}
       className={cn(
-        "cursor-grab active:cursor-grabbing",
+        reorderable && "cursor-grab active:cursor-grabbing",
         // Embedded (browser-style): every tab is EQUAL width (`basis-48` = 12rem,
         // `grow-0` so they don't stretch to fill), so a long title and a short one
         // read uniform instead of one wide / one narrow. They still `shrink`
@@ -326,6 +343,17 @@ export const TabItem = memo(function TabItem({
                   ]
             )}
           >
+            {accentStyle && (
+              // Group color along the top edge (folder or status band), like a
+              // browser's tab-group underline. `folder-title-tint` resolves the
+              // light/dark tone in CSS; `bg-current` paints it.
+              <span
+                aria-hidden
+                data-tab-accent
+                className="folder-title-tint pointer-events-none absolute inset-x-2 top-0 h-0.5 rounded-b-full bg-current"
+                style={accentStyle}
+              />
+            )}
             <ConversationStatusDot
               status={tab.status as ConversationStatus | undefined}
             />

@@ -1,9 +1,17 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
-import { SquarePen } from "lucide-react"
+import { ArrowDownWideNarrow, SquarePen } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -22,7 +30,50 @@ import {
 } from "@/lib/tab-drag-drop"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useIsCoarsePointer } from "@/hooks/use-is-coarse-pointer"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  STATUS_BAND_COLOR,
+  TAB_ARRANGE_MODES,
+  arrangeTabs,
+  folderAccentColor,
+  type TabArrangeMode,
+  type TabRun,
+  type TabStatusBand,
+} from "@/lib/tab-arrangement"
+import { folderTitleTintVars } from "@/lib/theme-presets"
+import { useTabArrangeStore } from "@/stores/tab-arrangement-store"
+import { useTabAttention } from "@/hooks/use-tab-attention"
 import { TabItem, type TabMoveTarget } from "./tab-item"
+
+/** i18n keys (Folder.tabs) for the arrange menu and the status band labels.
+ *  `as const` keeps them literal: next-intl's `t` is typed against the
+ *  message catalogue and rejects a plain `string` key. */
+const ARRANGE_MODE_LABEL = {
+  manual: { label: "arrangeManual", hint: "arrangeManualHint" },
+  folder: { label: "arrangeByFolder", hint: "arrangeByFolderHint" },
+  status: { label: "arrangeByStatus", hint: "arrangeByStatusHint" },
+} as const satisfies Record<TabArrangeMode, { label: string; hint: string }>
+const STATUS_BAND_LABEL = {
+  needs_you: "bandNeedsYou",
+  awaiting_reply: "bandAwaitingReply",
+  running: "bandRunning",
+  other: "bandOther",
+} as const satisfies Record<TabStatusBand, string>
+
+const NO_TAB_IDS: readonly string[] = []
+
+/** One slot of the strip as displayed: a tab, or (grouped / sorted) the label
+ *  ahead of a run. */
+type StripEntry =
+  | { kind: "label"; runKey: string; count: number }
+  | { kind: "tab"; tab: TabItemData }
 
 interface TabBarProps {
   /** Split-group strip: render only this group's tabs, highlight the GROUP's
@@ -37,6 +88,7 @@ interface TabBarProps {
 // and navigates tabs from the sidebar.
 export function TabBar({ groupId }: TabBarProps) {
   const t = useTranslations("Folder.conversationCard")
+  const tTabs = useTranslations("Folder.tabs")
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const groupOf = useTabStore((s) => s.groupOf)
@@ -82,6 +134,31 @@ export function TabBar({ groupId }: TabBarProps) {
   )
   const displayActiveId =
     groupId == null ? activeTabId : (groupSelection[groupId] ?? null)
+
+  // Display arrangement (manual / grouped by folder / sorted by status). Pure
+  // presentation over `groupTabs`: the manual order underneath is untouched and
+  // comes back as-is on `manual`. Every strip (split groups included) follows
+  // the one per-device choice.
+  const arrangeMode = useTabArrangeStore((s) => s.mode)
+  const setArrangeMode = useTabArrangeStore((s) => s.setMode)
+  useEffect(() => {
+    useTabArrangeStore.getState().hydrate()
+  }, [])
+  const isManualOrder = arrangeMode === "manual"
+  // Which tabs wait on the user (permission / question / plan approval), read
+  // from their live connections. Only the status sort uses it, so the other
+  // layouts don't subscribe to any connection.
+  const attentionTabIds = useMemo(
+    () =>
+      arrangeMode === "status" ? groupTabs.map((tab) => tab.id) : NO_TAB_IDS,
+    [arrangeMode, groupTabs]
+  )
+  const attentionByTabId = useTabAttention(attentionTabIds)
+  const arranged = useMemo(
+    () => arrangeTabs(groupTabs, arrangeMode, attentionByTabId),
+    [groupTabs, arrangeMode, attentionByTabId]
+  )
+  const displayTabs = arranged.ordered
   const isTileMode = !!tileByGroup[stripGroupId]
   const handleToggleTile = useCallback(
     () => toggleGroupTile(stripGroupId),
@@ -193,7 +270,9 @@ export function TabBar({ groupId }: TabBarProps) {
     },
     [resolveDropTarget, endTabDrag, moveTabToGroup]
   )
-  const crossDragEnabled = groupId != null && isSplit
+  // Dragging only makes sense in manual order: grouped / sorted layouts are
+  // derived, so a drop would have no coherent order to write back.
+  const crossDragEnabled = groupId != null && isSplit && isManualOrder
 
   // New-conversation affordance at the end of the tab strip. Mirrors the
   // sidebar's "New chat": return to the conversation workspace, then open a
@@ -242,10 +321,54 @@ export function TabBar({ groupId }: TabBarProps) {
   ])
 
   const folderIndex = useMemo(() => {
-    const map = new Map<number, { name: string }>()
-    for (const f of allFolders) map.set(f.id, { name: f.name })
+    const map = new Map<
+      number,
+      { name: string; alias: string | null; color: string; isChat: boolean }
+    >()
+    for (const f of allFolders) {
+      map.set(f.id, {
+        name: f.name,
+        alias: f.alias,
+        color: f.color,
+        isChat: f.kind === "chat",
+      })
+    }
     return map
   }, [allFolders])
+
+  // Label + stable tint per group run (folder color, or the status band's), and
+  // each tab's run. Stable objects: TabItem is memoized on `accentStyle`.
+  const runVisuals = useMemo(() => {
+    const byRun = new Map<
+      string,
+      { label: string; style: CSSProperties | undefined }
+    >()
+    const runOfTab = new Map<string, string>()
+    for (const run of arranged.runs ?? []) {
+      byRun.set(run.key, runVisual(run))
+      for (const tab of run.tabs) runOfTab.set(tab.id, run.key)
+    }
+    return { byRun, runOfTab }
+
+    function runVisual(run: TabRun<TabItemData>) {
+      if (run.kind === "status") {
+        const color = STATUS_BAND_COLOR[run.band]
+        return {
+          label: tTabs(STATUS_BAND_LABEL[run.band]),
+          style: color ? folderTitleTintVars(color) : undefined,
+        }
+      }
+      const folder = folderIndex.get(run.folderId)
+      return {
+        label: folder?.isChat
+          ? tTabs("chatGroup")
+          : folder?.alias || folder?.name || String(run.folderId),
+        style: folderTitleTintVars(
+          folderAccentColor(run.folderId, folder?.color)
+        ),
+      }
+    }
+  }, [arranged.runs, folderIndex, tTabs])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const isCoarsePointer = useIsCoarsePointer()
@@ -253,16 +376,42 @@ export function TabBar({ groupId }: TabBarProps) {
     null
   )
 
-  useEffect(() => {
+  // The strip as displayed: tabs, with a group label ahead of each run while
+  // grouped / sorted. Adjacency to the active tab is computed over THIS
+  // sequence, so a label flanking the active tab gets the same baseline inset a
+  // neighbouring tab would (`data-adjacent-active`, globals.css).
+  const entries = useMemo<StripEntry[]>(
+    () =>
+      arranged.runs
+        ? arranged.runs.flatMap((run): StripEntry[] => [
+            { kind: "label", runKey: run.key, count: run.tabs.length },
+            ...run.tabs.map((tab) => ({ kind: "tab" as const, tab })),
+          ])
+        : arranged.ordered.map((tab) => ({ kind: "tab" as const, tab })),
+    [arranged]
+  )
+  const activePos = entries.findIndex(
+    (e) => e.kind === "tab" && e.tab.id === displayActiveId
+  )
+  // Keep the active tab in view. A derived layout can move it without changing
+  // its id (switching the arrangement, or the tab changing status band), so the
+  // reveal also re-runs on the mode and, outside manual order, on the active
+  // tab's displayed slot. In manual order the active tab only moves under the
+  // user's own drag, which must not scroll the strip mid-gesture. A layout
+  // effect, so it measures the new layout before motion's layout animation
+  // (scheduled after this commit) shifts moved tabs back to their old spots.
+  const activeSlot = isManualOrder ? -1 : activePos
+  useLayoutEffect(() => {
     if (!displayActiveId || !scrollRef.current) return
     const el = scrollRef.current.querySelector(
       `[data-tab-id="${displayActiveId}"]`
     )
     el?.scrollIntoView({ block: "nearest", inline: "nearest" })
-  }, [displayActiveId])
+  }, [displayActiveId, arrangeMode, activeSlot])
 
   const handleReorder = useCallback(
     (nextTabs: TabItemData[]) => {
+      if (!isManualOrder) return
       if (isCoarsePointer && !touchSortingTabId) return
       if (groupId == null) {
         reorderTabs(nextTabs)
@@ -270,7 +419,14 @@ export function TabBar({ groupId }: TabBarProps) {
         reorderGroupTabs(groupId, nextTabs)
       }
     },
-    [groupId, isCoarsePointer, reorderGroupTabs, reorderTabs, touchSortingTabId]
+    [
+      groupId,
+      isCoarsePointer,
+      isManualOrder,
+      reorderGroupTabs,
+      reorderTabs,
+      touchSortingTabId,
+    ]
   )
 
   const handleTouchSortingEnd = useCallback(
@@ -280,12 +436,19 @@ export function TabBar({ groupId }: TabBarProps) {
 
   if (groupTabs.length === 0) return null
 
-  const activeIndex = groupTabs.findIndex((tab) => tab.id === displayActiveId)
-  // When the LAST tab is active, the trailing new-conversation wrapper is its
-  // right neighbour — it needs the same baseline inset a tab neighbour gets
-  // (`data-adjacent-active`), so the active tab's right reverse-corner foot
-  // doesn't leave a stray line poking out from under it (globals.css).
-  const lastTabActive = activeIndex >= 0 && activeIndex === groupTabs.length - 1
+  const adjacencyAt = (pos: number): "before" | "after" | undefined =>
+    activePos < 0
+      ? undefined
+      : pos === activePos - 1
+        ? "before"
+        : pos === activePos + 1
+          ? "after"
+          : undefined
+  // When the LAST entry is the active tab, the trailing new-conversation
+  // wrapper is its right neighbour — it needs the same baseline inset a tab
+  // neighbour gets, so the active tab's right reverse-corner foot doesn't leave
+  // a stray line poking out from under it (globals.css).
+  const lastTabActive = activePos >= 0 && activePos === entries.length - 1
 
   return (
     <Reorder.Group
@@ -293,7 +456,7 @@ export function TabBar({ groupId }: TabBarProps) {
       ref={scrollRef}
       role="tablist"
       axis="x"
-      values={groupTabs}
+      values={displayTabs as TabItemData[]}
       onReorder={handleReorder}
       // Cross-group drop target: group strips advertise their group id for the
       // drag hit-test and tint while a foreign tab hovers.
@@ -315,7 +478,40 @@ export function TabBar({ groupId }: TabBarProps) {
         isDropTarget && "bg-primary/8"
       )}
     >
-      {groupTabs.map((tab, index) => {
+      {entries.map((entry, pos) => {
+        if (entry.kind === "label") {
+          const visual = runVisuals.byRun.get(entry.runKey)
+          return (
+            <div
+              key={`group-label-${entry.runKey}`}
+              data-tab-group-label={entry.runKey}
+              data-adjacent-active={adjacencyAt(pos)}
+              // Sits in the tabs' flex line and carries the strip's bottom
+              // hairline like they do; `relative` anchors the inset-baseline
+              // pseudo-element used next to the active tab.
+              className="relative flex h-full shrink-0 items-center pl-1.5 pr-1 pb-1.5 ws-strip-line"
+            >
+              <span
+                className={cn(
+                  "flex max-w-[9rem] items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] leading-none font-medium",
+                  visual?.style
+                    ? "folder-title-tint bg-current/10"
+                    : "bg-muted text-muted-foreground"
+                )}
+                style={visual?.style}
+                title={`${visual?.label ?? ""} · ${entry.count}`}
+              >
+                <span
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-current"
+                />
+                <span className="truncate">{visual?.label}</span>
+                <span className="tabular-nums opacity-60">{entry.count}</span>
+              </span>
+            </div>
+          )
+        }
+        const tab = entry.tab
         const folderInfo = folderIndex.get(tab.folderId)
         // Drafts are group-bound: no cross-group drag, no move / split-and-move
         // menu items. Within-group sorting (the Reorder.Group itself) is
@@ -324,14 +520,8 @@ export function TabBar({ groupId }: TabBarProps) {
         // Neighbours of the active tab inset their workspace-bg baseline so the
         // active tab's transparent reverse-corner foot (which flares over them)
         // doesn't leave a stray line under it (globals.css `data-adjacent-active`).
-        const adjacentActive =
-          activeIndex < 0
-            ? undefined
-            : index === activeIndex - 1
-              ? "before"
-              : index === activeIndex + 1
-                ? "after"
-                : undefined
+        const adjacentActive = adjacencyAt(pos)
+        const runKey = runVisuals.runOfTab.get(tab.id)
         return (
           <TabItem
             key={tab.id}
@@ -365,6 +555,10 @@ export function TabBar({ groupId }: TabBarProps) {
             isTouchSorting={touchSortingTabId === tab.id}
             onTouchSortingStart={setTouchSortingTabId}
             onTouchSortingEnd={handleTouchSortingEnd}
+            reorderable={isManualOrder}
+            accentStyle={
+              runKey ? runVisuals.byRun.get(runKey)?.style : undefined
+            }
           />
         )
       })}
@@ -413,6 +607,44 @@ export function TabBar({ groupId }: TabBarProps) {
         >
           <SquarePen className="h-3.5 w-3.5" />
         </button>
+        {/* Arrange the strip: manual order, grouped by work folder (colored),
+            or sorted by status (waiting on you first). Same ghost-circle style
+            as the new-conversation button; tinted while a derived layout is
+            on so the non-draggable state never looks like a bug. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-tab-arrange-trigger
+              className={cn(
+                "mr-0.5 flex h-7 w-7 shrink-0 items-center justify-center self-start rounded-full backdrop-blur-sm transition-colors hover:bg-foreground/10 hover:text-foreground",
+                isManualOrder ? "text-muted-foreground" : "text-primary"
+              )}
+              aria-label={tTabs("arrangeTabs")}
+              title={tTabs("arrangeTabs")}
+            >
+              <ArrowDownWideNarrow className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-64">
+            <DropdownMenuLabel>{tTabs("arrangeTabs")}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={arrangeMode}
+              onValueChange={(value) => setArrangeMode(value as TabArrangeMode)}
+            >
+              {TAB_ARRANGE_MODES.map((mode) => (
+                <DropdownMenuRadioItem key={mode} value={mode}>
+                  <span className="flex flex-col gap-0.5">
+                    <span>{tTabs(ARRANGE_MODE_LABEL[mode].label)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {tTabs(ARRANGE_MODE_LABEL[mode].hint)}
+                    </span>
+                  </span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {/* Drag spacer, floored at `min-w-10` (40px) instead of `min-w-0`: even
             when many tabs overflow and squeeze this region, a grabbable
             window-drag gap always remains to the RIGHT of the new-conversation

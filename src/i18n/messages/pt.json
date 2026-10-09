@@ -2260,7 +2260,19 @@
       "unsplitAll": "Desfazer todas as divisões",
       "closeAll": "Fechar tudo",
       "tileDisplay": "Exibição em mosaico",
-      "untileDisplay": "Sair do mosaico"
+      "untileDisplay": "Sair do mosaico",
+      "arrangeTabs": "Organizar abas",
+      "arrangeManual": "Ordem manual",
+      "arrangeManualHint": "Arraste as abas para reordenar",
+      "arrangeByFolder": "Agrupar por pasta de trabalho",
+      "arrangeByFolderHint": "As abas de cada pasta juntas, na sua cor",
+      "arrangeByStatus": "Ordenar por status",
+      "arrangeByStatusHint": "Sessões aguardando você primeiro",
+      "bandNeedsYou": "Precisa de você",
+      "bandAwaitingReply": "Aguardando sua resposta",
+      "bandRunning": "Em execução",
+      "bandOther": "Outras",
+      "chatGroup": "Chat"
     },
     "fileWorkspace": {
       "files": "Arquivos",

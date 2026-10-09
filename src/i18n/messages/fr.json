@@ -2260,7 +2260,19 @@
       "unsplitAll": "Annuler toutes les divisions",
       "closeAll": "Tout fermer",
       "tileDisplay": "Affichage en mosaïque",
-      "untileDisplay": "Quitter la mosaïque"
+      "untileDisplay": "Quitter la mosaïque",
+      "arrangeTabs": "Organiser les onglets",
+      "arrangeManual": "Ordre manuel",
+      "arrangeManualHint": "Faites glisser les onglets pour les réordonner",
+      "arrangeByFolder": "Grouper par dossier de travail",
+      "arrangeByFolderHint": "Les onglets de chaque dossier ensemble, dans sa couleur",
+      "arrangeByStatus": "Trier par statut",
+      "arrangeByStatusHint": "Les sessions qui vous attendent d'abord",
+      "bandNeedsYou": "Vous attend",
+      "bandAwaitingReply": "Attend votre réponse",
+      "bandRunning": "En cours",
+      "bandOther": "Autres",
+      "chatGroup": "Chat"
     },
     "fileWorkspace": {
       "files": "Fichiers",

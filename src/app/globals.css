@@ -2761,6 +2761,23 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   background-color: var(--ws-chrome-border);
   pointer-events: none;
 }
+/* Mirror of the rule above for a standalone strip element sitting just BEFORE
+   the active tab — the tab strip's group labels (grouped by folder / sorted by
+   status) — whose baseline must stop short of the active tab's LEFT
+   reverse-corner foot. */
+[data-workspace-bg="on"] .ws-strip-line[data-adjacent-active="before"] {
+  border-bottom-width: 0;
+}
+[data-workspace-bg="on"] .ws-strip-line[data-adjacent-active="before"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0.5rem;
+  height: 1px;
+  background-color: var(--ws-chrome-border);
+  pointer-events: none;
+}
 
 /* ===========================================================================
    Token 用量看板配色（.tu-viz 作用域）

@@ -2260,7 +2260,19 @@
       "unsplitAll": "모든 분할 해제",
       "closeAll": "모두 닫기",
       "tileDisplay": "타일 표시",
-      "untileDisplay": "타일 해제"
+      "untileDisplay": "타일 해제",
+      "arrangeTabs": "탭 정렬",
+      "arrangeManual": "수동 순서",
+      "arrangeManualHint": "탭을 끌어서 순서 변경",
+      "arrangeByFolder": "작업 폴더별로 묶기",
+      "arrangeByFolderHint": "폴더별로 모아 폴더 색상으로 표시",
+      "arrangeByStatus": "상태별 정렬",
+      "arrangeByStatusHint": "응답이 필요한 세션을 먼저",
+      "bandNeedsYou": "응답 필요",
+      "bandAwaitingReply": "답장 대기",
+      "bandRunning": "실행 중",
+      "bandOther": "기타",
+      "chatGroup": "채팅"
     },
     "fileWorkspace": {
       "files": "파일",

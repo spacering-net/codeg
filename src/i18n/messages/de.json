@@ -2260,7 +2260,19 @@
       "unsplitAll": "Alle Teilungen aufheben",
       "closeAll": "Alle schließen",
       "tileDisplay": "Kachelansicht",
-      "untileDisplay": "Kachel beenden"
+      "untileDisplay": "Kachel beenden",
+      "arrangeTabs": "Tabs anordnen",
+      "arrangeManual": "Manuelle Reihenfolge",
+      "arrangeManualHint": "Tabs zum Umordnen ziehen",
+      "arrangeByFolder": "Nach Arbeitsordner gruppieren",
+      "arrangeByFolderHint": "Tabs jedes Ordners zusammen, in seiner Farbe",
+      "arrangeByStatus": "Nach Status sortieren",
+      "arrangeByStatusHint": "Sitzungen, die auf dich warten, zuerst",
+      "bandNeedsYou": "Braucht dich",
+      "bandAwaitingReply": "Wartet auf deine Antwort",
+      "bandRunning": "Läuft",
+      "bandOther": "Sonstige",
+      "chatGroup": "Chat"
     },
     "fileWorkspace": {
       "files": "Dateien",

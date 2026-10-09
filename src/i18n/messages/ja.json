@@ -2260,7 +2260,19 @@
       "unsplitAll": "すべての分割を解除",
       "closeAll": "すべて閉じる",
       "tileDisplay": "タイル表示",
-      "untileDisplay": "タイル解除"
+      "untileDisplay": "タイル解除",
+      "arrangeTabs": "タブの並べ方",
+      "arrangeManual": "手動の順序",
+      "arrangeManualHint": "タブをドラッグして並べ替え",
+      "arrangeByFolder": "作業フォルダーでグループ化",
+      "arrangeByFolderHint": "フォルダーごとにまとめ、フォルダーの色で表示",
+      "arrangeByStatus": "ステータスで並べ替え",
+      "arrangeByStatusHint": "対応待ちの会話を先頭に",
+      "bandNeedsYou": "対応が必要",
+      "bandAwaitingReply": "返信待ち",
+      "bandRunning": "実行中",
+      "bandOther": "その他",
+      "chatGroup": "チャット"
     },
     "fileWorkspace": {
       "files": "ファイル",

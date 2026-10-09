@@ -2260,7 +2260,19 @@
       "unsplitAll": "全部取消拆分",
       "closeAll": "關閉所有",
       "tileDisplay": "平鋪顯示",
-      "untileDisplay": "取消平鋪"
+      "untileDisplay": "取消平鋪",
+      "arrangeTabs": "排列分頁",
+      "arrangeManual": "手動順序",
+      "arrangeManualHint": "拖曳分頁調整順序",
+      "arrangeByFolder": "依工作資料夾分組",
+      "arrangeByFolderHint": "同一資料夾的分頁放在一起，並使用該資料夾的顏色",
+      "arrangeByStatus": "依狀態排序",
+      "arrangeByStatusHint": "等你處理的對話排在最前",
+      "bandNeedsYou": "需要你處理",
+      "bandAwaitingReply": "等你回覆",
+      "bandRunning": "進行中",
+      "bandOther": "其他",
+      "chatGroup": "聊天"
     },
     "fileWorkspace": {
       "files": "檔案",

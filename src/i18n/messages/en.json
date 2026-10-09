@@ -2260,7 +2260,19 @@
       "unsplitAll": "Unsplit All",
       "closeAll": "Close All",
       "tileDisplay": "Tile Display",
-      "untileDisplay": "Exit Tile"
+      "untileDisplay": "Exit Tile",
+      "arrangeTabs": "Arrange tabs",
+      "arrangeManual": "Manual order",
+      "arrangeManualHint": "Drag tabs to reorder",
+      "arrangeByFolder": "Group by work folder",
+      "arrangeByFolderHint": "Each folder's tabs together, in its color",
+      "arrangeByStatus": "Sort by status",
+      "arrangeByStatusHint": "Sessions waiting for you first",
+      "bandNeedsYou": "Needs you",
+      "bandAwaitingReply": "Awaiting your reply",
+      "bandRunning": "Running",
+      "bandOther": "Other",
+      "chatGroup": "Chat"
     },
     "fileWorkspace": {
       "files": "Files",
