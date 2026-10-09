@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useSyncExternalStore } from "react"
-import { Coins } from "lucide-react"
+import { Coins, Database } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useConnectionStore } from "@/contexts/acp-connections-context"
 import { useTabStore } from "@/contexts/tab-context"
@@ -31,7 +31,22 @@ const ICON_CIRCUMFERENCE = 2 * Math.PI * ICON_RADIUS
  * token breakdown from that conversation's own runtime-store session stats — so
  * every loaded/tiled composer shows its own context, not the active one's.
  */
-export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
+/**
+ * `part` splits the one control into two compact triggers for the row below
+ * the composer: `"context"` is the ring and its occupancy figures only;
+ * `"tokens"` is a database icon with the session total, whose popover carries
+ * the cache hit rate and the token breakdown. `"all"` (default) keeps the
+ * combined control.
+ */
+export type ComposerUsagePart = "all" | "context" | "tokens"
+
+export function ComposerContextUsage({
+  tabId,
+  part = "all",
+}: {
+  tabId: string | null
+  part?: ComposerUsagePart
+}) {
   const t = useTranslations("Folder.statusBar.tokens")
   const store = useConnectionStore()
   // This tab's own conversation → its per-conversation session stats, read
@@ -160,6 +175,24 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
     : null
 
   if (!hasContext && !hasTokenSection) return null
+  if (part === "context" && !hasContext) return null
+  if (part === "tokens" && !hasTokenSection) return null
+  if (part === "tokens") {
+    return (
+      <ComposerTokenUsage
+        total={total}
+        cacheHit={cacheHit}
+        rows={rows}
+        labels={{
+          tokenUsage: t("tokenUsage"),
+          cacheHit: t("cacheHit"),
+          row: (key) => t(key),
+        }}
+      />
+    )
+  }
+  const showCacheHitHere = part === "all" && cacheHit != null
+  const showTokenRows = part === "all" && hasTokenSection
 
   // Native hover hint mirroring the popover's headline (the popover stays for
   // the full breakdown on click).
@@ -220,10 +253,10 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-56 gap-2 p-3 text-xs">
-        {hasContext || cacheHit != null ? (
+        {hasContext || showCacheHitHere ? (
           <div
             className={`space-y-1 ${
-              hasUsage ? "mb-0.5 border-b border-border pb-0.5" : ""
+              showTokenRows ? "mb-0.5 border-b border-border pb-0.5" : ""
             }`}
           >
             {hasContext ? (
@@ -259,7 +292,7 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
             {/* Sits with the context figures rather than under the token
                 breakdown: it is a ratio, not a count, and a rule of its own
                 above it only fenced off a single line. */}
-            {cacheHit != null ? (
+            {showCacheHitHere && cacheHit != null ? (
               <div className="flex items-center justify-between gap-2 text-xs leading-none text-muted-foreground">
                 <span className="whitespace-nowrap">{t("cacheHit")}</span>
                 <span className="tabular-nums shrink-0">
@@ -269,7 +302,7 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
             ) : null}
           </div>
         ) : null}
-        {hasTokenSection ? (
+        {showTokenRows ? (
           <>
             <div className="mb-0 mt-0.5 text-xs leading-none font-medium">
               {t("tokenUsage")}
@@ -293,6 +326,78 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
             </div>
           </>
         ) : null}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+type TokenRowKey = "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+
+/** The compact token trigger (`part="tokens"`): icon + session total; the
+ *  popover leads with the total, then the cache hit rate and the breakdown. */
+function ComposerTokenUsage({
+  total,
+  cacheHit,
+  rows,
+  labels,
+}: {
+  total: number | null
+  cacheHit: number | null
+  rows: { key: TokenRowKey; value: number }[]
+  labels: {
+    tokenUsage: string
+    cacheHit: string
+    row: (key: TokenRowKey) => string
+  }
+}) {
+  const breakdown = rows.filter((row) => row.key !== "total")
+  const title =
+    total != null
+      ? `${labels.tokenUsage}: ${formatTokenCount(total)}`
+      : labels.tokenUsage
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          title={title}
+          aria-label={labels.tokenUsage}
+          className="flex items-center gap-1 hover:text-foreground transition-colors"
+        >
+          <Database className="size-3.5" />
+          {total != null ? (
+            <span className="tabular-nums">{formatTokenCount(total)}</span>
+          ) : null}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-60 gap-2 p-3 text-xs">
+        <div className="flex items-center justify-between gap-2 border-b border-border pb-1.5 font-medium">
+          <span className="flex items-center gap-1.5">
+            <Database className="size-3.5" />
+            {labels.tokenUsage}
+          </span>
+          {total != null ? (
+            <span className="tabular-nums">{total.toLocaleString()}</span>
+          ) : null}
+        </div>
+        <div className="space-y-1 text-muted-foreground">
+          {cacheHit != null ? (
+            <div className="flex items-center justify-between gap-2">
+              <span>{labels.cacheHit}</span>
+              <span className="tabular-nums">
+                {formatPercent(cacheHit, CACHE_HIT_RATE_DIGITS)}
+              </span>
+            </div>
+          ) : null}
+          {breakdown.map((row) => (
+            <div
+              key={row.key}
+              className="flex items-center justify-between gap-2"
+            >
+              <span>{labels.row(row.key)}</span>
+              <span className="tabular-nums">{row.value.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
       </PopoverContent>
     </Popover>
   )

@@ -2471,7 +2471,14 @@ export function MessageInput({
                 send button's right edge in the action bar above — no centring
                 slot, which would inset the narrow icon and break the alignment. */}
             <div className="flex shrink-0 items-center gap-3 pr-px">
-              <ComposerContextUsage tabId={attachmentTabId ?? null} />
+              <ComposerContextUsage
+                tabId={attachmentTabId ?? null}
+                part="tokens"
+              />
+              <ComposerContextUsage
+                tabId={attachmentTabId ?? null}
+                part="context"
+              />
               <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
             </div>
           </div>
