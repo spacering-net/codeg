@@ -18,6 +18,7 @@ import {
 import type { ImperativePanelGroupHandle } from "react-resizable-panels"
 import { FolderTitleBar } from "@/components/layout/folder-title-bar"
 import { Sidebar } from "@/components/layout/sidebar"
+import { SidebarConversationCompletionBridge } from "@/components/conversations/sidebar-conversation-attention"
 import { StatusBar } from "@/components/layout/status-bar"
 import {
   AppWorkspaceProvider,
@@ -1475,6 +1476,7 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>
+                      <SidebarConversationCompletionBridge />
                       <WorkspaceDocumentTitle />
                       <TabKeysSync />
                       <BrowserEventsBridge />

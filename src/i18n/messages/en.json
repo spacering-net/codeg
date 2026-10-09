@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "Move down",
       "sectionOrderItemLabel": "{name} — position {position} of {total}",
       "statusRunningBadge": "Running",
+      "statusNeedsAttentionBadge": "Needs your input",
+      "statusUnreadCompletionBadge": "Completed - click to review",
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
       "statusCancelledBadge": "Cancelled",
       "worktreeRemovedBadge": "Source worktree removed",

@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "下移",
       "sectionOrderItemLabel": "{name} — 第 {position} 位，共 {total} 位",
       "statusRunningBadge": "运行中",
+      "statusNeedsAttentionBadge": "等待你的输入",
+      "statusUnreadCompletionBadge": "已完成，点击查看",
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
       "worktreeRemovedBadge": "源 worktree 已删除",

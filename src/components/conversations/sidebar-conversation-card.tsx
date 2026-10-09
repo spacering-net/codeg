@@ -4,6 +4,7 @@ import {
   memo,
   useState,
   useCallback,
+  useId,
   type CSSProperties,
   type FocusEvent,
 } from "react"
@@ -21,6 +22,7 @@ import {
   FolderX,
   Info,
   ChevronRight,
+  BellRing,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -185,6 +187,8 @@ interface SidebarConversationCardProps {
   conversation: DbConversationSummary
   isSelected: boolean
   isOpenInTab?: boolean
+  needsAttention?: boolean
+  hasUnreadCompletion?: boolean
   timeLabel?: string
   onSelect: (id: number, agentType: string, folderId: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
@@ -208,6 +212,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   conversation,
   isSelected,
   isOpenInTab = false,
+  needsAttention = false,
+  hasUnreadCompletion = false,
   timeLabel,
   onSelect,
   onDoubleClick,
@@ -224,6 +230,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
   const tSidebar = useTranslations("Folder.sidebar")
+  const statusDescriptionId = useId()
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
   const [renameOpen, setRenameOpen] = useState(false)
@@ -368,13 +375,22 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     "group relative flex h-[1.9375rem] w-full items-center",
                     "rounded-full text-sidebar-foreground",
                     "transition-colors duration-[120ms]",
-                    isSelected
-                      ? "bg-sidebar-primary/8"
-                      : "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
+                    needsAttention
+                      ? "bg-amber-500/10 hover:bg-amber-500/15 dark:bg-amber-400/10 dark:hover:bg-amber-400/15"
+                      : hasUnreadCompletion
+                        ? "bg-emerald-500/10 hover:bg-emerald-500/15 dark:bg-emerald-400/10 dark:hover:bg-emerald-400/15"
+                        : isSelected
+                          ? "bg-sidebar-primary/8"
+                          : "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
                   )}
                 >
                   <button
                     data-conversation-id={conversation.id}
+                    aria-describedby={
+                      needsAttention || hasUnreadCompletion
+                        ? statusDescriptionId
+                        : undefined
+                    }
                     onClick={handleClick}
                     onDoubleClick={handleDblClick}
                     className={cn(
@@ -559,10 +575,39 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         // Roots swap the badge out for the hover actions; sub-sessions
                         // have no actions, so keep the badge (incl. the running
                         // spinner) visible on hover.
-                        !isSubsession && "group-hover:hidden"
+                        !isSubsession &&
+                          !needsAttention &&
+                          !hasUnreadCompletion &&
+                          "group-hover:hidden"
                       )}
                     >
-                      {isRunning ? (
+                      {needsAttention ? (
+                        <span
+                          className="relative inline-flex shrink-0 items-center justify-center"
+                          title={tSidebar("statusNeedsAttentionBadge")}
+                        >
+                          <BellRing
+                            className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300"
+                            aria-hidden
+                          />
+                          <span id={statusDescriptionId} className="sr-only">
+                            {tSidebar("statusNeedsAttentionBadge")}
+                          </span>
+                        </span>
+                      ) : hasUnreadCompletion ? (
+                        <span
+                          className="relative inline-flex shrink-0 items-center justify-center"
+                          title={tSidebar("statusUnreadCompletionBadge")}
+                        >
+                          <CheckCircle2
+                            className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300"
+                            aria-hidden
+                          />
+                          <span id={statusDescriptionId} className="sr-only">
+                            {tSidebar("statusUnreadCompletionBadge")}
+                          </span>
+                        </span>
+                      ) : isRunning ? (
                         <span
                           className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar("statusRunningBadge")}
@@ -611,55 +656,59 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     slot's right edge (0.75rem) — the same edge the default
                     time/status badge fills — instead of sitting ~5px in as a
                     centred icon in a transparent box would. */}
-                    {!isSubsession && (
-                      <div className="hidden items-center gap-px group-hover:flex">
-                        {onTogglePin && (
+                    {!isSubsession &&
+                      !needsAttention &&
+                      !hasUnreadCompletion && (
+                        <div className="hidden items-center gap-px group-hover:flex">
+                          {onTogglePin && (
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onTogglePin(conversation.id, !isPinned)
+                              }}
+                              title={isPinned ? t("unpin") : t("pin")}
+                              aria-label={isPinned ? t("unpin") : t("pin")}
+                              className={cn(
+                                "flex h-6 w-6 shrink-0 items-center justify-end rounded-[0.375rem]",
+                                "cursor-pointer outline-none transition-colors duration-150",
+                                "text-muted-foreground/90 hover:text-sidebar-foreground"
+                              )}
+                            >
+                              {isPinned ? (
+                                <PinOff className="h-[0.875rem] w-[0.875rem]" />
+                              ) : (
+                                <Pin className="h-[0.875rem] w-[0.875rem]" />
+                              )}
+                            </button>
+                          )}
                           <button
                             type="button"
                             tabIndex={-1}
                             onClick={(e) => {
                               e.stopPropagation()
-                              onTogglePin(conversation.id, !isPinned)
+                              onStatusChange(
+                                conversation.id,
+                                isCompleted ? "in_progress" : "completed"
+                              )
                             }}
-                            title={isPinned ? t("unpin") : t("pin")}
-                            aria-label={isPinned ? t("unpin") : t("pin")}
+                            title={
+                              isCompleted ? t("reopen") : t("markCompleted")
+                            }
+                            aria-label={
+                              isCompleted ? t("reopen") : t("markCompleted")
+                            }
                             className={cn(
                               "flex h-6 w-6 shrink-0 items-center justify-end rounded-[0.375rem]",
                               "cursor-pointer outline-none transition-colors duration-150",
                               "text-muted-foreground/90 hover:text-sidebar-foreground"
                             )}
                           >
-                            {isPinned ? (
-                              <PinOff className="h-[0.875rem] w-[0.875rem]" />
-                            ) : (
-                              <Pin className="h-[0.875rem] w-[0.875rem]" />
-                            )}
+                            <CheckCircle2 className="h-[0.875rem] w-[0.875rem]" />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          tabIndex={-1}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onStatusChange(
-                              conversation.id,
-                              isCompleted ? "in_progress" : "completed"
-                            )
-                          }}
-                          title={isCompleted ? t("reopen") : t("markCompleted")}
-                          aria-label={
-                            isCompleted ? t("reopen") : t("markCompleted")
-                          }
-                          className={cn(
-                            "flex h-6 w-6 shrink-0 items-center justify-end rounded-[0.375rem]",
-                            "cursor-pointer outline-none transition-colors duration-150",
-                            "text-muted-foreground/90 hover:text-sidebar-foreground"
-                          )}
-                        >
-                          <CheckCircle2 className="h-[0.875rem] w-[0.875rem]" />
-                        </button>
-                      </div>
-                    )}
+                        </div>
+                      )}
                   </div>
                 </div>
               </div>

@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "تحريك لأسفل",
       "sectionOrderItemLabel": "{name} — الموضع {position} من {total}",
       "statusRunningBadge": "قيد التشغيل",
+      "statusNeedsAttentionBadge": "يحتاج إلى إدخالك",
+      "statusUnreadCompletionBadge": "اكتملت - انقر للمراجعة",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "statusCancelledBadge": "ملغى",
       "worktreeRemovedBadge": "تمت إزالة شجرة العمل الأصلية",

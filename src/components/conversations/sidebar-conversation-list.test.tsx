@@ -66,6 +66,13 @@ const stableTabFns = vi.hoisted(() => ({
 }))
 
 const stableAgents = vi.hoisted(() => ({ sortedTypes: ["claude_code"] }))
+const sidebarAttention = vi.hoisted(() => ({ keys: new Set<string>() }))
+const sidebarCompletion = vi.hoisted(() => ({ keys: new Set<string>() }))
+
+vi.mock("./sidebar-conversation-attention", () => ({
+  useSidebarConversationAttention: () => sidebarAttention.keys,
+  useSidebarConversationCompletion: () => sidebarCompletion.keys,
+}))
 
 // Context functions are stable refs in production (useCallback values); the
 // mocks must be too, else the list's folder callbacks (which close over them)
@@ -332,6 +339,7 @@ beforeEach(() => {
   virtuaCtl.scrollOffset = 0
   virtuaCtl.onScroll = null
   virtuaCtl.scrollToIndex.mockClear()
+  sidebarAttention.keys.clear()
 })
 
 describe("SidebarConversationList — single status event re-render scope", () => {
@@ -409,6 +417,37 @@ describe("SidebarConversationList — single status event re-render scope", () =
 
     expect(probes.card).toBe(0)
     expect(probes.folder).toBe(0)
+  })
+})
+
+describe("SidebarConversationList — interaction attention", () => {
+  beforeEach(() => {
+    const folders = [folder(1, "Folder 1")]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [conv(11, 1, { status: "in_progress" })],
+    })
+    store.activeTabId = "tab-11"
+    store.tabSpec = [
+      {
+        id: "tab-11",
+        conversationId: 11,
+        agentType: "claude_code",
+        folderId: 1,
+        title: "conv-11",
+        isPinned: false,
+      },
+    ]
+  })
+
+  it("passes the live attention state to the matching conversation card", () => {
+    sidebarAttention.keys.add("claude_code:11")
+
+    render(tree())
+
+    expect(document.querySelector('[title="Needs your input"]')).not.toBeNull()
+    expect(document.querySelector('[title="Running"]')).toBeNull()
   })
 })
 

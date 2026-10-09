@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "아래로 이동",
       "sectionOrderItemLabel": "{name} — {total}개 중 {position}번째",
       "statusRunningBadge": "실행 중",
+      "statusNeedsAttentionBadge": "입력이 필요합니다",
+      "statusUnreadCompletionBadge": "완료됨 - 클릭하여 확인",
       "runningCountBadge": "{count}개 세션 실행 중",
       "statusCancelledBadge": "취소됨",
       "worktreeRemovedBadge": "원본 worktree가 삭제됨",

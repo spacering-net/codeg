@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "下へ移動",
       "sectionOrderItemLabel": "{name} — {total} 件中 {position} 番目",
       "statusRunningBadge": "実行中",
+      "statusNeedsAttentionBadge": "入力が必要です",
+      "statusUnreadCompletionBadge": "完了しました。クリックして確認",
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
       "worktreeRemovedBadge": "元の worktree は削除済み",

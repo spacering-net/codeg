@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "Nach unten",
       "sectionOrderItemLabel": "{name} — Position {position} von {total}",
       "statusRunningBadge": "Läuft",
+      "statusNeedsAttentionBadge": "Benötigt deine Eingabe",
+      "statusUnreadCompletionBadge": "Abgeschlossen - zum Prüfen klicken",
       "runningCountBadge": "{count, plural, one {# laufende Sitzung} other {# laufende Sitzungen}}",
       "statusCancelledBadge": "Abgebrochen",
       "worktreeRemovedBadge": "Quell-Worktree entfernt",

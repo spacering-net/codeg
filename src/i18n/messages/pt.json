@@ -1934,6 +1934,8 @@
       "sectionOrderMoveDown": "Mover para baixo",
       "sectionOrderItemLabel": "{name} — posição {position} de {total}",
       "statusRunningBadge": "Executando",
+      "statusNeedsAttentionBadge": "Precisa da sua resposta",
+      "statusUnreadCompletionBadge": "Concluído - clique para revisar",
       "runningCountBadge": "{count, plural, one {# sessão em execução} other {# sessões em execução}}",
       "statusCancelledBadge": "Cancelado",
       "worktreeRemovedBadge": "Worktree de origem removida",
