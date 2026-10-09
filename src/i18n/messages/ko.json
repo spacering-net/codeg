@@ -2223,6 +2223,28 @@
         "loadFailed": "상태를 읽을 수 없습니다: {message}",
         "openSettings": "전체 설정 열기",
         "refresh": "새로 고침"
+      },
+      "quota": {
+        "title": "할당량",
+        "plan": "요금제",
+        "fiveHourWindow": "5시간 주기",
+        "weeklyWindow": "주간 한도",
+        "shortWindow": "단기 주기",
+        "remaining": "남음",
+        "used": "사용됨",
+        "resetsIn": "{time} 후 초기화",
+        "resetsSoon": "곧 초기화",
+        "refresh": "할당량 새로고침",
+        "refreshing": "새로고침 중...",
+        "noQuota": "할당량 정보 없음",
+        "spendLimit": "지출 한도",
+        "lastUpdated": "{time} 업데이트",
+        "lowQuotaWarning": "할당량이 부족합니다",
+        "triggerAria": "할당량 상태 보기",
+        "hours": "시간",
+        "minutes": "분",
+        "days": "일",
+        "seconds": "초"
       }
     },
     "auxPanel": {

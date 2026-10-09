@@ -156,15 +156,20 @@ export class WebTransport implements Transport {
       () => controller.abort(),
       effectiveTimeoutMs
     )
+    const method = options?.webMethod ?? "POST"
+    const isGet = method === "GET"
+    const url = options?.webPath
+      ? `${this.baseUrl}${options.webPath.startsWith("/") ? "" : "/"}${options.webPath}`
+      : `${this.baseUrl}/api/${command}`
     let res: Response
     try {
-      res = await fetch(`${this.baseUrl}/api/${command}`, {
-        method: "POST",
+      res = await fetch(url, {
+        method,
         headers: {
-          "Content-Type": "application/json",
+          ...(isGet ? {} : { "Content-Type": "application/json" }),
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(args ?? {}),
+        body: isGet ? undefined : JSON.stringify(args ?? {}),
         signal: controller.signal,
       })
     } catch (err) {

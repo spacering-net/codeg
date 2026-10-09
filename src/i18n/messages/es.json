@@ -2223,6 +2223,28 @@
         "loadFailed": "No se pudo leer el estado: {message}",
         "openSettings": "Abrir ajustes completos",
         "refresh": "Actualizar"
+      },
+      "quota": {
+        "title": "Quota",
+        "plan": "Plan",
+        "fiveHourWindow": "5-Hour Window",
+        "weeklyWindow": "Weekly Limit",
+        "shortWindow": "Short Window",
+        "remaining": "Remaining",
+        "used": "Used",
+        "resetsIn": "Resets in {time}",
+        "resetsSoon": "Resets soon",
+        "refresh": "Refresh Quota",
+        "refreshing": "Refreshing...",
+        "noQuota": "No quota information available",
+        "spendLimit": "Spend Limit",
+        "lastUpdated": "Updated {time}",
+        "lowQuotaWarning": "Quota running low",
+        "triggerAria": "View quota status",
+        "hours": "h",
+        "minutes": "m",
+        "days": "d",
+        "seconds": "s"
       }
     },
     "auxPanel": {

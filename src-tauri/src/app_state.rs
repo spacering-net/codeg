@@ -96,6 +96,8 @@ pub struct AppState {
     /// The upgrade UI subscribes to it and re-syncs from a snapshot on mount,
     /// so download progress survives settings-page navigation and reloads.
     pub update_state: crate::update::AppUpdateStateHandle,
+    /// Quota tracking and fetch manager for supported agents.
+    pub quota_manager: Arc<crate::quota::QuotaManager>,
 }
 
 pub fn default_system_op_lock() -> Arc<tokio::sync::Mutex<()>> {
@@ -116,6 +118,10 @@ pub fn default_terminal_manager() -> TerminalManager {
 
 pub fn default_chat_channel_manager() -> ChatChannelManager {
     ChatChannelManager::new()
+}
+
+pub fn default_quota_manager() -> Arc<crate::quota::QuotaManager> {
+    Arc::new(crate::quota::QuotaManager::new())
 }
 
 /// Build the delegation broker + token registry + per-process UDS socket
@@ -281,6 +287,7 @@ impl AppState {
             computer_service: std::sync::OnceLock::new(),
             system_op_lock: default_system_op_lock(),
             update_state: default_update_state(),
+            quota_manager: Arc::new(crate::quota::QuotaManager::new()),
         }
     }
 }

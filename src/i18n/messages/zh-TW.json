@@ -2223,6 +2223,28 @@
         "loadFailed": "無法讀取狀態：{message}",
         "openSettings": "開啟詳細設定",
         "refresh": "重新整理"
+      },
+      "quota": {
+        "title": "配額",
+        "plan": "套餐方案",
+        "fiveHourWindow": "5小時週期",
+        "weeklyWindow": "週週期",
+        "shortWindow": "短週期",
+        "remaining": "剩餘",
+        "used": "已用",
+        "resetsIn": "{time}後重置",
+        "resetsSoon": "即將重置",
+        "refresh": "重新整理配額",
+        "refreshing": "重新整理中...",
+        "noQuota": "暫無配額資訊",
+        "spendLimit": "消費上限",
+        "lastUpdated": "更新於 {time}",
+        "lowQuotaWarning": "配額即將耗盡",
+        "triggerAria": "檢視配額狀態",
+        "hours": "小時",
+        "minutes": "分",
+        "days": "天",
+        "seconds": "秒"
       }
     },
     "auxPanel": {

@@ -2223,6 +2223,28 @@
         "loadFailed": "无法读取状态：{message}",
         "openSettings": "打开详细设置",
         "refresh": "刷新"
+      },
+      "quota": {
+        "title": "额度",
+        "plan": "计划",
+        "fiveHourWindow": "5小时窗口",
+        "weeklyWindow": "周额度",
+        "shortWindow": "短周期窗口",
+        "remaining": "剩余",
+        "used": "已用",
+        "resetsIn": "{time}后重置",
+        "resetsSoon": "即将重置",
+        "refresh": "刷新额度",
+        "refreshing": "正在刷新...",
+        "noQuota": "暂无额度信息",
+        "spendLimit": "费用上限",
+        "lastUpdated": "更新于 {time}",
+        "lowQuotaWarning": "额度不足",
+        "triggerAria": "查看配额状态",
+        "hours": "小时",
+        "minutes": "分",
+        "days": "天",
+        "seconds": "秒"
       }
     },
     "auxPanel": {

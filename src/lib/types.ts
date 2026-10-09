@@ -5244,3 +5244,27 @@ export interface DeepSeekModelCatalog {
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
 }
+
+// ─── Agent Quota ─────────────────────────────────────────────────────────────
+
+export interface QuotaWindow {
+  label: string
+  usedPercent: number
+  remainingPercent: number
+  resetsAt?: string | null
+  resetInSeconds?: number | null
+}
+
+export interface SpendLimit {
+  usedUsd: number
+  limitUsd: number
+}
+
+export interface AgentQuotaInfo {
+  agentType: string
+  planName?: string | null
+  shortWindow?: QuotaWindow | null
+  weeklyWindow?: QuotaWindow | null
+  spendLimit?: SpendLimit | null
+  lastUpdated: string
+}

@@ -2223,6 +2223,28 @@
         "loadFailed": "状態を取得できませんでした: {message}",
         "openSettings": "詳細設定を開く",
         "refresh": "更新"
+      },
+      "quota": {
+        "title": "クォータ",
+        "plan": "プラン",
+        "fiveHourWindow": "5時間ウィンドウ",
+        "weeklyWindow": "週間上限",
+        "shortWindow": "短期ウィンドウ",
+        "remaining": "残り",
+        "used": "使用済み",
+        "resetsIn": "{time}後にリセット",
+        "resetsSoon": "まもなくリセット",
+        "refresh": "クォータを更新",
+        "refreshing": "更新中...",
+        "noQuota": "クォータ情報はありません",
+        "spendLimit": "利用上限",
+        "lastUpdated": "{time} 更新",
+        "lowQuotaWarning": "クォータ残量が少なくなっています",
+        "triggerAria": "クォータ状態を表示",
+        "hours": "時間",
+        "minutes": "分",
+        "days": "日",
+        "seconds": "秒"
       }
     },
     "auxPanel": {

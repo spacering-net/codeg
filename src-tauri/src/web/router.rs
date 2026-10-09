@@ -33,6 +33,11 @@ pub fn build_router(
 
     let api = Router::new()
         .route("/health", post(health_check))
+        // ─── Agent Quota ───
+        .route(
+            "/quota/{agent_type}",
+            get(handlers::quota::get_agent_quota).post(handlers::quota::refresh_agent_quota),
+        )
         // Debug endpoint: operator-facing snapshot of `EventBusMetrics`
         // (emit volume, lag/eviction counts, attach decision counts).
         // Sits behind the same auth middleware as every other route.

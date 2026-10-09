@@ -81,6 +81,7 @@ import {
   useConversationFolderBranchPickerVisible,
   type ConversationFolderPickerOverride,
 } from "@/components/chat/conversation-context-bar"
+import { ComposerQuotaBadge } from "@/components/chat/composer-quota-badge"
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
@@ -2471,6 +2472,7 @@ export function MessageInput({
                 send button's right edge in the action bar above — no centring
                 slot, which would inset the narrow icon and break the alignment. */}
             <div className="flex shrink-0 items-center gap-3 pr-px">
+              <ComposerQuotaBadge tabId={attachmentTabId ?? null} />
               <ComposerContextUsage tabId={attachmentTabId ?? null} />
               <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
             </div>
