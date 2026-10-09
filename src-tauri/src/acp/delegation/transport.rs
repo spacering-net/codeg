@@ -68,7 +68,8 @@ use crate::acp::question::QuestionSpec;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerRequest {
     /// Shared secret minted by the main process when it spawned the agent CLI;
-    /// the agent passes it through to the companion via `--token`. Rejects
+    /// the agent passes it through to the companion via its per-server
+    /// `CODEG_MCP_TOKEN` environment variable. Rejects
     /// anything else.
     pub token: String,
     /// codeg-internal ACP connection UUID for the parent session.
