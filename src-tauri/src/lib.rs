@@ -1234,7 +1234,24 @@ mod tauri_app {
                             notify_web_auto_start_failed(app.handle(), port, &err);
                         }
                     }
-                    Ok(_) => {}
+                    Ok(config) => {
+                        // `CODEG_STATIC_DIR` forces the web server on so the
+                        // desktop window can load from an external directory.
+                        if web::external_static_dir().is_some() {
+                            let ws = app.state::<web::WebServerState>();
+                            if let Err(err) =
+                                tauri::async_runtime::block_on(web::do_start_web_server_tauri(
+                                    app.handle().clone(),
+                                    &ws,
+                                    config.port,
+                                    None,
+                                    config.token,
+                                ))
+                            {
+                                tracing::error!("[WEB] CODEG_STATIC_DIR force-start failed: {err}");
+                            }
+                        }
+                    }
                     Err(err) => tracing::error!("[WEB] failed to load auto-start config: {err}"),
                 }
 
@@ -1379,7 +1396,24 @@ mod tauri_app {
                 // actions still bring it up, and so do the Dock and a second
                 // launch once no other workspace is open or on its way back.
                 if app.get_webview_window("main").is_none() {
-                    let url = tauri::WebviewUrl::App(workspace_path.into());
+                    let url = if web::external_static_dir().is_some() {
+                        let port = app
+                            .state::<web::WebServerState>()
+                            .running_port();
+                        let path = if workspace_path.starts_with('/') {
+                            workspace_path
+                        } else {
+                            format!("/{workspace_path}")
+                        };
+                        let external =
+                            format!("http://127.0.0.1:{port}{path}");
+                        tracing::info!(
+                            "[WEB] Desktop window loading from external dir: {external}"
+                        );
+                        tauri::WebviewUrl::External(external.parse().unwrap())
+                    } else {
+                        tauri::WebviewUrl::App(workspace_path.into())
+                    };
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                         .title("Codeg")
                         .inner_size(1260.0, 860.0)
