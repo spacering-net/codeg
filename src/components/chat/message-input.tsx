@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useTranslations } from "next-intl"
+import { useTranslations, useLocale } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -157,6 +157,8 @@ import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
+import { useVoiceInput } from "@/components/chat/composer/use-voice-input"
+import { ComposerVoiceButton } from "@/components/chat/composer/composer-voice-button"
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -406,6 +408,7 @@ export function MessageInput({
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
+  const locale = useLocale()
   // Kept as a separate binding from `t` so its call sites — exclusively
   // upload / attachment toasts — read as a single coherent group when
   // scanning the file. Same namespace, no extra runtime cost.
@@ -478,6 +481,20 @@ export function MessageInput({
     const ed = editorRef.current?.getEditor()
     setComposerEmpty(ed ? isComposerEmpty(ed) : true)
   }, [])
+
+  const handleVoiceTranscript = useCallback((text: string) => {
+    if (!text) return
+    const editor = editorRef.current?.getEditor()
+    if (!editor) return
+    editor.chain().focus().insertContent(text).run()
+    setComposerEmpty(isComposerEmpty(editor))
+  }, [])
+
+  const voice = useVoiceInput({
+    engine: "gemini",
+    lang: locale?.toLowerCase().startsWith("zh") ? "zh-CN" : (locale || "zh-CN"),
+    onTranscript: handleVoiceTranscript,
+  })
 
   // Attachments (images → thumbnail strip, files → inline badges) and the "+"
   // menu's insertable shortcuts. Both are shared with the to-do task composers,
@@ -2360,7 +2377,17 @@ export function MessageInput({
                     </div>
                   )}
                 </div>
-                <div className="shrink-0">{actionButtons}</div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <ComposerVoiceButton
+                    voice={voice}
+                    disabled={disabled && !isPrompting && !isEditingQueueItem}
+                    label={t("voiceInput")}
+                    listeningLabel={t("voiceListening")}
+                    transcribingLabel={t("voiceTranscribing")}
+                    permissionDeniedLabel={t("micPermissionDenied")}
+                  />
+                  {actionButtons}
+                </div>
               </div>
               {showDragActive && (
                 <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-md border border-dashed border-primary/50 bg-background/80 text-xs text-muted-foreground">
