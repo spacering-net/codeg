@@ -2,7 +2,12 @@ services:
   codeg:
     build: .
     # Or use a pre-built image:
-    # image: xintaofei/codeg:latest
+    # image: xintaofei/codeg:latest 
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     ports:
       - "3080:3080"
       # Port bridge for dev servers started by agents inside the container:
@@ -12,11 +17,18 @@ services:
       # Drop this line if you set CODEG_BRIDGE_HOST_PATTERN below.
       - "3081-3090:3081-3090"
     volumes:
-      - codeg-data:/data
+      - ./data/cache:/root/.cache
+      - ./data/config:/root/.config
+      - ./data/local:/root/.local
+      - ./data/gitconfig:/root/.gitconfig
+      - ./data/ssh:/root/.ssh
+      - ./data/codex:/root/.codex
+      - ./data/codeg:/root/.codeg
       # Mount your project directories (optional):
       # - /path/to/projects:/projects
     environment:
       - CODEG_TOKEN=${CODEG_TOKEN:-}
+      - CODEG_DATA_DIR=/root/.local/share/codeg
       - CODEG_PORT=3080
       - CODEG_HOST=0.0.0.0
       # - CODEG_BRIDGE_PORTS=3081-3090   # or `off` to disable the port bridge
@@ -36,6 +48,3 @@ services:
     # `docker pull`) starts from the image again and drops the upgrade. Build or
     # pull an image at the new version and recreate to make it permanent.
     restart: unless-stopped
-
-volumes:
-  codeg-data:
