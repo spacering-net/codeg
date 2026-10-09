@@ -1676,8 +1676,9 @@ export function mergeAdjacentToolGroups(
 /**
  * Wrap any consecutive run of tool-call parts into a single tool-group.
  * Text, reasoning, tool-result and any other part types break the run.
- * Even a single tool call is wrapped, so the renderer can present a uniform
- * collapsed summary across history.
+ * Even a single tool call is wrapped — grouping stays uniform at this layer —
+ * but the renderer unwraps a one-item group back into a direct tool card, so
+ * lone calls never hide behind a "Ran 1 command" pill.
  */
 export function groupConsecutiveToolCalls(
   parts: AdaptedContentPart[]

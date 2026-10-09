@@ -3128,6 +3128,15 @@ const ToolGroupPart = memo(function ToolGroupPart({
 
   if (part.items.length === 0) return null
 
+  // A lone call has nothing to summarize — the pill would only read
+  // "Ran 1 command" and hide the card one click away. Unwrap it back to the
+  // direct tool card (the same one the expanded list below renders), so a
+  // single call sitting between two reasoning blocks reads as a plain card.
+  const [solo] = part.items
+  if (part.items.length === 1 && solo) {
+    return <ToolCallPart part={solo} />
+  }
+
   const joiner = t("joiner")
   const titleText = phrases.join(joiner)
 
