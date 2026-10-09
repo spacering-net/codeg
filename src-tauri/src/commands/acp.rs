@@ -7520,6 +7520,15 @@ const HERMES_PROVIDERS: &[HermesProvider] = &[
         needs_base_url: false,
         base_url_env_var: "OPENROUTER_BASE_URL",
     },
+    // OrcaRouter — OpenAI-compatible AI gateway (models.dev catalog, env var
+    // `ORCAROUTER_API_KEY`). Resolved by Hermes through the same models.dev
+    // fallback as openrouter (`get_provider`), so no auth.py entry exists.
+    HermesProvider {
+        id: "orcarouter",
+        key_env_var: "ORCAROUTER_API_KEY",
+        needs_base_url: false,
+        base_url_env_var: "ORCAROUTER_BASE_URL",
+    },
     HermesProvider {
         id: "openai-api",
         key_env_var: "OPENAI_API_KEY",
@@ -19255,6 +19264,7 @@ wire_api = "chat"
         // of GLM_API_KEY) fails CI rather than silently sending the wrong key var.
         let expected: &[(&str, &str)] = &[
             ("openrouter", "OPENROUTER_API_KEY"),
+            ("orcarouter", "ORCAROUTER_API_KEY"),
             ("openai-api", "OPENAI_API_KEY"),
             ("anthropic", "ANTHROPIC_API_KEY"),
             ("gemini", "GOOGLE_API_KEY"),
