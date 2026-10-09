@@ -1042,6 +1042,7 @@ pub fn build_router(
             "/acp_qoder_auth_status",
             post(handlers::acp::acp_qoder_auth_status),
         )
+        .route("/acp_qoder_quota", post(handlers::acp::acp_qoder_quota))
         .route(
             "/acp_update_kimi_code_config",
             post(handlers::acp::acp_update_kimi_code_config),

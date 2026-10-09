@@ -926,7 +926,9 @@
       "saveToken": "保存令牌",
       "advancedToggle": "高级：原始 settings.json",
       "advancedHint": "完整的 settings.json，保存时按原文写入——这也是唯一能删除某个键的入口。",
-      "saveRawConfig": "保存文件"
+      "saveRawConfig": "保存文件",
+      "quotaRemaining": "剩余 {credits}",
+      "quotaExceeded": "额度已用完"
     },
     "antigravity": {
       "configDescription": "Antigravity 必须先选定认证方式才能开始会话。所选方式会写入 $GEMINI_HOME/antigravity-acp/settings.json 的 auth.type —— 这是 ACP 服务端唯一读取的位置，不写就每次新建会话都会报 “Authentication required”。模型与会话模式不在这里：Antigravity 通过 ACP 上报它们，由输入框的选择器按会话管理。",

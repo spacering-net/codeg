@@ -77,6 +77,7 @@ import type {
   CursorAuthStatus,
   CursorModelsResult,
   QoderAuthStatus,
+  QoderQuota,
   CodexModelInfo,
   AgentSkillScope,
   AgentSkillLayout,
@@ -683,6 +684,18 @@ export async function acpQoderAuthStatus(
   personalAccessToken?: string
 ): Promise<QoderAuthStatus> {
   return getTransport().call("acp_qoder_auth_status", { personalAccessToken })
+}
+
+/**
+ * Read the account's remaining Qoder credits through the CLI's own
+ * `get_usage_info` control request. Resolves to `null` — no credits on the
+ * card, never an error — when the CLI is missing, holds no usable credential,
+ * or the lookup failed.
+ */
+export async function acpQoderQuota(
+  personalAccessToken?: string
+): Promise<QoderQuota | null> {
+  return getTransport().call("acp_qoder_quota", { personalAccessToken })
 }
 
 /**

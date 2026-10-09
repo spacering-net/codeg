@@ -926,7 +926,9 @@
       "saveToken": "토큰 저장",
       "advancedToggle": "고급: 원본 settings.json",
       "advancedHint": "settings.json 전체입니다. 저장하면 그대로 기록되며, 키를 삭제할 수 있는 유일한 경로이기도 합니다.",
-      "saveRawConfig": "파일 저장"
+      "saveRawConfig": "파일 저장",
+      "quotaRemaining": "{credits} 남음",
+      "quotaExceeded": "할당량 소진"
     },
     "antigravity": {
       "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",

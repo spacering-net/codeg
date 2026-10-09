@@ -4,16 +4,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   buildQoderEnv,
+  formatQoderCredits,
   QoderConfigPanel,
   qoderAuthMethod,
   qoderLoginCommand,
+  qoderQuotaSummary,
 } from "./qoder-config-panel"
-import { acpQoderAuthStatus, acpUpdateAgentConfig } from "@/lib/api"
-import type { AcpAgentInfo } from "@/lib/types"
+import {
+  acpQoderAuthStatus,
+  acpQoderQuota,
+  acpUpdateAgentConfig,
+} from "@/lib/api"
+import type { AcpAgentInfo, QoderAuthStatus, QoderQuota } from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
 
 vi.mock("@/lib/api", () => ({
   acpQoderAuthStatus: vi.fn(),
+  acpQoderQuota: vi.fn(),
   acpUpdateAgentConfig: vi.fn(),
 }))
 
@@ -66,6 +73,82 @@ describe("qoderAuthMethod", () => {
   })
 })
 
+describe("qoderQuotaSummary", () => {
+  const labels = {
+    remaining: (credits: string) => `${credits} credits left`,
+    exceeded: "Quota exhausted",
+  }
+
+  /** The shape the CLI's usage reply summarizes to: one package the account is
+   *  drawing on, no org package, no add-on. Synthetic numbers on purpose. */
+  const quotaOf = (overrides: Partial<QoderQuota> = {}): QoderQuota => ({
+    personal: {
+      total: 3000,
+      used: 2212,
+      remaining: 788,
+      percentage: 73.73,
+      unit: "credits",
+      available: true,
+    },
+    organization: null,
+    add_on: null,
+    total_remaining: 788,
+    unit: "credits",
+    total_usage_percentage: 73.73,
+    is_quota_exceeded: false,
+    ...overrides,
+  })
+
+  // One number beside the account name: the packages it is summed from are not
+  // itemised in the card.
+  it("shows the summed credits and nothing else", () => {
+    const { line, title } = qoderQuotaSummary(quotaOf(), labels)
+    expect(line).toBe("788 credits left")
+    expect(title).toBe("788 credits left")
+    expect(line).not.toContain("Personal")
+    expect(line).not.toContain("Org")
+  })
+
+  // The unit word comes from the message, so it is spelled in the reader's
+  // language rather than pasted from whatever token the service sent.
+  it("spells the unit from the message it is handed", () => {
+    const zh = {
+      remaining: (credits: string) => `剩余 ${credits}`,
+      exceeded: "额度已用完",
+    }
+    expect(qoderQuotaSummary(quotaOf(), zh).line).toBe("剩余 788")
+    // The payload's own `unit` never reaches the line.
+    expect(
+      qoderQuotaSummary(quotaOf({ unit: "credits" }), zh).line
+    ).not.toContain("credits")
+  })
+
+  it("reports a zero balance rather than dropping the row", () => {
+    expect(
+      qoderQuotaSummary(quotaOf({ total_remaining: 0 }), labels).line
+    ).toBe("0 credits left")
+  })
+
+  // The backend decides exhaustion (the CLI's rule: the flag, else a spent
+  // allowance, else nothing left); the row only carries the note through.
+  it("carries the exhausted note the backend decided on", () => {
+    expect(qoderQuotaSummary(quotaOf(), labels).title).not.toContain(
+      "exhausted"
+    )
+    expect(
+      qoderQuotaSummary(quotaOf({ is_quota_exceeded: true }), labels).title
+    ).toContain("Quota exhausted")
+  })
+
+  it("keeps whole credits whole and drops unusable numbers", () => {
+    expect(formatQoderCredits(3000)).toBe("3000")
+    expect(formatQoderCredits(12.5)).toBe("12.5")
+    expect(formatQoderCredits(0)).toBe("0")
+    expect(formatQoderCredits(null)).toBe("")
+    expect(formatQoderCredits(Number.NaN)).toBe("")
+  })
+})
+
 describe("QoderConfigPanel", () => {
   const m = enMessages.AcpAgentSettings.qoder
 
@@ -115,6 +198,43 @@ describe("QoderConfigPanel", () => {
     }
   }
 
+  /** A signed-in card, with synthetic account data. */
+  function signedIn(overrides: Partial<QoderAuthStatus> = {}): QoderAuthStatus {
+    return {
+      installed: true,
+      logged_in: true,
+      username: "demo-user",
+      email: null,
+      user_type: "personal_standard",
+      version: "1.1.64",
+      allow_byok: null,
+      error: null,
+      binary_path: "/usr/local/bin/qoder",
+      ...overrides,
+    }
+  }
+
+  /** The credits the usage probe reports, summed across the packages. */
+  function creditsOf(overrides: Partial<QoderQuota> = {}): QoderQuota {
+    return {
+      personal: {
+        total: 3000,
+        used: 2212,
+        remaining: 788,
+        percentage: 73.73,
+        unit: "credits",
+        available: true,
+      },
+      organization: null,
+      add_on: null,
+      total_remaining: 788,
+      unit: "credits",
+      total_usage_percentage: 73.73,
+      is_quota_exceeded: false,
+      ...overrides,
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(acpQoderAuthStatus).mockResolvedValue({
@@ -128,27 +248,125 @@ describe("QoderConfigPanel", () => {
       error: null,
       binary_path: null,
     })
+    vi.mocked(acpQoderQuota).mockResolvedValue(null)
     vi.mocked(acpUpdateAgentConfig).mockResolvedValue(0)
   })
 
   it("shows the signed-in account, tier and probed CLI version", async () => {
-    vi.mocked(acpQoderAuthStatus).mockResolvedValue({
-      installed: true,
-      logged_in: true,
-      username: "tao fei",
-      email: "t@example.com",
-      user_type: "personal_standard",
-      version: "1.1.25",
-      allow_byok: false,
-      error: null,
-      binary_path: "/usr/local/bin/qoder",
-    })
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
     renderPanel()
-    expect(await screen.findByText("tao fei")).toBeTruthy()
+    expect(await screen.findByText("demo-user")).toBeTruthy()
     expect(screen.getByText("personal_standard")).toBeTruthy()
-    expect(screen.getByText("1.1.25")).toBeTruthy()
+    expect(screen.getByText("1.1.64")).toBeTruthy()
     // Signed in ⇒ no login command on screen.
     expect(screen.queryByText(/qoder login$/)).toBeNull()
+  })
+
+  it("shows the account's credits beside the account name", async () => {
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
+    vi.mocked(acpQoderQuota).mockResolvedValue(creditsOf())
+    renderPanel()
+    expect(await screen.findByText("demo-user")).toBeTruthy()
+    await waitFor(() =>
+      expect(screen.getByTestId("qoder-quota").textContent).toBe(
+        "788 credits left"
+      )
+    )
+  })
+
+  // The usage lookup takes seconds; the account line must not wait for it.
+  it("shows the account name before the credits arrive", async () => {
+    let release: (value: QoderQuota | null) => void = () => {}
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
+    vi.mocked(acpQoderQuota).mockReturnValue(
+      new Promise<QoderQuota | null>((resolve) => {
+        release = resolve
+      })
+    )
+    renderPanel()
+    expect(await screen.findByText("demo-user")).toBeTruthy()
+    expect(screen.queryByTestId("qoder-quota")).toBeNull()
+
+    await act(async () => {
+      release(creditsOf())
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId("qoder-quota").textContent).toBe(
+        "788 credits left"
+      )
+    )
+  })
+
+  // Signed out, no credential the CLI can use, or a failed lookup: all three
+  // answer without credits, and the row simply carries no numbers.
+  it("leaves the credits out when the lookup has none", async () => {
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
+    vi.mocked(acpQoderQuota).mockResolvedValue(null)
+    renderPanel()
+    expect(await screen.findByText("demo-user")).toBeTruthy()
+    await waitFor(() => expect(acpQoderQuota).toHaveBeenCalled())
+    expect(screen.queryByTestId("qoder-quota")).toBeNull()
+  })
+
+  it("leaves the credits out when the call itself fails", async () => {
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
+    vi.mocked(acpQoderQuota).mockRejectedValue(new Error("transport"))
+    renderPanel()
+    expect(await screen.findByText("demo-user")).toBeTruthy()
+    expect(screen.queryByTestId("qoder-quota")).toBeNull()
+  })
+
+  // Both calls answer at their own pace, so a reply from a refresh that has
+  // already been superseded must not land on the row.
+  it("ignores a credits reply from an older refresh", async () => {
+    const pending: Array<(value: QoderQuota | null) => void> = []
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
+    vi.mocked(acpQoderQuota).mockImplementation(
+      () =>
+        new Promise<QoderQuota | null>((resolve) => {
+          pending.push(resolve)
+        })
+    )
+    renderPanel()
+    await screen.findByText("demo-user")
+    await waitFor(() => expect(pending.length).toBe(1))
+
+    fireEvent.click(screen.getByTestId("qoder-auth-refresh"))
+    await waitFor(() => expect(pending.length).toBe(2))
+    await act(async () => {
+      pending[1](creditsOf({ total_remaining: 500 }))
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId("qoder-quota").textContent).toBe(
+        "500 credits left"
+      )
+    )
+
+    // The first refresh finally answers with the older balance.
+    await act(async () => {
+      pending[0](creditsOf({ total_remaining: 788 }))
+    })
+    expect(screen.getByTestId("qoder-quota").textContent).toBe(
+      "500 credits left"
+    )
+  })
+
+  // A balance belongs to one account: a new credential on screen drops it until
+  // a refresh answers for that credential.
+  it("drops the previous account's credits when the token changes", async () => {
+    vi.mocked(acpQoderAuthStatus).mockResolvedValue(signedIn())
+    vi.mocked(acpQoderQuota).mockResolvedValue(creditsOf())
+    renderPanel()
+    await waitFor(() =>
+      expect(screen.getByTestId("qoder-quota").textContent).toBe(
+        "788 credits left"
+      )
+    )
+
+    fireEvent.change(screen.getByPlaceholderText(m.tokenPlaceholder), {
+      target: { value: "pat-other-account" },
+    })
+    await waitFor(() => expect(screen.queryByTestId("qoder-quota")).toBeNull())
   })
 
   it("offers the resolved login command when signed out", async () => {

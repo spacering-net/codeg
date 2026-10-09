@@ -926,7 +926,9 @@
       "saveToken": "Enregistrer le jeton",
       "advancedToggle": "Avancé : settings.json brut",
       "advancedHint": "Le settings.json complet. L'enregistrement écrit le fichier tel quel — c'est aussi le seul moyen de supprimer une clé.",
-      "saveRawConfig": "Enregistrer le fichier"
+      "saveRawConfig": "Enregistrer le fichier",
+      "quotaRemaining": "{credits} crédits restants",
+      "quotaExceeded": "Quota épuisé"
     },
     "antigravity": {
       "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",

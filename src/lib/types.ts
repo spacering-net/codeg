@@ -3663,6 +3663,37 @@ export interface QoderAuthStatus {
   binary_path?: string | null
 }
 
+// One package of a Qoder account's credits, as the CLI's `get_usage_info`
+// reports it: the personal plan, the organization's shared resource package, or
+// an add-on package. `percentage` is in percentage POINTS (the CLI multiplies a
+// fraction in [0, 1] by 100), not a fraction; `available` is false when the
+// account has the package but is not drawing on it.
+export interface QoderQuotaSlice {
+  total: number | null
+  used: number | null
+  remaining: number | null
+  percentage: number | null
+  unit: string | null
+  available: boolean | null
+}
+
+// The account's remaining Qoder credits, read through the CLI's own
+// `get_usage_info` control request — the same credential the CLI launches with,
+// so a browser login gets numbers too. `acpQoderQuota` resolves to null (no
+// credits shown, never an error) when the CLI holds no usable credential or the
+// lookup failed.
+export interface QoderQuota {
+  personal: QoderQuotaSlice | null
+  organization: QoderQuotaSlice | null
+  add_on: QoderQuotaSlice | null
+  /** Remaining credits summed across the packages above — what the account can
+   * still spend before Qoder starts rejecting requests. */
+  total_remaining: number
+  unit: string | null
+  total_usage_percentage: number | null
+  is_quota_exceeded: boolean
+}
+
 // The newest upstream release of an agent, newer than codeg's pinned version,
 // returned by acp_fetch_agent_latest_release. Unreviewed by codeg; `version` is
 // already in the form Custom install accepts.

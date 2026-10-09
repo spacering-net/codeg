@@ -1896,11 +1896,61 @@ pub struct CursorModelsResult {
     pub error: Option<String>,
 }
 
+/// One slice of the account's Qoder credits, as the CLI's `get_usage_info`
+/// answer reports it: the personal plan, the organization's shared resource
+/// package, or an add-on package. `total`/`used`/`remaining` are credits.
+///
+/// `percentage` is in percentage POINTS, not a fraction: the CLI multiplies a
+/// fraction in `[0, 1]` by 100 and passes anything larger through unchanged.
+/// `available` is the service saying the slice exists but its package is not
+/// active for this account.
+#[derive(Debug, Clone, Serialize)]
+pub struct QoderQuotaSlice {
+    pub total: Option<f64>,
+    pub used: Option<f64>,
+    pub remaining: Option<f64>,
+    pub percentage: Option<f64>,
+    pub unit: Option<String>,
+    pub available: Option<bool>,
+}
+
+/// The account's remaining Qoder credits, read through the CLI's own
+/// `get_usage_info` control request.
+///
+/// The CLI answers with whatever credential it is holding - the personal access
+/// token in its environment when one is set, otherwise the stored browser
+/// login, which never leaves the CLI's own store - so codeg carries no copy of
+/// Qoder's token exchange, host choice or headers, and a browser login gets
+/// numbers too.
+///
+/// `None` whenever the CLI is missing, has no usable credential, is signed out,
+/// or the lookup failed; the panel then shows no credits rather than an error.
+#[derive(Debug, Clone, Serialize)]
+pub struct QoderQuota {
+    /// Personal plan credits (`userQuota`).
+    pub personal: Option<QoderQuotaSlice>,
+    /// Organization resource package (`orgResourcePackage` / `sharedQuota`).
+    pub organization: Option<QoderQuotaSlice>,
+    /// Add-on package (`addOnQuota`).
+    pub add_on: Option<QoderQuotaSlice>,
+    /// Remaining credits summed across the slices above - what the account can
+    /// still spend before Qoder starts rejecting requests.
+    pub total_remaining: f64,
+    /// Credit unit the service labelled the slices with, e.g. `credits`.
+    pub unit: Option<String>,
+    /// Share of the whole allowance already spent, as the service reports it.
+    pub total_usage_percentage: Option<f64>,
+    pub is_quota_exceeded: bool,
+}
+
 /// Result of probing `qoder status -o json` for the Qoder settings panel's
 /// auth card. The CLI prints a flat object:
 /// `{logged_in, version, allow_byok, username, email, avatar_url, user_type}`.
 /// Parsed defensively — a shape change degrades to `error` rather than making
 /// the card claim the account is signed out.
+///
+/// Credits are NOT part of this answer: they come from a separate probe
+/// ([`QoderQuota`]), so the account line never waits on the slower lookup.
 #[derive(Debug, Clone, Serialize)]
 pub struct QoderAuthStatus {
     /// A launchable `qoder` binary was found (managed cache or system install).

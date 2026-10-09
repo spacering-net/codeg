@@ -926,7 +926,9 @@
       "saveToken": "حفظ الرمز",
       "advancedToggle": "متقدم: ملف settings.json الخام",
       "advancedHint": "ملف settings.json كاملًا، ويُكتب حرفيًا عند الحفظ — وهو أيضًا السبيل الوحيد لحذف مفتاح.",
-      "saveRawConfig": "حفظ الملف"
+      "saveRawConfig": "حفظ الملف",
+      "quotaRemaining": "متبقٍ {credits}",
+      "quotaExceeded": "تم استهلاك الحصة"
     },
     "antigravity": {
       "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",

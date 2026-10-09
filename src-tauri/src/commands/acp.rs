@@ -9810,6 +9810,265 @@ async fn run_qoder_probe(
     Ok(stdout)
 }
 
+/// Request id the usage probe writes, echoed back verbatim in the reply. One
+/// probe runs per call and the CLI answers this request once, so a constant is
+/// enough to tell our answer from anything else on stdout.
+const QODER_USAGE_REQUEST_ID: &str = "codeg-usage-1";
+
+/// Bound on the usage probe, spawn to reply. A fresh process took 4.5-8 s on
+/// 1.1.64, so this is headroom rather than a budget the happy path approaches.
+const QODER_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// One line of the usage probe's stdout, classified.
+///
+/// The reply is boxed: a quota is much wider than the other variants, and this
+/// value is built per line as the probe scans, so keeping it pointer-sized
+/// keeps the scan cheap.
+enum QoderUsageLine {
+    /// Not this request's reply: a startup notice, another request's answer, a
+    /// partial write, anything that is not a control response.
+    Ignore,
+    /// This request's reply. `Some` when it carried a usable `usage` object;
+    /// `None` for `usage: null` (not signed in, or the account lookup failed)
+    /// and for an error reply. Both mean "no numbers", never an error on the
+    /// card.
+    Reply(Option<Box<crate::acp::types::QoderQuota>>),
+}
+
+/// Classify one stdout line from the usage probe.
+///
+/// Pure, so the framing - the part that has to match a protocol codeg does not
+/// own - is testable without spawning anything.
+fn qoder_usage_line(line: &str, request_id: &str) -> QoderUsageLine {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+        return QoderUsageLine::Ignore;
+    };
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("control_response") {
+        return QoderUsageLine::Ignore;
+    }
+    let Some(response) = value.get("response") else {
+        return QoderUsageLine::Ignore;
+    };
+    if response
+        .get("request_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(request_id)
+    {
+        return QoderUsageLine::Ignore;
+    }
+    if response.get("subtype").and_then(serde_json::Value::as_str) != Some("success") {
+        return QoderUsageLine::Reply(None);
+    }
+    match response.get("response").and_then(|body| body.get("usage")) {
+        Some(usage) if usage.is_object() => {
+            QoderUsageLine::Reply(qoder_quota_from_usage(usage).map(Box::new))
+        }
+        _ => QoderUsageLine::Reply(None),
+    }
+}
+
+/// Read the account's remaining credits from the CLI itself.
+///
+/// `get_usage_info` is a headless control request: the CLI answers with the
+/// quota payload its own usage panel renders, normalized by the CLI and derived
+/// from whatever credential it is holding - the env token when one is set,
+/// otherwise the stored browser login. codeg therefore keeps no copy of Qoder's
+/// token exchange, host election or headers, and a browser login gets numbers
+/// as well. No prompt is ever sent, so a probe spends no credits.
+///
+/// Every failure is `None`, never an `error` on the auth card.
+async fn run_qoder_usage_probe(
+    extra_env: &BTreeMap<String, String>,
+) -> Option<crate::acp::types::QoderQuota> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let bin = resolve_qoder_binary()?;
+    // A private, empty working directory: the CLI reads project settings from
+    // its cwd, and codeg's own cwd is a session folder that has plenty.
+    let work_dir = tempfile::Builder::new()
+        .prefix("codeg-qoder-usage-")
+        .tempdir()
+        .ok()?;
+    let mut cmd = crate::process::tokio_command(&bin);
+    cmd.args([
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--input-format",
+        "stream-json",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "user",
+        "--settings",
+        r#"{"disableAllHooks":true}"#,
+    ])
+    .current_dir(work_dir.path())
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    // Nothing reads it, and a full pipe must not stall the child mid-answer.
+    .stderr(Stdio::null())
+    // Backstop for the timeout path below; the explicit reap still runs,
+    // because kill_on_drop signals only the direct child.
+    .kill_on_drop(true);
+    for (key, value) in extra_env {
+        if value.trim().is_empty() {
+            // An empty value means "ensure absent", so the probe can never read
+            // a credential a launch would not use.
+            cmd.env_remove(key);
+        } else {
+            cmd.env(key, value);
+        }
+    }
+    // Neither belongs to this probe: an inherited MCP config would start
+    // servers nobody asked for, and a working-directory override would move the
+    // CLI out of the private directory above.
+    cmd.env_remove("QODER_MCP_CONFIG");
+    cmd.env_remove("QODER_WORKING_DIR");
+    let mut child = cmd.spawn().ok()?;
+    let request = format!(
+        "{}\n",
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": QODER_USAGE_REQUEST_ID,
+            "request": { "type": "get_usage_info", "subtype": "get_usage_info" },
+        })
+    );
+    let query = async {
+        let mut stdin = child.stdin.take()?;
+        stdin.write_all(request.as_bytes()).await.ok()?;
+        stdin.flush().await.ok()?;
+        let stdout = child.stdout.take()?;
+        let mut lines = BufReader::new(stdout.take(4 * 1024 * 1024)).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            match qoder_usage_line(&line, QODER_USAGE_REQUEST_ID) {
+                QoderUsageLine::Ignore => continue,
+                QoderUsageLine::Reply(quota) => return Some(quota),
+            }
+        }
+        None
+    };
+    // `query` answers twice over: the outer `Option` is "the CLI replied at
+    // all", the inner one is "that reply carried numbers". Both absences mean
+    // the same thing to the card, so they collapse here.
+    let quota = tokio::time::timeout(QODER_USAGE_TIMEOUT, query)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .map(|quota| *quota);
+    // `query` owned the child's stdin, so returning from it closed the pipe -
+    // which is what tells the CLI to exit once it has answered.
+    reap_qoder_probe(&mut child).await;
+    quota
+}
+
+/// End a finished probe and reap it. The CLI exits on its own once stdin
+/// closes, so it normally needs no signal; one still alive a second later has
+/// its process TREE terminated, because on Windows a `.cmd` shim (npm's) leaves
+/// its `node` payload running after the shim exits.
+async fn reap_qoder_probe(child: &mut tokio::process::Child) {
+    if tokio::time::timeout(Duration::from_secs(1), child.wait())
+        .await
+        .is_ok()
+    {
+        return;
+    }
+    if let Some(pid) = child.id() {
+        if let Err(err) = kill_tree::tokio::kill_tree(pid).await {
+            tracing::debug!("[ACP][Qoder] kill_tree for usage probe pid {pid}: {err}");
+        }
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+/// Parse the CLI's `usage` object into the card's credits. Field names arrive
+/// camelCase from the CLI and snake_case from the older service payload it is
+/// normalized from, and every number is read leniently (a numeric string
+/// counts): the CLI's own reader accepts either spelling, so this one does too.
+fn qoder_quota_from_usage(usage: &serde_json::Value) -> Option<crate::acp::types::QoderQuota> {
+    type Slice = crate::acp::types::QoderQuotaSlice;
+    let slice = |value: Option<&serde_json::Value>| -> Option<Slice> {
+        let value = value?.as_object()?;
+        let number = |key: &str| {
+            value.get(key).and_then(|raw| {
+                raw.as_f64().or_else(|| {
+                    raw.as_str()
+                        .and_then(|text| text.trim().parse::<f64>().ok())
+                })
+            })
+        };
+        let total = number("total").or_else(|| number("cap"));
+        let used = number("used");
+        Some(Slice {
+            total,
+            used,
+            // The CLI derives a missing `remaining` from the other two and
+            // never reports a negative balance: do the same, rather than
+            // reading a slice that simply omits the key as empty.
+            remaining: number("remaining").or_else(|| match (total, used) {
+                (Some(total), Some(used)) => Some((total - used).max(0.0)),
+                _ => None,
+            }),
+            percentage: number("percentage"),
+            unit: value
+                .get("unit")
+                .and_then(serde_json::Value::as_str)
+                .filter(|unit| !unit.is_empty())
+                .map(str::to_string),
+            available: value.get("available").and_then(serde_json::Value::as_bool),
+        })
+    };
+    let pick = |keys: &[&str]| keys.iter().find_map(|key| usage.get(*key));
+    let personal = slice(pick(&["userQuota", "user_quota"]));
+    let organization = slice(pick(&[
+        "orgResourcePackage",
+        "org_resource_package",
+        "sharedQuota",
+        "shared_quota",
+    ]));
+    let add_on = slice(pick(&["addOnQuota", "add_on_quota"]));
+    if personal.is_none() && organization.is_none() && add_on.is_none() {
+        return None;
+    }
+    let remaining_of = |slice: &Option<Slice>| {
+        slice
+            .as_ref()
+            .and_then(|slice| slice.remaining)
+            .unwrap_or(0.0)
+    };
+    let number = |keys: &[&str]| pick(keys).and_then(|raw| {
+        raw.as_f64().or_else(|| {
+            raw.as_str()
+                .and_then(|text| text.trim().parse::<f64>().ok())
+        })
+    });
+    let total_remaining =
+        remaining_of(&personal) + remaining_of(&organization) + remaining_of(&add_on);
+    let percentage = number(&["totalUsagePercentage", "total_usage_percentage"]);
+    // The CLI's own rule for "spent": an explicit flag, or - when the service
+    // omits it - a usage reading at or past the cap. Nothing left also counts,
+    // because that is what the account actually experiences.
+    let flagged = pick(&["isQuotaExceeded", "is_quota_exceeded"])
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or_else(|| percentage.is_some_and(|percent| percent >= 100.0));
+    Some(crate::acp::types::QoderQuota {
+        unit: personal
+            .as_ref()
+            .and_then(|slice| slice.unit.clone())
+            .or_else(|| organization.as_ref().and_then(|slice| slice.unit.clone()))
+            .or_else(|| add_on.as_ref().and_then(|slice| slice.unit.clone())),
+        total_usage_percentage: percentage,
+        is_quota_exceeded: flagged || total_remaining <= 0.0,
+        total_remaining,
+        personal,
+        organization,
+        add_on,
+    })
+}
+
 /// Probe `qoder status -o json` for the Qoder settings panel's auth card.
 ///
 /// The CLI prints one flat object — `{logged_in, version, allow_byok, username,
@@ -9817,6 +10076,10 @@ async fn run_qoder_probe(
 /// nested `userInfo` to unwrap. A parse failure is reported as `error` with
 /// `logged_in: false`; the panel renders that as "could not check", not as
 /// "signed out", so a CLI output change never reads as a lost session.
+///
+/// Credits are a separate call ([`acp_qoder_quota_core`]): the account line
+/// should appear as soon as this fast probe answers, without waiting for the
+/// slower usage lookup.
 pub(crate) async fn acp_qoder_auth_status_core(
     db: &AppDatabase,
     personal_access_token: Option<String>,
@@ -9860,12 +10123,13 @@ pub(crate) async fn acp_qoder_auth_status_core(
                             .filter(|s| !s.is_empty())
                             .map(str::to_string)
                     };
+                    let logged_in = v
+                        .get("logged_in")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
                     crate::acp::types::QoderAuthStatus {
                         installed: true,
-                        logged_in: v
-                            .get("logged_in")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false),
+                        logged_in,
                         username: get_str("username"),
                         email: get_str("email"),
                         user_type: get_str("user_type"),
@@ -9891,6 +10155,24 @@ pub(crate) async fn acp_qoder_auth_status_core(
         }
         Err(err) => failed(Some(err)),
     }
+}
+
+/// The account's remaining credits, probed through the CLI for the Qoder
+/// settings panel.
+///
+/// A separate command from [`acp_qoder_auth_status_core`] on purpose: this one
+/// takes seconds even when it succeeds, and joining them would hold the account
+/// name back. `None` whenever the binary is missing, the CLI holds no usable
+/// credential, or the lookup failed — the card then carries no credit line,
+/// never an error.
+pub(crate) async fn acp_qoder_quota_core(
+    db: &AppDatabase,
+    personal_access_token: Option<String>,
+) -> Option<crate::acp::types::QoderQuota> {
+    // Nothing to ask: no binary, no numbers.
+    resolve_qoder_binary()?;
+    let extra_env = qoder_probe_env(db, personal_access_token.as_deref()).await;
+    run_qoder_usage_probe(&extra_env).await
 }
 
 /// The cursor-agent binary codeg would launch: managed cache first, then the
@@ -10202,6 +10484,18 @@ pub async fn acp_qoder_auth_status(
     personal_access_token: Option<String>,
 ) -> Result<crate::acp::types::QoderAuthStatus, AcpError> {
     Ok(acp_qoder_auth_status_core(&db, personal_access_token).await)
+}
+
+/// The account's remaining Qoder credits, for the settings panel's account row.
+/// A separate command from the status probe so the name is not held back by the
+/// slower lookup (`acp_qoder_quota_core`).
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_qoder_quota(
+    db: State<'_, AppDatabase>,
+    personal_access_token: Option<String>,
+) -> Result<Option<crate::acp::types::QoderQuota>, AcpError> {
+    Ok(acp_qoder_quota_core(&db, personal_access_token).await)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -17739,6 +18033,190 @@ wire_api = "chat"
         assert_eq!(
             unset.get("QODER_PERSONAL_ACCESS_TOKEN").map(String::as_str),
             Some("")
+        );
+    }
+
+    // The payload the CLI's `get_usage_info` answers with, trimmed to the
+    // fields the card shows: a personal plan plus an org package the account is
+    // not drawing on. Synthetic values on purpose — a captured reply would put
+    // somebody's account data in the repository.
+    #[test]
+    fn qoder_quota_reads_the_camel_case_payload() {
+        let usage = serde_json::json!({
+            "userType": "teams",
+            "usageType": "credits",
+            "totalUsagePercentage": 72.73,
+            "isQuotaExceeded": false,
+            "userQuota": {
+                "total": 3000.0,
+                "used": 2182.0,
+                "remaining": 818.0,
+                "percentage": 72.73,
+                "unit": "credits"
+            },
+            "orgResourcePackage": {
+                "used": 0.0,
+                "remaining": 0.0,
+                "percentage": 0.0,
+                "unit": "credits",
+                "cap": 0.0,
+                "available": false
+            }
+        });
+
+        let quota = qoder_quota_from_usage(&usage).expect("quota parsed");
+        let personal = quota.personal.expect("personal slice");
+        assert_eq!(personal.total, Some(3000.0));
+        assert_eq!(personal.used, Some(2182.0));
+        assert_eq!(personal.remaining, Some(818.0));
+        let organization = quota.organization.expect("organization slice");
+        assert_eq!(organization.remaining, Some(0.0));
+        assert_eq!(organization.available, Some(false));
+        assert!(quota.add_on.is_none());
+        assert_eq!(quota.total_remaining, 818.0);
+        assert_eq!(quota.unit.as_deref(), Some("credits"));
+        assert_eq!(quota.total_usage_percentage, Some(72.73));
+        assert!(!quota.is_quota_exceeded);
+    }
+
+    // The wire shape of the CLI's usage reply, as the headless control protocol
+    // frames it (one line on stdout).
+    const QODER_USAGE_REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"codeg-usage-1","response":{"usage":{"userType":"personal_standard","usageType":"credits","isQuotaExceeded":false,"totalUsagePercentage":26.07,"userQuota":{"total":3000.0,"used":782.0,"remaining":2218.0,"percentage":26.07,"unit":"credits"}},"session":{"total_credits":0.0,"model_usage":{}}}}}"#;
+
+    #[test]
+    fn qoder_usage_line_reads_the_success_reply() {
+        match qoder_usage_line(QODER_USAGE_REPLY, "codeg-usage-1") {
+            QoderUsageLine::Reply(Some(quota)) => {
+                assert_eq!(quota.total_remaining, 2218.0);
+                assert_eq!(quota.unit.as_deref(), Some("credits"));
+                assert!(!quota.is_quota_exceeded);
+            }
+            _ => panic!("the success reply must read as a quota"),
+        }
+    }
+
+    // Everything the CLI may put on stdout that is NOT this request's answer:
+    // the probe keeps reading rather than giving up on the first line.
+    #[test]
+    fn qoder_usage_line_ignores_anything_that_is_not_our_reply() {
+        for line in [
+            "Qoder CLI 1.1.64",
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"somebody-else","response":{"usage":{"userQuota":{"remaining":1.0}}}}}"#,
+            r#"{"type":"control_resp"#,
+            r#"{"type":"control_request","request":{"type":"get_usage_info"}}"#,
+            "",
+        ] {
+            assert!(
+                matches!(qoder_usage_line(line, "codeg-usage-1"), QoderUsageLine::Ignore),
+                "line should be ignored: {line}"
+            );
+        }
+        // Our reply, with a usage that is not an object: answered, no numbers.
+        let malformed = r#"{"type":"control_response","response":{"subtype":"success","request_id":"codeg-usage-1","response":{"usage":"unexpected"}}}"#;
+        assert!(matches!(
+            qoder_usage_line(malformed, "codeg-usage-1"),
+            QoderUsageLine::Reply(None)
+        ));
+    }
+
+    // A signed-out account and a failed lookup both answer `usage: null` (the
+    // latter sometimes with `usage_error` beside it), and an error reply says so
+    // outright. None of them is an error on the card.
+    #[test]
+    fn qoder_usage_line_reads_no_numbers_from_null_or_error() {
+        for line in [
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"codeg-usage-1","response":{"usage":null,"session":{"total_credits":0.0,"model_usage":{}}}}}"#,
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"codeg-usage-1","response":{"usage":null,"usage_error":"account lookup failed"}}}"#,
+            r#"{"type":"control_response","response":{"subtype":"error","request_id":"codeg-usage-1","error":"not signed in"}}"#,
+        ] {
+            assert!(
+                matches!(
+                    qoder_usage_line(line, "codeg-usage-1"),
+                    QoderUsageLine::Reply(None)
+                ),
+                "line should read as no numbers: {line}"
+            );
+        }
+    }
+
+    // A slice without `remaining` is derived the way the CLI derives it, and
+    // "exhausted" follows the CLI's rule rather than the flag alone.
+    #[test]
+    fn qoder_quota_derives_remaining_and_exhaustion() {
+        let overspent = serde_json::json!({
+            "userQuota": { "total": 100.0, "used": 140.0, "unit": "credits" }
+        });
+        let quota = qoder_quota_from_usage(&overspent).expect("quota parsed");
+        // Clamped at zero, never a negative balance.
+        assert_eq!(quota.personal.as_ref().and_then(|s| s.remaining), Some(0.0));
+        assert_eq!(quota.total_remaining, 0.0);
+        // Nothing left: exhausted even though the service never said so.
+        assert!(quota.is_quota_exceeded);
+
+        // No flag, but the usage reading is at the cap.
+        let at_cap = serde_json::json!({
+            "totalUsagePercentage": 100.0,
+            "userQuota": { "remaining": 5.0 }
+        });
+        assert!(
+            qoder_quota_from_usage(&at_cap)
+                .expect("quota parsed")
+                .is_quota_exceeded
+        );
+
+        // An explicit flag wins over the numbers.
+        let flagged = serde_json::json!({
+            "isQuotaExceeded": true,
+            "userQuota": { "remaining": 500.0 }
+        });
+        assert!(
+            qoder_quota_from_usage(&flagged)
+                .expect("quota parsed")
+                .is_quota_exceeded
+        );
+
+        // A healthy account fires neither signal.
+        let fine = serde_json::json!({
+            "totalUsagePercentage": 26.07,
+            "isQuotaExceeded": false,
+            "userQuota": { "remaining": 2218.0 }
+        });
+        assert!(
+            !qoder_quota_from_usage(&fine)
+                .expect("quota parsed")
+                .is_quota_exceeded
+        );
+    }
+
+    // The service has sent both spellings of every key, and an add-on package
+    // is what makes the summed total differ from the personal slice alone.
+    #[test]
+    fn qoder_quota_accepts_snake_case_and_adds_the_add_on() {
+        let usage = serde_json::json!({
+            "total_usage_percentage": "12.5",
+            "is_quota_exceeded": true,
+            "user_quota": { "total": "100", "used": "40", "remaining": "60", "unit": "credits" },
+            "shared_quota": { "remaining": 25.0, "available": true, "unit": "credits" },
+            "add_on_quota": { "remaining": 15.0, "unit": "credits" }
+        });
+
+        let quota = qoder_quota_from_usage(&usage).expect("quota parsed");
+        assert_eq!(quota.personal.as_ref().and_then(|s| s.remaining), Some(60.0));
+        assert_eq!(
+            quota.organization.as_ref().and_then(|s| s.remaining),
+            Some(25.0)
+        );
+        assert_eq!(quota.add_on.as_ref().and_then(|s| s.remaining), Some(15.0));
+        assert_eq!(quota.total_remaining, 100.0);
+        assert_eq!(quota.total_usage_percentage, Some(12.5));
+        assert!(quota.is_quota_exceeded);
+    }
+
+    #[test]
+    fn qoder_quota_needs_at_least_one_slice() {
+        assert!(qoder_quota_from_usage(&serde_json::json!({})).is_none());
+        assert!(
+            qoder_quota_from_usage(&serde_json::json!({ "userQuota": "unexpected" })).is_none()
         );
     }
 
