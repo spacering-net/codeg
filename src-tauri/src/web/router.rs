@@ -1,4 +1,4 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 
 use axum::{
     extract::{DefaultBodyLimit, Extension},
@@ -1093,6 +1093,30 @@ pub fn build_router(
         .route(
             "/acp_antigravity_sign_out",
             post(handlers::acp::acp_antigravity_sign_out),
+        )
+        .route(
+            "/acp_antigravity_add_account_start",
+            post(handlers::acp::acp_antigravity_add_account_start),
+        )
+        .route(
+            "/acp_antigravity_list_accounts",
+            post(handlers::acp::acp_antigravity_list_accounts),
+        )
+        .route(
+            "/acp_antigravity_switch_account",
+            post(handlers::acp::acp_antigravity_switch_account),
+        )
+        .route(
+            "/acp_antigravity_delete_account",
+            post(handlers::acp::acp_antigravity_delete_account),
+        )
+        .route(
+            "/acp_antigravity_get_quota",
+            post(handlers::acp::acp_antigravity_get_quota),
+        )
+        .route(
+            "/acp_antigravity_check_pending_login",
+            post(handlers::acp::acp_antigravity_check_pending_login),
         )
         .route(
             "/acp_pi_project_trust_state",

@@ -1,4 +1,4 @@
-// The ACP connection driver (`acp::connection`) wraps the enormous
+﻿// The ACP connection driver (`acp::connection`) wraps the enormous
 // `run_connection` future in a `block_on(async move { … })` frame whose type
 // layout nests deep enough to blow rustc's default query depth of 128 (it
 // overflowed by ~130 when computing the async block's layout). This is a
@@ -664,6 +664,7 @@ mod tauri_app {
             // same download progress; lets the upgrade UI survive navigation.
             .manage(crate::update::new_update_state_handle())
             .setup(|app| {
+                crate::acp::antigravity_accounts::ensure_active_token_on_disk();
                 let app_data_dir = app.path().app_data_dir()?;
 
                 // Unify the data root across every consumer:
@@ -1977,6 +1978,12 @@ mod tauri_app {
                 acp_commands::acp_antigravity_login_finish,
                 acp_commands::acp_antigravity_login_cancel,
                 acp_commands::acp_antigravity_sign_out,
+                acp_commands::acp_antigravity_add_account_start,
+                acp_commands::acp_antigravity_list_accounts,
+                acp_commands::acp_antigravity_switch_account,
+                acp_commands::acp_antigravity_delete_account,
+                acp_commands::acp_antigravity_get_quota,
+                acp_commands::acp_antigravity_check_pending_login,
                 acp_commands::acp_pi_project_trust_state,
                 acp_commands::acp_pi_set_project_trust,
                 acp_commands::acp_pi_acknowledge_project_trust,

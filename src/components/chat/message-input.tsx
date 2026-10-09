@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
@@ -54,6 +54,7 @@ import {
   type HistoryDirection,
 } from "@/lib/composer-history"
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
+import { AntigravityQuotaBadge } from "@/components/chat/antigravity-quota-badge"
 import { toast } from "sonner"
 import type {
   AgentSkillItem,
@@ -2463,6 +2464,9 @@ export function MessageInput({
                 tabId={attachmentTabId}
                 override={folderPickerOverride}
               />
+              {agentType === "antigravity" && (
+                <AntigravityQuotaBadge />
+              )}
             </div>
             {/* `pr-px` offsets the composer chrome's 1px border: the send button
                 sits INSIDE that border while this status row sits outside it, so

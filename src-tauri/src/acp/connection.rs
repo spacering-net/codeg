@@ -2125,16 +2125,8 @@ async fn build_agent(
                 apply_grok_env_policy(&mut merged_env, runtime_env);
             } else if agent_type == AgentType::Antigravity {
                 apply_antigravity_env_policy(&mut merged_env, runtime_env);
-                // Kept separate from the env policy above: the other
-                // `apply_*_env_policy`s are pure, and this one WRITES the
-                // server's settings.json. It has to happen before the spawn —
-                // the file is read during `session/new`, and without it that
-                // call fails with `Authentication required`.
-                //
-                // The report is for the settings panel, which runs the same
-                // sync at save time; here it is already in the log and must
-                // never block a launch, so it is deliberately dropped.
                 let _ = sync_antigravity_settings_file(runtime_env);
+                crate::acp::antigravity_accounts::ensure_active_token_on_disk();
             }
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             if !merged_env.is_empty() {

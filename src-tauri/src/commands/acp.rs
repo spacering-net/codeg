@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+﻿use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -6340,12 +6340,102 @@ pub(crate) async fn acp_antigravity_login_finish_core(
     handle: String,
     redirect: String,
 ) -> Result<crate::acp::antigravity_login::AntigravityLoginOutcome, AcpError> {
-    crate::acp::antigravity_login::finish(handle.trim(), &redirect).await
+    let outcome = crate::acp::antigravity_login::finish(handle.trim(), &redirect).await?;
+    if let Some(temp_dir) = crate::acp::antigravity_accounts::remove_pending_login(handle.trim()) {
+        let token_path = temp_dir.join("antigravity-acp").join(crate::acp::antigravity_accounts::TOKEN_FILENAME);
+        if token_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&token_path) {
+                if let Ok(token_json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let _ = crate::acp::antigravity_accounts::ingest_new_token(token_json).await;
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    } else if outcome.signed_in {
+        let _ = crate::acp::antigravity_accounts::sync_accounts_state().await;
+    }
+    Ok(outcome)
 }
 
 /// Abandon a pending browser-free sign-in and stop its agent process.
 pub(crate) async fn acp_antigravity_login_cancel_core(handle: String) -> Result<(), AcpError> {
+    if let Some(temp_dir) = crate::acp::antigravity_accounts::remove_pending_login(handle.trim()) {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+    crate::acp::antigravity_accounts::ensure_active_token_on_disk();
     crate::acp::antigravity_login::cancel(handle.trim()).await
+}
+
+pub(crate) async fn acp_antigravity_add_account_start_core(
+    db: &AppDatabase,
+    method_id: String,
+) -> Result<crate::acp::antigravity_login::AntigravityLoginStart, AcpError> {
+    crate::acp::antigravity_accounts::ensure_active_token_on_disk();
+    let base_env = antigravity_runtime_env(db).await?;
+    let (login_env, temp_dir) = crate::acp::antigravity_accounts::create_isolated_login_env(&base_env);
+
+    match crate::acp::antigravity_login::start(&login_env, method_id.trim()).await {
+        Ok(mut started) => {
+            if let Some(ref handle) = started.handle {
+                crate::acp::antigravity_accounts::register_pending_login(handle, temp_dir);
+            } else {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+            }
+            if let Some(ref mut auth_url) = started.auth_url {
+                if !auth_url.contains("prompt=") {
+                    if auth_url.contains('?') {
+                        auth_url.push_str("&prompt=select_account%20consent");
+                    } else {
+                        auth_url.push_str("?prompt=select_account%20consent");
+                    }
+                }
+            }
+            Ok(started)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            Err(e)
+        }
+    }
+}
+
+pub(crate) async fn acp_antigravity_check_pending_login_core(
+    handle: String,
+) -> Result<Option<crate::acp::antigravity_accounts::AntigravityAccountsState>, AcpError> {
+    crate::acp::antigravity_accounts::check_and_consume_login_if_ready(handle.trim()).await
+}
+
+pub(crate) async fn acp_antigravity_list_accounts_core(
+) -> Result<crate::acp::antigravity_accounts::AntigravityAccountsState, AcpError> {
+    crate::acp::antigravity_accounts::get_or_sync_accounts_state().await
+}
+
+pub(crate) async fn acp_antigravity_switch_account_core(
+    connection_manager: &crate::acp::manager::ConnectionManager,
+    account_id: String,
+) -> Result<crate::acp::antigravity_accounts::AntigravityAccountsState, AcpError> {
+    let state = crate::acp::antigravity_accounts::switch_account(account_id.trim()).await?;
+    let _ = connection_manager
+        .disconnect_by_agent_type(AgentType::Antigravity)
+        .await;
+    Ok(state)
+}
+
+pub(crate) async fn acp_antigravity_delete_account_core(
+    connection_manager: &crate::acp::manager::ConnectionManager,
+    account_id: String,
+) -> Result<crate::acp::antigravity_accounts::AntigravityAccountsState, AcpError> {
+    let state = crate::acp::antigravity_accounts::delete_account(account_id.trim()).await?;
+    let _ = connection_manager
+        .disconnect_by_agent_type(AgentType::Antigravity)
+        .await;
+    Ok(state)
+}
+
+pub(crate) async fn acp_antigravity_get_quota_core(
+    account_id: Option<String>,
+) -> Result<crate::acp::antigravity_accounts::AntigravityQuotaSummary, AcpError> {
+    Ok(crate::acp::antigravity_accounts::fetch_account_quota(account_id.as_deref()).await)
 }
 
 /// Sign Antigravity out, so the next sign-in can reach a different account.
@@ -12837,6 +12927,56 @@ pub async fn acp_antigravity_sign_out(
     manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
 ) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
     acp_antigravity_sign_out_core(&db, &manager).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_antigravity_add_account_start(
+    db: tauri::State<'_, AppDatabase>,
+    method_id: String,
+) -> Result<crate::acp::antigravity_login::AntigravityLoginStart, AcpError> {
+    acp_antigravity_add_account_start_core(&db, method_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_antigravity_list_accounts(
+) -> Result<crate::acp::antigravity_accounts::AntigravityAccountsState, AcpError> {
+    acp_antigravity_list_accounts_core().await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_antigravity_switch_account(
+    manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
+    account_id: String,
+) -> Result<crate::acp::antigravity_accounts::AntigravityAccountsState, AcpError> {
+    acp_antigravity_switch_account_core(&manager, account_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_antigravity_delete_account(
+    manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
+    account_id: String,
+) -> Result<crate::acp::antigravity_accounts::AntigravityAccountsState, AcpError> {
+    acp_antigravity_delete_account_core(&manager, account_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_antigravity_get_quota(
+    account_id: Option<String>,
+) -> Result<crate::acp::antigravity_accounts::AntigravityQuotaSummary, AcpError> {
+    acp_antigravity_get_quota_core(account_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_antigravity_check_pending_login(
+    handle: String,
+) -> Result<Option<crate::acp::antigravity_accounts::AntigravityAccountsState>, AcpError> {
+    acp_antigravity_check_pending_login_core(handle).await
 }
 
 /// Record (or clear, with `trusted: null`) an explicit project-trust decision in

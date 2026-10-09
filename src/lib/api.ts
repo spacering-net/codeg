@@ -1,4 +1,4 @@
-import {
+﻿import {
   getActiveRemoteConnectionId,
   getShellTransport,
   getTransport,
@@ -1102,6 +1102,91 @@ export async function acpAntigravitySignOut(): Promise<AntigravitySyncReport> {
     {},
     { timeoutMs: 180_000 }
   )
+}
+
+export type AntigravityAccount = {
+  id: string
+  email: string
+  name: string | null
+  picture: string | null
+  token: unknown
+  isActive: boolean
+  addedAt: number
+  lastUsedAt: number
+}
+
+export type AntigravityAccountsState = {
+  activeAccountId: string | null
+  accounts: AntigravityAccount[]
+}
+
+export type AntigravityQuotaBucket = {
+  bucketId: string
+  displayName: string
+  window: string | null
+  remainingFraction: number
+  resetTime: string | null
+  description: string | null
+}
+
+export type AntigravityQuotaGroup = {
+  displayName: string
+  description: string | null
+  buckets: AntigravityQuotaBucket[]
+}
+
+export type AntigravityQuotaSummary = {
+  email: string | null
+  isAvailable: boolean
+  error: string | null
+  fiveHourFraction: number | null
+  fiveHourResetTime: string | null
+  weeklyFraction: number | null
+  weeklyResetTime: string | null
+  groups: AntigravityQuotaGroup[]
+  updatedAt: number
+}
+
+export async function acpAntigravityListAccounts(): Promise<AntigravityAccountsState> {
+  return getTransport().call("acp_antigravity_list_accounts", {})
+}
+
+export async function acpAntigravitySwitchAccount(
+  accountId: string
+): Promise<AntigravityAccountsState> {
+  return getTransport().call("acp_antigravity_switch_account", { accountId })
+}
+
+export async function acpAntigravityDeleteAccount(
+  accountId: string
+): Promise<AntigravityAccountsState> {
+  return getTransport().call("acp_antigravity_delete_account", { accountId })
+}
+
+export async function acpAntigravityAddAccountStart(
+  methodId: string
+): Promise<AntigravityLoginStart> {
+  return getTransport().call(
+    "acp_antigravity_add_account_start",
+    { methodId },
+    { timeoutMs: 180_000 }
+  )
+}
+
+export async function acpAntigravityGetQuota(
+  accountId?: string | null
+): Promise<AntigravityQuotaSummary> {
+  return getTransport().call(
+    "acp_antigravity_get_quota",
+    { accountId: accountId ?? null },
+    { timeoutMs: 25_000 }
+  )
+}
+
+export async function acpAntigravityCheckPendingLogin(
+  handle: string
+): Promise<AntigravityAccountsState | null> {
+  return getTransport().call("acp_antigravity_check_pending_login", { handle })
 }
 
 /**
