@@ -6337,7 +6337,10 @@
     "emptyHint": "codeg 直接从各智能体自己的会话记录里读取 Token 数。点一下刷新，把本机已有的会话统计进来。",
     "emptyAction": "统计我的会话",
     "loadFailed": "用量加载失败",
-    "truncatedNotice": "该范围过大 —— 下面的数字只覆盖了其中最近的一段。"
+    "truncatedNotice": "该范围过大 —— 下面的数字只覆盖了其中最近的一段。",
+    "apiListEstimate": "≈ {amount} API 标价",
+    "apiListEstimatePartial": "≈ {amount} API 标价 · {percent}% 的 token",
+    "apiListEstimateHint": "来自 models.dev 的公开 API 标价，含缓存读写。订阅套餐的计费方式不同。"
   },
   "Forge": {
     "title": "仓库面板",

@@ -14,6 +14,7 @@ import {
   formatDuration,
   formatPercent,
   formatTokensPrecise,
+  formatUsd,
   freshTokens,
   fromLocalDayValue,
   idleDays,
@@ -569,6 +570,19 @@ describe("formatTokensPrecise", () => {
   it("does not print a negative or non-finite count", () => {
     expect(formatTokensPrecise(-5)).toBe("0")
     expect(formatTokensPrecise(Number.NaN)).toBe("0")
+  })
+})
+
+describe("formatUsd", () => {
+  it("keeps tiny list prices readable instead of rounding them to $0.00", () => {
+    expect(formatUsd(0.0042)).toBe("$0.0042")
+    expect(formatUsd(0.01)).toBe("$0.01")
+  })
+
+  it("prints ordinary amounts with two decimals", () => {
+    expect(formatUsd(12.4)).toBe("$12.40")
+    expect(formatUsd(0)).toBe("$0")
+    expect(formatUsd(1500)).toBe("$1,500.00")
   })
 })
 

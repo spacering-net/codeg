@@ -524,6 +524,23 @@ export function formatTokensPrecise(n: number): string {
   return Math.round(n).toLocaleString()
 }
 
+/**
+ * USD list-price amounts for the usage hero. Always a dollar figure, never
+ * localized into another currency: the catalog rates are USD per 1M tokens.
+ */
+export function formatUsd(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "$0"
+  if (n < 0.01) {
+    const trimmed = n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")
+    return `$${trimmed}`
+  }
+  if (n < 1000) return `$${n.toFixed(2)}`
+  return `$${n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
 /** `1h 24m` / `3m 05s` / `12s` — generation time, never zero-padded hours. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "0s"

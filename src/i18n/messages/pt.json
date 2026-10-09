@@ -6337,7 +6337,10 @@
     "emptyHint": "O codeg lê os tokens direto da transcrição de cada agente. Atualize para contabilizar o que já existe nesta máquina.",
     "emptyAction": "Contabilizar minhas sessões",
     "loadFailed": "Não foi possível carregar o uso",
-    "truncatedNotice": "Este período é muito amplo — os números cobrem apenas o trecho mais recente."
+    "truncatedNotice": "Este período é muito amplo — os números cobrem apenas o trecho mais recente.",
+    "apiListEstimate": "≈ {amount} lista da API",
+    "apiListEstimatePartial": "≈ {amount} lista da API · {percent}% dos tokens",
+    "apiListEstimateHint": "Preços públicos da API em models.dev, incluindo leituras e escritas de cache. Planos de assinatura cobram diferente."
   },
   "Forge": {
     "title": "Painel do repositório",

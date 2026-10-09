@@ -6337,7 +6337,10 @@
     "emptyHint": "codeg 直接從各智慧代理自己的工作階段紀錄讀取 Token 數。點一下重新整理，把本機已有的紀錄統計進來。",
     "emptyAction": "統計我的工作階段",
     "loadFailed": "用量載入失敗",
-    "truncatedNotice": "此範圍過大 —— 下面的數字只涵蓋其中最近的一段。"
+    "truncatedNotice": "此範圍過大 —— 下面的數字只涵蓋其中最近的一段。",
+    "apiListEstimate": "≈ {amount} API 標價",
+    "apiListEstimatePartial": "≈ {amount} API 標價 · {percent}% 的 token",
+    "apiListEstimateHint": "來自 models.dev 的公開 API 標價，含快取讀寫。訂閱方案的計費方式不同。"
   },
   "Forge": {
     "title": "儲存庫面板",

@@ -6337,7 +6337,10 @@
     "emptyHint": "Codeg lit les tokens directement dans la transcription de chaque agent. Actualisez pour compter ce qui est déjà sur cette machine.",
     "emptyAction": "Compter mes sessions",
     "loadFailed": "Impossible de charger la consommation",
-    "truncatedNotice": "Cette période est très large — les chiffres ne couvrent que sa portion la plus récente."
+    "truncatedNotice": "Cette période est très large — les chiffres ne couvrent que sa portion la plus récente.",
+    "apiListEstimate": "≈ {amount} tarif API",
+    "apiListEstimatePartial": "≈ {amount} tarif API · {percent}% des jetons",
+    "apiListEstimateHint": "Tarifs publics API issus de models.dev, lectures et écritures de cache comprises. Les abonnements facturent autrement."
   },
   "Forge": {
     "title": "Panneau du dépôt",

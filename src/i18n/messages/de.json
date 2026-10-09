@@ -6337,7 +6337,10 @@
     "emptyHint": "Codeg liest die Token-Zahlen direkt aus dem Protokoll jedes Agenten. Aktualisiere, um zu zählen, was schon auf diesem Rechner liegt.",
     "emptyAction": "Meine Sitzungen zählen",
     "loadFailed": "Verbrauch konnte nicht geladen werden",
-    "truncatedNotice": "Dieser Zeitraum ist sehr groß — die Zahlen decken nur seinen jüngsten Abschnitt ab."
+    "truncatedNotice": "Dieser Zeitraum ist sehr groß — die Zahlen decken nur seinen jüngsten Abschnitt ab.",
+    "apiListEstimate": "≈ {amount} API-Liste",
+    "apiListEstimatePartial": "≈ {amount} API-Liste · {percent}% der Tokens",
+    "apiListEstimateHint": "Öffentliche API-Listenpreise von models.dev, inklusive Cache-Lesen und -Schreiben. Abo-Tarife rechnen anders ab."
   },
   "Forge": {
     "title": "Repository-Panel",

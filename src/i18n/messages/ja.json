@@ -6337,7 +6337,10 @@
     "emptyHint": "codeg は各エージェント自身のセッション記録から直接トークン数を読み取ります。更新すると、このマシンにある記録を集計します。",
     "emptyAction": "セッションを集計",
     "loadFailed": "使用量を読み込めませんでした",
-    "truncatedNotice": "期間が非常に長いため、表示中の数値は直近の一部のみを対象としています。"
+    "truncatedNotice": "期間が非常に長いため、表示中の数値は直近の一部のみを対象としています。",
+    "apiListEstimate": "≈ {amount} APIリスト",
+    "apiListEstimatePartial": "≈ {amount} APIリスト · トークンの {percent}%",
+    "apiListEstimateHint": "models.dev の公開 API リスト料金です。キャッシュの読み書きを含みます。サブスクリプションの課金とは異なります。"
   },
   "Forge": {
     "title": "リポジトリパネル",

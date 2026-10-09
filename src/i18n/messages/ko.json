@@ -6337,7 +6337,10 @@
     "emptyHint": "codeg는 각 에이전트의 세션 기록에서 토큰 수를 직접 읽습니다. 새로 고침하면 이 컴퓨터에 있는 기록을 집계합니다.",
     "emptyAction": "내 세션 집계",
     "loadFailed": "사용량을 불러오지 못했습니다",
-    "truncatedNotice": "기간이 매우 길어 표시된 수치는 가장 최근 구간만 반영합니다."
+    "truncatedNotice": "기간이 매우 길어 표시된 수치는 가장 최근 구간만 반영합니다.",
+    "apiListEstimate": "≈ {amount} API 정가",
+    "apiListEstimatePartial": "≈ {amount} API 정가 · 토큰 {percent}%",
+    "apiListEstimateHint": "models.dev의 공개 API 정가이며 캐시 읽기/쓰기를 포함합니다. 구독 요금과는 다릅니다."
   },
   "Forge": {
     "title": "리포지토리 패널",

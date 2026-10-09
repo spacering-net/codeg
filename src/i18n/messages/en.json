@@ -6337,7 +6337,10 @@
     "emptyHint": "Codeg reads token counts straight from each agent's own transcript. Run a refresh to count what's already on this machine.",
     "emptyAction": "Count my sessions",
     "loadFailed": "Could not load usage",
-    "truncatedNotice": "This range is very large — the numbers cover only the most recent slice of it."
+    "truncatedNotice": "This range is very large — the numbers cover only the most recent slice of it.",
+    "apiListEstimate": "≈ {amount} API list",
+    "apiListEstimatePartial": "≈ {amount} API list · {percent}% of tokens",
+    "apiListEstimateHint": "Public API list rates from models.dev, including cache reads and writes. Subscription plans bill differently."
   },
   "Forge": {
     "title": "Repository panel",
