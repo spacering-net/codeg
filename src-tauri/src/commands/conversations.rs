@@ -1513,12 +1513,9 @@ pub async fn get_folder_conversation_core(
     // while the rollout file knows the answer.
     //
     // The parse WINS over the column rather than merely filling a hole in it.
-    // `seed_model_if_empty` now persists the first model a session is seen
-    // using, so "fill only when NULL" would pin this summary — and with it the
-    // details dialog, which reads `summary.model` ahead of the turns — to that
-    // first value for the life of the conversation, and a mid-session `/model`
-    // switch would never show. The stored value stays as the fallback for a
-    // transcript that names no model at all.
+    // `refresh_model` below persists this same parsed value for the sidebar, so
+    // both surfaces converge after a mid-session `/model` switch. The stored
+    // value stays as the fallback for a transcript that names no model at all.
     if let Some(parsed) = parsed_model.filter(|m| !m.trim().is_empty()) {
         summary.model = Some(parsed);
     }
@@ -1904,17 +1901,17 @@ pub async fn get_folder_conversation_with_live_core(
         }
     }
 
-    // Session-model backfill, the sibling of the auto-title above and for the
-    // same reason: the row was inserted before any model was named, and the
-    // sidebar reads the row rather than the transcript this parse just walked.
-    // `seed_model_if_empty` re-checks emptiness in SQL, so once a session has a
-    // model this is a no-op that writes nothing.
+    // Session-model refresh, the sibling of the auto-title above: the row was
+    // inserted before any model was named, and the sidebar reads the row rather
+    // than the transcript this parse just walked. `refresh_model` compares in
+    // SQL, so an unchanged model is a no-op while a `/model` switch updates the
+    // sidebar projection.
     if let Some(model) = detail.summary.model.clone() {
-        match conversation_service::seed_model_if_empty(conn, conversation_id, &model).await {
+        match conversation_service::refresh_model(conn, conversation_id, &model).await {
             Ok(true) => upserted = true,
             Ok(false) => {}
             Err(e) => tracing::error!(
-                "[conversations] session-model backfill failed for {conversation_id}: {e}"
+                "[conversations] session-model refresh failed for {conversation_id}: {e}"
             ),
         }
     }

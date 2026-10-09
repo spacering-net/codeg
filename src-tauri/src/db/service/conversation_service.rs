@@ -253,23 +253,17 @@ pub async fn seed_auto_title_if_empty(
     Ok(res.rows_affected > 0)
 }
 
-/// Write the session's `model` ONLY when the row still has none. The sibling
-/// of [`seed_auto_title_if_empty`], and for the same reason: a conversation
-/// row is inserted before the agent has named a model, so the column is NULL
-/// for every session started in-app and only the transcript knows the answer.
-/// Without this the sidebar — which reads the row, not the transcript — could
-/// only show a model for imported sessions.
+/// Refresh the session's `model` when the transcript reports a different,
+/// non-empty value. A conversation row is inserted before the agent has named
+/// a model, and the transcript remains the richer source after a mid-session
+/// model switch, while the sidebar reads this database projection.
 ///
-/// First value wins. The detail view re-reads the transcript on every open and
-/// stays exact, so the stored value is a cheap projection for the list rather
-/// than a second source of truth; re-writing it on every model switch would
-/// buy a row write per switch for a chip nobody reads mid-turn.
-///
-/// Returns `true` when a row was written so the caller can broadcast a sidebar
-/// upsert. Does not bump `updated_at` — the sidebar sorts on it, and merely
-/// opening a conversation must not float it to the top of Recent (same
-/// reasoning as [`update_pin`]).
-pub async fn seed_model_if_empty(
+/// The equality check and write happen in one conditional UPDATE so unchanged
+/// detail reads stay write-free. Returns `true` when a row was written so the
+/// caller can broadcast a sidebar upsert. Does not bump `updated_at` — the
+/// sidebar sorts on it, and merely opening a conversation must not float it to
+/// the top of Recent (same reasoning as [`update_pin`]).
+pub async fn refresh_model(
     conn: &DatabaseConnection,
     conversation_id: i32,
     model: &str,
@@ -286,7 +280,7 @@ pub async fn seed_model_if_empty(
         .filter(
             sea_orm::Condition::any()
                 .add(conversation::Column::Model.is_null())
-                .add(conversation::Column::Model.eq("")),
+                .add(conversation::Column::Model.ne(model)),
         )
         .exec(conn)
         .await?;
@@ -802,10 +796,9 @@ pub async fn bind_external_id(
                 active.external_id = Set(Some(external_id.clone()));
                 // The model described the session being released, and `carried`
                 // has already taken it for the row that keeps S1's history. Left
-                // in place it would name S1's model on a row that is now S2 —
-                // and `seed_model_if_empty` only fills an EMPTY column, so
-                // nothing would ever correct it. Cleared, S2 seeds itself on its
-                // next open.
+                // in place it would name S1's model on a row that is now S2 until
+                // S2's transcript is parsed. Clear it so the projection never
+                // claims to know the new session's model prematurely.
                 active.model = Set(None);
                 active.updated_at = Set(now);
                 active.update(txn).await?;
@@ -1669,7 +1662,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seed_model_fills_an_empty_column_once_without_bumping_updated_at() {
+    async fn model_projection_tracks_latest_value_without_bumping_updated_at() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-seed-model").await;
         let conv = create(
@@ -1690,7 +1683,7 @@ mod tests {
         let updated_at_before = before.updated_at;
 
         assert!(
-            seed_model_if_empty(&db.conn, conv.id, "  gpt-5-codex  ")
+            refresh_model(&db.conn, conv.id, "  gpt-5-codex  ")
                 .await
                 .expect("seed"),
             "an empty column must be filled, and report that it was so the \
@@ -1704,34 +1697,43 @@ mod tests {
              merely opening a conversation must not float it to the top"
         );
 
-        // First value wins. The detail view re-reads the transcript and stays
-        // exact; the column is a projection for the list, not a second source
-        // of truth that fights the parse.
+        // Re-reading an unchanged transcript is a no-op, avoiding a database
+        // write and sidebar broadcast on every detail fetch.
         assert!(
-            !seed_model_if_empty(&db.conn, conv.id, "gpt-5.2")
+            !refresh_model(&db.conn, conv.id, "gpt-5-codex")
                 .await
-                .expect("second seed"),
-            "a populated column must be left alone, and say nothing was written"
+                .expect("refresh unchanged"),
+            "an unchanged model must report that nothing was written"
+        );
+
+        // A mid-session model switch must replace the sidebar projection.
+        assert!(
+            refresh_model(&db.conn, conv.id, "gpt-5.2")
+                .await
+                .expect("refresh changed model"),
+            "a changed model must be stored and broadcast"
+        );
+        let refreshed = get_by_id(&db.conn, conv.id).await.expect("get refreshed");
+        assert_eq!(
+            refreshed.model.as_deref(),
+            Some("gpt-5.2"),
+            "the projection follows the transcript's latest model"
         );
         assert_eq!(
-            get_by_id(&db.conn, conv.id)
-                .await
-                .expect("get after")
-                .model
-                .as_deref(),
-            Some("gpt-5-codex")
+            refreshed.updated_at, updated_at_before,
+            "refreshing the model must not change sidebar recency"
         );
 
         // A transcript that names no model asks for no write at all.
         assert!(
-            !seed_model_if_empty(&db.conn, conv.id, "   ")
+            !refresh_model(&db.conn, conv.id, "   ")
                 .await
                 .expect("blank seed")
         );
     }
 
     #[tokio::test]
-    async fn seed_model_skips_a_soft_deleted_row() {
+    async fn refresh_model_skips_a_soft_deleted_row() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-seed-model-deleted").await;
         let conv = create(
@@ -1746,7 +1748,7 @@ mod tests {
         soft_delete(&db.conn, conv.id).await.expect("delete");
 
         assert!(
-            !seed_model_if_empty(&db.conn, conv.id, "gpt-5-codex")
+            !refresh_model(&db.conn, conv.id, "gpt-5-codex")
                 .await
                 .expect("seed"),
             "a deleted conversation is not something an open can resurrect a \
@@ -1893,7 +1895,7 @@ mod tests {
         bind_external_id(&db.conn, row.id, "S1", &[])
             .await
             .expect("first bind");
-        seed_model_if_empty(&db.conn, row.id, "gpt-5-codex")
+        refresh_model(&db.conn, row.id, "gpt-5-codex")
             .await
             .expect("seed S1's model");
         let before = raw_row(&db.conn, row.id).await;
@@ -1911,9 +1913,8 @@ mod tests {
         );
         assert!(
             current.model.is_none(),
-            "the model described S1; left behind it would name S1's model on a \
-             row that is now S2, and `seed_model_if_empty` only fills an EMPTY \
-             column, so nothing would ever correct it"
+            "the model described S1; left behind it would temporarily name S1's \
+             model on a row that is now S2"
         );
 
         let preserved = raw_row(&db.conn, preserved_id).await;
