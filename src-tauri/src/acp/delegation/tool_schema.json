@@ -37,6 +37,10 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "permission_mode": {
+          "type": "string",
+          "description": "Optional. Session mode the sub-agent starts in, for THIS delegation only. Use it to bound what a delegated agent may do without being asked, for example keeping it on a prompting or approval mode instead of running everything unattended. The value is the target agent's own session mode id, the same one shown in that agent's mode selector and used by the per-agent delegation default in Settings. Omit to keep the configured default, so existing callers are unaffected. Agents that expose no session modes ignore it. This is a cooperative permission scope enforced by the agent, not an OS sandbox."
         }
       }
     }

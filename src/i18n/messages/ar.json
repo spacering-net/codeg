@@ -3502,6 +3502,7 @@
         "subAgentRunning": "العميل الفرعي قيد التشغيل…",
         "noDetail": "No detail available yet.",
         "unknownAgent": "وكيل فرعي",
+        "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "عرض المحادثة",
         "resumed": "تم الاستئناف",
         "resumeDetail": "تفاصيل الاستئناف",

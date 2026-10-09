@@ -3502,6 +3502,7 @@
         "subAgentRunning": "Subagente en ejecución…",
         "noDetail": "No detail available yet.",
         "unknownAgent": "Sub-agente",
+        "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "Ver conversación",
         "resumed": "Reanudado",
         "resumeDetail": "Detalles de reanudación",

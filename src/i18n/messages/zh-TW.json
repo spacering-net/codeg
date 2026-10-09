@@ -3502,6 +3502,7 @@
         "subAgentRunning": "子代理執行中…",
         "noDetail": "暫無詳情。",
         "unknownAgent": "子智慧體",
+        "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "檢視會話",
         "resumed": "已恢復",
         "resumeDetail": "恢復詳情",
