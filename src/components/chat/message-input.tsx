@@ -1043,8 +1043,9 @@ export function MessageInput({
   // ── Editor-driven `/` (commands) and `$` (Codex skills) trigger detection ──
   // The `@` mention panel is now owned by RichComposer; this only handles the
   // runtime-command menus. We inspect the text before the collapsed caret in the
-  // current block: a `/` (any agent) or `$` (Codex) at the start or right after
-  // whitespace, and not inside inline code / a code block, opens the menu.
+  // current block: a `/` or its Chinese-IME alias `、` (any agent), or `$`
+  // (Codex), at the start or right after whitespace, and not inside inline code
+  // / a code block, opens the menu.
   const detectSlashTrigger = useCallback(() => {
     const editor = editorRef.current?.getEditor()
     const close = () => {
@@ -1063,10 +1064,11 @@ export function MessageInput({
       " "
     )
     const regex =
-      agentType === "codex" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
+      agentType === "codex" ? /(^|\s)([/$、])(\S*)$/ : /(^|\s)([/、])(\S*)$/
     const match = before.match(regex)
     if (!match) return close()
-    const trigger = match[2] as "/" | "$"
+    const matchedTrigger = match[2] as "/" | "$" | "、"
+    const trigger = matchedTrigger === "、" ? "/" : matchedTrigger
     // Only `/` is gated here. Its source is the agent's own command list, which
     // exists only once the connection is up — so an empty list means "nothing to
     // show" unless the connection is still coming, where the panel opens on a
@@ -1109,7 +1111,7 @@ export function MessageInput({
     setSlashTriggerChar(null)
   }, [])
 
-  // Replace the live `/`-or-`$` token immediately before the caret with
+  // Replace the live `/`-, `、`-, or `$` token immediately before the caret with
   // an inline reference badge (+ a trailing space unless one already follows),
   // then close the menu. Used by both the command (`/`) and Codex-skill (`$`)
   // selections — the badge serializes back to its literal `/cmd` / `$skill`
@@ -1125,7 +1127,7 @@ export function MessageInput({
         undefined,
         " "
       )
-      const match = before.match(/(^|\s)([/$])(\S*)$/)
+      const match = before.match(/(^|\s)([/$、])(\S*)$/)
       const charAfter =
         $from.parentOffset < $from.parent.content.size
           ? $from.parent.textBetween(
@@ -1138,7 +1140,7 @@ export function MessageInput({
       const suffix = charAfter && /\s/.test(charAfter) ? "" : " "
       let chain = editor.chain().focus()
       if (match) {
-        // Remove the live `/…` / `$…` token before the caret.
+        // Remove the live `/…` / `、…` / `$…` token before the caret.
         const tokenLen = match[2].length + match[3].length
         chain = chain.deleteRange({ from: $from.pos - tokenLen, to: $from.pos })
       }

@@ -1356,6 +1356,72 @@ describe("MessageInput slash menu while the agent connects", () => {
     )
   }
 
+  it("keeps `/` as a slash-command trigger", async () => {
+    await mountAndType({
+      commandsLoading: false,
+      availableCommands: COMMANDS,
+    })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("/compact")).toBeInTheDocument()
+  })
+
+  it("treats `、` as the same slash-command trigger", async () => {
+    await mountAndType(
+      { commandsLoading: false, availableCommands: COMMANDS },
+      "、"
+    )
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("/compact")).toBeInTheDocument()
+  })
+
+  it("preserves `、` in ordinary Chinese text", async () => {
+    const { editor } = await mountAndType(
+      { commandsLoading: false, availableCommands: COMMANDS },
+      "苹果、香蕉"
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(serializeDocToText(editor.state.doc)).toBe("苹果、香蕉")
+    expect(screen.queryByTestId("slash-menu")).toBeNull()
+  })
+
+  it("serializes a command selected through `、` with `/`", async () => {
+    const { editor } = await mountAndType(
+      { commandsLoading: false, availableCommands: COMMANDS },
+      "、"
+    )
+    const menu = await screen.findByTestId("slash-menu")
+    fireEvent.mouseDown(within(menu).getByRole("button", { name: /\/compact/ }))
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe("/compact")
+    )
+    expect(serializeDocToText(editor.state.doc)).not.toContain("、")
+  })
+
+  it("does not select a slash command while the IME is composing", async () => {
+    const { editor } = await mountAndType(
+      { commandsLoading: false, availableCommands: COMMANDS },
+      "、"
+    )
+    await screen.findByTestId("slash-menu")
+
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+          isComposing: true,
+        })
+      )
+    })
+
+    const text = serializeDocToText(editor.state.doc)
+    expect(text).toContain("、")
+    expect(text).not.toContain("/compact")
+  })
+
   it("opens the panel on a loading row while commands are still on their way", async () => {
     await mountAndType({ commandsLoading: true, availableCommands: [] })
     const menu = await screen.findByTestId("slash-menu")
