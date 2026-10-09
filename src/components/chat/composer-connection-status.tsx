@@ -1,6 +1,12 @@
 "use client"
 
-import { useCallback, useState, useSyncExternalStore } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   HeartHandshake,
@@ -24,6 +30,7 @@ import {
 } from "@/components/ui/popover"
 import { isConnectionBusy } from "@/lib/connection-teardown"
 import { cn } from "@/lib/utils"
+import { acpGetSessionSnapshot } from "@/lib/api"
 
 // Connection-only states. The session "prompting" state is intentionally
 // collapsed into "connected" (the connection stays up while the agent responds),
@@ -92,9 +99,21 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
   const t = useTranslations("Folder.statusBar.connection")
   const store = useConnectionStore()
-  const { reconnect, getReconnectInfo } = useAcpActions()
+  const { reconnect, restartStalled, getReconnectInfo } = useAcpActions()
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
+  const [restartPending, setRestartPending] = useState(false)
+  const [restartFailure, setRestartFailure] = useState<{
+    connectionId: string
+    eventSeq: number
+    message: string
+  } | null>(null)
+  const [silenceSample, setSilenceSample] = useState<{
+    connectionId: string
+    eventSeq: number
+    seconds: number | null
+  } | null>(null)
+  const currentEventSeq = useRef(0)
 
   const subscribeConn = useCallback(
     (cb: () => void) => {
@@ -140,6 +159,53 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
   const status =
     conn?.status ??
     (connectPending ? "connecting" : failedConnect ? "error" : null)
+  const connectionId = conn?.connectionId
+  useEffect(() => {
+    currentEventSeq.current = conn?.lastAppliedSeq ?? 0
+  }, [conn?.lastAppliedSeq])
+  useEffect(() => {
+    if (!connectionId || status !== "prompting") return
+    let active = true
+    const refresh = () => {
+      const requestedAtSeq = currentEventSeq.current
+      void acpGetSessionSnapshot(connectionId)
+        .then((snapshot) => {
+          if (active) {
+            setSilenceSample({
+              connectionId,
+              eventSeq: requestedAtSeq,
+              seconds:
+                snapshot?.status === "prompting"
+                  ? (snapshot.agent_silence_seconds ?? null)
+                  : null,
+            })
+          }
+        })
+        .catch(() => {
+          // A failed status probe is not proof the agent stopped. Keep the
+          // last advisory and try again; restart remains explicit.
+        })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 30_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [connectionId, status])
+  const silenceSeconds =
+    status === "prompting" &&
+    silenceSample !== null &&
+    silenceSample.connectionId === connectionId &&
+    silenceSample.eventSeq === (conn?.lastAppliedSeq ?? 0)
+      ? silenceSample.seconds
+      : null
+  const restartError =
+    restartFailure !== null &&
+    restartFailure.connectionId === connectionId &&
+    restartFailure.eventSeq === (conn?.lastAppliedSeq ?? 0)
+      ? restartFailure.message
+      : null
   // What went wrong, in one line: the live connection's error, or why the
   // last connect attempt failed.
   const errorText =
@@ -192,6 +258,16 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
       backgroundOutstanding: conn?.backgroundOutstanding ?? 0,
     })
   const canReconnect = reconnectInfo !== null
+  const canRestart =
+    status === "prompting" &&
+    conn !== undefined &&
+    !!conn.sessionId &&
+    !conn.isViewer &&
+    !conn.isDelegationChild
+  const quietMinutes =
+    silenceSeconds !== null && silenceSeconds >= 600
+      ? Math.floor(silenceSeconds / 60)
+      : null
 
   const handleReconnect = useCallback(() => {
     if (!tabId) return
@@ -203,6 +279,32 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
       })
       .finally(() => setPending(false))
   }, [reconnect, tabId])
+
+  const handleRestart = useCallback(() => {
+    if (!tabId) return
+    setRestartPending(true)
+    setRestartFailure(null)
+    void restartStalled(tabId)
+      .then((restarted) => {
+        if (!restarted && connectionId) {
+          setRestartFailure({
+            connectionId,
+            eventSeq: conn?.lastAppliedSeq ?? 0,
+            message: t("restartUnavailable"),
+          })
+        }
+      })
+      .catch((error: unknown) => {
+        if (connectionId) {
+          setRestartFailure({
+            connectionId,
+            eventSeq: conn?.lastAppliedSeq ?? 0,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+      })
+      .finally(() => setRestartPending(false))
+  }, [conn?.lastAppliedSeq, connectionId, restartStalled, t, tabId])
 
   // The trigger keeps the native `title` (hover tooltip) it had as a plain span,
   // so the detail is still one hover away now that a click opens the popover.
@@ -273,12 +375,38 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
           </p>
         ) : null}
 
+        {quietMinutes !== null ? (
+          <p className="text-2xs leading-snug text-amber-600 dark:text-amber-500">
+            {t("agentQuiet", { minutes: quietMinutes })}
+          </p>
+        ) : null}
+
+        {restartError ? (
+          <p role="alert" className="text-2xs leading-snug text-destructive">
+            {restartError}
+          </p>
+        ) : null}
+
+        {canRestart ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="w-full"
+            disabled={pending || restartPending}
+            onClick={handleRestart}
+          >
+            <RefreshCw className={cn(restartPending && "animate-spin")} />
+            {restartPending ? t("restartingAgent") : t("restartAgent")}
+          </Button>
+        ) : null}
+
         <Button
           type="button"
           size="xs"
           variant="outline"
           className="w-full"
-          disabled={!canReconnect || pending}
+          disabled={!canReconnect || pending || restartPending}
           onClick={handleReconnect}
         >
           <RefreshCw className={cn(pending && "animate-spin")} />

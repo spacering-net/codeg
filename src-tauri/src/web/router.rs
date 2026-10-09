@@ -948,6 +948,7 @@ pub fn build_router(
             post(handlers::acp::acp_env_diagnostics),
         )
         .route("/acp_connect", post(handlers::acp::acp_connect))
+        .route("/acp_restart", post(handlers::acp::acp_restart))
         .route("/acp_disconnect", post(handlers::acp::acp_disconnect))
         .route(
             "/acp_touch_connection",

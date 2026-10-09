@@ -18,13 +18,22 @@
 import { act, renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+const restartSurface = vi.hoisted(() => ({
+  release: vi.fn(() => false),
+  disconnect: vi.fn(async () => true),
+}))
+
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, params?: Record<string, unknown>) =>
     params ? `${key}:${JSON.stringify(params)}` : key,
 }))
 
 vi.mock("@/contexts/acp-connections-context", () => ({
-  useAcpActions: () => ({ setActiveKey: vi.fn(), touchActivity: vi.fn() }),
+  useAcpActions: () => ({
+    setActiveKey: vi.fn(),
+    touchActivity: vi.fn(),
+    releaseRestartingSurface: restartSurface.release,
+  }),
 }))
 
 const tasks = vi.hoisted(() => ({
@@ -70,7 +79,7 @@ vi.mock("@/hooks/use-connection", () => ({
     selectorsReady: conn.selectorsReady,
     hasCachedSelectors: conn.hasCachedSelectors,
     connect: vi.fn().mockResolvedValue(undefined),
-    disconnect: vi.fn().mockResolvedValue(undefined),
+    disconnect: restartSurface.disconnect,
     sendPrompt: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     setConfigOption: vi.fn().mockResolvedValue(undefined),
@@ -105,6 +114,18 @@ describe("useConnectionLifecycle opening legs", () => {
     conn.status = null
     conn.selectorsReady = false
     conn.hasCachedSelectors = false
+    restartSurface.release.mockReset()
+    restartSurface.release.mockReturnValue(false)
+    restartSurface.disconnect.mockClear()
+  })
+
+  it("releases a prompting owner when its tab closes during manual restart", () => {
+    conn.status = "prompting"
+    restartSurface.release.mockReturnValue(true)
+    const view = renderLifecycle(true)
+    view.unmount()
+    expect(restartSurface.release).toHaveBeenCalledWith("ctx-1")
+    expect(restartSurface.disconnect).toHaveBeenCalledTimes(1)
   })
 
   it("reports the historical-session wait as a status-bar task and as loading selectors", () => {

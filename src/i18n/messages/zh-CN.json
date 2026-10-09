@@ -2156,6 +2156,10 @@
         "sessionId": "会话 ID",
         "viewerNote": "已接入其他客户端拥有的会话——重连只会重新接入当前视图。",
         "reconnectInterrupts": "重连会重启智能体，并中断正在进行的工作。",
+        "agentQuiet": "智能体已有 {minutes} 分钟没有更新，可能仍在工作。",
+        "restartAgent": "重启此智能体",
+        "restartingAgent": "正在重启智能体...",
+        "restartUnavailable": "此会话已无法重启。",
         "reconnect": "重新连接",
         "reconnecting": "正在重新连接...",
         "reconnectUnavailable": "暂无可重连的会话。"

@@ -436,6 +436,10 @@ pub struct SessionState {
     // 事件锚点
     pub event_seq: u64,
     pub last_activity_at: DateTime<Utc>,
+    /// Turn-local clock for an advisory about agent silence. Unlike
+    /// last_activity_at, neither field is touched by frontend keepalive.
+    pub prompt_started_at: Option<DateTime<Utc>>,
+    pub last_agent_update_at: Option<DateTime<Utc>>,
 
     /// Per-connection event broadcaster used by the WS attach protocol.
     /// New subscribers register receivers here while holding the SessionState
@@ -718,6 +722,8 @@ impl SessionState {
             session_started_tx: None,
             event_seq: 0,
             last_activity_at: Utc::now(),
+            prompt_started_at: None,
+            last_agent_update_at: None,
             event_stream: Arc::new(ConnectionEventStream::new()),
             recent_events: RecentEventsBuffer::new(),
             delegation_token: None,
@@ -834,6 +840,8 @@ impl SessionState {
                     // new error scope, so stale recoverable errors must not be
                     // resurrected by a later snapshot attach.
                     self.last_error = None;
+                    self.prompt_started_at = Some(Utc::now());
+                    self.last_agent_update_at = None;
                 }
                 self.status = status.clone();
             }
@@ -1001,6 +1009,7 @@ impl SessionState {
                     Some(p) if p.request_id == *request_id,
                 ) {
                     self.pending_permission = None;
+                    self.last_agent_update_at = Some(Utc::now());
                 }
             }
             AcpEvent::QuestionRequest {
@@ -1022,6 +1031,7 @@ impl SessionState {
                     Some(p) if p.question_id == *question_id,
                 ) {
                     self.pending_question = None;
+                    self.last_agent_update_at = Some(Utc::now());
                 }
             }
             AcpEvent::PlanApprovalRequest {
@@ -1045,6 +1055,7 @@ impl SessionState {
                     Some(p) if p.approval_id == *approval_id,
                 ) {
                     self.pending_plan_approval = None;
+                    self.last_agent_update_at = Some(Utc::now());
                 }
             }
             AcpEvent::TurnComplete { stop_reason, .. } => {
@@ -1276,6 +1287,7 @@ impl SessionState {
                 message,
                 code,
                 details,
+                terminal,
                 ..
             } => {
                 // Capture so post-mortem readers (probe path, debug
@@ -1288,6 +1300,13 @@ impl SessionState {
                     code: code.clone(),
                     details: details.clone(),
                 });
+                if *terminal {
+                    // The lifecycle worker may complete its only terminal
+                    // callback before the driver's next StatusChanged(Error).
+                    // Mark the connection terminal while applying this event
+                    // so a concurrent restart cannot register a late waiter.
+                    self.status = ConnectionStatus::Error;
+                }
             }
             AcpEvent::DelegationStarted {
                 parent_tool_use_id,
@@ -2126,6 +2145,29 @@ impl SessionState {
             async_tasks: self.async_tasks.values().cloned().collect(),
             goal_actions: self.goal_actions.clone(),
             event_seq: self.event_seq,
+            agent_silence_seconds: self.agent_silence_seconds(),
+        }
+    }
+
+    /// Server-measured silence avoids false durations from a browser whose
+    /// clock differs from the machine hosting the agent.
+    pub fn agent_silence_seconds(&self) -> Option<u64> {
+        if self.status != ConnectionStatus::Prompting {
+            return None;
+        }
+        if self.pending_permission.is_some()
+            || self.pending_question.is_some()
+            || self.pending_plan_approval.is_some()
+        {
+            return None;
+        }
+        let since = self.last_agent_update_at.or(self.prompt_started_at)?;
+        Some((Utc::now() - since).num_seconds().max(0) as u64)
+    }
+
+    pub fn note_agent_update(&mut self) {
+        if self.status == ConnectionStatus::Prompting {
+            self.last_agent_update_at = Some(Utc::now());
         }
     }
 }
@@ -2161,6 +2203,10 @@ pub struct LiveSessionSnapshot {
     pub conversation_id: Option<i32>,
     pub folder_id: Option<i32>,
     pub status: ConnectionStatus,
+    /// Time since this turn started or its last actual ACP agent update.
+    /// Frontend keepalive never resets it; absent outside an active prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_silence_seconds: Option<u64>,
     pub external_id: Option<String>,
     pub live_message: Option<LiveMessage>,
     pub active_tool_calls: Vec<ToolCallState>,
@@ -2409,6 +2455,69 @@ mod tests {
             "win-test".to_string(),
             None,
         )
+    }
+
+    #[test]
+    fn agent_silence_ignores_frontend_keepalive_and_resets_on_agent_frame() {
+        let mut state = fresh_state();
+        state.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        let old = Utc::now() - chrono::Duration::minutes(31);
+        state.prompt_started_at = Some(old);
+        state.last_activity_at = Utc::now(); // frontend touch/keepalive
+        assert!(state.agent_silence_seconds().unwrap() >= 30 * 60);
+        state.note_agent_update();
+        assert!(state.agent_silence_seconds().unwrap() < 2);
+        state.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Connected,
+        });
+        assert_eq!(state.agent_silence_seconds(), None);
+    }
+
+    #[test]
+    fn agent_silence_pauses_for_each_user_decision_and_restarts_after_resolution() {
+        let mut state = fresh_state();
+        state.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        let old = Utc::now() - chrono::Duration::minutes(31);
+        state.last_agent_update_at = Some(old);
+
+        state.apply_event(&AcpEvent::PermissionRequest {
+            request_id: "permission-1".into(),
+            tool_call: serde_json::json!({"toolCallId": "tool-1"}),
+            options: vec![],
+            queued: 0,
+        });
+        assert_eq!(state.agent_silence_seconds(), None);
+        state.apply_event(&AcpEvent::PermissionResolved {
+            request_id: "permission-1".into(),
+        });
+        assert!(state.agent_silence_seconds().unwrap() < 2);
+
+        state.last_agent_update_at = Some(old);
+        state.apply_event(&AcpEvent::QuestionRequest {
+            question_id: "question-1".into(),
+            questions: vec![],
+        });
+        assert_eq!(state.agent_silence_seconds(), None);
+        state.apply_event(&AcpEvent::QuestionResolved {
+            question_id: "question-1".into(),
+        });
+        assert!(state.agent_silence_seconds().unwrap() < 2);
+
+        state.last_agent_update_at = Some(old);
+        state.apply_event(&AcpEvent::PlanApprovalRequest {
+            approval_id: "approval-1".into(),
+            tool_call_id: "tool-2".into(),
+            plan_markdown: "# Plan".into(),
+        });
+        assert_eq!(state.agent_silence_seconds(), None);
+        state.apply_event(&AcpEvent::PlanApprovalResolved {
+            approval_id: "approval-1".into(),
+        });
+        assert!(state.agent_silence_seconds().unwrap() < 2);
     }
 
     /// `ConversationLinked` must forget the live-title skip-cache.
@@ -3126,6 +3235,27 @@ mod tests {
             !empty_json.contains("pending_user_message"),
             "no-pending snapshot must omit the field"
         );
+    }
+
+    #[test]
+    fn only_terminal_error_changes_live_connection_status() {
+        for live_status in [ConnectionStatus::Connected, ConnectionStatus::Prompting] {
+            let mut state = fresh_state();
+            state.apply_event(&AcpEvent::StatusChanged {
+                status: live_status.clone(),
+            });
+            let error = |terminal| AcpEvent::Error {
+                message: "agent failed".into(),
+                agent_type: "claude_code".into(),
+                code: None,
+                details: None,
+                terminal,
+            };
+            state.apply_event(&error(false));
+            assert_eq!(state.status, live_status);
+            state.apply_event(&error(true));
+            assert_eq!(state.status, ConnectionStatus::Error);
+        }
     }
 
     #[test]

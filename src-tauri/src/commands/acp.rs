@@ -11229,6 +11229,68 @@ pub async fn acp_connect(
         .await
 }
 
+/// Shared desktop/Web restart path. The manager rechecks the session identity
+/// under its dedup lock after env construction, then confirms the old process
+/// and lifecycle worker have both finished before spawning a replacement.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_restart_core(
+    connection_id: &str,
+    owner_window_label: &str,
+    preferred_mode_id: Option<String>,
+    preferred_config_values: BTreeMap<String, String>,
+    manager: &ConnectionManager,
+    db: &AppDatabase,
+    data_dir: &Path,
+    emitter: EventEmitter,
+) -> Result<String, AcpError> {
+    let (agent_type, session_id) = manager
+        .restart_identity(connection_id, owner_window_label)
+        .await?;
+    let runtime_env =
+        build_session_runtime_env(db, agent_type, Some(&session_id), data_dir).await?;
+    verify_agent_installed(agent_type).await?;
+    manager
+        .restart_agent(
+            connection_id,
+            owner_window_label,
+            &session_id,
+            runtime_env,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+        )
+        .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_restart(
+    connection_id: String,
+    preferred_mode_id: Option<String>,
+    preferred_config_values: Option<BTreeMap<String, String>>,
+    manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
+    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<String, AcpError> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map(|p| crate::paths::resolve_effective_data_dir(&p))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    acp_restart_core(
+        &connection_id,
+        window.label(),
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+        &manager,
+        &db,
+        &app_data_dir,
+        EventEmitter::Tauri(app_handle),
+    )
+    .await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_prompt(

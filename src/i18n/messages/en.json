@@ -2156,6 +2156,10 @@
         "sessionId": "Session ID",
         "viewerNote": "Attached to a session another client owns — reconnecting only re-attaches this view.",
         "reconnectInterrupts": "Reconnecting restarts the agent and interrupts the work in progress.",
+        "agentQuiet": "No agent updates for {minutes} minutes. It may still be working.",
+        "restartAgent": "Restart this agent",
+        "restartingAgent": "Restarting agent...",
+        "restartUnavailable": "This session can no longer be restarted.",
         "reconnect": "Reconnect",
         "reconnecting": "Reconnecting...",
         "reconnectUnavailable": "Nothing to reconnect to yet."

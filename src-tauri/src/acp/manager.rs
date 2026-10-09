@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -67,6 +68,11 @@ const CONFIRM_GONE_POLL: Duration = Duration::from_millis(50);
 /// because the wait can also end in no answer at all: a child that has already
 /// exited but that nobody has reaped yet never zeroes its cell.
 const SIGKILL_SETTLE: Duration = Duration::from_millis(200);
+
+/// A restart must not begin its replacement session until the old driver's
+/// process has been reaped and its queued terminal DB work has completed.
+const RESTART_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+const RESTART_TERMINAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What one pass of [`kill_tree_pass`] established about the target itself.
 #[derive(Debug, PartialEq, Eq)]
@@ -290,6 +296,34 @@ struct SpawnDedupKey {
     session_id: String,
 }
 
+/// A cancelled or failed restart must still block fresh connects to this
+/// session until the previous child has actually exited AND its old terminal
+/// lifecycle write succeeded. This state outlives the HTTP/Tauri request.
+struct RestartQuarantine {
+    state: Mutex<RestartQuarantineState>,
+}
+
+struct RestartQuarantineState {
+    connection_id: String,
+    child_pid: Option<Arc<std::sync::atomic::AtomicU32>>,
+    /// 0 = pending; 1 = lifecycle terminal update succeeded; 2 = failed.
+    terminal: u8,
+}
+
+type RestartTerminalWaiters =
+    HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>;
+
+impl RestartQuarantine {
+    async fn is_safe_to_spawn(&self) -> bool {
+        let state = self.state.lock().await;
+        state
+            .child_pid
+            .as_ref()
+            .is_some_and(|pid| pid.load(Ordering::SeqCst) == 0)
+            && state.terminal == 1
+    }
+}
+
 /// Default upper bound on how long `spawn_agent` will hold the per-session
 /// dedup lock waiting for `SessionStarted`. Picked to comfortably cover
 /// cold-start agents (claude-code/codex warm: <2s; npx-fetched cold: 10–30s)
@@ -399,6 +433,15 @@ fn prune_reaped(draining: &mut DrainingChildren) {
     });
 }
 
+#[cfg(test)]
+type RestartAfterSpawnHook = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[cfg(test)]
+type RestartBeforeReservationHook = RestartAfterSpawnHook;
+
 pub struct ConnectionManager {
     pub(crate) connections: Arc<Mutex<HashMap<String, AgentConnection>>>,
     /// Connections whose teardown was requested but whose child process has
@@ -433,6 +476,15 @@ pub struct ConnectionManager {
     /// process lifetime — bounded by the number of distinct sessions ever
     /// connected.
     spawn_locks: Arc<Mutex<HashMap<SpawnDedupKey, Arc<Mutex<()>>>>>,
+    restart_quarantines: Arc<Mutex<HashMap<SpawnDedupKey, Arc<RestartQuarantine>>>>,
+    #[cfg(test)]
+    restart_after_spawn_hook: Arc<Mutex<Option<RestartAfterSpawnHook>>>,
+    #[cfg(test)]
+    restart_before_reservation_hook: Arc<Mutex<Option<RestartBeforeReservationHook>>>,
+    /// One-shot acknowledgements from the per-connection lifecycle worker.
+    /// A restart registers before requesting disconnect, so a late old
+    /// terminal event cannot cancel the replacement turn.
+    restart_terminal_waiters: Arc<Mutex<RestartTerminalWaiters>>,
     /// Bound on how long `spawn_agent` waits for the agent's handshake
     /// before releasing the dedup lock. Configurable per-instance for
     /// tests; in production initialized from env via
@@ -508,6 +560,12 @@ impl ConnectionManager {
             external_restore_lock: Arc::new(tokio::sync::RwLock::new(())),
             draining: Arc::new(Mutex::new(Vec::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
+            restart_quarantines: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(test)]
+            restart_after_spawn_hook: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            restart_before_reservation_hook: Arc::new(Mutex::new(None)),
+            restart_terminal_waiters: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: spawn_handshake_timeout_from_env(),
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
             delegation_injection: Arc::new(std::sync::OnceLock::new()),
@@ -525,6 +583,12 @@ impl ConnectionManager {
             external_restore_lock: self.external_restore_lock.clone(),
             draining: self.draining.clone(),
             spawn_locks: self.spawn_locks.clone(),
+            restart_quarantines: self.restart_quarantines.clone(),
+            #[cfg(test)]
+            restart_after_spawn_hook: self.restart_after_spawn_hook.clone(),
+            #[cfg(test)]
+            restart_before_reservation_hook: self.restart_before_reservation_hook.clone(),
+            restart_terminal_waiters: self.restart_terminal_waiters.clone(),
             spawn_handshake_timeout: self.spawn_handshake_timeout,
             terminal_shell_config: self.terminal_shell_config.clone(),
             delegation_injection: self.delegation_injection.clone(),
@@ -578,6 +642,10 @@ impl ConnectionManager {
             external_restore_lock: Arc::new(tokio::sync::RwLock::new(())),
             draining: Arc::new(Mutex::new(Vec::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
+            restart_quarantines: Arc::new(Mutex::new(HashMap::new())),
+            restart_after_spawn_hook: Arc::new(Mutex::new(None)),
+            restart_before_reservation_hook: Arc::new(Mutex::new(None)),
+            restart_terminal_waiters: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: timeout,
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
             delegation_injection: Arc::new(std::sync::OnceLock::new()),
@@ -721,11 +789,13 @@ impl ConnectionManager {
             let mu = {
                 let mut locks = self.spawn_locks.lock().await;
                 locks
-                    .entry(key)
+                    .entry(key.clone())
                     .or_insert_with(|| Arc::new(Mutex::new(())))
                     .clone()
             };
-            Some(mu.lock_owned().await)
+            let guard = mu.lock_owned().await;
+            self.ensure_restart_quarantine_clear(&key).await?;
+            Some(guard)
         } else {
             None
         };
@@ -752,7 +822,7 @@ impl ConnectionManager {
         // installs the SessionStarted dedup signal on the state, registers
         // a cleanup hook, and returns the rx half of the signal. Any spawn
         // failure short-circuits before we touch the rx wait.
-        let session_started_rx = spawn_agent_connection(
+        let (session_started_rx, _child_pid) = spawn_agent_connection(
             connection_id.clone(),
             agent_type,
             working_dir,
@@ -793,6 +863,36 @@ impl ConnectionManager {
         drop(dedup_lock);
 
         Ok(connection_id)
+    }
+
+    /// Called under the same per-session spawn mutex used by explicit
+    /// restart. A cancelled request or failed kill can never release that
+    /// mutex and accidentally permit a second child while the old one runs.
+    async fn ensure_restart_quarantine_clear(
+        &self,
+        key: &SpawnDedupKey,
+    ) -> Result<(), AcpError> {
+        let quarantine = self.restart_quarantines.lock().await.get(key).cloned();
+        if let Some(quarantine) = quarantine {
+            if quarantine.state.lock().await.child_pid.is_none() {
+                return Err(AcpError::protocol(
+                    "restart could not confirm whether a replacement process started; restart the CodeG backend before reconnecting this session",
+                ));
+            }
+            if !quarantine.is_safe_to_spawn().await {
+                return Err(AcpError::protocol(
+                    "the previous agent process or session teardown is not confirmed; reconnect after it exits",
+                ));
+            }
+            let mut quarantines = self.restart_quarantines.lock().await;
+            if quarantines
+                .get(key)
+                .is_some_and(|current| Arc::ptr_eq(current, &quarantine))
+            {
+                quarantines.remove(key);
+            }
+        }
+        Ok(())
     }
 
     /// Bump `last_activity_at` for a live connection so the idle sweep
@@ -2364,6 +2464,458 @@ impl ConnectionManager {
             Ok(())
         } else {
             Err(AcpError::ConnectionNotFound(conn_id.into()))
+        }
+    }
+
+    /// Tear down one owned, already running connection for an explicit
+    /// restart. A successful return proves both that its child was reaped
+    /// (on_exit cleared the pid cell) and that its old lifecycle worker
+    /// finished its terminal DB update. The caller must keep the session's
+    /// spawn lock until its replacement is established.
+    pub async fn disconnect_for_restart(
+        &self,
+        conn_id: &str,
+        owner_window_label: &str,
+    ) -> Result<(), AcpError> {
+        let (child_pid, state) = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+            if conn.owner_window_label != owner_window_label {
+                return Err(AcpError::protocol("only the connection owner can restart it"));
+            }
+            if conn.child_pid.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(AcpError::protocol(
+                    "agent process is not running; reconnect the session instead",
+                ));
+            }
+            (Arc::clone(&conn.child_pid), Arc::clone(&conn.state))
+        };
+        let key = {
+            let state = state.read().await;
+            if !matches!(
+                state.status,
+                ConnectionStatus::Connected | ConnectionStatus::Prompting
+            ) {
+                return Err(AcpError::protocol(
+                    "agent process is not running; reconnect the session instead",
+                ));
+            }
+            SpawnDedupKey {
+                agent_type: state.agent_type,
+                working_dir: state.working_dir.clone(),
+                session_id: state.external_id.clone().ok_or_else(|| {
+                    AcpError::protocol("the agent has no resumable session id")
+                })?,
+            }
+        };
+        #[cfg(test)]
+        {
+            let hook = self.restart_before_reservation_hook.lock().await.take();
+            if let Some((reached, resume)) = hook {
+                let _ = reached.send(());
+                let _ = resume.await;
+            }
+        }
+        let quarantine = Arc::new(RestartQuarantine {
+            state: Mutex::new(RestartQuarantineState {
+                connection_id: conn_id.to_string(),
+                child_pid: Some(Arc::clone(&child_pid)),
+                terminal: 0,
+            }),
+        });
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let cmd_tx = loop {
+            // Ordinary disconnect and driver cleanup remove entries under
+            // this lock. Recheck the same connection, then reserve its terminal
+            // callback before removing it; neither can finish in between.
+            let mut connections = self.connections.lock().await;
+            {
+                let conn = connections
+                    .get(conn_id)
+                    .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+                if !Arc::ptr_eq(&conn.state, &state)
+                    || !Arc::ptr_eq(&conn.child_pid, &child_pid)
+                    || conn.owner_window_label != owner_window_label
+                {
+                    return Err(AcpError::protocol("the connection changed before restart"));
+                }
+                // A status writer must finish without waiting on the map lock.
+                // Retry the atomic reservation after it releases the state.
+                let current = match state.try_read() {
+                    Ok(current) => current,
+                    Err(_) => {
+                        drop(connections);
+                        drop(state.read().await);
+                        continue;
+                    }
+                };
+                if conn.child_pid.load(Ordering::SeqCst) == 0
+                    || !matches!(
+                        current.status,
+                        ConnectionStatus::Connected | ConnectionStatus::Prompting
+                    )
+                    || current.agent_type != key.agent_type
+                    || current.working_dir != key.working_dir
+                    || current.external_id.as_deref() != Some(key.session_id.as_str())
+                {
+                    return Err(AcpError::protocol(
+                        "agent process or session changed before restart; reconnect instead",
+                    ));
+                }
+                let mut quarantines = self.restart_quarantines.lock().await;
+                if quarantines.contains_key(&key) {
+                    return Err(AcpError::protocol(
+                        "a restart is already stopping this session",
+                    ));
+                }
+                quarantines.insert(key, quarantine);
+                self.restart_terminal_waiters
+                    .lock()
+                    .await
+                    .insert(conn_id.to_string(), terminal_tx);
+            }
+            let conn = connections.remove(conn_id).expect("validated connection");
+            self.park_draining(&conn).await;
+            break conn.cmd_tx;
+        };
+        tracing::info!("[ACP] disconnect connection={}", conn_id);
+        let _ = cmd_tx.send(ConnectionCommand::Disconnect).await;
+
+        // The driver gets its normal cleanup opportunity first. If it cannot
+        // leave promptly, escalate this ONE child tree, then still await the
+        // authoritative on_exit callback. kill_tree_and_wait's own true value
+        // is weaker than a reap and must never permit a replacement.
+        tokio::time::sleep(DISCONNECT_ALL_GRACE).await;
+        if child_pid.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            let kill_cell = Arc::clone(&child_pid);
+            let signalled = tokio::task::spawn_blocking(move || kill_tree_and_wait(&kill_cell))
+                .await
+                .map_err(|e| AcpError::protocol(format!("agent teardown failed: {e}")))?;
+            if !signalled && child_pid.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+                self.restart_terminal_waiters.lock().await.remove(conn_id);
+                return Err(AcpError::protocol(
+                    "could not stop the old agent process; session was not resumed",
+                ));
+            }
+        }
+        let reap_cell = Arc::clone(&child_pid);
+        let reaped = tokio::task::spawn_blocking(move || {
+            reap_cell.load(std::sync::atomic::Ordering::SeqCst) == 0
+                || wait_for_reap(&reap_cell, RESTART_REAP_TIMEOUT)
+        })
+        .await
+        .map_err(|e| AcpError::protocol(format!("agent reap failed: {e}")))?;
+        if !reaped {
+            self.restart_terminal_waiters.lock().await.remove(conn_id);
+            return Err(AcpError::protocol(
+                "old agent process was not reaped; session was not resumed",
+            ));
+        }
+
+        match tokio::time::timeout(RESTART_TERMINAL_TIMEOUT, terminal_rx).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(AcpError::protocol(format!(
+                "old session status could not be finalized: {error}"
+            ))),
+            _ => {
+                self.restart_terminal_waiters.lock().await.remove(conn_id);
+                Err(AcpError::protocol(
+                    "old session status was not finalized; session was not resumed",
+                ))
+            }
+        }
+    }
+
+    /// Resolve the session identity for the command layer's runtime-env
+    /// construction. restart_agent rechecks it under the session spawn lock.
+    pub async fn restart_identity(
+        &self,
+        conn_id: &str,
+        owner_window_label: &str,
+    ) -> Result<(AgentType, String), AcpError> {
+        let state = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+            if conn.owner_window_label != owner_window_label {
+                return Err(AcpError::protocol("only the connection owner can restart it"));
+            }
+            Arc::clone(&conn.state)
+        };
+        let state = state.read().await;
+        let session_id = state.external_id.clone().ok_or_else(|| {
+            AcpError::protocol("the agent has no resumable session id")
+        })?;
+        Ok((state.agent_type, session_id))
+    }
+
+    /// Explicitly restart exactly one ACP child and resume its existing
+    /// external session. The session's dedup mutex spans lookup, teardown,
+    /// reap, lifecycle terminal work, and replacement establishment; ordinary
+    /// connects cannot slip a second process into that interval.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn restart_agent(
+        &self,
+        conn_id: &str,
+        owner_window_label: &str,
+        expected_session_id: &str,
+        runtime_env: BTreeMap<String, String>,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<String, AcpError> {
+        // Keep the teardown task alive if a Web request or desktop invoke is
+        // cancelled. Otherwise its per-session mutex would drop mid-kill and
+        // a new connect could start while the old child is still alive.
+        let manager = self.clone_ref();
+        let conn_id = conn_id.to_string();
+        let owner_window_label = owner_window_label.to_string();
+        let expected_session_id = expected_session_id.to_string();
+        tokio::spawn(async move {
+            manager
+                .restart_agent_inner(
+                    &conn_id,
+                    &owner_window_label,
+                    &expected_session_id,
+                    runtime_env,
+                    emitter,
+                    preferred_mode_id,
+                    preferred_config_values,
+                )
+                .await
+        })
+        .await
+        .map_err(|e| AcpError::protocol(format!("restart worker failed: {e}")))?
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn restart_agent_inner(
+        &self,
+        conn_id: &str,
+        owner_window_label: &str,
+        expected_session_id: &str,
+        runtime_env: BTreeMap<String, String>,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<String, AcpError> {
+        let _restore_guard = self.external_restore_lock.read().await;
+        let state_ref = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+            if conn.owner_window_label != owner_window_label {
+                return Err(AcpError::protocol("only the connection owner can restart it"));
+            }
+            Arc::clone(&conn.state)
+        };
+        let (agent_type, working_dir, session_id) = {
+            let state = state_ref.read().await;
+            (
+                state.agent_type,
+                state.working_dir.clone(),
+                state.external_id.clone().ok_or_else(|| {
+                    AcpError::protocol("the agent has no resumable session id")
+                })?,
+            )
+        };
+        if session_id != expected_session_id {
+            return Err(AcpError::protocol("the session changed before restart"));
+        }
+        let key = SpawnDedupKey {
+            agent_type,
+            working_dir: working_dir.clone(),
+            session_id: session_id.clone(),
+        };
+        let lock = {
+            let mut locks = self.spawn_locks.lock().await;
+            locks
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _session_guard = lock.lock_owned().await;
+        {
+            let connections = self.connections.lock().await;
+            let current = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+            if !Arc::ptr_eq(&current.state, &state_ref)
+                || current.owner_window_label != owner_window_label
+            {
+                return Err(AcpError::protocol("the connection changed before restart"));
+            }
+        }
+        if state_ref.read().await.external_id.as_deref() != Some(session_id.as_str()) {
+            return Err(AcpError::protocol("the session changed before restart"));
+        }
+
+        self.disconnect_for_restart(conn_id, owner_window_label)
+            .await?;
+        let replacement_id = uuid::Uuid::new_v4().to_string();
+        let quarantine = self
+            .restart_quarantines
+            .lock()
+            .await
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| AcpError::protocol("restart reservation disappeared"))?;
+        {
+            let mut state = quarantine.state.lock().await;
+            state.connection_id = replacement_id.clone();
+            // Unknown until spawn_agent_connection returns its pid cell.
+            // Treat a cancelled spawn as unsafe rather than assuming no child.
+            state.child_pid = None;
+            state.terminal = 0;
+        }
+        let (started, child_pid) = match spawn_agent_connection(
+            replacement_id.clone(),
+            agent_type,
+            working_dir.map(|dir| dir.to_string_lossy().into_owned()),
+            Some(session_id.clone()),
+            runtime_env,
+            owner_window_label.to_string(),
+            emitter,
+            self.connections.clone(),
+            preferred_mode_id,
+            preferred_config_values,
+            self.delegation_snapshot(),
+            self.terminal_shell_config.clone(),
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error) => {
+                // spawn_agent_connection returns Err only before its driver
+                // thread starts. build_agent has not spawned a child, and a
+                // thread-spawn failure drops its cleanup guard without
+                // running the driver, so no replacement process exists.
+                self.restart_quarantines.lock().await.remove(&key);
+                return Err(error);
+            }
+        };
+        #[cfg(test)]
+        {
+            let hook = self.restart_after_spawn_hook.lock().await.take();
+            if let Some((reached, resume)) = hook {
+                let _ = reached.send(());
+                let _ = resume.await;
+            }
+        }
+        // The driver may fail and remove its active-map entry before this
+        // continuation runs. Its returned PID cell remains authoritative
+        // through on_exit/reap, independent of that entry's lifetime.
+        quarantine.state.lock().await.child_pid = Some(child_pid);
+        let (outcome, _) =
+            wait_for_session_started(started, self.spawn_handshake_timeout).await;
+        let resumed = self
+            .get_state(&replacement_id)
+            .await
+            .map(|state| async move { state.read().await.external_id.clone() });
+        let actual_session_id = match resumed {
+            Some(future) => future.await,
+            None => None,
+        };
+        if outcome != HandshakeWaitOutcome::Ready
+            || actual_session_id.as_deref() != Some(session_id.as_str())
+        {
+            // Keep the reservation until this failed replacement has also
+            // exited. A plain disconnect removes its active map entry before
+            // the process exits, so an immediate normal connect could
+            // otherwise start a third process for the same session.
+            self.stop_failed_replacement(&replacement_id, &quarantine).await?;
+            return Err(AcpError::protocol(
+                "agent did not confirm resuming the original session",
+            ));
+        }
+        self.restart_quarantines.lock().await.remove(&key);
+        Ok(replacement_id)
+    }
+
+    async fn stop_failed_replacement(
+        &self,
+        conn_id: &str,
+        quarantine: &Arc<RestartQuarantine>,
+    ) -> Result<(), AcpError> {
+        let child_pid = quarantine
+            .state
+            .lock()
+            .await
+            .child_pid
+            .clone()
+            .ok_or_else(|| AcpError::protocol(
+                "failed replacement process identity is unknown; reconnect is blocked",
+            ))?;
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        self.restart_terminal_waiters
+            .lock()
+            .await
+            .insert(conn_id.to_string(), terminal_tx);
+        if self.get_state(conn_id).await.is_some() {
+            self.disconnect(conn_id).await?;
+        }
+        tokio::time::sleep(DISCONNECT_ALL_GRACE).await;
+        if child_pid.load(Ordering::SeqCst) != 0 {
+            let kill_cell = Arc::clone(&child_pid);
+            let signalled = tokio::task::spawn_blocking(move || kill_tree_and_wait(&kill_cell))
+                .await
+                .map_err(|e| AcpError::protocol(format!("failed replacement kill: {e}")))?;
+            if !signalled && child_pid.load(Ordering::SeqCst) != 0 {
+                return Err(AcpError::protocol(
+                    "failed replacement is still running; reconnect is blocked",
+                ));
+            }
+        }
+        let reap_cell = Arc::clone(&child_pid);
+        let reaped = tokio::task::spawn_blocking(move || {
+            reap_cell.load(Ordering::SeqCst) == 0
+                || wait_for_reap(&reap_cell, RESTART_REAP_TIMEOUT)
+        })
+        .await
+        .map_err(|e| AcpError::protocol(format!("failed replacement reap: {e}")))?;
+        if !reaped {
+            return Err(AcpError::protocol(
+                "failed replacement was not reaped; reconnect is blocked",
+            ));
+        }
+        if quarantine.state.lock().await.terminal == 1 {
+            return Ok(());
+        }
+        match tokio::time::timeout(RESTART_TERMINAL_TIMEOUT, terminal_rx).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            _ => Err(AcpError::protocol(
+                "failed replacement status was not finalized; reconnect is blocked",
+            )),
+        }
+    }
+
+    /// Called by the old connection's lifecycle worker only after terminal
+    /// status handling has returned. A missing waiter is an ordinary
+    /// disconnect.
+    pub(crate) async fn complete_restart_terminal(
+        &self,
+        conn_id: &str,
+        result: Result<(), String>,
+    ) {
+        let quarantines: Vec<_> = self
+            .restart_quarantines
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for quarantine in quarantines {
+            let mut state = quarantine.state.lock().await;
+            if state.connection_id == conn_id {
+                state.terminal = if result.is_ok() { 1 } else { 2 };
+            }
+        }
+        if let Some(waiter) = self.restart_terminal_waiters.lock().await.remove(conn_id) {
+            let _ = waiter.send(result);
         }
     }
 
@@ -4631,6 +5183,679 @@ mod tests {
             wait_until_dead(gpid).await,
             "grandchild {gpid} survived — the escalation reached the target but not its tree"
         );
+    }
+
+    /// The restart gate must observe this specific agent process being reaped,
+    /// not merely the return of a signal call. The second connection stands in
+    /// for a separate active session and must remain untouched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restart_disconnect_waits_for_its_child_reap_and_spares_other_connections() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut child, _) = spawn_sigterm_proof_tree(&dir.path().join("agent.pid")).await;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("stalled", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.get_state("stalled").await.unwrap().write().await.external_id =
+            Some("stalled-session".into());
+        mgr.insert_test_connection("other", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        let pid = mgr
+            .connections
+            .lock()
+            .await
+            .get("stalled")
+            .unwrap()
+            .child_pid
+            .clone();
+        pid.store(child.id(), Ordering::SeqCst);
+        let ack_mgr = mgr.clone_ref();
+
+        // A real driver clears the pid only from its ChildGuard on_exit after
+        // wait() reaps the child. Keep that callback in this test's control.
+        let restart = tokio::spawn(async move {
+            mgr.disconnect_for_restart("stalled", "test-window").await
+                .map(|_| mgr)
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!restart.is_finished(), "signalling is not proof of child exit");
+        let status = tokio::task::spawn_blocking(move || {
+            child.wait().expect("reap the fake agent process")
+        })
+        .await
+        .expect("child waiter");
+        assert!(!status.success());
+        assert!(!restart.is_finished(), "restart must still await on_exit");
+        pid.store(0, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!restart.is_finished(), "restart must await old lifecycle writes");
+        ack_mgr.complete_restart_terminal("stalled", Ok(())).await;
+        let mgr = restart.await.expect("restart task").expect("confirmed restart");
+        assert!(mgr.get_state("stalled").await.is_none());
+        assert!(mgr.get_state("other").await.is_some());
+    }
+
+    /// An unmount can finish ordinary disconnect and its lifecycle callback
+    /// after restart reads the session but before it installs the reservation.
+    /// A late restart must not leave a pending quarantine with no future callback.
+    #[tokio::test]
+    async fn ordinary_disconnect_before_restart_reservation_leaves_session_reconnectable() {
+        let mgr = ConnectionManager::new();
+        let agent = AgentType::Custom("test-absent-restart-agent-807-race");
+        mgr.insert_test_connection("old", agent, None, EventEmitter::Noop)
+            .await;
+        mgr.get_state("old")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("same-session".into());
+        let pid = mgr
+            .connections
+            .lock()
+            .await
+            .get("old")
+            .unwrap()
+            .child_pid
+            .clone();
+        pid.store(42, Ordering::SeqCst);
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        *mgr.restart_before_reservation_hook.lock().await = Some((reached_tx, resume_rx));
+        let restart_mgr = mgr.clone_ref();
+        let restart = tokio::spawn(async move {
+            restart_mgr
+                .disconnect_for_restart("old", "test-window")
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), reached_rx)
+            .await
+            .expect("restart reached reservation gap")
+            .expect("restart hook closed");
+
+        mgr.disconnect("old").await.expect("unmount disconnect");
+        pid.store(0, Ordering::SeqCst);
+        mgr.complete_restart_terminal("old", Ok(())).await;
+        resume_tx.send(()).expect("resume restart");
+        assert!(matches!(
+            restart.await.expect("restart task"),
+            Err(AcpError::ConnectionNotFound(_))
+        ));
+        let key = SpawnDedupKey {
+            agent_type: agent,
+            working_dir: None,
+            session_id: "same-session".into(),
+        };
+        mgr.ensure_restart_quarantine_clear(&key)
+            .await
+            .expect("ordinary disconnect must not strand reconnect");
+        assert!(mgr.restart_quarantines.lock().await.is_empty());
+        assert!(mgr.restart_terminal_waiters.lock().await.is_empty());
+        let reconnect = mgr
+            .spawn_agent(
+                agent,
+                None,
+                Some("same-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                EventEmitter::Noop,
+                None,
+                BTreeMap::new(),
+            )
+            .await;
+        assert!(matches!(reconnect, Err(AcpError::SdkNotInstalled(_))));
+    }
+
+    /// A terminal Error can finish lifecycle work before the driver's later
+    /// StatusChanged(Error) or map cleanup. Restart must treat the first event
+    /// as terminal instead of registering a waiter after its only callback.
+    #[tokio::test]
+    async fn terminal_error_before_restart_reservation_cannot_strand_quarantine() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("old", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        let state = mgr.get_state("old").await.unwrap();
+        state.write().await.external_id = Some("same-session".into());
+        let pid = mgr.connections.lock().await.get("old").unwrap().child_pid.clone();
+        pid.store(42, Ordering::SeqCst);
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        *mgr.restart_before_reservation_hook.lock().await = Some((reached_tx, resume_rx));
+        let restart_mgr = mgr.clone_ref();
+        let mut restart = tokio::spawn(async move {
+            restart_mgr.disconnect_for_restart("old", "test-window").await
+        });
+        tokio::time::timeout(Duration::from_secs(2), reached_rx)
+            .await
+            .expect("restart reached reservation gap")
+            .expect("restart hook closed");
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::Error {
+                message: "driver failed".into(),
+                agent_type: "antigravity".into(),
+                code: None,
+                details: None,
+                terminal: true,
+            },
+        )
+        .await;
+        // This is the lifecycle worker's one terminal callback. The driver
+        // has not yet emitted StatusChanged(Error) or removed the map entry.
+        mgr.complete_restart_terminal("old", Ok(())).await;
+        resume_tx.send(()).expect("resume restart");
+        let outcome = tokio::time::timeout(Duration::from_millis(300), &mut restart).await;
+        if outcome.is_err() {
+            restart.abort(); // do not signal the fake PID on the old code
+        }
+        let result = outcome
+            .expect("restart must reject the already-terminal connection promptly")
+            .expect("restart task");
+        assert!(matches!(result, Err(AcpError::Protocol(_))));
+        assert!(mgr.get_state("old").await.is_some());
+        assert!(mgr.restart_quarantines.lock().await.is_empty());
+        assert!(mgr.restart_terminal_waiters.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn restart_rejects_non_owner_and_missing_session_without_teardown() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection(
+            "owner",
+            AgentType::Antigravity,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        assert!(mgr.restart_identity("owner", "other-window").await.is_err());
+        assert!(mgr.restart_identity("owner", "test-window").await.is_err());
+        assert!(mgr.get_state("owner").await.is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unconfirmed_reap_quarantines_session_from_ordinary_connect() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut child, _) = spawn_sigterm_proof_tree(&dir.path().join("agent.pid")).await;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("stalled", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.get_state("stalled").await.unwrap().write().await.external_id =
+            Some("stalled-session".into());
+        let pid = mgr
+            .connections
+            .lock()
+            .await
+            .get("stalled")
+            .unwrap()
+            .child_pid
+            .clone();
+        pid.store(child.id(), Ordering::SeqCst);
+        // No ChildGuard on_exit callback exists for this injected child. The
+        // OS process dies, but the manager cannot prove its particular child
+        // was reaped, so the restart must fail closed.
+        assert!(mgr
+            .disconnect_for_restart("stalled", "test-window")
+            .await
+            .is_err());
+        let _ = child.wait();
+        let blocked = mgr
+            .spawn_agent(
+                AgentType::Antigravity,
+                None,
+                Some("stalled-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                EventEmitter::Noop,
+                None,
+                BTreeMap::new(),
+            )
+            .await;
+        assert!(matches!(blocked, Err(AcpError::Protocol(_))));
+        assert!(mgr.connections.lock().await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replacement_build_failure_releases_safe_session_quarantine() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut child, _) = spawn_sigterm_proof_tree(&dir.path().join("agent.pid")).await;
+        let agent = AgentType::Custom("test-absent-restart-agent-807");
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("old", agent, None, EventEmitter::Noop)
+            .await;
+        mgr.get_state("old").await.unwrap().write().await.external_id =
+            Some("old-session".into());
+        let pid = mgr.connections.lock().await.get("old").unwrap().child_pid.clone();
+        pid.store(child.id(), Ordering::SeqCst);
+        let callback_manager = mgr.clone_ref();
+        let callback = tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || child.wait().unwrap())
+                .await
+                .unwrap();
+            pid.store(0, Ordering::SeqCst);
+            callback_manager.complete_restart_terminal("old", Ok(())).await;
+        });
+        let error = mgr
+            .restart_agent(
+                "old",
+                "test-window",
+                "old-session",
+                BTreeMap::new(),
+                EventEmitter::Noop,
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect_err("missing custom agent cannot start a replacement");
+        callback.await.unwrap();
+        assert!(matches!(error, AcpError::SdkNotInstalled(_)));
+        assert!(mgr.restart_quarantines.lock().await.is_empty());
+    }
+
+    /// End-to-end ACP wire regression: the first fake agent accepts
+    /// session/load and then never answers session/prompt. Restart must kill
+    /// and reap that exact Python process, drain its lifecycle terminal work,
+    /// and only then load the SAME session in a new process. This exercises
+    /// the real connection driver and ChildGuard callbacks rather than only
+    /// an injected pid cell.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // global fake-agent registry must remain pinned throughout this async test
+    async fn stalled_fake_acp_restart_reaps_old_pid_and_resumes_same_session() {
+        use crate::acp::custom_registry::{
+            self, CustomAgentDef, CustomAgentSpec, CustomDistributionKind, NpxSpec,
+        };
+        use crate::acp::{EventBusMetrics, InternalEventBus};
+        use crate::db::service::conversation_service;
+        use crate::db::test_helpers;
+
+        if !std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping fake ACP process test: python3 is unavailable");
+            return;
+        }
+        let _registry_guard = custom_registry::hydrate_test_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join("fake_acp.py");
+        let pid_file = dir.path().join("pids.txt");
+        std::fs::write(
+            &script,
+            r#"import json, os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(sys.argv[1], "a", encoding="utf-8") as pids:
+    pids.write(str(os.getpid()) + "\n")
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "session/prompt":
+        while True:
+            time.sleep(1)
+    if "id" not in request:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}
+    elif method == "session/load":
+        if os.path.exists(os.path.join(os.path.dirname(sys.argv[1]), "exit_on_load")):
+            sys.exit(17)
+        if os.path.exists(os.path.join(os.path.dirname(sys.argv[1]), "reject_load")):
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32603, "message": "temporary load failure"}}) + "\n")
+            sys.stdout.flush()
+            continue
+        result = {}
+    elif method == "session/new":
+        result = {"sessionId": "different-session"}
+    else:
+        result = {}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\n")
+    sys.stdout.flush()
+"#,
+        )
+        .expect("fake agent script");
+        let def = CustomAgentDef {
+            registry_id: "test-stalled-restart".into(),
+            name: "Fake ACP restart agent".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: "fake-acp@1.0.0".into(),
+                    cmd: Some("python3".into()),
+                    args: vec![
+                        script.to_string_lossy().into_owned(),
+                        pid_file.to_string_lossy().into_owned(),
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: false,
+        };
+        assert!(custom_registry::hydrate(&[def]).is_empty());
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
+        let dispatcher = tokio::spawn(crate::acp::lifecycle_subscriber_task(
+            db.conn.clone(),
+            mgr.clone_ref(),
+            bus.clone(),
+            None,
+        ));
+        let emitter = EventEmitter::web_only(
+            Arc::new(WebEventBroadcaster::new()),
+            bus.clone(),
+        );
+        let agent = AgentType::Custom("test-stalled-restart");
+        let folder_id = test_helpers::seed_folder(&db, dir.path().to_str().unwrap()).await;
+        let conv = conversation_service::create(&db.conn, folder_id, agent, None, None)
+            .await
+            .expect("conversation");
+        conversation_service::bind_external_id(
+            &db.conn,
+            conv.id,
+            "restart-session",
+            &[],
+        )
+        .await
+        .expect("bind original session");
+        let old = mgr
+            .spawn_agent(
+                agent,
+                Some(dir.path().to_string_lossy().into_owned()),
+                Some("restart-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("first fake ACP connection");
+        assert_eq!(
+            mgr.get_state(&old).await.unwrap().read().await.external_id.as_deref(),
+            Some("restart-session")
+        );
+        mgr.send_prompt_linked(
+            &db,
+            &old,
+            vec![PromptInputBlock::Text {
+                text: "compact now".into(),
+            }],
+            Some(folder_id),
+            Some(conv.id),
+            None,
+        )
+        .await
+        .expect("start the stalled turn");
+
+        let old_pid = {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Ok(pids) = std::fs::read_to_string(&pid_file) {
+                    if let Some(pid) = pids.lines().next().and_then(|p| p.parse::<i32>().ok()) {
+                        break pid;
+                    }
+                }
+                assert!(std::time::Instant::now() < deadline, "fake ACP did not spawn");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        let replacement = mgr
+            .restart_agent(
+                &old,
+                "test-window",
+                "restart-session",
+                BTreeMap::new(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("confirmed restart");
+        assert_ne!(replacement, old);
+        assert!(!is_alive(old_pid), "old fake ACP PID still exists");
+        assert_eq!(
+            mgr.get_state(&replacement)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .external_id
+                .as_deref(),
+            Some("restart-session")
+        );
+        let pids = std::fs::read_to_string(&pid_file).expect("fake ACP spawn log");
+        assert_eq!(pids.lines().count(), 2, "restart must spawn exactly once");
+        let recovered_after_lost_response = mgr
+            .spawn_agent(
+                agent,
+                Some(dir.path().to_string_lossy().into_owned()),
+                Some("restart-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("a client missing the restart response can reconnect");
+        assert_eq!(recovered_after_lost_response, replacement);
+        assert_eq!(std::fs::read_to_string(&pid_file).unwrap().lines().count(), 2);
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, conv.id)
+                .await
+                .unwrap()
+                .status,
+            "cancelled",
+            "the old terminal CAS must finish before restart returns"
+        );
+        mgr.send_prompt_linked(
+            &db,
+            &replacement,
+            vec![PromptInputBlock::Text {
+                text: "continue".into(),
+            }],
+            Some(folder_id),
+            Some(conv.id),
+            None,
+        )
+        .await
+        .expect("new prompt on the resumed session");
+        bus.send(Arc::new(crate::acp::EventEnvelope {
+            seq: 999,
+            connection_id: old.clone(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "restart-session".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: agent.to_string(),
+            },
+        }));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, conv.id)
+                .await
+                .unwrap()
+                .status,
+            "in_progress",
+            "no old terminal event may cancel the new turn"
+        );
+
+        // Dropping the browser/desktop request after the old connection has
+        // left the map must not cancel the backend worker holding the session
+        // lock. A simultaneous ordinary connect waits and adopts the ONE new
+        // process instead of spawning alongside the old one.
+        let restart_manager = mgr.clone_ref();
+        let restart_emitter = emitter.clone();
+        let replacement_for_request = replacement.clone();
+        let cancelled_request = tokio::spawn(async move {
+            restart_manager
+                .restart_agent(
+                    &replacement_for_request,
+                    "test-window",
+                    "restart-session",
+                    BTreeMap::new(),
+                    restart_emitter,
+                    None,
+                    BTreeMap::new(),
+                )
+                .await
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while mgr.get_state(&replacement).await.is_some() {
+            assert!(std::time::Instant::now() < deadline, "restart did not remove old map entry");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        cancelled_request.abort();
+        let recovered = mgr
+            .spawn_agent(
+                agent,
+                Some(dir.path().to_string_lossy().into_owned()),
+                Some("restart-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("connect after cancelled request");
+        assert_ne!(recovered, replacement);
+        assert_eq!(std::fs::read_to_string(&pid_file).unwrap().lines().count(), 3);
+
+        // A replacement that rejects session/load and starts a DIFFERENT
+        // session is a failed restart. It must be reaped before the command
+        // returns an error; the original session key remains quarantined
+        // until both the child and terminal lifecycle are confirmed.
+        std::fs::write(dir.path().join("reject_load"), "1").unwrap();
+        assert!(mgr
+            .restart_agent(
+                &recovered,
+                "test-window",
+                "restart-session",
+                BTreeMap::new(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .is_err());
+        let pids: Vec<i32> = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .lines()
+            .map(|line| line.parse().unwrap())
+            .collect();
+        assert_eq!(pids.len(), 4);
+        assert!(!is_alive(pids[3]), "failed replacement still alive");
+        mgr.ensure_restart_quarantine_clear(&SpawnDedupKey {
+            agent_type: agent,
+            working_dir: Some(dir.path().to_path_buf()),
+            session_id: "restart-session".into(),
+        })
+        .await
+        .expect("failed replacement was safely finalized");
+
+        // Force the replacement driver to remove its active-map entry before
+        // restart_agent_inner stores its PID cell. The cell returned directly
+        // by spawn_agent_connection must still let quarantine prove reap and
+        // permit a later normal connect to the original session.
+        std::fs::remove_file(dir.path().join("reject_load")).unwrap();
+        let live = mgr
+            .spawn_agent(
+                agent,
+                Some(dir.path().to_string_lossy().into_owned()),
+                Some("restart-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("normal connect after failed replacement");
+        std::fs::write(dir.path().join("exit_on_load"), "1").unwrap();
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        *mgr.restart_after_spawn_hook.lock().await = Some((reached_tx, resume_rx));
+        let fast_manager = mgr.clone_ref();
+        let fast_emitter = emitter.clone();
+        let fast_restart = tokio::spawn(async move {
+            fast_manager
+                .restart_agent(
+                    &live,
+                    "test-window",
+                    "restart-session",
+                    BTreeMap::new(),
+                    fast_emitter,
+                    None,
+                    BTreeMap::new(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), reached_rx)
+            .await
+            .expect("replacement spawn hook")
+            .expect("replacement spawn reached");
+        let key = SpawnDedupKey {
+            agent_type: agent,
+            working_dir: Some(dir.path().to_path_buf()),
+            session_id: "restart-session".into(),
+        };
+        let fast_quarantine = mgr.restart_quarantines.lock().await.get(&key).cloned().unwrap();
+        let fast_id = fast_quarantine.state.lock().await.connection_id.clone();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while mgr.get_state(&fast_id).await.is_some() {
+            assert!(std::time::Instant::now() < deadline, "fast driver did not clean up");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        resume_tx.send(()).unwrap();
+        assert!(fast_restart.await.unwrap().is_err());
+        mgr.ensure_restart_quarantine_clear(&key)
+            .await
+            .expect("fast failed driver must not strand quarantine");
+        std::fs::remove_file(dir.path().join("exit_on_load")).unwrap();
+        let restored = mgr
+            .spawn_agent(
+                agent,
+                Some(dir.path().to_string_lossy().into_owned()),
+                Some("restart-session".into()),
+                BTreeMap::new(),
+                "test-window".into(),
+                emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("ordinary connect recovers after fast failed restart");
+        assert_eq!(
+            mgr.get_state(&restored)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .external_id
+                .as_deref(),
+            Some("restart-session")
+        );
+        dispatcher.abort();
+        custom_registry::hydrate(&[]);
     }
 
     /// Like [`spawn_process_tree`], but both levels ignore `SIGTERM`: the shell

@@ -2156,6 +2156,10 @@
         "sessionId": "ID da sessão",
         "viewerNote": "Anexado a uma sessão de outro cliente — reconectar apenas reanexa esta visualização.",
         "reconnectInterrupts": "Reconectar reinicia o agente e interrompe o trabalho em andamento.",
+        "agentQuiet": "Sem atualizações do agente há {minutes} minutos. Ele pode ainda estar trabalhando.",
+        "restartAgent": "Reiniciar este agente",
+        "restartingAgent": "Reiniciando o agente...",
+        "restartUnavailable": "Esta sessão não pode mais ser reiniciada.",
         "reconnect": "Reconectar",
         "reconnecting": "Reconectando...",
         "reconnectUnavailable": "Ainda não há sessão para reconectar."

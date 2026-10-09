@@ -23,8 +23,11 @@ const fake = vi.hoisted(() => {
       sessionId: string | null
     } | null,
     reconnect: vi.fn(async () => true),
+    restart: vi.fn(async () => true),
+    snapshot: { status: "prompting", agent_silence_seconds: 1800 },
     /** contextKeys the component asked to reconnect, in order. */
     reconnectedKeys: [] as string[],
+    restartedKeys: [] as string[],
   }
   return {
     state,
@@ -43,6 +46,10 @@ const fake = vi.hoisted(() => {
         state.reconnectedKeys.push(key)
         return state.reconnect()
       },
+      restartStalled: (key: string) => {
+        state.restartedKeys.push(key)
+        return state.restart()
+      },
       getReconnectInfo: () => state.reconnectInfo,
     },
   }
@@ -51,6 +58,10 @@ const fake = vi.hoisted(() => {
 vi.mock("@/contexts/acp-connections-context", () => ({
   useConnectionStore: () => fake.store,
   useAcpActions: () => fake.actions,
+}))
+
+vi.mock("@/lib/api", () => ({
+  acpGetSessionSnapshot: () => Promise.resolve(fake.state.snapshot),
 }))
 
 import { ComposerConnectionStatus } from "./composer-connection-status"
@@ -106,7 +117,13 @@ describe("ComposerConnectionStatus", () => {
       sessionId: "sess-abc-123",
     }
     fake.state.reconnect = vi.fn(async () => true)
+    fake.state.restart = vi.fn(async () => true)
     fake.state.reconnectedKeys = []
+    fake.state.restartedKeys = []
+    fake.state.snapshot = {
+      status: "prompting",
+      agent_silence_seconds: 1800,
+    }
   })
 
   it("keeps the status readable on the trigger before anything is clicked", () => {
@@ -266,6 +283,35 @@ describe("ComposerConnectionStatus", () => {
     ).toBeInTheDocument()
     // Still offered — the warning informs, it doesn't gate.
     expect(screen.getByRole("button", { name: copy.reconnect })).toBeEnabled()
+  })
+
+  it("treats agent silence as advisory and lets only the owner restart", async () => {
+    fake.state.conn = connected({
+      connectionId: "conn-1",
+      status: "prompting",
+    })
+    renderStatus()
+    await openPopover()
+    expect(
+      await screen.findByText(copy.agentQuiet.replace("{minutes}", "30"))
+    ).toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole("button", { name: copy.restartAgent })
+    )
+    expect(fake.state.restartedKeys).toEqual(["tab-1"])
+  })
+
+  it("does not offer process restart to a viewer", async () => {
+    fake.state.conn = connected({
+      connectionId: "conn-1",
+      status: "prompting",
+      isViewer: true,
+    })
+    renderStatus()
+    await openPopover()
+    expect(
+      screen.queryByRole("button", { name: copy.restartAgent })
+    ).not.toBeInTheDocument()
   })
 
   it("warns while background work is outstanding, even between turns", async () => {

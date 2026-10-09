@@ -2156,6 +2156,10 @@
         "sessionId": "ID de session",
         "viewerNote": "Rattaché à une session appartenant à un autre client : la reconnexion ne rattache que cette vue.",
         "reconnectInterrupts": "La reconnexion redémarre l'agent et interrompt le travail en cours.",
+        "agentQuiet": "Aucune mise à jour de l’agent depuis {minutes} minutes. Il travaille peut-être encore.",
+        "restartAgent": "Redémarrer cet agent",
+        "restartingAgent": "Redémarrage de l’agent...",
+        "restartUnavailable": "Cette session ne peut plus être redémarrée.",
         "reconnect": "Reconnecter",
         "reconnecting": "Reconnexion...",
         "reconnectUnavailable": "Aucune session à laquelle se reconnecter pour l'instant."

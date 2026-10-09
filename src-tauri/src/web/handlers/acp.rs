@@ -119,6 +119,38 @@ pub async fn acp_connect(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpRestartParams {
+    pub connection_id: String,
+    #[serde(default)]
+    pub preferred_mode_id: Option<String>,
+    #[serde(default)]
+    pub preferred_config_values: Option<BTreeMap<String, String>>,
+}
+
+pub async fn acp_restart(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpRestartParams>,
+) -> Result<Json<String>, AppCommandError> {
+    // The Web transport currently has one shared bearer-token trust domain
+    // and labels all its connections "web". The UI limits this action to its
+    // local owner; this label is not a per-browser-tab authorization token.
+    let connection_id = acp_commands::acp_restart_core(
+        &params.connection_id,
+        "web",
+        params.preferred_mode_id,
+        params.preferred_config_values.unwrap_or_default(),
+        &state.connection_manager,
+        &state.db,
+        &state.data_dir,
+        state.emitter.clone(),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(connection_id))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDisconnectParams {
     pub connection_id: String,
 }

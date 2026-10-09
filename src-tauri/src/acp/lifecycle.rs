@@ -1537,6 +1537,13 @@ async fn connection_worker_loop(
     let mut terminal_dispatched = false;
     while let Some(envelope_arc) = rx.recv().await {
         let envelope: &EventEnvelope = envelope_arc.as_ref();
+        // A terminal event closes this connection's DB lifecycle. The driver
+        // emits Disconnected last, but a queued callback from another task
+        // must never write the old connection's turn after restart has
+        // resumed the same conversation.
+        if terminal_dispatched {
+            continue;
+        }
         match &envelope.payload {
             AcpEvent::ConversationLinked {
                 conversation_id, ..
@@ -1549,13 +1556,21 @@ async fn connection_worker_loop(
                 if terminal_dispatched {
                     continue;
                 }
-                if let Err(e) = handle_terminal_event(&db, &mut cache, &connection_id).await {
+                let terminal_result =
+                    handle_terminal_event(&db, &mut cache, &connection_id).await;
+                if let Err(e) = &terminal_result {
                     tracing::error!("[lifecycle][ERROR] terminal event for {connection_id}: {e}");
                 }
                 if let Some(b) = broker.as_ref() {
                     forward_disconnect_to_broker(b.as_ref(), &connection_id, None).await;
                 }
                 terminal_dispatched = true;
+                manager
+                    .complete_restart_terminal(
+                        &connection_id,
+                        terminal_result.map_err(|e| e.to_string()),
+                    )
+                    .await;
             }
             AcpEvent::Error {
                 message,
@@ -1591,7 +1606,9 @@ async fn connection_worker_loop(
                 // (`cancel_by_child_connection` no-ops on empty pending),
                 // so the subsequent Disconnected will short-circuit on
                 // `terminal_dispatched`.
-                if let Err(e) = handle_terminal_event(&db, &mut cache, &connection_id).await {
+                let terminal_result =
+                    handle_terminal_event(&db, &mut cache, &connection_id).await;
+                if let Err(e) = &terminal_result {
                     tracing::error!("[lifecycle][ERROR] terminal event for {connection_id}: {e}");
                 }
                 if let Some(b) = broker.as_ref() {
@@ -1599,6 +1616,12 @@ async fn connection_worker_loop(
                     forward_disconnect_to_broker(b.as_ref(), &connection_id, Some(&detail)).await;
                 }
                 terminal_dispatched = true;
+                manager
+                    .complete_restart_terminal(
+                        &connection_id,
+                        terminal_result.map_err(|e| e.to_string()),
+                    )
+                    .await;
             }
             _ => {
                 handle_event_with_retry(&db, &manager, envelope, broker.as_ref()).await;

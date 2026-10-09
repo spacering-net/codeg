@@ -456,6 +456,18 @@ export async function acpDisconnect(connectionId: string): Promise<void> {
   return getTransport().call("acp_disconnect", { connectionId })
 }
 
+export async function acpRestart(
+  connectionId: string,
+  preferredModeId?: string | null,
+  preferredConfigValues?: Record<string, string> | null
+): Promise<string> {
+  return getTransport().call("acp_restart", {
+    connectionId,
+    preferredModeId: preferredModeId ?? null,
+    preferredConfigValues: preferredConfigValues ?? null,
+  })
+}
+
 export async function acpTouchConnection(
   connectionId: string
 ): Promise<boolean> {

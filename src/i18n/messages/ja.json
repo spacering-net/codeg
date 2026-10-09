@@ -2156,6 +2156,10 @@
         "sessionId": "セッション ID",
         "viewerNote": "他のクライアントが所有するセッションに接続しています。再接続してもこのビューが接続し直されるだけです。",
         "reconnectInterrupts": "再接続するとエージェントが再起動し、進行中の処理が中断されます。",
+        "agentQuiet": "エージェントからの更新が {minutes} 分間ありません。まだ処理中の可能性があります。",
+        "restartAgent": "このエージェントを再起動",
+        "restartingAgent": "エージェントを再起動中...",
+        "restartUnavailable": "このセッションは再起動できません。",
         "reconnect": "再接続",
         "reconnecting": "再接続中...",
         "reconnectUnavailable": "再接続できるセッションがまだありません。"

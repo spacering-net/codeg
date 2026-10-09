@@ -137,7 +137,8 @@ export function useConnectionLifecycle({
   isTransientUnmount,
 }: UseConnectionLifecycleOptions): UseConnectionLifecycleReturn {
   const t = useTranslations("Folder.chat.connectionLifecycle")
-  const { setActiveKey, touchActivity } = useAcpActions()
+  const { setActiveKey, touchActivity, releaseRestartingSurface } =
+    useAcpActions()
   const { addTask, updateTask, removeTask } = useTaskContext()
   const conn = useConnection(contextKey)
 
@@ -361,6 +362,10 @@ export function useConnectionLifecycle({
   useEffect(() => {
     connDisconnectRef.current = connDisconnect
   }, [connDisconnect])
+  const releaseRestartingSurfaceRef = useRef(releaseRestartingSurface)
+  useEffect(() => {
+    releaseRestartingSurfaceRef.current = releaseRestartingSurface
+  }, [releaseRestartingSurface])
   const isTransientUnmountRef = useRef(isTransientUnmount)
   useEffect(() => {
     isTransientUnmountRef.current = isTransientUnmount
@@ -373,6 +378,12 @@ export function useConnectionLifecycle({
   // will clean it up once it transitions back to "connected".
   useEffect(() => {
     return () => {
+      const transientUnmount = isTransientUnmountRef.current?.() === true
+      // A manual restart's backend task outlives this component. If the tab
+      // closes while awaiting it, invalidate that callback synchronously and
+      // release the old local route even though its turn was prompting.
+      const restartingSurfaceClosed =
+        !transientUnmount && releaseRestartingSurfaceRef.current(contextKey)
       // Owners keep a prompting agent alive in the background to finish the
       // turn (the idle sweep reclaims it once it returns to "connected"), and
       // likewise while background work is still outstanding (async sub-agents
@@ -386,11 +397,12 @@ export function useConnectionLifecycle({
       // necessary: the idle sweep skips viewers, so a viewer left attached
       // here would leak its WS subscription until the whole provider unmounts.
       if (
+        restartingSurfaceClosed ||
         shouldDisconnectOnUnmount({
           status: statusRef.current,
           isViewer: isViewerRef.current,
           backgroundOutstanding: backgroundOutstandingRef.current,
-          transientUnmount: isTransientUnmountRef.current?.() === true,
+          transientUnmount,
         })
       ) {
         connDisconnectRef.current().catch(() => {})
@@ -402,7 +414,7 @@ export function useConnectionLifecycle({
       }
       clearSelectorTask()
     }
-  }, [removeTask, clearSelectorTask])
+  }, [removeTask, clearSelectorTask, contextKey])
 
   const handleFocus = useCallback(() => {
     // Respect the caller's readiness gate — e.g. historical conversations

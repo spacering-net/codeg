@@ -3298,6 +3298,9 @@ export interface LiveSessionSnapshot {
   conversation_id: number | null
   folder_id: number | null
   status: ConnectionStatus
+  /** Seconds since the current prompt or latest agent ACP frame. Server
+   * measured; frontend keepalive does not reset it. */
+  agent_silence_seconds?: number | null
   external_id: string | null
   live_message: LiveMessage | null
   active_tool_calls: ToolCallState[]

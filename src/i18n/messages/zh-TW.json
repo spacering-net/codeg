@@ -2156,6 +2156,10 @@
         "sessionId": "工作階段 ID",
         "viewerNote": "已接入其他用戶端擁有的工作階段——重新連線只會重新接入目前檢視。",
         "reconnectInterrupts": "重新連線會重啟智慧體，並中斷進行中的工作。",
+        "agentQuiet": "智慧體已有 {minutes} 分鐘沒有更新，可能仍在工作。",
+        "restartAgent": "重啟此智慧體",
+        "restartingAgent": "正在重啟智慧體...",
+        "restartUnavailable": "此工作階段已無法重啟。",
         "reconnect": "重新連線",
         "reconnecting": "正在重新連線...",
         "reconnectUnavailable": "目前沒有可重新連線的工作階段。"

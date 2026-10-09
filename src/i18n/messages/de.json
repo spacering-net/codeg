@@ -2156,6 +2156,10 @@
         "sessionId": "Sitzungs-ID",
         "viewerNote": "Mit einer Sitzung verbunden, die einem anderen Client gehört – ein Neuverbinden hängt nur diese Ansicht erneut an.",
         "reconnectInterrupts": "Neu verbinden startet den Agenten neu und unterbricht die laufende Arbeit.",
+        "agentQuiet": "Seit {minutes} Minuten keine Agent-Updates. Der Agent arbeitet möglicherweise noch.",
+        "restartAgent": "Diesen Agenten neu starten",
+        "restartingAgent": "Agent wird neu gestartet...",
+        "restartUnavailable": "Diese Sitzung kann nicht mehr neu gestartet werden.",
         "reconnect": "Neu verbinden",
         "reconnecting": "Verbinde neu...",
         "reconnectUnavailable": "Noch keine Sitzung zum Neuverbinden."

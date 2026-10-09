@@ -2304,7 +2304,7 @@ pub async fn spawn_agent_connection(
     preferred_config_values: BTreeMap<String, String>,
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
-) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
+) -> Result<(tokio::sync::oneshot::Receiver<()>, Arc<std::sync::atomic::AtomicU32>), AcpError> {
     // Create the authoritative session state up front. Subsequent emit_with_state
     // calls write through this state and increment its seq counter so the first
     // event the frontend sees has seq=1, not the placeholder 0 from Phase 0.
@@ -2357,6 +2357,9 @@ pub async fn spawn_agent_connection(
     // backstop when the connection driver thread is torn down by process exit
     // before `ChildGuard::drop` can run. 0 = not spawned yet / unknown.
     let child_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    // Keep a manager-owned handle even if the driver exits and its cleanup
+    // removes the active map entry before this function returns.
+    let manager_child_pid = Arc::clone(&child_pid);
     // Connection-scoped ring buffer of the agent's stderr, populated by the
     // `with_debug` callback `build_agent` installs and read at turn end when a
     // turn is diagnosed as silently empty. Created here so both the spawn side
@@ -2614,7 +2617,7 @@ pub async fn spawn_agent_connection(
         )));
     }
 
-    Ok(session_started_rx)
+    Ok((session_started_rx, manager_child_pid))
 }
 
 /// The agent request a permission card answers. `Acp` is a real ACP
@@ -11199,6 +11202,11 @@ async fn run_conversation_loop(
                                 Ok(dispatch) => fix_usage_update_nulls(dispatch),
                                 Err(e) => return Err(defer_to_connection_report(e).await),
                             };
+                            // This is a frame from the agent, unlike the
+                            // frontend keepalive that updates last_activity_at.
+                            // Record even metadata-only or unreadable frames:
+                            // silence means no ACP traffic, not no rendered text.
+                            state.write().await.note_agent_update();
                             let h = emitter.clone();
                             let st = Arc::clone(state);
                             let runtime = terminal_runtime.clone();

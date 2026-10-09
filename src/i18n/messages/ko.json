@@ -2156,6 +2156,10 @@
         "sessionId": "세션 ID",
         "viewerNote": "다른 클라이언트가 소유한 세션에 연결되어 있습니다. 다시 연결해도 이 보기만 다시 연결됩니다.",
         "reconnectInterrupts": "다시 연결하면 에이전트가 재시작되어 진행 중인 작업이 중단됩니다.",
+        "agentQuiet": "에이전트 업데이트가 {minutes}분 동안 없습니다. 아직 작업 중일 수 있습니다.",
+        "restartAgent": "이 에이전트 다시 시작",
+        "restartingAgent": "에이전트 다시 시작 중...",
+        "restartUnavailable": "이 세션은 더 이상 다시 시작할 수 없습니다.",
         "reconnect": "다시 연결",
         "reconnecting": "다시 연결하는 중...",
         "reconnectUnavailable": "아직 다시 연결할 세션이 없습니다."
