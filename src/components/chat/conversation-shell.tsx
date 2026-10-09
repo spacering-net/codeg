@@ -18,6 +18,7 @@ import type {
 } from "@/lib/types"
 import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
 import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
+import { LiveOutputFileWatcher } from "@/components/chat/live-output-file-watcher"
 import type {
   PendingPermission,
   PendingQuestion,
@@ -218,7 +219,13 @@ export function ConversationShell({
           the pointer. The dock below is for things that come and go with the
           turn or the connection (`ComposerStatusStrips`). */}
       {asyncTasks && asyncTasks.length > 0 && (
-        <AsyncTaskStrip tasks={asyncTasks} onStop={onStopAsyncTask} />
+        <>
+          <AsyncTaskStrip tasks={asyncTasks} onStop={onStopAsyncTask} />
+          {/* Null-rendering leaf: keeps the output tabs the strip's button
+              opens fresh while their task is still writing (temp-dir logs
+              sit outside the notify-watched roots, so nothing else does). */}
+          <LiveOutputFileWatcher tasks={asyncTasks} />
+        </>
       )}
 
       <div className="flex-1 min-h-0">{children}</div>
