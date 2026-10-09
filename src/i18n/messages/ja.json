@@ -176,6 +176,11 @@
       "sectionDescription": "新しい会話ページで入力欄の上に表示される「コード開発 / 日常業務」のショートカットカードです。",
       "showQuickActions": "新しい会話ページに表示する"
     },
+    "planOverlay": {
+      "sectionTitle": "Agent plan",
+      "sectionDescription": "The floating plan card that appears on the left of a conversation when an agent writes a to-do list. You can always open it from the small chip.",
+      "autoExpand": "Open the plan card when an agent starts a plan"
+    },
     "workspaceBackground": {
       "sectionTitle": "ワークスペースの背景",
       "sectionDescription": "ワークスペース全体の背後に画像を表示します。サイドバーやパネルは半透明のすりガラスになり画像が透けて見えます。マスクで文字の可読性を保ちます。",

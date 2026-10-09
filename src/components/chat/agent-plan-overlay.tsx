@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import type { LiveMessage } from "@/contexts/acp-connections-context"
 import type { PlanEntryInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { usePlanOverlayAutoExpand } from "@/hooks/use-plan-overlay-auto-expand"
 import {
   CheckCircle2Icon,
   ChevronDownIcon,
@@ -70,6 +71,7 @@ export const AgentPlanOverlay = memo(function AgentPlanOverlay({
   isStreaming = false,
 }: AgentPlanOverlayProps) {
   const t = useTranslations("Folder.chat.agentPlanOverlay")
+  const { autoExpand } = usePlanOverlayAutoExpand()
   const liveEntries = useMemo(
     () => getLatestPlanEntries(message ?? null),
     [message]
@@ -114,6 +116,7 @@ export const AgentPlanOverlay = memo(function AgentPlanOverlay({
   const [autoExpanded, setAutoExpanded] = useState(false)
   if (prevLiveHadPlan !== liveHasPlan) {
     const planCreatedLive =
+      autoExpand &&
       prevLiveHadPlan === false &&
       liveHasPlan &&
       isStreaming &&

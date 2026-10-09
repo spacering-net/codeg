@@ -176,6 +176,11 @@
       "sectionDescription": "새 대화 페이지에서 입력창 위에 표시되는 '코드 개발 / 일상 업무' 바로가기 카드입니다.",
       "showQuickActions": "새 대화 페이지에 표시"
     },
+    "planOverlay": {
+      "sectionTitle": "Agent plan",
+      "sectionDescription": "The floating plan card that appears on the left of a conversation when an agent writes a to-do list. You can always open it from the small chip.",
+      "autoExpand": "Open the plan card when an agent starts a plan"
+    },
     "workspaceBackground": {
       "sectionTitle": "작업 공간 배경",
       "sectionDescription": "작업 공간 전체 뒤에 이미지를 표시합니다. 사이드바와 패널이 반투명 유리 효과로 바뀌어 이미지가 비쳐 보이며, 마스크가 텍스트 가독성을 유지합니다.",

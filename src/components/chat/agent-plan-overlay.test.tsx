@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 import { AgentPlanOverlay } from "./agent-plan-overlay"
 import enMessages from "@/i18n/messages/en.json"
@@ -22,6 +22,10 @@ const sampleEntries: PlanEntryInfo[] = [
 ]
 
 describe("AgentPlanOverlay", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("codeg-plan-overlay-auto-expand")
+  })
+
   it("renders nothing when entries are empty", () => {
     const { container } = renderWithIntl(
       <AgentPlanOverlay entries={[]} planKey="p-empty" />
@@ -115,6 +119,37 @@ describe("AgentPlanOverlay", () => {
     )
     fireEvent.click(screen.getByText("Plan 1/1").closest("button")!)
     expect(screen.getByText("Done A")).toBeInTheDocument()
+  })
+
+  it("stays collapsed when auto-expand is turned off", () => {
+    window.localStorage.setItem("codeg-plan-overlay-auto-expand", "0")
+    const noPlan = {
+      id: "live-off",
+      content: [{ type: "text", text: "working" }],
+    } as unknown as LiveMessage
+    const withPlan = {
+      id: "live-off",
+      content: [
+        { type: "text", text: "working" },
+        {
+          type: "plan",
+          entries: [
+            { content: "Build step", priority: "high", status: "in_progress" },
+          ],
+        },
+      ],
+    } as unknown as LiveMessage
+
+    const { rerender } = renderWithIntl(
+      <AgentPlanOverlay message={noPlan} isStreaming />
+    )
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AgentPlanOverlay message={withPlan} isStreaming />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("Plan 0/1")).toBeInTheDocument()
+    expect(screen.queryByText("Build step")).not.toBeInTheDocument()
   })
 
   it("auto-expands once when a plan is created live while streaming", () => {

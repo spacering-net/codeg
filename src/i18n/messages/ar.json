@@ -176,6 +176,11 @@
       "sectionDescription": "بطاقات الاختصار «تطوير الكود / الأعمال المكتبية» التي تظهر أعلى مربع الإدخال في صفحة المحادثة الجديدة.",
       "showQuickActions": "العرض في صفحة المحادثة الجديدة"
     },
+    "planOverlay": {
+      "sectionTitle": "Agent plan",
+      "sectionDescription": "The floating plan card that appears on the left of a conversation when an agent writes a to-do list. You can always open it from the small chip.",
+      "autoExpand": "Open the plan card when an agent starts a plan"
+    },
     "workspaceBackground": {
       "sectionTitle": "خلفية مساحة العمل",
       "sectionDescription": "عرض صورة خلف مساحة العمل بالكامل. يصبح الشريط الجانبي واللوحات شبه شفافة ومصنفرة لتظهر الصورة من خلالها، ويحافظ القناع على وضوح النص.",

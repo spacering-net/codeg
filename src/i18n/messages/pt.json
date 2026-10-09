@@ -176,6 +176,11 @@
       "sectionDescription": "Os cartões de atalho «Desenvolvimento / Escritório» exibidos acima do campo de entrada na página de nova conversa.",
       "showQuickActions": "Mostrar na página de nova conversa"
     },
+    "planOverlay": {
+      "sectionTitle": "Agent plan",
+      "sectionDescription": "The floating plan card that appears on the left of a conversation when an agent writes a to-do list. You can always open it from the small chip.",
+      "autoExpand": "Open the plan card when an agent starts a plan"
+    },
     "workspaceBackground": {
       "sectionTitle": "Plano de fundo da área de trabalho",
       "sectionDescription": "Mostra uma imagem atrás de toda a área de trabalho. A barra lateral e os painéis ficam translúcidos e foscos para deixar a imagem transparecer, e uma máscara mantém o texto legível.",

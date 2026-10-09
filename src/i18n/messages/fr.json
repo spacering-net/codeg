@@ -176,6 +176,11 @@
       "sectionDescription": "Les cartes de raccourci « Développement / Bureautique » affichées au-dessus du champ de saisie sur la page de nouvelle conversation.",
       "showQuickActions": "Afficher sur la page de nouvelle conversation"
     },
+    "planOverlay": {
+      "sectionTitle": "Agent plan",
+      "sectionDescription": "The floating plan card that appears on the left of a conversation when an agent writes a to-do list. You can always open it from the small chip.",
+      "autoExpand": "Open the plan card when an agent starts a plan"
+    },
     "workspaceBackground": {
       "sectionTitle": "Arrière-plan de l'espace de travail",
       "sectionDescription": "Affiche une image derrière tout l'espace de travail. La barre latérale et les panneaux deviennent translucides et dépolis pour laisser transparaître l'image, et un masque préserve la lisibilité du texte.",
