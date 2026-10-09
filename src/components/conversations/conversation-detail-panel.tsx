@@ -55,6 +55,7 @@ import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
+import { useContextMenuPointerGuard } from "@/hooks/use-context-menu-pointer-guard"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
 import { FeedbackDialog } from "@/components/chat/feedback-dialog"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
@@ -2588,6 +2589,7 @@ export function ConversationDetailPanel() {
   const [detailsOpen, setDetailsOpen] = useState(false)
 
   const exportLabels = useExportLabels()
+  const contextMenuPointerGuard = useContextMenuPointerGuard()
 
   // Release the old connection as soon as a preview tab is replaced (the next
   // single-click in the sidebar takes its slot) instead of waiting for a sweep.
@@ -3080,6 +3082,7 @@ export function ConversationDetailPanel() {
             <div
               ref={groupContainerRef}
               className="relative min-h-0 flex-1 overflow-hidden"
+              {...contextMenuPointerGuard.triggerProps}
             >
               {/* Flat sibling shells keyed by stable group id + divider
                   overlays — stable across every split/tile flip, otherwise
