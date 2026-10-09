@@ -39,6 +39,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: AppImage guard regression test
+        run: bash .github/scripts/appimage-guard.test.sh
+
       - name: Lint
         run: pnpm lint .
 
