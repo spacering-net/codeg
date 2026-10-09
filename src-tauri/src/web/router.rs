@@ -1632,6 +1632,18 @@ pub fn build_router(
             "/token_usage_sync",
             post(handlers::token_usage::token_usage_sync),
         )
+        .route(
+            "/subscription_quota_codex",
+            post(handlers::subscription_quota::subscription_quota_codex),
+        )
+        .route(
+            "/subscription_quota_claude",
+            post(handlers::subscription_quota::subscription_quota_claude),
+        )
+        .route(
+            "/subscription_quota_grok",
+            post(handlers::subscription_quota::subscription_quota_grok),
+        )
         // ─── Work tasks ───
         .route("/work_task_list", post(handlers::work_task::work_task_list))
         .route("/work_task_get", post(handlers::work_task::work_task_get))

@@ -6207,6 +6207,13 @@
   },
   "TokenUsage": {
     "title": "トークン使用量",
+    "quotaTitle": "サブスク残量",
+    "quotaHint": "このページは Codeg が計測したトークンです。プラン残量は公式 CLI が公開する場合のみ表示します。ACP の usage はコンテキスト占有であり、契約残量ではありません。",
+    "quotaRemaining": "残り {remaining} / {limit}",
+    "quotaProviderLink": "プロバイダーの使用量ページ",
+    "quotaLoading": "公式クォータを読み込み中…",
+    "quotaResets": "{when} にリセット",
+    "quotaExtraRemaining": "{name}: 残り {remaining}",
     "rangeLabel": "期間",
     "range7d": "7日間",
     "range30d": "30日間",

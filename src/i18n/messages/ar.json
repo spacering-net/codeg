@@ -6207,6 +6207,13 @@
   },
   "TokenUsage": {
     "title": "استهلاك الرموز",
+    "quotaTitle": "المتبقي من الاشتراك",
+    "quotaHint": "تعد Codeg الرموز في هذه الصفحة. يظهر رصيد الخطة فقط إذا نشره CLI المزوّد. استخدام ACP هو إشغال السياق وليس رصيد الاشتراك.",
+    "quotaRemaining": "متبقٍ {remaining} من {limit}",
+    "quotaProviderLink": "صفحة استخدام المزوّد",
+    "quotaLoading": "جارٍ قراءة الحصة الرسمية…",
+    "quotaResets": "يُعاد التعيين {when}",
+    "quotaExtraRemaining": "{name}: متبقٍ {remaining}",
     "rangeLabel": "النطاق الزمني",
     "range7d": "٧ أيام",
     "range30d": "٣٠ يومًا",

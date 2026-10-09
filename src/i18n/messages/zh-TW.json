@@ -6207,6 +6207,13 @@
   },
   "TokenUsage": {
     "title": "Token 用量",
+    "quotaTitle": "訂閱餘量",
+    "quotaHint": "本頁顯示 Codeg 計量的 token。方案餘量僅在供應商 CLI 公開時顯示。ACP usage 是上下文占用，不是訂閱餘量。",
+    "quotaRemaining": "剩餘 {remaining} / {limit}",
+    "quotaProviderLink": "供應商用量頁",
+    "quotaLoading": "正在讀取官方額度…",
+    "quotaResets": "{when} 重置",
+    "quotaExtraRemaining": "{name}：剩餘 {remaining}",
     "rangeLabel": "時間範圍",
     "range7d": "近 7 天",
     "range30d": "近 30 天",

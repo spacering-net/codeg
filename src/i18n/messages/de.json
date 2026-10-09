@@ -6207,6 +6207,13 @@
   },
   "TokenUsage": {
     "title": "Token-Verbrauch",
+    "quotaTitle": "Verbleibendes Abo",
+    "quotaHint": "Codeg zählt Tokens auf dieser Seite. Verbleibendes Plan-Kontingent nur wenn die CLI es veröffentlicht. ACP-Nutzung ist Kontextbelegung, kein Abo-Rest.",
+    "quotaRemaining": "{remaining} von {limit} übrig",
+    "quotaProviderLink": "Anbieter-Nutzungsseite",
+    "quotaLoading": "Offizielle Quote wird gelesen…",
+    "quotaResets": "Zurückgesetzt {when}",
+    "quotaExtraRemaining": "{name}: {remaining} übrig",
     "rangeLabel": "Zeitraum",
     "range7d": "7 Tage",
     "range30d": "30 Tage",

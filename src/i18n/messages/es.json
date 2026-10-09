@@ -6207,6 +6207,13 @@
   },
   "TokenUsage": {
     "title": "Uso de tokens",
+    "quotaTitle": "Suscripción restante",
+    "quotaHint": "Codeg mide tokens en esta página. El cupo restante del plan solo se muestra si el CLI del proveedor lo publica. El uso ACP es ocupación de contexto, no resto de suscripción.",
+    "quotaRemaining": "{remaining} de {limit} restantes",
+    "quotaProviderLink": "Página de uso del proveedor",
+    "quotaLoading": "Leyendo la cuota oficial…",
+    "quotaResets": "Se restablece {when}",
+    "quotaExtraRemaining": "{name}: {remaining} restantes",
     "rangeLabel": "Periodo",
     "range7d": "7 días",
     "range30d": "30 días",

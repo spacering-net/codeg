@@ -6207,6 +6207,13 @@
   },
   "TokenUsage": {
     "title": "Uso de tokens",
+    "quotaTitle": "Assinatura restante",
+    "quotaHint": "O Codeg mede tokens nesta página. A cota restante do plano só aparece se o CLI do provedor a publicar. O uso ACP é ocupação de contexto, não resto de assinatura.",
+    "quotaRemaining": "{remaining} de {limit} restantes",
+    "quotaProviderLink": "Página de uso do provedor",
+    "quotaLoading": "Lendo a cota oficial…",
+    "quotaResets": "Reinicia {when}",
+    "quotaExtraRemaining": "{name}: {remaining} restantes",
     "rangeLabel": "Período",
     "range7d": "7 dias",
     "range30d": "30 dias",
