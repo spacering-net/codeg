@@ -3006,6 +3006,7 @@ mod tests {
             working_dir: None,
             requested_working_dir: None,
             external_handle: None,
+            overrides: None,
         }
     }
 

@@ -36,6 +36,19 @@ impl AgentDelegationDefaults {
     pub fn is_empty(&self) -> bool {
         self.mode_id.is_none() && self.config_values.is_empty()
     }
+
+    /// `self` with `overrides` laid on top: an override's `mode_id` replaces
+    /// this one only when set, and its `config_values` win key by key, so an
+    /// override that pins just the model keeps the configured mode and every
+    /// other configured option.
+    pub fn merged_with(&self, overrides: &AgentDelegationDefaults) -> AgentDelegationDefaults {
+        let mut config_values = self.config_values.clone();
+        config_values.extend(overrides.config_values.clone());
+        AgentDelegationDefaults {
+            mode_id: overrides.mode_id.clone().or_else(|| self.mode_id.clone()),
+            config_values,
+        }
+    }
 }
 
 /// Everything the broker needs to dispatch a single delegation call.
@@ -71,6 +84,12 @@ pub struct DelegationRequest {
     pub requested_working_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_handle: Option<String>,
+    /// Per-call mode / config values laid over the agent's configured
+    /// delegation defaults (see [`AgentDelegationDefaults::merged_with`]).
+    /// Lets one caller run the same agent type with different models in
+    /// parallel. `None` keeps the configured defaults unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<AgentDelegationDefaults>,
 }
 
 /// Everything the broker needs to resume one interrupted delegation task.
@@ -102,6 +121,12 @@ pub struct ResumeDelegationRequest {
     /// [`DelegationRequest::external_handle`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_handle: Option<String>,
+    /// Same contract as [`DelegationRequest::overrides`]. The broker does not
+    /// remember a task's original overrides, so a caller that started a task
+    /// with overrides passes them again here to resume it under the same
+    /// mode / model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<AgentDelegationDefaults>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
