@@ -3503,6 +3503,7 @@
         "noDetail": "No detail available yet.",
         "unknownAgent": "サブエージェント",
         "openDetail": "会話を表示",
+        "delegationPinnedModel": "この委任では親が {model} を指定しました",
         "resumed": "再開済み",
         "resumeDetail": "再開の詳細",
         "resumeReasonLabel": "再開理由",

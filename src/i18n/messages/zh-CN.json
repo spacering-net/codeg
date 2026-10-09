@@ -3503,6 +3503,7 @@
         "noDetail": "暂无详情。",
         "unknownAgent": "子智能体",
         "openDetail": "查看会话",
+        "delegationPinnedModel": "本次委派由父级指定使用 {model}",
         "resumed": "已恢复",
         "resumeDetail": "恢复详情",
         "resumeReasonLabel": "恢复原因",

@@ -3503,6 +3503,7 @@
         "noDetail": "Aucun détail disponible pour le moment.",
         "unknownAgent": "Sous-agent",
         "openDetail": "Voir la conversation",
+        "delegationPinnedModel": "Démarré sur {model}, fixé par le parent pour cette délégation",
         "resumed": "Repris",
         "resumeDetail": "Détails de la reprise",
         "resumeReasonLabel": "Motif de la reprise",

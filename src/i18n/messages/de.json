@@ -3503,6 +3503,7 @@
         "noDetail": "No detail available yet.",
         "unknownAgent": "Sub-Agent",
         "openDetail": "Konversation anzeigen",
+        "delegationPinnedModel": "Gestartet mit {model}, vom Eltern-Agenten für diese Delegation festgelegt",
         "resumed": "Fortgesetzt",
         "resumeDetail": "Details zur Fortsetzung",
         "resumeReasonLabel": "Grund der Fortsetzung",

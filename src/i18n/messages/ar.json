@@ -3503,6 +3503,7 @@
         "noDetail": "No detail available yet.",
         "unknownAgent": "وكيل فرعي",
         "openDetail": "عرض المحادثة",
+        "delegationPinnedModel": "بدأ على {model}، حدده الأصل لهذه الإحالة",
         "resumed": "تم الاستئناف",
         "resumeDetail": "تفاصيل الاستئناف",
         "resumeReasonLabel": "سبب الاستئناف",

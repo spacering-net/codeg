@@ -69,6 +69,18 @@ pub struct DelegationRequest {
     /// the defaulted value the child is actually spawned in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_working_dir: Option<String>,
+    /// Model id the child should start on, as the LLM passed it in
+    /// `delegate_to_agent`. Written into `preferred_config_values["model"]`
+    /// after the per-agent Settings defaults and any per-call `config`
+    /// map, so this field wins. `None` keeps the configured default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Extra session config overrides for THIS call only (reasoning,
+    /// context, fast, whatever else that agent exposes). Merged over the
+    /// per-agent Settings defaults; unknown keys are ignored by the
+    /// spawner the same way Settings already ignores them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_values: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_handle: Option<String>,
 }

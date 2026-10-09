@@ -78,6 +78,7 @@ export function DelegatedSubThread({
     errorCode,
     childConversationId,
     childConnectionId,
+    model,
     hasModel,
   } = useDelegationCardModel(source)
 
@@ -96,6 +97,7 @@ export function DelegatedSubThread({
       <DelegationCardRow
         agentType={agentType}
         taskId={taskId}
+        pinnedModel={model}
         status={status}
         errorCode={errorCode}
         task={task}

@@ -61,6 +61,9 @@ export interface DelegationCardModel {
   errorCode: string | undefined
   childConversationId: number | null
   childConnectionId: string | null
+  /** Model the parent pinned for this delegation, or `null` when it used
+   *  the configured default. */
+  model: string | null
   /** False when there's no live binding and the input parsed to neither an
    *  agent type nor a task — nothing useful to draw. Callers render null. */
   hasModel: boolean
@@ -214,6 +217,7 @@ export function useDelegationCardModel(
     errorCode,
     childConversationId,
     childConnectionId,
+    model: parsed.model,
     // Broker-stamped meta alone is proof enough of a delegation — the
     // persisted Cursor shape has empty raw_input and no live binding. So is a
     // report that named the child: a persisted `resume_delegation` result has

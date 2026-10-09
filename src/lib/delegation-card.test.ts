@@ -22,6 +22,29 @@ describe("parseInput wrapper peeling", () => {
     expect(parsed.agentType).toBe("codex")
     expect(parsed.task).toBe("run the build")
     expect(parsed.workingDir).toBe("/tmp/proj")
+    expect(parsed.model).toBeNull()
+  })
+
+  it("reads a per-call model", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        agent_type: "codex",
+        task: "run the build",
+        model: "gpt-5.4",
+      })
+    )
+    expect(parsed.model).toBe("gpt-5.4")
+  })
+
+  it("treats a blank model as omitted", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        agent_type: "codex",
+        task: "run the build",
+        model: "   ",
+      })
+    )
+    expect(parsed.model).toBeNull()
   })
 
   it("peels Cursor's MCP args wrapper", () => {

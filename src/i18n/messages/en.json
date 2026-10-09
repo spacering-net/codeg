@@ -3503,6 +3503,7 @@
         "noDetail": "No detail available yet.",
         "unknownAgent": "Sub-agent",
         "openDetail": "Open conversation",
+        "delegationPinnedModel": "Started on {model}, pinned by the parent for this delegation",
         "resumed": "Resumed",
         "resumeDetail": "Resume details",
         "resumeReasonLabel": "Resume reason",
