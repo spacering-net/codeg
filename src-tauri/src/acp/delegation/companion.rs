@@ -4042,6 +4042,25 @@ mod tests {
         assert!(status["inputSchema"]["properties"]["wait_ms"].is_object());
         let required = status["inputSchema"]["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v == "task_ids"));
+        // Self-initiate is allowed: a mention is sufficient, not required.
+        // The old copy said a mention IS the trigger, so agents waited for `@`.
+        let desc = delegate["description"].as_str().unwrap();
+        assert!(
+            desc.contains("YOU MAY CALL THIS TOOL WITHOUT A USER @ MENTION"),
+            "delegate_to_agent must invite self-initiated spawn"
+        );
+        assert!(
+            desc.contains("Such a mention MUST be honored"),
+            "an @ mention must still force a delegation"
+        );
+        assert!(
+            !desc.contains("Such a mention IS an explicit instruction"),
+            "do not tell the model that only a mention starts a sub-agent"
+        );
+        let agent_desc = delegate["inputSchema"]["properties"]["agent_type"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(agent_desc.contains("even when the user did not @-mention"));
     }
 
     #[tokio::test]
