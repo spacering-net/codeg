@@ -205,8 +205,9 @@ export interface TabStoreState {
     opts?: {
       /** rawTabs slot for a tab that needs a NEW slot (clamped); omitted =
        *  append. Reopening a closed tab passes the slot it was closed from. A
-       *  conversation that is already open is focused where it is, and a
-       *  preview still replaces the group's current preview in place. */
+       *  conversation that is already open is focused where it is. A preview
+       *  replaces the group's existing preview in place for untiled groups; in
+       *  tiled groups it takes a slot of its own (so no visible pane is lost). */
       index?: number
     }
   ) => void
@@ -1267,12 +1268,17 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     // Preview replacement stays within the focused group — a preview parked in
     // another group is left alone (the new tab gets a slot of its own instead).
-    const previewIndex = prevState.rawTabs.findIndex(
-      (t) =>
-        !t.isPinned &&
-        groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
-          targetGroup
-    )
+    // A TILED group shows every one of its tabs as a pane at the same time, so
+    // replacing one there would silently remove a pane the mode exists to show.
+    // Tiled groups therefore give the new tab its own slot, like a pinned open.
+    const previewIndex = prevState.tileByGroup[targetGroup]
+      ? -1
+      : prevState.rawTabs.findIndex(
+          (t) =>
+            !t.isPinned &&
+            groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
+              targetGroup
+        )
     if (previewIndex >= 0) {
       const updated = [...prevState.rawTabs]
       const replacedPreviewTabId = updated[previewIndex].id

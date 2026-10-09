@@ -2867,4 +2867,137 @@ describe("TabProvider tab groups", () => {
       expect(isReparentUnmount(store(), "conv-1-codex-1", home)).toBe(false)
     })
   })
+
+  // Tile Display shows every tab in a group as its own pane at the same time,
+  // so consuming one of those panes for a preview would remove a session the
+  // mode exists to display. A tiled group hands the preview a slot of its own;
+  // an untiled group keeps the single preview slot it has always had.
+  describe("preview opens in a tiled group", () => {
+    /** `[id, isPinned]` for each tab the group holds, in strip order. */
+    const paneState = (groupId: string) =>
+      store()
+        .rawTabs.filter((tab) => groupOfId(tab.id) === groupId)
+        .map((tab) => [tab.id, tab.isPinned])
+
+    it("gives the preview its own pane instead of replacing one", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().toggleGroupTile(home)
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+      act(() => {
+        store().openTab(1, 4, "codex", false, "Fourth")
+      })
+
+      expect(paneState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", false],
+        ["conv-1-codex-3", false],
+        ["conv-1-codex-4", false],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-4")
+    })
+
+    it("still replaces the preview when the group is not tiled", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+
+      expect(paneState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-3", false],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-3")
+    })
+
+    it("replaces in the focused untiled group while a sibling group is tiled", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().splitTab("conv-1-codex-2", "right", { move: true })
+      })
+      const g1 = newLeafBeside(home)
+      act(() => {
+        store().toggleGroupTile(g1)
+        store().switchTab("conv-1-codex-1")
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+      act(() => {
+        store().openTab(1, 4, "codex", false, "Fourth")
+      })
+
+      expect(paneState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-4", false],
+      ])
+      expect(paneState(g1)).toEqual([["conv-1-codex-2", true]])
+    })
+
+    it("focuses a conversation the tiled group already shows", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().toggleGroupTile(home)
+      })
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().switchTab("conv-1-codex-1")
+      })
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+
+      expect(paneState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", false],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-2")
+    })
+
+    it("keeps every pane when pinned and preview opens interleave", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().toggleGroupTile(home)
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+      act(() => {
+        store().openTab(1, 4, "codex", true, "Fourth")
+      })
+      act(() => {
+        store().openTab(1, 5, "codex", false, "Fifth")
+      })
+
+      expect(paneState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", true],
+        ["conv-1-codex-3", false],
+        ["conv-1-codex-4", true],
+        ["conv-1-codex-5", false],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-5")
+    })
+  })
 })
