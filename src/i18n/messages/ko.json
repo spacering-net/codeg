@@ -2177,6 +2177,7 @@
         "contextWindow": "컨텍스트 윈도우",
         "usedMax": "사용 / 최대",
         "tokenUsage": "토큰 사용량",
+        "tokenUnitShort": "토큰",
         "input": "입력",
         "output": "출력",
         "cacheRead": "캐시 읽기",

@@ -2177,6 +2177,7 @@
         "contextWindow": "Fenêtre de contexte",
         "usedMax": "Utilisé / Max",
         "tokenUsage": "Utilisation des tokens",
+        "tokenUnitShort": "jet.",
         "input": "Entrée",
         "output": "Sortie",
         "cacheRead": "Lecture cache",

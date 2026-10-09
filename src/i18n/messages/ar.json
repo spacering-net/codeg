@@ -2177,6 +2177,7 @@
         "contextWindow": "نافذة السياق",
         "usedMax": "المستخدم / الحد الأقصى",
         "tokenUsage": "استخدام الرموز",
+        "tokenUnitShort": "رمز",
         "input": "إدخال",
         "output": "إخراج",
         "cacheRead": "قراءة الكاش",

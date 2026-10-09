@@ -81,7 +81,7 @@ import {
   useConversationFolderBranchPickerVisible,
   type ConversationFolderPickerOverride,
 } from "@/components/chat/conversation-context-bar"
-import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
+import { ComposerUsageIndicators } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import {
@@ -2180,7 +2180,7 @@ export function MessageInput({
         className={cn(
           "block",
           folderBranchPickerAttached &&
-            "overflow-hidden rounded-xl transition-colors",
+            "@container overflow-hidden rounded-xl transition-colors",
           folderBranchPickerAttached &&
             showDragActive &&
             "ring-1 ring-primary/40"
@@ -2454,27 +2454,34 @@ export function MessageInput({
           // above; the folder icon then aligns with the centered "+" icon (both
           // add the same 1px transparent border, paired with the picker buttons'
           // `px-1.5`). The row only renders while attached below the composer, so
-          // it always takes the rounded-bottom box treatment. Pickers sit at the
-          // left edge; the context-usage circle + agent connection status
-          // right-align at the trailing edge.
-          <div className="flex items-center justify-between gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
-            <div className="flex min-w-0 items-center gap-1">
-              <ConversationFolderBranchPicker
-                tabId={attachmentTabId}
-                override={folderPickerOverride}
-              />
-            </div>
-            {/* `pr-px` offsets the composer chrome's 1px border: the send button
-                sits INSIDE that border while this status row sits outside it, so
-                without the 1px nudge the trailing icon hangs 1px past the button.
-                With it, the connection icon's RIGHT edge is flush (0px) with the
-                send button's right edge in the action bar above — no centring
-                slot, which would inset the narrow icon and break the alignment. */}
-            <div className="flex shrink-0 items-center gap-3 pr-px">
-              <ComposerContextUsage tabId={attachmentTabId ?? null} />
-              <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
-            </div>
-          </div>
+          // it always takes the rounded-bottom box treatment. The side columns
+          // keep their intrinsic controls stable; only the centered token
+          // summary gives up space when a tiled panel becomes narrow.
+          <ComposerUsageIndicators tabId={attachmentTabId ?? null}>
+            {({ context, summary }) => (
+              <div className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
+                <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+                  <ConversationFolderBranchPicker
+                    tabId={attachmentTabId}
+                    override={folderPickerOverride}
+                  />
+                </div>
+                <div className="flex min-w-0 items-center justify-center overflow-hidden">
+                  {summary}
+                </div>
+                {/* `pr-px` offsets the composer chrome's 1px border: the send button
+                    sits INSIDE that border while this status row sits outside it, so
+                    without the 1px nudge the trailing icon hangs 1px past the button.
+                    With it, the connection icon's RIGHT edge is flush (0px) with the
+                    send button's right edge in the action bar above — no centring
+                    slot, which would inset the narrow icon and break the alignment. */}
+                <div className="flex shrink-0 items-center gap-3 pr-px">
+                  {context}
+                  <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
+                </div>
+              </div>
+            )}
+          </ComposerUsageIndicators>
         )}
       </div>
       {!attach.showNativePaperclip && (

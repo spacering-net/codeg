@@ -2177,6 +2177,7 @@
         "contextWindow": "コンテキストウィンドウ",
         "usedMax": "使用 / 最大",
         "tokenUsage": "トークン使用量",
+        "tokenUnitShort": "トークン",
         "input": "入力",
         "output": "出力",
         "cacheRead": "キャッシュ読み取り",

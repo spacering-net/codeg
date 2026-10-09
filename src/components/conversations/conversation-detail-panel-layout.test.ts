@@ -186,7 +186,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
 
     const pickerWrapper = messageInputSource.slice(pickerStart, pickerEnd)
     expect(messageInputSource).toContain(
-      '"overflow-hidden rounded-xl transition-colors"'
+      '"@container overflow-hidden rounded-xl transition-colors"'
     )
     expect(messageInputSource).not.toContain("bg-muted/60")
     // The rounded border lives in the always-on base (so the active-session flow
@@ -217,11 +217,16 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(pickerWrapper).not.toContain("pl-1.5")
     expect(pickerWrapper).not.toMatch(/\bborder-b\b/)
     expect(pickerWrapper).not.toMatch(/\bborder-x\b/)
-    // The context-usage circle + agent connection status moved here from the
-    // bottom status bar: they right-align at the trailing edge (justify-between)
-    // while the folder/branch pickers stay on the left.
-    expect(pickerWrapper).toContain("justify-between")
-    expect(pickerWrapper).toContain("<ComposerContextUsage")
+    // The attached row now has three explicit columns: folder/branch controls,
+    // a token summary that alone yields space, and the existing trailing
+    // context/connection controls. Intrinsic side columns keep both established
+    // control groups stable while the center column can shrink in tiled panes.
+    expect(pickerWrapper).toContain(
+      "grid-cols-[minmax(0,max-content)_minmax(0,1fr)_minmax(0,max-content)]"
+    )
+    expect(pickerWrapper).toContain("<ComposerUsageIndicators")
+    expect(pickerWrapper).toContain("{summary}")
+    expect(pickerWrapper).toContain("{context}")
     expect(pickerWrapper).toContain("<ComposerConnectionStatus")
   })
 

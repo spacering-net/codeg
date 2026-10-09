@@ -2177,6 +2177,7 @@
         "contextWindow": "上下文窗口",
         "usedMax": "已用 / 上限",
         "tokenUsage": "Token 用量",
+        "tokenUnitShort": "Token",
         "input": "输入",
         "output": "输出",
         "cacheRead": "缓存读取",
