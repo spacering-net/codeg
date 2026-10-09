@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/lib/api", () => ({
   getDelegationSettings: vi.fn(async () => ({
@@ -57,11 +57,16 @@ function renderSettings() {
  * and silently loses the association.
  */
 describe("CollaborationSettings", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   it("mounts both panels and wires each row's label to its control", async () => {
     renderSettings()
 
     for (const heading of [
       "Multi-Agent Collaboration",
+      "Mention agents with @",
       "In-conversation tools",
     ]) {
       expect(
@@ -75,5 +80,20 @@ describe("CollaborationSettings", () => {
     expect(screen.getByLabelText("Get session info")).toBeInTheDocument()
     expect(screen.getByLabelText("Create automations")).toBeInTheDocument()
     expect(screen.getByLabelText("Create to-do tasks")).toBeInTheDocument()
+  })
+
+  it("agent mentions default on and the switch persists the choice", async () => {
+    renderSettings()
+
+    const toggle = await screen.findByLabelText("Mention agents with @")
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+    expect(toggle).not.toBeChecked()
+    expect(localStorage.getItem("composer:agent-mentions")).toBe("false")
+
+    fireEvent.click(toggle)
+    expect(toggle).toBeChecked()
+    expect(localStorage.getItem("composer:agent-mentions")).toBe("true")
   })
 })

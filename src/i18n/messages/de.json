@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Zusammenarbeit",
-    "sectionDescription": "Wie Agenten zusammenarbeiten und auf welche codeg-eigenen Werkzeuge sie innerhalb einer Unterhaltung zugreifen dürfen."
+    "sectionDescription": "Wie Agenten zusammenarbeiten und auf welche codeg-eigenen Werkzeuge sie innerhalb einer Unterhaltung zugreifen dürfen.",
+    "agentMentionsTitle": "Agenten mit @ erwähnen",
+    "agentMentionsDescription": "Zeigt den Tab „Agenten“, wenn du im Nachrichtenfeld @ eingibst, damit du einen anderen Agenten markieren und ihm eine Teilaufgabe übergeben kannst. Schalte dies aus, um @ nur für Dateien, Sitzungen und Commits zu verwenden. Gilt für dieses Gerät."
   },
   "LoginPage": {
     "documentTitle": "Anmelden - codeg",

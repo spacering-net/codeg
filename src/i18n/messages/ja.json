@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "コラボレーション",
-    "sectionDescription": "エージェント同士の連携と、会話の中から使える codeg 自身のツールの範囲を設定します。"
+    "sectionDescription": "エージェント同士の連携と、会話の中から使える codeg 自身のツールの範囲を設定します。",
+    "agentMentionsTitle": "@ でエージェントをメンション",
+    "agentMentionsDescription": "メッセージ欄で @ を入力したときに「エージェント」タブを表示し、別のエージェントをタグ付けしてサブタスクを任せられるようにします。オフにすると、@ はファイル、セッション、コミット専用になります。このデバイスにのみ適用されます。"
   },
   "LoginPage": {
     "documentTitle": "ログイン - codeg",

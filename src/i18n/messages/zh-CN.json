@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "协作",
-    "sectionDescription": "智能体之间如何协同，以及它们能在会话中动用 codeg 的哪些工具。"
+    "sectionDescription": "智能体之间如何协同，以及它们能在会话中动用 codeg 的哪些工具。",
+    "agentMentionsTitle": "使用 @ 提及智能体",
+    "agentMentionsDescription": "在输入框中键入 @ 时显示“智能体”标签页，以便标记其他智能体并交给它一个子任务。关闭后，@ 仅用于文件、会话和提交。仅对当前设备生效。"
   },
   "LoginPage": {
     "documentTitle": "登录 - codeg",

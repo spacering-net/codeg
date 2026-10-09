@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "협업",
-    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다."
+    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다.",
+    "agentMentionsTitle": "@로 에이전트 멘션",
+    "agentMentionsDescription": "메시지 입력란에 @를 입력하면 '에이전트' 탭을 표시하여 다른 에이전트를 태그하고 하위 작업을 맡길 수 있습니다. 끄면 @는 파일, 세션, 커밋에만 사용됩니다. 이 기기에만 적용됩니다."
   },
   "LoginPage": {
     "documentTitle": "로그인 - codeg",

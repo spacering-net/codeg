@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Colaboración",
-    "sectionDescription": "Cómo colaboran los agentes entre sí y a qué herramientas propias de codeg pueden acceder dentro de una conversación."
+    "sectionDescription": "Cómo colaboran los agentes entre sí y a qué herramientas propias de codeg pueden acceder dentro de una conversación.",
+    "agentMentionsTitle": "Mencionar agentes con @",
+    "agentMentionsDescription": "Muestra la pestaña Agentes al escribir @ en el cuadro de mensaje, para etiquetar a otro agente y encargarle una subtarea. Desactívalo para usar @ solo con archivos, sesiones y commits. Se aplica a este dispositivo."
   },
   "LoginPage": {
     "documentTitle": "Iniciar sesión - codeg",

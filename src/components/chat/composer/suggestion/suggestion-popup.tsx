@@ -118,6 +118,11 @@ export interface SuggestionPopupProps {
   /** Localized per-kind tab labels (English fallbacks apply when omitted). */
   tabLabels?: Record<ReferenceKind, string>
   /**
+   * Kinds whose tab is not shown at all (e.g. `agent` when the user turned
+   * agent mentions off in Settings). Must be referentially stable.
+   */
+  hiddenKinds?: readonly ReferenceKind[]
+  /**
    * The composer box the panel lines up with. When given, the panel adopts that
    * box's width and left edge and opens above it — the same geometry as the
    * host's own `/` command menu, so both panels read as one affordance. Without
@@ -156,6 +161,7 @@ export const SuggestionPopup = forwardRef<
     countLabel = (count) => `${count} results`,
     moreLabel = "More results — keep typing to filter",
     tabLabels = DEFAULT_TAB_LABELS,
+    hiddenKinds,
     anchorRef,
     onActiveOptionChange,
   },
@@ -216,18 +222,31 @@ export const SuggestionPopup = forwardRef<
     }
   }, [state.query, search])
 
+  const tabOrder = useMemo(
+    () =>
+      hiddenKinds && hiddenKinds.length > 0
+        ? TAB_ORDER.filter((kind) => !hiddenKinds.includes(kind))
+        : TAB_ORDER,
+    [hiddenKinds]
+  )
+  // A hidden kind's group is dropped here too, so it can never be selected
+  // even if a search provider still returned it.
   const groupByKind = useMemo(
-    () => new Map(result.groups.map((group) => [group.kind, group])),
-    [result.groups]
+    () =>
+      new Map(
+        result.groups
+          .filter((group) => tabOrder.includes(group.kind))
+          .map((group) => [group.kind, group])
+      ),
+    [result.groups, tabOrder]
   )
   // Auto-target the first non-empty tab (agent-first) until the user pins one,
   // so a file/session/… query never strands the user on an empty agent tab.
   const firstNonEmpty = useMemo(
     () =>
-      TAB_ORDER.find(
-        (kind) => (groupByKind.get(kind)?.items.length ?? 0) > 0
-      ) ?? TAB_ORDER[0],
-    [groupByKind]
+      tabOrder.find((kind) => (groupByKind.get(kind)?.items.length ?? 0) > 0) ??
+      tabOrder[0],
+    [groupByKind, tabOrder]
   )
   const activeTab = pinnedTab ?? firstNonEmpty
   const activeGroup = useMemo(
@@ -419,9 +438,9 @@ export const SuggestionPopup = forwardRef<
             // Tab / Shift+Tab move between tabs (pinning the choice); Enter still
             // selects. Wraps around the five tabs.
             const dir = event.shiftKey ? -1 : 1
-            const at = TAB_ORDER.indexOf(activeTab)
+            const at = tabOrder.indexOf(activeTab)
             setPinnedTab(
-              TAB_ORDER[(at + dir + TAB_ORDER.length) % TAB_ORDER.length]
+              tabOrder[(at + dir + tabOrder.length) % tabOrder.length]
             )
             setSelectedIndex(0)
             return true
@@ -451,7 +470,7 @@ export const SuggestionPopup = forwardRef<
         }
       },
     }),
-    [flat, selectedIndex, activeTab, onSelect, onClose, state.range]
+    [flat, selectedIndex, activeTab, tabOrder, onSelect, onClose, state.range]
   )
 
   const activeLabel = tabLabels[activeTab]
@@ -514,7 +533,7 @@ export const SuggestionPopup = forwardRef<
           aria-orientation="horizontal"
           className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-border p-1"
         >
-          {TAB_ORDER.map((kind) => {
+          {tabOrder.map((kind) => {
             const isActive = kind === activeTab
             const count = stale ? 0 : (groupByKind.get(kind)?.items.length ?? 0)
             return (

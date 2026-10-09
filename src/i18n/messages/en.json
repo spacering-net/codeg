@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Collaboration",
-    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation."
+    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation.",
+    "agentMentionsTitle": "Mention agents with @",
+    "agentMentionsDescription": "Show the Agents tab when you type @ in the message box, so you can tag another agent to hand it a subtask. Turn this off to keep @ for files, sessions and commits only. Applies to this device."
   },
   "LoginPage": {
     "documentTitle": "Login - codeg",

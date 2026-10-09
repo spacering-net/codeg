@@ -256,6 +256,32 @@ describe("SuggestionPopup", () => {
     )
   })
 
+  it("drops a hidden kind's tab and never offers its rows", async () => {
+    // The provider still returns the agent group; the panel must not show it.
+    const { ref, onSelect } = mountPopup({ hiddenKinds: ["agent"] })
+    expect(await screen.findByText("alpha.md")).toBeInTheDocument()
+    expect(screen.queryByText("Codex Helper")).toBeNull()
+    const tabs = screen.getAllByRole("tab")
+    expect(tabs).toHaveLength(3)
+    expect(tabs.map((tab) => tab.textContent)).not.toContain("Agents")
+    expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Files/
+    )
+    // Tab cycling skips the hidden kind: three presses wrap back to Files.
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        ref.current?.onKeyDown(key("Tab"))
+      })
+    }
+    expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Files/
+    )
+    act(() => {
+      ref.current?.onKeyDown(key("Enter"))
+    })
+    expect(onSelect).toHaveBeenCalledWith(fileRef, state.range)
+  })
+
   it("packs the detail beside the label so it can use the row's spare width", async () => {
     // The panel is as wide as the composer box, so a label that stretches shoves
     // the detail against the far edge — and a hard width cap on the detail then

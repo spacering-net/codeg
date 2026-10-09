@@ -1752,7 +1752,9 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "協作",
-    "sectionDescription": "智能體之間如何協同，以及它們能在對話中動用 codeg 的哪些工具。"
+    "sectionDescription": "智能體之間如何協同，以及它們能在對話中動用 codeg 的哪些工具。",
+    "agentMentionsTitle": "使用 @ 提及代理",
+    "agentMentionsDescription": "在輸入框中鍵入 @ 時顯示「代理」分頁，以便標記其他代理並交給它一個子任務。關閉後，@ 僅用於檔案、工作階段和提交。僅對目前裝置生效。"
   },
   "LoginPage": {
     "documentTitle": "登入 - codeg",

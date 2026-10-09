@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
+import { useAgentMentionsEnabled } from "@/lib/agent-mention-prefs"
 import { gitLog, listAllConversations } from "@/lib/api"
 import type {
   AcpAgentInfo,
@@ -67,6 +68,12 @@ export interface ReferenceSearchSources {
   commits: GitLogEntry[]
   /** Repo identity for commit URIs; null disables the commit group. */
   repoKey: string | null
+  /**
+   * False when the user turned agent mentions off in Settings: the agent group
+   * is left out entirely (not just emptied), so the panel has no Agents tab.
+   * Defaults to true.
+   */
+  includeAgents?: boolean
 }
 
 /** Case-insensitive substring match against an adapted item's searchable text. */
@@ -85,8 +92,9 @@ function suggestionMatches(item: SuggestionItem, lowerQuery: string): boolean {
  * Pure: filter + adapt the raw sources into the fixed-order grouped suggestions
  * the `@` panel renders (files → agents → sessions → commits). Each group is
  * independently capped at {@link MAX_PER_GROUP}; empty groups are kept
- * (the popup hides them) so the order is always stable. Extracted from the hook
- * so the matching/ordering/dedup logic is testable without React.
+ * (the popup hides them) so the order is always stable. The one exception is
+ * the agent group, omitted outright when `includeAgents` is false. Extracted
+ * from the hook so the matching/ordering/dedup logic is testable without React.
  */
 export function buildReferenceGroups(
   query: string,
@@ -114,10 +122,12 @@ export function buildReferenceGroups(
     }
   }
 
+  const includeAgents = sources.includeAgents !== false
+
   // Only enabled agents are mentionable — a disabled agent (toggled off in
   // settings) can't be referenced, so it never appears in the `@` panel (its
   // tab count and `truncated` flag follow from this filtered set too).
-  const agentMatches = sources.agents
+  const agentMatches = (includeAgents ? sources.agents : [])
     .filter((agent) => agent.enabled)
     .map(agentToSuggestion)
     .filter((item) => suggestionMatches(item, q))
@@ -143,19 +153,23 @@ export function buildReferenceGroups(
     }
   }
 
-  return [
+  const groups: SuggestionGroup[] = [
     {
       kind: "file",
       label: labels.file,
       items: fileItems,
       truncated: fileTruncated,
     },
-    {
+  ]
+  if (includeAgents) {
+    groups.push({
       kind: "agent",
       label: labels.agent,
       items: agentItems,
       truncated: agentMatches.length > MAX_PER_GROUP,
-    },
+    })
+  }
+  groups.push(
     {
       kind: "session",
       label: labels.session,
@@ -167,8 +181,9 @@ export function buildReferenceGroups(
       label: labels.commit,
       items: commitItems,
       truncated: commitTruncated,
-    },
-  ]
+    }
+  )
+  return groups
 }
 
 export interface UseReferenceSearchOptions {
@@ -217,6 +232,9 @@ export function useReferenceSearch({
     enabled,
   })
   const { agents } = useAcpAgents()
+  // Settings switch: when off, the agent group is left out of every result.
+  // Read through a ref like the other sources so `search` stays stable.
+  const includeAgents = useAgentMentionsEnabled()
 
   // Mirror every changing source into a ref so `search` can stay identity-stable
   // (see the doc comment). Initialized from the first render so the refs are
@@ -229,6 +247,7 @@ export function useReferenceSearch({
   const pathRef = useRef(path)
   const enabledRef = useRef(enabled)
   const labelsRef = useRef(labels)
+  const includeAgentsRef = useRef(includeAgents)
 
   // `pathRef` and `enabledRef` gate the post-await freshness check in `search`,
   // so they must reflect the *committed* folder/enabled state synchronously at
@@ -239,7 +258,8 @@ export function useReferenceSearch({
   useIsomorphicLayoutEffect(() => {
     pathRef.current = path
     enabledRef.current = enabled
-  }, [path, enabled])
+    includeAgentsRef.current = includeAgents
+  }, [path, enabled, includeAgents])
 
   useEffect(() => {
     // Only expose files once the tree has loaded for the *current* path, so the
@@ -343,6 +363,7 @@ export function useReferenceSearch({
         sessions,
         commits,
         repoKey: path,
+        includeAgents: includeAgentsRef.current,
       },
       labelsRef.current ?? DEFAULT_GROUP_LABELS
     )
