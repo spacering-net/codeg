@@ -33811,4 +33811,51 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn mcp_over_acp_store_is_forwarded_to_custom_agents_over_the_wire() {
+        // Custom agents have no native MCP config file: the MCP-over-ACP
+        // store is their ONLY source, delivered as `session/new`'s
+        // `mcpServers`. pi-acp drops that field on the floor, so its sessions
+        // must stay empty no matter what the store holds.
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("CODEG_HOME", Some(dir.path()), || {
+            let path = crate::paths::codeg_mcp_over_acp_store_path();
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "mcpServers": {
+                        "ctx7": {
+                            "type": "stdio",
+                            "command": "/usr/local/bin/npx",
+                            "args": ["-y", "ctx7-mcp"],
+                        }
+                    }
+                }))
+                .expect("serialize store"),
+            )
+            .expect("write store");
+
+            let agent_type = AgentType::custom("my-agent").expect("custom agent type");
+            let servers = load_mcp_servers_for_agent(agent_type);
+            assert_eq!(
+                servers.len(),
+                1,
+                "custom agents receive exactly the store's servers"
+            );
+            match &servers[0] {
+                McpServer::Stdio(s) => {
+                    assert_eq!(s.name, "ctx7");
+                    assert_eq!(s.command, std::path::PathBuf::from("/usr/local/bin/npx"));
+                }
+                other => panic!("expected Stdio variant, got {other:?}"),
+            }
+
+            assert!(
+                load_mcp_servers_for_agent(AgentType::Pi).is_empty(),
+                "pi drops wire MCP regardless of store contents"
+            );
+        });
+    }
 }

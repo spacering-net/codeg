@@ -125,6 +125,16 @@ pub const MANAGED_SECTIONS: &[ManagedSection] = &[
         policy: SectionPolicy::ReplaceIfPresent,
         live_path: |_| crate::paths::codeg_home_dir().join("preferences.json"),
     },
+    ManagedSection {
+        // MCP-over-ACP assignments: codeg's own record of which servers a
+        // custom ACP agent receives as `session/new`'s `mcpServers`. Nothing
+        // else holds a copy, and losing it silently detaches every user
+        // server from those agents.
+        id: "mcp-over-acp.json",
+        kind: SectionKind::File,
+        policy: SectionPolicy::ReplaceIfPresent,
+        live_path: |_| crate::paths::codeg_mcp_over_acp_store_path(),
+    },
 ];
 
 /// `db/codeg.db` is deliberately NOT a managed section: its live filename

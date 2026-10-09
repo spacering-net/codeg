@@ -14,6 +14,7 @@ const UPLOADS_DIR_NAME: &str = "uploads";
 const LOGS_DIR_NAME: &str = "logs";
 const TURN_TIMINGS_DIR_NAME: &str = "turn-timings";
 const ACP_TRANSCRIPTS_DIR_NAME: &str = "acp-transcripts";
+const MCP_OVER_ACP_STORE_NAME: &str = "mcp-over-acp.json";
 const BACKGROUNDS_DIR_NAME: &str = "backgrounds";
 
 /// `$CODEG_HOME` if set (and non-empty), else `~/.codeg/`.
@@ -117,6 +118,24 @@ pub fn codeg_backgrounds_root() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(CODEG_DIR_NAME).join(BACKGROUNDS_DIR_NAME))
         .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(BACKGROUNDS_DIR_NAME))
+}
+
+/// Path of codeg's MCP-over-ACP server store (see `commands::mcp`).
+///
+/// Resolution mirrors [`codeg_backgrounds_root`]:
+/// 1. `$CODEG_HOME/mcp-over-acp.json`
+/// 2. `$CODEG_DATA_DIR/mcp-over-acp.json`
+/// 3. `~/.codeg/mcp-over-acp.json`
+pub fn codeg_mcp_over_acp_store_path() -> PathBuf {
+    if let Some(custom) = std::env::var_os("CODEG_HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(custom).join(MCP_OVER_ACP_STORE_NAME);
+    }
+    if let Some(data) = std::env::var_os("CODEG_DATA_DIR").filter(|s| !s.is_empty()) {
+        return PathBuf::from(data).join(MCP_OVER_ACP_STORE_NAME);
+    }
+    dirs::home_dir()
+        .map(|h| h.join(CODEG_DIR_NAME).join(MCP_OVER_ACP_STORE_NAME))
+        .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(MCP_OVER_ACP_STORE_NAME))
 }
 
 /// Root directory for application diagnostic logs (rotating files written by

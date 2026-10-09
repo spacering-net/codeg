@@ -128,6 +128,10 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "deepseek", label: "DeepSeek Harness" },
   { value: "qoder", label: "Qoder" },
   { value: "antigravity", label: "Google Antigravity" },
+  // MCP-over-ACP 不是某个 agent 的配置文件：这些 server 是 codeg 自己的
+  // store（mcp-over-acp.json），在会话启动时作为 session/new 的 mcpServers
+  // 发给读它的 agent（自定义 ACP agent 的唯一 MCP 来源）。
+  { value: "mcp_over_acp", label: "MCP-over-ACP" },
   // pi 同理不作为可分配目标：读写的 ~/.pi/agent/mcp.json 属于第三方 pi 扩展，
   // pi 自身没有 MCP，pi-acp 也不转发线缆上的 mcpServers。给没装该扩展的用户
   // 写这个文件只会造出一个没人读的配置。存量 "pi" 条目照样能改能删——
@@ -319,6 +323,7 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     qoder: appSet.has("qoder"),
     antigravity: appSet.has("antigravity"),
     pi: appSet.has("pi"),
+    mcp_over_acp: appSet.has("mcp_over_acp"),
   }
 }
 
