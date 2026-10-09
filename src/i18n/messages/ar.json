@@ -4054,6 +4054,12 @@
     }
   },
   "WebServiceSettings": {
+    "phoneReachTitle": "Phone reach",
+    "phoneReachHint": "The iOS app uses this URL plus the token above. You do not need the standalone Tailscale app on both devices. On the same network, start the Web Service. Off-network, join a tailnet with an auth key or login URL (userspace sidecar) and keep the Codeg token.",
+    "phoneReachAuthKey": "Tailnet auth key (optional)",
+    "phoneReachAuthUrl": "Tailnet login URL (optional)",
+    "phoneReachCommand": "Sidecar command",
+    "phoneReachCopy": "Copy sidecar command",
     "addressSwitchHint": "التبديل يغيّر فقط العنوان المعروض والمفتوح هنا؛ تستمع الخدمة على جميع الواجهات وتبقى قابلة للوصول من كل عنوان.",
     "sectionTitle": "خدمة الويب",
     "sectionDescription": "تفعيل للوصول إلى Codeg عن بُعد عبر المتصفح",
