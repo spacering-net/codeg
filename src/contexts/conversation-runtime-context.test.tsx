@@ -2042,6 +2042,9 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
       carrier?.type === "tool_result" ? carrier.agent_transcript : null
     ).toEqual([
       { type: "thinking", text: "before" },
+      // The child tool call keeps its chronological position: a marker the
+      // capsule resolves back through `agent_stats.tool_calls` by ordinal.
+      { type: "tool_call", childIndex: 0 },
       { type: "thinking", text: "after" },
     ])
   })

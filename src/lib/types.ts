@@ -145,10 +145,19 @@ export interface AgentExecutionStats {
  * split blocks only at kind/attribution boundaries, so consecutive same-kind
  * chunks of one subagent are a single growing entry.
  */
-export interface AgentTranscriptEntry {
-  type: "text" | "thinking"
-  text: string
-}
+export type AgentTranscriptEntry =
+  | { type: "text" | "thinking"; text: string }
+  | {
+      /**
+       * A marker into the mixed timeline: the child's OWN tool call, keeping
+       * its chronological position among the prose around it. `childIndex` is
+       * the call's ordinal among this parent's children — `agent_stats.
+       * tool_calls` carries no ids, and both lists are appended in the same
+       * arrival pass, so the ordinal is exact.
+       */
+      type: "tool_call"
+      childIndex: number
+    }
 
 /**
  * Image payload shared across `ContentBlock::Image` /

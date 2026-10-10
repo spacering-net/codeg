@@ -6,6 +6,11 @@ import { SubagentSessionDialog } from "./subagent-session-dialog"
 import { useSessionViewerHost } from "./session-viewer-host"
 import { shortAgentId } from "@/lib/collab-tool"
 import { MessageResponse } from "@/components/ai-elements/message"
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "@/components/ai-elements/reasoning"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import {
   Collapsible,
@@ -570,39 +575,54 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
         )}
 
         {/* Subagent tool calls — rendered with the same ToolCallPart
-      as the outer conversation for consistent appearance */}
-        {adaptedToolCalls.length > 0 && (
-          <div className="space-y-2">
-            {adaptedToolCalls.map((tc, i) =>
-              renderToolCall(
-                tc as Extract<AdaptedContentPart, { type: "tool-call" }>,
-                `subagent-tc-${i}`
-              )
-            )}
-          </div>
-        )}
+      as the outer conversation for consistent appearance. Hidden while the
+      live timeline is up: there the child's tool calls appear in position as
+      `tool_call` transcript entries, and rendering both would double them. */}
+        {adaptedToolCalls.length > 0 &&
+          !(isRunning && transcriptTail.length > 0) && (
+            <div className="space-y-2">
+              {adaptedToolCalls.map((tc, i) =>
+                renderToolCall(
+                  tc as Extract<AdaptedContentPart, { type: "tool-call" }>,
+                  `subagent-tc-${i}`
+                )
+              )}
+            </div>
+          )}
 
         {/* Live subagent transcript (claude-agent-acp ≥0.63) — streaming
-          text/thinking attributed to this Agent call. LIVE-only by
-          construction: the store stops attaching it at settle and promotion
-          never carries it, so this section disappears when the real result
-          takes over below. Render is tail-bounded; the data is not. */}
+          text/thinking/child-tool markers attributed to this Agent call, in
+          arrival order. LIVE-only by construction: the store stops attaching
+          it at settle and promotion never carries it, so this section
+          disappears when the real result takes over below. Render is
+          tail-bounded; the data is not. */}
         {isRunning && transcriptTail.length > 0 && (
           <div className="space-y-1.5">
             <div className="text-3xs font-medium uppercase tracking-wide text-muted-foreground/70">
               {t("agentLiveTranscript")}
             </div>
-            {transcriptTail.map((entry, i) =>
-              entry.type === "thinking" ? (
-                entry.text.trim() ? (
-                  <div
-                    key={i}
-                    className="whitespace-pre-wrap text-xs italic text-muted-foreground/80"
-                  >
-                    {entry.text}
-                  </div>
+            {transcriptTail.map((entry, i) => {
+              if (entry.type === "tool_call") {
+                const tc = adaptedToolCalls[entry.childIndex]
+                return tc
+                  ? renderToolCall(
+                      tc as Extract<AdaptedContentPart, { type: "tool-call" }>,
+                      `subagent-embed-${i}`
+                    )
+                  : null
+              }
+              if (entry.type === "thinking") {
+                return entry.text.trim() ? (
+                  // Folded like the main thread's thinking (same contract as
+                  // <ReasoningPart>): a subagent's reasoning is reference
+                  // material — it stays collapsed until the reader opens it.
+                  <Reasoning key={i} isStreaming={false}>
+                    <ReasoningTrigger />
+                    <ReasoningContent>{entry.text}</ReasoningContent>
+                  </Reasoning>
                 ) : null
-              ) : (
+              }
+              return (
                 <div
                   key={i}
                   className="text-sm prose prose-sm dark:prose-invert max-w-none [&_ul]:list-inside [&_ol]:list-inside"
@@ -610,7 +630,7 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
                   <MessageResponse>{entry.text}</MessageResponse>
                 </div>
               )
-            )}
+            })}
           </div>
         )}
 
