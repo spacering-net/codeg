@@ -1122,6 +1122,37 @@ mod tests {
         }
     }
 
+    // Issue #905, from registry entry to extracted archive, on any host. The
+    // registry's Windows entry for a single-file archive (`./kilo.exe`) has to
+    // name the file that archive holds; it used to come out as `kilo.exe.exe`,
+    // failing every such install at "Locating binary...".
+    #[test]
+    fn a_single_file_windows_entry_resolves_to_the_file_its_archive_holds() {
+        use crate::acp::binary_cache::{executable_file_name_for, find_binary_recursive};
+
+        let meta = build_meta(&binary_def("./kilo.exe", None)).expect("valid");
+        let cmd = match meta.distribution {
+            AgentDistribution::Binary { cmd, dir_entry, .. } => {
+                // A bare entry name takes the single-file copy-out path.
+                assert!(dir_entry.is_none());
+                cmd
+            }
+            other => panic!("expected binary distribution, got {other:?}"),
+        };
+        assert_eq!(cmd, "kilo.exe");
+
+        // What the install step finds after unpacking a one-member archive.
+        let tmp = tempfile::tempdir().unwrap();
+        let extracted = tmp.path().to_path_buf();
+        std::fs::write(extracted.join("kilo.exe"), b"MZ").unwrap();
+        let name = executable_file_name_for(cmd, true);
+        assert_eq!(
+            find_binary_recursive(&extracted, &name),
+            Some(extracted.join("kilo.exe")),
+            "looked for {name:?}"
+        );
+    }
+
     #[test]
     fn nested_archive_entry_switches_to_dir_tree_extraction() {
         let meta = build_meta(&binary_def("dist-package/agent", None)).expect("valid");

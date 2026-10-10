@@ -2289,6 +2289,9 @@
       "closeAll": "关闭所有",
       "hideTerminal": "隐藏终端（{shortcut}）",
       "openFolderFirst": "请先打开一个文件夹",
+      "processExited": "进程已退出",
+      "processExitedWithCode": "进程已退出（代码 {code}）",
+      "unavailable": "终端会话不可用；它可能已结束，或后端已重启。",
       "keybar": {
         "label": "终端虚拟键",
         "show": "显示虚拟键",
@@ -3569,6 +3572,7 @@
         "nameLabel": "名称：",
         "agentPromptLabel": "提示词",
         "agentModelLabel": "模型",
+        "agentEffortLabel": "思考强度",
         "agentRunning": "运行中...",
         "agentLiveTranscript": "实时活动",
         "agentProgressTools": "{count} 次工具调用",
@@ -4100,7 +4104,25 @@
     "loading": "加载中...",
     "emptyDirectory": "此目录为空",
     "errorLoadingDir": "加载目录失败",
-    "permissionDenied": "权限不足"
+    "permissionDenied": "权限不足",
+    "newFolder": {
+      "button": "新建文件夹",
+      "placeholder": "文件夹名称",
+      "create": "创建文件夹",
+      "location": "位于 {path}",
+      "errors": {
+        "empty": "请输入文件夹名称。",
+        "reservedName": "“{name}”不能用作文件夹名称。",
+        "separator": "文件夹名称不能包含 / 或 \\。",
+        "controlCharacter": "文件夹名称不能包含控制字符或换行符。",
+        "reservedCharacter": "文件夹名称不能包含 {character}。",
+        "invalidParent": "无法在 {path} 中创建文件夹。",
+        "parentNotFound": "{path} 已不存在。",
+        "alreadyExists": "“{name}”已存在。",
+        "permissionDenied": "没有在此处创建文件夹的权限。",
+        "failed": "无法创建文件夹：{reason}"
+      }
+    }
   },
   "ServerFileBrowser": {
     "title": "选择服务端文件",
@@ -4765,6 +4787,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "打开本地工作区",
+    "openLocalFailed": "打开本地工作区失败",
     "openRemoteWorkspace": "打开远端工作区",
     "manage": "管理远端工作区",
     "manageTitle": "远端工作区连接",

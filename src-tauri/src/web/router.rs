@@ -474,6 +474,10 @@ pub fn build_router(
             post(handlers::folders::list_directory_entries),
         )
         .route(
+            "/create_directory",
+            post(handlers::folders::create_directory),
+        )
+        .route(
             "/list_directory_with_files",
             post(handlers::folders::list_directory_with_files),
         )

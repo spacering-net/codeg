@@ -9,16 +9,24 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Monitor } from "lucide-react"
 import { useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
+import { Button } from "@/components/ui/button"
 import {
   clearRemoteDesktopTransport,
   configureRemoteDesktopTransport,
+  getTransport,
 } from "@/lib/transport"
+import type { RemoteDesktopTransport } from "@/lib/transport/remote-desktop-transport"
+import { RemoteConnectionStatus } from "@/components/connection/remote-connection-status"
 import { resetBackendScopedStores } from "@/stores/backend-scoped-store-reset"
-import { getRemoteWorkspaceConnection } from "@/lib/remote-workspace"
+import {
+  getRemoteWorkspaceConnection,
+  openLocalWorkspace,
+} from "@/lib/remote-workspace"
 import { toErrorMessage } from "@/lib/app-error"
+import { isDesktop } from "@/lib/platform"
 import type { RemoteWorkspaceConnection } from "@/lib/types"
 
 interface RemoteConnectionContextValue {
@@ -70,6 +78,52 @@ export function useResetBackendScopedStoresOnIdentityChange(
   }, [backendKey])
 }
 
+/**
+ * A remote window the gate cannot let through: the connection could not be
+ * loaded, or its credentials expired. Nothing of the workspace is rendered —
+ * no status bar, so no Quick actions — and Windows has no application menu,
+ * so this screen carries the way back to the local workspace itself. The
+ * expired notice also asks for the token to be updated, which is done from
+ * another window.
+ *
+ * Desktop only: a web client has no local workspace window to bring up.
+ */
+function RemoteConnectionDeadEnd({ message }: { message: string }) {
+  return (
+    <div className="flex h-screen flex-col items-center justify-center gap-3 bg-background p-6 text-center text-sm">
+      <p className="text-destructive">{message}</p>
+      {isDesktop() && <OpenLocalWorkspaceButton />}
+    </div>
+  )
+}
+
+function OpenLocalWorkspaceButton() {
+  const t = useTranslations("RemoteWorkspace")
+  // Said here rather than in a toast: the window's toaster belongs to the
+  // workspace this screen replaces.
+  const [failure, setFailure] = useState<string | null>(null)
+
+  const handleClick = () => {
+    setFailure(null)
+    openLocalWorkspace().catch((err) => setFailure(toErrorMessage(err)))
+  }
+
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={handleClick}>
+        <Monitor />
+        {t("openLocalWorkspace")}
+      </Button>
+      {failure !== null && (
+        <div role="alert" className="text-xs">
+          <p className="text-destructive">{t("openLocalFailed")}</p>
+          <p className="text-muted-foreground">{failure}</p>
+        </div>
+      )}
+    </>
+  )
+}
+
 export function RemoteConnectionGate({ children }: { children: ReactNode }) {
   const t = useTranslations("RemoteWorkspace")
   const searchParams = useSearchParams()
@@ -107,6 +161,8 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
           baseUrl: next.base_url,
           token: next.token,
           windowInstanceId: remoteWindowId,
+          // Only a refused token. A socket that is down keeps the workspace
+          // mounted while it retries; `RemoteConnectionStatus` shows that.
           onUnauthorized: () =>
             setState((prev) => ({ ...prev, expired: true })),
         })
@@ -196,23 +252,28 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
 
   if (error) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-destructive">
-        {t("connectionLoadFailed", { message: error })}
-      </div>
+      <RemoteConnectionDeadEnd
+        message={t("connectionLoadFailed", { message: error })}
+      />
     )
   }
 
   if (expired) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-destructive">
-        {t("connectionExpired", { name: connection?.name ?? "" })}
-      </div>
+      <RemoteConnectionDeadEnd
+        message={t("connectionExpired", { name: connection?.name ?? "" })}
+      />
     )
   }
 
   return (
     <RemoteConnectionContext.Provider value={value}>
       {children}
+      {hasRemoteConnection && (
+        <RemoteConnectionStatus
+          transport={getTransport() as RemoteDesktopTransport}
+        />
+      )}
     </RemoteConnectionContext.Provider>
   )
 }

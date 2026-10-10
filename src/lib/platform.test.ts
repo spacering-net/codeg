@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   tauriOpenUrl: vi.fn(async () => {}),
   tauriOpenPath: vi.fn(async () => {}),
   tauriReveal: vi.fn(async () => {}),
+  tauriDialogOpen: vi.fn<(options: unknown) => Promise<unknown>>(
+    async () => null
+  ),
 }))
 
 vi.mock("@/lib/transport", () => ({
@@ -32,7 +35,16 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: mocks.tauriReveal,
 }))
 
-import { openPath, openUrl, revealItemInDir } from "@/lib/platform"
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: mocks.tauriDialogOpen,
+}))
+
+import {
+  openFileDialog,
+  openPath,
+  openUrl,
+  revealItemInDir,
+} from "@/lib/platform"
 
 const URL = "https://example.com/issues/1"
 
@@ -138,5 +150,30 @@ describe("revealItemInDir", () => {
     mocks.tauriReveal.mockRejectedValue(new Error("nope"))
     await expect(revealItemInDir("\\\\Mac")).rejects.toThrow("nope")
     expect(mocks.tauriOpenPath).not.toHaveBeenCalled()
+  })
+})
+
+describe("openFileDialog", () => {
+  beforeEach(() => {
+    mocks.tauriDialogOpen.mockReset()
+    mocks.tauriDialogOpen.mockResolvedValue(null)
+  })
+
+  // The macOS panel's "New Folder" button: a folder picker should be able to
+  // make the folder it is about to pick, without leaving for Finder.
+  it("asks the native folder picker for its New Folder button", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    await openFileDialog({ directory: true, multiple: false })
+    expect(mocks.tauriDialogOpen).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      canCreateDirectories: true,
+    })
+  })
+
+  it("leaves a file picker's options as they are", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    await openFileDialog({ title: "Pick" })
+    expect(mocks.tauriDialogOpen).toHaveBeenCalledWith({ title: "Pick" })
   })
 })

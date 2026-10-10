@@ -21,6 +21,7 @@ const READY_TIMEOUT_MS = 5_000
 /// the wire format exactly; we re-export `__ready__` via `WS_READY_CHANNEL`
 /// to keep the shared-constants invariant with `WebTransport`.
 const WS_DISCONNECTED_CHANNEL = "__disconnected__"
+/// The server refused the token on the socket's handshake (HTTP 401).
 const WS_UNAUTHORIZED_CHANNEL = "__unauthorized__"
 
 // Two wire shapes flow on the same `remote-ws-event-{id}` Tauri event:
@@ -28,11 +29,16 @@ const WS_UNAUTHORIZED_CHANNEL = "__unauthorized__"
 //      firehose (`__ready__`, folder/app channels, etc.).
 //   2. Top-level attach-protocol frames `{type, ...}` from the per-connection
 //      WS attach forwarders (`ServerMsg` in `web/ws_attach.rs`).
-// `forward_text_message` in the Rust proxy passes the parsed JSON through
+// `forward_frame` in the Rust proxy passes the parsed JSON through
 // without re-shaping, so the handler must discriminate on which top-level
 // field is present. Using `unknown` here forces that discrimination at the
 // call site rather than silently destructuring `undefined`.
 type WsFrame = unknown
+
+export type RemoteConnectionState =
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
 
 const ATTACH_FRAME_TYPES = new Set([
   "snapshot",
@@ -94,9 +100,18 @@ export class RemoteDesktopTransport implements Transport {
   /// Tracks whether `__ready__` has arrived since this transport was
   /// constructed. The first arrival is the initial connect; subsequent
   /// arrivals are reconnects (after `__disconnected__` reset the promise).
-  /// Reconnect callbacks fire only on subsequent arrivals.
+  /// A clean initial connect needs no refetch, but one preceded by failed
+  /// startup reads must refresh the workspace on its first ready too.
   private hasReadiedOnce = false
+  // Initial loads can fail while a restored remote is offline. Its first
+  // eventual ready must refetch that state too, even without an earlier ready.
+  private recoveryNeeded = false
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null
+  private resubscribing = false
   private reconnectCallbacks = new Set<() => void>()
+  private connectionState: RemoteConnectionState = "reconnecting"
+  private connectionListeners = new Set<() => void>()
+  private readyCallbacks = new Set<() => void>()
   /// Listener handle for `remote-ws-event-{id}`. Null when not subscribed.
   private unlistenWsEvent: UnlistenFn | null = null
   /// Opaque ID generated at construction time, passed to `remote_ws_subscribe`
@@ -153,6 +168,7 @@ export class RemoteDesktopTransport implements Transport {
     ])
     if (timeoutId !== undefined) clearTimeout(timeoutId)
     if (result === "timeout") {
+      this.recoveryNeeded = true
       console.warn(
         `[RemoteDesktopTransport] WS __ready__ frame did not arrive within ${READY_TIMEOUT_MS}ms; ` +
           "proceeding without server-side subscribe confirmation (initial-connect race may reopen)."
@@ -165,6 +181,7 @@ export class RemoteDesktopTransport implements Transport {
     args?: Record<string, unknown>,
     options?: CallOptions
   ): Promise<T> {
+    const initialRequest = !this.hasReadiedOnce
     try {
       // Forward `timeoutMs` through to `remote_http_call`. Without this,
       // the Rust client's 30s default fires before the backend can answer
@@ -178,12 +195,33 @@ export class RemoteDesktopTransport implements Transport {
       })
       return result
     } catch (err) {
+      if (this.destroyed) throw err
       // The Rust proxy returns 401 from the remote server as
       // `AppErrorCode::AuthenticationFailed`. Surface the connection-expired
       // UI in just the calling window (the rest stay live until they
       // themselves hit a 401 — per design we don't broadcast).
       if (isAuthenticationFailed(err)) {
+        if (this.wsOpen) this.resetReady()
+        this.wsOpen = false
+        this.setConnectionState("disconnected")
         this.config.onUnauthorized?.()
+      } else if (
+        initialRequest &&
+        err &&
+        typeof err === "object" &&
+        (err as RustError).code === "network_error"
+      ) {
+        // Initial folder/conversation reads are not gated on the WS. If
+        // they failed offline, the first ready must retry their hydration.
+        this.recoveryNeeded = true
+        if (this.wsOpen && this.recoveryTimer === null) {
+          // A slow failed HTTP request can settle AFTER the first ready.
+          // Let its caller finish recording the failure before refreshing.
+          this.recoveryTimer = setTimeout(() => {
+            this.recoveryTimer = null
+            if (!this.destroyed && this.wsOpen) this.notifyReconnect()
+          }, 0)
+        }
       }
       throw err
     }
@@ -222,6 +260,89 @@ export class RemoteDesktopTransport implements Transport {
     this.reconnectCallbacks.add(callback)
     return () => {
       this.reconnectCallbacks.delete(callback)
+    }
+  }
+
+  getConnectionSnapshot(): RemoteConnectionState {
+    return this.connectionState
+  }
+
+  subscribeConnection(callback: () => void): UnsubscribeFn {
+    this.connectionListeners.add(callback)
+    return () => {
+      this.connectionListeners.delete(callback)
+    }
+  }
+
+  /** Retry a stopped proxy in place, preserving unsaved UI state and streams. */
+  reconnectNow(): void {
+    if (
+      this.destroyed ||
+      this.resubscribing ||
+      this.connectionState !== "disconnected"
+    ) {
+      return
+    }
+    this.resubscribing = true
+    this.recoveryNeeded = true
+    this.wsStarted = true
+    this.setConnectionState("reconnecting")
+    void (async () => {
+      try {
+        // Await removal before reusing the opaque ID, or a delayed
+        // unsubscribe could remove the freshly inserted registration.
+        await invoke("remote_ws_unsubscribe", {
+          connectionId: this.config.id,
+          subscriptionId: this.subscriptionId,
+        })
+        if (this.destroyed) return
+        if (this.unlistenWsEvent) await this.subscribeWs()
+        else await this.startWs()
+      } catch (err) {
+        if (!this.destroyed) {
+          this.setConnectionState("disconnected")
+          console.warn("[RemoteDesktopTransport] reconnect failed:", err)
+        }
+      } finally {
+        this.resubscribing = false
+      }
+    })()
+  }
+
+  private notifyReconnect(): void {
+    this.recoveryNeeded = false
+    if (this.recoveryTimer !== null) {
+      clearTimeout(this.recoveryTimer)
+      this.recoveryTimer = null
+    }
+    for (const callback of this.reconnectCallbacks) {
+      try {
+        callback()
+      } catch (err) {
+        console.error("[RemoteDesktopTransport] reconnect callback threw:", err)
+      }
+    }
+  }
+
+  private setConnectionState(state: RemoteConnectionState): void {
+    if (this.connectionState === state) return
+    this.connectionState = state
+    for (const callback of this.connectionListeners) {
+      try {
+        callback()
+      } catch (err) {
+        console.error(
+          "[RemoteDesktopTransport] connection listener threw:",
+          err
+        )
+      }
+    }
+  }
+
+  onReady(callback: () => void): UnsubscribeFn {
+    this.readyCallbacks.add(callback)
+    return () => {
+      this.readyCallbacks.delete(callback)
     }
   }
 
@@ -296,17 +417,28 @@ export class RemoteDesktopTransport implements Transport {
 
   private async startWs() {
     this.wsStarted = true
-
     try {
-      this.unlistenWsEvent = await listen<WsFrame>(
+      const unlisten = await listen<WsFrame>(
         `remote-ws-event-${this.config.id}`,
         (event) => this.handleWsEvent(event.payload)
       )
+      if (this.destroyed) {
+        unlisten()
+        this.wsStarted = false
+        return
+      }
+      this.unlistenWsEvent = unlisten
     } catch (err) {
       this.wsStarted = false
+      this.recoveryNeeded = true
+      this.setConnectionState("disconnected")
       throw err
     }
 
+    await this.subscribeWs()
+  }
+
+  private async subscribeWs() {
     try {
       await invoke("remote_ws_subscribe", {
         connectionId: this.config.id,
@@ -326,6 +458,8 @@ export class RemoteDesktopTransport implements Transport {
       this.unlistenWsEvent?.()
       this.unlistenWsEvent = null
       this.wsStarted = false
+      this.recoveryNeeded = true
+      this.setConnectionState("disconnected")
       throw err
     }
   }
@@ -349,8 +483,21 @@ export class RemoteDesktopTransport implements Transport {
     if (typeof channel !== "string") return
 
     if (channel === WS_READY_CHANNEL) {
+      // Rust may acknowledge another subscription in the same webview while
+      // the shared socket is already ready. This is not another reconnect.
+      if (this.wsOpen) return
+      const shouldRefresh = this.hasReadiedOnce || this.recoveryNeeded
+      this.hasReadiedOnce = true
       this.wsOpen = true
       this.readyResolve()
+      this.setConnectionState("connected")
+      for (const cb of this.readyCallbacks) {
+        try {
+          cb()
+        } catch (err) {
+          console.error("[RemoteDesktopTransport] ready callback threw:", err)
+        }
+      }
       // Notify EventStream so it can re-issue attach frames for any
       // active subscriptions. Fires on initial connect AND every reconnect.
       for (const cb of this.wsReadyCallbacks) {
@@ -360,36 +507,32 @@ export class RemoteDesktopTransport implements Transport {
           console.error("[RemoteDesktopTransport] wsReady callback threw:", err)
         }
       }
-      if (this.hasReadiedOnce) {
+      if (shouldRefresh) {
         // Reconnect path: server-side receiver_count was 0 during the
         // disconnect window, so any event fired in that gap was dropped.
         // Notify consumers to recover state (e.g. refetch snapshots).
         // Errors in user callbacks must not break sibling callbacks.
-        for (const cb of this.reconnectCallbacks) {
-          try {
-            cb()
-          } catch (err) {
-            console.error(
-              "[RemoteDesktopTransport] reconnect callback threw:",
-              err
-            )
-          }
-        }
-      } else {
-        this.hasReadiedOnce = true
+        this.notifyReconnect()
       }
       return
     }
     if (channel === WS_DISCONNECTED_CHANNEL) {
+      this.recoveryNeeded = true
+      this.setConnectionState("reconnecting")
+      // Repeated failed handshakes share the same waiters. Replacing their
+      // promise again would strand them until the readiness timeout.
+      if (this.wsOpen) this.resetReady()
       this.wsOpen = false
-      // New subscribers (and any concurrent subscribe() calls in flight)
-      // must wait for the next `__ready__` before resolving.
-      this.resetReady()
       return
     }
     if (channel === WS_UNAUTHORIZED_CHANNEL) {
-      // Rust gave up after WS_RECONNECT_FAIL_THRESHOLD failures, OR the
-      // remote rejected the handshake. Either way, surface as expired.
+      // Only a definitive authentication rejection ends Rust's retries, and
+      // it drops this window's subscription: the same expiry an HTTP 401
+      // reports.
+      this.recoveryNeeded = true
+      if (this.wsOpen) this.resetReady()
+      this.wsOpen = false
+      this.setConnectionState("disconnected")
       this.config.onUnauthorized?.()
       return
     }
@@ -402,8 +545,13 @@ export class RemoteDesktopTransport implements Transport {
   }
 
   destroy() {
+    if (this.destroyed) return
     this.destroyed = true
     this.wsOpen = false
+    if (this.recoveryTimer !== null) {
+      clearTimeout(this.recoveryTimer)
+      this.recoveryTimer = null
+    }
     if (this.sendFailRetryTimer !== null) {
       clearTimeout(this.sendFailRetryTimer)
       this.sendFailRetryTimer = null
@@ -426,6 +574,8 @@ export class RemoteDesktopTransport implements Transport {
     }
     this.handlers.clear()
     this.reconnectCallbacks.clear()
+    this.connectionListeners.clear()
+    this.readyCallbacks.clear()
     this.wsReadyCallbacks.clear()
     this.eventStreamInstance?.destroy()
     this.eventStreamInstance = null

@@ -16,7 +16,7 @@ import { useTerminalContext } from "@/contexts/terminal-context"
 import {
   bootstrapFolderCommandsFromPackageJson,
   listFolderCommands,
-  terminalKill,
+  terminalStop,
 } from "@/lib/api"
 import type { FolderCommand } from "@/lib/types"
 import {
@@ -180,7 +180,11 @@ export function CommandDropdown() {
         return
 
       selectCommand(cmd.id)
-      const terminalId = await createTerminalWithCommand(cmd.name, cmd.command)
+      const terminalId = await createTerminalWithCommand(
+        cmd.name,
+        cmd.command,
+        cmd.id
+      )
       if (!terminalId) return
 
       setLink(cmd.id, terminalId)
@@ -201,7 +205,9 @@ export function CommandDropdown() {
 
       clearLink(cmd.id)
       try {
-        await terminalKill(terminalId)
+        // The tab stays open with what the command printed, so the backend
+        // keeps that output for it — a reload of the tab still shows it.
+        await terminalStop(terminalId)
       } catch (err) {
         console.error("Failed to stop command terminal:", err)
       }

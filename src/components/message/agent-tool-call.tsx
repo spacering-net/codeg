@@ -340,6 +340,15 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
     [parsed, part.input]
   )
 
+  // Claude Code's Agent tool takes an `effort` (CLI 2.1.292+): the level the
+  // sub-agent runs at, set only when the user asked for one.
+  const effort = useMemo(
+    () =>
+      asText(parsed?.effort) ??
+      (part.input ? extractJsonField(part.input, "effort") : null),
+    [parsed, part.input]
+  )
+
   // codex 0.147's native team-of-agents marks its capsules as LAUNCH-only
   // (`CODEX_SUBAGENT_LAUNCH_KEY`, written by both the live path and the rollout
   // parser). The card settles when codex acknowledges the spawn, which is not
@@ -521,12 +530,21 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
         }
         statusLabel={statusLabel}
       >
-        {/* Model summary */}
-        {model && (
+        {/* Model and effort summary */}
+        {(model || effort) && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span>
-              {t("agentModelLabel")}: <span className="font-mono">{model}</span>
-            </span>
+            {model && (
+              <span>
+                {t("agentModelLabel")}:{" "}
+                <span className="font-mono">{model}</span>
+              </span>
+            )}
+            {effort && (
+              <span>
+                {t("agentEffortLabel")}:{" "}
+                <span className="font-mono">{effort}</span>
+              </span>
+            )}
           </div>
         )}
 

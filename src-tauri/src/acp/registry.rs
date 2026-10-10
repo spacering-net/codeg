@@ -16,7 +16,10 @@ pub enum AgentDistribution {
         version: &'static str,
         /// Command name on PATH (fallback launch + `which` probes). For
         /// single-file archives this is also the file name copied out of the
-        /// archive into the cache.
+        /// archive into the cache. On Windows a bare command (every built-in)
+        /// gets `.exe` appended, while one that already ends in `.exe` (a
+        /// custom agent's registry entry) is used as-is: see
+        /// `binary_cache::executable_file_name`.
         cmd: &'static str,
         args: &'static [&'static str],
         env: &'static [(&'static str, &'static str)],
@@ -1676,9 +1679,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // an `InputValidationError` result from 2.1.286; approving or
             // cancelling a plan answers `ExitPlanMode` (codeg is offered no
             // clear-context option); and a CLI killed mid-tool ends with "The
-            // connection to Claude was lost.", as on 0.85.0. The transcript
-            // keeps no trace of the failure, so a reload shows such a call with
-            // no result.
+            // connection to Claude was lost.", as on 0.85.0. A steer that lands
+            // while a tool call is still streaming does trip it, see (fff). The
+            // transcript keeps no trace of the failure, so a reload shows such a
+            // call with no result.
             //
             // (uu) #1205 restores background-task stops on `session/load`
             // replay instead of showing the `<task-notification>` as a prompt.
@@ -1820,9 +1824,112 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     `<persisted-output>` form as on 2.1.286.
             //   * The hand-back header (w), `api_retry` and `latest_per_family`
             //     are unchanged in 2.1.287.
+            //
+            // 0.87.0 changes the adapter only (#1249, #1233; #1260 bumps dev
+            // dependencies). 0.88.0 (#1276) moves the Claude SDK 0.3.287 →
+            // 0.3.293, i.e. CLI 2.1.287 → **2.1.293**. The ACP SDK stays 1.7.0
+            // and `engines.node` stays ">=22". 0.88.0's scenario harness, run
+            // on the sources of both tags with codeg's exact
+            // `clientCapabilities`, is byte-identical in all 40 scenarios; the
+            // Monitor scenario it replaced differs as (eee) says. The probes
+            // below ran live against the local fake Anthropic API (no model
+            // call), 0.86.0 and 0.88.0 side by side.
+            //
+            // (ddd) **A prompt folded into a turn Claude Code started itself
+            // now settles** (#1233). When a background task's notification
+            // starts a turn and the user's prompt arrives while that turn runs
+            // a tool, the CLI folds the prompt into the running turn and
+            // answers it with that turn's result. The transcript records the
+            // prompt as a `queued_command` attachment, which `parsers::claude`
+            // already renders as a user turn. 0.86.0 took the result for an
+            // autonomous one and left the prompt open: measured, no answer in
+            // 45 s, so codeg's turn kept spinning. 0.88.0 settles it
+            // (`end_turn`, 4.8 s after the send). A prompt that arrives while
+            // the autonomous turn is still waiting on the model is not folded
+            // on either version; it runs as its own turn afterwards.
+            //
+            // (eee) **Monitor tasks leave the async-task channel** (#1249). The
+            // task of a `Monitor` call (the SDK reports it as `local_bash`) and
+            // a `local_monitor` task are no longer published. codeg's task strip
+            // therefore lists no running monitor and offers no stop for one,
+            // and codeg cannot bring the control back:
+            // `_session/async_task/stop` refuses a task the adapter does not
+            // publish. Measured on 0.86.0's Monitor scenario: 0.86.0 sends
+            // `async_task_spawned` and two progress frames, 0.88.0 neither. The
+            // rest of #1249 stays inside the adapter: a task now comes only from
+            // structured data (a result's `backgroundTaskId` or the SDK's task
+            // events), never from result text; a late frame of an earlier run
+            // (`run_id`, SDK 0.3.292+) is dropped; and a subagent's task keeps
+            // reporting to the subagent's session after the subagent finished.
+            // codeg's Bash card reads the launch text itself
+            // (`parseBackgroundLaunch`), so a backgrounded command looks the
+            // same.
+            //
+            // (fff) **A steer during a streamed tool call no longer fails the
+            // turn** (#1249). A steer that lands while a `tool_use` is still
+            // streaming cuts that stream, and the CLI starts over with the
+            // steer, so the half-streamed call never runs. 0.86.0 then failed
+            // the turn through (tt): the prompt settled `end_turn` with an AIR
+            // `sessionFailure` titled "Claude ended the turn without returning
+            // results for tool calls: <id>" (actions retry and new session),
+            // and codeg's failure banner showed it over a turn that went fine.
+            // 0.88.0 reports no failure. It closes only that card as `failed`,
+            // with "Claude stopped this tool call before it ran." The call never
+            // reaches a complete assistant message, so the transcript has no
+            // trace of it and a reload drops the card.
+            //
+            // (ggg) **Haiku 5.5** (`claude-haiku-5-5`, CLI 2.1.293) becomes the
+            // first-party Haiku: `latest_per_family.haiku` moves to it from
+            // `claude-haiku-4-5`, which stays the per-provider default (Bedrock,
+            // Vertex, Foundry, Mantle and the catalog's `gateway` key). Through
+            // an `ANTHROPIC_BASE_URL` gateway the `haiku` row keeps its value
+            // and now reads "Haiku 5.5 · Fastest for quick answers ·
+            // $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts over 100k)", so a
+            // saved `haiku` pick replays as is. The model is natively 1M and
+            // takes effort: with `haiku` picked, 0.86.0 drops the `effort`
+            // option and 0.88.0 keeps low to max. The settings panels' Haiku
+            // placeholders name it, and the shared history gauge
+            // (`parsers::infer_context_window_max_tokens`) now sizes it and the
+            // other natively 1M Claude models at 1M.
+            //
+            // (hhh) **Tool inputs** (CLI 2.1.290, 2.1.292). Grep accepts
+            // `file_path` for `path`, through the same `coerceInput` hook (bb)
+            // found for Write and Edit (read from the 2.1.293 binary): the CLI
+            // repairs only the copy it runs (`path` from a non-empty
+            // `file_path` when `path` is absent, a repeat dropped), while the
+            // stream, `rawInput` and the JSONL keep the model's spelling, and
+            // the result gains "Note: Grep's parameter for where to search is
+            // named `path`. …", which codeg's search parser keeps as a note.
+            // `canonical_file_tool_input` makes the same repair, so the search
+            // card shows the path. The native CLI offers no Grep tool by
+            // default (it searches through Bash), so no probe reached it and
+            // few setups will. The
+            // Agent tool takes `effort`, and WebFetch takes `offset` to read on
+            // past 100,000 characters. The adapter adds both to its own titles,
+            // which codeg does not show, so codeg's Agent and WebFetch cards
+            // read them from `rawInput`.
+            //
+            // (iii) **MCP handshake** (CLI 2.1.292). A stdio server is first
+            // offered protocol 2026-07-28 through a `server/discover` probe, with
+            // up to 3 s to answer before the 2025-11-25 `initialize`. codeg-mcp
+            // answers it at once with -32601 (method not found), and the CLI
+            // falls back at once. Measured with the real binary: `initialize`
+            // follows 6 ms after the probe, and `session/new` takes as long as
+            // on 0.86.0.
+            //
+            // (jjj) Nothing to change in codeg, each checked:
+            //   * A resume and a load both come back in plan mode after a plan
+            //     mode prompt, on both versions.
+            //   * An async Agent launch keeps its result text; the structured
+            //     result adds `canContinueAgent: true`.
+            //   * `latest_per_family` keeps Fable 5.1, Opus 5.5 and Sonnet 5.5,
+            //     and the Fable row keeps the value `fable`.
+            //   * 2.1.292 honours `NO_PROXY` for the CLI's own sign-in and
+            //     policy requests, so the bypass list codeg exports with its
+            //     proxy setting now reaches them too.
             distribution: AgentDistribution::Npx {
-                version: "0.86.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.86.0",
+                version: "0.88.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.88.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -2977,10 +3084,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // interrupted `hermes update` in the standalone `hermes-acp` entry,
             // a no-op under the `hermes acp` codeg launches.
             //
-            // Launch preference: `resolve_npx_command("hermes")` checks PATH
-            // first, so an official-installer `hermes` (which self-updates)
-            // naturally outranks the npm-managed copy; the npm global install
-            // is the managed/one-click channel codeg's Install button drives.
+            // Launch preference: `resolve_npx_command("hermes")` checks PATH,
+            // then `~/.local/bin` (the official installer's target), then the
+            // npm global prefix. Whatever is on the app's PATH wins first; past
+            // that, an official-installer `hermes` (which self-updates)
+            // outranks the npm-managed copy even when the app's PATH lacks
+            // `~/.local/bin`. The npm global install is the managed/one-click
+            // channel codeg's Install button drives.
             distribution: AgentDistribution::Npx {
                 version: "0.21.5",
                 package: "hermes-agent@0.21.5",
@@ -4140,8 +4250,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.86.0",
-            "@agentclientprotocol/claude-agent-acp@0.86.0",
+            "0.88.0",
+            "@agentclientprotocol/claude-agent-acp@0.88.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -4234,8 +4344,9 @@ mod tests {
     // `acp` subcommand — the package's OTHER bins (`hermes-agent`,
     // `hermes-npm`) map to different console scripts (`run_agent:main` and
     // the bridge maintenance CLI), not the ACP adapter. `resolve_npx_command`
-    // checks PATH before the npm prefix, so an official-installer `hermes`
-    // keeps outranking the npm-managed copy without any policy bit.
+    // checks PATH and `~/.local/bin` before the npm prefix, so an
+    // official-installer `hermes` keeps outranking the npm-managed copy
+    // without any policy bit.
     #[test]
     fn hermes_launches_the_hermes_bin_with_acp_subcommand() {
         let meta = get_agent_meta(AgentType::Hermes);

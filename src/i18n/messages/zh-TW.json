@@ -2289,6 +2289,9 @@
       "closeAll": "關閉所有",
       "hideTerminal": "隱藏終端（{shortcut}）",
       "openFolderFirst": "請先開啟一個資料夾",
+      "processExited": "程序已結束",
+      "processExitedWithCode": "程序已結束（代碼 {code}）",
+      "unavailable": "終端工作階段無法使用。它可能已結束，或後端已重新啟動。",
       "keybar": {
         "label": "終端虛擬鍵",
         "show": "顯示虛擬鍵",
@@ -3569,6 +3572,7 @@
         "nameLabel": "名稱：",
         "agentPromptLabel": "提示詞",
         "agentModelLabel": "模型",
+        "agentEffortLabel": "思考強度",
         "agentRunning": "執行中...",
         "agentLiveTranscript": "即時活動",
         "agentProgressTools": "{count} 次工具調用",
@@ -4100,7 +4104,25 @@
     "loading": "載入中...",
     "emptyDirectory": "此目錄為空",
     "errorLoadingDir": "載入目錄失敗",
-    "permissionDenied": "權限不足"
+    "permissionDenied": "權限不足",
+    "newFolder": {
+      "button": "新增資料夾",
+      "placeholder": "資料夾名稱",
+      "create": "建立資料夾",
+      "location": "位於 {path}",
+      "errors": {
+        "empty": "請輸入資料夾名稱。",
+        "reservedName": "「{name}」不能用作資料夾名稱。",
+        "separator": "資料夾名稱不能包含 / 或 \\。",
+        "controlCharacter": "資料夾名稱不能包含控制字元或換行符號。",
+        "reservedCharacter": "資料夾名稱不能包含 {character}。",
+        "invalidParent": "無法在 {path} 中建立資料夾。",
+        "parentNotFound": "{path} 已不存在。",
+        "alreadyExists": "「{name}」已存在。",
+        "permissionDenied": "沒有在此處建立資料夾的權限。",
+        "failed": "無法建立資料夾：{reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "載入中...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "開啟本地工作區",
+    "openLocalFailed": "無法開啟本地工作區",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

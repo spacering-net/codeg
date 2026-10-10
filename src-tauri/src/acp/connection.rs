@@ -4556,6 +4556,11 @@ async fn apply_and_emit_session_config_options(
             // session birth, and on a catalog broadcast). `None` when empty
             // keeps the switch path on the flat-fallback branch.
             state.write().await.grok_model_specs = (!specs.is_empty()).then(|| specs.clone());
+            // Grok's picker comes from its handshake, not a config-option list:
+            // its values are what the agent picked on its own, read before the
+            // replay below rewrites them (see
+            // `SessionState::agent_chosen_config_values`).
+            state.write().await.agent_chosen_config_values = current_config_option_values(&opts);
             let session_id = session.session_id().clone();
             apply_grok_preferred_options(
                 cx,
@@ -4571,6 +4576,10 @@ async fn apply_and_emit_session_config_options(
         // No x.ai/sessionConfig (unexpected): fall through to the standard path,
         // which for Grok emits an empty list (no selectors) — same as before.
     }
+    // What the agent picked on its own, read before the replay below rewrites
+    // any of it (see `SessionState::agent_chosen_config_values`).
+    state.write().await.agent_chosen_config_values =
+        current_config_option_values(&map_session_config_options(&initial_config_options));
     let updated = apply_preferred_session_options(
         cx,
         session,
@@ -10858,6 +10867,16 @@ async fn run_conversation_loop(
     // loop ends while `read_update` holds `session`. A fork restarts this loop
     // with the new session, so it cannot go stale in here.
     let agent_turn_session_id = session.session_id().0.to_string();
+    // Whether a prompt has run on this session in this loop — from then on the
+    // idle loop records a custom agent's frames as the turn loop does (see the
+    // `record_transcript_update` below). Before it, nothing the idle loop reads
+    // is conversation: a banner the agent greets a new session with, which no
+    // client renders and which would list a session the user never spoke in,
+    // or a straggler of a `session/load` replay whose history the hydration
+    // drain has already decided to keep or skip. Work the agent does on its
+    // own needs a turn to have started it, and background work cannot outlive
+    // the agent process this loop's connection owns.
+    let mut prompted = false;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
@@ -10921,6 +10940,18 @@ async fn run_conversation_loop(
                                         drift.extend(
                                             take_asserted_config_drift(&st, &update.config_options).await,
                                         );
+                                    }
+                                    // A custom agent's history is this
+                                    // transcript and nothing else, and what
+                                    // arrives here is part of it: a turn the
+                                    // agent runs on its own (a background job's
+                                    // follow-up, with no `session/prompt` around
+                                    // it), the late completion of a call an
+                                    // earlier turn started, or the last frames
+                                    // of a turn whose response won the turn
+                                    // loop's select. No-op for every other agent.
+                                    if prompted {
+                                        record_transcript_update(agent_type, &notif.session_id.0, &notif.update);
                                     }
                                     emit_conversation_update(&st, &h, agent_type, notif.update, cwd_opt, &mut raw_output_cache, &mut cb_state).await;
                                     Ok(())
@@ -11098,6 +11129,7 @@ async fn run_conversation_loop(
                 // instantly — and awaited, so the replay gate can never see
                 // this conversation as transcript-less (see `record_prompt`).
                 record_prompt(agent_type, &sid.0, &prompt_blocks).await;
+                prompted = true;
                 let turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
                 let prompt_request = PromptRequest::new(sid.clone(), prompt_blocks);
                 // Snapshot the stderr write position BEFORE the request is
@@ -28252,6 +28284,48 @@ mod tests {
         }
     }
 
+    /// A Grep sent with `file_path` (CLI 2.1.292 runs it as `path`) reaches the
+    /// search card as `path`. Under the AIR contract the update that carries
+    /// the input names no tool of its own, so the tool name has to come from
+    /// the opening frame through the `_meta` ledger.
+    #[tokio::test]
+    async fn claude_grep_file_path_reaches_the_card_as_path() {
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        pi_emit(
+            AgentType::ClaudeCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "toolu_g",
+                "title": "grep",
+                "kind": "search",
+                "status": "pending",
+                "_meta": {"claudeCode": {"toolName": "Grep"}},
+            }),
+        )
+        .await;
+        let (_, raw_input, _, _) = pi_emit(
+            AgentType::ClaudeCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "toolu_g",
+                "title": "grep \"needle\" /w/a.txt",
+                "rawInput": {"pattern": "needle", "file_path": "/w/a.txt", "output_mode": "content"},
+            }),
+        )
+        .await;
+        let input: serde_json::Value =
+            serde_json::from_str(raw_input.as_deref().expect("raw_input")).unwrap();
+        assert_eq!(
+            input,
+            serde_json::json!({"pattern": "needle", "path": "/w/a.txt", "output_mode": "content"})
+        );
+    }
+
     /// The renames are keyed on the claude tool's NAME: Grep's own `path`
     /// argument is not a Write's `file_path`, and another agent's `_meta` that
     /// happens to use the same key is not claude's.
@@ -30875,6 +30949,144 @@ mod tests {
         assert_eq!(ordered, vec!["a_thing", "z_thing"]);
     }
 
+    /// Establishment keeps what the agent picked on its own, read BEFORE the
+    /// saved preferences replay over it. The options probe reports that for
+    /// each option it applied (`report_agent_chosen_values` in the manager), so
+    /// the delegation panel's "Default" names the agent's model rather than the
+    /// user's. Shaped like a live opencode 2.0.24: switching the model re-lists
+    /// `effort` for it.
+    #[tokio::test]
+    async fn establishment_keeps_the_agents_own_picks_from_before_the_preference_replay() {
+        use agent_client_protocol::schema::v1::SetSessionConfigOptionResponse;
+
+        fn options(model: &str, effort: &str, efforts: &[&str]) -> Vec<SessionConfigOption> {
+            let efforts: Vec<serde_json::Value> = efforts
+                .iter()
+                .map(|value| serde_json::json!({"value": value, "name": value}))
+                .collect();
+            serde_json::from_value(serde_json::json!([
+                {
+                    "type": "select",
+                    "id": "model",
+                    "name": "Model",
+                    "category": "model",
+                    "currentValue": model,
+                    "options": [
+                        {"value": "opencode/exo-free", "name": "Exo"},
+                        {"value": "opencode/step-5-preview-free", "name": "Step 5"}
+                    ]
+                },
+                {
+                    "type": "select",
+                    "id": "effort",
+                    "name": "Effort",
+                    "category": "thought_level",
+                    "currentValue": effort,
+                    "options": efforts
+                },
+            ]))
+            .expect("parses")
+        }
+
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let agent = tokio::spawn(async move {
+            let _ = Agent
+                .builder()
+                .on_receive_request(
+                    async |_req: NewSessionRequest,
+                           responder: Responder<NewSessionResponse>,
+                           _cx: ConnectionTo<Client>| {
+                        let opened = options("opencode/exo-free", "high", &["high", "default"]);
+                        responder.respond(
+                            NewSessionResponse::new(SessionId::new("s1")).config_options(opened),
+                        )
+                    },
+                    on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_req: SetSessionConfigOptionRequest,
+                           responder: Responder<SetSessionConfigOptionResponse>,
+                           _cx: ConnectionTo<Client>| {
+                        // Only the model is replayed: the answer re-lists effort.
+                        let switched = options(
+                            "opencode/step-5-preview-free",
+                            "default",
+                            &["low", "medium", "high", "default"],
+                        );
+                        responder.respond(SetSessionConfigOptionResponse::new(switched))
+                    },
+                    on_receive_request!(),
+                )
+                .connect_with(agent_end, async |_cx: ConnectionTo<Client>| {
+                    std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                })
+                .await;
+        });
+
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-probe".to_string(),
+            AgentType::OpenCode,
+            None,
+            "delegation-probe".to_string(),
+            None,
+        )));
+        let establishment_state = Arc::clone(&state);
+        Client
+            .builder()
+            .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
+                let raw = cx
+                    .send_request_to(
+                        Agent,
+                        UntypedMessage::new("session/new", NewSessionRequest::new("/tmp"))?,
+                    )
+                    .block_task()
+                    .await?;
+                let response: NewSessionResponse = serde_json::from_value(raw)
+                    .map_err(agent_client_protocol::Error::into_internal_error)?;
+                let initial = response.config_options.clone().unwrap_or_default();
+                let mut session = AgentSession::attach(&cx, response)?;
+                let preferred = BTreeMap::from([(
+                    "model".to_string(),
+                    "opencode/step-5-preview-free".to_string(),
+                )]);
+                apply_and_emit_session_config_options(
+                    &cx,
+                    &mut session,
+                    &establishment_state,
+                    &EventEmitter::Noop,
+                    AgentType::OpenCode,
+                    None,
+                    None,
+                    None,
+                    &preferred,
+                    initial,
+                )
+                .await;
+                Ok(())
+            })
+            .await
+            .expect("the establishment runs");
+        agent.abort();
+
+        let state = state.read().await;
+        assert_eq!(
+            state.agent_chosen_config_values,
+            BTreeMap::from([
+                ("model".to_string(), "opencode/exo-free".to_string()),
+                ("effort".to_string(), "high".to_string()),
+            ]),
+            "the agent's own picks, from before the replay"
+        );
+        // …while the session itself runs the preference, effort re-listed for it.
+        let current =
+            current_config_option_values(state.config_options.as_deref().unwrap_or_default());
+        assert_eq!(
+            current.get("model").map(String::as_str),
+            Some("opencode/step-5-preview-free")
+        );
+        assert_eq!(current.get("effort").map(String::as_str), Some("default"));
+    }
+
     /// The claude shape: a model select plus the effort option that hangs off it.
     fn asserted_drift_options(model: &str, effort: &str) -> Vec<SessionConfigOption> {
         serde_json::from_value(serde_json::json!([
@@ -33304,5 +33516,352 @@ mod tests {
             "a prompt's late turn_completed ends nothing"
         );
         assert!(grok_turn_completed_ends(Some("f"), &done(None)));
+    }
+
+    // ── A custom agent's history and the idle loop (#903) ───────────────────
+    //
+    // A custom agent has no store of its own for codeg to parse later: its
+    // history IS the ACP transcript this connection writes as frames go by.
+    // Work the agent does between prompts — the follow-up to a background job,
+    // the late completion of a call an earlier turn started — reaches codeg on
+    // the IDLE loop with no `session/prompt` around it. Driven over the real
+    // runtime with the scripted-agent plumbing of the Grok loop tests above.
+
+    /// The custom agent these loop tests drive. Deliberately unregistered:
+    /// nothing on the recording path looks the id up.
+    const IDLE_PROBE_AGENT: &str = "idle-probe";
+
+    fn custom_update(update: serde_json::Value) -> GrokFrame {
+        (
+            "session/update",
+            serde_json::json!({"sessionId": "s1", "update": update}),
+        )
+    }
+
+    fn custom_text(text: &str) -> GrokFrame {
+        custom_update(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": text},
+        }))
+    }
+
+    /// One line per turn, for assertions that read like the conversation.
+    fn turn_shape(turns: &[crate::models::message::MessageTurn]) -> Vec<String> {
+        use crate::models::message::ContentBlock as Block;
+        turns
+            .iter()
+            .map(|turn| {
+                let blocks: Vec<String> = turn
+                    .blocks
+                    .iter()
+                    .map(|block| match block {
+                        Block::Text { text } => format!("text {text:?}"),
+                        Block::ToolUse {
+                            tool_use_id,
+                            tool_name,
+                            ..
+                        } => format!("call {} {tool_name}", tool_use_id.as_deref().unwrap_or("?")),
+                        Block::ToolResult {
+                            tool_use_id,
+                            output_preview,
+                            ..
+                        } => format!(
+                            "result {} {:?}",
+                            tool_use_id.as_deref().unwrap_or("?"),
+                            output_preview.as_deref().unwrap_or("")
+                        ),
+                        other => format!("{other:?}"),
+                    })
+                    .collect();
+                format!("{:?}: {}", turn.role, blocks.join(" | "))
+            })
+            .collect()
+    }
+
+    /// `run_conversation_loop` for a custom agent. Each prompt streams the next
+    /// turn of the script, then holds its response until the test releases it,
+    /// so every frame of a prompted turn is read INSIDE that turn. Frames handed
+    /// to [`CustomLoop::agent_sends`] go out at once, outside any prompt.
+    struct CustomLoop {
+        state: Arc<RwLock<SessionState>>,
+        cmd_tx: mpsc::Sender<ConnectionCommand>,
+        events: tokio::sync::broadcast::Receiver<Arc<crate::acp::types::EventEnvelope>>,
+        /// Every event the loop emitted so far, in order.
+        seen: Vec<AcpEvent>,
+        unprompted: tokio::sync::mpsc::UnboundedSender<Vec<GrokFrame>>,
+        respond: Arc<tokio::sync::Notify>,
+        client: tokio::task::JoinHandle<()>,
+        agent: tokio::task::JoinHandle<()>,
+    }
+
+    impl CustomLoop {
+        async fn start(turns: Vec<Vec<GrokFrame>>) -> Self {
+            use agent_client_protocol::schema::v1::PromptResponse;
+
+            let agent_type = AgentType::custom(IDLE_PROBE_AGENT).expect("a valid custom id");
+            let turns = Arc::new(std::sync::Mutex::new(VecDeque::from(turns)));
+            let respond = Arc::new(tokio::sync::Notify::new());
+            let agent_respond = Arc::clone(&respond);
+            let (unprompted, mut unprompted_rx) =
+                tokio::sync::mpsc::unbounded_channel::<Vec<GrokFrame>>();
+            let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+
+            let agent = tokio::spawn(async move {
+                let _ = Agent
+                    .builder()
+                    .on_receive_request(
+                        async |_req: NewSessionRequest,
+                               responder: Responder<NewSessionResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            responder.respond(NewSessionResponse::new(SessionId::new("s1")))
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: PromptRequest,
+                                    responder: Responder<PromptResponse>,
+                                    cx: ConnectionTo<Client>| {
+                            let frames = turns.lock().unwrap().pop_front().unwrap_or_default();
+                            send_grok_frames(&cx, &frames)?;
+                            let respond = Arc::clone(&agent_respond);
+                            // Off the handler, so a held response doesn't hold
+                            // up the agent's other incoming messages.
+                            tokio::spawn(async move {
+                                respond.notified().await;
+                                responder.respond(PromptResponse::new(StopReason::EndTurn))
+                            });
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
+                    .connect_with(agent_end, async move |cx: ConnectionTo<Client>| {
+                        while let Some(frames) = unprompted_rx.recv().await {
+                            send_grok_frames(&cx, &frames)?;
+                        }
+                        std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                    })
+                    .await;
+            });
+
+            let state = Arc::new(RwLock::new(SessionState::new(
+                "conn-custom".to_string(),
+                agent_type,
+                None,
+                "win".to_string(),
+                None,
+            )));
+            let events = state.read().await.event_stream().subscribe();
+            let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+            let loop_state = Arc::clone(&state);
+            let client = tokio::spawn(async move {
+                let _ = Client
+                    .builder()
+                    .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
+                        let raw = cx
+                            .send_request_to(
+                                Agent,
+                                UntypedMessage::new("session/new", NewSessionRequest::new("/tmp"))?,
+                            )
+                            .block_task()
+                            .await?;
+                        let response: NewSessionResponse = serde_json::from_value(raw)
+                            .map_err(agent_client_protocol::Error::into_internal_error)?;
+                        let mut session = AgentSession::attach(&cx, response)?;
+                        let perms = PendingPermissions::default();
+                        let ledger = background_watch::PromptLedger::shared();
+                        let stderr_tail = Arc::new(StderrTail::new());
+                        run_conversation_loop(
+                            &mut session,
+                            "conn-custom",
+                            &EventEmitter::Noop,
+                            &loop_state,
+                            agent_type,
+                            &perms,
+                            &mut cmd_rx,
+                            Arc::new(TerminalRuntime::with_base_env(BTreeMap::new())),
+                            "/tmp",
+                            false,
+                            &ledger,
+                            None,
+                            &stderr_tail,
+                        )
+                        .await?;
+                        Ok(())
+                    })
+                    .await;
+            });
+
+            Self {
+                state,
+                cmd_tx,
+                events,
+                seen: Vec::new(),
+                unprompted,
+                respond,
+                client,
+                agent,
+            }
+        }
+
+        /// Have the agent send `frames` now, outside any prompt.
+        fn agent_sends(&self, frames: Vec<GrokFrame>) {
+            self.unprompted.send(frames).expect("the agent is running");
+        }
+
+        /// Run one prompted turn to its end: admit the prompt the way
+        /// `send_prompt_inner` does, wait until `last_text` has been read
+        /// inside the turn, then release the response and wait for the end.
+        async fn run_turn(&mut self, prompt: &str, last_text: &str) {
+            self.state.write().await.turn_in_flight = true;
+            self.cmd_tx
+                .send(ConnectionCommand::Prompt {
+                    blocks: vec![PromptInputBlock::Text {
+                        text: prompt.into(),
+                    }],
+                    user_message: None,
+                })
+                .await
+                .expect("the loop is running");
+            self.until(
+                "the turn's reply",
+                |e| matches!(e, AcpEvent::ContentDelta { text, .. } if text == last_text),
+            )
+            .await;
+            self.respond.notify_one();
+            self.until("the turn end", |e| {
+                matches!(e, AcpEvent::TurnComplete { .. })
+            })
+            .await;
+        }
+
+        /// Record events until one matches, and return its index in `seen`.
+        async fn until(&mut self, what: &str, matches: impl Fn(&AcpEvent) -> bool) -> usize {
+            let deadline = std::time::Duration::from_secs(10);
+            loop {
+                let envelope = tokio::time::timeout(deadline, self.events.recv())
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!("timed out waiting for {what}; saw {:#?}", self.seen)
+                    })
+                    .expect("event stream");
+                self.seen.push(envelope.payload.clone());
+                if matches(&envelope.payload) {
+                    return self.seen.len() - 1;
+                }
+            }
+        }
+
+        /// Wait until a [`grok_barrier`] the agent sent has been through the
+        /// loop — and with it every frame sent before it.
+        async fn until_barrier(&mut self) -> usize {
+            self.until("the agent's barrier", |e| {
+                matches!(e, AcpEvent::AvailableCommands { .. })
+            })
+            .await
+        }
+
+        async fn shutdown(self) {
+            let _ = self.cmd_tx.send(ConnectionCommand::Disconnect).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.client).await;
+            self.agent.abort();
+        }
+    }
+
+    /// Issue #903: a turn the agent runs on its own between two prompts — here
+    /// a background job's follow-up — together with the completion of the call
+    /// that started the job. Both reach codeg on the idle loop, and both have to
+    /// be in the history the conversation is rebuilt from once the next turn
+    /// ends (or the conversation is reopened).
+    #[tokio::test]
+    async fn a_turn_a_custom_agent_runs_on_its_own_stays_in_its_history() {
+        use crate::parsers::AgentParser as _;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let home_str = home.path().to_string_lossy().into_owned();
+        // The recorder resolves its root from the process-global `CODEG_HOME`;
+        // temp_env serializes this against every other test that pins it.
+        let turns = temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let mut lp = CustomLoop::start(vec![
+                vec![
+                    custom_update(serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "job-1",
+                        "title": "Bash",
+                        "kind": "execute",
+                        "status": "in_progress",
+                        "rawInput": {"command": "sleep 30 && echo done"},
+                    })),
+                    custom_text("Started the job."),
+                ],
+                vec![custom_text("You're welcome.")],
+            ])
+            .await;
+
+            // Opening a session does not start a conversation: a greeting sent
+            // before the first prompt stays out of the history, as it stays
+            // out of the live view.
+            lp.agent_sends(vec![custom_text("Welcome!"), grok_barrier()]);
+            lp.until_barrier().await;
+
+            lp.run_turn("start the job", "Started the job.").await;
+
+            // The job outlives its turn: the agent reports the call done and
+            // carries on by itself, with no `session/prompt` around any of it.
+            lp.agent_sends(vec![
+                custom_update(serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "job-1",
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "done"}}],
+                })),
+                custom_text("The job finished."),
+                grok_barrier(),
+            ]);
+            lp.until_barrier().await;
+
+            // The end of the next turn is when the conversation is rebuilt from
+            // history.
+            lp.run_turn("thanks", "You're welcome.").await;
+            lp.shutdown().await;
+
+            // Everything above went through the one writer thread, which takes
+            // its queue in order and writes a turn end before the next job, so
+            // a turn end queued after them lands only once they have. Waiting
+            // for that one with room for a stalled CI runner — the loop's own
+            // wait on its turn end gives up after 2s — is what lets the read
+            // below see the whole file.
+            let root = crate::paths::codeg_acp_transcripts_root();
+            let barrier = crate::acp_transcript::record_entry_in(
+                &root,
+                IDLE_PROBE_AGENT,
+                "writer-barrier",
+                crate::acp_transcript::EntryKind::TurnEnd,
+                serde_json::json!({"stopReason": "end_turn"}),
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
+                .await
+                .expect("the transcript writer kept up")
+                .expect("the barrier record landed");
+
+            crate::parsers::acp_native::AcpNativeParser::new_in(
+                AgentType::custom(IDLE_PROBE_AGENT).expect("a valid custom id"),
+                root,
+            )
+            .get_conversation("s1")
+            .expect("the session has a transcript")
+            .turns
+        })
+        .await;
+
+        assert_eq!(
+            turn_shape(&turns),
+            vec![
+                r#"User: text "start the job""#,
+                r#"Assistant: call job-1 Bash | text "Started the job." | result job-1 "done""#,
+                r#"Assistant: text "The job finished.""#,
+                r#"User: text "thanks""#,
+                r#"Assistant: text "You're welcome.""#,
+            ]
+        );
     }
 }

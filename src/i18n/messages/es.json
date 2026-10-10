@@ -2289,6 +2289,9 @@
       "closeAll": "Cerrar todo",
       "hideTerminal": "Ocultar terminal ({shortcut})",
       "openFolderFirst": "Abre primero una carpeta",
+      "processExited": "Proceso finalizado",
+      "processExitedWithCode": "Proceso finalizado (código {code})",
+      "unavailable": "La sesión de terminal no está disponible. Puede haber terminado o el servidor se ha reiniciado.",
       "keybar": {
         "label": "Teclas virtuales del terminal",
         "show": "Mostrar teclas virtuales",
@@ -3569,6 +3572,7 @@
         "nameLabel": "Nombre:",
         "agentPromptLabel": "Instrucción",
         "agentModelLabel": "Modelo",
+        "agentEffortLabel": "Esfuerzo",
         "agentRunning": "Ejecutando...",
         "agentLiveTranscript": "Actividad en vivo",
         "agentProgressTools": "{count} llamadas a herramientas",
@@ -4100,7 +4104,25 @@
     "loading": "Cargando...",
     "emptyDirectory": "Este directorio está vacío",
     "errorLoadingDir": "Error al cargar el directorio",
-    "permissionDenied": "Permiso denegado"
+    "permissionDenied": "Permiso denegado",
+    "newFolder": {
+      "button": "Nueva carpeta",
+      "placeholder": "Nombre de la carpeta",
+      "create": "Crear carpeta",
+      "location": "En {path}",
+      "errors": {
+        "empty": "Escribe un nombre para la carpeta.",
+        "reservedName": "«{name}» no se puede usar como nombre de carpeta.",
+        "separator": "El nombre de una carpeta no puede contener / ni \\.",
+        "controlCharacter": "El nombre de una carpeta no puede contener caracteres de control ni saltos de línea.",
+        "reservedCharacter": "El nombre de una carpeta no puede contener {character}.",
+        "invalidParent": "No se puede crear una carpeta en {path}.",
+        "parentNotFound": "{path} ya no existe.",
+        "alreadyExists": "«{name}» ya existe aquí.",
+        "permissionDenied": "No tienes permiso para crear una carpeta aquí.",
+        "failed": "No se pudo crear la carpeta: {reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "Cargando...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Abrir espacio de trabajo local",
+    "openLocalFailed": "No se pudo abrir el espacio de trabajo local",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

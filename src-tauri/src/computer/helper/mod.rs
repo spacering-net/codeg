@@ -951,12 +951,15 @@ async fn handle_op(
             if !paste_ok && act::pastes(&action) {
                 return Err(act::paste_refused());
             }
-            let element_frame = {
+            let (element_frame, web) = {
                 let book = state.snapshots();
                 book.check(pid, window_id, &action, app_key.as_deref(), paste_ok)?;
-                action
-                    .element()
-                    .and_then(|element| book.frame(pid, window_id, element))
+                action.element().map_or((None, false), |element| {
+                    (
+                        book.frame(pid, window_id, element),
+                        book.in_web_content(pid, window_id, element),
+                    )
+                })
             };
             let mut window_frame =
                 act::check_points(&driver, pid, window_id, &action.points()).await?;
@@ -965,7 +968,10 @@ async fn handle_op(
             } else {
                 None
             };
-            let first = act::act(&driver, pid, window_id, &action, mode, &delivery, paste_ok).await;
+            let first = act::act(
+                &driver, pid, window_id, &action, mode, &delivery, paste_ok, web,
+            )
+            .await;
             let done = match first {
                 // The driver aims a point only by its snapshot's capture of
                 // the window, and holds none just now — no snapshot taken
@@ -980,7 +986,10 @@ async fn handle_op(
                     }
                     window_frame =
                         act::check_points(&driver, pid, window_id, &action.points()).await?;
-                    act::act(&driver, pid, window_id, &action, mode, &delivery, paste_ok).await?
+                    act::act(
+                        &driver, pid, window_id, &action, mode, &delivery, paste_ok, web,
+                    )
+                    .await?
                 }
                 done => done?,
             };

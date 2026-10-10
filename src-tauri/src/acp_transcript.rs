@@ -52,9 +52,10 @@
 //! argues why the reader cannot tell the difference).
 //!
 //! Everything else is written the moment it arrives: prompts, turn ends and
-//! headers never wait, and neither does anything recorded outside a live turn
-//! (a `session/load` replay is stored verbatim — it is already merged, and
-//! merging it would need turn boundaries it does not have).
+//! headers never wait, and neither does anything recorded outside a live turn.
+//! A `session/load` replay is stored verbatim — it is already merged, and
+//! merging it would need turn boundaries it does not have — and so is a turn
+//! the agent runs on its own between prompts, which starts at its first chunk.
 //!
 //! Writes are pure appends: no record is ever rewritten or truncated once it
 //! has landed. A crash therefore costs at most the last unflushed window of an
@@ -362,7 +363,8 @@ struct SessionWriter {
     /// Whether records arriving now belong to a live prompt turn — the only
     /// place merging streamed chunks is sound. Set by a written `Prompt`,
     /// cleared by a written `TurnEnd`, so a `session/load` replay (which has
-    /// neither) is always written verbatim.
+    /// neither) is always written verbatim, and so is whatever the agent does
+    /// between a turn end and the next prompt.
     compactable: bool,
     header_written: bool,
     /// The file can no longer be safely appended to: a partial write that could
@@ -645,9 +647,9 @@ fn mergeable_chunk_kind(payload: &serde_json::Value) -> Option<&'static str> {
 ///   a `TurnEnd` to overwrite it, which a turn flushed early by a mid-turn user
 ///   chunk never gets.
 /// * **Start of the turn.** That comes from the prompt's timestamp, and prompts
-///   are never merged. The one case where a turn starts from a chunk instead is
-///   a transcript with no prompts at all — a replay — which `compactable`
-///   excludes.
+///   are never merged. A turn starts from a chunk instead in a transcript with
+///   no prompts at all — a replay — and in a turn the agent runs on its own
+///   after a turn end; `compactable` excludes both.
 /// * **Everything else** (tool calls, plans, user chunks, images, resource
 ///   links) is written through unchanged.
 fn compact_batch(pending: &[Queued], compactable: bool) -> (String, bool) {
@@ -1976,6 +1978,34 @@ mod tests {
             "every replayed record survives"
         );
         assert_same_projection(records, &[], "replay");
+    }
+
+    /// A turn the agent runs on its own between prompts (issue #903) has no
+    /// prompt to fix its start, so it starts at its FIRST chunk — and must land
+    /// unmerged like a replay: a merged record carries the run's last
+    /// timestamp, which would start the turn where it ended.
+    #[test]
+    fn a_turn_the_agent_runs_between_prompts_keeps_its_start_time() {
+        let records = || {
+            vec![
+                prompt_record(1_000, "start the job"),
+                chunk(1_100, "agent_message_chunk", "Started."),
+                turn_end(1_200),
+                chunk(5_000, "agent_message_chunk", "The job "),
+                chunk(5_400, "agent_message_chunk", "finished."),
+                prompt_record(9_000, "thanks"),
+                chunk(9_100, "agent_message_chunk", "Welcome."),
+                turn_end(9_200),
+            ]
+        };
+        // All in one flush window: the batch a merge could reach.
+        assert_same_projection(records(), &[], "a turn of the agent's own");
+
+        let (verbatim, _) = projected_both_ways(records(), &[]);
+        let own = &verbatim[2];
+        assert!(matches!(own.role, TurnRole::Assistant));
+        assert_eq!(own.timestamp.timestamp_millis(), 5_000);
+        assert_eq!(own.duration_ms, Some(400));
     }
 
     /// Chunks carrying different `_meta` are opaque extension data; merging

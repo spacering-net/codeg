@@ -284,7 +284,7 @@ export function EditModelProviderDialog({
                       haiku: e.target.value,
                     }))
                   }
-                  placeholder="claude-haiku-4-5"
+                  placeholder="claude-haiku-5-5"
                 />
               </div>
               <div className="space-y-1.5">

@@ -75,3 +75,79 @@ describe("useAgentOptions snapshot ownership", () => {
     expect(result.current.snapshotAgentType).toBe("codex")
   })
 })
+
+describe("useAgentOptions model-scoped probes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("applies the selected model and re-probes when it changes", async () => {
+    const folder = `/tmp/use-agent-options-model-${Math.random()}`
+    const { rerender } = renderHook(
+      ({ model }: { model: string }) =>
+        useAgentOptions("deepseek" as AgentType, folder, true, { model }),
+      { initialProps: { model: "opencode-go/deepseek-v4.1-flash" } }
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith("deepseek", folder, {
+      model: "opencode-go/deepseek-v4.1-flash",
+    })
+
+    // A different model derives different option lists — the (agent, folder)
+    // cache must not serve the previous model's snapshot.
+    rerender({ model: "vercel/callstack/apex" })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(describeAgentOptions).toHaveBeenCalledTimes(2)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith("deepseek", folder, {
+      model: "vercel/callstack/apex",
+    })
+  })
+
+  /** The task editor's config bar and its brief composer each run this hook
+   *  for the same agent and folder. Only the model keys the probe, so both
+   *  read one probe as long as they pass the same model — a host that left it
+   *  out would spawn the agent a second time. */
+  it("shares one probe between hosts passing the same model", async () => {
+    const folder = `/tmp/use-agent-options-shared-${Math.random()}`
+    const selections = { model: "opencode/step-5-preview-free", effort: "high" }
+    // Held open, so the second host arrives while the first probe is still
+    // running rather than after it filled the cache.
+    let answer: (snapshot: AgentOptionsSnapshot) => void = () => {}
+    describeAgentOptions.mockImplementation(
+      () =>
+        new Promise<AgentOptionsSnapshot>((resolve) => {
+          answer = resolve
+        })
+    )
+    const { result } = renderHook(() => [
+      useAgentOptions("deepseek" as AgentType, folder, true, selections),
+      useAgentOptions("deepseek" as AgentType, folder, true, selections),
+    ])
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      answer(snapshotFor("deepseek"))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current[0].snapshot).not.toBeNull()
+    expect(result.current[1].snapshot).toBe(result.current[0].snapshot)
+  })
+})

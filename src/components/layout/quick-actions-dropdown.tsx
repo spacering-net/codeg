@@ -9,6 +9,7 @@ import {
   LayoutTemplate,
   ListTodo,
   Map as MapIcon,
+  Monitor,
   MonitorCloud,
   PawPrint,
   Rocket,
@@ -39,6 +40,8 @@ import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { openPetWindow } from "@/lib/pet/api"
+import { isRemoteDesktopWindow } from "@/lib/platform"
+import { openLocalWorkspace } from "@/lib/remote-workspace"
 import { CloneDialog } from "./clone-dialog"
 import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
@@ -49,13 +52,14 @@ import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
  *
  * Every entry here already exists somewhere else (the sidebar's nav rows, the
  * folder-list context menu, the top-left chrome, the file tab strip's "+",
- * Settings › Appearance), but those homes are scattered and several of them
- * disappear with the sidebar collapsed — or, for the file strip, whenever no
- * file tab is open. The status bar never unmounts, so this menu is the one
- * always-on path to all of them. Items are grouped by what they act on rather
- * than by where they used to live: workspace (open/clone/boot/remote),
- * navigation (every full-page workbench route), and then the two window-level
- * extras — a browser tab and the desktop pet. Search and the
+ * Settings › Appearance, the tray menu), but those homes are scattered and
+ * several of them disappear with the sidebar collapsed — or, for the file
+ * strip, whenever no file tab is open. The status bar never unmounts, so this
+ * menu is the one always-on path to all of them. Items are grouped by what
+ * they act on rather than by where they used to live: workspace
+ * (open/clone/boot/local/remote), navigation (every full-page workbench
+ * route), and then the two window-level extras — a browser tab and the
+ * desktop pet. Search and the
  * per-folder session actions (manage / import) are the deliberate omissions —
  * search has a permanent button in the window's top-left chrome, and the
  * session actions are folder-scoped, so they live where a folder is: "Manage
@@ -95,12 +99,23 @@ export function QuickActionsDropdown() {
     refresh: refreshRemote,
     open: handleOpenRemote,
   } = useRemoteWorkspaceConnections()
+  // Only a remote workspace window has a local workspace to go back to; in the
+  // local one the row would just focus the window it was picked from.
+  const remoteWindow = isRemoteDesktopWindow()
 
   const handleProjectBoot = useCallback(() => {
     openProjectBootWindow().catch((err) => {
       console.error("[QuickActionsDropdown] failed to open project boot:", err)
     })
   }, [])
+
+  const handleOpenLocal = useCallback(() => {
+    openLocalWorkspace().catch((err) => {
+      toast.error(tRemote("openLocalFailed"), {
+        description: toErrorMessage(err),
+      })
+    })
+  }, [tRemote])
 
   // The file column — where browser tabs live — only exists on the
   // conversations route; every other workbench route is rendered in its place.
@@ -166,6 +181,12 @@ export function QuickActionsDropdown() {
             <Rocket />
             {tFolderDropdown("projectBoot")}
           </DropdownMenuItem>
+          {remoteWindow && (
+            <DropdownMenuItem onSelect={handleOpenLocal}>
+              <Monitor />
+              {tRemote("openLocalWorkspace")}
+            </DropdownMenuItem>
+          )}
           {desktop && (
             <DropdownMenuSub
               onOpenChange={(open) => open && void refreshRemote()}

@@ -70,6 +70,7 @@ export class WebTransport implements Transport {
   // may have desynced during the disconnect window.
   private hasReadiedOnce = false
   private reconnectCallbacks = new Set<() => void>()
+  private readyCallbacks = new Set<() => void>()
   // Latched in `destroy()`. The async `onclose` fired by `ws.close()` inside
   // `destroy()`/`teardownWs()` would otherwise flip the state machine to
   // "reconnecting" and schedule a fresh backoff on a transport the caller
@@ -241,6 +242,13 @@ export class WebTransport implements Transport {
     }
   }
 
+  onReady(callback: () => void): UnsubscribeFn {
+    this.readyCallbacks.add(callback)
+    return () => {
+      this.readyCallbacks.delete(callback)
+    }
+  }
+
   // ── Connection-health surface (consumed by the reconnect dialog) ─────────
 
   /** Current transport health. Drives the global reconnect dialog. */
@@ -407,6 +415,13 @@ export class WebTransport implements Transport {
           // keeps growing its backoff instead of restarting from 1s.
           this.wsFailCount = 0
           this.setConnState("connected")
+          for (const cb of this.readyCallbacks) {
+            try {
+              cb()
+            } catch (err) {
+              console.error("[WebTransport] ready callback threw:", err)
+            }
+          }
           if (this.hasReadiedOnce) {
             // Reconnect path: server-side receiver_count was 0 during the
             // disconnect window, so any event fired in that gap was dropped.
@@ -573,6 +588,7 @@ export class WebTransport implements Transport {
     this.teardownWs()
     this.handlers.clear()
     this.reconnectCallbacks.clear()
+    this.readyCallbacks.clear()
     this.wsReadyCallbacks.clear()
     this.connListeners.clear()
     this.eventStreamInstance?.destroy()

@@ -1825,6 +1825,61 @@ describe("MessageInput mid-turn send (live-feedback channel)", () => {
     await waitFor(() => expect(screen.queryByTitle(MI.queueMessage)).toBeNull())
   })
 
+  it.each([
+    ["native", false],
+    ["pull", false],
+    ["native", true],
+    ["pull", true],
+  ] as const)(
+    "preserves edits during a %s steer (turn ended: %s)",
+    async (steerChannel, turnEnded) => {
+      const user = userEvent.setup()
+      const { isNoActiveTurnRejection } = await import("@/lib/turn-busy")
+      vi.mocked(isNoActiveTurnRejection).mockReturnValue(turnEnded)
+      let finish: () => void = () => {}
+      const onSteer = vi.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finish = () =>
+              turnEnded ? reject(new Error("no active turn")) : resolve()
+          })
+      )
+      const onEnqueue = vi.fn()
+      const editor = await mountPrompting({
+        onSteer,
+        onEnqueue,
+        steerChannel,
+      })
+      typeDraft(editor, "original instruction")
+      const label =
+        steerChannel === "native" ? MI.steerIntoTurn : MI.steerAsNote
+      await user.click(screen.getByLabelText(label))
+      await user.click(await screen.findByRole("menuitem", { name: label }))
+      // The steer really started, with the draft as it was at the click, and
+      // is still in flight while the user edits. Without this the edit below
+      // would survive trivially if the click never reached `onSteer`.
+      await waitFor(() =>
+        expect(onSteer).toHaveBeenCalledWith("original instruction", undefined)
+      )
+      expect(screen.getByTitle(MI.queueMessage)).toBeDisabled()
+      typeDraft(editor, " additional instruction")
+      await act(async () => finish())
+      // …and it settled: the handler's `finally` re-enables the split.
+      await waitFor(() =>
+        expect(screen.getByTitle(MI.queueMessage)).toBeEnabled()
+      )
+      expect(serializeDocToText(editor.state.doc)).toContain(
+        "additional instruction"
+      )
+      if (turnEnded) {
+        expect(onEnqueue).toHaveBeenCalledWith(
+          expect.objectContaining({ displayText: "original instruction" }),
+          null
+        )
+      }
+    }
+  )
+
   it("falls back to the queue when the turn ends in the race window", async () => {
     const user = userEvent.setup()
     const { isNoActiveTurnRejection } = await import("@/lib/turn-busy")

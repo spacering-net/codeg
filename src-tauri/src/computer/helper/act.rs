@@ -95,6 +95,10 @@ pub struct ElementFacts {
     pub secret: bool,
     /// A menu command or a button named for pasting (`ops::element_refs`).
     pub paste: bool,
+    /// Inside web content — a page, or an application built on Chromium or
+    /// Electron — as the driver judged it: what such an element's value reads
+    /// back is not what the page holds (see [`unread_keys`]).
+    pub web: bool,
     /// Where the element was on the screen when the snapshot was taken, in
     /// the platform's desktop units — for the marker, not for aiming (the
     /// driver aims by the element itself).
@@ -161,12 +165,21 @@ impl SnapshotBook {
     /// Where `element` was on the screen when its snapshot was taken, if that
     /// is still the window's latest snapshot and it said.
     pub fn frame(&self, pid: u32, window_id: u64, element: &ElementRef) -> Option<Rect> {
+        self.facts(pid, window_id, element)?.frame
+    }
+
+    /// Whether `element` is in web content, as its snapshot said — while that
+    /// is still the window's latest.
+    pub fn in_web_content(&self, pid: u32, window_id: u64, element: &ElementRef) -> bool {
+        self.facts(pid, window_id, element).is_some_and(|e| e.web)
+    }
+
+    fn facts(&self, pid: u32, window_id: u64, element: &ElementRef) -> Option<&ElementFacts> {
         self.windows
             .get(&(pid, window_id))
             .filter(|f| f.snapshot_id == element.snapshot_id)?
             .elements
-            .get(&element.index)?
-            .frame
+            .get(&element.index)
     }
 
     /// Check `action`'s element against the latest snapshot of the window:
@@ -514,6 +527,9 @@ pub fn permissions_for(action: &WindowAction) -> &'static [OsPermission] {
 /// still hold at the moment of delivery (nothing stopped, the same process,
 /// an unlocked session) — and a call it refuses is not made; so is a key or
 /// typing at the front while the person holds a modifier ([`keys_free`]).
+/// `web`: the action's element is in web content, where typing cannot be
+/// read back ([`type_text`]).
+#[allow(clippy::too_many_arguments)]
 pub async fn act(
     driver: &DriverProc,
     pid: u32,
@@ -522,6 +538,7 @@ pub async fn act(
     mode: ActDelivery,
     deliverable: &Delivery,
     paste_ok: bool,
+    web: bool,
 ) -> Result<RawAct, HelperError> {
     // Only macOS checks a menu command's own shortcut for a paste.
     #[cfg(not(target_os = "macos"))]
@@ -624,7 +641,7 @@ pub async fn act(
             args["text"] = json!(text);
             deliverable.check()?;
             keys_free(mode, held_modifiers)?;
-            let typed = one(driver, "type_text", args, mode, TYPE_TIMEOUT).await?;
+            let typed = type_text(driver, args, mode, web).await?;
             if !*submit {
                 return Ok(typed);
             }
@@ -994,6 +1011,66 @@ async fn one(
     action_result(tool, mode, &result)
 }
 
+/// Typing, and how far it can be vouched for. The driver checks typing by
+/// reading the field's value back after the keys; in web content (`web`) —
+/// a page, or an application built on Chromium or Electron — that value is
+/// not what the page holds: a terminal built on xterm.js empties its input as
+/// it takes each key, and an editor's hidden input never shows the text at
+/// all. So a read-back there that found none of the text after every key had
+/// gone out ([`unread_keys`]) proves nothing either way: the typing is
+/// unverifiable, as the driver calls all typing into web content — not a
+/// failure, which would hold back the return after it and have the agent
+/// type the whole text a second time.
+async fn type_text(
+    driver: &DriverProc,
+    args: Value,
+    mode: ActDelivery,
+    web: bool,
+) -> Result<RawAct, HelperError> {
+    let result = driver.call("type_text", args, TYPE_TIMEOUT).await?;
+    typed(&result, mode, web)
+}
+
+/// What the driver's answer to typing says came of it (see [`type_text`]).
+fn typed(result: &ToolCallResult, mode: ActDelivery, web: bool) -> Result<RawAct, HelperError> {
+    if !result.is_error {
+        return action_result("type_text", mode, result);
+    }
+    match unread_keys(result) {
+        Some(route) if web => Ok(RawAct {
+            effect: ActEffect::Unverifiable,
+            route: Some(route),
+            submitted: None,
+            submit_note: None,
+            element_frame: None,
+            window_frame: None,
+            clipboard: None,
+        }),
+        _ => Err(act_error("type_text", mode, result)),
+    }
+}
+
+/// The route of keys the driver sent in full and then found none of in the
+/// field's value: its "type_text incomplete" with nothing delivered, from a
+/// path that sends every key before it reads back — as input at the front, or
+/// posted to the application. `None` for any other answer, and above all for
+/// part of the text found: a field whose value showed that much is one that
+/// can be read, and the rest did not reach it in time.
+fn unread_keys(result: &ToolCallResult) -> Option<ActRoute> {
+    if result.code() != Some("type_text_incomplete") {
+        return None;
+    }
+    let said = result.structured.as_ref()?;
+    if said.get("delivered_chars").and_then(Value::as_u64) != Some(0) {
+        return None;
+    }
+    match said.get("path").and_then(Value::as_str)? {
+        "key_events_fg" => Some(ActRoute::GlobalInput),
+        "key_events" => Some(ActRoute::SyntheticEvents),
+        _ => None,
+    }
+}
+
 /// Read the driver's closed action result: how far it can vouch for the
 /// action, and the route it took. One it refused without calling it an
 /// error says why by code (`error.code`), read as any refusal is.
@@ -1041,13 +1118,26 @@ fn action_result(
 /// (`Chrome_WidgetWin_1`), as the driver names a refused target's.
 const CHROMIUM_WINDOW_CLASS: &str = "Chrome_WidgetWin_";
 
+/// Typing by ref refused in the background by an application built on
+/// Chromium or Electron (macOS): the driver cannot hand such a field the
+/// page's own focus from its accessibility element, and refuses before
+/// typing anywhere else (`escalation.recommended: "px"`). Its keys are not
+/// refused with it — they go in the background to what has focus — and words
+/// that said otherwise had agents give up on pressing return.
+const WEB_TYPING_REFUSED: &str = "This application is built on Chromium or Electron: typing into \
+     its fields does not go in the background, so nothing was typed, and trying again in the \
+     background will not change that. Keys are another matter: computer_press_key presses \
+     return, tab and the others here in the background, on an element by ref or on whatever has \
+     focus. computer_set_value may fill a plain field as it is.";
+
 /// What the agent is told when the driver would not send the input in the
 /// background. A key or text is refused for the application as a whole —
 /// aimed at an element by ref as much as at the window, and every time — so
 /// the words say what still reaches it in the background, rather than
 /// suggest a ref. On Windows the commonest such application is one built on
 /// Chromium, which drops every key that does not come from the front; the
-/// driver names it by its window class. Two refusals are of another kind: on
+/// driver names it by its window class. On macOS such an application refuses
+/// typing alone ([`WEB_TYPING_REFUSED`]). Two refusals are of another kind: on
 /// Windows an application's accessibility interface that did not finish a
 /// click it may already have acted on (`effect: "unverifiable"`), and on
 /// Linux background input that goes through `/dev/uinput`, which the
@@ -1076,6 +1166,14 @@ fn background_refusal(tool: &str, result: &ToolCallResult) -> String {
         return "This application does not take that kind of input in the background. Try an \
                 element by ref, or computer_set_value."
             .to_string();
+    }
+    let recommended = result
+        .structured
+        .as_ref()
+        .and_then(|s| s.pointer("/escalation/recommended"))
+        .and_then(Value::as_str);
+    if tool == "type_text" && recommended == Some("px") {
+        return WEB_TYPING_REFUSED.to_string();
     }
     let mut words = "This application takes no key presses or typing while it is in the \
                      background, so nothing was sent — and trying again in the background, by \
@@ -1372,6 +1470,7 @@ mod tests {
                             role: role.to_string(),
                             secret: *secret,
                             paste: false,
+                            web: false,
                             frame: None,
                         },
                     )
@@ -1425,6 +1524,29 @@ mod tests {
             snapshot_id: id.into(),
             index,
         }
+    }
+
+    /// Whether an element is in web content is read off the snapshot the ref
+    /// names, as its frame is — and from no other.
+    #[test]
+    fn web_content_is_told_by_the_refs_own_snapshot() {
+        let mut book = SnapshotBook::default();
+        let mut snapshot = facts(
+            "s00000001",
+            &[(3, "AXTextField", false), (4, "AXButton", false)],
+        );
+        snapshot.elements.get_mut(&3).unwrap().web = true;
+        book.record(1, 10, Some(snapshot));
+        assert!(book.in_web_content(1, 10, &element("s00000001", 3)));
+        assert!(!book.in_web_content(1, 10, &element("s00000001", 4)));
+        assert!(!book.in_web_content(1, 10, &element("s00000001", 5)));
+        assert!(!book.in_web_content(1, 11, &element("s00000001", 3)));
+        book.record(
+            1,
+            10,
+            Some(facts("s00000002", &[(3, "AXTextField", false)])),
+        );
+        assert!(!book.in_web_content(1, 10, &element("s00000001", 3)));
     }
 
     /// An element's frame is told only from the snapshot the ref names, and
@@ -1624,6 +1746,62 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(occluded.code, HelperErrorCode::Occluded);
+    }
+
+    /// Typing into web content that the driver sent in full and then read
+    /// none of back — a terminal built on xterm.js empties its input as it
+    /// takes each key — is unverifiable, not part-typed: its return still
+    /// goes, and the text is not typed again. Outside web content the same
+    /// answer is a failure, and so is part of the text found anywhere.
+    #[test]
+    fn typing_web_content_cannot_read_back_is_unverifiable() {
+        let incomplete = |path: &str, delivered: u64| ToolCallResult {
+            is_error: true,
+            content: vec![json!({"type": "text", "text": "type_text incomplete"})],
+            structured: Some(json!({
+                "code": "type_text_incomplete", "path": path, "effect": "partial",
+                "requested_chars": 23, "delivered_chars": delivered, "retryable": true,
+                "retry_from_character": delivered,
+            })),
+        };
+        let front = ActDelivery::Foreground;
+        let back = ActDelivery::Background;
+        let sent = typed(&incomplete("key_events_fg", 0), front, true).unwrap();
+        assert_eq!(sent.effect, ActEffect::Unverifiable);
+        assert_eq!(sent.route, Some(ActRoute::GlobalInput));
+        assert_eq!(sent.submitted, None);
+        let posted = typed(&incomplete("key_events", 0), back, true).unwrap();
+        assert_eq!(posted.route, Some(ActRoute::SyntheticEvents));
+        // A native field reads back what it holds: nothing there is nothing.
+        let native = typed(&incomplete("key_events_fg", 0), front, false).unwrap_err();
+        assert_eq!(native.code, HelperErrorCode::ActionFailed);
+        assert!(native.message.contains("Only part"), "{}", native.message);
+        // Part of the text found is a field that can be read, short of the
+        // rest; an AX write found in part is no keys sent at all.
+        for (path, delivered) in [("key_events_fg", 3), ("ax", 0), ("hid", 0)] {
+            let e = typed(&incomplete(path, delivered), front, true).unwrap_err();
+            assert_eq!(e.code, HelperErrorCode::ActionFailed, "{path} {delivered}");
+        }
+        // Any other refusal is read as it always is.
+        let refused = ToolCallResult {
+            is_error: true,
+            content: Vec::new(),
+            structured: Some(json!({"code": "background_unavailable"})),
+        };
+        assert_eq!(
+            typed(&refused, back, true).unwrap_err().code,
+            HelperErrorCode::BackgroundUnavailable
+        );
+        // And typing that went through is the driver's to vouch for.
+        let done = ToolCallResult {
+            is_error: false,
+            content: Vec::new(),
+            structured: Some(json!({"effect": "unverifiable", "path": "key_events_fg"})),
+        };
+        assert_eq!(
+            typed(&done, front, true).unwrap().effect,
+            ActEffect::Unverifiable
+        );
     }
 
     /// An element goes to the driver by its token alone — the snapshot's id
@@ -1828,6 +2006,35 @@ mod tests {
         );
         assert_eq!(bad.code, HelperErrorCode::ActionFailed);
         assert!(bad.message.contains("fault in codeg"), "{}", bad.message);
+    }
+
+    /// On macOS an application built on Chromium or Electron refuses typing
+    /// by ref in the background — and only typing: its keys still go there,
+    /// which the words say, rather than send the agent to a submit button or
+    /// to the user for return. Whether the front may be tried is codeg's to
+    /// add.
+    #[test]
+    fn web_typing_refused_in_the_background_leaves_keys_open() {
+        let refusal = ToolCallResult {
+            is_error: true,
+            content: vec![json!({"type": "text", "text": "Background input refused"})],
+            structured: Some(json!({
+                "code": "background_unavailable", "effect": "refused", "pid": 1, "window_id": 2,
+                "reason": "The Electron AX target cannot establish a safe exact background text \
+                           route on macOS",
+                "escalation": {"recommended": "px", "reason": "px"},
+            })),
+        };
+        let e = act_error("type_text", ActDelivery::Background, &refusal);
+        assert_eq!(e.code, HelperErrorCode::BackgroundUnavailable);
+        assert!(e.message.contains("computer_press_key"), "{}", e.message);
+        assert!(e.message.contains("return"), "{}", e.message);
+        assert!(!e.message.contains("ask the user"), "{}", e.message);
+        assert!(!e.message.contains("front"), "{}", e.message);
+        assert!(!e.message.contains("Electron AX target"), "{}", e.message);
+        // Only typing is told so: a key refused in the background is one.
+        let key = act_error("press_key", ActDelivery::Background, &refusal);
+        assert!(key.message.contains("no key presses"), "{}", key.message);
     }
 
     /// The front fails in words of its own — a window that would not come

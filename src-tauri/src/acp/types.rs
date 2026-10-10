@@ -1436,6 +1436,11 @@ pub struct GrokModelCatalog {
 /// to give the delegation settings UI an authoritative view of what an
 /// agent will accept (no reliance on chat-side caches).
 ///
+/// The caller's selections (the model) are applied first, as a real launch
+/// applies them, so an option the agent derives from one answers for it. Each
+/// option's current value is what it runs when the caller leaves it unset —
+/// for an applied option that is the agent's own pick, not the selection.
+///
 /// Both fields mirror `SessionState`: `modes` is `None` when the agent
 /// reports no mode catalog (e.g. some thin wrappers); `config_options` is
 /// empty when the agent advertises no configurable options.
