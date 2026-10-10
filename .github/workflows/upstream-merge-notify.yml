@@ -1,0 +1,112 @@
+# managed-by: dev-rules/templates/upstream-merge-notify
+name: Upstream Merge Needed
+
+# Detection-only. When origin/main is behind the configured upstream/main,
+# open or refresh one `[upstream-merge]` tracking issue for a human to handle.
+# Labels are attached best-effort and must not block issue creation.
+# Prefer UPSTREAM_MERGE_GH_TOKEN when set; otherwise fall back to github.token.
+# Unset GITHUB_TOKEN in the issue step so gh does not mix tokens.
+# This workflow never merges, never opens a PR, and never runs an agent.
+
+on:
+  schedule:
+    # GitHub cron is UTC.
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: upstream-merge-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Keep default checkout credentials so `git fetch origin main` works
+          # for private forks. This workflow never git-push.
+
+      - name: Fetch origin/main and upstream/main
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          if ! git remote get-url upstream >/dev/null 2>&1; then
+            git remote add upstream https://github.com/xintaofei/codeg.git
+          fi
+          git fetch upstream main --quiet
+
+      - name: Measure drift
+        run: |
+          set +e
+          bash scripts/upstream/check-drift.sh --json > /tmp/upstream-merge-drift.json
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::check-drift.sh failed (git/network)"
+            exit 2
+          fi
+          # rc 0 = in sync, rc 1 = behind — both are valid inputs.
+          cat /tmp/upstream-merge-drift.json
+
+      - name: Collect commit list and merge-tree conflicts
+        run: |
+          set -euo pipefail
+          git log --format='%h %s' origin/main..upstream/main > /tmp/upstream-merge-commits.txt
+          set +e
+          git merge-tree --write-tree --name-only --no-messages origin/main upstream/main \
+            > /tmp/upstream-merge-tree.txt
+          mt_rc=$?
+          set -e
+          if [ "$mt_rc" -gt 1 ]; then
+            echo "::error::git merge-tree failed"
+            cat /tmp/upstream-merge-tree.txt >&2 || true
+            exit 2
+          fi
+
+      - name: List leftover merge/upstream-* PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh pr list --state open --base main --json number,title,url,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("merge/upstream-"))]' \
+            > /tmp/upstream-merge-open-prs.json; then
+            echo '[]' > /tmp/upstream-merge-open-prs.json
+          fi
+
+      - name: Open, update, or close tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_MERGE_GH_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Missing GH_TOKEN for issue create/update."
+            exit 1
+          fi
+          unset GITHUB_TOKEN
+          python3 scripts/upstream/notify-merge-needed.py apply \
+            --drift /tmp/upstream-merge-drift.json \
+            --commits /tmp/upstream-merge-commits.txt \
+            --conflicts /tmp/upstream-merge-tree.txt \
+            --open-prs /tmp/upstream-merge-open-prs.json \
+            --run-url "$RUN_URL"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Upstream merge notify"
+            echo ""
+            echo "- run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "- drift: \`$(tr -d '\n' < /tmp/upstream-merge-drift.json 2>/dev/null || echo missing)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
