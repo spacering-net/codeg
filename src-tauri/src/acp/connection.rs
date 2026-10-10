@@ -393,13 +393,21 @@ fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
 /// this makes the launch agree with what the user was told rather than quietly
 /// contradict it.
 ///
-/// Legacy rows with no recorded method — and any unrecognized value — are left
-/// completely untouched, so an operator-provisioned container env that never
+/// Credential variables in legacy rows with no recorded method — and any
+/// unrecognized value — are left untouched, so an operator-provisioned env that never
 /// went through the panel keeps working.
 fn apply_antigravity_env_policy(
     merged: &mut Vec<(String, String)>,
     runtime_env: &BTreeMap<String, String>,
 ) {
+    // The Python ACP server passes this environment to Python MCP processes.
+    // HTTPX rejects `[::1]` before a request; Node-based agents still need that
+    // spelling, so normalize only Antigravity's launch environment.
+    for (key, value) in merged.iter_mut() {
+        if matches!(key.as_str(), "NO_PROXY" | "no_proxy") {
+            *value = proxy::unbracket_ipv6_no_proxy(value);
+        }
+    }
     let Some(method) = runtime_env
         .get(ANTIGRAVITY_AUTH_METHOD_ENV)
         .map(String::as_str)
@@ -20705,6 +20713,46 @@ mod tests {
             ANTIGRAVITY_AUTH_METHOD_ENV.to_string(),
             method.to_string(),
         )])
+    }
+
+    #[test]
+    fn antigravity_env_policy_normalizes_bracketed_ipv6_proxy_bypass_entries() {
+        for runtime in [BTreeMap::new(), antigravity_runtime("oauth-personal")] {
+            let mut env = vec![
+                (
+                    "NO_PROXY".to_string(),
+                    "localhost,127.0.0.1,::1,[::1],.corp.example".to_string(),
+                ),
+                (
+                    "no_proxy".to_string(),
+                    "[2001:db8::1],2001:db8::1,http://[::1]:8000".to_string(),
+                ),
+                ("HTTPS_PROXY".to_string(), "http://proxy.example:3128".to_string()),
+            ];
+            apply_antigravity_env_policy(&mut env, &runtime);
+            assert_eq!(
+                merged_value(&env, "NO_PROXY"),
+                Some("localhost,127.0.0.1,::1,.corp.example")
+            );
+            assert_eq!(
+                merged_value(&env, "no_proxy"),
+                Some("2001:db8::1,http://[::1]:8000")
+            );
+            assert_eq!(
+                merged_value(&env, "HTTPS_PROXY"),
+                Some("http://proxy.example:3128")
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_env_policy_preserves_empty_and_wildcard_proxy_bypass_values() {
+        for value in ["", "*", ".corp.example"] {
+            let mut env = vec![("no_proxy".to_string(), value.to_string())];
+            apply_antigravity_env_policy(&mut env, &BTreeMap::new());
+            assert_eq!(merged_value(&env, "no_proxy"), Some(value));
+            assert_eq!(merged_value(&env, "NO_PROXY"), None);
+        }
     }
 
     #[test]

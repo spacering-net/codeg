@@ -158,6 +158,26 @@ pub(crate) fn canonical_no_proxy(raw: &str) -> Option<String> {
     (!entries.is_empty()).then(|| entries.join(","))
 }
 
+/// Python HTTPX expects standalone IPv6 bypass entries without URL brackets.
+/// Keep URL entries intact and deduplicate aliases after removing brackets.
+pub(crate) fn unbracket_ipv6_no_proxy(raw: &str) -> String {
+    let mut entries: Vec<&str> = Vec::new();
+    for entry in no_proxy_entries(raw) {
+        let normalized = entry
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .filter(|host| host.parse::<std::net::Ipv6Addr>().is_ok())
+            .unwrap_or(entry);
+        if !entries
+            .iter()
+            .any(|seen| seen.eq_ignore_ascii_case(normalized))
+        {
+            entries.push(normalized);
+        }
+    }
+    entries.join(",")
+}
+
 /// [`canonical_no_proxy`] for a list that is about to be exported. A control
 /// character cannot be part of a host, and a NUL would make the env write
 /// panic, so either rejects the list.
@@ -399,6 +419,16 @@ mod tests {
             merged.get("NO_PROXY").map(String::as_str),
             merged.get("no_proxy").map(String::as_str),
         )
+    }
+
+    #[test]
+    fn python_bypass_entries_normalize_ipv6_without_changing_urls_or_domains() {
+        assert_eq!(
+            super::unbracket_ipv6_no_proxy(
+                "::1,[::1],[2001:db8::1],http://[::1]:8000,.corp,[example.com]"
+            ),
+            "::1,2001:db8::1,http://[::1]:8000,.corp,[example.com]"
+        );
     }
 
     /// Whatever the proxy's source, an agent handed one also gets the loopback
