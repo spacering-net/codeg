@@ -19,6 +19,15 @@ export const STORAGE_KEY_ZOOM_LEVEL = "codeg-zoom-level"
 // 缺省即回退为开启（保持历史行为）；仅在欢迎态客户端渲染，无需预水合。
 export const STORAGE_KEY_WELCOME_QUICK_ACTIONS = "codeg-welcome-quick-actions"
 
+// Whether an opened conversation keeps its own tab instead of taking the
+// group's single preview slot. Missing key falls back to preview tabs (the
+// historical behavior). Read by the tab store at open time as well as by the
+// Provider, so the settings window and the workspace window share one value
+// through localStorage. Nothing renders from it on the first frame, so it
+// needs no pre-hydration.
+export const STORAGE_KEY_KEEP_OPENED_CONVERSATIONS =
+  "codeg-keep-opened-conversations"
+
 // 字体偏好（界面 / 编辑器 / 终端）。
 // 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地
 // 预水合写入 --font-sans；编辑器/终端字体只走各自的 Monaco/xterm 选项，水合后才挂载，

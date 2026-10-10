@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "ターミナルの合字は内蔵のコーディングフォントにのみ適用されます。",
       "preview": "プレビュー"
     },
+    "conversationTabs": {
+      "sectionTitle": "会話タブ",
+      "sectionDescription": "クリックで開いたタブは、次に開いた会話に置き換えられることなく、閉じるまで残ります。",
+      "keepOpened": "開いた会話を残す"
+    },
     "welcomePanel": {
       "sectionTitle": "モード選択エリア",
       "sectionDescription": "新しい会話ページで入力欄の上に表示される「コード開発 / 日常業務」のショートカットカードです。",

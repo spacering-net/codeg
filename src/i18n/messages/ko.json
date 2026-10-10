@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "터미널 합자는 내장 코딩 글꼴에만 적용됩니다.",
       "preview": "미리 보기"
     },
+    "conversationTabs": {
+      "sectionTitle": "대화 탭",
+      "sectionDescription": "클릭으로 연 탭은 다음에 여는 대화로 바뀌지 않고 닫을 때까지 그대로 유지됩니다.",
+      "keepOpened": "연 대화 유지"
+    },
     "welcomePanel": {
       "sectionTitle": "모드 선택 영역",
       "sectionDescription": "새 대화 페이지에서 입력창 위에 표시되는 '코드 개발 / 일상 업무' 바로가기 카드입니다.",

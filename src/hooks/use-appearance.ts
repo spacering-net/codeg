@@ -31,6 +31,13 @@ export function useWelcomeQuickActions() {
   return { showWelcomeQuickActions, setShowWelcomeQuickActions }
 }
 
+/** 语义化包装：打开的会话是否各自保留一个标签页（关闭预览标签页的就地替换） */
+export function useKeepOpenedConversations() {
+  const { keepOpenedConversations, setKeepOpenedConversations } =
+    useAppearance()
+  return { keepOpenedConversations, setKeepOpenedConversations }
+}
+
 /** 界面字体（普通组件）。stack 已解析，可直接用于 style 或 CSS 变量。 */
 export function useUiFont() {
   const { uiFont, setUiFont } = useAppearance()

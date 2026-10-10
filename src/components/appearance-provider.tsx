@@ -32,6 +32,7 @@ import {
   STORAGE_KEY_THEME_COLOR,
   STORAGE_KEY_ZOOM_LEVEL,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
+  STORAGE_KEY_KEEP_OPENED_CONVERSATIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
   STORAGE_KEY_UI_FONT_STACK,
@@ -117,6 +118,9 @@ type AppearanceContextValue = {
   /** 新会话欢迎页是否显示「模式选择区域」（QuickActions 快捷卡片），默认开启 */
   showWelcomeQuickActions: boolean
   setShowWelcomeQuickActions: (on: boolean) => void
+  /** 打开的会话是否各占一个标签页（关闭预览标签页的「就地替换」），默认关闭 */
+  keepOpenedConversations: boolean
+  setKeepOpenedConversations: (on: boolean) => void
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
@@ -370,6 +374,13 @@ export function AppearanceProvider({
   const [showWelcomeQuickActions, setShowWelcomeQuickActionsState] =
     useState<boolean>(() => readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true))
 
+  // 打开的会话是否保留各自的标签页：默认关闭，键缺失即回退为预览标签页的历史行为。
+  // 真正消费它的是 tab store（在 openTab 里直接读同一个键），这里只是设置面板的回显态。
+  const [keepOpenedConversations, setKeepOpenedConversationsState] =
+    useState<boolean>(() =>
+      readBool(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, false)
+    )
+
   // 字体偏好的初始值从 localStorage 读 id/custom（视觉已由 inline 脚本就位，
   // 这里只是回填选中态，不会造成闪烁）。
   const [uiFont, setUiFontState] = useState<FontSelection>(() =>
@@ -517,6 +528,11 @@ export function AppearanceProvider({
   const setShowWelcomeQuickActions = useCallback((on: boolean) => {
     setShowWelcomeQuickActionsState(on)
     persist(STORAGE_KEY_WELCOME_QUICK_ACTIONS, on ? "1" : "0")
+  }, [])
+
+  const setKeepOpenedConversations = useCallback((on: boolean) => {
+    setKeepOpenedConversationsState(on)
+    persist(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, on ? "1" : "0")
   }, [])
 
   const setUiFont = useCallback((id: string, custom = "") => {
@@ -955,6 +971,11 @@ export function AppearanceProvider({
           readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true)
         )
       }
+      if (e.key === STORAGE_KEY_KEEP_OPENED_CONVERSATIONS) {
+        setKeepOpenedConversationsState(
+          readBool(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, false)
+        )
+      }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
       }
@@ -1059,6 +1080,8 @@ export function AppearanceProvider({
         setZoomLevel,
         showWelcomeQuickActions,
         setShowWelcomeQuickActions,
+        keepOpenedConversations,
+        setKeepOpenedConversations,
         uiFont,
         setUiFont,
         editorFont,

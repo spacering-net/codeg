@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "終端機連字僅對內建程式字型生效。",
       "preview": "預覽"
     },
+    "conversationTabs": {
+      "sectionTitle": "會話標籤頁",
+      "sectionDescription": "單擊開啟的標籤頁會一直保留到手動關閉，而不會被下一個開啟的會話就地取代。",
+      "keepOpened": "保留已開啟的會話"
+    },
     "welcomePanel": {
       "sectionTitle": "模式選擇區域",
       "sectionDescription": "新會話頁面輸入框上方顯示的「程式開發 / 日常辦公」快捷卡片區域。",

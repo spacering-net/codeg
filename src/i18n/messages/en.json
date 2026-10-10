@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "Terminal ligatures apply only to bundled coding fonts.",
       "preview": "Preview"
     },
+    "conversationTabs": {
+      "sectionTitle": "Conversation tabs",
+      "sectionDescription": "A click opens a tab that stays until you close it, instead of being replaced by the next conversation you open.",
+      "keepOpened": "Keep opened conversations"
+    },
     "welcomePanel": {
       "sectionTitle": "Mode selection area",
       "sectionDescription": "The Code Development / Office Work shortcut cards shown above the composer on the new conversation page.",

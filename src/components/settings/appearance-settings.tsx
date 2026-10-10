@@ -1,6 +1,13 @@
 "use client"
 
-import { LayoutGrid, Monitor, Moon, Sun, Type } from "lucide-react"
+import {
+  LayoutGrid,
+  Monitor,
+  Moon,
+  PanelsTopLeft,
+  Sun,
+  Type,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -16,6 +23,7 @@ import {
   useThemeColor,
   useZoomLevel,
   useWelcomeQuickActions,
+  useKeepOpenedConversations,
 } from "@/hooks/use-appearance"
 import { cn } from "@/lib/utils"
 import {
@@ -40,6 +48,8 @@ export function AppearanceSettings() {
   const { zoomLevel, setZoomLevel } = useZoomLevel()
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
+  const { keepOpenedConversations, setKeepOpenedConversations } =
+    useKeepOpenedConversations()
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -213,6 +223,30 @@ export function AppearanceSettings() {
 
         {/* ===== Workspace background ===== */}
         <WorkspaceBackgroundSection />
+
+        {/* ===== Conversation tabs ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <PanelsTopLeft className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("conversationTabs.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("conversationTabs.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={keepOpenedConversations}
+              onCheckedChange={setKeepOpenedConversations}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("conversationTabs.keepOpened")}
+            </span>
+          </label>
+        </section>
 
         {/* ===== New conversation — mode selection area ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">

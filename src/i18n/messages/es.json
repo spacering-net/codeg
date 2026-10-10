@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "Las ligaduras del terminal solo se aplican a las fuentes de programación incluidas.",
       "preview": "Vista previa"
     },
+    "conversationTabs": {
+      "sectionTitle": "Pestañas de conversación",
+      "sectionDescription": "Un clic abre una pestaña que permanece hasta que la cierras, en lugar de ser reemplazada por la siguiente conversación que abras.",
+      "keepOpened": "Mantener las conversaciones abiertas"
+    },
     "welcomePanel": {
       "sectionTitle": "Área de selección de modo",
       "sectionDescription": "Las tarjetas de acceso rápido «Desarrollo de código / Ofimática» que se muestran sobre el editor en la página de nueva conversación.",

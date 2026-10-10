@@ -36,6 +36,7 @@ import {
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
 import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
+import { STORAGE_KEY_KEEP_OPENED_CONVERSATIONS } from "@/lib/appearance-script"
 import {
   batchCloseSlots,
   pushClosedTab,
@@ -327,6 +328,26 @@ const TILE_MODE_STORAGE_KEY = "workspace:tile-mode"
 /** Device-local split-group state (layout tree, assignments, selection, tile
  *  flags), keyed by canonical tab ids. See `persistGroupState`. */
 const TAB_GROUPS_STORAGE_KEY = "workspace:tab-groups:v1"
+
+/**
+ * "Keep opened conversations" (Appearance settings): when it is on, opening a
+ * conversation is never a preview — it takes a tab of its own and keeps it
+ * until the user closes it. Off by default, which is the preview-tab behavior
+ * this app has always had.
+ *
+ * Read per open rather than cached: appearance settings live in their own
+ * window, so localStorage is what the two windows share, and reading it at the
+ * decision point means a change takes effect on the very next click without
+ * any cross-window plumbing.
+ */
+function keepOpenedConversations(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return localStorage.getItem(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS) === "1"
+  } catch {
+    return false
+  }
+}
 
 /** Per-window/session identity stamped on every tab save and echoed back on
  *  `tabs://changed`, so this client ignores its own broadcast (echo
@@ -1244,6 +1265,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       ) || runtime.labels.untitledConversation
 
     const tabId = makeConversationTabId(folderId, agentType, conversationId)
+    // A conversation the user asked to keep is not a preview at all, so it
+    // opens exactly like a pinned open: its own slot, and no preview victim is
+    // looked for below. Being genuinely pinned is the point — the tab strip
+    // renders a preview in oblique type, and a tab that will never be replaced
+    // must not wear that mark (nor become replaceable again if the preference
+    // is later turned back off).
+    const pinned = pin || keepOpenedConversations()
     const newTab: TabItemInternal = {
       id: tabId,
       kind: "conversation",
@@ -1251,10 +1279,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       conversationId,
       agentType,
       title: resolvedTitle,
-      isPinned: pin,
+      isPinned: pinned,
     }
 
-    if (pin) {
+    if (pinned) {
       set({
         rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
         activeTabId: tabId,

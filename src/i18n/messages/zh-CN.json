@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "终端连字仅对内置编程字体生效。",
       "preview": "预览"
     },
+    "conversationTabs": {
+      "sectionTitle": "会话标签页",
+      "sectionDescription": "单击打开的标签页会一直保留到手动关闭，而不会被下一个打开的会话就地替换。",
+      "keepOpened": "保留已打开的会话"
+    },
     "welcomePanel": {
       "sectionTitle": "模式选择区域",
       "sectionDescription": "新会话页面输入框上方显示的「代码开发 / 日常办公」快捷卡片区域。",

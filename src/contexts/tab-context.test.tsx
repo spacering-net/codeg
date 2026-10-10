@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { useEffect } from "react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { TabProvider, useTabContext } from "@/contexts/tab-context"
 import { CONVERSATION_CHANGED_EVENT, TABS_CHANGED_EVENT } from "@/lib/types"
 import type {
@@ -25,6 +25,7 @@ import {
   type OpenedDraftTarget,
 } from "@/stores/tab-store"
 import { leafIds } from "@/lib/tab-group-layout"
+import { STORAGE_KEY_KEEP_OPENED_CONVERSATIONS } from "@/lib/appearance-script"
 import {
   buildNewConversationDraftStorageKey,
   loadMessageInputDraftV2,
@@ -2796,6 +2797,161 @@ describe("TabProvider tab groups", () => {
           .rawTabs.filter((t) => groupOfId(t.id) === home)
           .map((t) => t.id)
       ).toEqual([draft.id, "conv-1-codex-1", "conv-1-codex-2"])
+    })
+  })
+
+  // A preview tab is a slot the next open takes over, so a conversation opened
+  // only to read it is thrown away by whatever the user opens next. "Keep
+  // opened conversations" (Appearance settings) turns that slot off. It is off
+  // by default, so the preference is the only thing that changes any of this.
+  describe("keep opened conversations", () => {
+    const preferKeepingTabs = (on: boolean) => {
+      if (on) localStorage.setItem(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, "1")
+      else localStorage.removeItem(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS)
+    }
+
+    afterEach(() => preferKeepingTabs(false))
+
+    /** `[id, isPinned]` for each tab the group holds, in strip order. */
+    const stripState = (groupId: string) =>
+      store()
+        .rawTabs.filter((tab) => groupOfId(tab.id) === groupId)
+        .map((tab) => [tab.id, tab.isPinned])
+
+    it("gives every opened conversation a tab of its own", async () => {
+      preferKeepingTabs(true)
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+
+      // Pinned rather than merely spared: the strip sets a preview in oblique
+      // type, and a tab nothing will replace must not wear that mark.
+      expect(stripState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", true],
+        ["conv-1-codex-3", true],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-3")
+    })
+
+    it("still replaces the preview while the preference is off", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+
+      expect(stripState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-3", false],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-3")
+    })
+
+    it("focuses a conversation it already holds instead of opening it twice", async () => {
+      preferKeepingTabs(true)
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().switchTab("conv-1-codex-1")
+      })
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+
+      expect(stripState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", true],
+      ])
+      expect(store().activeTabId).toBe("conv-1-codex-2")
+    })
+
+    it("leaves the double-click pin doing its job while the preference is off", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      // A double click in the sidebar is the single-click open followed by the
+      // pinning one, so the preview it just parked is the tab it promotes.
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().openTab(1, 2, "codex", true, "Second")
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+
+      expect(stripState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", true],
+        ["conv-1-codex-3", false],
+      ])
+    })
+
+    it("keeps every pane of a tiled group", async () => {
+      preferKeepingTabs(true)
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().toggleGroupTile(home)
+      })
+      act(() => {
+        store().openTab(1, 2, "codex", false, "Second")
+      })
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+
+      expect(stripState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-2", true],
+        ["conv-1-codex-3", true],
+      ])
+    })
+
+    it("keeps the tabs of every group, not just the focused one", async () => {
+      preferKeepingTabs(true)
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+      const home = leaves()[0]
+
+      act(() => {
+        store().splitTab("conv-1-codex-2", "right", { move: true })
+      })
+      const g1 = newLeafBeside(home)
+      act(() => {
+        store().openTab(1, 3, "codex", false, "Third")
+      })
+      act(() => {
+        store().switchTab("conv-1-codex-1")
+      })
+      act(() => {
+        store().openTab(1, 4, "codex", false, "Fourth")
+      })
+
+      expect(stripState(home)).toEqual([
+        ["conv-1-codex-1", true],
+        ["conv-1-codex-4", true],
+      ])
+      expect(stripState(g1)).toEqual([
+        ["conv-1-codex-2", true],
+        ["conv-1-codex-3", true],
+      ])
     })
   })
 

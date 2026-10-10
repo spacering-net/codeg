@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "Terminal-Ligaturen gelten nur für mitgelieferte Programmierschriftarten.",
       "preview": "Vorschau"
     },
+    "conversationTabs": {
+      "sectionTitle": "Konversations-Tabs",
+      "sectionDescription": "Ein Klick öffnet einen Tab, der bleibt, bis du ihn schließt, statt von der nächsten geöffneten Konversation ersetzt zu werden.",
+      "keepOpened": "Geöffnete Konversationen behalten"
+    },
     "welcomePanel": {
       "sectionTitle": "Modusauswahlbereich",
       "sectionDescription": "Die Shortcut-Karten „Code-Entwicklung / Büroarbeit“ über dem Eingabefeld auf der Seite für eine neue Konversation.",

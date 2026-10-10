@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "Les ligatures du terminal ne s’appliquent qu’aux polices de programmation intégrées.",
       "preview": "Aperçu"
     },
+    "conversationTabs": {
+      "sectionTitle": "Onglets de conversation",
+      "sectionDescription": "Un clic ouvre un onglet qui reste jusqu’à ce que vous le fermiez, au lieu d’être remplacé par la conversation suivante que vous ouvrez.",
+      "keepOpened": "Conserver les conversations ouvertes"
+    },
     "welcomePanel": {
       "sectionTitle": "Zone de sélection du mode",
       "sectionDescription": "Les cartes de raccourci « Développement / Bureautique » affichées au-dessus du champ de saisie sur la page de nouvelle conversation.",

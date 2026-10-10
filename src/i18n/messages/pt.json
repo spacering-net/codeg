@@ -171,6 +171,11 @@
       "terminalLigaturesHint": "As ligaduras do terminal aplicam-se apenas às fontes de programação incluídas.",
       "preview": "Pré-visualização"
     },
+    "conversationTabs": {
+      "sectionTitle": "Abas de conversa",
+      "sectionDescription": "Um clique abre uma aba que permanece até ser fechada, em vez de ser substituída pela próxima conversa aberta.",
+      "keepOpened": "Manter as conversas abertas"
+    },
     "welcomePanel": {
       "sectionTitle": "Área de seleção de modo",
       "sectionDescription": "Os cartões de atalho «Desenvolvimento / Escritório» exibidos acima do campo de entrada na página de nova conversa.",
