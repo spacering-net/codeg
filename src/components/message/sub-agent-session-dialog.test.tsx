@@ -177,6 +177,12 @@ vi.mock("@/components/message/message-list-view", () => ({
           ? "null"
           : String(props.connStatus)
       }
+      data-agent-type={String(props.agentType)}
+      data-available-commands={
+        props.availableCommands === undefined
+          ? "undefined"
+          : JSON.stringify(props.availableCommands)
+      }
     />
   ),
 }))
@@ -414,6 +420,54 @@ describe("SubAgentSessionDialog", () => {
     // isActive=false marks this as a passive embed, not the live active panel.
     expect(list).toHaveAttribute("data-is-active", "false")
     expect(list).toHaveAttribute("data-conversation-id", "99")
+  })
+
+  it("names the viewed connection's agent to the transcript when the host does not know it", () => {
+    // Its commands, and what it last advertised in this folder, are that
+    // agent's: a Claude default would badge another agent's record.
+    mockChildConnection = makeConnState({ agentType: "codex" })
+    renderWithIntl(
+      <SubAgentSessionDialog
+        open
+        onOpenChange={() => {}}
+        childConversationId={99}
+        childConnectionId="c1"
+        agentType={null}
+      />
+    )
+    const list = screen.getByTestId("message-list-view")
+    expect(list).toHaveAttribute("data-agent-type", "codex")
+    expect(list).toHaveAttribute("data-available-commands", "null")
+  })
+
+  it("badges no command at all when no agent is known, rather than a default's", () => {
+    renderWithIntl(
+      <SubAgentSessionDialog
+        open
+        onOpenChange={() => {}}
+        childConversationId={99}
+        childConnectionId={null}
+        agentType={null}
+      />
+    )
+    const list = screen.getByTestId("message-list-view")
+    expect(list).toHaveAttribute("data-agent-type", "claude_code")
+    expect(list).toHaveAttribute("data-available-commands", "[]")
+  })
+
+  it("leaves a known agent's list unknown without a connection, so its remembered one stands in", () => {
+    renderWithIntl(
+      <SubAgentSessionDialog
+        open
+        onOpenChange={() => {}}
+        childConversationId={99}
+        childConnectionId={null}
+        agentType="codex"
+      />
+    )
+    const list = screen.getByTestId("message-list-view")
+    expect(list).toHaveAttribute("data-agent-type", "codex")
+    expect(list).toHaveAttribute("data-available-commands", "undefined")
   })
 
   it("bridges conn.liveMessage to setLiveMessage while open and clears the runtime session on close", () => {

@@ -1752,16 +1752,19 @@
 }
 
 /* Workspace panel show/hide slide. Toggling the left sidebar, right aux panel,
-   or bottom terminal recomputes the react-resizable-panels layout and snaps
-   each panel's `flex-grow` (0 ↔ N). FolderWorkspaceShell tags the affected
-   panel group with `.panel-slide-animating` for the duration of the toggle
-   only — never during handle drags or container/window resizes — so the
-   neighboring panes get pushed smoothly instead of jumping. The `>` child
-   combinator scopes the transition to the group's own panels, so a horizontal
-   (sidebar/aux) toggle never animates the nested vertical (terminal) group,
-   and vice versa. */
+   or bottom terminal snaps that panel's px `flex-basis` (0 ↔ N —
+   FolderWorkspaceShell pins those three panels in px over the
+   react-resizable-panels `flex-grow`, which the center / workspace pane still
+   carries). FolderWorkspaceShell tags the affected panel group with
+   `.panel-slide-animating` for the duration of the toggle only — never during
+   handle drags or container/window resizes — so the neighboring panes get
+   pushed smoothly instead of jumping. The `>` child combinator scopes the
+   transition to the group's own panels, so a horizontal (sidebar/aux) toggle
+   never animates the nested vertical (terminal) group, and vice versa. */
 .panel-slide-animating > [data-panel] {
-  transition: flex-grow 240ms ease-out;
+  transition:
+    flex-grow 240ms ease-out,
+    flex-basis 240ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

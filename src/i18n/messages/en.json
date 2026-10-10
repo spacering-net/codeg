@@ -2289,6 +2289,9 @@
       "closeAll": "Close All",
       "hideTerminal": "Hide Terminal ({shortcut})",
       "openFolderFirst": "Open a folder first",
+      "processExited": "Process exited",
+      "processExitedWithCode": "Process exited (code {code})",
+      "unavailable": "Terminal session unavailable. It may have ended or the backend restarted.",
       "keybar": {
         "label": "Terminal virtual keys",
         "show": "Show virtual keys",
@@ -3569,6 +3572,7 @@
         "nameLabel": "Name:",
         "agentPromptLabel": "Prompt",
         "agentModelLabel": "Model",
+        "agentEffortLabel": "Effort",
         "agentRunning": "Running...",
         "agentLiveTranscript": "Live activity",
         "agentProgressTools": "{count} tool calls",
@@ -4100,7 +4104,25 @@
     "loading": "Loading...",
     "emptyDirectory": "This directory is empty",
     "errorLoadingDir": "Failed to load directory",
-    "permissionDenied": "Permission denied"
+    "permissionDenied": "Permission denied",
+    "newFolder": {
+      "button": "New folder",
+      "placeholder": "Folder name",
+      "create": "Create folder",
+      "location": "In {path}",
+      "errors": {
+        "empty": "Enter a name for the folder.",
+        "reservedName": "“{name}” can't be used as a folder name.",
+        "separator": "A folder name can't contain / or \\.",
+        "controlCharacter": "A folder name can't contain control characters or line breaks.",
+        "reservedCharacter": "A folder name can't contain {character}.",
+        "invalidParent": "A folder can't be created in {path}.",
+        "parentNotFound": "{path} no longer exists.",
+        "alreadyExists": "“{name}” already exists here.",
+        "permissionDenied": "You don't have permission to create a folder here.",
+        "failed": "Couldn't create the folder: {reason}"
+      }
+    }
   },
   "ServerFileBrowser": {
     "title": "Pick server file",
@@ -4765,6 +4787,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Open local workspace",
+    "openLocalFailed": "Failed to open local workspace",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

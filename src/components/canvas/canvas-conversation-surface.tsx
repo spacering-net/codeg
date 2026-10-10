@@ -812,6 +812,7 @@ export function CanvasConversationSurface({
             // wrong guess) leaves MessageListView's folder fallback in place.
             imageRoot={workingDir}
             agentType={agentType}
+            availableCommands={conn.availableCommands}
             connStatus={connStatus}
             isActive={isActive}
             sendSignal={sendSignal}

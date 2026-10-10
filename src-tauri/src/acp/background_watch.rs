@@ -1172,28 +1172,36 @@ impl WatchState {
 
     /// Read bytes appended since `committed`, returning COMPLETE lines only;
     /// a trailing partial line stays in `carry` until its newline arrives.
+    ///
+    /// Linear in the bytes read: each line is copied out of `carry` once, then
+    /// the unread tail moves to a buffer of its own. One append can be large —
+    /// a resume replays the surviving history into the same file — and
+    /// splitting `carry` line by line instead gave every line a buffer as big
+    /// as everything still unread, about bytes × lines / 2 in all (#885).
     fn read_new_lines(&mut self, path: &PathBuf) -> std::io::Result<Vec<String>> {
         let mut f = std::fs::File::open(path)?;
         f.seek(SeekFrom::Start(self.committed + self.carry.len() as u64))?;
-        let mut fresh = Vec::new();
-        f.read_to_end(&mut fresh)?;
-        if fresh.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.carry.extend_from_slice(&fresh);
+        // Straight into `carry`. Bytes read before an error stay there, so the
+        // next call returns their complete lines even if nothing new arrives.
+        f.read_to_end(&mut self.carry)?;
 
         let mut lines = Vec::new();
-        while let Some(nl) = self.carry.iter().position(|b| *b == b'\n') {
-            let rest = self.carry.split_off(nl + 1);
-            let mut line_bytes = std::mem::replace(&mut self.carry, rest);
-            line_bytes.pop(); // the '\n'
-            self.committed += nl as u64 + 1;
+        let mut consumed = 0;
+        for line in self.carry.split_inclusive(|b| *b == b'\n') {
+            let Some(body) = line.strip_suffix(b"\n") else {
+                break; // the partial tail
+            };
+            consumed += line.len();
             // Mirror the detail parser: a non-UTF-8 line is skipped, but its
             // bytes still count toward the watermark.
-            if let Ok(line) = String::from_utf8(line_bytes) {
-                lines.push(line);
+            if let Ok(text) = std::str::from_utf8(body) {
+                lines.push(text.to_owned());
             }
         }
+        self.committed += consumed as u64;
+        // Not `drain`: that would keep the whole batch's allocation alive
+        // behind a partial line for as long as the session is watched.
+        self.carry = self.carry[consumed..].to_vec();
         Ok(lines)
     }
 
@@ -3272,6 +3280,78 @@ mod tests {
         assert_eq!(turns2.len(), 1);
         assert_ne!(turns2[0].id, id1);
         assert!(turns2[0].id.starts_with("bg-"));
+    }
+
+    /// One large append (a resume replaying hundreds of records of history in
+    /// a single write) must be read in memory linear in its size (#885).
+    /// Splitting `carry` one line at a time left every returned line holding a
+    /// buffer as large as everything still unread when it was split, about
+    /// bytes × lines / 2 in all: a 15 MB append took the app past 13 GB. The
+    /// rest of the reader's contract is pinned alongside: complete lines only,
+    /// a non-UTF-8 line skipped but counted, the partial tail kept for later.
+    #[test]
+    fn a_large_append_reads_in_memory_linear_in_its_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let record = assistant_text("a-replay", &"x".repeat(7_000));
+        write_lines(&path, &[record.as_str(); 300]);
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            f.write_all(b"\xff\xfe not utf-8\n").unwrap();
+        }
+        write_lines(&path, &[&record]);
+        let (head, tail) = record.split_at(record.len() / 2);
+        append_raw(&path, head);
+
+        let lines = ws.read_new_lines(&path).unwrap();
+        assert_eq!(lines.len(), 301, "every complete UTF-8 line, nothing else");
+        assert!(lines.iter().all(|line| *line == record));
+        let bytes: usize = lines.iter().map(String::len).sum();
+        let held: usize = lines.iter().map(String::capacity).sum();
+        assert!(
+            held <= 2 * bytes,
+            "the lines must hold about their own bytes: {held} held for {bytes}"
+        );
+        // The watermark covers every complete line, the skipped one included.
+        // Only the partial tail stays, and not in a buffer sized to the batch.
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(ws.committed, file_len - head.len() as u64);
+        assert_eq!(ws.carry, head.as_bytes());
+        assert!(
+            ws.carry.capacity() < bytes / 4,
+            "carry kept {} bytes of capacity after the batch",
+            ws.carry.capacity()
+        );
+
+        // The tail completes on a later append and reads as one line.
+        append_raw(&path, &format!("{tail}\n"));
+        assert_eq!(ws.read_new_lines(&path).unwrap(), vec![record.clone()]);
+        assert!(ws.carry.is_empty());
+        assert_eq!(ws.committed, std::fs::metadata(&path).unwrap().len());
+    }
+
+    /// A read that fails partway leaves what it did read in `carry`. The next
+    /// call must return the complete lines among those bytes even when the
+    /// file has not grown since, rather than hold them until another append.
+    #[test]
+    fn lines_a_failed_read_left_in_carry_surface_without_a_new_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        let record = assistant_text("a1", "kept");
+        write_lines(&path, &[&record]);
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        // What a read that failed after reaching EOF leaves behind.
+        ws.carry = std::fs::read(&path).unwrap();
+
+        assert_eq!(ws.read_new_lines(&path).unwrap(), vec![record]);
+        assert!(ws.carry.is_empty());
+        assert_eq!(ws.committed, std::fs::metadata(&path).unwrap().len());
     }
 
     #[test]

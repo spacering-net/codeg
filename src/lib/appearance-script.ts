@@ -6,6 +6,7 @@ import {
   SAFE_STYLE_QUERY_PARAM,
   TOKEN_VALUE_PATTERN_SOURCE,
 } from "./custom-style"
+import { THEME_COLOR_DARK, THEME_COLOR_LIGHT } from "./theme-color"
 
 /**
  * Storage keys for appearance preferences.
@@ -139,6 +140,19 @@ const SCRIPT = `
     } else {
       document.documentElement.style.colorScheme = "light";
       document.documentElement.style.backgroundColor = "";
+    }
+
+    // theme-color（浏览器界面 / 安卓已安装应用的状态栏与导航栏）：layout 按
+    // prefers-color-scheme 各出一个 <meta>，跟随系统时无需处理；用户在应用内选了
+    // 明/暗时两个都改成该模式的颜色，否则系统偏好会盖过应用内的选择。
+    // 首帧之后由 ThemeProvider 接管，含 Next 导航重建 <head> 之后的重新写入。
+    if (storedMode === "dark" || storedMode === "light") {
+      try {
+        var metaThemes = document.querySelectorAll('meta[name="theme-color"]');
+        for (var m = 0; m < metaThemes.length; m++) {
+          metaThemes[m].setAttribute("content", isDark ? "${THEME_COLOR_DARK}" : "${THEME_COLOR_LIGHT}");
+        }
+      } catch (e) {}
     }
 
     // ── 自定义样式 ──────────────────────────────────────────────────────

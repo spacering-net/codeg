@@ -10,6 +10,12 @@ import {
   STORAGE_KEY_ZOOM_LEVEL,
 } from "./appearance-script"
 import { CUSTOM_CSS_ELEMENT_ID } from "./custom-style"
+import {
+  THEME_COLOR_DARK,
+  THEME_COLOR_LIGHT,
+  THEME_COLOR_MEDIA_DARK,
+  THEME_COLOR_MEDIA_LIGHT,
+} from "./theme-color"
 
 /**
  * 这段脚本跑在第一帧渲染之前、任何模块加载之前，是整个外观体系里最脆弱的一环：
@@ -28,6 +34,9 @@ function resetDocument() {
   root.removeAttribute("data-workspace-bg")
   root.classList.remove("dark")
   document.getElementById(CUSTOM_CSS_ELEMENT_ID)?.remove()
+  document
+    .querySelectorAll('meta[name="theme-color"]')
+    .forEach((tag) => tag.remove())
 }
 
 beforeEach(() => {
@@ -222,5 +231,68 @@ describe("APPEARANCE_INIT_SCRIPT — escape hatches", () => {
     expect(document.documentElement.style.getPropertyValue("--primary")).toBe(
       "#111111"
     )
+  })
+})
+
+/**
+ * 静态 HTML 里按 prefers-color-scheme 各有一个 theme-color 标签（layout 的
+ * viewport.themeColor）。应用内显式选了明/暗时，首帧前就要让两个都换成该模式的
+ * 颜色，否则安卓已安装应用的状态栏按系统偏好着色，和界面反着来。
+ */
+describe("APPEARANCE_INIT_SCRIPT — theme-color", () => {
+  function addSchemeTags() {
+    for (const [media, color] of [
+      [THEME_COLOR_MEDIA_LIGHT, THEME_COLOR_LIGHT],
+      [THEME_COLOR_MEDIA_DARK, THEME_COLOR_DARK],
+    ]) {
+      const tag = document.createElement("meta")
+      tag.setAttribute("name", "theme-color")
+      tag.setAttribute("media", media)
+      tag.setAttribute("content", color)
+      document.head.appendChild(tag)
+    }
+  }
+
+  function contents() {
+    return Array.from(
+      document.querySelectorAll('meta[name="theme-color"]'),
+      (tag) => tag.getAttribute("content")
+    )
+  }
+
+  it("paints both tags dark for an explicit dark choice on a light OS", () => {
+    addSchemeTags()
+    localStorage.setItem("theme", "dark")
+
+    runInitScript()
+
+    expect(contents()).toEqual([THEME_COLOR_DARK, THEME_COLOR_DARK])
+  })
+
+  it("paints both tags light for an explicit light choice on a dark OS", () => {
+    addSchemeTags()
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({ matches: true }) as unknown as typeof matchMedia
+    )
+    localStorage.setItem("theme", "light")
+
+    runInitScript()
+
+    expect(contents()).toEqual([THEME_COLOR_LIGHT, THEME_COLOR_LIGHT])
+  })
+
+  it("leaves the per-scheme tags to the browser when following the system", () => {
+    addSchemeTags()
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({ matches: true }) as unknown as typeof matchMedia
+    )
+    localStorage.setItem("theme", "system")
+
+    runInitScript()
+
+    expect(document.documentElement.classList.contains("dark")).toBe(true)
+    expect(contents()).toEqual([THEME_COLOR_LIGHT, THEME_COLOR_DARK])
   })
 })

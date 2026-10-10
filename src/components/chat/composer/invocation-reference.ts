@@ -65,7 +65,7 @@ export function skillToReference(
  * prefix that agent triggers them by.
  */
 export function buildKnownInvocations(
-  commands: readonly AvailableCommandInfo[] | null | undefined,
+  commands: readonly Pick<AvailableCommandInfo, "name">[] | null | undefined,
   skills?: readonly AgentSkillItem[] | null,
   skillPrefix: InvocationPrefix = "/"
 ): KnownInvocations {

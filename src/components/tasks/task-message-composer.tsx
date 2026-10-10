@@ -102,6 +102,12 @@ export interface TaskMessageComposerProps {
   /** Extra controls in the bottom bar, right of the "+" (the task editor's
    *  mode/model selectors). */
   bottomBarExtra?: ReactNode
+  /** The host's config selections, when the host probes this same agent for
+   *  selectors of its own (the task editor's mode/model bar). The probe is
+   *  keyed by the selected model, so the composer must probe with the same
+   *  selections to share the host's probe instead of spawning the agent a
+   *  second time. Omit where the composer is the only one probing. */
+  probeConfigValues?: Record<string, string> | null
   /** Sizing for the editor surface itself. */
   editorClassName?: string
 }
@@ -139,6 +145,7 @@ export function TaskMessageComposer({
   onSubmit,
   onAttachmentsChange,
   bottomBarExtra,
+  probeConfigValues,
   editorClassName = "max-h-[12rem] min-h-[4.5rem]",
 }: TaskMessageComposerProps) {
   const t = useTranslations("Folder.chat.messageInput")
@@ -156,7 +163,12 @@ export function TaskMessageComposer({
   // One transient probe backs the `/` menu (the snapshot carries
   // available_commands) and the image encoding (prompt_capabilities); `$`
   // skills are a filesystem scan inside `useComposerInvocations`.
-  const agentOptions = useAgentOptions(agentType, folderPath)
+  const agentOptions = useAgentOptions(
+    agentType,
+    folderPath,
+    true,
+    probeConfigValues
+  )
   const availableCommands: AvailableCommandInfo[] =
     agentOptions.snapshot?.available_commands ?? []
   const promptCapabilities =

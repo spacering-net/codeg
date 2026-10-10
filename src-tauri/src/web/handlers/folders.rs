@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
+use crate::commands::create_directory::create_directory_core;
 use crate::commands::folders as folder_commands;
 use crate::models::*;
 
@@ -359,6 +360,20 @@ pub async fn list_directory_entries(
 ) -> Result<Json<Vec<folder_commands::DirectoryEntry>>, AppCommandError> {
     let result = folder_commands::list_directory_entries(params.path).await?;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDirectoryParams {
+    pub parent_path: String,
+    pub name: String,
+}
+
+pub async fn create_directory(
+    Json(params): Json<CreateDirectoryParams>,
+) -> Result<Json<String>, AppCommandError> {
+    let created = create_directory_core(&params.parent_path, &params.name)?;
+    Ok(Json(created))
 }
 
 pub async fn list_directory_with_files(

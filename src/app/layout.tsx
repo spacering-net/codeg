@@ -8,6 +8,12 @@ import { resolveRequestLocale } from "@/i18n/resolve-request-locale"
 import { ThemeProvider } from "@/components/theme-provider"
 import { toIntlLocale } from "@/lib/i18n"
 import { APPEARANCE_INIT_SCRIPT } from "@/lib/appearance-script"
+import {
+  THEME_COLOR_DARK,
+  THEME_COLOR_LIGHT,
+  THEME_COLOR_MEDIA_DARK,
+  THEME_COLOR_MEDIA_LIGHT,
+} from "@/lib/theme-color"
 import { AppearanceProvider } from "@/components/appearance-provider"
 import { OverlayScrollbarsInit } from "@/components/overlay-scrollbars-init"
 import { ClipboardFallbackInit } from "@/components/clipboard-fallback-init"
@@ -19,6 +25,13 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  colorScheme: "dark light",
+  // In-app light/dark overrides of these are applied by the pre-paint script
+  // and ThemeProvider, see `@/lib/theme-color`.
+  themeColor: [
+    { media: THEME_COLOR_MEDIA_LIGHT, color: THEME_COLOR_LIGHT },
+    { media: THEME_COLOR_MEDIA_DARK, color: THEME_COLOR_DARK },
+  ],
 }
 
 export const metadata: Metadata = {
@@ -27,9 +40,15 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       { url: "/icon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512x512.png", sizes: "512x512", type: "image/png" },
       { url: "/icon.svg", type: "image/svg+xml" },
     ],
-    apple: { url: "/icon-128x128.png", sizes: "128x128", type: "image/png" },
+    apple: [
+      { url: "/icon-128x128.png", sizes: "128x128", type: "image/png" },
+      { url: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512x512.png", sizes: "512x512", type: "image/png" },
+    ],
   },
 }
 
@@ -44,6 +63,18 @@ export default async function RootLayout({
 
   return (
     <html lang={initialLocale} suppressHydrationWarning>
+      <head>
+        {/* Written by hand rather than via `metadata.manifest`: Next only adds
+            `crossOrigin="use-credentials"` there on Vercel preview builds.
+            Without it the browser fetches the manifest without cookies, and
+            an auth proxy in front of codeg-server answers with its login
+            redirect instead of the manifest. */}
+        <link
+          rel="manifest"
+          href="/manifest.json"
+          crossOrigin="use-credentials"
+        />
+      </head>
       <body>
         {/* CSS-only dark background: applies before JS executes, preventing white flash in dark mode */}
         <style

@@ -2289,6 +2289,9 @@
       "closeAll": "Tout fermer",
       "hideTerminal": "Masquer le terminal ({shortcut})",
       "openFolderFirst": "Ouvrez d'abord un dossier",
+      "processExited": "Processus terminé",
+      "processExitedWithCode": "Processus terminé (code {code})",
+      "unavailable": "Session de terminal indisponible. Elle s'est peut-être terminée ou le serveur a redémarré.",
       "keybar": {
         "label": "Touches virtuelles du terminal",
         "show": "Afficher les touches virtuelles",
@@ -3569,6 +3572,7 @@
         "nameLabel": "Nom :",
         "agentPromptLabel": "Instruction",
         "agentModelLabel": "Modèle",
+        "agentEffortLabel": "Effort",
         "agentRunning": "En cours...",
         "agentLiveTranscript": "Activité en direct",
         "agentProgressTools": "{count} appels d'outils",
@@ -4100,7 +4104,25 @@
     "loading": "Chargement...",
     "emptyDirectory": "Ce répertoire est vide",
     "errorLoadingDir": "Échec du chargement du répertoire",
-    "permissionDenied": "Permission refusée"
+    "permissionDenied": "Permission refusée",
+    "newFolder": {
+      "button": "Nouveau dossier",
+      "placeholder": "Nom du dossier",
+      "create": "Créer le dossier",
+      "location": "Dans {path}",
+      "errors": {
+        "empty": "Saisissez un nom pour le dossier.",
+        "reservedName": "« {name} » ne peut pas servir de nom de dossier.",
+        "separator": "Un nom de dossier ne peut contenir ni / ni \\.",
+        "controlCharacter": "Un nom de dossier ne peut contenir ni caractères de contrôle ni sauts de ligne.",
+        "reservedCharacter": "Un nom de dossier ne peut pas contenir {character}.",
+        "invalidParent": "Impossible de créer un dossier dans {path}.",
+        "parentNotFound": "{path} n’existe plus.",
+        "alreadyExists": "« {name} » existe déjà ici.",
+        "permissionDenied": "Vous n’avez pas l’autorisation de créer un dossier ici.",
+        "failed": "Impossible de créer le dossier : {reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "Chargement...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Ouvrir l’espace de travail local",
+    "openLocalFailed": "Impossible d’ouvrir l’espace de travail local",
     "openRemoteWorkspace": "Ouvrir l’espace de travail distant",
     "manage": "Gérer l’espace de travail distant",
     "manageTitle": "Connexions à l’espace de travail distant",

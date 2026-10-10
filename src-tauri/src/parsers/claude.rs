@@ -870,9 +870,10 @@ pub(crate) fn is_synthetic_assistant(value: &serde_json::Value) -> bool {
 /// unavoidable. Assuming the 1M lane keeps the meter from over-reporting
 /// pressure ~5x on the extended-context models most sessions run; the cost is
 /// under-reporting for a session that really was on the 200K lane. Other
-/// agents' transcripts keep the id verbatim, so that path can detect the lane
-/// and defaults to 200K instead. Change one of these without the other and
-/// they silently disagree again.
+/// agents' transcripts keep the id verbatim, so that path can detect the lane:
+/// it reads 1M for the natively 1M models and the `-1m` spelling, and 200K
+/// for the older models whose 1M lane is opt-in. Change one of these without
+/// the other and they silently disagree again.
 fn claude_context_window_max_tokens_for_model(model: Option<&str>) -> Option<u64> {
     let model = model?.trim();
     if model.is_empty() {
@@ -2762,6 +2763,8 @@ fn parse_data_uri_image(raw: &str) -> Option<(String, String)> {
 /// * `Edit` (already accepted by 2.1.274): `path` → `file_path`, `old_str` →
 ///   `old_string`, `new_str` → `new_string`, and `replace_name` →
 ///   `replace_all` (true only for `true` / `"true"`).
+/// * `Grep` (2.1.292, read out of the 2.1.293 binary): the other way round,
+///   see [`canonical_grep_input`].
 ///
 /// Each rename fills a canonical key the input left ABSENT, and only from a
 /// string, so an input that already uses the canonical names — the common
@@ -2781,6 +2784,7 @@ pub(crate) fn canonical_file_tool_input(
     let (is_write, aliases): (bool, &[&str]) = match tool_name {
         "Write" => (true, &["path", "file_text", "file_content"]),
         "Edit" => (false, &["path", "old_str", "new_str", "replace_name"]),
+        "Grep" => return canonical_grep_input(input),
         _ => return None,
     };
     let args = input.as_object()?;
@@ -2817,6 +2821,32 @@ pub(crate) fn canonical_file_tool_input(
         }
     }
     changed.then_some(serde_json::Value::Object(args))
+}
+
+/// Grep's one alias, the way the CLI repairs it: a non-empty `file_path` is
+/// read as `path` when `path` is absent, and dropped when it repeats `path`.
+/// Beside a different `path` it is left alone, as the CLI leaves it, and so is
+/// an empty one. The CLI also appends a note on the rename to the result
+/// ("Note: Grep's parameter for where to search is named `path`. …"), which
+/// the search card's output parser keeps as a note line.
+fn canonical_grep_input(input: &serde_json::Value) -> Option<serde_json::Value> {
+    let original = input.as_object()?;
+    let file_path = original
+        .get("file_path")?
+        .as_str()
+        .filter(|path| !path.is_empty())?;
+    let mut args = original.clone();
+    match original.get("path") {
+        None => {
+            let value = args.remove("file_path")?;
+            args.insert("path".to_string(), value);
+        }
+        Some(path) if path.as_str() == Some(file_path) => {
+            args.remove("file_path");
+        }
+        Some(_) => return None,
+    }
+    Some(serde_json::Value::Object(args))
 }
 
 /// Move `alias` onto `canonical` when the canonical key is absent and the alias
@@ -3616,6 +3646,68 @@ mod tests {
                 json!({"file_path": "/w/a", "old_string": "a", "new_string": "b", "replace_all": false})
             )
         );
+    }
+
+    #[test]
+    fn grep_file_path_is_read_as_path_the_way_the_cli_reads_it() {
+        // CLI 2.1.292: `path` from a non-empty `file_path` when `path` is absent.
+        assert_eq!(
+            canonical_file_tool_input(
+                "Grep",
+                &json!({"pattern": "needle", "file_path": "/w/a.txt", "output_mode": "content"})
+            ),
+            Some(json!({"pattern": "needle", "path": "/w/a.txt", "output_mode": "content"}))
+        );
+        // A repeat of `path` is dropped.
+        assert_eq!(
+            canonical_file_tool_input(
+                "Grep",
+                &json!({"pattern": "x", "path": "/w", "file_path": "/w"})
+            ),
+            Some(json!({"pattern": "x", "path": "/w"}))
+        );
+        // Beside a different `path`, empty, or not a string: the CLI repairs
+        // nothing, and neither does the card.
+        for input in [
+            json!({"pattern": "x", "path": "/w", "file_path": "/v"}),
+            json!({"pattern": "x", "path": null, "file_path": "/v"}),
+            json!({"pattern": "x", "file_path": ""}),
+            json!({"pattern": "x", "file_path": 7}),
+            json!({"pattern": "x"}),
+        ] {
+            assert_eq!(canonical_file_tool_input("Grep", &input), None, "{input}");
+        }
+        // Glob takes no such alias.
+        assert_eq!(
+            canonical_file_tool_input("Glob", &json!({"pattern": "*.rs", "file_path": "/w"})),
+            None
+        );
+    }
+
+    #[test]
+    fn a_history_grep_that_used_file_path_renders_with_path() {
+        let record = json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_g",
+                    "name": "Grep",
+                    "input": {"pattern": "needle", "file_path": "/w/a.txt"},
+                }],
+            },
+        });
+        let blocks = extract_assistant_content(&record);
+        let Some(ContentBlock::ToolUse {
+            input_preview: Some(input),
+            ..
+        }) = blocks.first()
+        else {
+            panic!("expected a tool_use block, got {blocks:?}");
+        };
+        let input: serde_json::Value = serde_json::from_str(input).unwrap();
+        assert_eq!(input, json!({"pattern": "needle", "path": "/w/a.txt"}));
     }
 
     #[test]

@@ -2289,6 +2289,9 @@
       "closeAll": "إغلاق الكل",
       "hideTerminal": "إخفاء الطرفية ({shortcut})",
       "openFolderFirst": "افتح مجلدا أولا",
+      "processExited": "انتهت العملية",
+      "processExitedWithCode": "انتهت العملية (الرمز {code})",
+      "unavailable": "جلسة الطرفية غير متاحة. ربما انتهت أو أُعيد تشغيل الخادم.",
       "keybar": {
         "label": "مفاتيح الطرفية الافتراضية",
         "show": "إظهار المفاتيح الافتراضية",
@@ -3569,6 +3572,7 @@
         "nameLabel": "الاسم:",
         "agentPromptLabel": "المطالبة",
         "agentModelLabel": "النموذج",
+        "agentEffortLabel": "مستوى التفكير",
         "agentRunning": "قيد التشغيل...",
         "agentLiveTranscript": "النشاط المباشر",
         "agentProgressTools": "{count} استدعاءات أدوات",
@@ -4100,7 +4104,25 @@
     "loading": "جاري التحميل...",
     "emptyDirectory": "هذا المجلد فارغ",
     "errorLoadingDir": "فشل في تحميل المجلد",
-    "permissionDenied": "تم رفض الإذن"
+    "permissionDenied": "تم رفض الإذن",
+    "newFolder": {
+      "button": "مجلد جديد",
+      "placeholder": "اسم المجلد",
+      "create": "إنشاء المجلد",
+      "location": "في {path}",
+      "errors": {
+        "empty": "أدخل اسمًا للمجلد.",
+        "reservedName": "لا يمكن استخدام «{name}» اسمًا لمجلد.",
+        "separator": "لا يمكن أن يحتوي اسم المجلد على / أو \\.",
+        "controlCharacter": "لا يمكن أن يحتوي اسم المجلد على أحرف تحكم أو فواصل أسطر.",
+        "reservedCharacter": "لا يمكن أن يحتوي اسم المجلد على {character}.",
+        "invalidParent": "لا يمكن إنشاء مجلد في {path}.",
+        "parentNotFound": "لم يعد {path} موجودًا.",
+        "alreadyExists": "«{name}» موجود هنا بالفعل.",
+        "permissionDenied": "ليس لديك إذن لإنشاء مجلد هنا.",
+        "failed": "تعذّر إنشاء المجلد: {reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "جاري التحميل...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "فتح مساحة العمل المحلية",
+    "openLocalFailed": "تعذر فتح مساحة العمل المحلية",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

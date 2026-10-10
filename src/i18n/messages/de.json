@@ -2289,6 +2289,9 @@
       "closeAll": "Alle schließen",
       "hideTerminal": "Terminal ausblenden ({shortcut})",
       "openFolderFirst": "Öffnen Sie zuerst einen Ordner",
+      "processExited": "Prozess beendet",
+      "processExitedWithCode": "Prozess beendet (Code {code})",
+      "unavailable": "Terminalsitzung nicht verfügbar. Sie wurde möglicherweise beendet oder das Backend neu gestartet.",
       "keybar": {
         "label": "Virtuelle Terminaltasten",
         "show": "Virtuelle Tasten anzeigen",
@@ -3569,6 +3572,7 @@
         "nameLabel": "Bezeichnung:",
         "agentPromptLabel": "Eingabe",
         "agentModelLabel": "Modell",
+        "agentEffortLabel": "Aufwand",
         "agentRunning": "Läuft...",
         "agentLiveTranscript": "Live-Aktivität",
         "agentProgressTools": "{count} Tool-Aufrufe",
@@ -4100,7 +4104,25 @@
     "loading": "Wird geladen...",
     "emptyDirectory": "Dieses Verzeichnis ist leer",
     "errorLoadingDir": "Verzeichnis konnte nicht geladen werden",
-    "permissionDenied": "Zugriff verweigert"
+    "permissionDenied": "Zugriff verweigert",
+    "newFolder": {
+      "button": "Neuer Ordner",
+      "placeholder": "Ordnername",
+      "create": "Ordner erstellen",
+      "location": "In {path}",
+      "errors": {
+        "empty": "Geben Sie einen Namen für den Ordner ein.",
+        "reservedName": "„{name}“ kann nicht als Ordnername verwendet werden.",
+        "separator": "Ein Ordnername darf weder / noch \\ enthalten.",
+        "controlCharacter": "Ein Ordnername darf keine Steuerzeichen oder Zeilenumbrüche enthalten.",
+        "reservedCharacter": "Ein Ordnername darf {character} nicht enthalten.",
+        "invalidParent": "In {path} kann kein Ordner erstellt werden.",
+        "parentNotFound": "{path} existiert nicht mehr.",
+        "alreadyExists": "„{name}“ existiert hier bereits.",
+        "permissionDenied": "Sie haben keine Berechtigung, hier einen Ordner zu erstellen.",
+        "failed": "Der Ordner konnte nicht erstellt werden: {reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "Wird geladen...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Lokalen Arbeitsbereich öffnen",
+    "openLocalFailed": "Lokaler Arbeitsbereich konnte nicht geöffnet werden",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

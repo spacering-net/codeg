@@ -66,6 +66,7 @@ import { WelcomeHero, WelcomeTip } from "@/components/chat/welcome-hero"
 import { QuickActions } from "@/components/chat/quick-actions"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { TileScrollContainer } from "@/components/conversations/tile-scroll-container"
+import { stableTabViewOrder } from "@/lib/tab-view-order"
 import { GroupSplitHandle } from "@/components/conversations/group-split-handle"
 import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -99,7 +100,8 @@ import {
   shouldQueueDirectSend,
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
-import { TurnBusyError, isNoActiveTurnRejection } from "@/lib/turn-busy"
+import { TurnBusyError } from "@/lib/turn-busy"
+import { deliverQueuedSteer } from "@/lib/queued-steer"
 import { toErrorMessage } from "@/lib/app-error"
 import { notify } from "@/lib/notify"
 import {
@@ -655,6 +657,7 @@ const ConversationTabView = memo(function ConversationTabView({
     dequeue: mqDequeue,
     remove: mqRemove,
     reorder: mqReorder,
+    moveToFront: mqMoveToFront,
     updateItem: mqUpdateItem,
     editingItemId: mqEditingItemId,
     startEditing: mqStartEditing,
@@ -728,10 +731,12 @@ const ConversationTabView = memo(function ConversationTabView({
     () => effectiveConfigOptions ?? [],
     [effectiveConfigOptions]
   )
-  const connectionCommands = useMemo(
-    () => (connIsForOtherAgent ? [] : (conn.availableCommands ?? [])),
-    [connIsForOtherAgent, conn.availableCommands]
-  )
+  // `null` until this tab's agent has advertised (no connection, one still
+  // coming up, or one still bound to another agent), never `[]`, which is an
+  // answer: the agent offers no commands. The composers read the two alike;
+  // the transcript tells them apart, badging from what this agent last
+  // advertised in this folder while the list is unknown.
+  const connectionCommands = connIsForOtherAgent ? null : conn.availableCommands
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
     if (modeId && connectionModes.some((mode) => mode.id === modeId)) {
@@ -2100,6 +2105,7 @@ const ConversationTabView = memo(function ConversationTabView({
         conversationId={effectiveConversationId}
         imageRoot={workingDirForConnection ?? null}
         agentType={selectedAgent}
+        availableCommands={connectionCommands}
         connStatus={connStatus}
         isActive={isActive}
         sendSignal={sendSignal}
@@ -2183,9 +2189,8 @@ const ConversationTabView = memo(function ConversationTabView({
   // over the same live-feedback channel the composer's mid-turn dropdown uses.
   // The block/text encoding is the shared `buildSteerPayload` — one call site,
   // no policy here beyond the row's own lifecycle: success removes the row;
-  // the turn-end race leaves it queued so the auto-flush sends it with the
-  // next turn — never lost. Any other failure keeps the row untouched and
-  // surfaces the error.
+  // a turn-end race prioritizes the row for the existing queue auto-flush.
+  // Failures keep the row available for retry.
   const handleQueueSteer = useCallback(
     async (id: string) => {
       const item = msgQueue.find((m) => m.id === id)
@@ -2200,14 +2205,15 @@ const ConversationTabView = memo(function ConversationTabView({
       // when the turn-end edge lands mid-round-trip.
       setQueueSteerInFlight(true)
       try {
-        await feedbackSteer(payload.text, payload.blocks)
-        mqRemove(id)
+        const delivered = await deliverQueuedSteer(
+          () => feedbackSteer(payload.text, payload.blocks),
+          () => mqMoveToFront(id)
+        )
+        // Not delivered means the turn ended first, so the row goes out as the
+        // next turn instead; say so, as the composer's steer does.
+        if (delivered) mqRemove(id)
+        else toast.info(tCmp("steerQueuedInstead"))
       } catch (err: unknown) {
-        if (isNoActiveTurnRejection(err)) {
-          // The turn ended mid-click — the queue flush will deliver it.
-          toast.info(tCmp("steerQueuedInstead"))
-          return
-        }
         notify({
           level: "error",
           key: `steer-failed:${tabId}`,
@@ -2220,7 +2226,15 @@ const ConversationTabView = memo(function ConversationTabView({
         setQueueSteerInFlight(false)
       }
     },
-    [msgQueue, feedbackSteer, mqRemove, feedback.channel, tabId, tCmp]
+    [
+      msgQueue,
+      feedbackSteer,
+      mqRemove,
+      feedback.channel,
+      tabId,
+      tCmp,
+      mqMoveToFront,
+    ]
   )
 
   return (
@@ -2904,6 +2918,7 @@ export function ConversationDetailPanel() {
             tileTabRefs.current.delete(tab.id)
           }
         }}
+        style={canTileG ? { order: indexInGroup } : undefined}
         className={cn(
           canTileG
             ? cn(
@@ -3017,8 +3032,12 @@ export function ConversationDetailPanel() {
                 canTileG && "flex min-w-full flex-row"
               )}
             >
-              {groupTabs.map((tab, indexInGroup) =>
-                renderTabWrapper(tab, indexInGroup, groupId, canTileG)
+              {/* Strip order reaches the screen only through CSS `order`:
+                  a reorder that moved these nodes would reset each moved
+                  transcript's scroll offset and blank it (see
+                  stableTabViewOrder). */}
+              {stableTabViewOrder(groupTabs).map(({ tab, visualIndex }) =>
+                renderTabWrapper(tab, visualIndex, groupId, canTileG)
               )}
             </div>
           </TileScrollContainer>

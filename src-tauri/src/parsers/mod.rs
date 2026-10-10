@@ -846,6 +846,42 @@ fn is_claude_one_million_context_id(model: &str) -> bool {
     claude_one_million_id_regex().is_match(model)
 }
 
+/// `claude-<family>-<major>[-<minor>]`, then a snapshot date, a gateway
+/// suffix or nothing. The minor may be dotted (`claude-opus-4.7`), as gateways
+/// that rename Anthropic's ids write it. It is at most two digits, so a
+/// snapshot date such as `-20251001` is never read as one.
+fn claude_family_version_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^claude-(opus|sonnet|haiku|fable|mythos)-(\d{1,2})(?:[-.](\d{1,2}))?(?:$|\D)")
+            .expect("valid claude family regex")
+    })
+}
+
+/// Whether `model` (lowercased, provider prefix stripped) is a Claude model
+/// whose DEFAULT window is 1M, with no opt-in. This follows the `native_1m`
+/// flag of the model catalog baked into Claude Code (CLI 2.1.293): every Fable
+/// and Mythos, Opus from 4.7, Sonnet from 5, and Haiku from 5.5. Opus 4.6 and
+/// Sonnet 4.5 / 4.6 reach 1M only through the beta lane, which an id spells as
+/// `-1m` ([`is_claude_one_million_context_id`]).
+fn is_claude_native_one_million_model(model: &str) -> bool {
+    let Some(captures) = claude_family_version_regex().captures(model) else {
+        return false;
+    };
+    let major: u32 = captures[2].parse().unwrap_or(0);
+    let minor: u32 = captures
+        .get(3)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+    match &captures[1] {
+        "fable" | "mythos" => true,
+        "opus" => (major, minor) >= (4, 7),
+        "sonnet" => major >= 5,
+        "haiku" => (major, minor) >= (5, 5),
+        _ => false,
+    }
+}
+
 fn parse_model_capacity_suffix(model: &str) -> Option<u64> {
     let captures = model_capacity_suffix_regex().captures(model.trim())?;
     let value = captures.get(1)?.as_str().parse::<f64>().ok()?;
@@ -886,13 +922,17 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         .trim()
         .to_ascii_lowercase();
 
-    // Anthropic's default lane is 200K; the 1M lane is opt-in and shows up in
-    // the model id itself. Agents other than Claude Code record the id the way
-    // their backend named it, so the marker survives here — unlike Claude
-    // Code's own transcripts, where it is stripped (see
+    // The current Claude models are natively 1M (Opus from 4.7, Sonnet from 5,
+    // Haiku from 5.5, every Fable and Mythos). For the older ones the default
+    // lane is 200K, and the opt-in 1M lane shows up in the model id itself.
+    // Agents other than Claude Code record the id the way their backend named
+    // it, so the marker survives here — unlike Claude Code's own transcripts,
+    // where it is stripped (see
     // `claude::claude_context_window_max_tokens_for_model`).
     if normalized.starts_with("claude") {
-        if is_claude_one_million_context_id(&normalized) {
+        if is_claude_one_million_context_id(&normalized)
+            || is_claude_native_one_million_model(&normalized)
+        {
             return Some(1_000_000);
         }
         return Some(200_000);
@@ -2238,6 +2278,47 @@ mod tests {
             infer_context_window_max_tokens(Some("claude-opus-4-6-10m-preview")),
             Some(200_000)
         );
+        // Natively 1M models need no marker: Claude Code's baked catalog
+        // (CLI 2.1.293) flags Opus from 4.7, Sonnet from 5, Haiku from 5.5 and
+        // every Fable and Mythos as `native_1m`.
+        for model in [
+            "claude-haiku-5-5",
+            "claude-sonnet-5",
+            "claude-sonnet-5-5",
+            "claude-sonnet-5-20260101",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-opus-5-5",
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+            "anthropic/claude-opus-4.7",
+            "claude-opus-4-7@20260101",
+        ] {
+            assert_eq!(
+                infer_context_window_max_tokens(Some(model)),
+                Some(1_000_000),
+                "{model}"
+            );
+        }
+        // The older models stay on the 200K default lane, snapshot dates
+        // included (`-20251001` is not a minor version).
+        for model in [
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-20250514",
+            "claude-3-7-sonnet-20250219",
+            "claude-mythos-preview",
+        ] {
+            assert_eq!(
+                infer_context_window_max_tokens(Some(model)),
+                Some(200_000),
+                "{model}"
+            );
+        }
         // Grok context windows per x.ai docs: grok-4.5 = 500K, grok-4.3 /
         // grok-4.20 = 1M, the coding/build models = 256K (grok-code-fast-1
         // despite "fast"), the general -fast variants = 2M, and any unknown

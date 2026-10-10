@@ -2289,6 +2289,9 @@
       "closeAll": "모두 닫기",
       "hideTerminal": "터미널 숨기기 ({shortcut})",
       "openFolderFirst": "먼저 폴더를 여세요",
+      "processExited": "프로세스가 종료되었습니다",
+      "processExitedWithCode": "프로세스가 종료되었습니다(코드 {code})",
+      "unavailable": "터미널 세션을 사용할 수 없습니다. 세션이 종료되었거나 백엔드가 다시 시작되었을 수 있습니다.",
       "keybar": {
         "label": "터미널 가상 키",
         "show": "가상 키 표시",
@@ -3569,6 +3572,7 @@
         "nameLabel": "이름:",
         "agentPromptLabel": "프롬프트",
         "agentModelLabel": "모델",
+        "agentEffortLabel": "사고 강도",
         "agentRunning": "실행 중...",
         "agentLiveTranscript": "실시간 활동",
         "agentProgressTools": "도구 호출 {count}회",
@@ -4100,7 +4104,25 @@
     "loading": "로딩 중...",
     "emptyDirectory": "이 디렉토리는 비어 있습니다",
     "errorLoadingDir": "디렉토리 로딩 실패",
-    "permissionDenied": "권한이 없습니다"
+    "permissionDenied": "권한이 없습니다",
+    "newFolder": {
+      "button": "새 폴더",
+      "placeholder": "폴더 이름",
+      "create": "폴더 만들기",
+      "location": "위치: {path}",
+      "errors": {
+        "empty": "폴더 이름을 입력하세요.",
+        "reservedName": "“{name}”은(는) 폴더 이름으로 사용할 수 없습니다.",
+        "separator": "폴더 이름에는 / 또는 \\를 사용할 수 없습니다.",
+        "controlCharacter": "폴더 이름에는 제어 문자나 줄 바꿈을 사용할 수 없습니다.",
+        "reservedCharacter": "폴더 이름에는 {character} 문자를 사용할 수 없습니다.",
+        "invalidParent": "{path}에는 폴더를 만들 수 없습니다.",
+        "parentNotFound": "{path}이(가) 더 이상 존재하지 않습니다.",
+        "alreadyExists": "“{name}”이(가) 이미 있습니다.",
+        "permissionDenied": "여기에 폴더를 만들 권한이 없습니다.",
+        "failed": "폴더를 만들지 못했습니다: {reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "로딩 중...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "로컬 워크스페이스 열기",
+    "openLocalFailed": "로컬 워크스페이스를 열지 못했습니다",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

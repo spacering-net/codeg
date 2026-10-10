@@ -33,6 +33,65 @@ function basePart(
   }
 }
 
+describe("AgentToolCallPart model and effort", () => {
+  // Claude Code 2.1.292's Agent tool takes an `effort` for the sub-agent.
+  it("shows the requested effort beside the model", () => {
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "general-purpose",
+          description: "probe sub",
+          model: "sonnet",
+          effort: "high",
+        }),
+        "output-available"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText("sonnet").parentElement?.textContent).toBe(
+      "Model: sonnet"
+    )
+    expect(screen.getByText("high").parentElement?.textContent).toBe(
+      "Effort: high"
+    )
+  })
+
+  it("shows the effort on its own when no model was named", () => {
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "general-purpose",
+          description: "probe sub",
+          effort: "max",
+        }),
+        "output-available"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText("max").parentElement?.textContent).toBe(
+      "Effort: max"
+    )
+    expect(screen.queryByText(/Model:/)).not.toBeInTheDocument()
+  })
+
+  it("ignores an effort that is not a string", () => {
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "general-purpose",
+          description: "probe sub",
+          prompt: "say ok",
+          effort: { level: "high" },
+        }),
+        "output-available"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText("Prompt")).toBeInTheDocument()
+    expect(screen.queryByText(/Effort:/)).not.toBeInTheDocument()
+  })
+})
+
 describe("AgentToolCallPart title", () => {
   it("renders the subagent_type prefix in front of the description", () => {
     renderCard(

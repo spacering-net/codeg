@@ -27,10 +27,12 @@
 //!
 //! The flags only exist from [`LISTEN_FLAGS_MIN_VERSION`], and opencode parses
 //! its CLI strictly: an older build exits on them instead of starting, and
-//! prints its usage to stdout — the ACP channel. Those builds are unaffected
-//! anyway (their `acp` starts no HTTP server), so they keep the bare argv, and
-//! the launch has to know which kind of build it is starting. See
-//! [`listen_args`].
+//! prints its usage to stdout — the ACP channel. The 2.x line belongs in the
+//! same bucket: opencode 2.0 dropped the flags (its `acp` starts a private
+//! `serve --stdio --port 0` child server of its own) and the CLI rejects them
+//! just the same. Those builds have no user-controlled listener to override
+//! anyway, so they keep the bare argv, and the launch has to know which kind
+//! of build it is starting. See [`listen_args`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -57,10 +59,19 @@ const HELP_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// cannot tell. opencode publishes every preview channel (`dev`, `beta`,
 /// `next`, per-branch snapshots) as `0.0.0-<tag>` whatever the build's age —
 /// npm carries thousands of them, from before `acp` existed to last night —
-/// and a source build or a failed probe has no usable version at all.
+/// and a source build or a failed probe has no usable version at all. The
+/// 2.x line is the same "cannot tell" case at the major: opencode 2.0
+/// rearchitected `acp` (it starts its own `serve --stdio --port 0` child) and
+/// declares no listen flags, so the 1.x floor stops at the major.
 fn release_accepts_listen_flags(version: &str) -> Option<bool> {
     let version = semver::Version::parse(version.trim()).ok()?;
     if (version.major, version.minor, version.patch) == (0, 0, 0) {
+        return None;
+    }
+    // Never infer 2.x from the 1.x floor: `acp` dropped `--port`/`--hostname`
+    // in 2.0.0, and the CLI rejects them outright. Ask the binary
+    // (`acp --help`) instead, so a later 2.x that re-adds them is handled too.
+    if version.major >= 2 {
         return None;
     }
     Some(version.cmp_precedence(&LISTEN_FLAGS_MIN_VERSION) != std::cmp::Ordering::Less)
@@ -122,7 +133,8 @@ async fn help_probe(bin: &Path) -> Option<bool> {
 /// tag its archive was downloaded from. A binary found on PATH comes without
 /// one, so its `--version` is read through the same cached probe the agent
 /// list already runs on it, which usually makes this free. A release version
-/// settles the question outright; anything else asks the binary for its
+/// below 2.0 settles the question outright; anything else — a preview build,
+/// a release from 2.0 on, no usable version — asks the binary for its
 /// `acp --help`.
 ///
 /// When even that fails, the launch keeps the bare argv. That is exactly how
@@ -144,9 +156,12 @@ pub(crate) async fn listen_args(
     match verdict {
         Some(true) => LISTEN_ARGS,
         Some(false) => {
-            // Nothing lost: builds without the flags run no HTTP server.
+            // Nothing lost: no build without the flags has a listener the
+            // config can move. Before 1.0.43 `acp` starts no HTTP server, and
+            // 2.x puts its private `serve --stdio` child on an automatic
+            // loopback port.
             tracing::info!(
-                "[ACP][OpenCode] {} (version {}) predates `acp --port/--hostname`; launching without them",
+                "[ACP][OpenCode] {} (version {}) does not accept `acp --port/--hostname`; launching without them",
                 bin.display(),
                 version.unwrap_or("unknown"),
             );
@@ -176,7 +191,6 @@ mod tests {
         assert_eq!(release_accepts_listen_flags("1.0.204"), Some(true));
         assert_eq!(release_accepts_listen_flags("1.18.33"), Some(true));
         assert_eq!(release_accepts_listen_flags(" 1.18.33\n"), Some(true));
-        assert_eq!(release_accepts_listen_flags("2.0.18"), Some(true));
         // A later release's prerelease is still past the floor.
         assert_eq!(release_accepts_listen_flags("1.18.34-beta.1"), Some(true));
 
@@ -198,14 +212,34 @@ mod tests {
         assert_eq!(release_accepts_listen_flags("1.18"), None);
     }
 
+    #[test]
+    fn a_2x_release_is_never_settled_by_the_1x_floor() {
+        // opencode 2.0 rearchitected `acp`: it starts its own
+        // `serve --stdio --port 0` child and declares no listen flags (absent
+        // from v2.0.0 through v2.0.26). The 1.x floor must not carry across
+        // the major — a 2.x answer has to come from `acp --help`, so a build
+        // that re-adds the flags is answered by its own help, not by a guess.
+        assert_eq!(release_accepts_listen_flags("2.0.0"), None);
+        assert_eq!(release_accepts_listen_flags("2.0.18"), None);
+        assert_eq!(release_accepts_listen_flags("2.0.24"), None);
+        // Any later major is equally unknown.
+        assert_eq!(release_accepts_listen_flags("3.0.0-rc.1"), None);
+    }
+
     /// `opencode acp --help` from 1.18.33 and 1.0.41, trimmed to the options.
     const HELP_1_18_33: &str = "opencode acp\n\nstart ACP (Agent Client Protocol) server\n\nOptions:\n  -h, --help         show help  [boolean]\n      --port         port to listen on  [number] [default: 0]\n      --hostname     hostname to listen on  [string] [default: \"127.0.0.1\"]\n      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)\n      --cwd          working directory  [string]\n";
     const HELP_1_0_41: &str = "opencode acp\n\nStart ACP (Agent Client Protocol) server\n\nOptions:\n  -h, --help        show help  [boolean]\n      --print-logs  print logs to stderr  [boolean]\n      --cwd         working directory  [string]\n";
+
+    /// `opencode acp --help` from 2.0.24, verbatim; 2.x prints it on stdout.
+    /// Its `acp` declares no options of its own — every flag listed is one of
+    /// the CLI's global flags.
+    const HELP_2_0_24: &str = "DESCRIPTION\n  Start an Agent Client Protocol server\n\nUSAGE\n  opencode acp [flags]\n\nGLOBAL FLAGS\n  --help, -h                                                          Show help information\n  --version, -v                                                       Show version information\n  --wizard                                                            Start wizard mode for a command\n  --completions <bash|zsh|fish|sh>                                    Print shell completion script (choices: bash, zsh, fish, sh)\n  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)\n  --print-logs                                                        Print logs to stderr (server logs require --standalone)\n";
 
     #[test]
     fn help_needs_both_flags_as_whole_tokens() {
         assert!(help_lists_listen_flags(HELP_1_18_33));
         assert!(!help_lists_listen_flags(HELP_1_0_41));
+        assert!(!help_lists_listen_flags(HELP_2_0_24));
         assert!(!help_lists_listen_flags(""));
         assert!(!help_lists_listen_flags("--port only"));
         assert!(!help_lists_listen_flags("--portal --hostnames"));
@@ -250,14 +284,28 @@ mod tests {
     }
 
     /// A stand-in `opencode`: answers `--version` with `version` (or fails
-    /// when `None`), and `acp --help` with `help` on stderr and exit status
-    /// `acp_status`. Every call is logged; see [`invocations`].
+    /// when `None`), and `acp --help` with `help` on stderr — where 1.18
+    /// prints it — and exit status `acp_status`. Every call is logged; see
+    /// [`invocations`].
     #[cfg(unix)]
     async fn fake_opencode(
         dir: &Path,
         version: Option<&str>,
         help: &str,
         acp_status: u8,
+    ) -> PathBuf {
+        fake_opencode_with_help_on(dir, version, help, acp_status, 2).await
+    }
+
+    /// [`fake_opencode`], printing its `acp --help` on file descriptor
+    /// `help_fd` instead: 1 for a 2.x stand-in, since 2.x prints it on stdout.
+    #[cfg(unix)]
+    async fn fake_opencode_with_help_on(
+        dir: &Path,
+        version: Option<&str>,
+        help: &str,
+        acp_status: u8,
+        help_fd: u8,
     ) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
@@ -271,7 +319,7 @@ mod tests {
              if [ \"$1\" = \"--noop\" ]; then exit 1; fi\n\
              echo \"$1\" >> '{}'\n\
              if [ \"$1\" = \"--version\" ]; then {version_arm}; fi\n\
-             if [ \"$1\" = \"acp\" ]; then printf '%s' '{help}' >&2; exit {acp_status}; fi\n\
+             if [ \"$1\" = \"acp\" ]; then printf '%s' '{help}' >&{help_fd}; exit {acp_status}; fi\n\
              exit 1\n",
             dir.join("invocations").display()
         );
@@ -349,6 +397,43 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let bin = fake_opencode(dir.path(), Some("0.0.0-1748650942428"), HELP_1_0_41, 0).await;
         assert!(listen_args(&bin, None).await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_2x_build_keeps_the_bare_argv() {
+        // The codeg#860 floor must not leak into opencode 2.x: 2.0.24 rejects
+        // the listen flags outright (the CLI exits and prints its usage to
+        // stdout — the ACP channel), so the bare argv is the only launch that
+        // starts. The binary is asked (`--version`, whose real banner reads as
+        // 2.0.24, then `acp --help`) and its answer — no flags — is what keeps
+        // that launch.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin =
+            fake_opencode_with_help_on(dir.path(), Some("opencode v2.0.24"), HELP_2_0_24, 0, 1)
+                .await;
+        assert!(listen_args(&bin, None).await.is_empty());
+        assert_eq!(invocations(dir.path()), ["--version", "acp"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_2x_label_is_answered_by_its_help_both_ways() {
+        // A managed install's 2.x label settles nothing on its own either: the
+        // binary is asked for `acp --help` straight away (its `--version` is
+        // not needed) ...
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_2_0_24, 0, 1).await;
+        assert!(listen_args(&bin, Some("2.0.24")).await.is_empty());
+        assert_eq!(invocations(dir.path()), ["acp"]);
+
+        // ... and a later 2.x whose help declares both flags again launches
+        // with them, read from stdout, where 2.x prints its help. (1.18.33's
+        // option list stands in for that help.)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_1_18_33, 0, 1).await;
+        assert_eq!(listen_args(&bin, Some("2.1.0")).await, LISTEN_ARGS);
+        assert_eq!(invocations(dir.path()), ["acp"]);
     }
 
     #[cfg(unix)]

@@ -292,7 +292,8 @@ function TaskSettingsBody({
   const agentOptions = useAgentOptions(
     agentType,
     folder?.path ?? null,
-    loaded != null && editing
+    loaded != null && editing,
+    configValues
   )
 
   const save = async () => {

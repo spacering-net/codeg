@@ -123,12 +123,13 @@ pub async fn run_preflight(agent_type: AgentType) -> PreflightResult {
 /// diagnostics report, which bounds every command with `DIAG_PROBE_TIMEOUT`.
 ///
 /// The two lookups run concurrently because either can fall through to
-/// `resolve_npx_command`'s `npm prefix -g` probe (only when `which` misses), and
-/// a FAILED prefix resolution is never cached — `cached_npm_global_prefix_with`
-/// short-circuits on `None` before it reaches `OnceCell::set`. On a machine
-/// where that probe stalls, running these in sequence would pay
-/// `NPM_PREFIX_TIMEOUT` twice per adapter agent; overlapping them costs the same
-/// two spawns but bounds the added Settings latency to one timeout.
+/// `resolve_npx_command`'s `npm prefix -g` probe (only when `which` and
+/// `~/.local/bin` both miss), and a FAILED prefix resolution is never cached —
+/// `cached_npm_global_prefix_with` short-circuits on `None` before it reaches
+/// `OnceCell::set`. On a machine where that probe stalls, running these in
+/// sequence would pay `NPM_PREFIX_TIMEOUT` twice per adapter agent; overlapping
+/// them costs the same two spawns but bounds the added Settings latency to one
+/// timeout.
 async fn probe_adapter(meta: &AcpAgentMeta) -> Option<AdapterInfo> {
     let relation = registry::acp_adapter_relation(meta.agent_type)?;
     let adapter_cmd = match &meta.distribution {
@@ -791,7 +792,7 @@ mod adapter_tests {
         );
         assert_eq!(
             info.adapter_package,
-            "@agentclientprotocol/claude-agent-acp@0.86.0"
+            "@agentclientprotocol/claude-agent-acp@0.88.0"
         );
         assert_eq!(info.adapter_cmd, "claude-agent-acp");
         assert!(!info.adapter_installed);

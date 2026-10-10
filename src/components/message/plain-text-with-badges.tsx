@@ -7,17 +7,24 @@ import { parseQuoteBlocks, type QuoteBlock } from "@/lib/message-quote"
 import { cn } from "@/lib/utils"
 
 import { FileReferenceActions } from "./file-reference-actions"
+import { useKnownInvocations } from "./known-invocations-context"
 import { parseUserMessageSegments } from "./user-message-segments"
 
 /**
  * One prose run: literal text with the five built-in reference kinds (file /
- * agent / session / commit / skill) resolved into inline colored badges.
+ * agent / session / commit / skill) resolved into inline colored badges. A bare
+ * `/word`·`$word` is a skill badge only when the transcript's agent offers it
+ * ({@link useKnownInvocations}); a path or any other slash word stays text.
  *
  * A fragment, not a wrapping element, so adjacent text and badges share one
  * inline flow and the caller's `whitespace-pre-wrap` collapses nothing.
  */
 const TextRun = memo(function TextRun({ text }: { text: string }) {
-  const segments = useMemo(() => parseUserMessageSegments(text), [text])
+  const knownInvocations = useKnownInvocations()
+  const segments = useMemo(
+    () => parseUserMessageSegments(text, { knownInvocations }),
+    [text, knownInvocations]
+  )
   return (
     <>
       {segments.map((segment, index) =>

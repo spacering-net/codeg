@@ -57,3 +57,7 @@ export async function reorderRemoteWorkspaceConnections(
 export async function openRemoteWorkspace(id: number): Promise<void> {
   return getShellTransport().call("open_remote_workspace", { id })
 }
+
+export async function openLocalWorkspace(): Promise<void> {
+  return getShellTransport().call("open_local_workspace")
+}

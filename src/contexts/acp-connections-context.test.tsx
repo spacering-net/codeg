@@ -66,6 +66,8 @@ const h = vi.hoisted(() => {
     toastDismiss: vi.fn(),
     // The status-bar alert list — where every notified warning/error is kept.
     recordAlert: vi.fn(),
+    // Where a connection's advertised commands are filed for its transcripts.
+    rememberAdvertisedCommands: vi.fn(),
     openSettingsWindow: vi.fn(async () => {}),
     // Every `t(key, values)` this render made. The mock below still returns
     // the bare key (what most assertions compare against), so interpolated
@@ -112,6 +114,10 @@ vi.mock("sonner", () => ({
 }))
 
 vi.mock("@/contexts/alert-context", () => ({ recordAlert: h.recordAlert }))
+
+vi.mock("@/lib/advertised-commands-store", () => ({
+  rememberAdvertisedCommands: h.rememberAdvertisedCommands,
+}))
 
 vi.mock("@/lib/selector-prefs-storage", () => ({
   getSavedPrefsForConnect: () => ({ modeId: undefined, configValues: {} }),
@@ -228,6 +234,7 @@ beforeEach(() => {
   h.toastInfo.mockClear()
   h.toastDismiss.mockClear()
   h.recordAlert.mockClear()
+  h.rememberAdvertisedCommands.mockClear()
   h.openSettingsWindow.mockClear()
 })
 
@@ -6768,5 +6775,142 @@ describe("AIR session failures are told as notifications", () => {
     // …without a burst of stale notifications.
     expect(h.toastError).not.toHaveBeenCalled()
     expect(h.recordAlert).not.toHaveBeenCalled()
+  })
+})
+
+describe("AcpConnectionsProvider remembers advertised commands", () => {
+  const REVIEW = { name: "review", description: "Review the diff" }
+  const INIT = { name: "init", description: "" }
+
+  async function connectOwner(): Promise<AttachHandlers> {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    return latestAttachHandlers()
+  }
+
+  it("files a list the agent advertises under the connection's own agent and cwd", async () => {
+    const handlers = await connectOwner()
+    expect(h.rememberAdvertisedCommands).not.toHaveBeenCalled()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "available_commands",
+      commands: [REVIEW, INIT],
+    })
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(1)
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledWith(
+      "claude_code",
+      "/tmp/x",
+      [REVIEW, INIT]
+    )
+
+    // The same list again changes nothing on the connection, so there is
+    // nothing new to file either.
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "available_commands",
+      commands: [REVIEW, INIT],
+    })
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(1)
+
+    // A changed list replaces it, an empty one included: that is an answer.
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "available_commands",
+      commands: [],
+    })
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(2)
+    expect(h.rememberAdvertisedCommands).toHaveBeenLastCalledWith(
+      "claude_code",
+      "/tmp/x",
+      []
+    )
+  })
+
+  it("files the list a snapshot carries, which is the only copy after a refresh", async () => {
+    const handlers = await connectOwner()
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      availableCommands: [REVIEW],
+      eventSeq: 5,
+    })
+    hydrateSnapshot(handlers, {
+      connection_id: "spawned-conn",
+      conversation_id: null,
+      folder_id: null,
+      status: "connected",
+      external_id: null,
+      live_message: null,
+      active_tool_calls: [],
+      pending_permission: null,
+      pending_question: null,
+      pending_user_message: null,
+      active_delegations: [],
+      feedback: [],
+      feedback_tool_available: false,
+      modes: null,
+      current_mode: null,
+      config_options: null,
+      prompt_capabilities: null,
+      usage: null,
+      fork_supported: false,
+      available_commands: [REVIEW],
+      selectors_ready: false,
+      config_stale: false,
+      config_stale_kind: null,
+      event_seq: 5,
+    })
+    expect(h.store!.getConnection(TAB)!.availableCommands).toEqual([REVIEW])
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(1)
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledWith(
+      "claude_code",
+      "/tmp/x",
+      [REVIEW]
+    )
+  })
+
+  it("files the list a stale snapshot fills in, when the connection had none", async () => {
+    const handlers = await connectOwner()
+    // A later event moves the cursor past the snapshot's seq, so the hydrate
+    // takes the stale branch, which still fills a list the connection lacks.
+    emitAcpEvent(handlers, {
+      seq: 6,
+      connection_id: "spawned-conn",
+      type: "usage_update",
+      used: 10,
+      size: 100,
+    })
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      availableCommands: [INIT],
+      eventSeq: 5,
+    })
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.availableCommands).toEqual([INIT])
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(1)
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledWith(
+      "claude_code",
+      "/tmp/x",
+      [INIT]
+    )
+
+    // A stale snapshot never replaces a list the connection already has.
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      availableCommands: [REVIEW],
+      eventSeq: 5,
+    })
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.availableCommands).toEqual([INIT])
+    expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(1)
   })
 })

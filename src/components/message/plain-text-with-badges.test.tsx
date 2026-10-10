@@ -1,6 +1,7 @@
 import { render } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
+import { KnownInvocationsProvider } from "./known-invocations-context"
 import { PlainTextWithBadges } from "./plain-text-with-badges"
 
 const badge = (c: HTMLElement, kind: string) =>
@@ -49,9 +50,11 @@ describe("PlainTextWithBadges", () => {
     expect(badge(commit, "commit")).not.toBeNull()
   })
 
-  it("badges a bare /command token but not a path", () => {
+  it("badges a bare /command token the agent advertises, but not a path", () => {
     const { container: cmd } = render(
-      <PlainTextWithBadges text="run /review please" />
+      <KnownInvocationsProvider value={new Set(["/review"])}>
+        <PlainTextWithBadges text="run /review please" />
+      </KnownInvocationsProvider>
     )
     expect(badge(cmd, "skill")).not.toBeNull()
     // The badge shows the bare name (no `/` prefix), matching the composer.
@@ -59,10 +62,56 @@ describe("PlainTextWithBadges", () => {
     expect(cmd.textContent).not.toContain("/review")
 
     const { container: path } = render(
-      <PlainTextWithBadges text="see /usr/bin for it" />
+      <KnownInvocationsProvider value={new Set(["/review"])}>
+        <PlainTextWithBadges text="see /usr/bin for it" />
+      </KnownInvocationsProvider>
     )
     expect(badge(path, "skill")).toBeNull()
     expect(path.textContent).toContain("/usr/bin")
+  })
+
+  it("leaves a slash word the agent does not advertise as text", () => {
+    // `/tmp` has the shape of a command; it is not one this agent has.
+    const { container } = render(
+      <KnownInvocationsProvider value={new Set(["/review"])}>
+        <PlainTextWithBadges text="clean /tmp and /rev, then /review" />
+      </KnownInvocationsProvider>
+    )
+    const badges = container.querySelectorAll("[data-reference-badge]")
+    expect(badges).toHaveLength(1)
+    expect(container.textContent).toContain("clean /tmp and /rev, then ")
+  })
+
+  it("badges no bare token without an advertised list", () => {
+    // No provider (an embed with no agent) or an agent that has not advertised
+    // its commands yet: nothing can be verified, so nothing is claimed.
+    const { container: none } = render(
+      <PlainTextWithBadges text="run /review please" />
+    )
+    expect(none.querySelector("[data-reference-badge]")).toBeNull()
+    expect(none.textContent).toBe("run /review please")
+
+    const { container: empty } = render(
+      <KnownInvocationsProvider value={new Set()}>
+        <PlainTextWithBadges text="run /review please" />
+      </KnownInvocationsProvider>
+    )
+    expect(empty.querySelector("[data-reference-badge]")).toBeNull()
+  })
+
+  it("re-badges when the advertised list arrives", () => {
+    const { container, rerender } = render(
+      <KnownInvocationsProvider value={new Set()}>
+        <PlainTextWithBadges text="run /review please" />
+      </KnownInvocationsProvider>
+    )
+    expect(badge(container, "skill")).toBeNull()
+    rerender(
+      <KnownInvocationsProvider value={new Set(["/review"])}>
+        <PlainTextWithBadges text="run /review please" />
+      </KnownInvocationsProvider>
+    )
+    expect(badge(container, "skill")).not.toBeNull()
   })
 
   it("gives a file badge — and only a file badge — the hover-actions anchor", () => {

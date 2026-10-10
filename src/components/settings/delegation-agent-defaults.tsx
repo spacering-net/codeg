@@ -79,20 +79,35 @@ interface CachedSnapshot {
   ts: number
 }
 const SNAPSHOT_TTL_MS = 30_000
-const snapshotCache = new Map<AgentType, CachedSnapshot>()
+// Keyed by (agent, model): an agent that derives one option's choices from
+// another's value (opencode lists `effort` per model) answers differently per
+// model, so a cached snapshot for one model must not serve another.
+const snapshotCache = new Map<string, CachedSnapshot>()
 
-function readCache(agent: AgentType): AgentOptionsSnapshot | null {
-  const entry = snapshotCache.get(agent)
+function snapshotKey(agent: AgentType, model: string | null): string {
+  return JSON.stringify([agent, model])
+}
+
+function readCache(
+  agent: AgentType,
+  model: string | null
+): AgentOptionsSnapshot | null {
+  const key = snapshotKey(agent, model)
+  const entry = snapshotCache.get(key)
   if (!entry) return null
   if (Date.now() - entry.ts > SNAPSHOT_TTL_MS) {
-    snapshotCache.delete(agent)
+    snapshotCache.delete(key)
     return null
   }
   return entry.snapshot
 }
 
-function writeCache(agent: AgentType, snapshot: AgentOptionsSnapshot): void {
-  snapshotCache.set(agent, { snapshot, ts: Date.now() })
+function writeCache(
+  agent: AgentType,
+  model: string | null,
+  snapshot: AgentOptionsSnapshot
+): void {
+  snapshotCache.set(snapshotKey(agent, model), { snapshot, ts: Date.now() })
 }
 
 export interface DelegationAgentDefaultsPanelProps {
@@ -132,43 +147,58 @@ export function DelegationAgentDefaultsPanel({
   const [error, setError] = useState<string | null>(null)
   const reqIdRef = useRef(0)
 
-  const loadSnapshot = useCallback(async (agent: AgentType, force: boolean) => {
-    if (!force) {
-      const cached = readCache(agent)
-      if (cached) {
-        setLoaded({ agent, snapshot: cached })
-        setError(null)
-        setLoading(false)
-        return
+  const loadSnapshot = useCallback(
+    async (agent: AgentType, model: string | null, force: boolean) => {
+      // Bump FIRST so a cache hit also invalidates a probe still in flight for
+      // the previous (agent, model) — otherwise that probe's late answer would
+      // replace the snapshot just shown for the current one.
+      const reqId = ++reqIdRef.current
+      if (!force) {
+        const cached = readCache(agent, model)
+        if (cached) {
+          setLoaded({ agent, snapshot: cached })
+          setError(null)
+          setLoading(false)
+          return
+        }
       }
-    }
-    const reqId = ++reqIdRef.current
-    setLoading(true)
-    setError(null)
-    setLoaded(null)
-    try {
-      const fresh = await describeAgentOptions(agent)
-      if (reqIdRef.current !== reqId) return
-      writeCache(agent, fresh)
-      setLoaded({ agent, snapshot: fresh })
-    } catch (err: unknown) {
-      if (reqIdRef.current !== reqId) return
-      setError(toErrorMessage(err))
-    } finally {
-      if (reqIdRef.current === reqId) setLoading(false)
-    }
-  }, [])
+      setLoading(true)
+      setError(null)
+      setLoaded(null)
+      try {
+        const fresh = await describeAgentOptions(
+          agent,
+          null,
+          model ? { model } : null
+        )
+        if (reqIdRef.current !== reqId) return
+        writeCache(agent, model, fresh)
+        setLoaded({ agent, snapshot: fresh })
+      } catch (err: unknown) {
+        if (reqIdRef.current !== reqId) return
+        setError(toErrorMessage(err))
+      } finally {
+        if (reqIdRef.current === reqId) setLoading(false)
+      }
+    },
+    []
+  )
+
+  // The model currently selected for this agent (its saved override). The
+  // probe applies it so option lists an agent derives per model — opencode's
+  // `effort` — answer for THAT model instead of the agent's own default.
+  const probeModel = value[selectedAgent]?.config_values?.model ?? null
 
   useEffect(() => {
-    // Debounce so rapid tab clicks (which would each fire a real probe
-    // — even with backend serialization, each one still spawns the CLI)
-    // collapse into a single load. Cancelling on cleanup means the
-    // *last* tab the user lands on wins, not the first.
+    // Debounce so rapid tab clicks / model changes (each would fire a real
+    // probe — even with backend serialization, each one still spawns the
+    // CLI) collapse into a single load. Cancelling on cleanup means the
+    // *last* (agent, model) the user lands on wins, not the first.
     const handle = window.setTimeout(() => {
-      void loadSnapshot(selectedAgent, false)
+      void loadSnapshot(selectedAgent, probeModel, false)
     }, TAB_SWITCH_DEBOUNCE_MS)
     return () => window.clearTimeout(handle)
-  }, [selectedAgent, loadSnapshot])
+  }, [selectedAgent, probeModel, loadSnapshot])
 
   const updateAgentDefaults = useCallback(
     (agent: AgentType, next: AgentDelegationDefaults | null) => {
@@ -263,7 +293,9 @@ export function DelegationAgentDefaultsPanel({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void loadSnapshot(selectedAgent, true)}
+                onClick={() =>
+                  void loadSnapshot(selectedAgent, probeModel, true)
+                }
               >
                 {t("retry")}
               </Button>

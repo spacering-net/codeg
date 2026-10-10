@@ -1243,6 +1243,10 @@ async fn protected_menu_titles(_pid: u32) -> Option<[String; 2]> {
 /// * an element is secret if ANY line carrying its index was judged secret,
 ///   or its own role, label or value say so — a forged line can add secrecy,
 ///   never take it away.
+///
+/// Whether an element is in web content is the driver's own marker on it
+/// (`in_web_content`, macOS): a web area above it — the same judgment by
+/// which the driver distrusts what typing there reads back.
 fn element_refs(
     nodes: &[TreeNode],
     elements: Option<&Value>,
@@ -1282,6 +1286,7 @@ fn element_refs(
                 role: role.to_string(),
                 secret,
                 paste: names_a_paste_control(role, text("label")),
+                web: element.get("in_web_content").and_then(Value::as_bool) == Some(true),
                 frame: element_frame(element),
             },
         );
@@ -1879,6 +1884,25 @@ mod tests {
         assert!(facts[&4].secret);
         // No structured list: nothing to offer.
         assert!(element_refs(&redacted.nodes, None).0.is_empty());
+    }
+
+    /// An element is in web content when the driver marks it so, and only
+    /// then.
+    #[test]
+    fn web_content_is_the_drivers_mark() {
+        use super::super::tree::{redact_tree, Dialect};
+        let tree = "- [0] AXWindow \"Termius\"\n  - [1] AXWebArea\n    - [2] AXTextField (Terminal input)\n  - [3] AXButton \"Close\"\n";
+        let elements = json!([
+            {"element_index": 0, "role": "AXWindow", "label": "Termius"},
+            {"element_index": 1, "role": "AXWebArea", "in_web_content": true},
+            {"element_index": 2, "role": "AXTextField", "in_web_content": true},
+            {"element_index": 3, "role": "AXButton", "label": "Close", "in_web_content": false},
+        ]);
+        let (_, facts) = element_refs(&redact_tree(tree, Dialect::Mac).nodes, Some(&elements));
+        assert!(facts[&2].web);
+        assert!(facts[&1].web);
+        assert!(!facts[&3].web);
+        assert!(!facts[&0].web);
     }
 
     /// A control is a paste's when it is pressed to do something — a menu

@@ -2289,6 +2289,9 @@
       "closeAll": "Fechar tudo",
       "hideTerminal": "Ocultar terminal ({shortcut})",
       "openFolderFirst": "Abra primeiro uma pasta",
+      "processExited": "Processo encerrado",
+      "processExitedWithCode": "Processo encerrado (código {code})",
+      "unavailable": "Sessão do terminal indisponível. Ela pode ter terminado ou o servidor pode ter reiniciado.",
       "keybar": {
         "label": "Teclas virtuais do terminal",
         "show": "Mostrar teclas virtuais",
@@ -3569,6 +3572,7 @@
         "nameLabel": "Nome:",
         "agentPromptLabel": "Instrução",
         "agentModelLabel": "Modelo",
+        "agentEffortLabel": "Esforço",
         "agentRunning": "Em execução...",
         "agentLiveTranscript": "Atividade ao vivo",
         "agentProgressTools": "{count} chamadas de ferramentas",
@@ -4100,7 +4104,25 @@
     "loading": "Carregando...",
     "emptyDirectory": "Este diretório está vazio",
     "errorLoadingDir": "Falha ao carregar o diretório",
-    "permissionDenied": "Permissão negada"
+    "permissionDenied": "Permissão negada",
+    "newFolder": {
+      "button": "Nova pasta",
+      "placeholder": "Nome da pasta",
+      "create": "Criar pasta",
+      "location": "Em {path}",
+      "errors": {
+        "empty": "Digite um nome para a pasta.",
+        "reservedName": "“{name}” não pode ser usado como nome de pasta.",
+        "separator": "O nome de uma pasta não pode conter / nem \\.",
+        "controlCharacter": "O nome de uma pasta não pode conter caracteres de controle nem quebras de linha.",
+        "reservedCharacter": "O nome de uma pasta não pode conter {character}.",
+        "invalidParent": "Não é possível criar uma pasta em {path}.",
+        "parentNotFound": "{path} não existe mais.",
+        "alreadyExists": "“{name}” já existe aqui.",
+        "permissionDenied": "Você não tem permissão para criar uma pasta aqui.",
+        "failed": "Não foi possível criar a pasta: {reason}"
+      }
+    }
   },
   "ChatChannelSettings": {
     "loading": "Carregando...",
@@ -4745,6 +4767,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Abrir espaço de trabalho local",
+    "openLocalFailed": "Não foi possível abrir o espaço de trabalho local",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

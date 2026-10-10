@@ -224,6 +224,9 @@ export function LiveTranscriptView({
 }: LiveTranscriptViewProps) {
   const conn = useConnectionStateById(connectionId)
   const connStatus = conn?.status ?? null
+  // The agent behind this transcript: the host's word for it, else the viewed
+  // connection's own.
+  const transcriptAgent = agentType ?? conn?.agentType ?? null
   const isStreaming = connStatus === "prompting"
 
   const { refetchDetail, setLiveOwnsActiveTurn } =
@@ -347,7 +350,11 @@ export function LiveTranscriptView({
           // folder lookup would come up empty; `undefined` when there is no
           // live connection keeps that lookup as the fallback.
           imageRoot={conn?.workingDir ?? undefined}
-          agentType={agentType ?? "claude_code"}
+          agentType={transcriptAgent ?? "claude_code"}
+          // With no agent known, that default is a guess, and what it last
+          // advertised in this folder says nothing about this transcript:
+          // `[]` badges no command at all rather than another agent's.
+          availableCommands={transcriptAgent ? conn?.availableCommands : []}
           connStatus={connStatus}
           isActive={false}
           detailLoading={detailLoading}

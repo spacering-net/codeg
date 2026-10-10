@@ -420,6 +420,10 @@ pub struct AcpDescribeAgentOptionsParams {
     pub agent_type: crate::models::AgentType,
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Config selections to apply on the probe session before reading the
+    /// snapshot — callers pass the model so per-model option lists match.
+    #[serde(default)]
+    pub config_values: Option<std::collections::BTreeMap<String, String>>,
 }
 
 pub async fn acp_describe_agent_options(
@@ -432,6 +436,7 @@ pub async fn acp_describe_agent_options(
         &state.data_dir,
         params.agent_type,
         params.working_dir,
+        params.config_values.unwrap_or_default(),
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;

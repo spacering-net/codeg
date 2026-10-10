@@ -1680,6 +1680,9 @@ function WebToolInput({
   const url = str(input, "url")
   const query = str(input, "query")
   const prompt = str(input, "prompt")
+  // Claude Code's WebFetch reads on past its 100,000-character page window
+  // from this character offset (CLI 2.1.290+).
+  const offset = num(input, "offset")
 
   return (
     <div className="space-y-2">
@@ -1694,9 +1697,14 @@ function WebToolInput({
       {name === "webfetch" && url && (
         <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2">
           <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="break-all font-mono text-xs text-foreground">
+          <span className="min-w-0 flex-1 break-all font-mono text-xs text-foreground">
             {url}
           </span>
+          {offset != null && offset > 0 && (
+            <span className="shrink-0 text-3xs text-muted-foreground">
+              {t("offset", { offset })}
+            </span>
+          )}
         </div>
       )}
       {prompt && (
