@@ -441,7 +441,7 @@ mod tests {
         let command = login_command_for_platform(&login_plan_from_env(&env).unwrap(), true).unwrap();
         let encoded = command.strip_prefix("powershell.exe -NoProfile -EncodedCommand ").unwrap();
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
-        let words: Vec<u16> = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        let words: Vec<u16> = bytes.as_chunks::<2>().0.iter().copied().map(u16::from_le_bytes).collect();
         let script = String::from_utf16(&words).unwrap();
         assert_eq!(script, format!("$env:CODEX_HOME = '{}'; & 'codex' 'login'", value.replace('\'', "''")));
         assert!(!command.contains(value));

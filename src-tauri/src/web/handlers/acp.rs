@@ -1554,9 +1554,16 @@ mod extra_slot_login_api_tests {
     use axum_test::TestServer;
     use serde_json::{json, Value};
 
-    #[tokio::test]
-    async fn isolated_sign_in_round_trips_through_the_authenticated_http_api() {
+    #[test]
+    fn isolated_sign_in_round_trips_through_the_authenticated_http_api() {
+        // The registry is process-wide; keep its test guard outside the async runtime.
         let _guard = crate::acp::custom_registry::hydrate_test_guard();
+        struct ClearRegistry;
+        impl Drop for ClearRegistry {
+            fn drop(&mut self) { crate::acp::custom_registry::hydrate(&[]); }
+        }
+        let _clear = ClearRegistry;
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         let data = tempfile::tempdir().unwrap();
         let static_dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
@@ -1597,5 +1604,6 @@ mod extra_slot_login_api_tests {
         assert_eq!(result["launched"], false);
         assert!(!result["command"].as_str().unwrap().is_empty());
         assert_eq!(std::fs::read(auth).unwrap(), b"untouched-account-file");
+        });
     }
 }
