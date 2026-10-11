@@ -32,7 +32,7 @@ impl IsolatorFamily {
             Self::Claude => "CLAUDE_CONFIG_DIR",
             Self::Codex => "CODEX_HOME",
             Self::Grok => "GROK_HOME",
-            Self::Gemini => "GEMINI_CONFIG_DIR",
+            Self::Gemini => "GEMINI_CLI_HOME",
             Self::OpenCode => "OPENCODE_CONFIG_DIR",
         }
     }
@@ -43,7 +43,7 @@ impl IsolatorFamily {
             Self::Claude => &["claude", "login"],
             Self::Codex => &["codex", "login"],
             Self::Grok => &["grok", "login"],
-            Self::Gemini => &["gemini", "auth"],
+            Self::Gemini => &["gemini"],
             Self::OpenCode => &["opencode", "auth", "login"],
         }
     }
@@ -78,8 +78,7 @@ pub fn spec_env_map(spec: &CustomAgentSpec) -> BTreeMap<String, String> {
 
 /// Detect the isolated family home from a launch env map.
 ///
-/// Gemini accepts two official keys: `GEMINI_CONFIG_DIR` is the `.gemini`
-/// directory itself; `GEMINI_CLI_HOME` is the parent (we join `.gemini`).
+/// Gemini uses `GEMINI_CLI_HOME`, the parent of `.gemini`.
 /// Blank values are ignored. Auth-file paths are never returned.
 pub fn isolator_from_env(env: &BTreeMap<String, String>) -> Option<(IsolatorFamily, PathBuf)> {
     isolator_from_env_filtered(env, None)
@@ -89,13 +88,11 @@ fn isolator_from_env_filtered(
     env: &BTreeMap<String, String>,
     only: Option<IsolatorFamily>,
 ) -> Option<(IsolatorFamily, PathBuf)> {
-    // Prefer the explicit config-dir keys. `GEMINI_CLI_HOME` is the parent of
-    // the settings directory, so it is consulted after `GEMINI_CONFIG_DIR`.
+    // GEMINI_CLI_HOME is the parent of the settings directory.
     let candidates: &[(IsolatorFamily, &str, bool)] = &[
         (IsolatorFamily::Claude, "CLAUDE_CONFIG_DIR", false),
         (IsolatorFamily::Codex, "CODEX_HOME", false),
         (IsolatorFamily::Grok, "GROK_HOME", false),
-        (IsolatorFamily::Gemini, "GEMINI_CONFIG_DIR", false),
         (IsolatorFamily::Gemini, "GEMINI_CLI_HOME", true),
         (IsolatorFamily::OpenCode, "OPENCODE_CONFIG_DIR", false),
     ];
@@ -132,10 +129,7 @@ fn is_default_home(family: IsolatorFamily, home: &Path) -> bool {
 }
 
 /// Extra homes for one family, from already-loaded custom-agent defs. No DB.
-pub fn extra_homes_for_family(
-    family: IsolatorFamily,
-    defs: &[CustomAgentDef],
-) -> Vec<PathBuf> {
+pub fn extra_homes_for_family(family: IsolatorFamily, defs: &[CustomAgentDef]) -> Vec<PathBuf> {
     let mut homes = Vec::new();
     for def in defs {
         let env = spec_env_map(&def.spec);
@@ -196,6 +190,11 @@ pub struct ExtraSlotLogin {
 
 pub fn login_plan_from_env(env: &BTreeMap<String, String>) -> Option<ExtraSlotLogin> {
     let (family, home) = isolator_from_env(env)?;
+    let home = if family == IsolatorFamily::Gemini {
+        home.parent()?.to_path_buf()
+    } else {
+        home
+    };
     Some(ExtraSlotLogin {
         family,
         isolator_key: family.isolator_key(),
@@ -283,9 +282,11 @@ mod tests {
         let mut env = BTreeMap::new();
         env.insert("GEMINI_CONFIG_DIR".into(), "/tmp/g".into());
         env.insert("GEMINI_CLI_HOME".into(), "/tmp/h".into());
-        let (family, home) = isolator_from_env(&env).expect("config dir wins");
+        let (family, home) = isolator_from_env(&env).expect("official home wins");
         assert_eq!(family, IsolatorFamily::Gemini);
-        assert_eq!(home, PathBuf::from("/tmp/g"));
+        assert_eq!(home, PathBuf::from("/tmp/h").join(".gemini"));
+        env.remove("GEMINI_CLI_HOME");
+        assert!(isolator_from_env(&env).is_none());
 
         let mut env = BTreeMap::new();
         env.insert("CLAUDE_CONFIG_DIR".into(), "   ".into());
@@ -308,7 +309,10 @@ mod tests {
                 "codex-default",
                 BTreeMap::from([(
                     "CODEX_HOME".into(),
-                    IsolatorFamily::Codex.default_home().to_string_lossy().into(),
+                    IsolatorFamily::Codex
+                        .default_home()
+                        .to_string_lossy()
+                        .into(),
                 )]),
             ),
         ];
@@ -349,10 +353,7 @@ mod tests {
     #[test]
     fn isolator_never_returns_an_auth_file_path() {
         let mut env = BTreeMap::new();
-        env.insert(
-            "CLAUDE_CONFIG_DIR".into(),
-            "/profiles/claude-2".into(),
-        );
+        env.insert("CLAUDE_CONFIG_DIR".into(), "/profiles/claude-2".into());
         env.insert(
             "ANTHROPIC_AUTH_TOKEN".into(),
             "/profiles/other/auth.json".into(),

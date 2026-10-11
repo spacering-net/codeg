@@ -1673,8 +1673,11 @@ fn read_claude_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
 }
 
 fn upsert_claude_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let path = claude_config_path();
-    let mut root = read_json_file(&path)?;
+    upsert_claude_server_at(&claude_config_path(), &claude_settings_path(), id, spec)
+}
+
+fn upsert_claude_server_at(path: &Path, settings: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
@@ -1696,35 +1699,38 @@ fn upsert_claude_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
         })?;
     map.insert(id.to_string(), canonical);
 
-    write_json_file(&path, &root)?;
-    enable_claude_local_plugin(id)
+    write_json_file(path, &root)?;
+    enable_claude_local_plugin_at(settings, id)
 }
 
 fn remove_claude_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = claude_config_path();
+    remove_claude_server_at(&claude_config_path(), &claude_settings_path(), id)
+}
+
+fn remove_claude_server_at(path: &Path, settings: &Path, id: &str) -> Result<bool, AppCommandError> {
     if !path.exists() {
         // Even if `~/.claude.json` is missing, `enabledPlugins` could still
         // have a stale entry from a prior session — clean it up regardless
         // so the user doesn't end up with dangling activation markers.
-        disable_claude_local_plugin(id)?;
+        disable_claude_local_plugin_at(settings, id)?;
         return Ok(false);
     }
 
-    let mut root = read_json_file(&path)?;
+    let mut root = read_json_file(path)?;
     let Some(obj) = root.as_object_mut() else {
-        disable_claude_local_plugin(id)?;
+        disable_claude_local_plugin_at(settings, id)?;
         return Ok(false);
     };
     let Some(servers) = obj.get_mut("mcpServers").and_then(Value::as_object_mut) else {
-        disable_claude_local_plugin(id)?;
+        disable_claude_local_plugin_at(settings, id)?;
         return Ok(false);
     };
 
     let removed = servers.remove(id).is_some();
     if removed {
-        write_json_file(&path, &root)?;
+        write_json_file(path, &root)?;
     }
-    disable_claude_local_plugin(id)?;
+    disable_claude_local_plugin_at(settings, id)?;
     Ok(removed)
 }
 
@@ -1733,10 +1739,6 @@ fn remove_claude_server(id: &str) -> Result<bool, AppCommandError> {
 /// servers from `~/.claude.json.mcpServers` (a server can be defined but
 /// will not load until it appears in this list). Existing fields in the
 /// settings file (env, model, other plugin entries) are preserved.
-fn enable_claude_local_plugin(id: &str) -> Result<(), AppCommandError> {
-    enable_claude_local_plugin_at(&claude_settings_path(), id)
-}
-
 fn enable_claude_local_plugin_at(path: &Path, id: &str) -> Result<(), AppCommandError> {
     let mut root = read_json_file(path)?;
     if !root.is_object() {
@@ -1772,10 +1774,6 @@ fn enable_claude_local_plugin_at(path: &Path, id: &str) -> Result<(), AppCommand
 /// Remove `<id>@local` from `~/.claude/settings.json.enabledPlugins` if
 /// present. Other entries (including any `<id>@<other-marketplace>` that
 /// the user manages manually) are intentionally left untouched.
-fn disable_claude_local_plugin(id: &str) -> Result<(), AppCommandError> {
-    disable_claude_local_plugin_at(&claude_settings_path(), id)
-}
-
 fn disable_claude_local_plugin_at(path: &Path, id: &str) -> Result<(), AppCommandError> {
     if !path.exists() {
         return Ok(());
@@ -3277,11 +3275,14 @@ fn fanout_server_for_extra_homes(
     for home in extra_homes {
         match family {
             crate::acp::family_isolator::IsolatorFamily::Claude => {
+                // CLAUDE_CONFIG_DIR relocates both files. This account does
+                // not read server definitions from the default home.
+                let config = home.join(".claude.json");
                 let settings = home.join("settings.json");
-                if spec.is_some() {
-                    enable_claude_local_plugin_at(&settings, id)?;
+                if let Some(spec) = spec {
+                    upsert_claude_server_at(&config, &settings, id, spec)?;
                 } else {
-                    disable_claude_local_plugin_at(&settings, id)?;
+                    let _ = remove_claude_server_at(&config, &settings, id)?;
                 }
             }
             crate::acp::family_isolator::IsolatorFamily::Codex => {
@@ -8329,6 +8330,9 @@ mod tests {
         )
         .expect("seed claude settings");
         let claude_auth = claude_home.join("auth.json");
+        let claude_config = claude_home.join(".claude.json");
+        std::fs::write(&claude_config, "{\"account\":\"keep\",\"mcpServers\":{\"other\":{\"command\":\"other\"}}}")
+            .expect("seed isolated config");
         let auth_bytes = b"{\"token\":\"do-not-copy\"}\n";
         std::fs::write(&claude_auth, auth_bytes).expect("seed auth");
 
@@ -8395,10 +8399,10 @@ mod tests {
         );
         assert_eq!(claude_root.get("model").and_then(Value::as_str), Some("keep-me"));
         assert_eq!(std::fs::read(&claude_auth).unwrap(), auth_bytes);
-        assert!(
-            !claude_root.as_object().unwrap().contains_key("mcpServers"),
-            "Claude extra homes get enabledPlugins only; defs stay in ~/.claude.json"
-        );
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(&claude_config).unwrap()).unwrap();
+        assert_eq!(config.pointer("/mcpServers/ctx7/command"), Some(&json!("npx")));
+        assert_eq!(config.get("account"), Some(&json!("keep")));
+        assert!(config.pointer("/mcpServers/other").is_some());
 
         let codex_raw = std::fs::read_to_string(codex_home.join("config.toml")).unwrap();
         let codex_root: toml::Value = codex_raw.parse().unwrap();
@@ -8463,6 +8467,10 @@ mod tests {
         let claude_root: Value =
             serde_json::from_str(&std::fs::read_to_string(&claude_settings).unwrap()).unwrap();
         assert!(claude_root.pointer("/enabledPlugins/ctx7@local").is_none());
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(&claude_config).unwrap()).unwrap();
+        assert!(config.pointer("/mcpServers/ctx7").is_none());
+        assert!(config.pointer("/mcpServers/other").is_some());
+        assert_eq!(config.get("account"), Some(&json!("keep")));
         assert_eq!(
             claude_root.pointer("/enabledPlugins/other@local"),
             Some(&json!(true))
