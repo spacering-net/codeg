@@ -1228,6 +1228,7 @@ export interface CustomAgentSpec {
 export type CustomDistributionKind = "npx" | "uvx" | "binary"
 
 export interface CustomAgentInfo {
+  isolatedLogin?: { key: string; home: string } | null
   registryId: string
   /** `custom:<registryId>` — pass this wherever an `AgentType` is expected. */
   agentType: AgentType
@@ -1284,6 +1285,20 @@ export interface RegistryCatalogAgent {
 
 export async function acpListCustomAgents(): Promise<CustomAgentInfo[]> {
   return getTransport().call("acp_list_custom_agents", {})
+}
+
+export interface ExtraSlotLoginResult {
+  family: string
+  isolatorKey: string
+  home: string
+  command: string
+  launched: boolean
+}
+
+export async function acpLoginExtraAgent(
+  registryId: string
+): Promise<ExtraSlotLoginResult> {
+  return getTransport().call("acp_login_extra_agent", { registryId })
 }
 
 export async function acpSaveCustomAgent(params: {

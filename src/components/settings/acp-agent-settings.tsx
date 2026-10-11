@@ -47,6 +47,7 @@ import {
 import { AgentIcon } from "@/components/agent-icon"
 import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { ExtraAgentSignIn } from "@/components/settings/extra-agent-sign-in"
 import { CustomAgentMcpToggle } from "@/components/settings/custom-agent-mcp-toggle"
 import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
 import {
@@ -100,6 +101,7 @@ import {
   acpPrepareNpxAgent,
   acpReorderAgents,
   acpDeleteCustomAgent,
+  acpListCustomAgents,
   acpUninstallAgent,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
@@ -152,6 +154,16 @@ import {
   type OpenCodeModelOptionGroup,
 } from "@/lib/opencode-connect"
 import { toErrorMessage } from "@/lib/app-error"
+
+function familyLabelFromIsolator(key: string): string {
+  if (key.startsWith("CLAUDE")) return "Claude"
+  if (key.startsWith("CODEX")) return "Codex"
+  if (key.startsWith("GROK")) return "Grok"
+  if (key.startsWith("GEMINI")) return "Gemini"
+  if (key.startsWith("OPENCODE")) return "OpenCode"
+  return key
+}
+
 import { getInstallErrorHintKey } from "@/lib/agent-install-error"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
@@ -4454,6 +4466,10 @@ export function AcpAgentSettings() {
     null
   )
   const [removingCustomAgent, setRemovingCustomAgent] = useState(false)
+  const [extraSlotIsolator, setExtraSlotIsolator] = useState<{
+    key: string
+    home: string
+  } | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [checkState, setCheckState] = useState<
     Partial<Record<AgentType, AgentCheckState>>
@@ -4589,6 +4605,29 @@ export function AcpAgentSettings() {
       null,
     [selectedAgentType, sortedAgents]
   )
+
+  useEffect(() => {
+    const registryId = selectedAgent
+      ? customAgentId(selectedAgent.agent_type)
+      : null
+    if (!registryId) {
+      setExtraSlotIsolator(null)
+      return
+    }
+    let cancelled = false
+    void acpListCustomAgents()
+      .then((rows) => {
+        if (cancelled) return
+        const row = rows.find((item) => item.registryId === registryId)
+        setExtraSlotIsolator(row?.isolatedLogin ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setExtraSlotIsolator(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedAgent])
   const agentTypesKey = useMemo(
     () =>
       [...new Set(agents.map((agent) => agent.agent_type))].sort().join(","),
@@ -11666,6 +11705,14 @@ supports_websockets = true`}
                   // dialog) so the panel reads as one stack of settings rather
                   // than four differently-shaped boxes.
                   <>
+                    {extraSlotIsolator &&
+                    customAgentId(selectedAgent.agent_type) ? (
+                      <ExtraAgentSignIn
+                        key={selectedAgent.agent_type}
+                        registryId={customAgentId(selectedAgent.agent_type)!}
+                        family={familyLabelFromIsolator(extraSlotIsolator.key)}
+                      />
+                    ) : null}
                     <SettingCard>
                       <SettingRow
                         icon={Pencil}
