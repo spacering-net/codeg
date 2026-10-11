@@ -1228,6 +1228,7 @@ export interface CustomAgentSpec {
 export type CustomDistributionKind = "npx" | "uvx" | "binary"
 
 export interface CustomAgentInfo {
+  isolatedLogin?: { key: string; home: string } | null
   registryId: string
   /** `custom:<registryId>` — pass this wherever an `AgentType` is expected. */
   agentType: AgentType

@@ -50,7 +50,7 @@ impl IsolatorFamily {
     /// Official login argv for this family. Used by extra-slot Sign in.
     pub fn login_args(self) -> &'static [&'static str] {
         match self {
-            Self::Claude => &["claude", "login"],
+            Self::Claude => &["claude", "auth", "login"],
             Self::Codex => &["codex", "login"],
             Self::Grok => &["grok", "login"],
             Self::Gemini => &["gemini"],
@@ -196,6 +196,7 @@ pub struct ExtraSlotLogin {
     pub isolator_key: &'static str,
     pub home: PathBuf,
     pub args: &'static [&'static str],
+    pub env: BTreeMap<String, String>,
 }
 
 pub fn login_plan_from_env(env: &BTreeMap<String, String>) -> Option<ExtraSlotLogin> {
@@ -205,38 +206,59 @@ pub fn login_plan_from_env(env: &BTreeMap<String, String>) -> Option<ExtraSlotLo
     } else {
         home
     };
+    let mut login_env = BTreeMap::from([(family.isolator_key().into(), home.to_string_lossy().into_owned())]);
+    if family == IsolatorFamily::OpenCode {
+        // OPENCODE_CONFIG_DIR does not move auth.json. Only offer isolated
+        // sign-in when the selected distribution isolates its data as well.
+        let data = env.get("XDG_DATA_HOME").filter(|s| !s.trim().is_empty())?;
+        let default_data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"));
+        if paths_equivalent(Path::new(data), &default_data) { return None; }
+        for key in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
+            if let Some(value) = env.get(key).filter(|s| !s.trim().is_empty()) {
+                login_env.insert(key.into(), value.clone());
+            }
+        }
+    }
     Some(ExtraSlotLogin {
         family,
         isolator_key: family.isolator_key(),
         home,
         args: family.login_args(),
+        env: login_env,
     })
 }
 
 pub fn login_plan_from_def(def: &CustomAgentDef) -> Option<ExtraSlotLogin> {
-    login_plan_from_env(&spec_env_map(&def.spec))
+    use crate::acp::custom_registry::CustomDistributionKind;
+    let env = match def.distribution_kind {
+        CustomDistributionKind::Npx => &def.spec.npx.as_ref()?.env,
+        CustomDistributionKind::Uvx => &def.spec.uvx.as_ref()?.env,
+        CustomDistributionKind::Binary => &def.spec.binary.get(crate::acp::registry::current_platform())?.env,
+    };
+    login_plan_from_env(env)
 }
 
 /// Build the command line `open_external_terminal_impl` will run.
 /// Rejects newlines in the home path (same rule as the terminal opener).
 pub fn shell_export_and_login(plan: &ExtraSlotLogin) -> Result<String, String> {
-    let home = plan.home.to_string_lossy();
-    if home.contains(['\n', '\r']) || plan.isolator_key.contains(['\n', '\r']) {
+    login_command_for_platform(plan, cfg!(windows))
+}
+
+fn login_command_for_platform(plan: &ExtraSlotLogin, windows: bool) -> Result<String, String> {
+    if plan.env.values().any(|s| s.contains(['\n', '\r', '\0'])) || plan.home.to_string_lossy().contains(['\n', '\r', '\0']) {
         return Err("isolator home must not contain newlines".into());
     }
-    let command = plan.args.join(" ");
-    if cfg!(windows) {
-        Ok(format!(
-            "set \"{}={}\"&& {}",
-            plan.isolator_key, home, command
-        ))
+    if windows {
+        use base64::Engine;
+        let mut script = plan.env.iter().map(|(key, value)| format!("$env:{key} = '{}'; ", value.replace('\'', "''"))).collect::<String>();
+        script.push_str("& ");
+        script.push_str(&plan.args.iter().map(|arg| format!("'{}'", arg.replace('\'', "''"))).collect::<Vec<_>>().join(" "));
+        let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        Ok(format!("powershell.exe -NoProfile -EncodedCommand {}", base64::engine::general_purpose::STANDARD.encode(bytes)))
     } else {
-        Ok(format!(
-            "export {}={} && {}",
-            plan.isolator_key,
-            shell_single_quote(&home),
-            command
-        ))
+        let exports = plan.env.iter().map(|(key, value)| format!("export {key}={}", shell_single_quote(value))).collect::<Vec<_>>().join(" && ");
+        Ok(format!("{exports} && {}", plan.args.join(" ")))
     }
 }
 
@@ -344,8 +366,12 @@ mod tests {
         assert_eq!(plan.home, PathBuf::from("/tmp/c2"));
         assert_eq!(plan.args, &["codex", "login"]);
         let cmd = shell_export_and_login(&plan).expect("cmd");
-        assert!(cmd.contains("CODEX_HOME"));
-        assert!(cmd.contains("codex login"));
+        if cfg!(windows) {
+            assert!(cmd.starts_with("powershell.exe -NoProfile -EncodedCommand "));
+        } else {
+            assert!(cmd.contains("CODEX_HOME"));
+            assert!(cmd.contains("codex login"));
+        }
         assert!(!cmd.contains('\n'));
     }
 
@@ -356,6 +382,7 @@ mod tests {
             isolator_key: "CLAUDE_CONFIG_DIR",
             home: PathBuf::from("/tmp/bad\nhome"),
             args: IsolatorFamily::Claude.login_args(),
+            env: BTreeMap::new(),
         };
         assert!(shell_export_and_login(&plan).is_err());
     }
@@ -371,5 +398,39 @@ mod tests {
         let (_, home) = isolator_from_env(&env).expect("home");
         assert_eq!(home, PathBuf::from("/profiles/claude-2"));
         assert!(!home.ends_with("auth.json"));
+    }
+
+    #[test]
+    fn opencode_sign_in_requires_separate_credential_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let mut env = BTreeMap::from([("OPENCODE_CONFIG_DIR".into(), root.path().join("config").display().to_string())]);
+        assert!(login_plan_from_env(&env).is_none());
+        env.insert("XDG_DATA_HOME".into(), root.path().join("data").display().to_string());
+        let plan = login_plan_from_env(&env).unwrap();
+        assert_eq!(plan.env.get("XDG_DATA_HOME"), env.get("XDG_DATA_HOME"));
+        assert!(login_command_for_platform(&plan, false).unwrap().contains("XDG_DATA_HOME"));
+    }
+
+    #[test]
+    fn gemini_sign_in_and_mcp_use_the_same_directory() {
+        let env = BTreeMap::from([("GEMINI_CLI_HOME".into(), "/profiles/google".into())]);
+        let (_, config) = isolator_from_env(&env).unwrap();
+        let plan = login_plan_from_env(&env).unwrap();
+        assert_eq!(config, plan.home.join(".gemini"));
+        assert_eq!(plan.args, &["gemini"]);
+    }
+
+    #[test]
+    fn windows_login_keeps_shell_metacharacters_inside_an_encoded_literal() {
+        use base64::Engine;
+        let value = "C:\\profiles\\a & echo bad %PATH% !bang! 'quoted'";
+        let env = BTreeMap::from([("CODEX_HOME".into(), value.into())]);
+        let command = login_command_for_platform(&login_plan_from_env(&env).unwrap(), true).unwrap();
+        let encoded = command.strip_prefix("powershell.exe -NoProfile -EncodedCommand ").unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        let words: Vec<u16> = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        let script = String::from_utf16(&words).unwrap();
+        assert_eq!(script, format!("$env:CODEX_HOME = '{}'; & 'codex' 'login'", value.replace('\'', "''")));
+        assert!(!command.contains(value));
     }
 }

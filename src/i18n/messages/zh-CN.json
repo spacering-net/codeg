@@ -1658,6 +1658,7 @@
     "customAgentSignIn": "登录",
     "customAgentSignInHint": "在此槽位的隔离主目录中打开官方 {family} 登录。账号 1 不受影响。",
     "customAgentSignInCopy": "复制登录命令",
+    "customAgentSignInCopied": "登录命令已复制",
     "customAgentSignInLaunched": "已在终端打开 {home} 的官方登录",
     "customAgentSignInCommand": "在终端运行以登录：{command}",
     "customAgentEditHint": "修改名称、图标、分发信息与技能声明；智能体 ID 不可修改。",

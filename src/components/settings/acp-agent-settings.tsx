@@ -24,7 +24,6 @@ import {
   EyeOff,
   GripVertical,
   Loader2,
-  LogIn,
   Minus,
   PackagePlus,
   Pencil,
@@ -48,6 +47,7 @@ import {
 import { AgentIcon } from "@/components/agent-icon"
 import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { ExtraAgentSignIn } from "@/components/settings/extra-agent-sign-in"
 import { CustomAgentMcpToggle } from "@/components/settings/custom-agent-mcp-toggle"
 import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
 import {
@@ -102,7 +102,6 @@ import {
   acpReorderAgents,
   acpDeleteCustomAgent,
   acpListCustomAgents,
-  acpLoginExtraAgent,
   acpUninstallAgent,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
@@ -154,17 +153,7 @@ import {
   setProviderEnabled,
   type OpenCodeModelOptionGroup,
 } from "@/lib/opencode-connect"
-import type { CustomAgentSpec } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-
-const EXTRA_SLOT_ISOLATOR_KEYS = [
-  "CLAUDE_CONFIG_DIR",
-  "CODEX_HOME",
-  "GROK_HOME",
-  "GEMINI_CONFIG_DIR",
-  "GEMINI_CLI_HOME",
-  "OPENCODE_CONFIG_DIR",
-] as const
 
 function familyLabelFromIsolator(key: string): string {
   if (key.startsWith("CLAUDE")) return "Claude"
@@ -175,24 +164,6 @@ function familyLabelFromIsolator(key: string): string {
   return key
 }
 
-function isolatorFromCustomSpec(
-  spec: CustomAgentSpec | undefined
-): { key: string; home: string } | null {
-  if (!spec) return null
-  const maps: Array<Record<string, string> | undefined> = [
-    spec.npx?.env,
-    spec.uvx?.env,
-    ...Object.values(spec.binary ?? {}).map((item) => item.env),
-  ]
-  for (const env of maps) {
-    if (!env) continue
-    for (const key of EXTRA_SLOT_ISOLATOR_KEYS) {
-      const home = env[key]?.trim()
-      if (home) return { key, home }
-    }
-  }
-  return null
-}
 import { getInstallErrorHintKey } from "@/lib/agent-install-error"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
@@ -4499,7 +4470,6 @@ export function AcpAgentSettings() {
     key: string
     home: string
   } | null>(null)
-  const [signingInExtraSlot, setSigningInExtraSlot] = useState(false)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [checkState, setCheckState] = useState<
     Partial<Record<AgentType, AgentCheckState>>
@@ -4649,7 +4619,7 @@ export function AcpAgentSettings() {
       .then((rows) => {
         if (cancelled) return
         const row = rows.find((item) => item.registryId === registryId)
-        setExtraSlotIsolator(isolatorFromCustomSpec(row?.spec))
+        setExtraSlotIsolator(row?.isolatedLogin ?? null)
       })
       .catch(() => {
         if (!cancelled) setExtraSlotIsolator(null)
@@ -11735,59 +11705,13 @@ supports_websockets = true`}
                   // dialog) so the panel reads as one stack of settings rather
                   // than four differently-shaped boxes.
                   <>
-                    {extraSlotIsolator ? (
-                      <SettingCard>
-                        <SettingRow
-                          icon={LogIn}
-                          title={t("customAgentSignIn")}
-                          description={t("customAgentSignInHint", {
-                            family: familyLabelFromIsolator(
-                              extraSlotIsolator.key
-                            ),
-                          })}
-                          control={
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={signingInExtraSlot}
-                              onClick={() => {
-                                const registryId = customAgentId(
-                                  selectedAgent.agent_type
-                                )
-                                if (!registryId) return
-                                setSigningInExtraSlot(true)
-                                void acpLoginExtraAgent(registryId)
-                                  .then((result) => {
-                                    if (result.launched) {
-                                      toast.success(
-                                        t("customAgentSignInLaunched", {
-                                          home: result.home,
-                                        })
-                                      )
-                                    } else {
-                                      toast.message(
-                                        t("customAgentSignInCommand", {
-                                          command: result.command,
-                                        })
-                                      )
-                                    }
-                                  })
-                                  .catch((error: unknown) => {
-                                    toast.error(toErrorMessage(error))
-                                  })
-                                  .finally(() => setSigningInExtraSlot(false))
-                              }}
-                            >
-                              {signingInExtraSlot ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <LogIn className="h-3.5 w-3.5" />
-                              )}
-                              {t("customAgentSignIn")}
-                            </Button>
-                          }
-                        />
-                      </SettingCard>
+                    {extraSlotIsolator &&
+                    customAgentId(selectedAgent.agent_type) ? (
+                      <ExtraAgentSignIn
+                        key={selectedAgent.agent_type}
+                        registryId={customAgentId(selectedAgent.agent_type)!}
+                        family={familyLabelFromIsolator(extraSlotIsolator.key)}
+                      />
                     ) : null}
                     <SettingCard>
                       <SettingRow

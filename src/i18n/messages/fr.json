@@ -1658,6 +1658,7 @@
     "customAgentSignIn": "Se connecter",
     "customAgentSignInHint": "Ouvre la connexion officielle {family} dans le répertoire isolé de ce slot. Le compte 1 est inchangé.",
     "customAgentSignInCopy": "Copier la commande de connexion",
+    "customAgentSignInCopied": "Commande de connexion copiée",
     "customAgentSignInLaunched": "Connexion officielle ouverte dans un terminal pour {home}",
     "customAgentSignInCommand": "Exécutez ceci dans un terminal pour vous connecter : {command}",
     "customAgentEditHint": "Modifiez le nom, l’icône, la distribution et les déclarations de skills. L’ID de l’agent ne peut pas être modifié.",

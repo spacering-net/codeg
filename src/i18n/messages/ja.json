@@ -1658,6 +1658,7 @@
     "customAgentSignIn": "サインイン",
     "customAgentSignInHint": "このスロットの隔離ホームで公式の {family} ログインを開きます。アカウント 1 はそのままです。",
     "customAgentSignInCopy": "ログインコマンドをコピー",
+    "customAgentSignInCopied": "ログインコマンドをコピーしました",
     "customAgentSignInLaunched": "{home} の公式ログインをターミナルで開きました",
     "customAgentSignInCommand": "サインインするにはターミナルで実行: {command}",
     "customAgentEditHint": "名前・アイコン・配布情報・スキル宣言を変更できます。エージェント ID は変更できません。",

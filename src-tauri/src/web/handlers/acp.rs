@@ -1548,3 +1548,54 @@ mod tests {
         assert!(!text.contains("codex"));
     }
 }
+#[cfg(test)]
+mod extra_slot_login_api_tests {
+    use super::*;
+    use axum_test::TestServer;
+    use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn isolated_sign_in_round_trips_through_the_authenticated_http_api() {
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
+        let data = tempfile::tempdir().unwrap();
+        let static_dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join("auth.json");
+        std::fs::write(&auth, b"untouched-account-file").unwrap();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let state = Arc::new(AppState::new_for_test(db, data.path().to_path_buf()));
+        let router = crate::web::router::build_router(
+            state,
+            "test-login-token".into(),
+            static_dir.path().to_path_buf(),
+            Arc::new(crate::web::shutdown::ShutdownSignal::new()),
+        );
+        let server = TestServer::new(router).unwrap();
+        server.post("/api/acp_login_extra_agent")
+            .json(&json!({"registryId": "codex-login-test"})).await.assert_status_unauthorized();
+        let saved = server.post("/api/acp_save_custom_agent")
+            .add_header("authorization", "Bearer test-login-token")
+            .json(&json!({"params": {
+                "registryId": "codex-login-test", "name": "Work", "version": "1.0.0",
+                "distributionKind": "npx", "spec": {"npx": {
+                    "package": "@agentclientprotocol/codex-acp@1.0.0", "cmd": "codex-acp",
+                    "env": {"CODEX_HOME": home.path().display().to_string()}
+                }}
+            }})).await;
+        saved.assert_status_ok();
+        let listed = server.post("/api/acp_list_custom_agents")
+            .add_header("authorization", "Bearer test-login-token").json(&json!({})).await;
+        listed.assert_status_ok();
+        let rows: Value = listed.json();
+        assert_eq!(rows[0]["isolatedLogin"]["key"], "CODEX_HOME");
+        let login = server.post("/api/acp_login_extra_agent")
+            .add_header("authorization", "Bearer test-login-token")
+            .json(&json!({"registryId": "codex-login-test"})).await;
+        login.assert_status_ok();
+        let result: Value = login.json();
+        assert_eq!(result["home"], home.path().display().to_string());
+        assert_eq!(result["launched"], false);
+        assert!(!result["command"].as_str().unwrap().is_empty());
+        assert_eq!(std::fs::read(auth).unwrap(), b"untouched-account-file");
+    }
+}

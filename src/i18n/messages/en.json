@@ -1658,6 +1658,7 @@
     "customAgentSignIn": "Sign in",
     "customAgentSignInHint": "Opens the official {family} login into this slot's isolated home. Account 1 is unchanged.",
     "customAgentSignInCopy": "Copy login command",
+    "customAgentSignInCopied": "Login command copied",
     "customAgentSignInLaunched": "Official login opened in a terminal for {home}",
     "customAgentSignInCommand": "Run this in a terminal to sign in: {command}",
     "customAgentEditHint": "Update the name, icon, distribution and skills declarations. The agent ID cannot be changed.",

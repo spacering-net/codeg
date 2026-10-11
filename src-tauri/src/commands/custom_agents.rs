@@ -29,6 +29,7 @@ use crate::web::event_bridge::EventEmitter;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomAgentInfo {
+    pub isolated_login: Option<ExtraSlotLoginInfo>,
     pub registry_id: String,
     /// Wire form of the agent type (`custom:<id>`) — what the frontend passes
     /// back as an `AgentType`.
@@ -60,12 +61,22 @@ pub struct CustomAgentInfo {
     pub problem: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtraSlotLoginInfo {
+    pub key: String,
+    pub home: String,
+}
+
 fn info_from_def(def: &CustomAgentDef) -> CustomAgentInfo {
     // `validate`, not `build_meta`: the settings list re-renders on every
     // refresh and this result is thrown away, while building metadata leaks the
     // arg/env/platform slices it interns (see `custom_registry::build_meta`).
     let problem = custom_registry::validate(def).err().map(|e| e.to_string());
     CustomAgentInfo {
+        isolated_login: family_isolator::login_plan_from_def(def).map(|plan| ExtraSlotLoginInfo {
+            key: plan.isolator_key.into(),
+            home: plan.home.display().to_string(),
+        }),
         agent_type: AgentType::custom(&def.registry_id)
             // An unparseable id cannot reach the database (`upsert` validates),
             // so this is unreachable in practice; degrade rather than panic.
@@ -603,9 +614,12 @@ pub async fn acp_login_extra_agent_core(
     })?;
     let plan = family_isolator::login_plan_from_def(&def).ok_or_else(|| {
         AcpError::protocol(
-            "this custom agent has no isolated family home (set CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME, GEMINI_CONFIG_DIR, or OPENCODE_CONFIG_DIR)",
+            "Configure an isolated account home for this agent. OpenCode also requires a separate XDG_DATA_HOME.",
         )
     })?;
+    if !plan.home.is_absolute() {
+        return Err(AcpError::protocol("Use an absolute path for the account home."));
+    }
     std::fs::create_dir_all(&plan.home).map_err(|e| {
         AcpError::protocol(format!(
             "failed to create isolated home {}: {e}",
@@ -614,16 +628,16 @@ pub async fn acp_login_extra_agent_core(
     })?;
     let command = family_isolator::shell_export_and_login(&plan)
         .map_err(AcpError::protocol)?;
-    let launched = launch_extra_slot_login(&command, &plan.home);
     Ok(ExtraSlotLoginResult {
         family: plan.family.as_str().to_string(),
         isolator_key: plan.isolator_key.to_string(),
         home: plan.home.display().to_string(),
         command,
-        launched,
+        launched: false,
     })
 }
 
+#[cfg(feature = "tauri-runtime")]
 fn launch_extra_slot_login(command: &str, home: &std::path::Path) -> bool {
     if cfg!(test) {
         let _ = (command, home);
@@ -647,7 +661,9 @@ pub async fn acp_login_extra_agent(
     registry_id: String,
     db: State<'_, AppDatabase>,
 ) -> Result<ExtraSlotLoginResult, AcpError> {
-    acp_login_extra_agent_core(&registry_id, &db).await
+    let mut result = acp_login_extra_agent_core(&registry_id, &db).await?;
+    result.launched = launch_extra_slot_login(&result.command, std::path::Path::new(&result.home));
+    Ok(result)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -790,8 +806,12 @@ mod tests {
         assert_eq!(result.family, "codex");
         assert_eq!(result.isolator_key, "CODEX_HOME");
         assert_eq!(result.home, extra.path().display().to_string());
-        assert!(result.command.contains("codex login"));
-        assert!(result.command.contains("CODEX_HOME"));
+        if cfg!(windows) {
+            assert!(result.command.starts_with("powershell.exe -NoProfile -EncodedCommand "));
+        } else {
+            assert!(result.command.contains("codex login"));
+            assert!(result.command.contains("CODEX_HOME"));
+        }
         assert!(!result.launched, "unit tests must not spawn a terminal");
         assert_eq!(std::fs::read(&extra_auth).unwrap(), b"slot-2\n");
         assert_eq!(std::fs::read(&other_auth).unwrap(), b"slot-1\n");
