@@ -19,6 +19,7 @@ pub mod custom_registry;
 pub mod delegation;
 pub mod error;
 pub mod event_stream;
+pub mod family_isolator;
 pub mod feedback;
 pub mod file_system_runtime;
 pub mod fork;

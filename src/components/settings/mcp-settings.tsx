@@ -110,6 +110,10 @@ type McpTranslator = (
   values?: Record<string, string | number>
 ) => string
 
+// Extra isolated family homes (custom agents with CLAUDE_CONFIG_DIR /
+// CODEX_HOME / GROK_HOME / GEMINI_CONFIG_DIR / OPENCODE_CONFIG_DIR) stay
+// covered by these family rows. Do not add custom:* checkboxes here: MCP
+// writers fan the same server into those homes automatically.
 const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "claude_code", label: "Claude Code" },
   { value: "codex", label: "Codex CLI" },
