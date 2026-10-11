@@ -118,6 +118,13 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   the cache-write column stayed 0. Totals are unchanged; the columns are
 ///   not.
 ///   See `parsers::codex::codex_usage_counters`.
+/// * `5` — Qoder sub-agent spend reads the run's own transcripts
+///   (`<sessionId>/subagents/agent-*.jsonl`) instead of its segment logs:
+///   deduped by `message.id`, the cached prefix split out, each call
+///   attributed to the turn current at its own timestamp. Totals change for
+///   unchanged transcripts — the old path double-counted the cached prefix,
+///   and a rotated log silently dropped the spend. See
+///   `parsers::qoder::attribute_subagent_usage`.
 ///
 /// Only the accounting stored in `token_usage_turn` counts: the four token
 /// counters, the duration and the timestamp. A conversation's context WINDOW is
@@ -132,7 +139,7 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-const FACT_SCHEMA_VERSION: &str = "4";
+const FACT_SCHEMA_VERSION: &str = "5";
 
 const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
