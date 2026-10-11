@@ -1163,9 +1163,19 @@ export function buildStreamingTurnsFromLiveMessage(
 
         if (resolvedParent) {
           childToolCallIds.add(block.info.tool_call_id)
-          agentChildren
-            .get(resolvedParent)
-            ?.push({ info: block.info, toolName })
+          const children = agentChildren.get(resolvedParent)
+          const childIndex = children?.length ?? 0
+          children?.push({ info: block.info, toolName })
+          // Keep the child's work in ONE timeline: the marker preserves this
+          // tool call's position among the prose around it (the capsule
+          // resolves it back through `agent_stats.tool_calls` by ordinal —
+          // the stats carry no ids, and both lists are appended in this same
+          // arrival pass, so the ordinal is exact). The list is created on
+          // demand so a tool call arriving before any prose still anchors the
+          // timeline's start.
+          const timeline = agentTranscripts.get(resolvedParent) ?? []
+          timeline.push({ type: "tool_call", childIndex })
+          agentTranscripts.set(resolvedParent, timeline)
           // This agent stopped talking to run a tool: its next chunk starts a
           // new transcript entry rather than rejoining the previous one.
           transcriptRun.delete(resolvedParent)

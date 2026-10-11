@@ -451,7 +451,7 @@ describe("AgentToolCallPart live subagent transcript", () => {
   const expandRunningCapsule = () =>
     fireEvent.click(screen.getByRole("button", { name: "Running" }))
 
-  it("renders text and thinking entries while running", () => {
+  it("folds thinking entries like the main thread and expands on demand", () => {
     renderCard(
       withTranscript("input-available", [
         { type: "thinking", text: "planning the sweep" },
@@ -460,8 +460,47 @@ describe("AgentToolCallPart live subagent transcript", () => {
     )
     expandRunningCapsule()
     expect(screen.getByText("Live activity")).toBeInTheDocument()
+    // Folded by default — same contract as the main thread's <Reasoning>.
+    expect(screen.queryByText("planning the sweep")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Thought" }))
     expect(screen.getByText("planning the sweep")).toBeInTheDocument()
     expect(screen.getByText("found three matches")).toBeInTheDocument()
+  })
+
+  it("renders child tool-call markers in their chronological position", () => {
+    const part: ToolCallPart = {
+      ...withTranscript("input-available", [
+        { type: "text", text: "before the read" },
+        { type: "tool_call", childIndex: 0 },
+        { type: "text", text: "after the read" },
+      ]),
+      agentStats: { tool_calls: [{ tool_name: "Read", is_error: false }] },
+    }
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AgentToolCallPart
+          part={part}
+          renderToolCall={(tc, key) => (
+            <span key={key} data-testid="child-tool-call">
+              {tc.toolName}
+            </span>
+          )}
+        />
+      </NextIntlClientProvider>
+    )
+    expandRunningCapsule()
+    const before = screen.getByText("before the read")
+    const child = screen.getByTestId("child-tool-call")
+    const after = screen.getByText("after the read")
+    // The child's card sits BETWEEN the prose that arrived on either side —
+    // not hoisted into a "tool calls first" block of its own.
+    expect(
+      before.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      child.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(child.textContent).toBe("Read")
   })
 
   it("skips empty thinking entries and renders nothing when settled", () => {
