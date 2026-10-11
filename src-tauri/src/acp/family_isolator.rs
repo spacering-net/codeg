@@ -201,6 +201,9 @@ pub struct ExtraSlotLogin {
 
 pub fn login_plan_from_env(env: &BTreeMap<String, String>) -> Option<ExtraSlotLogin> {
     let (family, home) = isolator_from_env(env)?;
+    if is_default_home(family, &home) {
+        return None;
+    }
     let home = if family == IsolatorFamily::Gemini {
         home.parent()?.to_path_buf()
     } else {
@@ -409,6 +412,16 @@ mod tests {
         let plan = login_plan_from_env(&env).unwrap();
         assert_eq!(plan.env.get("XDG_DATA_HOME"), env.get("XDG_DATA_HOME"));
         assert!(login_command_for_platform(&plan, false).unwrap().contains("XDG_DATA_HOME"));
+    }
+
+    #[test]
+    fn default_home_is_not_offered_as_an_isolated_account() {
+        for family in [IsolatorFamily::Claude, IsolatorFamily::Codex, IsolatorFamily::Grok, IsolatorFamily::Gemini, IsolatorFamily::OpenCode] {
+            let home = family.default_home();
+            let value = if family == IsolatorFamily::Gemini { home.parent().unwrap() } else { &home };
+            let env = BTreeMap::from([(family.isolator_key().into(), value.display().to_string())]);
+            assert!(login_plan_from_env(&env).is_none(), "{family:?}");
+        }
     }
 
     #[test]
