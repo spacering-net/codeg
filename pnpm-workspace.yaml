@@ -8,3 +8,8 @@ allowBuilds:
   msw: true
   sharp: true
   unrs-resolver: true
+
+# Supply-chain hardening.
+# Only accept package versions published at least 7 days ago, so a malicious
+# release has a chance to be caught and unpublished before we pick it up.
+minimumReleaseAge: 10080
