@@ -4757,13 +4757,22 @@ fn build_client_capabilities(
     }
     // Form elicitation is advertised only to agents that are KNOWN to send
     // spec-conformant `elicitation/create` forms `classify_elicitation` can
-    // bridge: codex-acp (Plan-mode `request_user_input`, MCP forms/approvals)
-    // and deepseek-acp (its `ask_user_question` + plan-review both build
-    // standard oneOf/anyOf forms, and decode a free-text answer that is not in
-    // the option set as a custom answer — the card's "Other" input round-trips
-    // cleanly). Agents without the bit fall back to their own
-    // `request_permission` button path.
-    if matches!(agent_type, AgentType::Codex | AgentType::DeepSeek) {
+    // bridge: codex-acp (Plan-mode `request_user_input`, MCP forms/approvals),
+    // deepseek-acp (its `ask_user_question` + plan-review both build standard
+    // oneOf/anyOf forms, and decode a free-text answer that is not in the
+    // option set as a custom answer — the card's "Other" input round-trips
+    // cleanly), and qodercli ≥1.1.67 (verified 2026-10-10 against the real
+    // wire: its native `AskUserQuestion` arrives as a form — question prose in
+    // `description`, header in `title`, `oneOf` choices, scope flattened as
+    // top-level `sessionId`/`toolCallId` — while MCP tool-call approvals KEEP
+    // using `session/request_permission`, so only the question surface
+    // changes; without the bit qodercli hides `AskUserQuestion` entirely and
+    // the model falls back to its `request_permission` path). Agents without
+    // the bit fall back to their own `request_permission` button path.
+    if matches!(
+        agent_type,
+        AgentType::Codex | AgentType::DeepSeek | AgentType::Qoder
+    ) {
         client_capabilities = client_capabilities
             .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
     }
@@ -22443,6 +22452,14 @@ mod tests {
         let deepseek = caps_of(AgentType::DeepSeek);
         assert!(deepseek.get("elicitation").is_some());
         assert!(deepseek.get("_meta").is_none());
+
+        // Qoder: form elicitation since qodercli 1.1.67's native
+        // `AskUserQuestion` rides `elicitation/create` (verified on the real
+        // wire; MCP tool-call approvals stay on `session/request_permission`).
+        // No `_meta` gates.
+        let qoder = caps_of(AgentType::Qoder);
+        assert!(qoder.get("elicitation").is_some());
+        assert!(qoder.get("_meta").is_none());
 
         // Cursor: parameterized model picker only (no elicitation / AIR).
         let cursor = caps_of(AgentType::Cursor);
