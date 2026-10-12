@@ -199,6 +199,17 @@ describe("buildReferenceGroups", () => {
     expect(agents[0].reference.id).toBe("codex")
   })
 
+  it("leaves the agent group out entirely when agent mentions are off", () => {
+    const groups = buildReferenceGroups(
+      "",
+      emptySources({
+        agents: [makeAgent("codex", { name: "Codex" })],
+        includeAgents: false,
+      })
+    )
+    expect(groups.map((g) => g.kind)).toEqual(["file", "session", "commit"])
+  })
+
   it("adapts sessions into codeg://session references", () => {
     const groups = buildReferenceGroups(
       "login",

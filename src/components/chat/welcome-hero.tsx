@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl"
 import { Lightbulb } from "lucide-react"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useIsMac } from "@/hooks/use-is-mac"
+import { useAgentMentionsEnabled } from "@/lib/agent-mention-prefs"
 import {
   formatShortcutLabel,
   type ShortcutSettings,
@@ -126,9 +127,14 @@ export function WelcomeTip() {
   const t = useTranslations("Folder.chat.welcomePanel")
   const { shortcuts } = useShortcutSettings()
   const isMac = useIsMac()
+  // The agent-mention tip advertises a feature the user switched off.
+  const agentMentionsEnabled = useAgentMentionsEnabled()
 
   const [tipIndex] = useState(() => Math.floor(Math.random() * TIPS.length))
-  const tip = TIPS[tipIndex]
+  const tips = agentMentionsEnabled
+    ? TIPS
+    : TIPS.filter((def) => def.key !== "mentionTargets")
+  const tip = tips[tipIndex % tips.length]
 
   const kbd = (chunks: ReactNode) => (
     <kbd className="mx-0.5 inline-flex items-center rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.65625rem] font-medium text-foreground/80">

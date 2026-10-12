@@ -16,6 +16,7 @@ import { Selection } from "@tiptap/pm/state"
 import { EditorContent, useEditor } from "@tiptap/react"
 import { exitSuggestion } from "@tiptap/suggestion"
 
+import { useAgentMentionsEnabled } from "@/lib/agent-mention-prefs"
 import type { HistoryDirection } from "@/lib/composer-history"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import {
@@ -47,6 +48,9 @@ import type {
   SuggestionPopupHandle,
 } from "./suggestion/types"
 import type { ReferenceAttrs, ReferenceKind } from "./types"
+
+/** Tabs dropped from the `@` panel when agent mentions are off in Settings. */
+const AGENT_TAB_HIDDEN: readonly ReferenceKind[] = ["agent"]
 
 /**
  * Imperative handle exposed to the parent (e.g. the message input that owns
@@ -278,6 +282,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     const onFocusRef = useRef(onFocus)
     const onBlurRef = useRef(onBlur)
     const onReadyRef = useRef(onReady)
+    const agentMentionsEnabled = useAgentMentionsEnabled()
     // Latest referenceSearch, read at event time so the mention plugin (always
     // installed) is gated on whether mentions are currently enabled — robust to
     // the prop being added/removed after the editor is created once.
@@ -728,6 +733,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             moreLabel={mentionUiLabels?.more}
             countLabel={mentionUiLabels?.count}
             tabLabels={tabLabels}
+            hiddenKinds={agentMentionsEnabled ? undefined : AGENT_TAB_HIDDEN}
           />
         )}
       </div>

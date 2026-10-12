@@ -7,6 +7,8 @@
  *   * "Multi-Agent Collaboration" — whether an agent may hand a sub-task to
  *     another agent at all, how deep the chain may go, and what each agent is
  *     spawned with (`delegation-settings.tsx`).
+ *   * "Mention agents with @" — whether the composer's `@` panel offers
+ *     agents at all (`agent-mention-settings.tsx`), a per-device preference.
  *   * "In-conversation tools" — the tool groups codeg-mcp injects when an
  *     agent starts: feedback, ask-user-question, session info, the built-in
  *     browser, computer use and the create-from-chat writers
@@ -24,6 +26,7 @@ import { useTranslations } from "next-intl"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
+import { AgentMentionSettingsSection } from "@/components/settings/agent-mention-settings"
 import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
 
 export function CollaborationSettings() {
@@ -40,6 +43,8 @@ export function CollaborationSettings() {
         </section>
 
         <DelegationSettingsSection />
+
+        <AgentMentionSettingsSection />
 
         <AgentToolsSettingsSection />
       </div>
