@@ -75,6 +75,10 @@ impl WebServerState {
         self.shutdown_signal.clone()
     }
 
+    pub fn running_port(&self) -> u16 {
+        self.port.load(Ordering::Relaxed)
+    }
+
     /// Mark the server as running from outside the Tauri command path.
     /// `codeg-server` calls `axum::serve` directly without going through
     /// `start_web_server`, so without this the `running` flag stays
@@ -315,9 +319,35 @@ fn classify_bind_error(err: std::io::Error) -> AppCommandError {
     AppCommandError::new(code, key).with_detail(err.to_string())
 }
 
+/// Returns the path set by `CODEG_STATIC_DIR` if it contains an `index.html`.
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn external_static_dir() -> Option<PathBuf> {
+    let raw = std::env::var("CODEG_STATIC_DIR").ok()?;
+    let p = PathBuf::from(&raw);
+    if p.join("index.html").exists() {
+        Some(p)
+    } else {
+        tracing::warn!(
+            "[WEB] CODEG_STATIC_DIR set but no index.html in: {}",
+            raw
+        );
+        None
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 pub(crate) fn find_static_dir_tauri(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
+    // 0. External override: `CODEG_STATIC_DIR` forces the desktop window to
+    //    load from a local directory instead of the embedded assets, so a
+    //    frontend rebuild (`pnpm build`) takes effect without recompiling Rust.
+    if let Some(dir) = external_static_dir() {
+        tracing::info!(
+            "[WEB] Serving static files from CODEG_STATIC_DIR: {}",
+            dir.display()
+        );
+        return dir;
+    }
     // 1. Production: bundle.resources copies out/ → web/ inside the resource directory.
     let resource = app.path().resource_dir().ok();
     if let Some(ref dir) = resource {
