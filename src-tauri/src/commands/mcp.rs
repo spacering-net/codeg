@@ -76,6 +76,10 @@ pub enum McpAppType {
     /// assignable target and gets no MCP over the ACP wire. See the pi section
     /// below.
     Pi,
+    /// Serializes as `mcp_over_acp`. Not an agent at all: codeg's own store of
+    /// servers handed to MCP-capable custom agents over the ACP wire at
+    /// session birth. See the MCP-over-ACP section below.
+    McpOverAcp,
 }
 
 /// Every app the local-MCP write paths walk, in the order they walk it.
@@ -88,7 +92,7 @@ pub enum McpAppType {
 /// server come back on the next refresh. Both used to keep their own hand-typed
 /// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
 /// (which fails to compile when a variant is added) is what keeps them honest.
-const ALL_MCP_APPS: [McpAppType; 15] = [
+const ALL_MCP_APPS: [McpAppType; 16] = [
     McpAppType::ClaudeCode,
     McpAppType::Codex,
     McpAppType::Gemini,
@@ -104,6 +108,7 @@ const ALL_MCP_APPS: [McpAppType; 15] = [
     McpAppType::Qoder,
     McpAppType::Antigravity,
     McpAppType::Pi,
+    McpAppType::McpOverAcp,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -2460,8 +2465,8 @@ fn remove_cline_server(id: &str) -> Result<bool, AppCommandError> {
 fn deepseek_mcp_json_path() -> PathBuf {
     crate::parsers::deepseek::resolve_dsh_home_dir().join("mcp.json")
 }
-
-/// Write the DeepSeek MCP store with owner-only permissions.
+/// Write a codeg-owned MCP store (DeepSeek, MCP-over-ACP) with owner-only
+/// permissions.
 ///
 /// Every other agent's store is created by the agent itself, with whatever
 /// mode that agent chose; this one is created by CODEG, so its mode is codeg's
@@ -2475,7 +2480,7 @@ fn deepseek_mcp_json_path() -> PathBuf {
 /// a WORLD-accessible mode — a deliberately group-shared `0640` is left alone.
 /// The parent is created `0700` when it does not exist yet, matching what the
 /// harness itself does with `$DSH_HOME`.
-fn write_deepseek_json_file(path: &Path, value: &Value) -> Result<(), AppCommandError> {
+fn write_owned_store_json_file(path: &Path, value: &Value) -> Result<(), AppCommandError> {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             #[cfg(unix)]
@@ -2589,7 +2594,7 @@ fn upsert_deepseek_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), 
         })?;
     map.insert(id.to_string(), canonical);
 
-    write_deepseek_json_file(path, &root)
+    write_owned_store_json_file(path, &root)
 }
 
 fn remove_deepseek_server(id: &str) -> Result<bool, AppCommandError> {
@@ -2611,7 +2616,114 @@ fn remove_deepseek_server_at(path: &Path, id: &str) -> Result<bool, AppCommandEr
 
     let removed = servers.remove(id).is_some();
     if removed {
-        write_deepseek_json_file(path, &root)?;
+        write_owned_store_json_file(path, &root)?;
+    }
+    Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
+// MCP-over-ACP  (<data dir>/mcp-over-acp.json  →  top-level `mcpServers`)
+//
+// Like DeepSeek's store above, this file is NOT read by any agent: it is
+// codeg's own record of which servers a custom ACP agent should receive as
+// `session/new`'s `mcpServers`. `read_servers_for_agent_type` hands it to
+// `AgentType::Custom(_)` and `load_mcp_servers_for_agent` forwards it at
+// every session birth; delivery stays gated by the custom agent's own
+// `supports_mcp` and its advertised transport capabilities. Unlike DeepSeek,
+// ALL three transports are hostable — the store keeps the canonical spec
+// verbatim, and the per-session capability filter skips what the agent
+// cannot mount.
+//
+// The owner-only writer is shared with DeepSeek: both are CODEG-created
+// stores whose stdio `env` routinely carries tokens.
+// ---------------------------------------------------------------------------
+
+fn mcp_over_acp_store_path() -> PathBuf {
+    crate::paths::codeg_mcp_over_acp_store_path()
+}
+
+fn read_mcp_over_acp_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+    read_mcp_over_acp_servers_at(&mcp_over_acp_store_path())
+}
+
+fn read_mcp_over_acp_servers_at(
+    path: &Path,
+) -> Result<BTreeMap<String, Value>, AppCommandError> {
+    let root = read_json_file(path)?;
+    let mut out = BTreeMap::new();
+
+    let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else {
+        return Ok(out);
+    };
+
+    for (id, spec) in servers {
+        match canonicalize_spec(spec, "MCP-over-ACP config") {
+            Ok(normalized) => {
+                out.insert(id.to_string(), normalized);
+            }
+            Err(err) => {
+                eprintln!("[MCP] skip invalid MCP-over-ACP entry id={id}: {err}");
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+fn upsert_mcp_over_acp_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    upsert_mcp_over_acp_server_at(&mcp_over_acp_store_path(), id, spec)
+}
+
+fn upsert_mcp_over_acp_server_at(
+    path: &Path,
+    id: &str,
+    spec: &Value,
+) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
+    if !root.is_object() {
+        root = json!({});
+    }
+
+    let canonical = canonicalize_spec(spec, "MCP-over-ACP write")?;
+
+    let obj = root.as_object_mut().ok_or_else(|| {
+        mcp_configuration_invalid(format!("invalid JSON root in {}", path.display()))
+    })?;
+    if !obj.get("mcpServers").map(Value::is_object).unwrap_or(false) {
+        obj.insert("mcpServers".to_string(), Value::Object(Map::new()));
+    }
+
+    let map = obj
+        .get_mut("mcpServers")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            mcp_configuration_invalid(format!("invalid mcpServers in {}", path.display()))
+        })?;
+    map.insert(id.to_string(), canonical);
+
+    write_owned_store_json_file(path, &root)
+}
+
+fn remove_mcp_over_acp_server(id: &str) -> Result<bool, AppCommandError> {
+    remove_mcp_over_acp_server_at(&mcp_over_acp_store_path(), id)
+}
+
+fn remove_mcp_over_acp_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let mut root = read_json_file(path)?;
+    let Some(obj) = root.as_object_mut() else {
+        return Ok(false);
+    };
+    let Some(servers) = obj.get_mut("mcpServers").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+
+    let removed = servers.remove(id).is_some();
+    if removed {
+        write_owned_store_json_file(path, &root)?;
     }
     Ok(removed)
 }
@@ -3074,7 +3186,7 @@ impl LocalMcpReader {
     }
 }
 
-fn local_mcp_readers() -> [LocalMcpReader; 15] {
+fn local_mcp_readers() -> [LocalMcpReader; 16] {
     [
         LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, read_claude_servers),
         LocalMcpReader::new("Codex", McpAppType::Codex, read_codex_servers),
@@ -3095,6 +3207,11 @@ fn local_mcp_readers() -> [LocalMcpReader; 15] {
         ),
         LocalMcpReader::new("Qoder", McpAppType::Qoder, read_qoder_servers),
         LocalMcpReader::new("pi", McpAppType::Pi, read_pi_servers),
+        LocalMcpReader::new(
+            "MCP-over-ACP",
+            McpAppType::McpOverAcp,
+            read_mcp_over_acp_servers,
+        ),
     ]
 }
 
@@ -3239,6 +3356,7 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
         McpAppType::Qoder => upsert_qoder_server(id, spec),
         McpAppType::Antigravity => upsert_antigravity_server(id, spec),
         McpAppType::Pi => upsert_pi_server(id, spec),
+        McpAppType::McpOverAcp => upsert_mcp_over_acp_server(id, spec),
     }
 }
 
@@ -3278,8 +3396,9 @@ pub fn read_servers_for_agent_type(
         AgentType::Antigravity => read_antigravity_servers(),
         // Custom agents get MCP purely over the ACP wire (`session/new`'s
         // `mcpServers`); codeg deliberately knows nothing about their native
-        // config files, so there is no per-agent store to read back here.
-        AgentType::Custom(_) => Ok(BTreeMap::new()),
+        // config files. The MCP-over-ACP store (see its section above) is the
+        // wire-side source, gated by the agent's `supports_mcp`.
+        AgentType::Custom(_) => read_mcp_over_acp_servers(),
     }
 }
 
@@ -4343,6 +4462,7 @@ fn remove_server_for_app(app: McpAppType, id: &str) -> Result<bool, AppCommandEr
         McpAppType::Qoder => remove_qoder_server(id),
         McpAppType::Antigravity => remove_antigravity_server(id),
         McpAppType::Pi => remove_pi_server(id),
+        McpAppType::McpOverAcp => remove_mcp_over_acp_server(id),
     }
 }
 
@@ -6646,6 +6766,120 @@ mod tests {
     }
 
     #[test]
+    fn mcp_over_acp_store_round_trips_the_canonical_spec() {
+        // Like DeepSeek's store, this file is codeg's OWN record of what the
+        // wire receives, so the canonical spec shape must survive a
+        // round-trip verbatim — including the persisted `type`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp-over-acp.json");
+
+        assert!(read_mcp_over_acp_servers_at(&path)
+            .expect("read missing")
+            .is_empty());
+        assert!(!remove_mcp_over_acp_server_at(&path, "missing").expect("remove missing"));
+
+        upsert_mcp_over_acp_server_at(
+            &path,
+            "ctx7",
+            &json!({ "command": "npx", "args": ["-y", "ctx7-mcp"] }),
+        )
+        .expect("upsert stdio");
+        upsert_mcp_over_acp_server_at(
+            &path,
+            "remote",
+            &json!({ "url": "https://mcp.example.com/mcp" }),
+        )
+        .expect("upsert http");
+        upsert_mcp_over_acp_server_at(
+            &path,
+            "legacy",
+            &json!({ "type": "sse", "url": "https://mcp.example.com/sse" }),
+        )
+        .expect("upsert sse");
+
+        let servers = read_mcp_over_acp_servers_at(&path).expect("read back");
+        assert_eq!(servers.len(), 3);
+        assert_eq!(
+            servers
+                .get("ctx7")
+                .and_then(|s| s.get("type"))
+                .and_then(Value::as_str),
+            Some("stdio")
+        );
+        assert_eq!(
+            servers
+                .get("remote")
+                .and_then(|s| s.get("type"))
+                .and_then(Value::as_str),
+            Some("http")
+        );
+
+        // Unlike DeepSeek's bridge, the receiving agent is arbitrary and the
+        // per-session capability filter does the skipping, so every transport
+        // stays hostable — SSE included.
+        for spec in servers.values() {
+            assert!(app_can_host_spec(McpAppType::McpOverAcp, spec));
+        }
+
+        for id in ["ctx7", "remote", "legacy"] {
+            assert!(remove_mcp_over_acp_server_at(&path, id).expect("remove"));
+        }
+        assert!(read_mcp_over_acp_servers_at(&path)
+            .expect("read after remove")
+            .is_empty());
+    }
+
+    #[test]
+    fn mcp_over_acp_app_serializes_as_snake_case() {
+        // The scan result ships to the frontend verbatim, where `apps` is a
+        // string union — the serde rename IS the contract.
+        assert_eq!(
+            serde_json::to_value(McpAppType::McpOverAcp).expect("serialize"),
+            json!("mcp_over_acp")
+        );
+    }
+
+    #[test]
+    fn mcp_over_acp_store_feeds_custom_agents_and_the_scan_but_not_pi() {
+        // `read_servers_for_agent_type` is the single wire source, so the
+        // store must surface for a CUSTOM agent (whose only MCP door is the
+        // wire) and appear in the scan under its own app, while pi keeps its
+        // unconditional empty map: pi-acp drops `mcpServers` on the floor.
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("CODEG_HOME", Some(dir.path()), || {
+            upsert_mcp_over_acp_server(
+                "ctx7",
+                &json!({ "command": "npx", "args": ["-y", "ctx7-mcp"] }),
+            )
+            .expect("upsert");
+
+            let agent_type = crate::models::agent::AgentType::custom("my-agent")
+                .expect("custom agent type");
+            let servers = read_servers_for_agent_type(agent_type).expect("read custom");
+            assert_eq!(servers.len(), 1);
+            assert_eq!(
+                servers
+                    .get("ctx7")
+                    .and_then(|s| s.get("type"))
+                    .and_then(Value::as_str),
+                Some("stdio")
+            );
+
+            assert!(read_servers_for_agent_type(crate::models::agent::AgentType::Pi)
+                .expect("read pi")
+                .is_empty());
+
+            let scan = scan_local_servers();
+            let entry = scan
+                .servers
+                .iter()
+                .find(|s| s.id == "ctx7")
+                .expect("store server in scan");
+            assert!(entry.apps.contains(&McpAppType::McpOverAcp));
+        });
+    }
+ 
+    #[test]
     fn antigravity_mcp_config_handles_both_document_shapes() {
         // `mcp_servers.py::parse_mcp_config_file` does
         // `servers_dict = data.get("mcpServers", data)` — a BARE top-level map
@@ -7178,7 +7412,8 @@ mod tests {
                 | McpAppType::DeepSeek
                 | McpAppType::Qoder
                 | McpAppType::Antigravity
-                | McpAppType::Pi => {}
+                | McpAppType::Pi
+                | McpAppType::McpOverAcp => {}
             }
         }
 
