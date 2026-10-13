@@ -27,6 +27,7 @@ pub async fn create(
         git_branch,
         None,
         ConversationKind::Regular,
+        None,
     )
     .await
 }
@@ -50,6 +51,7 @@ pub async fn create_chat(
         git_branch,
         None,
         ConversationKind::Chat,
+        None,
     )
     .await
 }
@@ -74,11 +76,36 @@ pub async fn create_with_delegation(
         ConversationKind::Regular
     };
     create_inner(
-        conn, folder_id, agent_type, title, git_branch, delegation, kind,
+        conn, folder_id, agent_type, title, git_branch, delegation, kind, None,
     )
     .await
 }
 
+/// [`create_with_delegation`] that also stores the full task text. Resume
+/// replays `delegation_task`; the title stays the short sidebar seed.
+pub async fn create_with_delegation_task(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    git_branch: Option<String>,
+    delegation: crate::acp::delegation::spawner::DelegationLink,
+    delegation_task: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    create_inner(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+        Some(delegation),
+        ConversationKind::Delegate,
+        delegation_task,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn create_inner(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -87,6 +114,7 @@ async fn create_inner(
     git_branch: Option<String>,
     delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
     kind: ConversationKind,
+    delegation_task: Option<String>,
 ) -> Result<conversation::Model, DbError> {
     let at_str = serde_json::to_value(agent_type)
         .ok()
@@ -101,6 +129,9 @@ async fn create_inner(
         ),
         None => (None, None, None),
     };
+    let delegation_task = delegation_task
+        .map(|task| task.trim().to_string())
+        .filter(|task| !task.is_empty());
     let model = conversation::ActiveModel {
         id: NotSet,
         folder_id: Set(folder_id),
@@ -121,6 +152,7 @@ async fn create_inner(
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        delegation_task: Set(delegation_task),
     };
     Ok(model.insert(conn).await?)
 }
@@ -973,6 +1005,10 @@ impl CarriedOverRow {
             // not to the history.
             pinned_at: Set(None),
             origin_cwd: Set(self.origin_cwd),
+            // The live row keeps the task. A split preserves the old session's
+            // history only; copying the task would attach it to that abandoned
+            // session id.
+            delegation_task: Set(None),
         }
     }
 }
@@ -1295,6 +1331,25 @@ pub async fn get_by_delegation_call_id(
     Ok(conv.map(conv_to_summary))
 }
 
+/// The full task text stored for `delegation_call_id`, if the child row has
+/// one. `Ok(None)` when the row is missing or predates the column's writes.
+/// Whitespace-only values are treated as absent.
+pub async fn delegation_task_by_call_id(
+    conn: &DatabaseConnection,
+    delegation_call_id: &str,
+) -> Result<Option<String>, DbError> {
+    let conv = conversation::Entity::find()
+        .filter(conversation::Column::DelegationCallId.eq(delegation_call_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?;
+    Ok(conv.and_then(|row| {
+        row.delegation_task
+            .map(|task| task.trim().to_string())
+            .filter(|task| !task.is_empty())
+    }))
+}
+
 pub async fn list_by_folder(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -1593,6 +1648,81 @@ mod tests {
             vec![second.id, first.id],
             "newest child must come first"
         );
+    }
+
+    #[tokio::test]
+    async fn delegation_task_keeps_the_full_prompt_past_the_title_seed() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-delegation-task-639").await;
+        let parent = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("P".into()),
+            None,
+        )
+        .await
+        .expect("parent");
+        let agent = AgentType::custom("stars-codex-luna-low").expect("custom id");
+        let task = format!(
+            "do not use tools; answer from memory only. {} TOKEN-639",
+            "scope ".repeat(40)
+        );
+        assert!(task.len() > 100, "task must outgrow the title seed");
+        let child = create_with_delegation_task(
+            &db.conn,
+            folder,
+            agent,
+            Some("short title".into()),
+            None,
+            DelegationLink {
+                parent_conversation_id: parent.id,
+                parent_tool_use_id: "tu-639".into(),
+                delegation_call_id: "call-639".into(),
+            },
+            Some(task.clone()),
+        )
+        .await
+        .expect("child");
+        assert_eq!(child.delegation_task.as_deref(), Some(task.as_str()));
+        assert_eq!(child.title.as_deref(), Some("short title"));
+        let loaded = delegation_task_by_call_id(&db.conn, "call-639")
+            .await
+            .expect("lookup")
+            .expect("stored task");
+        assert_eq!(loaded, task);
+
+        let plain = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("plain".into()),
+            None,
+        )
+        .await
+        .expect("plain");
+        assert_eq!(plain.delegation_task, None);
+
+        let blank = create_with_delegation_task(
+            &db.conn,
+            folder,
+            agent,
+            Some("blank".into()),
+            None,
+            DelegationLink {
+                parent_conversation_id: parent.id,
+                parent_tool_use_id: "tu-blank".into(),
+                delegation_call_id: "call-blank".into(),
+            },
+            Some("   ".into()),
+        )
+        .await
+        .expect("blank child");
+        assert_eq!(blank.delegation_task, None);
+        assert!(delegation_task_by_call_id(&db.conn, "call-blank")
+            .await
+            .expect("blank lookup")
+            .is_none());
     }
 
     #[tokio::test]

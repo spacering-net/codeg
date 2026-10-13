@@ -72,6 +72,10 @@ pub struct Model {
     /// Gemini/Cline/OpenClaw stale-external-id fallback matches on
     /// `origin_cwd ?? folder.path`. Always NULL for ordinary conversations.
     pub origin_cwd: Option<String>,
+    /// The full delegated task text, written when the child row is created.
+    /// Resume replays this into the continuation prompt. `None` for ordinary
+    /// conversations and for delegation rows created before the column existed.
+    pub delegation_task: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

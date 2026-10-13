@@ -256,6 +256,11 @@ pub struct SessionState {
     /// as this session's — an epoch taken at the tick itself would classify
     /// them as copied history and drop them.
     pub external_id_changed_at: Option<std::time::SystemTime>,
+    /// Previous agent session a fresh `session/new` continues. Set only when
+    /// a delegation resume must not `session/resume` a never-prompted custom
+    /// session. The transcript header records it before `SessionStarted` so
+    /// the existing conversation row is rebound in place.
+    pub delegation_continues_from: Option<String>,
     pub agent_type: AgentType,
     pub working_dir: Option<PathBuf>,
     pub owner_window_label: String,
@@ -723,6 +728,7 @@ impl SessionState {
             conversation_id: None,
             external_id: None,
             external_id_changed_at: None,
+            delegation_continues_from: None,
             agent_type,
             working_dir,
             owner_window_label,

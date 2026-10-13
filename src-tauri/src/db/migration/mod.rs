@@ -48,6 +48,7 @@ mod m20260907_000001_canvas_node_path;
 mod m20260929_000001_canvas_board;
 mod m20260930_000001_agent_setting_drop_adapter_channel;
 mod m20261006_000001_conversation_tag;
+mod m20261012_000001_conversation_delegation_task;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -102,6 +103,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260929_000001_canvas_board::Migration),
             Box::new(m20260930_000001_agent_setting_drop_adapter_channel::Migration),
             Box::new(m20261006_000001_conversation_tag::Migration),
+            Box::new(m20261012_000001_conversation_delegation_task::Migration),
         ]
     }
 }

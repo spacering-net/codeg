@@ -1146,6 +1146,51 @@ pub fn has_entries_in(root: &Path, agent_dir: &str, session_id: &str) -> bool {
     found
 }
 
+/// True when this session's transcript records an agent turn.
+///
+/// Resume uses this, not [`has_recorded_history_in`]. That helper is the
+/// `session/load` replay gate and is conservative in the other direction: any
+/// entry, including an outbound [`EntryKind::Prompt`] and a prompt still
+/// queued for write, counts as history so a replay cannot duplicate it.
+///
+/// `record_prompt` writes that `Prompt` line before `session/prompt` is sent
+/// and before a `Cancel` already queued on the same channel can be observed.
+/// Treating it as delivery makes resume `session/resume` an empty custom
+/// thread and keep the model captured at session creation (issue 639). Only
+/// an agent [`EntryKind::Update`] or a [`EntryKind::TurnEnd`] means the agent
+/// took the turn. A header does not count. A missing or unreadable file does
+/// not count. A prompt still queued for write does not count either: it is
+/// the same pre-send window.
+pub fn agent_turn_recorded_in(root: &Path, agent_dir: &str, session_id: &str) -> bool {
+    let Some(path) = transcript_path_in(root, agent_dir, session_id) else {
+        return false;
+    };
+    let mut header_seen = false;
+    let mut found = false;
+    scan_lines(&path, |line| {
+        // Mirrors [`has_entries_in`]: the header is consumed, not counted.
+        if !header_seen && parse_header_line(line).is_some() {
+            header_seen = true;
+            return true;
+        }
+        found = matches!(
+            serde_json::from_str::<TranscriptEntry>(line),
+            Ok(entry) if matches!(entry.k, EntryKind::Update | EntryKind::TurnEnd)
+        );
+        !found
+    });
+    found
+}
+
+/// [`agent_turn_recorded_in`] against the real transcripts root.
+pub fn agent_turn_recorded(agent_dir: &str, session_id: &str) -> bool {
+    agent_turn_recorded_in(
+        &crate::paths::codeg_acp_transcripts_root(),
+        agent_dir,
+        session_id,
+    )
+}
+
 /// Bound on how far [`read_chain_in`] follows `continues_from`. One link is
 /// added per failed `session/load`, i.e. roughly per app restart of a
 /// long-lived conversation, so this is far above any real chain — it exists

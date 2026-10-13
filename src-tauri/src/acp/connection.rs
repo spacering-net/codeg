@@ -2324,6 +2324,7 @@ pub async fn spawn_agent_connection(
     preferred_config_values: BTreeMap<String, String>,
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
+    continues_from: Option<String>,
 ) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
     // Create the authoritative session state up front. Subsequent emit_with_state
     // calls write through this state and increment its seq counter so the first
@@ -2335,6 +2336,10 @@ pub async fn spawn_agent_connection(
         owner_window_label.clone(),
         None, // folder_id 由后续 prompt handler 在首次 send 时绑定 (Phase 2)
     );
+    // Must be on the state before the connection thread starts: `session/new`
+    // reads it to write `continues_from` into the transcript header, and that
+    // write is awaited before `SessionStarted`.
+    initial_state.delegation_continues_from = continues_from;
 
     // Install the SessionStarted dedup signal BEFORE wrapping into Arc so the
     // first event (StatusChanged{Connecting} below) doesn't race with the
@@ -7204,7 +7209,22 @@ async fn run_connection(
                 state.write().await.pi_startup_banner =
                     pi_startup_banner(agent_type, new_resp.meta.as_ref());
                 let mut session = AgentSession::attach(&cx, new_resp)?;
-                record_transcript_header(agent_type, &sid, &cwd.to_string_lossy());
+                // A delegation resume of a never-prompted custom session opens
+                // a fresh id that still belongs to the same child row. The
+                // link has to be durable before `SessionStarted`, or the
+                // session-binding guard splits the conversation.
+                let continues_from = state.read().await.delegation_continues_from.clone();
+                if continues_from.is_some() {
+                    record_transcript_header_continuing(
+                        agent_type,
+                        &sid,
+                        &cwd_string,
+                        continues_from.as_deref(),
+                    )
+                    .await;
+                } else {
+                    record_transcript_header(agent_type, &sid, &cwd_string);
+                }
                 emit_with_state(
                     &state,
                     &emitter_clone,

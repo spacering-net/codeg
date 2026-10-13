@@ -38,7 +38,11 @@
 //! [`DelegationBroker::resume_delegation`]: an INTERRUPTED task (canceled, or
 //! stranded `in_progress` by a crash) can be brought back under its original
 //! `task_id` by reloading the child's recorded agent session — a continuation
-//! of the original task, never a new iteration on it.
+//! of the original task, never a new iteration on it. A custom session whose
+//! transcript has no agent turn yet (a header, or only the outbound prompt
+//! recorded before `session/prompt`) is opened fresh instead — saved target
+//! defaults do not stick on `session/resume` of that thread — and the task
+//! stored on the child row is replayed into the continuation prompt.
 //!
 //! Result durability: child output is NOT stored in codeg's DB, so the broker
 //! caches the completed text in `completed` (parent-scoped, FIFO-capped). Once
@@ -64,7 +68,7 @@ use crate::acp::delegation::live_reply::{ChildLiveReplyLookup, NoopChildLiveRepl
 use crate::acp::delegation::meta_writer::{
     build_delegation_meta, is_synthetic_parent_tool_use_id, DelegationMetaWriter, NoopMetaWriter,
 };
-use crate::acp::delegation::spawner::{ConnectionSpawner, DelegationLink};
+use crate::acp::delegation::spawner::{ConnectionSpawner, DelegationLink, ResumedSpawn};
 use crate::acp::delegation::types::{
     AgentDelegationDefaults, BlockedKind, BlockedOn, DelegationError, DelegationOutcome,
     DelegationRequest, DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
@@ -156,6 +160,20 @@ pub struct ChildResumeContext {
     /// The child row's title (originally seeded from the delegated task text) —
     /// bounded and reused as the resumed task's `task_preview` label.
     pub title: Option<String>,
+    /// Full original delegated task, stored on the child row when it was
+    /// created. `None` for rows that predate that column. Resume replays it
+    /// into the continuation prompt so a cancel that landed before the agent
+    /// persisted the first turn does not leave the child without its task.
+    pub original_task: Option<String>,
+    /// Whether the agent session already took a turn.
+    ///
+    /// Custom agents: the codeg transcript has an agent `Update` or a
+    /// `TurnEnd`. A header alone does not count, and neither does an outbound
+    /// `Prompt` — `record_prompt` writes that line before `session/prompt` is
+    /// sent, so a cancel right after the Running ack still leaves only that
+    /// line. Every other agent: `true` — codeg keeps no transcript for them,
+    /// and treating "unknown" as empty would abandon a real session.
+    pub prompt_delivered: bool,
 }
 
 /// DB fallback for `get_delegation_status` / `cancel_delegation` once a task's
@@ -877,7 +895,12 @@ pub const NOT_RESUMABLE_CODE: &str = "not_resumable";
 /// NOT caller-controlled beyond the bounded `reason`: `resume_delegation`
 /// continues the ORIGINAL task and must not be usable as a second
 /// `delegate_to_agent` (see the tool schema's contract).
-pub fn build_resume_prompt(reason: Option<&str>) -> String {
+///
+/// `original_task` is the task codeg stored when the child was created, not
+/// text from the resume call. It is replayed because a cancel (or crash)
+/// before the agent persisted its first turn leaves no earlier message to
+/// re-read. Absent on rows that predate that store.
+pub fn build_resume_prompt(reason: Option<&str>, original_task: Option<&str>) -> String {
     let mut prompt = String::from(
         "This delegated task was interrupted before completion and is now being \
          resumed. Re-read the original task from the earlier messages in this \
@@ -889,7 +912,28 @@ pub fn build_resume_prompt(reason: Option<&str>) -> String {
         prompt.push_str("\nContext on why the run was interrupted / resumed: ");
         prompt.push_str(&truncate_on_char_boundary(reason, RESUME_REASON_CAP));
     }
+    if let Some(task) = original_task.map(str::trim).filter(|t| !t.is_empty()) {
+        prompt.push_str(
+            "\n\nThe original task follows for reference. Finish that task; \
+             do not take on any new work beyond it.\n\n",
+        );
+        prompt.push_str(task);
+    }
     prompt
+}
+
+/// A custom-agent session that never received a prompt must be opened with
+/// `session/new` so saved target defaults stick the way they do on a fresh
+/// delegation. `session/resume` of that empty thread restores the model the
+/// agent wrote at creation time (often the parent Codex default) and the
+/// following `set_config_option` does not become the next turn's model.
+///
+/// Built-in agents stay on `session/resume`. Their history lives in the
+/// agent's own store, and rebinding a brand-new session id onto the row is
+/// not what [`crate::acp::continued_session_ids`] does for them — a fresh
+/// session there would split the conversation (codeg#500).
+pub(crate) fn resume_opens_fresh_session(agent_type: AgentType, prompt_delivered: bool) -> bool {
+    agent_type.custom_id().is_some() && !prompt_delivered
 }
 
 /// The `Running` ack returned by `resume_delegation` once the child is back up.
@@ -3749,10 +3793,16 @@ impl DelegationBroker {
     /// `Completed` / `Failed` task ended by its own doing — resuming it would
     /// be a new iteration on the original task, which this tool deliberately
     /// does not do (that is `delegate_to_agent`'s job). The same contract is
-    /// why there is no task-text parameter: the child continues the ORIGINAL
-    /// task in its own resumed session (`session/load` via the row's
-    /// `external_id`), nudged by a fixed continuation prompt that may carry
-    /// only the bounded `reason` as interruption context.
+    /// why there is no task-text parameter: the continuation prompt replays
+    /// the task stored on the child row (`delegation_task`) and may also
+    /// carry the bounded `reason` as interruption context. A custom session
+    /// whose transcript has an agent `Update` or `TurnEnd` is reloaded with
+    /// `session/resume` (`session/load` of the row's `external_id`). A custom
+    /// session that has only a header, or only the outbound prompt recorded
+    /// before `session/prompt` was sent, is opened with `session/new` that
+    /// continues that session id, so the saved target defaults apply.
+    /// Built-in agents always `session/resume`; codeg keeps no transcript
+    /// for them.
     ///
     /// The resumed run KEEPS the task id: the child row already persists it as
     /// `delegation_call_id`, so the lifecycle's TurnComplete routing
@@ -4049,18 +4099,37 @@ impl DelegationBroker {
                 None,
             );
         }
-        let spawned = match self
-            .spawner
-            .spawn_for_resume(
-                &req.parent_connection_id,
-                ctx.agent_type,
-                Some(working_dir),
-                &external_id,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await
-        {
+        // A custom session with no agent turn yet (a header, or only the
+        // outbound prompt recorded before session/prompt) is opened fresh so
+        // preferred mode/config apply on session/new. The previous session id
+        // is continued, not loaded. A session that already has an agent
+        // Update or TurnEnd — and every built-in — keeps session/resume.
+        let restart_fresh = resume_opens_fresh_session(ctx.agent_type, ctx.prompt_delivered);
+        let spawned = if restart_fresh {
+            self.spawner
+                .spawn_continuing(
+                    &req.parent_connection_id,
+                    ctx.agent_type,
+                    Some(working_dir),
+                    &external_id,
+                    preferred_mode_id,
+                    preferred_config_values,
+                )
+                .await
+                .map(ResumedSpawn::fresh)
+        } else {
+            self.spawner
+                .spawn_for_resume(
+                    &req.parent_connection_id,
+                    ctx.agent_type,
+                    Some(working_dir),
+                    &external_id,
+                    preferred_mode_id,
+                    preferred_config_values,
+                )
+                .await
+        };
+        let spawned = match spawned {
             Ok(s) => s,
             Err(e) => {
                 self.drop_inflight(inflight_id).await;
@@ -4129,7 +4198,7 @@ impl DelegationBroker {
             .spawner
             .send_resume_prompt(
                 &child_connection_id,
-                build_resume_prompt(req.reason.as_deref()),
+                build_resume_prompt(req.reason.as_deref(), ctx.original_task.as_deref()),
                 ctx.folder_id,
                 ctx.child_conversation_id,
             )
@@ -4574,6 +4643,41 @@ fn task_status_from_row(status: &str) -> TaskStatus {
     }
 }
 
+/// See [`resume_opens_fresh_session`]. For a custom agent, delivered means
+/// the transcript has an agent `Update` or `TurnEnd`
+/// ([`crate::acp_transcript::agent_turn_recorded`]). A missing external id
+/// counts as not delivered (there is no transcript to consult). Built-ins
+/// still report delivered so resume keeps `session/resume`.
+fn prompt_delivered_for(agent_type: AgentType, external_id: Option<&str>) -> bool {
+    if agent_type.custom_id().is_none() {
+        return true;
+    }
+    let Some(sid) = external_id.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let dir = crate::acp::registry::registry_id_for(agent_type);
+    crate::acp_transcript::agent_turn_recorded(dir, sid)
+}
+
+/// How a `delegation_task` read affects resume.
+///
+/// `Ok(None)` is a legacy or blank row: resume continues and the continuation
+/// prompt falls back to the re-read instruction. `Err` refuses the resume.
+/// The summary load just above fails closed the same way; mapping this `Err`
+/// to "no task" would start the child as if the original prompt had never
+/// been stored.
+enum StoredTaskLoad {
+    Resume(Option<String>),
+    Refuse,
+}
+
+fn stored_task_load(loaded: Result<Option<String>, crate::db::error::DbError>) -> StoredTaskLoad {
+    match loaded {
+        Ok(task) => StoredTaskLoad::Resume(task),
+        Err(_) => StoredTaskLoad::Refuse,
+    }
+}
+
 #[async_trait]
 impl ChildStatusLookup for DbChildStatusLookup {
     async fn find_by_call_id(&self, call_id: &str) -> Option<ChildStatusRecord> {
@@ -4609,6 +4713,21 @@ impl ChildStatusLookup for DbChildStatusLookup {
                 .ok()
                 .flatten()
                 .map(|f| f.path);
+        let original_task = match stored_task_load(
+            crate::db::service::conversation_service::delegation_task_by_call_id(
+                &self.db.conn,
+                call_id,
+            )
+            .await,
+        ) {
+            StoredTaskLoad::Resume(task) => task,
+            // Same fail-closed answer as a failed summary load above: no
+            // resume context, so the caller gets the unknown-task report
+            // instead of a Running ack with the task dropped.
+            StoredTaskLoad::Refuse => return None,
+        };
+        let prompt_delivered =
+            prompt_delivered_for(summary.agent_type, summary.external_id.as_deref());
         Some(ChildResumeContext {
             child_conversation_id: summary.id,
             status: task_status_from_row(&summary.status),
@@ -4619,6 +4738,8 @@ impl ChildStatusLookup for DbChildStatusLookup {
             folder_id: summary.folder_id,
             working_dir,
             title: summary.title,
+            original_task,
+            prompt_delivered,
         })
     }
 }
@@ -9417,6 +9538,8 @@ mod tests {
             folder_id: 7,
             working_dir: Some("/work".into()),
             title: Some("do x".into()),
+            original_task: None,
+            prompt_delivered: true,
         }
     }
 
@@ -9448,18 +9571,336 @@ mod tests {
 
     #[test]
     fn resume_prompt_carries_bounded_reason_only() {
-        let bare = build_resume_prompt(None);
+        let bare = build_resume_prompt(None, None);
         assert!(bare.contains("interrupted before completion"));
         assert!(!bare.contains("Context on why"));
         // Whitespace-only reason collapses to the bare prompt.
-        assert_eq!(build_resume_prompt(Some("   ")), bare);
-        let with_reason = build_resume_prompt(Some("app crashed"));
+        assert_eq!(build_resume_prompt(Some("   "), None), bare);
+        let with_reason = build_resume_prompt(Some("app crashed"), None);
         assert!(with_reason.contains("Context on why the run was interrupted"));
         assert!(with_reason.contains("app crashed"));
         // An oversized reason is truncated, not passed through.
         let huge = "x".repeat(10 * 1024);
-        let capped = build_resume_prompt(Some(&huge));
+        let capped = build_resume_prompt(Some(&huge), None);
         assert!(capped.len() < bare.len() + RESUME_REASON_CAP + 128);
+    }
+
+    fn original_task_639() -> String {
+        format!(
+            "do not use tools; answer from memory only. {} TOKEN-639",
+            "scope ".repeat(40)
+        )
+    }
+
+    fn luna_defaults(agent: AgentType) -> BTreeMap<AgentType, AgentDelegationDefaults> {
+        let mut config_values = BTreeMap::new();
+        config_values.insert("model".into(), "gpt-5.6-luna".into());
+        config_values.insert("reasoning_effort".into(), "low".into());
+        let mut agent_defaults = BTreeMap::new();
+        agent_defaults.insert(
+            agent,
+            AgentDelegationDefaults {
+                mode_id: Some("low".into()),
+                config_values,
+            },
+        );
+        agent_defaults
+    }
+
+    async fn enable_with_defaults(
+        broker: &DelegationBroker,
+        agent_defaults: BTreeMap<AgentType, AgentDelegationDefaults>,
+    ) {
+        broker
+            .set_config(DelegationConfig {
+                enabled: true,
+                depth_limit: 2,
+                agent_defaults,
+                ..DelegationConfig::default()
+            })
+            .await;
+    }
+
+    #[test]
+    fn unprompted_custom_session_opens_fresh_builtin_does_not() {
+        let custom = AgentType::custom("stars-codex-luna-low").expect("slug");
+        assert!(resume_opens_fresh_session(custom, false));
+        assert!(!resume_opens_fresh_session(custom, true));
+        assert!(!resume_opens_fresh_session(AgentType::Codex, false));
+        assert!(!resume_opens_fresh_session(AgentType::Codex, true));
+    }
+
+    /// Issue 639. `record_prompt` writes the outbound `Prompt` before
+    /// `session/prompt` is sent, and Cancel on the same channel is observed
+    /// only after that write. A header, or that prompt alone, is not delivery.
+    /// An agent `Update` or `TurnEnd` is, and stays on `session/resume`.
+    /// Built-ins have no codeg transcript and stay delivered.
+    #[test]
+    fn prompt_delivered_for_counts_agent_turn_not_outbound_prompt() {
+        use crate::acp_transcript::{EntryKind, TranscriptEntry, TranscriptHeader};
+
+        let agent = AgentType::custom("stars-codex-luna-low").expect("slug");
+        let dir = crate::acp::registry::registry_id_for(agent);
+        let nonce = format!(
+            "i639-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let root = crate::paths::codeg_acp_transcripts_root();
+
+        struct Written(Vec<std::path::PathBuf>);
+        impl Drop for Written {
+            fn drop(&mut self) {
+                for path in &self.0 {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+
+        let header = |session: &str| {
+            serde_json::to_string(&TranscriptHeader::new(
+                "custom:stars-codex-luna-low",
+                session,
+                "/work",
+                1_750_000_000_000,
+            ))
+            .expect("header")
+        };
+        let entry = |kind: EntryKind, payload: serde_json::Value| {
+            serde_json::to_string(&TranscriptEntry {
+                t: 1_750_000_000_001,
+                k: kind,
+                p: payload,
+                steer: false,
+            })
+            .expect("entry")
+        };
+        let mut written = Written(Vec::new());
+        let mut write = |sid: &str, lines: &[String]| {
+            let path =
+                crate::acp_transcript::transcript_path_in(&root, dir, sid).expect("safe session id");
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("transcript dir");
+            }
+            let mut body = String::new();
+            for line in lines {
+                body.push_str(line);
+                body.push('\n');
+            }
+            std::fs::write(&path, body).expect("write transcript");
+            written.0.push(path);
+        };
+
+        let header_sid = format!("{nonce}-h");
+        let prompt_sid = format!("{nonce}-p");
+        let update_sid = format!("{nonce}-u");
+        let turn_sid = format!("{nonce}-t");
+        let prompt_payload = serde_json::json!([{"type": "text", "text": "do the task"}]);
+        write(&header_sid, &[header(&header_sid)]);
+        write(
+            &prompt_sid,
+            &[
+                header(&prompt_sid),
+                entry(EntryKind::Prompt, prompt_payload.clone()),
+            ],
+        );
+        write(
+            &update_sid,
+            &[
+                header(&update_sid),
+                entry(EntryKind::Prompt, prompt_payload.clone()),
+                entry(
+                    EntryKind::Update,
+                    serde_json::json!({"sessionUpdate": "agent_message_chunk"}),
+                ),
+            ],
+        );
+        write(
+            &turn_sid,
+            &[
+                header(&turn_sid),
+                entry(EntryKind::Prompt, prompt_payload),
+                entry(
+                    EntryKind::TurnEnd,
+                    serde_json::json!({"stopReason": "end_turn"}),
+                ),
+            ],
+        );
+
+        assert!(
+            !prompt_delivered_for(agent, Some(&header_sid)),
+            "a header alone is not a delivered prompt"
+        );
+        assert!(
+            !prompt_delivered_for(agent, Some(&prompt_sid)),
+            "an outbound Prompt recorded before session/prompt is not delivery"
+        );
+        assert!(
+            prompt_delivered_for(agent, Some(&update_sid)),
+            "an agent Update keeps session/resume"
+        );
+        assert!(
+            prompt_delivered_for(agent, Some(&turn_sid)),
+            "a TurnEnd keeps session/resume"
+        );
+        assert!(
+            prompt_delivered_for(AgentType::Codex, Some(&prompt_sid)),
+            "built-ins stay on session/resume"
+        );
+        assert!(!prompt_delivered_for(agent, None));
+        assert!(!prompt_delivered_for(agent, Some("")));
+    }
+
+    /// A failed `delegation_task` read must not look like a legacy row.
+    /// `Ok(None)` still resumes with no replayed task; `Err` refuses the resume.
+    #[test]
+    fn delegation_task_db_error_refuses_resume_blank_row_does_not() {
+        use crate::db::error::DbError;
+
+        assert!(
+            matches!(stored_task_load(Ok(None)), StoredTaskLoad::Resume(None)),
+            "a legacy or blank row still resumes"
+        );
+        assert!(matches!(
+            stored_task_load(Ok(Some("TOKEN-639".into()))),
+            StoredTaskLoad::Resume(Some(task)) if task == "TOKEN-639"
+        ));
+        assert!(
+            matches!(
+                stored_task_load(Err(DbError::Database(sea_orm::DbErr::Custom(
+                    "delegation_task read failed".into(),
+                )))),
+                StoredTaskLoad::Refuse
+            ),
+            "a database error must not resume as if the task were absent"
+        );
+    }
+
+    /// Issue 639. Cancel before the child writes its first turn leaves no
+    /// session history to re-read, and `session/resume` of that empty custom
+    /// thread comes up on the parent model instead of the saved target
+    /// defaults. Resume must replay the full stored task (past the short
+    /// title) and open a fresh session with those defaults, continuing the
+    /// recorded session id so the same conversation row is kept.
+    #[tokio::test]
+    async fn resume_of_unprompted_custom_target_replays_task_and_defaults() {
+        let original = original_task_639();
+        assert!(original.len() > 100, "fixture must outgrow the title seed");
+        let agent = AgentType::custom("stars-codex-luna-low").expect("slug");
+        let mut ctx = resume_ctx(TaskStatus::Canceled);
+        ctx.agent_type = agent;
+        ctx.title = Some("do not use tools; answer from memory only....".into());
+        ctx.original_task = Some(original.clone());
+        ctx.prompt_delivered = false;
+        let (mock, _lookup, broker) = resume_harness(Some(ctx)).await;
+        enable_with_defaults(&broker, luna_defaults(agent)).await;
+        mock.queue_continuing_spawn(Ok("child-conn-2".into())).await;
+        mock.queue_resume_send(Ok(())).await;
+
+        let ack = broker.resume_delegation(resume_request("task-1")).await;
+        assert_eq!(ack.status, TaskStatus::Running, "{ack:?}");
+        assert_eq!(ack.child_conversation_id, Some(42));
+
+        assert!(mock.resume_spawn_args.lock().await.is_empty());
+        assert!(mock.spawn_args.lock().await.is_empty());
+        let spawns = mock.continuing_spawn_args.lock().await;
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].agent_type, agent);
+        assert_eq!(spawns[0].previous_session_id, "ext-session-1");
+        assert_eq!(spawns[0].working_dir.as_deref(), Some("/work"));
+        assert_eq!(spawns[0].preferred_mode_id.as_deref(), Some("low"));
+        assert_eq!(
+            spawns[0]
+                .preferred_config_values
+                .get("model")
+                .map(String::as_str),
+            Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            spawns[0]
+                .preferred_config_values
+                .get("reasoning_effort")
+                .map(String::as_str),
+            Some("low")
+        );
+        drop(spawns);
+
+        let sends = mock.resume_send_args.lock().await;
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].child_conversation_id, 42);
+        assert!(
+            sends[0].prompt.contains("TOKEN-639"),
+            "continuation prompt dropped the original task: {}",
+            sends[0].prompt
+        );
+        assert!(sends[0].prompt.contains("do not use tools"));
+        assert!(sends[0].prompt.contains("interrupted before completion"));
+        // The short title is a label, not a substitute for the task body.
+        assert!(!sends[0].prompt.contains("answer from memory only...."));
+    }
+
+    /// A custom session that already received the task keeps session/resume
+    /// (partial work stays) and still replays the stored task plus the saved
+    /// defaults.
+    #[tokio::test]
+    async fn resume_of_prompted_custom_target_keeps_session_and_task() {
+        let agent = AgentType::custom("stars-codex-luna-low").expect("slug");
+        let mut ctx = resume_ctx(TaskStatus::Canceled);
+        ctx.agent_type = agent;
+        ctx.original_task = Some(original_task_639());
+        ctx.prompt_delivered = true;
+        let (mock, _lookup, broker) = resume_harness(Some(ctx)).await;
+        enable_with_defaults(&broker, luna_defaults(agent)).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
+        mock.queue_resume_send(Ok(())).await;
+
+        let ack = broker.resume_delegation(resume_request("task-1")).await;
+        assert_eq!(ack.status, TaskStatus::Running, "{ack:?}");
+        assert!(mock.continuing_spawn_args.lock().await.is_empty());
+        let spawns = mock.resume_spawn_args.lock().await;
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].external_session_id, "ext-session-1");
+        assert_eq!(spawns[0].preferred_mode_id.as_deref(), Some("low"));
+        assert_eq!(
+            spawns[0]
+                .preferred_config_values
+                .get("model")
+                .map(String::as_str),
+            Some("gpt-5.6-luna")
+        );
+        drop(spawns);
+        let sends = mock.resume_send_args.lock().await;
+        assert!(sends[0].prompt.contains("TOKEN-639"));
+    }
+
+    /// Built-in agents have no codeg transcript. Even when the caller marks
+    /// the prompt undelivered, resume keeps the recorded session (a fresh
+    /// session id would split the row) and still replays a stored task.
+    #[tokio::test]
+    async fn resume_of_unprompted_builtin_keeps_session_and_replays_task() {
+        let mut ctx = resume_ctx(TaskStatus::Canceled);
+        ctx.agent_type = AgentType::Codex;
+        ctx.prompt_delivered = false;
+        ctx.original_task = Some("TOKEN-639 builtin".into());
+        let (mock, _lookup, broker) = resume_harness(Some(ctx)).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
+        mock.queue_resume_send(Ok(())).await;
+
+        let ack = broker.resume_delegation(resume_request("task-1")).await;
+        assert_eq!(ack.status, TaskStatus::Running, "{ack:?}");
+        assert!(mock.continuing_spawn_args.lock().await.is_empty());
+        let spawns = mock.resume_spawn_args.lock().await;
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].external_session_id, "ext-session-1");
+        drop(spawns);
+        assert!(mock.resume_send_args.lock().await[0]
+            .prompt
+            .contains("TOKEN-639 builtin"));
     }
 
     /// A crash-interrupted task (nothing in memory, DB row `cancelled`) resumes:

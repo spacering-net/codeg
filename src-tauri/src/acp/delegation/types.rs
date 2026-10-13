@@ -76,10 +76,11 @@ pub struct DelegationRequest {
 /// Everything the broker needs to resume one interrupted delegation task.
 ///
 /// Deliberately carries NO task text: `resume_delegation` continues the
-/// ORIGINAL task in the child's own (resumed) session and must not become a
-/// side-channel for new instructions — the only free-form field is `reason`,
-/// which is bounded and framed as interruption context in the continuation
-/// prompt (see `broker::build_resume_prompt`).
+/// ORIGINAL task and must not become a side-channel for new instructions.
+/// The task replayed into the continuation prompt is the one stored on the
+/// child row at delegate time, not a field of this request. The only
+/// free-form field is `reason`, which is bounded and framed as interruption
+/// context (see `broker::build_resume_prompt`).
 ///
 /// `parent_connection_id` / `parent_conversation_id` identify the CALLER —
 /// after a parent-session restart this is a different connection id than the

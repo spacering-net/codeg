@@ -2659,6 +2659,8 @@ mod tests {
                     folder_id: 7,
                     working_dir: Some("/work".into()),
                     title: Some("do x".into()),
+                    original_task: None,
+                    prompt_delivered: true,
                 })
             }
         }

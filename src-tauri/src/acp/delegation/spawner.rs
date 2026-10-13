@@ -141,6 +141,24 @@ pub trait ConnectionSpawner: Send + Sync {
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<ResumedSpawn, SpawnerError>;
 
+    /// Open a FRESH agent session (`session/new`) that continues
+    /// `previous_session_id`, applying the same per-agent defaults as
+    /// [`Self::spawn`]. Used when resuming a custom-agent delegation whose
+    /// original prompt never reached the agent: `session/resume` of that
+    /// empty thread does not stick the saved target defaults, while
+    /// `session/new` does. The new session's transcript header must link
+    /// `continues_from` to `previous_session_id` before `SessionStarted`, so
+    /// adopting the existing child row updates it in place.
+    async fn spawn_continuing(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        previous_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<String, SpawnerError>;
+
     /// Send the resume continuation prompt into the child's EXISTING
     /// conversation row (`child_conversation_id`, in `folder_id`). Unlike
     /// [`Self::send_prompt_linked_for_delegation`] this adopts the row instead
@@ -200,6 +218,10 @@ pub mod mock {
         pub resume_send_results: Mutex<VecDeque<Result<(), SpawnerError>>>,
         pub resume_spawn_args: Mutex<Vec<ResumeSpawnCallArgs>>,
         pub resume_send_args: Mutex<Vec<ResumeSendCallArgs>>,
+        /// Queued results / recorded calls for `spawn_continuing`. Separate
+        /// from both the fresh-spawn and resume-spawn queues.
+        pub continuing_spawn_results: Mutex<VecDeque<Result<String, SpawnerError>>>,
+        pub continuing_spawn_args: Mutex<Vec<ContinuingSpawnCallArgs>>,
         /// Conversation ids `has_live_connection_for_conversation` answers
         /// `true` for. Empty (default) = no live child connections.
         pub live_conversations: Mutex<Vec<i32>>,
@@ -237,6 +259,16 @@ pub mod mock {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ContinuingSpawnCallArgs {
+        pub parent_connection_id: String,
+        pub agent_type: AgentType,
+        pub working_dir: Option<String>,
+        pub previous_session_id: String,
+        pub preferred_mode_id: Option<String>,
+        pub preferred_config_values: BTreeMap<String, String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ResumeSendCallArgs {
         pub conn_id: String,
         pub prompt: String,
@@ -269,6 +301,10 @@ pub mod mock {
 
         pub async fn queue_resume_spawn(&self, r: Result<ResumedSpawn, SpawnerError>) {
             self.resume_spawn_results.lock().await.push_back(r);
+        }
+
+        pub async fn queue_continuing_spawn(&self, r: Result<String, SpawnerError>) {
+            self.continuing_spawn_results.lock().await.push_back(r);
         }
 
         pub async fn queue_resume_send(&self, r: Result<(), SpawnerError>) {
@@ -366,6 +402,37 @@ pub mod mock {
                 .pop_front()
                 .unwrap_or_else(|| {
                     Err(SpawnerError::Spawn("no queued resume spawn result".into()))
+                })
+        }
+
+        async fn spawn_continuing(
+            &self,
+            parent_connection_id: &str,
+            agent_type: AgentType,
+            working_dir: Option<String>,
+            previous_session_id: &str,
+            preferred_mode_id: Option<String>,
+            preferred_config_values: BTreeMap<String, String>,
+        ) -> Result<String, SpawnerError> {
+            self.continuing_spawn_args
+                .lock()
+                .await
+                .push(ContinuingSpawnCallArgs {
+                    parent_connection_id: parent_connection_id.to_string(),
+                    agent_type,
+                    working_dir,
+                    previous_session_id: previous_session_id.to_string(),
+                    preferred_mode_id,
+                    preferred_config_values,
+                });
+            self.continuing_spawn_results
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(SpawnerError::Spawn(
+                        "no queued continuing spawn result".into(),
+                    ))
                 })
         }
 

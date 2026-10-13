@@ -246,6 +246,25 @@ fn user_prompt_text_preview(blocks: &[PromptInputBlock]) -> Option<String> {
     }
 }
 
+/// Full text of a delegation prompt, stored on the child row so resume can
+/// replay it. Distinct from [`delegation_child_title_seed`], which caps a
+/// sidebar label at ~100 characters.
+fn delegation_task_text(blocks: &[PromptInputBlock]) -> Option<String> {
+    let joined = blocks
+        .iter()
+        .filter_map(|b| match b {
+            PromptInputBlock::Text { text } => {
+                let t = text.trim();
+                (!t.is_empty()).then_some(t)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let trimmed = joined.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Seed title for a freshly-created delegation child row, derived from the
 /// delegating prompt's text blocks (the sub-agent's task). Uses the parser's own
 /// `title_from_user_text` (folds reference links, caps at 100 chars) so the value
@@ -688,6 +707,64 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, AcpError> {
+        self.spawn_agent_inner(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::spawn_agent`] for a fresh session (`session_id = None`) whose
+    /// transcript continues `previous_session_id`. Preferred mode and config
+    /// are applied on `session/new`, which is what makes saved delegation
+    /// target defaults stick when the previous custom session never received
+    /// a prompt.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_agent_continuing(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        previous_session_id: String,
+    ) -> Result<String, AcpError> {
+        self.spawn_agent_inner(
+            agent_type,
+            working_dir,
+            None,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            Some(previous_session_id),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_agent_inner(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        continues_from: Option<String>,
+    ) -> Result<String, AcpError> {
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
         // empty connection list and then have one appear underneath it. Not
@@ -765,6 +842,7 @@ impl ConnectionManager {
             preferred_config_values,
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
+            continues_from,
         )
         .await?;
 
@@ -1267,6 +1345,11 @@ impl ConnectionManager {
             } else {
                 None
             };
+            let delegation_task = if delegation.is_some() {
+                delegation_task_text(&blocks)
+            } else {
+                None
+            };
             let db_conn = db.conn.clone();
             let task_state = state_arc.clone();
             let task_emitter = emitter.clone();
@@ -1308,15 +1391,31 @@ impl ConnectionManager {
                             let parent_tool_use_id_for_event = task_delegation
                                 .as_ref()
                                 .map(|d| d.parent_tool_use_id.clone());
-                            let row = conversation_service::create_with_delegation(
-                                &db_conn,
-                                folder_id,
-                                agent_type,
-                                seed_title,
-                                None,
-                                task_delegation,
-                            )
-                            .await
+                            let row = match task_delegation {
+                                Some(link) => {
+                                    conversation_service::create_with_delegation_task(
+                                        &db_conn,
+                                        folder_id,
+                                        agent_type,
+                                        seed_title,
+                                        None,
+                                        link,
+                                        delegation_task,
+                                    )
+                                    .await
+                                }
+                                None => {
+                                    conversation_service::create_with_delegation(
+                                        &db_conn,
+                                        folder_id,
+                                        agent_type,
+                                        seed_title,
+                                        None,
+                                        None,
+                                    )
+                                    .await
+                                }
+                            }
                             .map_err(|e| AcpError::protocol(e.to_string()))?;
                             (
                                 row.id,
@@ -2327,6 +2426,7 @@ impl ConnectionManager {
                         deleted_at: Set(None),
                         pinned_at: Set(None),
                         origin_cwd: Set(None),
+                        delegation_task: Set(None),
                     };
                     let inserted = sibling.insert(txn).await?;
                     // The sibling keeps the pre-fork history under the
@@ -3903,6 +4003,60 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 emitter,
                 preferred_mode_id,
                 preferred_config_values,
+            )
+            .await
+            .map_err(|e| SpawnerError::Spawn(e.to_string()))
+    }
+
+    async fn spawn_continuing(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        previous_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<String, crate::acp::delegation::spawner::SpawnerError> {
+        use crate::acp::delegation::spawner::SpawnerError;
+        let (emitter, owner_window, parent_working_dir) = {
+            let conns = self.manager.connections.lock().await;
+            let parent = conns.get(parent_connection_id).ok_or_else(|| {
+                SpawnerError::Spawn(format!(
+                    "parent connection {parent_connection_id} not found"
+                ))
+            })?;
+            let pwd = {
+                let s = parent.state.read().await;
+                s.working_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+            };
+            (
+                parent.emitter.clone(),
+                parent.owner_window_label.clone(),
+                pwd,
+            )
+        };
+        let effective_working_dir = working_dir.or(parent_working_dir);
+        let runtime_env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            self.data_dir.as_path(),
+        )
+        .await
+        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+
+        self.manager
+            .spawn_agent_continuing(
+                agent_type,
+                effective_working_dir,
+                runtime_env,
+                owner_window,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+                previous_session_id.to_string(),
             )
             .await
             .map_err(|e| SpawnerError::Spawn(e.to_string()))
