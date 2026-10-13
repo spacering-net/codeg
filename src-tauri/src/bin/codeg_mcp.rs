@@ -8,14 +8,14 @@
 //! `tasks` / `automations` / `taskboard`).
 //!
 //! The agent's MCP config (injected by codeg via `load_mcp_servers_for_agent`)
-//! spawns this binary with three required flags:
+//! spawns this binary with two required flags and a per-server environment
+//! variable containing the ephemeral broker capability token:
 //!
-//!   codeg-mcp \
+//!   CODEG_MCP_TOKEN=<ephemeral secret> codeg-mcp \
 //!     --parent-connection-id <uuid> \
-//!     --socket-path <abs path> \
-//!     --token <ephemeral secret>
+//!     --socket-path <abs path>
 //!
-//! All three are required and the binary exits early if any is missing.
+//! All three values are required and the binary exits early if any is missing.
 //! `--custom-agents` optionally carries the `custom:<id>` slugs registered
 //! in the parent, so `delegate_to_agent`'s schema can offer them as targets;
 //! `--disabled-agents` optionally names the built-ins to drop from that
@@ -72,15 +72,24 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
+    parse_args_from(
+        std::env::args().skip(1),
+        std::env::var("CODEG_MCP_TOKEN").ok(),
+    )
+}
+
+fn parse_args_from(
+    arguments: impl Iterator<Item = String>,
+    token: Option<String>,
+) -> Result<Args, String> {
     let mut parent_connection_id = None;
     let mut socket_path = None;
-    let mut token = None;
     let mut parent_pid = None;
     let mut features = None;
     let mut custom_agents = None;
     let mut disabled_agents = None;
 
-    let mut iter = std::env::args().skip(1);
+    let mut iter = arguments;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--parent-connection-id" => {
@@ -93,12 +102,6 @@ fn parse_args() -> Result<Args, String> {
                 socket_path = Some(
                     iter.next()
                         .ok_or_else(|| "--socket-path requires a value".to_string())?,
-                );
-            }
-            "--token" => {
-                token = Some(
-                    iter.next()
-                        .ok_or_else(|| "--token requires a value".to_string())?,
                 );
             }
             "--parent-pid" => {
@@ -130,7 +133,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "codeg-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions,tasks] [--custom-agents custom:<id>,...] [--disabled-agents <agent>,...]"
+                    "CODEG_MCP_TOKEN=<secret> codeg-mcp --parent-connection-id <uuid> --socket-path <path> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions,tasks] [--custom-agents custom:<id>,...] [--disabled-agents <agent>,...]"
                 );
                 std::process::exit(0);
             }
@@ -141,7 +144,9 @@ fn parse_args() -> Result<Args, String> {
         parent_connection_id: parent_connection_id
             .ok_or_else(|| "missing --parent-connection-id".to_string())?,
         socket_path: socket_path.ok_or_else(|| "missing --socket-path".to_string())?,
-        token: token.ok_or_else(|| "missing --token".to_string())?,
+        token: token
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "missing CODEG_MCP_TOKEN".to_string())?,
         parent_pid,
         features,
         custom_agents,
@@ -310,4 +315,34 @@ async fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_token_must_come_from_nonempty_environment() {
+        let argv = || {
+            [
+                "--parent-connection-id",
+                "parent",
+                "--socket-path",
+                "/tmp/codeg.sock",
+            ]
+            .into_iter()
+            .map(str::to_string)
+        };
+
+        assert!(parse_args_from(argv(), None).is_err());
+        assert!(parse_args_from(argv(), Some(String::new())).is_err());
+        assert!(parse_args_from(argv(), Some("  ".to_string())).is_err());
+
+        let parsed = parse_args_from(argv(), Some("test-capability".to_string()))
+            .expect("nonempty environment token is accepted");
+        assert_eq!(parsed.token, "test-capability");
+
+        let legacy_argv = argv().chain(["--token".to_string(), "legacy-value".to_string()]);
+        assert!(parse_args_from(legacy_argv, Some("test-capability".to_string())).is_err());
+    }
 }
