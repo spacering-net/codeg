@@ -30,6 +30,10 @@ interface Props {
   agentType: AgentType | null
   /** Broker task id; rendered as a `#`-prefixed 8-char handle when present. */
   taskId: string | null
+  /** Session mode the parent pinned for this one delegation. Omitted /`null`
+   *  means the child used the configured per-agent default, which is the
+   *  common case — then no chip is drawn and the row reads as it always did. */
+  permissionMode?: string | null
   status: DelegationCardStatus
   errorCode?: string
   /** The sub-agent's task text, one clamped line. */
@@ -43,6 +47,7 @@ interface Props {
 export function DelegationCardRow({
   agentType,
   taskId,
+  permissionMode,
   status,
   errorCode,
   task,
@@ -75,6 +80,14 @@ export function DelegationCardRow({
                 title={taskId}
               >
                 #{taskId.slice(0, 8)}
+              </span>
+            )}
+            {permissionMode && (
+              <span
+                className="shrink-0 rounded border border-border px-1 py-px font-mono text-[10px] leading-none text-muted-foreground"
+                title={t("delegationPinnedMode", { mode: permissionMode })}
+              >
+                {permissionMode}
               </span>
             )}
             <StatusBadge status={status} errorCode={errorCode} />

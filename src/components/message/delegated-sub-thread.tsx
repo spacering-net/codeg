@@ -72,6 +72,7 @@ export function DelegatedSubThread({
   }
   const {
     agentType,
+    permissionMode,
     task,
     taskId,
     status,
@@ -96,6 +97,7 @@ export function DelegatedSubThread({
       <DelegationCardRow
         agentType={agentType}
         taskId={taskId}
+        permissionMode={permissionMode}
         status={status}
         errorCode={errorCode}
         task={task}

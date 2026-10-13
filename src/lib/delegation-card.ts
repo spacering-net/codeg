@@ -36,6 +36,10 @@ export type ParsedInput = {
   agentType: AgentType | null
   task: string | null
   workingDir: string | null
+  /** Session mode the parent pinned for this one delegation, from the
+   *  `permission_mode` argument. `null` when omitted, which means the child
+   *  used the configured per-agent default. */
+  permissionMode: string | null
 }
 
 // Derived from the canonical `ALL_AGENT_TYPES` so a newly added agent is
@@ -141,6 +145,7 @@ const EMPTY_PARSED_INPUT: ParsedInput = {
   agentType: null,
   task: null,
   workingDir: null,
+  permissionMode: null,
 }
 
 // Wrapper keys that hosts use to nest the actual tool arguments. JSON-RPC
@@ -182,7 +187,8 @@ function findDelegationArgs(
   if (
     typeof obj.task === "string" ||
     typeof obj.agent_type === "string" ||
-    typeof obj.working_dir === "string"
+    typeof obj.working_dir === "string" ||
+    typeof obj.permission_mode === "string"
   ) {
     return obj
   }
@@ -264,6 +270,10 @@ export function parseInput(raw: string | null | undefined): ParsedInput {
     agentType: coerceAgentType(obj.agent_type),
     task: typeof obj.task === "string" ? obj.task : null,
     workingDir: typeof obj.working_dir === "string" ? obj.working_dir : null,
+    permissionMode:
+      typeof obj.permission_mode === "string" && obj.permission_mode.trim()
+        ? obj.permission_mode.trim()
+        : null,
   }
 }
 

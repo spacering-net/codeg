@@ -2463,11 +2463,15 @@ impl DelegationBroker {
         // Pull per-agent overrides from the broker config (defaults to empty).
         // Cloning is cheap — `AgentDelegationDefaults` is at most one Option<String>
         // and a small BTreeMap, and the spawner consumes both fields by value.
-        let (preferred_mode_id, preferred_config_values) = cfg
+        let (configured_mode_id, preferred_config_values) = cfg
             .agent_defaults
             .get(&req.agent_type)
             .map(|d: &AgentDelegationDefaults| (d.mode_id.clone(), d.config_values.clone()))
             .unwrap_or((None, BTreeMap::new()));
+        // A per-call `permission_mode` wins over the settings default; when the
+        // LLM omits it the configured default is used unchanged, so existing
+        // callers and non-delegated sessions see no behaviour change.
+        let preferred_mode_id = req.permission_mode.clone().or(configured_mode_id);
         // Checkpoint #1 (opportunistic): if a parent cancel already landed
         // during the claim/depth phase, bail before spawning a child the parent
         // has abandoned. No child exists yet, so there's nothing to tear down.
@@ -4656,6 +4660,7 @@ mod tests {
             task: "do x".into(),
             working_dir: None,
             requested_working_dir: None,
+            permission_mode: None,
             external_handle: None,
         }
     }
@@ -5334,6 +5339,106 @@ mod tests {
             DelegationOutcome::Err { code, .. } => assert_eq!(code, "spawn_failed"),
             other => panic!("expected Err, got {other:?}"),
         }
+    }
+
+    /// A per-call `permission_mode` overrides the configured per-agent default
+    /// for that delegation only. This is the whole point of the parameter: a
+    /// parent can bound one child without changing global settings.
+    #[tokio::test]
+    async fn per_call_permission_mode_overrides_agent_default() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Err(SpawnerError::Send("stop after spawn".into())))
+            .await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+
+        let mut agent_defaults = BTreeMap::new();
+        agent_defaults.insert(
+            AgentType::ClaudeCode,
+            AgentDelegationDefaults {
+                mode_id: Some("auto".into()),
+                config_values: BTreeMap::new(),
+            },
+        );
+        broker
+            .set_config(DelegationConfig {
+                enabled: true,
+                depth_limit: 8,
+                agent_defaults,
+                ..DelegationConfig::default()
+            })
+            .await;
+
+        let mut req = request(1, "pt-1");
+        req.permission_mode = Some("plan".into());
+        let _ = broker.handle_request(req).await;
+
+        let args = mock.spawn_args.lock().await;
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].preferred_mode_id.as_deref(), Some("plan"));
+    }
+
+    /// Omitting `permission_mode` must leave the configured default untouched,
+    /// so existing callers see no behaviour change.
+    #[tokio::test]
+    async fn omitted_permission_mode_keeps_configured_default() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Err(SpawnerError::Send("stop after spawn".into())))
+            .await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+
+        let mut agent_defaults = BTreeMap::new();
+        agent_defaults.insert(
+            AgentType::ClaudeCode,
+            AgentDelegationDefaults {
+                mode_id: Some("auto".into()),
+                config_values: BTreeMap::new(),
+            },
+        );
+        broker
+            .set_config(DelegationConfig {
+                enabled: true,
+                depth_limit: 8,
+                agent_defaults,
+                ..DelegationConfig::default()
+            })
+            .await;
+
+        // `request()` leaves permission_mode as None.
+        let _ = broker.handle_request(request(1, "pt-1")).await;
+
+        let args = mock.spawn_args.lock().await;
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].preferred_mode_id.as_deref(), Some("auto"));
+    }
+
+    /// With no configured default and no per-call value, nothing is forced.
+    #[tokio::test]
+    async fn per_call_permission_mode_works_without_any_agent_default() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Err(SpawnerError::Send("stop after spawn".into())))
+            .await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        broker
+            .set_config(DelegationConfig {
+                enabled: true,
+                depth_limit: 8,
+                ..DelegationConfig::default()
+            })
+            .await;
+
+        let mut req = request(1, "pt-1");
+        req.permission_mode = Some("plan".into());
+        let _ = broker.handle_request(req).await;
+
+        let args = mock.spawn_args.lock().await;
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].preferred_mode_id.as_deref(), Some("plan"));
     }
 
     #[tokio::test]
