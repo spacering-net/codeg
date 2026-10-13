@@ -3005,6 +3005,8 @@ mod tests {
             task: "do x".into(),
             working_dir: None,
             requested_working_dir: None,
+            model: None,
+            config_values: std::collections::BTreeMap::new(),
             external_handle: None,
         }
     }

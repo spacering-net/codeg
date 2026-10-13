@@ -37,6 +37,15 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional. Model id the sub-agent starts on for THIS delegation only. Use the same id the target agent's model selector shows. Overrides the per-agent Settings default. Omit to keep that default. Agents with no model selector ignore it."
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Optional. Other session controls for THIS delegation only, using the same option ids as that agent's Settings defaults (reasoning, context, fast, and whatever else it exposes). Each value is the option's id. Omit a key to keep the configured default. Unknown keys are ignored."
         }
       }
     }
