@@ -69,6 +69,15 @@ pub struct DelegationRequest {
     /// the defaulted value the child is actually spawned in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_working_dir: Option<String>,
+    /// Session mode the child should start in, as the LLM passed it in the
+    /// `delegate_to_agent` arguments. Overrides the per-agent
+    /// `AgentDelegationDefaults::mode_id` from settings for THIS call only;
+    /// `None` keeps the configured default, so omitting it is a no-op. The
+    /// value is the target agent's own ACP session mode id (the same
+    /// vocabulary the settings default uses), forwarded verbatim as
+    /// `ConnectionSpawner::spawn`'s `preferred_mode_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_handle: Option<String>,
 }
