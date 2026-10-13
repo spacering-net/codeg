@@ -1587,13 +1587,29 @@ describe("patchCodexConfigTomlText — codeg's requires_openai_auth default", ()
 
   // The three structured controls that reach ensureCodexProviderDefaults. Each
   // must behave identically — the bug in issue #406 fired through all of them.
+  // `seedsFromEmpty` marks the ones that may CREATE the provider: the WebSocket
+  // toggle carries no URL, so on an unbound config it writes the `[features]`
+  // key instead of installing an empty provider (#520).
   const ENTRY_POINTS: Array<{
     label: string
     patch: Parameters<typeof patchCodexConfigTomlText>[1]
+    seedsFromEmpty: boolean
   }> = [
-    { label: "API base URL", patch: { apiBaseUrl: "https://new.example/v1" } },
-    { label: "WebSocket toggle", patch: { supportsWebsockets: true } },
-    { label: "model provider", patch: { modelProvider: "codeg" } },
+    {
+      label: "API base URL",
+      patch: { apiBaseUrl: "https://new.example/v1" },
+      seedsFromEmpty: true,
+    },
+    {
+      label: "WebSocket toggle",
+      patch: { supportsWebsockets: true },
+      seedsFromEmpty: false,
+    },
+    {
+      label: "model provider",
+      patch: { modelProvider: "codeg" },
+      seedsFromEmpty: true,
+    },
   ]
 
   const BOUND_PROVIDER = [
@@ -1605,7 +1621,7 @@ describe("patchCodexConfigTomlText — codeg's requires_openai_auth default", ()
     'wire_api = "responses"',
   ].join("\n")
 
-  for (const { label, patch } of ENTRY_POINTS) {
+  for (const { label, patch, seedsFromEmpty } of ENTRY_POINTS) {
     describe(`via the ${label} control`, () => {
       it("keeps an explicit false", () => {
         const toml = `${BOUND_PROVIDER}\nrequires_openai_auth = false\n`
@@ -1623,9 +1639,16 @@ describe("patchCodexConfigTomlText — codeg's requires_openai_auth default", ()
         ).toBe(true)
       })
 
-      it("seeds a brand-new provider from an empty config", () => {
-        expect(authFlagOf(patchCodexConfigTomlText("", patch))).toBe(true)
-      })
+      it(
+        seedsFromEmpty
+          ? "seeds a brand-new provider from an empty config"
+          : "does not seed a provider from an empty config",
+        () => {
+          expect(authFlagOf(patchCodexConfigTomlText("", patch))).toBe(
+            seedsFromEmpty ? true : undefined
+          )
+        }
+      )
 
       it("stands down for a provider using actor authorization", () => {
         const toml = [
@@ -1759,6 +1782,114 @@ describe("patchCodexConfigTomlText — codeg's requires_openai_auth default", ()
     const toml = [BOUND_PROVIDER, 'base_url = "unterminated'].join("\n")
     const result = patchCodexConfigTomlText(toml, ENTRY)
     expect(result).not.toContain("requires_openai_auth")
+  })
+})
+
+// config.toml is shared with the codex CLI and the native Codex app. Adopting
+// `codeg` as the model provider from a control that carries no URL writes
+// `model_provider = "codeg"` beside `[model_providers.codeg] base_url = ""`, and
+// codex then fails every request at the builder stage ("stream disconnected
+// before completion: builder error") in every client reading that file. Nothing
+// in codeg's UI undoes it. See issue #520.
+describe("patchCodexConfigTomlText: an unbound config stays unbound", () => {
+  // What the panel really sends: the draft's provider is "" while nothing is
+  // bound, and it rides along on the URL and WebSocket patches.
+  const UNBOUND_DRAFT_PROVIDER = ""
+  const UNBOUND = 'model = "gpt-5.6-sol"\n'
+  const BOUND = [
+    'model_provider = "acme"',
+    "",
+    "[model_providers.acme]",
+    'base_url = "https://acme.example/v1"',
+  ].join("\n")
+
+  function codegProviderOf(configTomlText: string): {
+    root: string | undefined
+    table: unknown
+  } {
+    const parsed = parseTomlDocument(configTomlText) as {
+      model_provider?: unknown
+      model_providers?: Record<string, unknown>
+    }
+    return {
+      root:
+        typeof parsed.model_provider === "string"
+          ? parsed.model_provider
+          : undefined,
+      table: parsed.model_providers?.codeg,
+    }
+  }
+
+  for (const enabled of [true, false]) {
+    it(`turning WebSockets ${enabled ? "on" : "off"} binds no provider`, () => {
+      const after = patchCodexConfigTomlText(UNBOUND, {
+        modelProvider: UNBOUND_DRAFT_PROVIDER,
+        supportsWebsockets: enabled,
+      })
+      const { root, table } = codegProviderOf(after)
+      expect(root).toBeUndefined()
+      expect(table).toBeUndefined()
+      expect(after).not.toContain("base_url")
+    })
+  }
+
+  // Without a provider the `[features]` key IS the setting, and it is what the
+  // reader falls back to, so the switch has to keep round-tripping.
+  it("still moves the WebSocket switch, through the feature key", () => {
+    const on = patchCodexConfigTomlText(UNBOUND, {
+      modelProvider: UNBOUND_DRAFT_PROVIDER,
+      supportsWebsockets: true,
+    })
+    expect(on).toContain("responses_websockets_v2 = true")
+    expect(extractCodexImportantValues("", on).supportsWebsockets).toBe(true)
+
+    const off = patchCodexConfigTomlText(on, {
+      modelProvider: UNBOUND_DRAFT_PROVIDER,
+      supportsWebsockets: false,
+    })
+    expect(off).not.toContain("responses_websockets_v2")
+    expect(extractCodexImportantValues("", off).supportsWebsockets).toBe(false)
+    expect(codegProviderOf(off).root).toBeUndefined()
+  })
+
+  it("clearing the API base URL binds no provider", () => {
+    const after = patchCodexConfigTomlText(UNBOUND, {
+      modelProvider: UNBOUND_DRAFT_PROVIDER,
+      apiBaseUrl: "",
+    })
+    expect(codegProviderOf(after).table).toBeUndefined()
+    expect(after).not.toContain("model_providers")
+  })
+
+  it("typing an API base URL still binds codeg", () => {
+    const after = patchCodexConfigTomlText(UNBOUND, {
+      modelProvider: UNBOUND_DRAFT_PROVIDER,
+      apiBaseUrl: "https://new.example/v1",
+    })
+    expect(codegProviderOf(after).root).toBe("codeg")
+    expect(after).toContain('base_url = "https://new.example/v1"')
+  })
+
+  it("writes supports_websockets onto the provider the user did bind", () => {
+    const after = patchCodexConfigTomlText(BOUND, { supportsWebsockets: true })
+    const parsed = parseTomlDocument(after) as {
+      model_provider?: string
+      model_providers?: Record<string, { supports_websockets?: unknown }>
+    }
+    expect(parsed.model_provider).toBe("acme")
+    expect(parsed.model_providers?.acme?.supports_websockets).toBe(true)
+    expect(parsed.model_providers?.codeg).toBeUndefined()
+  })
+
+  it("still clears a bound provider's base URL", () => {
+    const after = patchCodexConfigTomlText(BOUND, { apiBaseUrl: "" })
+    const parsed = parseTomlDocument(after) as {
+      model_provider?: string
+      model_providers?: Record<string, { base_url?: unknown }>
+    }
+    expect(parsed.model_provider).toBe("acme")
+    expect(parsed.model_providers?.acme).toBeDefined()
+    expect(parsed.model_providers?.acme?.base_url).toBeUndefined()
   })
 })
 
