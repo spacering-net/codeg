@@ -373,6 +373,7 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         // Appearance, so a caller that wants General has to name it.
         Some("general") => "settings/general",
         Some("appearance") => "settings/appearance",
+        Some("general") => "settings/general",
         Some("agents") => "settings/agents",
         Some("mcp") => "settings/mcp",
         Some("skills") => "settings/skills",

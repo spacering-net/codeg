@@ -54,6 +54,11 @@ import {
   type HistoryDirection,
 } from "@/lib/composer-history"
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
+import {
+  findBlockedAgentMentions,
+  mentionedAgentTypesFromBlocks,
+} from "@/components/chat/composer/agent-mention-hint"
+import { openSettingsWindow } from "@/lib/api"
 import { toast } from "sonner"
 import type {
   AgentSkillItem,
@@ -102,6 +107,7 @@ import {
   MODEL_LIST_VIRTUALIZE_THRESHOLD,
   type ModelOptionGroup,
 } from "@/lib/model-config-groups"
+import { acpAgentsSnapshot } from "@/hooks/use-acp-agents"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import { isPrimaryPointerCoarse } from "@/hooks/use-is-coarse-pointer"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
@@ -178,6 +184,9 @@ export interface ComposerInjectContent {
    */
   mode?: "replace" | "append"
 }
+
+/** Shared sonner id for the "@-mention can't delegate" warning (see `handleSend`). */
+const MENTION_DELEGATION_HINT_TOAST_ID = "agent-mention-delegation-hint"
 
 interface MessageInputProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
@@ -1580,6 +1589,51 @@ export function MessageInput({
       return
     }
 
+    // An @-mention only delegates when multi-agent delegation is on and the
+    // target agent is enabled; with a gate closed the host model otherwise
+    // answers the mention itself and the sender never learns why (upstream
+    // #545). Best-effort and fire-and-forget — a lookup failure must never
+    // block or break the send.
+    const mentionedTypes = mentionedAgentTypesFromBlocks(draft.blocks)
+    if (mentionedTypes.length > 0) {
+      void findBlockedAgentMentions(mentionedTypes, acpAgentsSnapshot())
+        .then((blocked) => {
+          // One stable id for both branches: they are mutually exclusive, and a
+          // user who keeps delegation off would otherwise stack an identical
+          // warning per send. Same id → sonner replaces rather than piles up.
+          if (blocked.delegationOff) {
+            toast.warning(t("mentionDelegateOffHint"), {
+              id: MENTION_DELEGATION_HINT_TOAST_ID,
+              action: {
+                label: t("mentionHintOpenSettings"),
+                onClick: () => void openSettingsWindow("general"),
+              },
+            })
+            return
+          }
+          const firstDisabled = blocked.disabledAgents[0]
+          if (firstDisabled) {
+            const names = blocked.disabledAgents
+              .map((agent) => agent.label)
+              .join(", ")
+            toast.warning(
+              t("mentionDelegateDisabledAgentHint", { agent: names }),
+              {
+                id: MENTION_DELEGATION_HINT_TOAST_ID,
+                action: {
+                  label: t("mentionHintOpenSettings"),
+                  onClick: () =>
+                    void openSettingsWindow("agents", {
+                      agentType: firstDisabled.type,
+                    }),
+                },
+              }
+            )
+          }
+        })
+        .catch(() => {})
+    }
+
     // Prompting mode: enqueue instead of sending
     if (isPrompting && onEnqueue) {
       onEnqueue(draft, showModeSelector ? effectiveModeId : null)
@@ -1596,6 +1650,7 @@ export function MessageInput({
     disabled,
     hasUploadingImage,
     tAttach,
+    t,
     buildDraft,
     isEditingQueueItem,
     isPrompting,

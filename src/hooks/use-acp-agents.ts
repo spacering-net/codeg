@@ -205,6 +205,18 @@ export function useAcpAgents(): UseAcpAgentsResult {
   return { agents, fresh, refresh }
 }
 
+/**
+ * Read the shared registry WITHOUT subscribing — for event handlers (a send, a
+ * menu action) that need the current list at the moment they run and must not
+ * re-render their host on every reload. In the running app TabProvider +
+ * SidebarConversationList hold the refcount ≥ 1 for the whole session, so this
+ * is warm; a cold store answers `[]`, which callers must read as "registry
+ * unknown" rather than "no agents exist".
+ */
+export function acpAgentsSnapshot(): AcpAgentInfo[] {
+  return useAcpAgentsStore.getState().agents
+}
+
 /** Test-only: reset the shared store + module race/refcount state to a clean
  *  slate (disposing any live subscription). */
 export function resetAcpAgentsStore(): void {
