@@ -921,6 +921,10 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::update::AppUpdateStateHandle>()
             .inner()
             .clone(),
+        quota_manager: app
+            .try_state::<Arc<crate::quota::QuotaManager>>()
+            .map(|s| s.inner().clone())
+            .unwrap_or_else(|| Arc::new(crate::quota::QuotaManager::new())),
     });
 
     // See do_start_web_server_with_state for rationale on the reset.

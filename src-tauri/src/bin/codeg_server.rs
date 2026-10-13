@@ -300,6 +300,7 @@ async fn async_main() -> ExitCode {
         computer_service: std::sync::OnceLock::new(),
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
+        quota_manager: codeg_lib::app_state::default_quota_manager(),
     });
     state
         .connection_manager

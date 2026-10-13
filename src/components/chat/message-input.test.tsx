@@ -101,6 +101,9 @@ vi.mock("./composer-context-usage", () => ({
 vi.mock("./composer-connection-status", () => ({
   ComposerConnectionStatus: () => null,
 }))
+vi.mock("./composer-quota-badge", () => ({
+  ComposerQuotaBadge: () => null,
+}))
 // The platform opener is the DESKTOP arm of the shared opener; this suite runs
 // in web mode, where a system-browser target lands on `window.open` instead.
 const platform = vi.hoisted(() => ({ openUrl: vi.fn(async () => {}) }))
