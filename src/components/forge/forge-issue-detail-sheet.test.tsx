@@ -29,6 +29,7 @@ import type {
   ForgeCheck,
   ForgeComment,
   ForgeCommentList,
+  ForgeExpectedRepo,
   ForgeIdentity,
   ForgeIssueRow,
   ForgeLabel,
@@ -282,18 +283,27 @@ function mount(
     onRowUpdated?: (updated: ForgeIssueRow) => void
     onCommentPosted?: (item: { isPr: boolean; number: number }) => void
     folderId?: number | null
+    repo?: string | null
+    /** The pair a write carries — the repository the panel is showing. */
+    expected?: ForgeExpectedRepo | null
+    /** Called when a write comes back refused as stale. */
+    onStaleRepository?: () => void
   } = {}
 ) {
   const onOpenChange = handlers.onOpenChange ?? vi.fn()
   const onStart = handlers.onStart ?? vi.fn()
   const onRowUpdated = handlers.onRowUpdated ?? vi.fn()
   const onCommentPosted = handlers.onCommentPosted ?? vi.fn()
+  const onStaleRepository = handlers.onStaleRepository ?? vi.fn()
   const view = render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <ForgeIssueDetailSheet
         row={item}
         link={link}
         folderId={handlers.folderId === undefined ? 7 : handlers.folderId}
+        repo={handlers.repo}
+        expected={handlers.expected}
+        onStaleRepository={onStaleRepository}
         onOpenChange={onOpenChange}
         onStart={onStart}
         onRowUpdated={onRowUpdated}
@@ -301,7 +311,42 @@ function mount(
       />
     </NextIntlClientProvider>
   )
-  return { onOpenChange, onStart, onRowUpdated, onCommentPosted, view }
+  return {
+    onOpenChange,
+    onStart,
+    onRowUpdated,
+    onCommentPosted,
+    onStaleRepository,
+    view,
+  }
+}
+
+/**
+ * The panel as the PAGE renders it, repository included.
+ *
+ * The remote is a page-level fact handed down (see `repoKey` in
+ * `forge-page.tsx`), so the only way to rehearse a switch of it is to re-render
+ * this panel with another value — the folder does not move.
+ */
+function panelWithRepo(
+  item: ForgeIssueRow | null,
+  folderId: number,
+  repo: string | null
+) {
+  return (
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <ForgeIssueDetailSheet
+        row={item}
+        link={null}
+        folderId={folderId}
+        repo={repo}
+        onOpenChange={vi.fn()}
+        onStart={vi.fn()}
+        onRowUpdated={vi.fn()}
+        onCommentPosted={vi.fn()}
+      />
+    </NextIntlClientProvider>
+  )
 }
 
 beforeEach(() => {
@@ -959,13 +1004,19 @@ describe("ForgeIssueDetailSheet writes", () => {
     await user.click(screen.getByRole("button", { name: "Comment" }))
 
     await waitFor(() =>
-      expect(forgeCreateComment).toHaveBeenCalledWith(7, {
-        kind: "issue",
-        number: 42,
-        // Trimmed before it goes out — a comment padded with what a keyboard
-        // left behind is one nobody meant to publish.
-        body: "looks fixed",
-      })
+      expect(forgeCreateComment).toHaveBeenCalledWith(
+        7,
+        {
+          kind: "issue",
+          number: 42,
+          // Trimmed before it goes out — a comment padded with what a keyboard
+          // left behind is one nobody meant to publish.
+          body: "looks fixed",
+        },
+        // No repository named by this caller — see the test below for the one
+        // that does.
+        null
+      )
     )
     expect(await screen.findByText("looks fixed")).toBeInTheDocument()
     expect(screen.getByText("alice")).toBeInTheDocument()
@@ -1008,6 +1059,93 @@ describe("ForgeIssueDetailSheet writes", () => {
     expect(submit).toBeDisabled()
   })
 
+  /** What the backend answers with when the coordinates a write carried no
+   *  longer match the folder's remote (see `WRITE_MISMATCH_I18N_KEY`). */
+  const writeMismatch = {
+    code: "configuration_invalid",
+    message:
+      "this panel was showing github.com/me/app, but the folder's remote is now github.com/acme/app",
+    i18n_key: "Forge.writeMismatch",
+    i18n_params: {
+      expected: "github.com/me/app",
+      actual: "github.com/acme/app",
+    },
+  }
+
+  it("carries the repository this panel is showing on the post", async () => {
+    const user = userEvent.setup()
+    forgeListComments.mockResolvedValue(commentPage([]))
+    forgeCreateComment.mockResolvedValue(comment({ id: "991", body: "hi" }))
+    mount(row(), null, {
+      expected: {
+        expectedServerHost: "github.com",
+        expectedOwnerRepo: "me/app",
+      },
+    })
+    await screen.findByText("No comments yet")
+
+    await user.type(screen.getByPlaceholderText("Leave a comment…"), "hi")
+    await user.click(screen.getByRole("button", { name: "Comment" }))
+
+    await waitFor(() =>
+      expect(forgeCreateComment).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({ body: "hi" }),
+        { expectedServerHost: "github.com", expectedOwnerRepo: "me/app" }
+      )
+    )
+  })
+
+  it("hands a stale-repository refusal to the page instead of only reporting it", async () => {
+    const user = userEvent.setup()
+    forgeListComments.mockResolvedValue(commentPage([]))
+    forgeCreateComment.mockRejectedValue(writeMismatch)
+    const { onStaleRepository, onCommentPosted } = mount(row(), null, {
+      expected: {
+        expectedServerHost: "github.com",
+        expectedOwnerRepo: "me/app",
+      },
+    })
+    await screen.findByText("No comments yet")
+
+    await user.type(
+      screen.getByPlaceholderText("Leave a comment…"),
+      "meant for the fork"
+    )
+    await user.click(screen.getByRole("button", { name: "Comment" }))
+
+    // The panel is stale, so re-resolving is the only fix — this is the
+    // callback the page turns into one. Nothing was published, and nothing was
+    // adopted as if it had been.
+    await waitFor(() => expect(onStaleRepository).toHaveBeenCalled())
+    expect(onCommentPosted).not.toHaveBeenCalled()
+  })
+
+  it("does the same for a close the folder has moved out from under", async () => {
+    const user = userEvent.setup()
+    forgeSetItemState.mockRejectedValue(writeMismatch)
+    const { onStaleRepository, onRowUpdated } = mount(row(), null, {
+      expected: {
+        expectedServerHost: "github.com",
+        expectedOwnerRepo: "me/app",
+      },
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: "Close #42 on the forge" })
+    )
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Close",
+      })
+    )
+
+    await waitFor(() => expect(onStaleRepository).toHaveBeenCalled())
+    // Not flipped locally: the write never happened, and pretending it did is
+    // the guess this panel refuses to make everywhere else.
+    expect(onRowUpdated).not.toHaveBeenCalled()
+  })
+
   it("confirms a close, then adopts the row the forge answered with", async () => {
     const user = userEvent.setup()
     // GitHub's PATCH answers with bare label names on GitLab; here the point
@@ -1030,11 +1168,15 @@ describe("ForgeIssueDetailSheet writes", () => {
       })
     )
     await waitFor(() =>
-      expect(forgeSetItemState).toHaveBeenCalledWith(7, {
-        kind: "issue",
-        number: 42,
-        action: "close",
-      })
+      expect(forgeSetItemState).toHaveBeenCalledWith(
+        7,
+        {
+          kind: "issue",
+          number: 42,
+          action: "close",
+        },
+        null
+      )
     )
     await waitFor(() => expect(onRowUpdated).toHaveBeenCalled())
     const adopted = vi.mocked(onRowUpdated).mock.calls[0][0] as ForgeIssueRow
@@ -2133,14 +2275,18 @@ describe("ForgeIssueDetailSheet merge box", () => {
     await user.click(screen.getByRole("button", { name: "Squash and merge" }))
 
     await waitFor(() =>
-      expect(forgeMergeChange).toHaveBeenCalledWith(7, {
-        number: 42,
-        method: "squash",
-        // The commit the panel DECIDED on — its diff, its files and its checks
-        // all describe this one. Both forges refuse with a 409 if the branch
-        // has moved, which is the point of sending it.
-        headSha: "abc123",
-      })
+      expect(forgeMergeChange).toHaveBeenCalledWith(
+        7,
+        {
+          number: 42,
+          method: "squash",
+          // The commit the panel DECIDED on — its diff, its files and its checks
+          // all describe this one. Both forges refuse with a 409 if the branch
+          // has moved, which is the point of sending it.
+          headSha: "abc123",
+        },
+        null
+      )
     )
     // The FORGE's row, not a local flip: GitHub has no merged state, and only
     // its answer knows this one landed rather than closed.
@@ -2209,7 +2355,8 @@ describe("ForgeIssueDetailSheet merge box", () => {
     await waitFor(() =>
       expect(forgeMergeChange).toHaveBeenCalledWith(
         7,
-        expect.objectContaining({ headSha: "reviewed1" })
+        expect.objectContaining({ headSha: "reviewed1" }),
+        null
       )
     )
   })
@@ -2675,6 +2822,121 @@ describe("ForgeIssueDetailSheet conversation rail", () => {
     expect(card).not.toBeNull()
     const column = card?.previousElementSibling
     expect(column?.firstElementChild).toHaveClass("rounded-full")
+  })
+
+  /**
+   * The repository is part of what the panel's own lookups are ABOUT, so a
+   * switch of it has to blank them, not just re-ask.
+   *
+   * `forgeIdentity` is asked for by FOLDER and answered about whatever remote
+   * that folder names — and the real backend reads the same folder, so the
+   * answer for the folder really does change under a switch. Keyed on the folder
+   * alone the panel went on naming the previous repository's account until its
+   * own request came back, over a row that had already been re-read from the new
+   * one. The window is the whole point: both requests are held open here, since
+   * an answer that resolved would paper over the stale one a moment later.
+   */
+  it("names no account from the repository the switch left, not even for a frame", async () => {
+    const settle = new Map<number, (value: ForgeIdentity) => void>()
+    forgeIdentity.mockImplementation(
+      (folderId: number) =>
+        new Promise<ForgeIdentity>((resolve) => {
+          settle.set(folderId, resolve)
+        })
+    )
+
+    const { view } = mount(row(), null, {
+      folderId: 7,
+      repo: "github.com/me/codeg",
+    })
+    await waitFor(() => expect(forgeIdentity).toHaveBeenCalledWith(7))
+    settle.get(7)?.({ username: "on-the-fork", avatar_url: null })
+    await waitFor(() =>
+      expect(
+        screen.getByRole("img", { name: "Commenting as on-the-fork" })
+      ).toBeInTheDocument()
+    )
+
+    // Same folder, other repository — the picker in action.
+    view.rerender(panelWithRepo(row(), 7, "github.com/acme/codeg-parent"))
+
+    // The new repository's lookup has gone out and has not answered, and the
+    // fork's account must not be standing in for it.
+    await waitFor(() => expect(forgeIdentity).toHaveBeenCalledTimes(2))
+    expect(screen.queryByRole("img", { name: /Commenting as/ })).toBeNull()
+
+    settle.get(7)?.({ username: "on-the-parent", avatar_url: null })
+    await waitFor(() =>
+      expect(
+        screen.getByRole("img", { name: "Commenting as on-the-parent" })
+      ).toBeInTheDocument()
+    )
+  })
+
+  /** The same rule for the merge box: which methods the forge permits is a fact
+   *  about the repository, and the box must not go on offering the fork's while
+   *  the parent's is on screen. Held open, as the account lookup is — the claim
+   *  is about the window before the new answer lands. */
+  it("withholds the merge on a repository switch until the new one answers", async () => {
+    forgeChangeDetail.mockResolvedValue({
+      number: 42,
+      base_ref: "main",
+      head_ref: "fix/timeout",
+      head_repo: null,
+      head_sha: "abc123",
+      draft: false,
+      state: "open",
+      mergeable: true,
+      merge_state: "clean",
+      additions: 1,
+      deletions: 1,
+      changed_files: 1,
+      commits: 1,
+      checks: { checks: [], available: true, partial: false },
+    })
+    // Held in a list rather than a `let … | null`: the resolve is stored from
+    // inside the mock, and TypeScript's control-flow analysis cannot see an
+    // assignment made in a callback, so it narrows a `let` back to `null` at
+    // the call site and refuses the call outright.
+    const settles: Array<(value: ForgeMergeOptions) => void> = []
+    forgeMergeOptions
+      .mockResolvedValueOnce({
+        methods: ["squash"],
+        default_method: "squash",
+        merge_strategy: "squash",
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise<ForgeMergeOptions>((resolve) => {
+            settles.push(resolve)
+          })
+      )
+
+    const mergeButton = () =>
+      screen.getByRole("button", { name: /^(Merge|Merging…)$/ })
+    const { view } = mount(row({ is_pr: true }), null, {
+      folderId: 7,
+      repo: "github.com/me/codeg",
+    })
+    await waitFor(() => expect(mergeButton()).toBeEnabled())
+
+    view.rerender(
+      panelWithRepo(row({ is_pr: true }), 7, "github.com/acme/codeg-parent")
+    )
+
+    // Blanked rather than carried over: the method the fork prefers is a claim
+    // about a repository this panel is no longer reading, and the box says so
+    // by not being willing to merge until the new repository has answered.
+    await waitFor(() => expect(forgeMergeOptions).toHaveBeenCalledTimes(2))
+    expect(mergeButton()).toBeDisabled()
+
+    // And the parent's own answer still lands when it comes.
+    settles[0]?.({
+      methods: ["merge"],
+      default_method: "merge",
+      merge_strategy: "merge_commit",
+    })
+    await waitFor(() => expect(mergeButton()).toBeEnabled())
   })
 })
 

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::forge as core;
+use crate::forge::remotes::ForgeRemoteStore;
 use crate::forge::settings::{ForgePanelSettings, ForgeSettingsStore};
 use crate::forge::{
     ChangeFilesQuery, ChangeMergeRequest, ChangeQuery, CommentDraft, CommentFilters, CountFilters,
@@ -295,5 +296,31 @@ pub async fn forge_settings_set(
 ) -> Result<Json<ForgeSettingsStore>, AppCommandError> {
     Ok(Json(
         core::forge_settings_set_core(&state.db, params.folder_id, params.settings).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSetParams {
+    pub folder_id: i32,
+    /// The remote to read the folder from, or null for the default. A blank
+    /// name is the same answer — the store normalizes it (see
+    /// `forge::remotes`).
+    #[serde(default)]
+    pub remote: Option<String>,
+}
+
+pub async fn forge_remote_get(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<ForgeRemoteStore>, AppCommandError> {
+    Ok(Json(core::forge_remote_get_core(&state.db).await?))
+}
+
+pub async fn forge_remote_set(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RemoteSetParams>,
+) -> Result<Json<ForgeRemoteStore>, AppCommandError> {
+    Ok(Json(
+        core::forge_remote_set_core(&state.db, params.folder_id, params.remote).await?,
     ))
 }

@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Plus } from "lucide-react"
+import { toast } from "sonner"
 import { ForgeLabelChip } from "@/components/forge/forge-issue-row"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,11 +20,15 @@ import { Textarea } from "@/components/ui/textarea"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { forgeCreateIssue } from "@/lib/api"
 import {
+  isForgeWriteMismatch,
   type AppErrorTranslator,
   toLocalizedErrorMessage,
 } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
-import type { ForgeIssueRow, ForgeLabel } from "@/lib/types"
+import type { ForgeExpectedRepo, ForgeIssueRow, ForgeLabel } from "@/lib/types"
+
+/** Stands in for a caller that wired no re-resolve (a preview, a fixture). */
+const NO_OP = () => {}
 
 /** Mirrors `MAX_TITLE_CHARS` in src-tauri/src/forge/mod.rs. Enforced here as
  *  well as there so the counter and the button agree with what the forge will
@@ -52,6 +57,8 @@ export function ForgeNewIssueDialog({
   folderId,
   repo,
   labelOptions,
+  expected = null,
+  onStaleRepository = NO_OP,
   onOpenChange,
   onCreated,
 }: {
@@ -59,6 +66,13 @@ export function ForgeNewIssueDialog({
   folderId: number
   /** `owner/repo`, for the description — the backend derives its own. */
   repo: string
+  /** The repository this dialog was opened over, as the pair a write carries
+   *  (see `ForgeExpectedRepo`). `null` sends none, which is the old
+   *  behaviour. */
+  expected?: ForgeExpectedRepo | null
+  /** The write was refused because the folder has moved to another
+   *  repository; the page re-resolves, which closes this dialog. */
+  onStaleRepository?: () => void
   /** The repository's label vocabulary, already fetched by the page. Empty
    *  when it has none (or the read failed), in which case no label control is
    *  offered at all — one that can only show an empty list is worse than none. */
@@ -97,21 +111,45 @@ export function ForgeNewIssueDialog({
     setCreating(true)
     setFailure(null)
     try {
-      const row = await forgeCreateIssue(folderId, {
-        title: trimmedTitle,
-        body: body.trim() === "" ? null : body.trim(),
-        labels,
-      })
+      const row = await forgeCreateIssue(
+        folderId,
+        {
+          title: trimmedTitle,
+          body: body.trim() === "" ? null : body.trim(),
+          labels,
+        },
+        expected
+      )
       // Only once it exists: clearing before the answer would lose what
       // somebody wrote to a network failure they cannot retry from.
       reset()
       onCreated(row)
     } catch (error) {
+      if (isForgeWriteMismatch(error)) {
+        // The page's re-resolve closes this dialog, so the inline strip would
+        // be torn down before it could be read — a toast outlives it.
+        toast.error(
+          toLocalizedErrorMessage(error, tRoot as unknown as AppErrorTranslator)
+        )
+        onStaleRepository()
+        return
+      }
       setFailure({ error })
     } finally {
       setCreating(false)
     }
-  }, [body, canCreate, folderId, labels, onCreated, reset, trimmedTitle])
+  }, [
+    body,
+    canCreate,
+    expected,
+    folderId,
+    labels,
+    onCreated,
+    onStaleRepository,
+    reset,
+    tRoot,
+    trimmedTitle,
+  ])
 
   return (
     <Dialog

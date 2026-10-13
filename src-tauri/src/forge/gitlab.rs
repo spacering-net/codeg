@@ -322,19 +322,33 @@ pub async fn create_merge_request(
     owner_repo: &str,
     req: &NewPullRequest<'_>,
 ) -> Result<ForgePr, ForgeError> {
-    let project = project_ref(owner_repo)?;
+    // Where the request is ADDRESSED. GitLab resolves `source_branch` in the
+    // project the request is sent to, so a merge request from a fork is created
+    // ON the fork, with the project it is aimed at named in the body. Addressing
+    // the target and naming the fork in `source_project_id` instead is answered
+    // with `source_branch does not exist` — measured against gitlab.com, not
+    // guessed.
+    let project = match req.source_project_id {
+        Some(fork) => fork.to_string(),
+        None => project_ref(owner_repo)?,
+    };
     let url = format!("{}/projects/{project}/merge_requests", auth.api_base);
     let title = if req.draft && !is_draft_title(req.title) {
         format!("Draft: {}", req.title)
     } else {
         req.title.to_string()
     };
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "source_branch": req.head,
         "target_branch": req.base,
         "title": title,
         "description": req.body,
     });
+    // The other half of a cross-project merge request. Omitting it does not
+    // fall back to the fork's upstream — it makes the fork its own target.
+    if let Some(id) = req.target_project_id {
+        body["target_project_id"] = serde_json::json!(id);
+    }
     let raw: RawMergeRequest = api_post(auth, &url, &body)
         .await?
         .json()
@@ -848,6 +862,33 @@ async fn project_path(auth: &ResolvedAuth, project_id: i64) -> Option<String> {
     let url = format!("{}/projects/{project_id}", auth.api_base);
     let project: RawProject = api_get(auth, &url).await.ok()?.json().await.ok()?;
     Some(project.path_with_namespace).filter(|p| !p.is_empty())
+}
+
+/// `path_with_namespace` → project id — the inverse of [`project_path`], and
+/// the one coordinate a cross-project merge request cannot be opened without.
+///
+/// GitLab takes the SOURCE project of a merge request by id, while everything
+/// codeg holds (a remote URL, a folder, a task's recorded fork) is a path. The
+/// id is resolved once, at trigger time, and recorded on the task: the list
+/// payload the retry path reads names a foreign source project by number alone
+/// (see `map_merge_request`), so the delivery needs this same id to turn that
+/// placeholder back into a repository.
+pub async fn resolve_project_id(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+) -> Result<i64, ForgeError> {
+    #[derive(Deserialize)]
+    struct RawProject {
+        id: i64,
+    }
+    let project = project_ref(owner_repo)?;
+    let url = format!("{}/projects/{project}", auth.api_base);
+    let raw: RawProject = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad project payload: {e}")))?;
+    Ok(raw.id)
 }
 
 pub(crate) async fn api_get(
@@ -1425,6 +1466,9 @@ mod tests {
         let user_hits = Arc::new(AtomicUsize::new(0));
         let last_query: Arc<RwLock<HashMap<String, String>>> = Default::default();
         let seen = creates.clone();
+        // The fork's own create records into the same list from a second
+        // closure, so it needs its own handle.
+        let fork_seen = creates.clone();
         let issue_notes = notes.clone();
         let mr_notes = notes.clone();
         let hits = user_hits.clone();
@@ -1460,6 +1504,12 @@ mod tests {
                     (headers, Json(serde_json::Value::Array(rows)))
                 }),
             )
+            // The project itself — what `resolve_project_id` reads, and the id
+            // a cross-project merge request is opened with.
+            .route(
+                "/projects/group%2Fsub%2Fproj",
+                get(|| async { Json(serde_json::json!({ "id": 4711 })) }),
+            )
             .route(
                 "/projects/group%2Fsub%2Fproj/merge_requests",
                 get(move |Query(q): Query<HashMap<String, String>>| async move {
@@ -1493,6 +1543,21 @@ mod tests {
                 .post(move |Json(body): Json<serde_json::Value>| {
                     seen.lock().unwrap().push(body);
                     async { Json(mr_json(8, "opened", 1)) }
+                }),
+            )
+            // A merge request created ON a fork: the project in the path owns
+            // the branch, the target is named in the body. The payload that
+            // comes back names the fork by number alone, which is what the
+            // claim path has to turn back into a repository.
+            .route(
+                "/projects/4712/merge_requests",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    fork_seen.lock().unwrap().push(body);
+                    async {
+                        let mut mr = mr_json(9, "opened", 4712);
+                        mr["target_project_id"] = serde_json::json!(4711);
+                        Json(mr)
+                    }
                 }),
             )
             .route(
@@ -1979,6 +2044,62 @@ mod tests {
         assert!(get_merge_request(&auth, "not-a-path", 4).await.is_err());
     }
 
+    /// The path → id lookup a trigger performs, and the cross-project body it
+    /// The shape of a cross-project merge request, which the live API settled:
+    /// the request is ADDRESSED to the fork — GitLab resolves `source_branch`
+    /// in the project in the path, so addressing the target while naming the
+    /// fork answers `source_branch does not exist` — and the target is named in
+    /// the body. Omitting that does not fall back to the fork's upstream: it
+    /// makes the fork its own target.
+    #[tokio::test]
+    async fn a_cross_project_merge_request_is_created_on_the_fork() {
+        let (api_base, creates, _, _, _) = mock_api().await;
+        let auth = auth_for(api_base);
+
+        assert_eq!(
+            resolve_project_id(&auth, "Group/Sub/Proj").await.expect("id"),
+            4711,
+            "the path is asked for exactly as the API spells it"
+        );
+        // A path this token cannot see (or that is not a path at all) is an
+        // error, never a silent 0 — the trigger refuses the task on it.
+        assert!(resolve_project_id(&auth, "not-a-path").await.is_err());
+
+        let made = create_merge_request(
+            &auth,
+            "group/sub/proj",
+            &NewPullRequest {
+                source_project_id: Some(4712),
+                target_project_id: Some(4711),
+                title: "From the fork",
+                head: "task/7",
+                base: "main",
+                body: "",
+                draft: false,
+            },
+        )
+        .await
+        .expect("create");
+        assert_eq!(made.number, 9);
+        let sent = creates.lock().unwrap().first().cloned().unwrap();
+        assert_eq!(sent["target_project_id"], 4711);
+        assert_eq!(sent["source_branch"], "task/7", "the branch stays bare");
+        assert!(sent.get("source_project_id").is_none(), "{sent}");
+        // And what the target's own list will say about it: a number where a
+        // repository name belongs, which only the recorded fork id can turn
+        // back into one.
+        assert_eq!(made.head_repo, "project-4712");
+        assert_eq!(
+            made.clone().with_resolved_head(Some(4712), "me/fork").head_repo,
+            "me/fork"
+        );
+        assert_eq!(
+            made.with_resolved_head(Some(999), "someone/else").head_repo,
+            "project-4712",
+            "another fork's merge request is not this task's"
+        );
+    }
+
     /// The delivery's lookup: by source branch, in any state, mapped into the
     /// same shape the four-way match already knows.
     #[tokio::test]
@@ -2006,6 +2127,8 @@ mod tests {
             &auth,
             "group/sub/proj",
             &NewPullRequest {
+                source_project_id: None,
+                target_project_id: None,
                 title: "Fix #7",
                 head: "task/7",
                 base: "main",
@@ -2021,12 +2144,17 @@ mod tests {
         assert_eq!(sent["target_branch"], "main");
         assert_eq!(sent["title"], "Draft: Fix #7");
         assert_eq!(sent["description"], "Closes #7");
+        // A SAME-project merge request must not name a source project: GitLab
+        // reads that field as "the branch lives over there".
+        assert!(sent.get("source_project_id").is_none(), "{sent}");
 
         // Not a draft, and an already-prefixed title is not prefixed twice.
         create_merge_request(
             &auth,
             "group/sub/proj",
             &NewPullRequest {
+                source_project_id: None,
+                target_project_id: None,
                 title: "Draft: Fix #7",
                 head: "task/7",
                 base: "main",

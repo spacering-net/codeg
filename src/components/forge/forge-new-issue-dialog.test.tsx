@@ -13,7 +13,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { ForgeIssueRow, ForgeLabel } from "@/lib/types"
+import type { ForgeExpectedRepo, ForgeIssueRow, ForgeLabel } from "@/lib/types"
 
 import {
   ForgeNewIssueDialog,
@@ -41,9 +41,16 @@ function created(overrides: Partial<ForgeIssueRow> = {}): ForgeIssueRow {
   }
 }
 
-function mount(labelOptions: ForgeLabel[] = []) {
+function mount(
+  labelOptions: ForgeLabel[] = [],
+  handlers: {
+    expected?: ForgeExpectedRepo | null
+    onStaleRepository?: () => void
+  } = {}
+) {
   const onOpenChange = vi.fn()
   const onCreated = vi.fn()
+  const onStaleRepository = handlers.onStaleRepository ?? vi.fn()
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <ForgeNewIssueDialog
@@ -51,12 +58,14 @@ function mount(labelOptions: ForgeLabel[] = []) {
         folderId={7}
         repo="acme/app"
         labelOptions={labelOptions}
+        expected={handlers.expected}
+        onStaleRepository={onStaleRepository}
         onOpenChange={onOpenChange}
         onCreated={onCreated}
       />
     </NextIntlClientProvider>
   )
-  return { onOpenChange, onCreated }
+  return { onOpenChange, onCreated, onStaleRepository }
 }
 
 beforeEach(() => {
@@ -112,13 +121,19 @@ describe("ForgeNewIssueDialog", () => {
     await user.click(screen.getByRole("button", { name: "Create issue" }))
 
     await waitFor(() =>
-      expect(forgeCreateIssue).toHaveBeenCalledWith(7, {
-        title: "Login times out",
-        // Null, not "": GitHub stores an empty string as a body and the issue
-        // then renders an empty description block.
-        body: null,
-        labels: ["bug"],
-      })
+      expect(forgeCreateIssue).toHaveBeenCalledWith(
+        7,
+        {
+          title: "Login times out",
+          // Null, not "": GitHub stores an empty string as a body and the issue
+          // then renders an empty description block.
+          body: null,
+          labels: ["bug"],
+        },
+        // No repository named by this caller — the page passes one in
+        // production (see the test below).
+        null
+      )
     )
     // The forge's row — the number and the URL only exist once it is written.
     expect(onCreated).toHaveBeenCalledWith(
@@ -146,6 +161,56 @@ describe("ForgeNewIssueDialog", () => {
     mount([])
     // A picker that can only ever open an empty list is worse than no picker.
     expect(screen.queryByText("Labels")).not.toBeInTheDocument()
+  })
+
+  it("carries the repository the dialog was opened over", async () => {
+    const user = userEvent.setup()
+    forgeCreateIssue.mockResolvedValue(created())
+    mount([], {
+      expected: {
+        expectedServerHost: "github.com",
+        expectedOwnerRepo: "me/app",
+      },
+    })
+
+    await user.type(screen.getByLabelText("Title"), "Login times out")
+    await user.click(screen.getByRole("button", { name: "Create issue" }))
+
+    await waitFor(() =>
+      expect(forgeCreateIssue).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({ title: "Login times out" }),
+        { expectedServerHost: "github.com", expectedOwnerRepo: "me/app" }
+      )
+    )
+  })
+
+  it("tells the page to re-resolve when the folder has moved on", async () => {
+    const user = userEvent.setup()
+    // What the backend answers with when the coordinates no longer match the
+    // folder's remote (`WRITE_MISMATCH_I18N_KEY`).
+    forgeCreateIssue.mockRejectedValue({
+      code: "configuration_invalid",
+      message: "this panel was showing github.com/me/app",
+      i18n_key: "Forge.writeMismatch",
+      i18n_params: {
+        expected: "github.com/me/app",
+        actual: "github.com/acme/app",
+      },
+    })
+    const { onStaleRepository, onCreated } = mount([], {
+      expected: {
+        expectedServerHost: "github.com",
+        expectedOwnerRepo: "me/app",
+      },
+    })
+
+    await user.type(screen.getByLabelText("Title"), "Login times out")
+    await user.click(screen.getByRole("button", { name: "Create issue" }))
+
+    await waitFor(() => expect(onStaleRepository).toHaveBeenCalled())
+    // Nothing was filed, and the dialog does not pretend otherwise.
+    expect(onCreated).not.toHaveBeenCalled()
   })
 })
 

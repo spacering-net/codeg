@@ -120,13 +120,52 @@ pub struct ForgePr {
     pub head_sha: String,
     pub head_ref: String,
     /// `owner/repo` of the head — compared with `same_repo`, never `==`.
+    /// GitLab's LIST payload abbreviates a foreign source project to
+    /// `project-{id}`; see [`ForgePr::with_resolved_head`].
     pub head_repo: String,
     pub base_ref: String,
+}
+
+impl ForgePr {
+    /// Turn GitLab's `project-{id}` placeholder back into a repository path.
+    ///
+    /// GitLab names a foreign source project by NUMBER alone in every list
+    /// payload — `map_merge_request` writes that as `project-{id}` on purpose,
+    /// so a gate does not spend one request per row to learn the same thing.
+    /// A delivery that knows which id it recorded at trigger time substitutes
+    /// the fork's path for free, and every comparison downstream (the four-way
+    /// match's head criterion, `check_pull_target`) then works on the same
+    /// spelling the detail endpoint would have given.
+    ///
+    /// Only the RECORDED id is substituted: another fork's merge request keeps
+    /// its placeholder, which matches nothing — that is what keeps a
+    /// stranger's merge request from being adopted.
+    pub fn with_resolved_head(mut self, fork_project_id: Option<i64>, fork_repo: &str) -> Self {
+        if let Some(id) = fork_project_id {
+            if self.head_repo == format!("project-{id}") {
+                self.head_repo = fork_repo.to_string();
+            }
+        }
+        self
+    }
 }
 
 /// What to open, once we know nothing suitable exists yet.
 #[derive(Debug, Clone)]
 pub struct NewPullRequest<'a> {
+    /// GitLab only: the project that OWNS the head branch, when it is not the
+    /// repository being merged into. GitHub and Gitea express that in `head`
+    /// (`owner:branch`); GitLab needs both ends by id, and the request has to be
+    /// ADDRESSED to this one — GitLab resolves `source_branch` in the project
+    /// the request is sent to, so naming the fork while addressing the target
+    /// answers "source_branch does not exist" (verified against gitlab.com).
+    /// `None` = a same-project merge request, created on `owner_repo` itself.
+    pub source_project_id: Option<i64>,
+    /// GitLab only, and the other half of the same fact: the project the merge
+    /// request is aimed at. Required exactly when `source_project_id` is set —
+    /// GitLab does NOT fall back to the fork's upstream, and a request without
+    /// it makes the fork its own target.
+    pub target_project_id: Option<i64>,
     pub title: &'a str,
     pub head: &'a str,
     pub base: &'a str,
@@ -251,11 +290,20 @@ pub trait ForgeDeliveryApi: Send + Sync {
         remote_branch: &str,
     ) -> Result<(), String>;
 
-    /// Pull requests whose head is `head_branch` in the source repository, in
-    /// ANY state — a merged or closed one is exactly what recovery must see.
+    /// Pull requests whose head is `head_branch` in `head_repo`, in ANY state —
+    /// a merged or closed one is exactly what recovery must see.
+    ///
+    /// Two repositories, deliberately, because a cross-repository delivery has
+    /// two: the collection that is LISTED is `ctx.owner_repo` (a pull request
+    /// lives where it is merged into), while `head_repo` is the repository the
+    /// branch was pushed to, which the match compares a row's head against and
+    /// which GitHub's `head={owner}:{branch}` pre-filter names. Aiming the list
+    /// at the head's repository instead comes back empty — which reads as "no
+    /// pull request exists" and earns a 422 from the create that follows.
     async fn find_pulls(
         &self,
         ctx: &DeliveryCtx<'_>,
+        head_repo: &str,
         head_branch: &str,
     ) -> Result<Vec<ForgePr>, String>;
 
@@ -341,11 +389,14 @@ impl ForgeDeliveryApi for ForgeDelivery {
     async fn find_pulls(
         &self,
         ctx: &DeliveryCtx<'_>,
+        head_repo: &str,
         head_branch: &str,
     ) -> Result<Vec<ForgePr>, String> {
         let auth = resolve(ctx).await?;
         match ctx.provider {
-            ForgeProvider::GitHub => find_pulls(&auth, ctx.owner_repo, head_branch).await,
+            ForgeProvider::GitHub => {
+                find_pulls(&auth, ctx.owner_repo, head_repo, head_branch).await
+            }
             ForgeProvider::GitLab => {
                 gitlab::find_merge_requests(&auth, ctx.owner_repo, head_branch).await
             }
@@ -440,6 +491,12 @@ async fn resolve(ctx: &DeliveryCtx<'_>) -> Result<ResolvedAuth, String> {
 
 /// `GET /repos/{o}/{r}/pulls?head={owner}:{branch}&state=all`.
 ///
+/// `owner_repo` is the repository whose pull requests are listed (the one the
+/// merge is aimed at); `head_repo` is the one the branch was pushed to, and the
+/// ONLY thing taken from it is the owner in the filter — GitHub pre-selects by
+/// head owner, so a fork's branch has to be asked for as `owner:branch` while
+/// the collection in the path stays the target's.
+///
 /// Unlike `assignee`/`labels` (silently ignored by this endpoint — see
 /// `github.rs`), the `head` filter IS applied; verified against the live API
 /// before this was written. The four-way match still runs locally afterwards:
@@ -447,14 +504,17 @@ async fn resolve(ctx: &DeliveryCtx<'_>) -> Result<ResolvedAuth, String> {
 pub async fn find_pulls(
     auth: &ResolvedAuth,
     owner_repo: &str,
+    head_repo: &str,
     head_branch: &str,
 ) -> Result<Vec<ForgePr>, ForgeError> {
     let repo = super::normalize_repo(owner_repo)
         .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
-    let owner = repo
+    let head = super::normalize_repo(head_repo)
+        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {head_repo}")))?;
+    let owner = head
         .split('/')
         .next()
-        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
+        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {head_repo}")))?;
     let url = format!(
         "{}/repos/{}/pulls?head={}:{}&state=all&per_page=100",
         auth.api_base,
@@ -1122,12 +1182,19 @@ mod tests {
     }
 
     fn pull_json(number: i64, merged_at: Option<&str>) -> serde_json::Value {
+        pull_json_from(number, merged_at, "Acme/App")
+    }
+
+    /// Same, with the head repository spelled out: the cross-repository case,
+    /// where the row is in the target's collection while its head lives in a
+    /// fork.
+    fn pull_json_from(number: i64, merged_at: Option<&str>, head_repo: &str) -> serde_json::Value {
         serde_json::json!({
             "number": number,
             "html_url": format!("https://github.test/acme/app/pull/{number}"),
             "state": if merged_at.is_some() { "closed" } else { "open" },
             "merged_at": merged_at,
-            "head": { "sha": "abc123", "ref": "task/7", "repo": { "full_name": "Acme/App" } },
+            "head": { "sha": "abc123", "ref": "task/7", "repo": { "full_name": head_repo } },
             "base": { "ref": "main" },
         })
     }
@@ -1154,6 +1221,7 @@ mod tests {
                     // verified against the live API before this was written.
                     let rows = match q.get("head").map(String::as_str) {
                         Some("acme:task/7") => vec![pull_json(4, None)],
+                        Some("me:task/7") => vec![pull_json_from(8, None, "me/app")],
                         Some("acme:merged") => vec![pull_json(5, Some("2026-08-18T00:00:00Z"))],
                         _ => vec![],
                     };
@@ -1164,6 +1232,13 @@ mod tests {
                     seen.lock().unwrap().push(body);
                     async { Json(pull_json(6, None)) }
                 }),
+            )
+            .route(
+                "/repos/me/app/pulls",
+                // The fork's own collection: the pull request was opened in the
+                // target, so a search aimed here comes back EMPTY — the shape
+                // of the mistake, reproduced.
+                get(|| async { Json(serde_json::Value::Array(vec![])) }),
             )
             .route(
                 "/conflict/repos/acme/app/pulls",
@@ -1203,15 +1278,40 @@ mod tests {
         let (api_base, _, _, _) = mock_api().await;
         let auth = auth_for(api_base);
 
-        let open = find_pulls(&auth, "Acme/App", "task/7").await.unwrap();
+        let open = find_pulls(&auth, "Acme/App", "Acme/App", "task/7").await.unwrap();
         assert_eq!(open.len(), 1);
         assert!(!open[0].merged && open[0].state == "open");
         assert_eq!(open[0].head_repo, "Acme/App"); // canonical casing preserved
 
-        let merged = find_pulls(&auth, "acme/app", "merged").await.unwrap();
+        let merged = find_pulls(&auth, "acme/app", "acme/app", "merged").await.unwrap();
         assert!(merged[0].merged, "merged_at must set the merged flag");
 
-        assert!(find_pulls(&auth, "acme/app", "nothing").await.unwrap().is_empty());
+        assert!(find_pulls(&auth, "acme/app", "acme/app", "nothing")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A cross-repository search: the collection listed is the one being merged
+    /// into, the `head` filter names the fork that holds the branch. Aiming the
+    /// collection at the head's repository instead comes back empty, which a
+    /// delivery reads as "no pull request exists" — the 422 a retry then earns.
+    #[tokio::test]
+    async fn a_cross_repo_search_lists_the_target_and_filters_by_the_fork() {
+        let (api_base, _, _, _) = mock_api().await;
+        let auth = auth_for(api_base);
+        let found = find_pulls(&auth, "acme/app", "me/app", "task/7")
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].number, 8);
+        assert_eq!(found[0].head_repo, "me/app", "the row names the fork");
+        // And the head's own repository as the collection: the mock answers the
+        // way the real endpoint does, with nothing.
+        assert!(find_pulls(&auth, "me/app", "me/app", "task/7")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1222,6 +1322,8 @@ mod tests {
             &auth,
             "acme/app",
             &NewPullRequest {
+                source_project_id: None,
+                target_project_id: None,
                 title: "Fix #7",
                 head: "task/7",
                 base: "main",
@@ -1249,6 +1351,8 @@ mod tests {
             &auth,
             "acme/app",
             &NewPullRequest {
+                source_project_id: None,
+                target_project_id: None,
                 title: "t",
                 head: "task/7",
                 base: "main",

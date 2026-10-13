@@ -2469,6 +2469,8 @@ mod tests {
         let (api_base, seen) = mock_api().await;
         let auth = auth_for(api_base);
         let mut req = NewPullRequest {
+            source_project_id: None,
+            target_project_id: None,
             title: "Fix the crash",
             head: "codeg/task-1",
             base: "main",

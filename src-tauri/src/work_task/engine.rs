@@ -49,7 +49,9 @@ use crate::forge::deliver::{
     adopt_pull_request, pull_request_body, writeback_comment_body, DeliveryCtx, ForgeDeliveryApi,
     ForgePr, NewPullRequest, PrAdoption, TaskOutcome,
 };
-use crate::forge::{ForgeItemKind, ForgeSourceMeta, SOURCE_KIND_ISSUE, SOURCE_KIND_PR};
+use crate::forge::{
+    ForgeItemKind, ForgeProvider, ForgeSourceMeta, SOURCE_KIND_ISSUE, SOURCE_KIND_PR,
+};
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
     AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeOp,
@@ -4086,12 +4088,14 @@ impl TaskEngine {
                      trigger it again"
                         .to_string()
                 })?;
-            // The push lands in the recorded HEAD repository — the fork, when
-            // the pull request comes from one. Resolvability is re-checked
-            // here, before the CAS, so a row whose fork codeg cannot name
-            // (written by an older build, or hydrated while the fork was
-            // already gone) is refused with the task left exactly as it was.
-            pull_push_repo(&meta)?;
+            // The push lands in the repository this task's work belongs to —
+            // the pull request's own head (the fork, when it comes from one),
+            // or the recorded fork of an issue task. Resolvability is
+            // re-checked here, before the CAS, so a row whose fork codeg
+            // cannot name (written by an older build, or hydrated while the
+            // fork was already gone) is refused with the task left exactly as
+            // it was.
+            delivery_push_repo(&meta)?;
             head_ref
         } else {
             work_branch.clone()
@@ -4388,26 +4392,47 @@ impl TaskEngine {
             account_id: &meta.account_id,
             owner_repo: &meta.owner_repo,
         };
+        // Where the work lands: the source, or the fork this folder's `origin`
+        // named when the task was triggered. Resolved ONCE, before the push,
+        // because the same answer decides three things — the push's target, the
+        // `head` a new pull request is created with, and (on GitHub and Gitea)
+        // which owner the look-before-create asks for. The pull request itself
+        // is still listed in the SOURCE's collection either way.
+        let push_repo = delivery_push_repo(meta)?;
         // Fast-forward push of the same commits is a no-op, so a retry after a
         // later step failed costs nothing and changes nothing.
         self.forge
-            .push_branch(&ctx, wt_path, &meta.owner_repo, work_branch, work_branch)
+            .push_branch(&ctx, wt_path, &push_repo, work_branch, work_branch)
             .await
             .map_err(|e| format!("could not push the task branch: {e}"))?;
 
         // Look before creating: the previous attempt may have opened the pull
-        // request and died on the way to settling it.
+        // request and died on the way to settling it. The LIST is the source's
+        // — a pull request lives where it is merged into — while the branch
+        // being searched for is the fork's, which GitHub's
+        // `head={owner}:{branch}` pre-filter names and the four-way match
+        // compares against. Aim it at the fork instead and the list comes back
+        // empty, which is how a retry opens a second pull request and eats a
+        // 422.
         let existing = self
             .forge
-            .find_pulls(&ctx, work_branch)
+            .find_pulls(&ctx, &push_repo, work_branch)
             .await
             .map_err(|e| format!("could not check for an existing pull request: {e}"))?;
+        // GitLab's list payload names a foreign source project by NUMBER only
+        // (`project-{id}`); the task recorded which id that is at trigger time,
+        // so the placeholder becomes the fork's path before the match — without
+        // it, a retry can never recognise the merge request it already opened.
+        let existing: Vec<ForgePr> = existing
+            .into_iter()
+            .map(|pr| pr.with_resolved_head(meta.fork_project_id, &push_repo))
+            .collect();
         match adopt_pull_request(
             existing,
             expected_head,
             work_branch,
             base_branch,
-            &meta.owner_repo,
+            &push_repo,
         ) {
             PrAdoption::Merged(pr) | PrAdoption::Open(pr) => Ok(pr),
             PrAdoption::ClosedUnmerged(pr) => Err(format!(
@@ -4426,12 +4451,30 @@ impl TaskEngine {
             )),
             PrAdoption::NoMatch => {
                 let body = pull_request_body(&meta.url, meta.number, task_id);
+                // The head goes to the FORK when there is one — as
+                // `owner:branch`, which is how both GitHub and Gitea spell a
+                // repository other than the target. GitLab has no qualified
+                // head: its side of the same fact is the pair of project ids
+                // below, and its `source_branch` stays bare.
+                let head = head_ref_for(meta.provider, &push_repo, &meta.owner_repo, work_branch);
+                // The id pair a cross-project GitLab merge request needs: the
+                // project the request is created ON (the fork that holds the
+                // branch) and the one it is aimed at. A same-project delivery
+                // carries neither.
+                let (source_project_id, target_project_id) =
+                    if crate::forge::same_repo(&push_repo, &meta.owner_repo) {
+                        (None, None)
+                    } else {
+                        (meta.fork_project_id, meta.owner_project_id)
+                    };
                 self.forge
                     .create_pull(
                         &ctx,
                         &NewPullRequest {
+                            source_project_id,
+                            target_project_id,
                             title,
-                            head: work_branch,
+                            head: &head,
                             base: base_branch,
                             body: &body,
                             draft,
@@ -4500,7 +4543,7 @@ impl TaskEngine {
                     meta.number
                 ));
             }
-            let push_repo = pull_push_repo(meta)?;
+            let push_repo = delivery_push_repo(meta)?;
             self.forge
                 .push_branch(&ctx, wt_path, &push_repo, work_branch, remote_branch)
                 .await
@@ -4567,18 +4610,20 @@ impl TaskEngine {
         remote_branch: &str,
     ) -> Result<(), String> {
         let noun = meta.provider.change_noun();
-        // Compared against the head repository RECORDED at trigger time (the
-        // fork, when the pull request comes from one — rows without one are
-        // same-repo by construction), not against the source repository: a
-        // fork's pull request legitimately lives elsewhere, and the thing
-        // being caught here is the head moving since the task was made.
-        let recorded_repo = meta
-            .head_repo
-            .as_deref()
-            .map(str::trim)
-            .filter(|r| !r.is_empty())
-            .unwrap_or(&meta.owner_repo);
-        if !crate::forge::same_repo(&pr.head_repo, recorded_repo) {
+        // Compared against the repository this task's work is pushed to — the
+        // head of a pull-request task, or the recorded fork of an issue task —
+        // not against the source: a cross-repository delivery legitimately has
+        // its head elsewhere, and the thing being caught here is that head
+        // moving since the task was made. Rows written before the fork was
+        // recorded are same-repo by construction and answer the source.
+        let recorded_repo = delivery_push_repo(meta)?;
+        // GitLab's list payload abbreviates a foreign source project to
+        // `project-{id}`; the task recorded which id is its fork, so the
+        // placeholder becomes the path before the comparison — otherwise a
+        // cross-project merge request created a moment ago reads as one that
+        // was retargeted under us.
+        let pr = pr.clone().with_resolved_head(meta.fork_project_id, &recorded_repo);
+        if !crate::forge::same_repo(&pr.head_repo, &recorded_repo) {
             return Err(format!(
                 "{noun} #{} now comes from {}, not {recorded_repo} — check it before delivering \
                  again",
@@ -4917,8 +4962,22 @@ impl TaskEngine {
                 .await;
             return;
         }
-        let found = match self.forge.find_pulls(&ctx, remote_branch).await {
-            Ok(prs) => prs,
+        // An ISSUE task's own branch lives in the repository recorded for it —
+        // the fork, when the folder's `origin` was not the source. Recovery is
+        // the one place that has to agree with `push_and_open` about where
+        // that is, or an interrupted delivery re-opens what already exists.
+        let push_repo = match delivery_push_repo(&meta) {
+            Ok(repo) => repo,
+            Err(e) => {
+                self.bounce_delivery(task, e).await;
+                return;
+            }
+        };
+        let found = match self.forge.find_pulls(&ctx, &push_repo, remote_branch).await {
+            Ok(prs) => prs
+                .into_iter()
+                .map(|pr| pr.with_resolved_head(meta.fork_project_id, &push_repo))
+                .collect(),
             Err(e) => {
                 self.bounce_delivery(
                     task,
@@ -4936,7 +4995,7 @@ impl TaskEngine {
             expected_head,
             remote_branch,
             base_branch,
-            &meta.owner_repo,
+            &push_repo,
         ) {
             PrAdoption::Merged(pr) | PrAdoption::Open(pr) => {
                 if let Err(e) = self.settle_delivery(task_id, &meta, task.run_seq, &pr).await {
@@ -6193,29 +6252,57 @@ fn classify_push_refusal(error: &str) -> PushRefusal {
     PushRefusal::Unknown
 }
 
-/// The repository a pull-request task's push-back lands in: the HEAD
-/// repository recorded at trigger time — the fork, when the pull request comes
-/// from one. A row that recorded none falls back to the source repository:
-/// builds that predate the field refused forks at trigger, so their rows are
-/// same-repo by construction. `Err` is the one head codeg cannot push to ever —
-/// a fork it cannot name (GitLab's unresolved `project-{id}` placeholder, or a
-/// fork deleted since GitHub hydrated the row).
-fn pull_push_repo(meta: &ForgeSourceMeta) -> Result<String, String> {
+/// The repository a task's WORK lands in.
+///
+/// Three answers, in order:
+/// - a task that IS a pull request pushes back to that pull request's own head
+///   repository (the fork, when it comes from one);
+/// - an issue task pushes its own branch to the fork its folder's `origin`
+///   named when the task was triggered, if that was not the source;
+/// - otherwise the source itself, which is every row written before the fork
+///   was recorded at all.
+///
+/// `Err` is the one repository codeg can never push to: a fork it cannot name
+/// (GitLab's unresolved `project-{id}` placeholder, or a fork deleted since the
+/// row was written).
+fn delivery_push_repo(meta: &ForgeSourceMeta) -> Result<String, String> {
     let recorded = meta
         .head_repo
         .as_deref()
+        .or(meta.fork_repo.as_deref())
         .map(str::trim)
         .filter(|r| !r.is_empty())
         .unwrap_or(&meta.owner_repo);
     crate::forge::normalize_repo(recorded).ok_or_else(|| {
         format!(
-            "{} #{} comes from a fork whose repository codeg cannot see (it may be private or \
-             deleted), so there is nowhere to push the work back to — its commits stay on the \
-             task's local branch",
+            "{} #{} would be delivered from a repository codeg cannot see ({recorded}; it may be \
+             private, deleted, or a fork this build cannot name), so there is nowhere to push the \
+             work — its commits stay on the task's local branch",
             meta.provider.change_noun(),
             meta.number
         )
     })
+}
+
+/// The `head` a create-pull request takes.
+///
+/// The branch alone when the head repository IS the target, and `owner:branch`
+/// when it is not — the qualified form GitHub and Gitea both accept, and the
+/// only way to say "from my fork" without a second field. GitLab is excluded
+/// because it does not read a qualified head at all: a cross-project merge
+/// request is addressed to the FORK and names the target in its body (see
+/// [`NewPullRequest`]), so its `source_branch` stays bare.
+fn head_ref_for(
+    provider: ForgeProvider,
+    push_repo: &str,
+    target_repo: &str,
+    branch: &str,
+) -> String {
+    if provider == ForgeProvider::GitLab || crate::forge::same_repo(push_repo, target_repo) {
+        return branch.to_string();
+    }
+    let owner = push_repo.split('/').next().unwrap_or(push_repo);
+    format!("{owner}:{branch}")
 }
 
 /// Pick the launch mode for a pump-driven launch from the task's history: a
@@ -9632,7 +9719,36 @@ mod tests {
         /// `(repository, work branch, remote branch)` of every push.
         pushes: Mutex<Vec<(String, String, String)>>,
         created: Mutex<Vec<(String, String, String, bool)>>,
+        /// `(source project id, target project id)` of every create, in order.
+        /// GitLab's way of naming both ends of a cross-project merge request —
+        /// the fork it is created ON and the project it is aimed at — and the
+        /// pair a same-project create must leave out entirely.
+        source_projects: Mutex<Vec<(Option<i64>, Option<i64>)>>,
+        /// `(repository the search was AIMED at, head branch)` of every
+        /// lookup — the head side of a cross-repository delivery is a claim
+        /// about which repository that must be, and this is what makes it
+        /// observable from a test.
+        /// `(repository searched, head repository, head branch)` of every
+        /// lookup. The search's aim is the one that decides whether a retry
+        /// sees what it already opened — a pull request lives in the repository
+        /// being merged INTO — so the fixtures record both sides and the
+        /// cross-repository tests assert them; `collection_owner` below is what
+        /// makes a wrong aim fail rather than merely be logged.
+        finds: Mutex<Vec<(String, String, String)>>,
+        /// Which repository's collection really holds `existing`.
+        ///
+        /// A forge lists what its own collection contains, so a search aimed
+        /// anywhere else comes back empty. `None` = the fixture does not model
+        /// it, which is fine for a same-repository delivery (the head and the
+        /// collection are the same repository, so the aim cannot diverge); the
+        /// cross-repository fixtures set it, so aiming at the head fails the
+        /// adoption assertions instead of passing quietly.
+        collection_owner: Mutex<Option<String>>,
         existing: Mutex<Vec<ForgePr>>,
+        /// OID of the branch the last push published — what a real forge
+        /// records as the new pull request's head, and therefore what the
+        /// four-way match compares against on the next delivery.
+        pushed_head: Mutex<Option<String>>,
         /// What the source repository's base branch points at. The fixture
         /// seeds it with the task's own base, i.e. "nothing unpushed".
         remote_base: Mutex<Option<String>>,
@@ -9687,6 +9803,11 @@ mod tests {
                 work_branch.to_string(),
                 remote_branch.to_string(),
             ));
+            // What the forge now sees on that branch — the OID a created pull
+            // request will report, and the anchor every later delivery is
+            // matched against.
+            *self.pushed_head.lock().await =
+                task_git::rev_parse(worktree_path, work_branch).await.ok();
             if let Some(changed) = self.after_push.lock().await.clone() {
                 *self.existing.lock().await = vec![changed];
             }
@@ -9695,11 +9816,21 @@ mod tests {
 
         async fn find_pulls(
             &self,
-            _ctx: &DeliveryCtx<'_>,
-            _head_branch: &str,
+            ctx: &DeliveryCtx<'_>,
+            head_repo: &str,
+            head_branch: &str,
         ) -> Result<Vec<ForgePr>, String> {
             if let Some(e) = &self.find_error {
                 return Err(e.clone());
+            }
+            self.finds.lock().await.push((
+                ctx.owner_repo.to_string(),
+                head_repo.to_string(),
+                head_branch.to_string(),
+            ));
+            let owner = self.collection_owner.lock().await.clone();
+            if owner.is_some_and(|owner| owner != ctx.owner_repo) {
+                return Ok(Vec::new());
             }
             Ok(self.existing.lock().await.clone())
         }
@@ -9758,7 +9889,7 @@ mod tests {
 
         async fn create_pull(
             &self,
-            _ctx: &DeliveryCtx<'_>,
+            ctx: &DeliveryCtx<'_>,
             req: &NewPullRequest<'_>,
         ) -> Result<ForgePr, String> {
             if let Some(e) = &self.create_error {
@@ -9770,16 +9901,44 @@ mod tests {
                 req.base.to_string(),
                 req.draft,
             ));
-            Ok(ForgePr {
+            self.source_projects
+                .lock()
+                .await
+                .push((req.source_project_id, req.target_project_id));
+            // The forge's own reading of the request. GitLab names a foreign
+            // SOURCE PROJECT by number in every list payload — reporting it
+            // that way is what makes the claim path's placeholder substitution
+            // load-bearing rather than decorative. The other two spell a fork
+            // as `owner:branch`, so the head lives in `owner/{name}` while the
+            // pull request itself sits in the target.
+            let head_repo = if let Some(id) = req.source_project_id {
+                format!("project-{id}")
+            } else if let Some((owner, _)) = req.head.split_once(':') {
+                match ctx.owner_repo.split_once('/') {
+                    Some((_, name)) => format!("{owner}/{name}"),
+                    None => ctx.owner_repo.to_string(),
+                }
+            } else {
+                ctx.owner_repo.to_string()
+            };
+            let pr = ForgePr {
                 number: 42,
                 html_url: "https://github.test/acme/app/pull/42".to_string(),
                 state: "open".to_string(),
                 merged: false,
-                head_sha: "unused-by-the-fake".to_string(),
-                head_ref: req.head.to_string(),
-                head_repo: "acme/app".to_string(),
+                head_sha: self
+                    .pushed_head
+                    .lock()
+                    .await
+                    .clone()
+                    .unwrap_or_else(|| "unused-by-the-fake".to_string()),
+                head_ref: req.head.split_once(':').map_or(req.head, |(_, b)| b).to_string(),
+                head_repo,
                 base_ref: req.base.to_string(),
-            })
+            };
+            // Published: the NEXT delivery of the same task has to find it.
+            self.existing.lock().await.push(pr.clone());
+            Ok(pr)
         }
     }
 
@@ -9933,6 +10092,33 @@ mod tests {
         }
     }
 
+    /// The fixture's task re-pointed at GitLab, with the fork's project id the
+    /// trigger would have resolved (`resolve_project_id`).
+    async fn set_gitlab_fork(f: &Delivery, fork_repo: &str, fork_project_id: i64, target_id: i64) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let task = row(&f.engine, f.task_id).await;
+        let mut meta: ForgeSourceMeta =
+            serde_json::from_str(task.source_meta.as_deref().expect("meta")).expect("decode");
+        meta.provider = crate::forge::ForgeProvider::GitLab;
+        meta.fork_repo = Some(fork_repo.to_string());
+        meta.fork_project_id = Some(fork_project_id);
+        meta.owner_project_id = Some(target_id);
+        // Same as `set_fork`: the fixture's merge requests are the source
+        // project's, not the fork's.
+        f.forge
+            .collection_owner
+            .lock()
+            .await
+            .replace("acme/app".to_string());
+        let mut active: crate::db::entities::work_task::ActiveModel = task.into();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("encode")));
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("record the gitlab fork");
+    }
+
     async fn row(engine: &Arc<TaskEngine>, id: i32) -> crate::db::entities::work_task::Model {
         work_task_service::get_model(&engine.db.conn, id)
             .await
@@ -9979,6 +10165,187 @@ mod tests {
         assert!(f.worktree.exists());
         // Nothing is left in the in-flight set for the reconcile tick to trip on.
         assert!(f.engine.merging.lock().await.is_empty());
+    }
+
+    /// The fixture's task with a recorded FORK — what the trigger writes when
+    /// the panel's folder points at a parent (the picker's selection is the
+    /// SOURCE there; the work is pushed to the folder's own `origin`).
+    async fn set_fork(f: &Delivery, fork_repo: &str) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let task = row(&f.engine, f.task_id).await;
+        let mut meta: ForgeSourceMeta =
+            serde_json::from_str(task.source_meta.as_deref().expect("meta")).expect("decode");
+        meta.fork_repo = Some(fork_repo.to_string());
+        let mut active: crate::db::entities::work_task::ActiveModel = task.into();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("encode")));
+        active.update(&f.engine.db.conn).await.expect("record the fork");
+        // The fixture's pull requests live in the source's collection, so a
+        // search aimed at the fork comes back empty — the way a real forge
+        // answers.
+        f.forge
+            .collection_owner
+            .lock()
+            .await
+            .replace("acme/app".to_string());
+    }
+
+    /// The row a retry finds: back in review, nothing settled, the delivery's
+    /// in-flight intent spent. That is the state an interrupted delivery leaves
+    /// behind, and the one the second attempt has to handle.
+    async fn reset_to_review(f: &Delivery) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let task = row(&f.engine, f.task_id).await;
+        let mut active: crate::db::entities::work_task::ActiveModel = task.into();
+        active.status = Set(WorkTaskStatus::Review);
+        active.completion_kind = Set(None);
+        active.merge_state = Set(None);
+        active.finished_at = Set(None);
+        active.update(&f.engine.db.conn).await.expect("back to review");
+    }
+
+    /// The fork workflow end to end: the panel is pointed at the parent, so the
+    /// issue is the parent's while the branch codeg can write to is the user's
+    /// own copy. The push has to land THERE and the pull request has to say so —
+    /// otherwise the account is asked to write to a repository it can only
+    /// read, and the task fails at the very end, after the agent has done the
+    /// work.
+    #[tokio::test]
+    async fn an_issue_task_pushes_to_its_fork_and_opens_a_cross_repo_pull_request() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        set_fork(&f, "me/app").await;
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("delivery");
+
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("me/app".to_string(), "task/7".to_string(), "task/7".to_string())],
+            "the work branch lands in the fork, not in the source"
+        );
+        assert_eq!(
+            f.forge.created.lock().await.as_slice(),
+            [(
+                // No title was passed, so the task's own title is used.
+                "#7 · Fix the login flow".to_string(),
+                "me:task/7".to_string(),
+                "main".to_string(),
+                false
+            )],
+            "the head is the qualified form that makes the pull request cross-repository"
+        );
+        // The search for an existing pull request: LISTED in the target's
+        // collection, filtered by the fork that holds it. Aiming the list at
+        // the head's repository returns nothing — which is how a retry opens a
+        // second pull request.
+        assert_eq!(
+            f.forge.finds.lock().await.as_slice(),
+            [("acme/app".to_string(), "me/app".to_string(), "task/7".to_string())],
+            "the collection is the one being merged into, the head filter names the fork"
+        );
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+    }
+
+    /// GitLab's half of the same story: the far side of a cross-project merge
+    /// request is a project ID (not a qualified head ref), the list payload
+    /// comes back as `project-{id}` — and the retry still has to ADOPT the merge
+    /// request the first delivery opened rather than open a second one.
+    #[tokio::test]
+    async fn a_gitlab_task_delivers_from_its_fork_and_adopts_its_own_merge_request() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        set_gitlab_fork(&f, "me/app", 4711, 4712).await;
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("first delivery");
+
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("me/app".to_string(), "task/7".to_string(), "task/7".to_string())]
+        );
+        assert_eq!(
+            f.forge.created.lock().await.as_slice(),
+            [(
+                "#7 · Fix the login flow".to_string(),
+                // The branch stays BARE on GitLab: the other side is the id.
+                "task/7".to_string(),
+                "main".to_string(),
+                false
+            )]
+        );
+        assert_eq!(
+            f.forge.source_projects.lock().await.as_slice(),
+            [(Some(4711), Some(4712))],
+            "a cross-project merge request names BOTH ends: the fork it is created \
+             on and the project it is aimed at"
+        );
+        // What the forge now serves — and what a retry has to recognise.
+        assert!(
+            f.forge
+                .existing
+                .lock()
+                .await
+                .iter()
+                .any(|pr| pr.head_repo == "project-4711"),
+            "the list payload names the fork by number"
+        );
+
+        reset_to_review(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("second delivery");
+
+        assert_eq!(
+            f.forge.created.lock().await.len(),
+            1,
+            "the placeholder must be resolved, or the retry opens a second merge request"
+        );
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// The retry half of the same story, and why the head-side aim is
+    /// load-bearing rather than cosmetic: a second delivery that searched the
+    /// SOURCE for this branch would come back empty, conclude nothing exists,
+    /// and open a SECOND pull request for the same head — which the real forge
+    /// answers with a 422, after the work has already been pushed.
+    #[tokio::test]
+    async fn a_retry_adopts_the_cross_repo_pull_request_instead_of_opening_a_second() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        set_fork(&f, "me/app").await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("first delivery");
+        assert_eq!(f.forge.created.lock().await.len(), 1);
+
+        reset_to_review(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("second delivery");
+
+        assert_eq!(
+            f.forge.created.lock().await.len(),
+            1,
+            "the pull request the first delivery opened must be adopted, not duplicated"
+        );
+        assert_eq!(
+            f.forge.source_projects.lock().await.as_slice(),
+            [(None, None)],
+            "the project ids are GitLab's spelling of the far side — GitHub and \
+             Gitea put it in the head instead, and must not send them"
+        );
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
     }
 
     /// The delivery's own version of the offer both other acceptances make:
@@ -12336,6 +12703,82 @@ mod tests {
             [("acme/app".to_string(), "task/7".to_string(), "feature".to_string())]
         );
         assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// A review whose head is somebody ELSE's fork is delivered to that fork,
+    /// not refused up front: whether this account may write there is a
+    /// server-side fact (the author's "allow edits from maintainers"), so the
+    /// push is what decides — which is also the only way a maintainer can push
+    /// a fix into a contributor's review.
+    #[tokio::test]
+    async fn a_review_from_a_third_party_fork_is_pushed_there() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&f, open_pull("at-the-old-head", "feature", "contributor/app"))
+            .await;
+        f.forge.existing.lock().await.push(open_pull(
+            "at-the-old-head",
+            "feature",
+            "contributor/app",
+        ));
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("pushed back into the review's own fork");
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [(
+                "contributor/app".to_string(),
+                "task/7".to_string(),
+                "feature".to_string()
+            )],
+            "the branch goes to the fork the review came from, not to the source"
+        );
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// And when that fork refuses us — the author never allowed edits by
+    /// maintainers, or this account has no business there — the refusal has to
+    /// name the way out rather than just report the forge's own words. The work
+    /// stays on the task's branch, so a retry after the box is ticked lands.
+    #[tokio::test]
+    async fn a_refused_push_into_a_strangers_fork_names_the_way_out() {
+        let forge = FakeForge {
+            push_error: Some(
+                "remote: You are not allowed to push code to this project. error: 403".into(),
+            ),
+            ..FakeForge::default()
+        };
+        let f = delivery_fixture(forge).await;
+        as_pull_request_task(&f, open_pull("at-the-old-head", "feature", "contributor/app"))
+            .await;
+        f.forge.existing.lock().await.push(open_pull(
+            "at-the-old-head",
+            "feature",
+            "contributor/app",
+        ));
+
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect_err("no permission on the fork");
+        assert!(err.contains("contributor/app"), "names the fork: {err}");
+        assert!(
+            err.contains("allow edits from maintainers"),
+            "names the way out: {err}"
+        );
+        assert_eq!(
+            row(&f.engine, f.task_id).await.status,
+            WorkTaskStatus::Review,
+            "the task goes back to review with its work intact"
+        );
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+                .await
+                .is_ok(),
+            "and the commits are still on the branch"
+        );
     }
 
     /// Everything that would make the push land somewhere it does not belong
