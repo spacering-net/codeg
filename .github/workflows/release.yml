@@ -297,6 +297,10 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_AR=${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_AR}"
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS}"
 
+      - name: Pin linuxdeploy for Linux x64 AppImage
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: ./.github/actions/pin-linuxdeploy
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -560,6 +564,11 @@ jobs:
           args: --target ${{ matrix.target }}
           includeUpdaterJson: true
           retryAttempts: 2
+
+      - name: Check Linux x64 AppImage libraries
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: bash .github/scripts/appimage-guard.sh
 
       - name: Build, sign, and upload to draft release (macOS)
         if: contains(matrix.target, 'apple-darwin')
