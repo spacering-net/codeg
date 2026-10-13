@@ -55,6 +55,7 @@ import type { PromptCapabilitiesInfo, PromptInputBlock } from "@/lib/types"
 import type { Editor } from "@tiptap/core"
 
 import {
+  agentUsesGrokImageSidecar,
   imageAttachmentToPromptBlock,
   type ImageInputAttachment,
   type InputAttachment,
@@ -109,6 +110,8 @@ export interface ComposerAttachmentsOptions {
   disabled?: boolean
   /** Decides whether images may be attached at all, and how they are encoded. */
   promptCapabilities: Pick<PromptCapabilitiesInfo, "image" | "embedded_context">
+  /** Used to force Grok Image blocks even when initialize still says image:false. */
+  agentType?: string | null
   /** Groups uploads with the session/tab that owns them (quota + cleanup). */
   attachmentTabId?: string | null
   /** Start directory for the native picker and the server file browser. */
@@ -194,6 +197,7 @@ export function useComposerAttachments({
   containerRef,
   disabled = false,
   promptCapabilities,
+  agentType = null,
   attachmentTabId = null,
   defaultPath = null,
   logLabel = "Composer",
@@ -219,7 +223,9 @@ export function useComposerAttachments({
   // (`image`) or as an embedded resource blob (`embedded_context`, what an
   // agent that advertises `image: false` but `embeddedContext: true` takes).
   const canAttachImages =
-    promptCapabilities.image || promptCapabilities.embedded_context
+    promptCapabilities.image ||
+    promptCapabilities.embedded_context ||
+    agentUsesGrokImageSidecar(agentType)
 
   const [attachments, setAttachments] = useState<InputAttachment[]>([])
   const embeddedPayloadsRef = useRef<Map<string, PromptInputBlock>>(new Map())
@@ -1370,9 +1376,9 @@ export function useComposerAttachments({
   const imagePromptBlocks = useCallback(
     (): PromptInputBlock[] =>
       imageAttachments.map((attachment) =>
-        imageAttachmentToPromptBlock(attachment, promptCapabilities)
+        imageAttachmentToPromptBlock(attachment, promptCapabilities, agentType)
       ),
-    [imageAttachments, promptCapabilities]
+    [agentType, imageAttachments, promptCapabilities]
   )
 
   return {

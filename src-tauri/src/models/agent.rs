@@ -68,6 +68,21 @@ impl AgentType {
         matches!(self, AgentType::Custom(_))
     }
 
+    /// Grok's initialize still advertises `image: false`. Native Image
+    /// blocks run its describe sidecar; a Resource blob does not. Built-in
+    /// Grok and extra isolated Grok slots (`custom:grok-2`, …) share that
+    /// sidecar. Other custom agents are left on the advertised bit.
+    pub fn uses_grok_image_sidecar(&self) -> bool {
+        match self {
+            AgentType::Grok => true,
+            AgentType::Custom(id) => {
+                let id = id.to_ascii_lowercase();
+                id == "grok" || id.starts_with("grok-") || id.starts_with("grok_")
+            }
+            _ => false,
+        }
+    }
+
     /// The custom agent's registry id, or `None` for a built-in.
     pub fn custom_id(&self) -> Option<&'static str> {
         match self {
@@ -281,6 +296,23 @@ mod tests {
             assert!(!agent.is_custom());
             assert_eq!(agent.custom_id(), None);
         }
+    }
+
+    #[test]
+    fn grok_image_sidecar_covers_builtin_and_extra_slots() {
+        assert!(AgentType::Grok.uses_grok_image_sidecar());
+        assert!(
+            AgentType::custom("grok-2")
+                .unwrap()
+                .uses_grok_image_sidecar()
+        );
+        assert!(
+            AgentType::custom("grok_work")
+                .unwrap()
+                .uses_grok_image_sidecar()
+        );
+        assert!(!AgentType::ClaudeCode.uses_grok_image_sidecar());
+        assert!(!AgentType::custom("goose").unwrap().uses_grok_image_sidecar());
     }
 
     #[test]

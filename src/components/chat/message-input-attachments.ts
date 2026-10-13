@@ -69,11 +69,20 @@ export type InputAttachment = ResourceInputAttachment | ImageInputAttachment
  * `clipboard://` identifier derived from its name + id, so the emitted block is
  * reproducible without a random source (and unit-testable).
  */
+/** Built-in `grok` plus extra isolated slots (`custom:grok-2`, …). */
+export function agentUsesGrokImageSidecar(agentType?: string | null): boolean {
+  if (!agentType) return false
+  const raw = agentType.toLowerCase()
+  const id = raw.startsWith("custom:") ? raw.slice("custom:".length) : raw
+  return id === "grok" || id.startsWith("grok-") || id.startsWith("grok_")
+}
+
 export function imageAttachmentToPromptBlock(
   attachment: ImageInputAttachment,
-  caps: Pick<PromptCapabilitiesInfo, "image" | "embedded_context">
+  caps: Pick<PromptCapabilitiesInfo, "image" | "embedded_context">,
+  agentType?: string | null
 ): PromptInputBlock {
-  if (caps.image) {
+  if (caps.image || agentUsesGrokImageSidecar(agentType)) {
     return {
       type: "image",
       data: attachment.data,
