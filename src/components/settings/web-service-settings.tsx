@@ -43,6 +43,7 @@ const DEFAULT_PORT = 3080
 import { openUrl } from "@/lib/platform"
 import { copyTextToClipboard } from "@/lib/utils"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
+import { joinPlan, sidecarCommand } from "@/lib/embedded-tailnet"
 
 // Remembers which reachable address the user last chose to display/open.
 // Keyed by host (IP) only, so the choice survives a port change.
@@ -288,6 +289,8 @@ export function WebServiceSettings() {
   const [autoStart, setAutoStart] = useState(false)
   const [configLoaded, setConfigLoaded] = useState(false)
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null)
+  const [tailnetAuthKey, setTailnetAuthKey] = useState("")
+  const [tailnetAuthUrl, setTailnetAuthUrl] = useState("")
 
   const probePort = useCallback(async (portNum: number) => {
     try {
@@ -595,6 +598,58 @@ export function WebServiceSettings() {
               )}
             </div>
           )}
+
+          <div className="space-y-2 rounded-md border p-3">
+            <div className="text-sm font-medium">{t("phoneReachTitle")}</div>
+            <p className="text-xs text-muted-foreground">
+              {t("phoneReachHint")}
+            </p>
+            <input
+              value={tailnetAuthKey}
+              onChange={(event) => setTailnetAuthKey(event.target.value)}
+              placeholder={t("phoneReachAuthKey")}
+              spellCheck={false}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+            />
+            <input
+              value={tailnetAuthUrl}
+              onChange={(event) => setTailnetAuthUrl(event.target.value)}
+              placeholder={t("phoneReachAuthUrl")}
+              spellCheck={false}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+            />
+            {(() => {
+              try {
+                const plan = joinPlan({
+                  target: currentAddress ?? `http://127.0.0.1:${port}`,
+                  authKey: tailnetAuthKey || undefined,
+                  authUrl: tailnetAuthUrl || undefined,
+                })
+                const command = sidecarCommand(plan)
+                return (
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">
+                      {t("phoneReachCommand")}
+                    </div>
+                    <code className="block break-all rounded bg-muted px-2 py-1 text-[11px]">
+                      {command}
+                    </code>
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline"
+                      onClick={() => {
+                        void copyTextToClipboard(command)
+                      }}
+                    >
+                      {t("phoneReachCopy")}
+                    </button>
+                  </div>
+                )
+              } catch {
+                return null
+              }
+            })()}
+          </div>
         </div>
       </div>
     </ScrollArea>
