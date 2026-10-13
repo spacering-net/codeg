@@ -8,13 +8,18 @@ import {
   useChatAnimationsSetting,
   useChatContentWidth,
   useCustomStyle,
+  useEditorFont,
 } from "@/hooks/use-appearance"
 import {
   STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_CUSTOM_THEME,
+  STORAGE_KEY_EDITOR_FONT,
+  STORAGE_KEY_EDITOR_FONT_CUSTOM,
+  STORAGE_KEY_TERMINAL_FONT,
   STORAGE_KEY_ZOOM_LEVEL,
 } from "@/lib/appearance-script"
+import { resolveFontStack } from "@/lib/font-presets"
 
 function Probe() {
   const { setCustomThemeToken } = useCustomStyle()
@@ -434,5 +439,108 @@ describe("chat content width", () => {
     })
     expect(screen.getByTestId("width").textContent).toBe("1100")
     expect(rootVar()).toBe("68.75rem")
+  })
+})
+
+function EditorFontProbe() {
+  const { setEditorFont } = useEditorFont()
+  return (
+    <>
+      <button type="button" onClick={() => setEditorFont("jetbrains-mono")}>
+        set-jetbrains
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditorFont("custom", "Maple Mono NF CN")}
+      >
+        set-custom-mono
+      </button>
+    </>
+  )
+}
+
+describe("editor font on conversation code blocks", () => {
+  const monoVar = () =>
+    document.documentElement.style.getPropertyValue("--font-mono")
+
+  it("writes the chosen editor stack to --font-mono", () => {
+    // Streamdown's highlighter renders <pre><code> with no font-mono class.
+    // Those elements follow --font-mono through Tailwind preflight. The
+    // settings control must publish the same stack Monaco uses.
+    render(
+      <AppearanceProvider>
+        <EditorFontProbe />
+      </AppearanceProvider>
+    )
+
+    fireEvent.click(screen.getByText("set-jetbrains"))
+
+    expect(monoVar()).toBe(resolveFontStack("jetbrains-mono", "", "mono"))
+  })
+
+  it("publishes a custom editor family, the CJK mono case", () => {
+    render(
+      <AppearanceProvider>
+        <EditorFontProbe />
+      </AppearanceProvider>
+    )
+
+    fireEvent.click(screen.getByText("set-custom-mono"))
+
+    expect(monoVar()).toBe(
+      resolveFontStack("custom", "Maple Mono NF CN", "mono")
+    )
+  })
+
+  it("applies a stored editor font to --font-mono on mount", () => {
+    localStorage.setItem(STORAGE_KEY_EDITOR_FONT, "custom")
+    localStorage.setItem(STORAGE_KEY_EDITOR_FONT_CUSTOM, "Maple Mono NF CN")
+
+    render(
+      <AppearanceProvider>
+        <div />
+      </AppearanceProvider>
+    )
+
+    expect(monoVar()).toBe(
+      resolveFontStack("custom", "Maple Mono NF CN", "mono")
+    )
+  })
+
+  it("leaves --font-mono alone until an editor font is chosen", () => {
+    // No explicit choice must not stamp the default stack inline: a custom
+    // CSS `:root { --font-mono }` workaround lives in a stylesheet and loses
+    // to an inline property.
+    render(
+      <AppearanceProvider>
+        <div />
+      </AppearanceProvider>
+    )
+
+    expect(monoVar()).toBe("")
+  })
+
+  it("does not let a terminal-font sync replace a stylesheet --font-mono", () => {
+    render(
+      <AppearanceProvider>
+        <div />
+      </AppearanceProvider>
+    )
+    document.documentElement.style.setProperty(
+      "--font-mono",
+      '"Maple Mono", monospace'
+    )
+
+    localStorage.setItem(STORAGE_KEY_TERMINAL_FONT, "jetbrains-mono")
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY_TERMINAL_FONT,
+          newValue: "jetbrains-mono",
+        })
+      )
+    })
+
+    expect(monoVar()).toBe('"Maple Mono", monospace')
   })
 })
