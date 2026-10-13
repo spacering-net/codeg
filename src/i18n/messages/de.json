@@ -2193,6 +2193,7 @@
         "contextWindow": "Kontextfenster",
         "usedMax": "Verwendet / Max",
         "tokenUsage": "Token-Nutzung",
+        "tokenUnitShort": "Tok.",
         "input": "Eingabe",
         "output": "Ausgabe",
         "cacheRead": "Cache lesen",
