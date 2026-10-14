@@ -2200,6 +2200,26 @@
         "total": "합계",
         "cacheHit": "캐시 적중률"
       },
+      "planLimits": {
+        "title": "요금제 사용량",
+        "triggerTitle": "{label}: {time} 후 초기화",
+        "triggerTitleUsed": "{label}: {percent}% 사용, {time} 후 초기화",
+        "fiveHour": "5시간",
+        "sevenDay": "주간",
+        "sevenDayModel": "주간 · {model}",
+        "overage": "추가 사용량",
+        "hours": "{count}시간",
+        "days": "{count}일",
+        "other": "사용 한도",
+        "reached": "한도 도달",
+        "reset": "초기화됨 — 다음 요청부터 새 기간이 시작됩니다",
+        "resetsIn": "{time} 후 초기화 · {at}",
+        "staleNote": "마지막 업데이트: {at}. 메시지를 보내면 새로고침됩니다.",
+        "durationDays": "{days}일 {hours}시간",
+        "durationHours": "{hours}시간 {minutes}분",
+        "durationMinutes": "{minutes}분",
+        "durationSoon": "1분 미만"
+      },
       "quickActions": {
         "title": "빠른 작업",
         "groups": {

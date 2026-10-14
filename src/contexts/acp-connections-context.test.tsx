@@ -7097,3 +7097,85 @@ describe("AcpConnectionsProvider remembers advertised commands", () => {
     expect(h.rememberAdvertisedCommands).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("AcpConnectionsProvider plan usage windows", () => {
+  const RESETS = 1_791_000_000
+
+  async function connectOwner(): Promise<AttachHandlers> {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    return latestAttachHandlers()
+  }
+
+  function fiveHour(used: number, resetsAt = RESETS) {
+    return {
+      kind: "five_hour",
+      used_percent: used,
+      resets_at: resetsAt,
+      window_minutes: 300,
+    }
+  }
+
+  it("keeps the latest figures a plan_limits event reports", async () => {
+    const handlers = await connectOwner()
+    expect(h.store!.getConnection(TAB)!.planLimits).toEqual([])
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "plan_limits",
+      windows: [fiveHour(40)],
+    })
+    expect(h.store!.getConnection(TAB)!.planLimits).toEqual([fiveHour(40)])
+
+    // An older report of the same window (lower share) changes nothing; the
+    // next window replaces it whatever its share.
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "plan_limits",
+      windows: [fiveHour(30)],
+    })
+    expect(h.store!.getConnection(TAB)!.planLimits).toEqual([fiveHour(40)])
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "plan_limits",
+      windows: [fiveHour(2, RESETS + 18_000)],
+    })
+    expect(h.store!.getConnection(TAB)!.planLimits).toEqual([
+      fiveHour(2, RESETS + 18_000),
+    ])
+  })
+
+  it("takes the windows a snapshot carries, but never older ones from a stale snapshot", async () => {
+    const handlers = await connectOwner()
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      planLimits: [fiveHour(40)],
+      eventSeq: 5,
+    })
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.planLimits).toEqual([fiveHour(40)])
+
+    emitAcpEvent(handlers, {
+      seq: 6,
+      connection_id: "spawned-conn",
+      type: "plan_limits",
+      windows: [fiveHour(60)],
+    })
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      planLimits: [fiveHour(40)],
+      eventSeq: 5,
+    })
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.planLimits).toEqual([fiveHour(60)])
+  })
+})

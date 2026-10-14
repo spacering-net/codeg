@@ -95,6 +95,9 @@ vi.mock("@/components/chat/conversation-context-bar", () => ({
   ConversationFolderBranchPicker: () => null,
   useConversationFolderBranchPickerVisible: folderPickerVisible,
 }))
+vi.mock("./composer-plan-limits", () => ({
+  ComposerPlanLimits: () => null,
+}))
 vi.mock("./composer-context-usage", () => ({
   ComposerContextUsage: () => null,
 }))

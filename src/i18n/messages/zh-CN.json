@@ -2200,6 +2200,26 @@
         "total": "总计",
         "cacheHit": "缓存命中率"
       },
+      "planLimits": {
+        "title": "套餐用量",
+        "triggerTitle": "{label}：{time}后重置",
+        "triggerTitleUsed": "{label}：已用 {percent}%，{time}后重置",
+        "fiveHour": "5 小时",
+        "sevenDay": "每周",
+        "sevenDayModel": "每周 · {model}",
+        "overage": "额外用量",
+        "hours": "{count} 小时",
+        "days": "{count} 天",
+        "other": "用量上限",
+        "reached": "已达上限",
+        "reset": "已重置，下一次请求开始新的周期",
+        "resetsIn": "{time}后重置 · {at}",
+        "staleNote": "最后更新于 {at}，发送消息即可刷新。",
+        "durationDays": "{days} 天 {hours} 小时",
+        "durationHours": "{hours} 小时 {minutes} 分",
+        "durationMinutes": "{minutes} 分钟",
+        "durationSoon": "不到 1 分钟"
+      },
       "quickActions": {
         "title": "快捷操作",
         "groups": {

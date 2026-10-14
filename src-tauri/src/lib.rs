@@ -1236,6 +1236,12 @@ mod tauri_app {
                         .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone();
+                    // Keeps every live connection of an agent on the same
+                    // subscription plan figures (see `acp::plan_limits`).
+                    tauri::async_runtime::spawn(crate::acp::plan_limits_subscriber_task(
+                        cm.clone_ref(),
+                        bus.clone(),
+                    ));
                     tauri::async_runtime::spawn(crate::acp::lifecycle_subscriber_task(
                         db_conn,
                         cm,

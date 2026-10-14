@@ -9,6 +9,7 @@ import type {
   LiveSessionSnapshot,
   PendingPlanApprovalState,
   PendingQuestionState,
+  PlanLimitWindow,
   PromptCapabilitiesInfo,
   SessionConfigOptionInfo,
   SessionFailureRecord,
@@ -46,6 +47,8 @@ export interface SnapshotPatch {
   configOptions: SessionConfigOptionInfo[] | null
   availableCommands: AvailableCommandInfo[] | null
   usage: SessionUsageUpdateInfo | null
+  /** The plan's usage windows the session last reported; `[]` when none. */
+  planLimits: PlanLimitWindow[]
   liveMessage: LocalLiveMessage | null
   pendingPermission: PendingPermission | null
   /** Awaiting-answer multiple-choice `ask_user_question` carried by the
@@ -123,6 +126,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     configOptions: wire.config_options,
     availableCommands: wire.available_commands ?? null,
     usage: wire.usage,
+    planLimits: wire.plan_limits ?? [],
     liveMessage: wire.live_message
       ? denormalizeLiveMessage(wire.live_message, toolMap)
       : null,

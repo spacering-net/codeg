@@ -534,6 +534,13 @@ async fn async_main() -> ExitCode {
         Some(state.delegation_broker.clone()),
     ));
 
+    // Keeps every live connection of an agent on the same subscription plan
+    // figures (see `acp::plan_limits`).
+    tokio::spawn(codeg_lib::acp::plan_limits_subscriber_task(
+        state.connection_manager.clone_ref(),
+        state.acp_event_bus.clone(),
+    ));
+
     // Spawn the desktop pet state mapper so server-mode browsers viewing
     // /pet receive `pet://state` and `pet://oneshot` over the WebSocket
     // bridge, just like the Tauri webview does in desktop mode. ACP events

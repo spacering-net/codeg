@@ -697,6 +697,13 @@ pub enum AcpEvent {
     AvailableCommands { commands: Vec<AvailableCommandInfo> },
     /// Session usage/context window updated during conversation
     UsageUpdate { used: u64, size: u64 },
+    /// The agent account's subscription usage windows, as the agent reported
+    /// them on its own traffic (Claude Pro/Max today — see
+    /// `acp::plan_limits`). Carries the windows this report covers; held state
+    /// merges them by `kind` (`SessionState.plan_limits`).
+    PlanLimits {
+        windows: Vec<crate::models::conversation::PlanLimitWindow>,
+    },
     /// Out-of-turn activity surfaced from the agent's own session transcript
     /// by the background watcher (`acp::background_watch`; Claude-only today).
     /// Covers everything that happens OUTSIDE a codeg-driven prompt turn:

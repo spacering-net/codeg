@@ -941,6 +941,7 @@ pub fn compute_session_stats(turns: &[MessageTurn]) -> Option<SessionStats> {
         context_window_used_tokens: None,
         context_window_max_tokens: None,
         context_window_usage_percent: None,
+        plan_limits: Vec::new(),
     })
 }
 
@@ -1212,6 +1213,7 @@ pub fn merge_context_window_stats(
             context_window_used_tokens: used_tokens,
             context_window_max_tokens: max_tokens,
             context_window_usage_percent: usage_percent,
+            plan_limits: Vec::new(),
         }),
     }
 }
@@ -1250,6 +1252,7 @@ pub fn with_reported_context_percent(
             context_window_used_tokens: None,
             context_window_max_tokens: None,
             context_window_usage_percent: Some(percent),
+            plan_limits: Vec::new(),
         }),
     }
 }
@@ -2586,6 +2589,7 @@ mod tests {
             context_window_used_tokens: None,
             context_window_max_tokens: None,
             context_window_usage_percent: None,
+            plan_limits: Vec::new(),
         });
         let merged_existing =
             merge_context_window_stats(existing, Some(200), Some(1000)).expect("merged");

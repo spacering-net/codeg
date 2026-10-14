@@ -33,6 +33,7 @@ pub mod opencode_catalog;
 pub mod opencode_launch;
 pub mod opencode_plugins;
 pub mod plan_approval;
+pub mod plan_limits;
 pub mod preflight;
 pub mod prompt_hydration;
 pub mod question;
@@ -52,6 +53,7 @@ pub mod work_task_tools;
 pub use idle_sweep::{idle_sweep_task, idle_timeout_from_env, SWEEP_INTERVAL_SECS};
 pub use internal_bus::{EventBusMetrics, EventBusMetricsSnapshot, InternalEventBus};
 pub use lifecycle::lifecycle_subscriber_task;
+pub use plan_limits::plan_limits_subscriber_task;
 pub use session_state::{LiveSessionSnapshot, SessionState};
 // Re-export the inner types of LiveSessionSnapshot for downstream consumers; not all are
 // directly named in Rust today (they ride along through the snapshot struct), so silence

@@ -2504,10 +2504,30 @@ pub async fn spawn_agent_connection(
             emitter: emitter.clone(),
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
             last_observed_fingerprint: config_fingerprint.clone(),
-            config_fingerprint,
+            config_fingerprint: config_fingerprint.clone(),
             child_pid,
         },
     );
+
+    // The plan's usage windows belong to the account, not to this session:
+    // start from what the agent's other live connections on the same settings
+    // already know. Registered first, so a report landing meanwhile reaches
+    // this connection too. As an event, so a client replaying from the start
+    // sees it as well as one that takes the snapshot.
+    let known = crate::acp::plan_limits::known_plan_limits(
+        &connections,
+        agent_type,
+        &config_fingerprint,
+    )
+    .await;
+    if !known.is_empty() {
+        emit_with_state(
+            &session_state,
+            &emitter,
+            AcpEvent::PlanLimits { windows: known },
+        )
+        .await;
+    }
 
     // Drive `run_connection` on a dedicated, large-stack thread (see
     // ACP_CONNECTION_STACK_SIZE) rather than a Tokio worker task: its debug
@@ -18242,6 +18262,17 @@ async fn emit_conversation_update(
             emit_with_state(state, emitter, AcpEvent::AvailableCommands { commands }).await;
         }
         SessionUpdate::UsageUpdate(update) => {
+            // Claude Pro/Max carry the plan's usage windows on this update
+            // (`_meta["_claude/rateLimit"]`, see `crate::acp::plan_limits`).
+            // Forwarded only where they are newer than what is held.
+            let windows = crate::acp::plan_limits::claude_plan_limits(update.meta.as_ref());
+            if !windows.is_empty() {
+                crate::web::event_bridge::emit_with_state_built(state, emitter, |held| {
+                    let fresh = crate::acp::plan_limits::superseding(&held.plan_limits, &windows);
+                    (!fresh.is_empty()).then_some(AcpEvent::PlanLimits { windows: fresh })
+                })
+                .await;
+            }
             // A codex request that ran a hosted web search reports its
             // provider's whole search loop: the ring keeps the reading before
             // it (see `crate::acp::codex_context`) — on the window this report

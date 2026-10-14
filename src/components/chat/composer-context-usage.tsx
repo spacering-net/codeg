@@ -1,11 +1,11 @@
 "use client"
 
-import { useCallback, useSyncExternalStore } from "react"
 import { Coins } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { useConnectionStore } from "@/contexts/acp-connections-context"
-import { useTabStore } from "@/contexts/tab-context"
-import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
+import {
+  useComposerConnection,
+  useComposerSessionStats,
+} from "@/components/chat/use-composer-session"
 import { formatTokenCount } from "@/lib/token-format"
 import { formatContextWindowPercent } from "@/lib/context-window"
 import {
@@ -33,41 +33,12 @@ const ICON_CIRCUMFERENCE = 2 * Math.PI * ICON_RADIUS
  */
 export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
   const t = useTranslations("Folder.statusBar.tokens")
-  const store = useConnectionStore()
-  // This tab's own conversation → its per-conversation session stats, read
-  // straight from the runtime store where every panel already keeps them (keyed
-  // by the tab's runtime conversation id — the same resolution the panel uses
-  // for `effectiveConversationId`: runtimeConversationId ?? conversationId).
-  // Reading per-conversation (rather than one shared "active session" value) is
-  // what lets every loaded / tiled composer show its own context.
-  const runtimeConversationId = useTabStore((s) => {
-    const tab = s.tabs.find((x) => x.id === tabId)
-    if (!tab || tab.kind !== "conversation") return null
-    return tab.runtimeConversationId ?? tab.conversationId ?? null
-  })
-  const sessionStats = useConversationRuntimeStore((s) =>
-    runtimeConversationId != null
-      ? (s.byConversationId.get(runtimeConversationId)?.sessionStats ?? null)
-      : null
-  )
+  // This tab's own conversation and connection — reading per-conversation
+  // (rather than one shared "active session" value) is what lets every loaded /
+  // tiled composer show its own context.
+  const sessionStats = useComposerSessionStats(tabId)
   const usage = sessionStats?.total_usage
-
-  const subscribeConn = useCallback(
-    (cb: () => void) => {
-      if (!tabId) return () => {}
-      return store.subscribeKey(tabId, cb)
-    },
-    [store, tabId]
-  )
-  const getConnSnapshot = useCallback(
-    () => (tabId ? store.getConnection(tabId) : undefined),
-    [store, tabId]
-  )
-  const conn = useSyncExternalStore(
-    subscribeConn,
-    getConnSnapshot,
-    getConnSnapshot
-  )
+  const conn = useComposerConnection(tabId)
 
   const rawLiveUsed = conn?.usage?.used ?? null
   const rawLiveSize = conn?.usage?.size ?? null

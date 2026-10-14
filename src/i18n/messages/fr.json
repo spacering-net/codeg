@@ -2200,6 +2200,26 @@
         "total": "Total des tokens",
         "cacheHit": "Taux de réussite du cache"
       },
+      "planLimits": {
+        "title": "Utilisation de l’abonnement",
+        "triggerTitle": "{label} : réinitialisation dans {time}",
+        "triggerTitleUsed": "{label} : {percent} % utilisé, réinitialisation dans {time}",
+        "fiveHour": "5 heures",
+        "sevenDay": "Hebdomadaire",
+        "sevenDayModel": "Hebdomadaire · {model}",
+        "overage": "Usage supplémentaire",
+        "hours": "{count} heures",
+        "days": "{count} jours",
+        "other": "Limite d’utilisation",
+        "reached": "Limite atteinte",
+        "reset": "Réinitialisé : la prochaine requête ouvre une nouvelle période",
+        "resetsIn": "Réinitialisation dans {time} · {at}",
+        "staleNote": "Dernière mise à jour : {at}. Envoyez un message pour actualiser.",
+        "durationDays": "{days} j {hours} h",
+        "durationHours": "{hours} h {minutes} min",
+        "durationMinutes": "{minutes} min",
+        "durationSoon": "<1 min"
+      },
       "quickActions": {
         "title": "Actions rapides",
         "groups": {

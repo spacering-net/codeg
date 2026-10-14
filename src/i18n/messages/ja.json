@@ -2200,6 +2200,26 @@
         "total": "合計",
         "cacheHit": "キャッシュヒット率"
       },
+      "planLimits": {
+        "title": "プランの使用量",
+        "triggerTitle": "{label}：{time}後にリセット",
+        "triggerTitleUsed": "{label}：{percent}% 使用、{time}後にリセット",
+        "fiveHour": "5 時間",
+        "sevenDay": "週間",
+        "sevenDayModel": "週間 · {model}",
+        "overage": "追加使用量",
+        "hours": "{count} 時間",
+        "days": "{count} 日",
+        "other": "使用上限",
+        "reached": "上限に到達",
+        "reset": "リセット済み。次のリクエストで新しい期間が始まります",
+        "resetsIn": "{time}後にリセット · {at}",
+        "staleNote": "最終更新：{at}。メッセージを送ると更新されます。",
+        "durationDays": "{days}日{hours}時間",
+        "durationHours": "{hours}時間{minutes}分",
+        "durationMinutes": "{minutes}分",
+        "durationSoon": "1分未満"
+      },
       "quickActions": {
         "title": "クイック操作",
         "groups": {

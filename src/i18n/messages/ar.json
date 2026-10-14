@@ -2200,6 +2200,26 @@
         "total": "الإجمالي",
         "cacheHit": "معدل إصابة الكاش"
       },
+      "planLimits": {
+        "title": "استخدام الخطة",
+        "triggerTitle": "{label}: يُعاد التعيين خلال {time}",
+        "triggerTitleUsed": "{label}: استُخدم {percent}%، يُعاد التعيين خلال {time}",
+        "fiveHour": "5 ساعات",
+        "sevenDay": "أسبوعي",
+        "sevenDayModel": "أسبوعي · {model}",
+        "overage": "استخدام إضافي",
+        "hours": "{count} ساعات",
+        "days": "{count} أيام",
+        "other": "حد الاستخدام",
+        "reached": "تم بلوغ الحد",
+        "reset": "أُعيد التعيين — يبدأ الطلب التالي فترة جديدة",
+        "resetsIn": "يُعاد التعيين خلال {time} · {at}",
+        "staleNote": "آخر تحديث: {at}. أرسل رسالة للتحديث.",
+        "durationDays": "{days} ي {hours} س",
+        "durationHours": "{hours} س {minutes} د",
+        "durationMinutes": "{minutes} د",
+        "durationSoon": "أقل من دقيقة"
+      },
       "quickActions": {
         "title": "إجراءات سريعة",
         "groups": {

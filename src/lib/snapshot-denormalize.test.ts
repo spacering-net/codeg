@@ -249,3 +249,24 @@ describe("denormalizeSnapshot — last_error", () => {
     expect(patch.status).toBe("connected")
   })
 })
+
+describe("denormalizeSnapshot — plan_limits", () => {
+  it("carries the plan windows into the patch", () => {
+    const windows = [
+      {
+        kind: "five_hour",
+        used_percent: 82,
+        resets_at: 1_791_000_000,
+        window_minutes: 300,
+        status: "allowed_warning",
+      },
+    ]
+    expect(
+      denormalizeSnapshot(baseSnapshot({ plan_limits: windows })).planLimits
+    ).toEqual(windows)
+  })
+
+  it("defaults planLimits to [] when the field is absent (no plan, or an older server)", () => {
+    expect(denormalizeSnapshot(baseSnapshot()).planLimits).toEqual([])
+  })
+})

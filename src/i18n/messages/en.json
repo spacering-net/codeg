@@ -2200,6 +2200,26 @@
         "total": "Total",
         "cacheHit": "Cache Hit Rate"
       },
+      "planLimits": {
+        "title": "Plan usage",
+        "triggerTitle": "{label}: resets in {time}",
+        "triggerTitleUsed": "{label}: {percent}% used, resets in {time}",
+        "fiveHour": "5-hour",
+        "sevenDay": "Weekly",
+        "sevenDayModel": "Weekly · {model}",
+        "overage": "Extra usage",
+        "hours": "{count}-hour",
+        "days": "{count}-day",
+        "other": "Usage limit",
+        "reached": "Limit reached",
+        "reset": "Reset — the next request starts a new window",
+        "resetsIn": "Resets in {time} · {at}",
+        "staleNote": "Last updated {at}. Send a message to refresh.",
+        "durationDays": "{days}d {hours}h",
+        "durationHours": "{hours}h {minutes}m",
+        "durationMinutes": "{minutes}m",
+        "durationSoon": "<1m"
+      },
       "quickActions": {
         "title": "Quick actions",
         "groups": {

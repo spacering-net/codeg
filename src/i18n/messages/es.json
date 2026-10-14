@@ -2200,6 +2200,26 @@
         "total": "Total de tokens",
         "cacheHit": "Tasa de aciertos de caché"
       },
+      "planLimits": {
+        "title": "Uso del plan",
+        "triggerTitle": "{label}: se restablece en {time}",
+        "triggerTitleUsed": "{label}: {percent}% usado, se restablece en {time}",
+        "fiveHour": "5 horas",
+        "sevenDay": "Semanal",
+        "sevenDayModel": "Semanal · {model}",
+        "overage": "Uso adicional",
+        "hours": "{count} horas",
+        "days": "{count} días",
+        "other": "Límite de uso",
+        "reached": "Límite alcanzado",
+        "reset": "Restablecido: la próxima solicitud inicia un nuevo periodo",
+        "resetsIn": "Se restablece en {time} · {at}",
+        "staleNote": "Última actualización: {at}. Envía un mensaje para actualizar.",
+        "durationDays": "{days} d {hours} h",
+        "durationHours": "{hours} h {minutes} min",
+        "durationMinutes": "{minutes} min",
+        "durationSoon": "<1 min"
+      },
       "quickActions": {
         "title": "Acciones rápidas",
         "groups": {

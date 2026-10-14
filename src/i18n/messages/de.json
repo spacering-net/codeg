@@ -2200,6 +2200,26 @@
         "total": "Gesamt",
         "cacheHit": "Cache-Trefferquote"
       },
+      "planLimits": {
+        "title": "Tarifnutzung",
+        "triggerTitle": "{label}: Zurücksetzung in {time}",
+        "triggerTitleUsed": "{label}: {percent} % genutzt, Zurücksetzung in {time}",
+        "fiveHour": "5 Stunden",
+        "sevenDay": "Wöchentlich",
+        "sevenDayModel": "Wöchentlich · {model}",
+        "overage": "Zusatznutzung",
+        "hours": "{count} Stunden",
+        "days": "{count} Tage",
+        "other": "Nutzungslimit",
+        "reached": "Limit erreicht",
+        "reset": "Zurückgesetzt – die nächste Anfrage startet einen neuen Zeitraum",
+        "resetsIn": "Zurücksetzung in {time} · {at}",
+        "staleNote": "Zuletzt aktualisiert: {at}. Sende eine Nachricht, um zu aktualisieren.",
+        "durationDays": "{days} T {hours} Std.",
+        "durationHours": "{hours} Std. {minutes} Min.",
+        "durationMinutes": "{minutes} Min.",
+        "durationSoon": "<1 Min."
+      },
       "quickActions": {
         "title": "Schnellaktionen",
         "groups": {
