@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SurfaceKind {
-    /// wry child webview embedded in the owner window (macOS / Windows).
+    /// Wry webview embedded in the owner window (GTK overlay on Linux).
     Child,
     /// Owned top-level window (`WebviewWindowBuilder::parent`).
     Window,

@@ -17,7 +17,7 @@ use tauri::Url;
 /// local filesystem.
 /// How far back a page-initiated new-window request may look for a user
 /// gesture before it counts as an unsolicited popup. Both surfaces ask it:
-/// the embedded one on macOS and Windows, the owned window on Linux.
+/// embedded tabs on all desktop platforms and the owned-window fallback.
 pub const POPUP_GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub fn navigation_allowed(url: &Url) -> bool {
@@ -44,6 +44,13 @@ pub fn subframe_navigation_allowed(url: &Url) -> bool {
         "about" => matches!(url.as_str(), "about:blank" | "about:srcdoc"),
         _ => false,
     }
+}
+
+/// Called only for a refused scheme. WebKitGTK also reports subframes but
+/// does not identify them, so keep their wider schemes quiet without allowing
+/// those schemes as top-level navigations.
+pub fn report_scheme_denial(url: &Url, main_frame: bool) -> bool {
+    main_frame && !(cfg!(target_os = "linux") && subframe_navigation_allowed(url))
 }
 
 /// The initial URL handed to `browser_open_tab` must already be a web page;

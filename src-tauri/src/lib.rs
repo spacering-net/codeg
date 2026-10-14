@@ -1435,7 +1435,7 @@ mod tauri_app {
 
                 #[cfg(all(
                     feature = "browser-child",
-                    any(target_os = "macos", target_os = "windows")
+                    any(target_os = "macos", target_os = "windows", target_os = "linux")
                 ))]
                 crate::browser::surface_child::init_main_thread();
                 crate::browser::surface_window::init_main_thread();

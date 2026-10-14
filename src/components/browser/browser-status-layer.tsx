@@ -444,8 +444,8 @@ export function BrowserErrorPage({
   )
 }
 
-/** Placeholder shown in the pane when the page lives in an owned window
- *  (Linux, or the fallback surface): nothing is embedded here. */
+/** Placeholder shown when the user selects the owned-window fallback:
+ *  the page is displayed in that window instead of this pane. */
 export function BrowserOwnedWindowCard({
   url,
   onShow,

@@ -69,8 +69,8 @@ mcp-bin = []
 # tauri's eyes — with a tauri child attached, `is_webview_window()` turns
 # false, `get_webview_window("main")` returns None and every command taking a
 # `tauri::WebviewWindow` argument fails — and it needs no `unstable` feature.
-# Only macOS and Windows compile the child surface; Linux uses owned windows
-# (wry's child build is X11-only and cannot be positioned on Wayland).
+# Linux builds into a GTK Fixed overlay instead of build_as_child, supporting
+# both X11 and Wayland while preserving the workspace's WebviewWindow identity.
 browser-child = ["dep:tauri-runtime-wry", "dep:webview2-com", "dep:windows"]
 # Dev-only puppet driven by a JSON control file (see src/browser/smoke.rs).
 browser-smoke = []

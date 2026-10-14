@@ -309,6 +309,23 @@ pub fn requested(app: &AppHandle, tab_id: &str, url: &str, destination: &mut Pat
     true
 }
 
+/// One source binding per native view. The context resolves the source at
+/// download start, then retains these callbacks only for that transfer.
+#[cfg(target_os = "linux")]
+pub fn linux_handlers(app: &AppHandle, tab_id: &str) -> super::shim::linux::DownloadHandlers {
+    let started_app = app.clone();
+    let tab_id = tab_id.to_string();
+    let finished_app = app.clone();
+    super::shim::linux::DownloadHandlers {
+        started: std::sync::Arc::new(move |url, path| {
+            requested(&started_app, &tab_id, url, path)
+        }),
+        finished: std::sync::Arc::new(move |url, success| {
+            finished(&finished_app, url, None, success)
+        }),
+    }
+}
+
 /// The engine finished (or gave up on) a download.
 pub fn finished(app: &AppHandle, url: &str, path: Option<PathBuf>, success: bool) {
     let Some(downloads) = app.try_state::<BrowserDownloads>() else {

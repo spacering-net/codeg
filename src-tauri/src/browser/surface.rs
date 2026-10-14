@@ -12,7 +12,7 @@ use super::types::{Bounds, SurfaceKind, ViewportSize};
 
 #[cfg(all(
     feature = "browser-child",
-    any(target_os = "macos", target_os = "windows")
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 use super::surface_child::ChildHandle;
 
@@ -76,7 +76,7 @@ impl From<tauri::Error> for SurfaceError {
 
 #[cfg(all(
     feature = "browser-child",
-    any(target_os = "macos", target_os = "windows")
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 impl From<super::surface_child::ChildError> for SurfaceError {
     fn from(err: super::surface_child::ChildError) -> Self {
@@ -88,21 +88,21 @@ impl From<super::surface_child::ChildError> for SurfaceError {
 pub enum BrowserSurface {
     #[cfg(all(
         feature = "browser-child",
-        any(target_os = "macos", target_os = "windows")
+        any(target_os = "macos", target_os = "windows", target_os = "linux")
     ))]
     Child(ChildHandle),
     /// Boxed: `WebviewWindow` is ~900 bytes and the enum is cloned around.
     Window(Box<tauri::WebviewWindow>),
 }
 
-// The child arm is compiled out on Linux; the macro keeps every method to one
-// match instead of three cfg-laden copies.
+// The child arm is compiled out without browser-child; keep each operation
+// in one match instead of repeating its conditional compilation.
 macro_rules! per_surface {
     ($self:ident, child: |$c:ident| $child:expr, window: |$w:ident| $window:expr) => {
         match $self {
             #[cfg(all(
                 feature = "browser-child",
-                any(target_os = "macos", target_os = "windows")
+                any(target_os = "macos", target_os = "windows", target_os = "linux")
             ))]
             BrowserSurface::Child($c) => $child,
             BrowserSurface::Window($w) => $window,
