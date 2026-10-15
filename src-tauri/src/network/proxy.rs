@@ -32,8 +32,16 @@ const NO_PROXY_ENV_KEYS: [&str; 2] = ["NO_PROXY", "no_proxy"];
 ///
 /// IPv6 needs both spellings: curl and reqwest match a bare `::1`, while Bun,
 /// Node's env proxy and Python's `urllib` compare the URL's bracketed host and
-/// only match `[::1]`.
-const LOOPBACK_NO_PROXY: [&str; 4] = ["localhost", "127.0.0.1", "::1", "[::1]"];
+/// only match `[::1]`. The bracketed form is deliberately NOT exported: a
+/// standalone bracketed entry anywhere in `NO_PROXY` makes Python's HTTPX fail
+/// while it builds a default client (`Invalid port: ':1]'`), before any request
+/// is sent, so every HTTPX-based client that inherits codeg's environment
+/// breaks whatever it was about to connect to. What leaving it out costs is a
+/// URL that names the IPv6 loopback literal (`http://[::1]:3000`): `urllib`,
+/// Bun's `fetch` and Node's env proxy send that to the proxy, while `requests`,
+/// curl and Node's `http` still reach it directly. The settings page lists
+/// these same three entries.
+const LOOPBACK_NO_PROXY: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
 /// Canonicalize a user-entered proxy address into a URL that carries an
 /// explicit scheme.
@@ -158,6 +166,30 @@ pub(crate) fn canonical_no_proxy(raw: &str) -> Option<String> {
     (!entries.is_empty()).then(|| entries.join(","))
 }
 
+/// Python HTTPX refuses to build a default client while a standalone bracketed
+/// IPv6 entry such as `[::1]` is present — it reports `Invalid port: ':1]'`
+/// before any request goes out — so an exported list carries those entries
+/// bare. A URL (`http://[::1]:8000`) and anything that is not an IPv6 literal
+/// (`[example.com]`) keep their spelling, and aliases are deduplicated after
+/// the brackets come off.
+pub(crate) fn unbracket_ipv6_no_proxy(raw: &str) -> String {
+    let mut entries: Vec<&str> = Vec::new();
+    for entry in no_proxy_entries(raw) {
+        let normalized = entry
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .filter(|host| host.parse::<std::net::Ipv6Addr>().is_ok())
+            .unwrap_or(entry);
+        if !entries
+            .iter()
+            .any(|seen| seen.eq_ignore_ascii_case(normalized))
+        {
+            entries.push(normalized);
+        }
+    }
+    entries.join(",")
+}
+
 /// [`canonical_no_proxy`] for a list that is about to be exported. A control
 /// character cannot be part of a host, and a NUL would make the env write
 /// panic, so either rejects the list.
@@ -181,15 +213,24 @@ pub(crate) fn normalize_no_proxy(raw: &str) -> Result<Option<String>, AppCommand
 /// everything", but Python and curl only honour it as the whole value — inside
 /// a list they skip it, so keeping it among other entries would quietly turn it
 /// off.
+///
+/// A standalone bracketed IPv6 entry — codeg's own list no longer carries one,
+/// but a user's list can — is exported bare for the reason in
+/// [`unbracket_ipv6_no_proxy`]: it makes HTTPX clients fail before they send
+/// anything, whatever their destination.
 pub(crate) fn no_proxy_value<'a>(lists: impl IntoIterator<Item = &'a str>) -> String {
-    let mut entries: Vec<&str> = LOOPBACK_NO_PROXY.to_vec();
+    let mut entries: Vec<String> = LOOPBACK_NO_PROXY
+        .iter()
+        .map(|entry| (*entry).to_string())
+        .collect();
     for list in lists {
-        for entry in no_proxy_entries(list) {
+        let list = unbracket_ipv6_no_proxy(list);
+        for entry in no_proxy_entries(&list) {
             if entry == "*" {
                 return entry.to_string();
             }
             if !entries.iter().any(|seen| seen.eq_ignore_ascii_case(entry)) {
-                entries.push(entry);
+                entries.push(entry.to_string());
             }
         }
     }
@@ -378,7 +419,7 @@ mod tests {
 
     use super::add_no_proxy_to_launch_env;
 
-    const LOOPBACK: &str = "localhost,127.0.0.1,::1,[::1]";
+    const LOOPBACK: &str = "localhost,127.0.0.1,::1";
 
     fn launch_env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -399,6 +440,32 @@ mod tests {
             merged.get("NO_PROXY").map(String::as_str),
             merged.get("no_proxy").map(String::as_str),
         )
+    }
+
+    #[test]
+    fn python_bypass_entries_normalize_ipv6_without_changing_urls_or_domains() {
+        assert_eq!(
+            super::unbracket_ipv6_no_proxy(
+                "::1,[::1],[2001:db8::1],http://[::1]:8000,.corp,[example.com]"
+            ),
+            "::1,2001:db8::1,http://[::1]:8000,.corp,[example.com]"
+        );
+    }
+
+    /// A standalone bracketed IPv6 entry — codeg's own list no longer carries
+    /// one, but a user's list can — reaches the child bare, because HTTPX
+    /// refuses to build a client while one is present. Only real IPv6 literals
+    /// change: a URL and a bracketed non-address keep their spelling.
+    #[test]
+    fn a_bracketed_ipv6_entry_is_exported_without_brackets() {
+        assert_eq!(
+            super::no_proxy_value([
+                "[fd00::1],[fd00::1],http://[::1]:8000,.corp.example,[example.com]"
+            ]),
+            "localhost,127.0.0.1,::1,fd00::1,http://[::1]:8000,.corp.example,[example.com]"
+        );
+        // `*` still wins alone, whatever else the list holds.
+        assert_eq!(super::no_proxy_value(["[fd00::1],*"]), "*");
     }
 
     /// Whatever the proxy's source, an agent handed one also gets the loopback

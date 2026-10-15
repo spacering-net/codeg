@@ -256,7 +256,7 @@
     "proxyAddress": "代理地址",
     "proxyHint": "支持 http(s)/socks5，示例：{example}。仅在启用系统代理时生效。",
     "proxyBypass": "不走代理的地址",
-    "proxyBypassHint": "多个地址用英文逗号 <code>,</code> 分隔，不加空格，例如 <code>{example}</code>。<code>example.com</code> 匹配该域名，<code>.example.com</code> 匹配它的所有子域名，也可以填写 IP 地址。本机地址 <code>localhost,127.0.0.1,::1</code> 始终直连，无需填写。该列表作为环境变量 NO_PROXY 生效。",
+    "proxyBypassHint": "多个地址用英文逗号 <code>,</code> 分隔，不加空格，例如 <code>{example}</code>。<code>example.com</code> 匹配该域名，<code>.example.com</code> 匹配它的所有子域名，也可以填写 IP 地址。本机地址 <code>localhost,127.0.0.1,::1</code> 始终在绕过列表中，无需填写；但把 IPv6 地址写成方括号形式的 URL（例如 <code>http://[::1]:3000</code>）在部分工具中仍会走代理。该列表作为环境变量 NO_PROXY 生效。",
     "save": "保存",
     "saving": "保存中...",
     "proxyRequired": "启用代理时必须填写代理地址",

@@ -1323,7 +1323,7 @@ mod tests {
         );
         assert_eq!(
             proxy::no_proxy_env_value(&settings).expect("valid"),
-            "localhost,127.0.0.1,::1,[::1],*.corp.example.com,.corp.example.com"
+            "localhost,127.0.0.1,::1,*.corp.example.com,.corp.example.com"
         );
     }
 
@@ -1373,12 +1373,20 @@ mod tests {
     fn exported_bypass_list_leads_with_the_loopback_hosts() {
         assert_eq!(
             proxy::no_proxy_env_value(&enabled_proxy("http://10.0.0.2:3128")).expect("valid"),
-            "localhost,127.0.0.1,::1,[::1]"
+            "localhost,127.0.0.1,::1"
         );
         let settings = enabled_proxy_bypassing("corp.example.com, 127.0.0.1, 10.0.0.5");
         assert_eq!(
             proxy::no_proxy_env_value(&settings).expect("valid"),
-            "localhost,127.0.0.1,::1,[::1],corp.example.com,10.0.0.5"
+            "localhost,127.0.0.1,::1,corp.example.com,10.0.0.5"
+        );
+
+        // A bracketed IPv6 entry the user typed reaches the child bare: HTTPX
+        // refuses to build a client while one is present.
+        let settings = enabled_proxy_bypassing("[fd00::1],http://[::1]:8000");
+        assert_eq!(
+            proxy::no_proxy_env_value(&settings).expect("valid"),
+            "localhost,127.0.0.1,::1,fd00::1,http://[::1]:8000"
         );
     }
 
@@ -1397,7 +1405,7 @@ mod tests {
         for key in ["NO_PROXY", "no_proxy"] {
             assert_eq!(
                 written(key),
-                Some(Some("localhost,127.0.0.1,::1,[::1],corp.example.com")),
+                Some(Some("localhost,127.0.0.1,::1,corp.example.com")),
                 "{key}"
             );
         }
