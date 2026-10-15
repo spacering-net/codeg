@@ -3360,6 +3360,16 @@
         "collapsedSummary": "サブエージェント {count}",
         "collapseAria": "サブエージェントを折りたたむ"
       },
+      "memberTimeline": {
+        "title": "チームメンバー",
+        "collapsedSummary": "チームメンバー {count}",
+        "collapseAria": "チームメンバーを折りたたむ",
+        "userEchoLabel": "メッセージを受信",
+        "statusPending": "保留中",
+        "statusRunning": "実行中",
+        "statusCompleted": "完了",
+        "statusFailed": "失敗"
+      },
       "agentPlanOverlay": {
         "title": "エージェントプラン",
         "collapsePlanAria": "プランを折りたたむ",

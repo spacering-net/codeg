@@ -41,6 +41,7 @@ import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
 import { AgentPlanOverlay } from "@/components/chat/agent-plan-overlay"
 import { SubAgentOverlay } from "@/components/chat/sub-agent-overlay"
+import { MemberTimelineOverlay } from "@/components/chat/member-timeline-overlay"
 import { SessionViewerHost } from "@/components/message/session-viewer-host"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { parseResumeTaskId } from "@/lib/codeg-mcp-tool"
@@ -182,6 +183,14 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /**
+   * The live connection's contextKey (the owning tab's id). Enables the
+   * member-timeline overlay — Agent Teams members stream only on the live
+   * connection, and the store is keyed by it. Omitted on embeds without a
+   * connection (canvas cards, sub-session transcripts), where the overlay
+   * renders nothing.
+   */
+  memberTimelineContextKey?: string | null
 }
 
 export interface ResolvedMessageGroup {
@@ -1131,6 +1140,7 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  memberTimelineContextKey = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1817,6 +1827,11 @@ export function MessageListView({
             delegations={lastAssistantDelegations}
             overlayKey={subAgentOverlayKey}
           />
+          {/* Agent Teams member timelines — the other half of the sub-agent
+          panel: delegated children get capsules, in-process team members get
+          their own per-member streams (see `MemberTimelineOverlay`). Renders
+          nothing until member frames arrive on this connection. */}
+          <MemberTimelineOverlay contextKey={memberTimelineContextKey} />
         </div>
         <SelectionActionBubble
           containerRef={selectionBoxRef}

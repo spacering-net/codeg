@@ -3360,6 +3360,16 @@
         "collapsedSummary": "Subagentes {count}",
         "collapseAria": "Recolher subagentes"
       },
+      "memberTimeline": {
+        "title": "Membros da equipe",
+        "collapsedSummary": "Membros da equipe {count}",
+        "collapseAria": "Recolher os membros da equipe",
+        "userEchoLabel": "Mensagem recebida",
+        "statusPending": "Pendente",
+        "statusRunning": "Em execução",
+        "statusCompleted": "Concluído",
+        "statusFailed": "Falhou"
+      },
       "agentPlanOverlay": {
         "title": "Plano do agente",
         "collapsePlanAria": "Recolher plano",

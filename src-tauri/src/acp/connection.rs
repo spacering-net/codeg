@@ -58,11 +58,12 @@ use crate::acp::terminal_runtime::{
 };
 use crate::acp::types::{
     AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionInfo,
-    ConnectionStatus, GrokModelCatalog, GrokModelSpec, PermissionOptionInfo, PlanEntryInfo,
-    PluginLoadFailure, PromptCapabilitiesInfo, PromptInputBlock, SessionConfigBooleanInfo,
-    SessionConfigKindInfo, SessionConfigOptionInfo, SessionConfigSelectGroupInfo,
-    SessionConfigSelectInfo, SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo,
-    SessionModeStateInfo, SessionNotice, ToolCallImageInfo, UserMessageBlock,
+    ConnectionStatus, GrokModelCatalog, GrokModelSpec, MemberChunkKind, PermissionOptionInfo,
+    PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo, PromptInputBlock,
+    SessionConfigBooleanInfo, SessionConfigKindInfo, SessionConfigOptionInfo,
+    SessionConfigSelectGroupInfo, SessionConfigSelectInfo, SessionConfigSelectOptionInfo,
+    SessionFailureRecord, SessionModeInfo, SessionModeStateInfo, SessionNotice,
+    ToolCallImageInfo, UserMessageBlock,
 };
 use crate::logging::throttle::LeadingEdgeThrottle;
 use crate::models::agent::AgentType;
@@ -4774,7 +4775,7 @@ pub(crate) fn claude_raw_sdk_session_meta(
 ///   `forwardSubagentText`). Subagent text/thought chunks then stream with
 ///   update-level `_meta.claudeCode.parentToolUseId` instead of being
 ///   filtered; codeg routes them into the live Agent capsule (see
-///   `claude_chunk_parent_tool_use_id`). The adapter checks strictly
+///   `subagent_chunk_parent_tool_use_id`). The adapter checks strictly
 ///   `=== true`, and a pre-0.63 binary ignores the unknown key, so this is
 ///   inert everywhere it isn't understood.
 /// - Any agent that launches `cursor-agent … acp` (the built-in Cursor entry
@@ -13990,6 +13991,28 @@ fn cursor_companion_title_from_content(content: Option<&str>) -> Option<&'static
     None
 }
 
+/// Whether this live agent belongs to the CodeBuddy family and therefore gets
+/// the CodeBuddy quirk handling: the built-in CodeBuddy agent, or a custom agent
+/// registered as a CodeBuddy CLI variant (registry id `codebuddy` or
+/// `codebuddy-*` — e.g. multi-account or env-isolated setups run the same CLI
+/// binary and stream identical `codebuddy.ai/*` `_meta` shapes).
+///
+/// Every CodeBuddy quirk is gated on this predicate rather than on
+/// `AgentType::CodeBuddy` alone: a custom registration that IS the CodeBuddy CLI
+/// needs the same handling — without it, its sub-agent thought/message chunks
+/// leaked into the main stream (each also rendered inside the Agent pill's
+/// window, out of order) and it missed the Agent-pill title rewrite and
+/// deferred-MCP unwraps. The id-prefix scope keeps every quirk on agents that
+/// ARE the CodeBuddy CLI, so no unrelated agent's `codebuddy.ai/*` keys can
+/// alias in.
+fn is_codebuddy_family(agent_type: AgentType) -> bool {
+    match agent_type {
+        AgentType::CodeBuddy => true,
+        AgentType::Custom(id) => id == "codebuddy" || id.starts_with("codebuddy-"),
+        _ => false,
+    }
+}
+
 /// Mirrors `parsers/opencode.rs:425-429` (and `parsers/codebuddy.rs`'s
 /// `subagent_type → "Agent"` rewrite) so streaming and reload-from-DB render the
 /// same Agent card. The SQLite-side condition is
@@ -14004,7 +14027,7 @@ fn cursor_companion_title_from_content(content: Option<&str>) -> Option<&'static
 /// identify a sub-agent invocation in practice. Other agents stay excluded to
 /// avoid any cross-agent collision a generic `subagent_type` field could cause.
 fn is_subagent_invocation(agent_type: AgentType, raw_input: &Option<String>) -> bool {
-    if !matches!(agent_type, AgentType::OpenCode | AgentType::CodeBuddy) {
+    if !matches!(agent_type, AgentType::OpenCode) && !is_codebuddy_family(agent_type) {
         return false;
     }
     let Some(text) = raw_input.as_deref() else {
@@ -14034,7 +14057,7 @@ fn is_subagent_invocation(agent_type: AgentType, raw_input: &Option<String>) -> 
 /// (the cards peel `params` themselves, and that keeps `inferFromInput` from
 /// misclassifying `cancel_delegation`'s `{task_id}` as a generic task).
 fn codebuddy_deferred_tool_name(agent_type: AgentType, raw_input: &Option<String>) -> Option<String> {
-    if agent_type != AgentType::CodeBuddy {
+    if !is_codebuddy_family(agent_type) {
         return None;
     }
     let text = raw_input.as_deref()?;
@@ -14063,7 +14086,7 @@ fn codebuddy_deferred_tool_name(agent_type: AgentType, raw_input: &Option<String
 /// those pass through untouched. Unlike the title rewrite, this needs no
 /// `raw_input`, so it also normalizes a result-only `ToolCallUpdate` that omits it.
 fn unwrap_codebuddy_deferred_output(agent_type: AgentType, text: &str) -> Option<String> {
-    if agent_type != AgentType::CodeBuddy {
+    if !is_codebuddy_family(agent_type) {
         return None;
     }
     // Cheap substring guard before parsing a potentially large payload.
@@ -14092,7 +14115,7 @@ fn codebuddy_meta_marks_subagent(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
-    if agent_type != AgentType::CodeBuddy {
+    if !is_codebuddy_family(agent_type) {
         return false;
     }
     let Some(meta) = meta else {
@@ -15169,7 +15192,7 @@ fn codebuddy_meta_marks_background(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
-    if agent_type != AgentType::CodeBuddy {
+    if !is_codebuddy_family(agent_type) {
         return false;
     }
     meta.and_then(|m| m.get("codebuddy.ai/isBackground"))
@@ -15178,16 +15201,16 @@ fn codebuddy_meta_marks_background(
 }
 
 /// True when a CodeBuddy thought/message `ContentChunk`'s own `_meta` marks the
-/// chunk as sub-agent output (`codebuddy.ai/isSubagent`, or a
-/// `codebuddy.ai/parentToolCallId` link to the Agent call). This is a precision
-/// supplement to the open-sub-agent window — CodeBuddy is not confirmed to
-/// populate chunk `_meta`, so suppression never relies on it alone. Gated on
-/// CodeBuddy.
+/// chunk as sub-agent output (`codebuddy.ai/isSubagent`, a
+/// `codebuddy.ai/parentToolCallId` link to the Agent call, or an Agent Teams
+/// `codebuddy.ai/memberEvent` tag). This is a precision supplement to the
+/// open-sub-agent window — CodeBuddy is not confirmed to populate chunk `_meta`,
+/// so suppression never relies on it alone. Gated on CodeBuddy.
 fn codebuddy_chunk_marks_subagent(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
-    if agent_type != AgentType::CodeBuddy {
+    if !is_codebuddy_family(agent_type) {
         return false;
     }
     let Some(meta) = meta else {
@@ -15196,19 +15219,95 @@ fn codebuddy_chunk_marks_subagent(
     if meta.get("codebuddy.ai/isSubagent").and_then(|v| v.as_bool()) == Some(true) {
         return true;
     }
+    // Agent Teams (CLI 2.164.0): an in-process team member's own live stream —
+    // its deltas AND the committed record echoed verbatim after them — is
+    // tagged `codebuddy.ai/memberEvent = <member name>` by `AcpTeamBridge`,
+    // with NO parent link. The CLI documents the client contract for it
+    // ("客户端收到带 memberEvent 标记的事件后，应将其路由到对应成员的对话时间线，
+    // 而非主对话区" — docs/cn/cli/acp.md, 成员流式消息). This arm enforces the
+    // "而非主对话区" half: without it the unlinked team-bridge copy lands in the
+    // MAIN thread, where it both duplicates the member's prose (deltas + record
+    // echo) and chops the main agent's own text at every interleaved member
+    // chunk (2026-10-14). The other half — "路由到对应成员的对话时间线" — is
+    // `codebuddy_member_channel`, which reroutes exactly the chunks this arm
+    // claims (and only those) onto the member channel as `AcpEvent::MemberChunk`.
+    // A member-tagged chunk that DOES carry a parent link stays routed — the
+    // link wins, exactly like the other markers below.
+    if meta
+        .get("codebuddy.ai/memberEvent")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
+        return true;
+    }
     meta.get("codebuddy.ai/parentToolCallId")
         .and_then(|v| v.as_str())
         .is_some_and(|s| !s.is_empty())
+}
+
+/// The member timeline a CodeBuddy frame belongs to — `Some(member name)` when
+/// the frame carries a non-empty `codebuddy.ai/memberEvent` tag and NO
+/// `codebuddy.ai/parentToolCallId` link.
+///
+/// THE routing decision for the Agent Teams member channel (LOCAL, codeg-fix
+/// 2026-10-14). The CLI's contract ("客户端收到带 memberEvent 标记的事件后，应将其
+/// 路由到对应成员的对话时间线，而非主对话区" — docs/cn/cli/acp.md §成员流式消息)
+/// has two halves; `should_suppress_subagent_chunk` / `codebuddy_chunk_marks_subagent`
+/// keep the unlinked member copy out of the main thread, and this is the
+/// receiving end of that reroute: every frame they would suppress into silence
+/// is emitted as an [`AcpEvent::MemberChunk`] instead. Parent-link precedence
+/// matches the suppression path exactly (the link wins there), so a member
+/// frame that carries BOTH tags is still the capsule's copy, routed as before.
+///
+/// Gated on the CodeBuddy family so the flat `codebuddy.ai/*` keys of any other
+/// agent's `_meta` can never alias into member routing.
+fn codebuddy_member_channel(
+    agent_type: AgentType,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    if !is_codebuddy_family(agent_type) {
+        return None;
+    }
+    let meta = meta?;
+    if meta
+        .get("codebuddy.ai/parentToolCallId")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
+        return None;
+    }
+    meta.get("codebuddy.ai/memberEvent")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// `codebuddy.ai/memberHistoryItemId` — the id of the committed member record an
+/// echo frame re-sends (absent on live deltas; present on the record echo, the
+/// member's `user_message_chunk`, and each of its committed tool records). The
+/// frontend keys finalized timeline items by it (`item:{id}`), which is what
+/// makes the agent's full-history replays idempotent.
+fn member_history_item_id(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    meta?
+        .get("codebuddy.ai/memberHistoryItemId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 /// Whether a live thought/message chunk should be dropped from the top-level
 /// stream because it belongs to a CodeBuddy sub-agent (whose work is already
 /// represented by the Agent pill + its nested tool calls).
 ///
-/// Claude Code is NOT handled here: its sub-agent chunks (claude-agent-acp
-/// ≥0.63 with the `subagent-transcript` capability) arrive with a precise
-/// per-chunk `_meta.claudeCode.parentToolUseId` and are forwarded WITH that
-/// attribution instead of suppressed — see `claude_chunk_parent_tool_use_id`.
+/// Suppression is the FALLBACK, not the contract: a chunk the wire LINKED to
+/// its owning Agent call is routed instead (forwarded with that attribution,
+/// and the frontend files it into the live Agent capsule) — the same contract
+/// Claude's parented chunks follow, so sub-agent thinking/text survives into
+/// the settled card instead of vanishing with the suppressed stream. Only
+/// chunks the wire did not link fall through to suppression below (see
+/// `subagent_chunk_parent_tool_use_id` for the two wire shapes).
 ///
 /// Suppress while we're inside an open sub-agent window OR when the chunk's own
 /// meta marks it. The window safety rests on a structural invariant: the window
@@ -15218,31 +15317,60 @@ fn codebuddy_chunk_marks_subagent(
 /// the sub-agent's chunks, never main-agent output. BACKGROUND sub-agents (which
 /// run concurrently and could interleave main-agent output) are deliberately
 /// excluded from the window by `track_subagent_window`, so `window_open` can
-/// never cause a main-agent chunk to be dropped. Gated on CodeBuddy; every other
-/// agent always emits.
+/// never cause a main-agent chunk to be dropped. An Agent Teams member's start
+/// frame carries `isBackground=false`, so `track_subagent_window` DOES open the
+/// window for it — start frame to terminal frame, only ~13-15 ms, with the main
+/// model blocked inside the `Agent` call throughout, so the invariant holds and
+/// no main-thread chunk competes with it. The member's prose/thought arrives
+/// after that window has closed and carries no parent link; the meta arm catches
+/// it instead (see `codebuddy_chunk_marks_subagent`), and the meta arm never
+/// consults `window_open`. Gated on the CodeBuddy family; every other agent
+/// always emits.
 fn should_suppress_subagent_chunk(
     agent_type: AgentType,
     window_open: bool,
     chunk_meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
-    if agent_type != AgentType::CodeBuddy {
+    if !is_codebuddy_family(agent_type) {
+        return false;
+    }
+    if subagent_chunk_parent_tool_use_id(agent_type, chunk_meta).is_some() {
         return false;
     }
     window_open || codebuddy_chunk_marks_subagent(agent_type, chunk_meta)
 }
 
-/// Extract the update-level `_meta.claudeCode.parentToolUseId` of a live
-/// text/thought chunk — set by claude-agent-acp ≥0.63 on a subagent's
-/// forwarded chunks once the client advertises the `subagent-transcript`
-/// capability (see `build_client_capabilities`). The chunk is emitted WITH
-/// this attribution (never suppressed): the frontend routes parented chunks
-/// into the live Agent capsule instead of the main thread. Gated on
-/// ClaudeCode so no other agent's namespaced meta can alias into parented
-/// routing; empty strings are treated as absent.
-fn claude_chunk_parent_tool_use_id(
+/// Extract the update-level parent-tool-call attribution of a live
+/// text/thought chunk — the id of the Agent/Task call that owns the subagent
+/// the chunk came from. The chunk is emitted WITH this attribution (never
+/// suppressed): the frontend routes parented chunks into the live Agent
+/// capsule instead of the main thread.
+///
+/// Two wire shapes today:
+/// * Claude Code nests it under `_meta.claudeCode.parentToolUseId`, set by
+///   claude-agent-acp ≥0.63 on a subagent's forwarded chunks once the client
+///   advertises the `subagent-transcript` capability (see
+///   `build_client_capabilities`).
+/// * The CodeBuddy family writes a FLAT `_meta["codebuddy.ai/parentToolCallId"]`
+///   (measured on CodeBuddy 2.164.0: present on every sub-agent thought/message
+///   chunk, never on a main-thread one).
+///
+/// Only the owning agent family's own id space is read, so no other agent's
+/// namespaced meta can alias into parented routing; empty strings are treated
+/// as absent.
+fn subagent_chunk_parent_tool_use_id(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<String> {
+    // CodeBuddy's link is a flat single key, not nested under a namespace
+    // object — read it before the namespaced pair.
+    if is_codebuddy_family(agent_type) {
+        return meta?
+            .get("codebuddy.ai/parentToolCallId")?
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+    }
     if agent_type != AgentType::ClaudeCode {
         return None;
     }
@@ -15385,7 +15513,7 @@ fn track_subagent_window(
     open: &mut HashSet<String>,
     closed: &mut HashSet<String>,
 ) {
-    if agent_type != AgentType::CodeBuddy || !is_agent {
+    if !is_codebuddy_family(agent_type) || !is_agent {
         return;
     }
     let is_final = matches!(status, Some("completed") | Some("failed"));
@@ -17541,15 +17669,68 @@ async fn emit_conversation_update(
     cb_state: &mut CodeBuddyLiveState,
 ) {
     match update {
+        SessionUpdate::UserMessageChunk(ContentChunk {
+            content: ContentBlock::Text(text),
+            meta,
+            ..
+        }) => {
+            // Agent Teams member frames reroute a message delivered TO a member
+            // (a teammate message / its kickoff prompt) onto the member
+            // timeline. Routed by the same rule as the member's own chunks —
+            // `codebuddy_member_channel` — and these always arrive as committed
+            // records (`history_item_id` set), so the frontend files a user
+            // line outright. The main thread's own user echo stays a silent
+            // no-op as before.
+            if let Some(member) = codebuddy_member_channel(agent_type, meta.as_ref()) {
+                emit_with_state(
+                    state,
+                    emitter,
+                    AcpEvent::MemberChunk {
+                        member,
+                        kind: MemberChunkKind::UserEcho,
+                        text: Some(text.text),
+                        tool_call_id: None,
+                        title: None,
+                        status: None,
+                        history_item_id: member_history_item_id(meta.as_ref()),
+                    },
+                )
+                .await;
+            }
+        }
         SessionUpdate::UserMessageChunk(_) => {
-            // User echo chunks are informational for transcript sync and
-            // currently not rendered in live ACP UI.
+            // Non-text user echo chunks are informational for transcript sync
+            // and currently not rendered in live ACP UI.
         }
         SessionUpdate::AgentMessageChunk(ContentChunk {
             content: ContentBlock::Text(text),
             meta,
             ..
         }) => {
+            // Agent Teams member frames ARE the member's conversation stream:
+            // the CLI contract routes them to the member's timeline, never the
+            // main conversation area (docs/cn/cli/acp.md §成员流式消息; see
+            // `codebuddy_member_channel`). The unlinked copy used to be dropped
+            // outright — it now feeds the member channel instead. A member
+            // frame that carries a parent link is the Agent capsule's copy and
+            // falls through to the existing routing below (the link wins).
+            if let Some(member) = codebuddy_member_channel(agent_type, meta.as_ref()) {
+                emit_with_state(
+                    state,
+                    emitter,
+                    AcpEvent::MemberChunk {
+                        member,
+                        kind: MemberChunkKind::Message,
+                        text: Some(text.text),
+                        tool_call_id: None,
+                        title: None,
+                        status: None,
+                        history_item_id: member_history_item_id(meta.as_ref()),
+                    },
+                )
+                .await;
+                return;
+            }
             // Gemini reports an approval-mode switch as a prose chunk reading
             // `[MODE_UPDATE] <mode>`. Turn it back into the mode event it should
             // have been — see `gemini_mode_update_chunk` for the two guards that
@@ -17564,8 +17745,9 @@ async fn emit_conversation_update(
             // shape — see `pi_take_startup_banner`. No-op for every other agent.
             let is_pi_startup_banner =
                 pi_take_startup_banner(agent_type, state, &text.text).await;
-            // Drop a CodeBuddy sub-agent's interleaved message text — it belongs
-            // to the Agent pill, not the main thread (see
+            // Drop a CodeBuddy sub-agent's interleaved message text that the
+            // wire did not link — it belongs to the Agent pill, not the main
+            // thread; linked chunks are routed into the capsule instead (see
             // `should_suppress_subagent_chunk`). No-op for every other agent.
             if !is_pi_startup_banner
                 && !should_suppress_subagent_chunk(
@@ -17608,7 +17790,7 @@ async fn emit_conversation_update(
                         // emit with their parent id so the frontend can route them
                         // into the live Agent capsule.
                         let parent_tool_use_id =
-                            claude_chunk_parent_tool_use_id(agent_type, meta.as_ref());
+                            subagent_chunk_parent_tool_use_id(agent_type, meta.as_ref());
                         emit_with_state(
                             state,
                             emitter,
@@ -17630,13 +17812,32 @@ async fn emit_conversation_update(
             meta,
             ..
         }) => {
-            // Same suppression for a sub-agent's interleaved reasoning.
+            // Same member-channel reroute as the prose arm above — a member's
+            // reasoning belongs to its own timeline, not the main thread.
+            if let Some(member) = codebuddy_member_channel(agent_type, meta.as_ref()) {
+                emit_with_state(
+                    state,
+                    emitter,
+                    AcpEvent::MemberChunk {
+                        member,
+                        kind: MemberChunkKind::Thought,
+                        text: Some(text.text),
+                        tool_call_id: None,
+                        title: None,
+                        status: None,
+                        history_item_id: member_history_item_id(meta.as_ref()),
+                    },
+                )
+                .await;
+                return;
+            }
+            // Same suppression/routing for a sub-agent's interleaved reasoning.
             if !should_suppress_subagent_chunk(
                 agent_type,
                 !cb_state.open_subagents.is_empty(),
                 meta.as_ref(),
             ) {
-                let parent_tool_use_id = claude_chunk_parent_tool_use_id(agent_type, meta.as_ref());
+                let parent_tool_use_id = subagent_chunk_parent_tool_use_id(agent_type, meta.as_ref());
                 emit_with_state(
                     state,
                     emitter,
@@ -17652,6 +17853,30 @@ async fn emit_conversation_update(
             // Non-text thought chunks are currently ignored.
         }
         SessionUpdate::ToolCall(mut tc) => {
+            // Agent Teams member tool frames route to the member timeline, and
+            // they return BEFORE any of the sub-agent bookkeeping below: a
+            // member's call is not the main thread's, so it must neither open
+            // the suppression window nor register a title rewrite for its id
+            // (see `codebuddy_member_channel`). v1 carries only
+            // `tool_call_id`/`title`/`status` — the frontend renders a
+            // weakened one-line row from them.
+            if let Some(member) = codebuddy_member_channel(agent_type, tc.meta.as_ref()) {
+                emit_with_state(
+                    state,
+                    emitter,
+                    AcpEvent::MemberChunk {
+                        member,
+                        kind: MemberChunkKind::ToolCall,
+                        text: None,
+                        tool_call_id: Some(tc.tool_call_id.to_string()),
+                        title: Some(tc.title.clone()),
+                        status: Some(format!("{:?}", tc.status).to_lowercase()),
+                        history_item_id: member_history_item_id(tc.meta.as_ref()),
+                    },
+                )
+                .await;
+                return;
+            }
             let tool_call_id = tc.tool_call_id.to_string();
             // The AIR contract sends each `_meta` key once: open the call's
             // record, and read the moved keys under their legacy names from here
@@ -17974,6 +18199,30 @@ async fn emit_conversation_update(
             .await;
         }
         SessionUpdate::ToolCallUpdate(mut tcu) => {
+            // Same member-channel reroute as the ToolCall arm, and for the same
+            // reason it returns before any bookkeeping (see there). `title` /
+            // `status` are forwarded only when this frame carries them — the
+            // frontend merges onto the member's existing tool row by id.
+            if let Some(member) = codebuddy_member_channel(agent_type, tcu.meta.as_ref()) {
+                emit_with_state(
+                    state,
+                    emitter,
+                    AcpEvent::MemberChunk {
+                        member,
+                        kind: MemberChunkKind::ToolCallUpdate,
+                        text: None,
+                        tool_call_id: Some(tcu.tool_call_id.to_string()),
+                        title: tcu.fields.title.clone(),
+                        status: tcu
+                            .fields
+                            .status
+                            .map(|s| format!("{:?}", s).to_lowercase()),
+                        history_item_id: member_history_item_id(tcu.meta.as_ref()),
+                    },
+                )
+                .await;
+                return;
+            }
             let tool_call_id = tcu.tool_call_id.to_string();
             // The AIR contract leaves every unchanged `_meta` key off an update;
             // read the call's merged `_meta` instead of the frame's, and hand the
@@ -31427,6 +31676,49 @@ mod tests {
         );
     }
 
+    // ─── is_codebuddy_family (the built-in and custom CLI variants) ──────
+
+    /// A custom registration running the same CLI (e.g. `codebuddy-cn` /
+    /// `codebuddy-intl` for two accounts) must get the same quirk handling as
+    /// the built-in; ids outside the family must not.
+    #[test]
+    fn codebuddy_family_covers_builtin_and_custom_variants_only() {
+        assert!(is_codebuddy_family(AgentType::CodeBuddy));
+        assert!(is_codebuddy_family(AgentType::Custom("codebuddy")));
+        assert!(is_codebuddy_family(AgentType::Custom("codebuddy-cn")));
+        assert!(is_codebuddy_family(AgentType::Custom("codebuddy-intl")));
+        assert!(!is_codebuddy_family(AgentType::Custom("codebuddyx")));
+        assert!(!is_codebuddy_family(AgentType::Custom("qoder-cli")));
+        assert!(!is_codebuddy_family(AgentType::ClaudeCode));
+        assert!(!is_codebuddy_family(AgentType::OpenCode));
+    }
+
+    /// The suppression window is the core of the sub-agent folding the custom
+    /// agents were missing: an open Agent window must suppress chunks for a
+    /// custom CodeBuddy variant exactly like the built-in.
+    #[test]
+    fn custom_codebuddy_variant_gets_subagent_suppression_and_meta_reads() {
+        let custom = AgentType::Custom("codebuddy-cn");
+        // Window open, chunk meta absent → suppressed (the window invariant).
+        assert!(should_suppress_subagent_chunk(custom, true, None));
+        // Window closed but the chunk's own meta marks a sub-agent → suppressed.
+        let meta = serde_json::json!({ "codebuddy.ai/isSubagent": true });
+        assert!(should_suppress_subagent_chunk(custom, false, meta.as_object()));
+        // Window closed, no marker → emitted.
+        assert!(!should_suppress_subagent_chunk(custom, false, None));
+        // Meta-based classification and title rewrite work for the variant.
+        let agent_meta = serde_json::json!({ "codebuddy.ai/toolName": "Agent" });
+        assert!(codebuddy_meta_marks_subagent(custom, agent_meta.as_object()));
+        let mut overrides: HashMap<String, String> = HashMap::new();
+        assert_eq!(
+            resolve_rewritten_title(custom, &None, "tc1", false, true, &mut overrides).as_deref(),
+            Some("agent")
+        );
+        // Still scoped: a non-family agent with the same meta is untouched.
+        assert!(!codebuddy_meta_marks_subagent(AgentType::Qoder, agent_meta.as_object()));
+        assert!(!should_suppress_subagent_chunk(AgentType::Qoder, true, None));
+    }
+
     // ─── codebuddy_meta_marks_subagent ───────────────────────────────────
 
     #[test]
@@ -31613,52 +31905,550 @@ mod tests {
             false,
             None
         ));
-        // Window closed but the chunk's own meta marks it → suppress (precision
-        // supplement; never relied on alone).
+        // Window closed, meta marks it but carries NO parent link → suppress
+        // (the fallback path; suppression is never relied on alone).
         let sub = serde_json::json!({ "codebuddy.ai/isSubagent": true });
+        assert!(should_suppress_subagent_chunk(
+            AgentType::CodeBuddy,
+            false,
+            sub.as_object()
+        ));
+        // Window closed and the chunk carries its own parent link → ROUTED, not
+        // suppressed: it emits with that attribution and the frontend files it
+        // into the live Agent capsule, so sub-agent thinking/text survives into
+        // the settled card instead of vanishing.
         let parented = serde_json::json!({ "codebuddy.ai/parentToolCallId": "call_x" });
-        for meta in [&sub, &parented] {
-            assert!(should_suppress_subagent_chunk(
-                AgentType::CodeBuddy,
-                false,
-                meta.as_object()
-            ));
-        }
+        assert!(!should_suppress_subagent_chunk(
+            AgentType::CodeBuddy,
+            false,
+            parented.as_object()
+        ));
+        // Even inside an open window a linked chunk is routed — suppression
+        // only ever catches chunks the wire did not link.
+        assert!(!should_suppress_subagent_chunk(
+            AgentType::CodeBuddy,
+            true,
+            parented.as_object()
+        ));
         // Other agents never suppress, even inside a (spurious) open window.
         assert!(!should_suppress_subagent_chunk(AgentType::OpenCode, true, None));
+    }
+
+    /// Agent Teams (CLI 2.164.0, 2026-10-14): an in-process member's stream
+    /// reaches the client TWICE — once parented through the sub-agent bridge
+    /// (the Agent capsule's copy) and once tagged `codebuddy.ai/memberEvent`
+    /// with no parent link by `AcpTeamBridge`. The second copy also re-sends
+    /// each committed message record verbatim (`codebuddy.ai/memberHistoryItemId`
+    /// rides it). This is the SUPPRESSION half of the shared routing rule: the
+    /// unlinked copy must not enter the main conversation — it duplicated the
+    /// member's prose and chopped the main agent's own text at every
+    /// interleaved member chunk. The receiving half — the same frames onto the
+    /// member timeline — is `codebuddy_member_channel`, and the emission-level
+    /// tests below pin the two decisions together.
+    #[test]
+    fn member_event_chunks_are_suppressed_unless_linked() {
+        // The unlinked member stream (and its record echo) → suppressed even
+        // with the window closed: the meta arm alone catches it. A member is
+        // NOT window-excluded as a background worker — its start frame carries
+        // isBackground=false, so the window does open, but it stays open only
+        // from that frame to the terminal frame (~13-15 ms, with the main model
+        // blocked inside the Agent call throughout). The member's prose/thought
+        // arrives after that close, so window state plays no role here.
+        let member = serde_json::json!({ "codebuddy.ai/memberEvent": "impl-x" });
+        assert!(should_suppress_subagent_chunk(
+            AgentType::CodeBuddy,
+            false,
+            member.as_object()
+        ));
+        // Same for a custom CodeBuddy variant (the family gate).
+        assert!(should_suppress_subagent_chunk(
+            AgentType::Custom("codebuddy-intl"),
+            false,
+            member.as_object()
+        ));
+        // A member chunk that ALSO carries a parent link stays routed — the
+        // link wins, exactly like the other markers.
+        let linked = serde_json::json!({
+            "codebuddy.ai/memberEvent": "impl-x",
+            "codebuddy.ai/parentToolCallId": "call_agent",
+        });
+        assert!(!should_suppress_subagent_chunk(
+            AgentType::CodeBuddy,
+            false,
+            linked.as_object()
+        ));
+        assert_eq!(
+            subagent_chunk_parent_tool_use_id(AgentType::CodeBuddy, linked.as_object()),
+            Some("call_agent".to_string())
+        );
+        // Scoped to the family: another agent's identical meta cannot alias in.
+        assert!(!should_suppress_subagent_chunk(
+            AgentType::Qoder,
+            false,
+            member.as_object()
+        ));
+        // Main-thread chunks never carry the key → still emitted.
+        let main = serde_json::json!({ "codebuddy.ai/messageId": "m1" });
+        assert!(!should_suppress_subagent_chunk(
+            AgentType::CodeBuddy,
+            false,
+            main.as_object()
+        ));
+    }
+
+    /// Unit contract of the member-channel decision: the flat
+    /// `codebuddy.ai/memberEvent` tag with NO parent link, read only for the
+    /// CodeBuddy family. A parent link wins (that is the Agent capsule's copy),
+    /// empty/wrong-typed values are absent, and an EMPTY parent link does not
+    /// veto — mirroring `codebuddy_chunk_parent_reads_the_flat_meta_only_for_the_family`.
+    #[test]
+    fn member_channel_reads_the_flat_meta_only_for_the_family() {
+        let tagged = serde_json::json!({
+            "codebuddy.ai/memberEvent": "impl-x",
+            "codebuddy.ai/memberHistoryItemId": "h1",
+        });
+        // The built-in and both dual-account custom variants all read it.
+        for agent in [
+            AgentType::CodeBuddy,
+            AgentType::Custom("codebuddy-cn"),
+            AgentType::Custom("codebuddy-intl"),
+        ] {
+            assert_eq!(
+                codebuddy_member_channel(agent, tagged.as_object()).as_deref(),
+                Some("impl-x")
+            );
+        }
+        assert_eq!(
+            member_history_item_id(tagged.as_object()).as_deref(),
+            Some("h1")
+        );
+        // The parent link wins: this frame is the capsule's copy, never the
+        // member channel (same precedence as the suppression arm).
+        let linked = serde_json::json!({
+            "codebuddy.ai/memberEvent": "impl-x",
+            "codebuddy.ai/parentToolCallId": "call_agent",
+        });
+        assert_eq!(
+            codebuddy_member_channel(AgentType::CodeBuddy, linked.as_object()),
+            None
+        );
+        // An EMPTY parent link is absent (the routing rule reads `is_empty` as
+        // no link), so the frame is still a member frame.
+        let empty_parent = serde_json::json!({
+            "codebuddy.ai/memberEvent": "impl-x",
+            "codebuddy.ai/parentToolCallId": "",
+        });
+        assert_eq!(
+            codebuddy_member_channel(AgentType::CodeBuddy, empty_parent.as_object()).as_deref(),
+            Some("impl-x")
+        );
+        // Scoped to the family: another agent's identical meta cannot alias in.
+        for agent in [
+            AgentType::Qoder,
+            AgentType::ClaudeCode,
+            AgentType::OpenCode,
+        ] {
+            assert_eq!(codebuddy_member_channel(agent, tagged.as_object()), None);
+        }
+        // Empty / wrong type / absent key / absent meta → None.
+        let empty = serde_json::json!({ "codebuddy.ai/memberEvent": "" });
+        assert_eq!(
+            codebuddy_member_channel(AgentType::CodeBuddy, empty.as_object()),
+            None
+        );
+        let wrong_type = serde_json::json!({ "codebuddy.ai/memberEvent": 42 });
+        assert_eq!(
+            codebuddy_member_channel(AgentType::CodeBuddy, wrong_type.as_object()),
+            None
+        );
+        let absent = serde_json::json!({ "codebuddy.ai/messageId": "m1" });
+        assert_eq!(
+            codebuddy_member_channel(AgentType::CodeBuddy, absent.as_object()),
+            None
+        );
+        assert_eq!(codebuddy_member_channel(AgentType::CodeBuddy, None), None);
+        // History item id: absent / empty / absent meta → None.
+        assert_eq!(member_history_item_id(None), None);
+        assert_eq!(member_history_item_id(absent.as_object()), None);
+        let empty_hist = serde_json::json!({ "codebuddy.ai/memberHistoryItemId": "" });
+        assert_eq!(member_history_item_id(empty_hist.as_object()), None);
+    }
+
+    /// Drive `frames` (raw `session/update` payloads) through
+    /// `emit_conversation_update` on one CodeBuddy connection and return every
+    /// emitted event, in order. The member-channel sibling of
+    /// `drive_tool_frames`, which filters to tool-call events.
+    async fn drive_codebuddy_frames(
+        agent: AgentType,
+        frames: Vec<serde_json::Value>,
+    ) -> Vec<AcpEvent> {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-cb-member".to_string(),
+            agent,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        for frame in frames {
+            let update: SessionUpdate =
+                serde_json::from_value(frame).expect("recorded wire shape parses");
+            emit_conversation_update(
+                &state,
+                &EventEmitter::Noop,
+                agent,
+                update,
+                None,
+                &mut cache,
+                &mut cb,
+            )
+            .await;
+        }
+        let events = state
+            .read()
+            .await
+            .recent_events_after(0)
+            .expect("events recorded")
+            .into_iter()
+            .map(|e| e.payload.clone())
+            .collect();
+        events
+    }
+
+    /// The RECEIVING half of the member contract: every unlinked member frame is
+    /// rerouted onto the member channel (`AcpEvent::MemberChunk`) instead of
+    /// being dropped, and none of it reaches the main thread. Frames are the
+    /// real shapes recorded from a stock 2.164.0 probe (`frames4.jsonl`):
+    /// a teammate message delivered to the member, its thought/prose deltas,
+    /// the committed reply record echoed after them, and its tool pair.
+    ///
+    /// ③ is covered by construction — no frame here has a parented twin, which
+    /// is exactly the replay / detached-member shape — and again by the
+    /// replay-only run at the end (a lone record echo and a lone tool update,
+    /// the content a reopen replay delivers).
+    #[tokio::test]
+    async fn member_event_frames_are_rerouted_to_the_member_channel() {
+        let events = drive_codebuddy_frames(
+            AgentType::CodeBuddy,
+            vec![
+                // A teammate message delivered TO the member → its user line.
+                serde_json::json!({"sessionUpdate": "user_message_chunk",
+                    "messageId": "m-u1",
+                    "content": {"type": "text", "text": "<teammate-message>请写两句</teammate-message>"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/memberHistoryItemId": "m-u1",
+                              "timestamp": "2026-10-14T08:43:31.324Z"}}),
+                // The member's live reasoning, then its prose deltas…
+                serde_json::json!({"sessionUpdate": "agent_thought_chunk",
+                    "messageId": "m-t1",
+                    "content": {"type": "text", "text": "The lead"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x"}}),
+                serde_json::json!({"sessionUpdate": "agent_message_chunk",
+                    "messageId": "m-a1",
+                    "content": {"type": "text", "text": "正在"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x"}}),
+                // …and the committed reply record echoed verbatim after them.
+                serde_json::json!({"sessionUpdate": "agent_message_chunk",
+                    "messageId": "m-a1",
+                    "content": {"type": "text", "text": "正在处理任务分配。"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/memberHistoryItemId": "m-a1"}}),
+                // The member's tool pair.
+                serde_json::json!({"sessionUpdate": "tool_call",
+                    "toolCallId": "call_1",
+                    "title": "SendMessage",
+                    "kind": "other",
+                    "status": "pending",
+                    "rawInput": {"type": "message"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/memberHistoryItemId": "m-tc1"}}),
+                serde_json::json!({"sessionUpdate": "tool_call_update",
+                    "toolCallId": "call_1",
+                    "status": "completed",
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/memberHistoryItemId": "m-tc2"}}),
+            ],
+        )
+        .await;
+
+        /// (member, kind, text, tool_call_id, title, status, history_item_id)
+        type Unpacked<'a> = (
+            &'a str,
+            MemberChunkKind,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        fn unpack(event: &AcpEvent) -> Unpacked<'_> {
+            match event {
+                AcpEvent::MemberChunk {
+                    member,
+                    kind,
+                    text,
+                    tool_call_id,
+                    title,
+                    status,
+                    history_item_id,
+                } => (
+                    member.as_str(),
+                    *kind,
+                    text.as_deref(),
+                    tool_call_id.as_deref(),
+                    title.as_deref(),
+                    status.as_deref(),
+                    history_item_id.as_deref(),
+                ),
+                other => panic!("expected a member chunk, got {other:?}"),
+            }
+        }
+
+        // ① The main thread saw NONE of it — no dropped-into-main copy either.
+        assert!(
+            events.iter().all(|e| !matches!(
+                e,
+                AcpEvent::ContentDelta { .. }
+                    | AcpEvent::Thinking { .. }
+                    | AcpEvent::ToolCall { .. }
+                    | AcpEvent::ToolCallUpdate { .. }
+            )),
+            "member frames must not enter the main thread: {events:?}"
+        );
+
+        // ② One member-channel event per frame, fields intact, in stream order.
+        assert_eq!(events.len(), 6, "{events:?}");
+        assert_eq!(
+            unpack(&events[0]),
+            (
+                "impl-x",
+                MemberChunkKind::UserEcho,
+                Some("<teammate-message>请写两句</teammate-message>"),
+                None,
+                None,
+                None,
+                Some("m-u1"),
+            )
+        );
+        assert_eq!(
+            unpack(&events[1]),
+            (
+                "impl-x",
+                MemberChunkKind::Thought,
+                Some("The lead"),
+                None,
+                None,
+                None,
+                None,
+            )
+        );
+        assert_eq!(
+            unpack(&events[2]),
+            (
+                "impl-x",
+                MemberChunkKind::Message,
+                Some("正在"),
+                None,
+                None,
+                None,
+                None,
+            )
+        );
+        assert_eq!(
+            unpack(&events[3]),
+            (
+                "impl-x",
+                MemberChunkKind::Message,
+                Some("正在处理任务分配。"),
+                None,
+                None,
+                None,
+                Some("m-a1"),
+            )
+        );
+        assert_eq!(
+            unpack(&events[4]),
+            (
+                "impl-x",
+                MemberChunkKind::ToolCall,
+                None,
+                Some("call_1"),
+                Some("SendMessage"),
+                Some("pending"),
+                Some("m-tc1"),
+            )
+        );
+        assert_eq!(
+            unpack(&events[5]),
+            (
+                "impl-x",
+                MemberChunkKind::ToolCallUpdate,
+                None,
+                Some("call_1"),
+                None,
+                Some("completed"),
+                Some("m-tc2"),
+            )
+        );
+
+        // ③ A replay-only run (reopen / detached shape: the ONLY frames on the
+        // wire are memberEvent tags with no parented twin) must still land on
+        // the member channel — record echo and a tool update with no prior
+        // opening frame included.
+        let replay_only = drive_codebuddy_frames(
+            AgentType::CodeBuddy,
+            vec![
+                serde_json::json!({"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "已确认所有方案。"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/memberHistoryItemId": "m-a1"}}),
+                serde_json::json!({"sessionUpdate": "tool_call_update",
+                    "toolCallId": "call_1",
+                    "status": "completed",
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/memberHistoryItemId": "m-tc2"}}),
+            ],
+        )
+        .await;
+        assert_eq!(replay_only.len(), 2, "{replay_only:?}");
+        assert!(
+            replay_only
+                .iter()
+                .all(|e| matches!(e, AcpEvent::MemberChunk { .. })),
+            "replayed member history must not be dropped: {replay_only:?}"
+        );
+    }
+
+    /// Regression: a member frame that ALSO carries a parent link is the Agent
+    /// capsule's copy — its routing is untouched (text/thought emitted with the
+    /// parent attribution; tool frames keep the normal path) and NOTHING is
+    /// rerouted to the member channel.
+    #[tokio::test]
+    async fn parented_member_frames_keep_the_capsule_routing() {
+        let events = drive_codebuddy_frames(
+            AgentType::CodeBuddy,
+            vec![
+                serde_json::json!({"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "子代理正文"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/parentToolCallId": "call_agent"}}),
+                serde_json::json!({"sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "子代理思考"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/parentToolCallId": "call_agent"}}),
+                serde_json::json!({"sessionUpdate": "tool_call",
+                    "toolCallId": "call_child",
+                    "title": "Read",
+                    "kind": "read",
+                    "status": "pending",
+                    "rawInput": {"file_path": "/w/a.txt"},
+                    "_meta": {"codebuddy.ai/memberEvent": "impl-x",
+                              "codebuddy.ai/parentToolCallId": "call_agent"}}),
+            ],
+        )
+        .await;
+
+        assert_eq!(events.len(), 3, "{events:?}");
+        match (&events[0], &events[1]) {
+            (
+                AcpEvent::ContentDelta {
+                    text,
+                    parent_tool_use_id,
+                },
+                AcpEvent::Thinking {
+                    text: thought,
+                    parent_tool_use_id: thought_parent,
+                },
+            ) => {
+                assert_eq!(text, "子代理正文");
+                assert_eq!(parent_tool_use_id.as_deref(), Some("call_agent"));
+                assert_eq!(thought, "子代理思考");
+                assert_eq!(thought_parent.as_deref(), Some("call_agent"));
+            }
+            other => panic!("parented member frames must keep the capsule routing: {other:?}"),
+        }
+        assert!(
+            matches!(&events[2], AcpEvent::ToolCall { title, .. } if title == "Read"),
+            "a parented member tool frame keeps the normal ToolCall path: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, AcpEvent::MemberChunk { .. })),
+            "a parent-linked member frame is never rerouted: {events:?}"
+        );
+    }
+
+    #[test]
+    fn codebuddy_chunk_parent_reads_the_flat_meta_only_for_the_family() {
+        let valid = serde_json::json!({ "codebuddy.ai/parentToolCallId": "chatcmpl-tool-1" });
+        // The built-in and custom variants all read it.
+        for agent in [
+            AgentType::CodeBuddy,
+            AgentType::Custom("codebuddy-cn"),
+            AgentType::Custom("codebuddy-intl"),
+        ] {
+            assert_eq!(
+                subagent_chunk_parent_tool_use_id(agent, valid.as_object()),
+                Some("chatcmpl-tool-1".to_string())
+            );
+        }
+        // The same flat key on a non-family agent must not alias into routing.
+        assert_eq!(
+            subagent_chunk_parent_tool_use_id(AgentType::ClaudeCode, valid.as_object()),
+            None
+        );
+        // Empty / wrong type / absent key / absent meta → None.
+        let empty = serde_json::json!({ "codebuddy.ai/parentToolCallId": "" });
+        assert_eq!(
+            subagent_chunk_parent_tool_use_id(AgentType::CodeBuddy, empty.as_object()),
+            None
+        );
+        let wrong_type = serde_json::json!({ "codebuddy.ai/parentToolCallId": 42 });
+        assert_eq!(
+            subagent_chunk_parent_tool_use_id(AgentType::CodeBuddy, wrong_type.as_object()),
+            None
+        );
+        let no_key = serde_json::json!({ "codebuddy.ai/isSubagent": true });
+        assert_eq!(
+            subagent_chunk_parent_tool_use_id(AgentType::CodeBuddy, no_key.as_object()),
+            None
+        );
+        assert_eq!(subagent_chunk_parent_tool_use_id(AgentType::CodeBuddy, None), None);
     }
 
     #[test]
     fn claude_chunk_parent_reads_only_wellformed_claude_meta() {
         let valid = serde_json::json!({ "claudeCode": { "parentToolUseId": "toolu_01A" } });
         assert_eq!(
-            claude_chunk_parent_tool_use_id(AgentType::ClaudeCode, valid.as_object()),
+            subagent_chunk_parent_tool_use_id(AgentType::ClaudeCode, valid.as_object()),
             Some("toolu_01A".to_string())
         );
         // Gated on ClaudeCode — the same meta on another agent must not alias
         // into parented routing.
         assert_eq!(
-            claude_chunk_parent_tool_use_id(AgentType::CodeBuddy, valid.as_object()),
+            subagent_chunk_parent_tool_use_id(AgentType::CodeBuddy, valid.as_object()),
             None
         );
         // Absent meta / absent key / wrong type / empty string → None.
         assert_eq!(
-            claude_chunk_parent_tool_use_id(AgentType::ClaudeCode, None),
+            subagent_chunk_parent_tool_use_id(AgentType::ClaudeCode, None),
             None
         );
         let no_key = serde_json::json!({ "claudeCode": { "toolName": "Agent" } });
         assert_eq!(
-            claude_chunk_parent_tool_use_id(AgentType::ClaudeCode, no_key.as_object()),
+            subagent_chunk_parent_tool_use_id(AgentType::ClaudeCode, no_key.as_object()),
             None
         );
         let wrong_type = serde_json::json!({ "claudeCode": { "parentToolUseId": 42 } });
         assert_eq!(
-            claude_chunk_parent_tool_use_id(AgentType::ClaudeCode, wrong_type.as_object()),
+            subagent_chunk_parent_tool_use_id(AgentType::ClaudeCode, wrong_type.as_object()),
             None
         );
         let empty = serde_json::json!({ "claudeCode": { "parentToolUseId": "" } });
         assert_eq!(
-            claude_chunk_parent_tool_use_id(AgentType::ClaudeCode, empty.as_object()),
+            subagent_chunk_parent_tool_use_id(AgentType::ClaudeCode, empty.as_object()),
             None
         );
     }

@@ -3360,6 +3360,16 @@
         "collapsedSummary": "الوكلاء الفرعيون {count}",
         "collapseAria": "طي الوكلاء الفرعيين"
       },
+      "memberTimeline": {
+        "title": "أعضاء الفريق",
+        "collapsedSummary": "أعضاء الفريق {count}",
+        "collapseAria": "طي أعضاء الفريق",
+        "userEchoLabel": "تم استلام الرسالة",
+        "statusPending": "قيد الانتظار",
+        "statusRunning": "قيد التشغيل",
+        "statusCompleted": "مكتمل",
+        "statusFailed": "فشل"
+      },
       "agentPlanOverlay": {
         "title": "خطة الوكيل",
         "collapsePlanAria": "طي الخطة",

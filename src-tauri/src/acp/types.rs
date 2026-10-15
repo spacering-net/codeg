@@ -381,6 +381,47 @@ pub enum AcpEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_tool_use_id: Option<String>,
     },
+    /// One chunk of an Agent Teams member's own conversation stream, rerouted
+    /// off the main thread (LOCAL, codeg-fix 2026-10-14).
+    ///
+    /// CodeBuddy CLI 2.164.0 (`AcpTeamBridge`) tags every frame of an in-process
+    /// team member — the member's live text/thought deltas, its tool calls, its
+    /// user-message echo, and the committed record those deltas precede — with
+    /// `_meta["codebuddy.ai/memberEvent"] = <member name>` and NO parent link.
+    /// The CLI documents the client contract for these frames ("客户端收到带
+    /// memberEvent 标记的事件后，应将其路由到对应成员的对话时间线，而非主对话区"
+    /// — `docs/cn/cli/acp.md` §成员流式消息; same line in the EN doc). 480568c9
+    /// enforced the second half of that contract — keep them out of the main
+    /// thread — and this event is the first half: the same frames, routed to
+    /// the frontend's per-member timeline instead of being dropped.
+    ///
+    /// `kind` picks the payload arm: text kinds carry `text`, tool kinds carry
+    /// `tool_call_id` / `title` / `status`. `history_item_id` is
+    /// `codebuddy.ai/memberHistoryItemId`, set on the committed-record echo (and
+    /// on the member's `user_message_chunk`); the echo's text is the whole
+    /// record, so the frontend replaces the member's streaming buffer with it
+    /// and keys the finished item by this id — which is what makes the agent's
+    /// periodic full-history replay idempotent.
+    ///
+    /// Notification-only: `SessionState::apply_event` keeps none of it, and no
+    /// snapshot carries it. A reopened session rebuilds the timeline from the
+    /// agent's own memberEvent replay (`AcpTeamBridge::subscribeExistingMembers`
+    /// runs at bridge start and on the 3s progress interval).
+    MemberChunk {
+        /// `codebuddy.ai/memberEvent` — the member's name (bucket key).
+        member: String,
+        kind: MemberChunkKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        history_item_id: Option<String>,
+    },
     /// Raw SDK message forwarded from Claude ACP extension notification
     ClaudeSdkMessage {
         session_id: String,
@@ -844,6 +885,26 @@ pub enum AcpEvent {
         stale: bool,
         kind: ConfigStaleKind,
     },
+}
+
+/// Which kind of member-stream payload an [`AcpEvent::MemberChunk`] carries —
+/// the ACP `sessionUpdate` kind the tagged frame arrived as, reduced to the
+/// five arms the member timeline consumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberChunkKind {
+    /// `agent_message_chunk` — the member's prose.
+    Message,
+    /// `agent_thought_chunk` — the member's reasoning.
+    Thought,
+    /// `user_message_chunk` — a prompt / teammate message delivered TO the
+    /// member. Always an already-committed record (`history_item_id` set in
+    /// practice), so the timeline files it as a user line outright.
+    UserEcho,
+    /// `tool_call` — the member opened a tool call.
+    ToolCall,
+    /// `tool_call_update` — status/result progress for one of its calls.
+    ToolCallUpdate,
 }
 
 /// One background task settled by a `<task-notification>` transcript record,

@@ -3360,6 +3360,16 @@
         "collapsedSummary": "Subagenten {count}",
         "collapseAria": "Subagenten einklappen"
       },
+      "memberTimeline": {
+        "title": "Teammitglieder",
+        "collapsedSummary": "Teammitglieder {count}",
+        "collapseAria": "Teammitglieder einklappen",
+        "userEchoLabel": "Nachricht erhalten",
+        "statusPending": "Ausstehend",
+        "statusRunning": "Läuft",
+        "statusCompleted": "Abgeschlossen",
+        "statusFailed": "Fehlgeschlagen"
+      },
       "agentPlanOverlay": {
         "title": "Agentenplan",
         "collapsePlanAria": "Plan einklappen",

@@ -3360,6 +3360,16 @@
         "collapsedSummary": "Subagentes {count}",
         "collapseAria": "Contraer subagentes"
       },
+      "memberTimeline": {
+        "title": "Miembros del equipo",
+        "collapsedSummary": "Miembros del equipo {count}",
+        "collapseAria": "Contraer los miembros del equipo",
+        "userEchoLabel": "Mensaje recibido",
+        "statusPending": "Pendiente",
+        "statusRunning": "En ejecución",
+        "statusCompleted": "Completado",
+        "statusFailed": "Fallido"
+      },
       "agentPlanOverlay": {
         "title": "Plan del agente",
         "collapsePlanAria": "Contraer plan",

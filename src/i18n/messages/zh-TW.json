@@ -3360,6 +3360,16 @@
         "collapsedSummary": "子智能體 {count}",
         "collapseAria": "摺疊子智能體"
       },
+      "memberTimeline": {
+        "title": "團隊成員",
+        "collapsedSummary": "團隊成員 {count}",
+        "collapseAria": "摺疊團隊成員",
+        "userEchoLabel": "收到訊息",
+        "statusPending": "等待中",
+        "statusRunning": "執行中",
+        "statusCompleted": "已完成",
+        "statusFailed": "失敗"
+      },
       "agentPlanOverlay": {
         "title": "計畫任務",
         "collapsePlanAria": "摺疊計畫",

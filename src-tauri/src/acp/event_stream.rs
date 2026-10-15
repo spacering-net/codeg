@@ -339,9 +339,10 @@ fn user_block_size(block: &UserMessageBlock) -> usize {
 ///
 /// `emit_with_state` calls this on every event while holding the `SessionState`
 /// write lock. The hot, high-frequency, and potentially-large variants —
-/// streaming text/thinking deltas, tool calls and updates and user messages
-/// (which can carry multi-MB base64 images), and forwarded Claude SDK messages —
-/// are therefore estimated STRUCTURALLY from their string/JSON fields, with no
+/// streaming text/thinking deltas, tool calls and updates, user messages
+/// (which can carry multi-MB base64 images), Agent Teams member chunks (one
+/// per member token), and forwarded Claude SDK messages — are therefore
+/// estimated STRUCTURALLY from their string/JSON fields, with no
 /// serialization: serializing a per-token delta or a multi-MB image on that
 /// locked hot path only to measure and discard the bytes was the cost this
 /// replaced. Every other variant is small and infrequent, so it falls back to an
@@ -464,6 +465,31 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
                     })
                     .sum::<usize>()
         }
+        // High-frequency on an Agent Teams session (one delta per token per
+        // member), so sized structurally like the other streaming deltas
+        // instead of falling through to the serialize-fallback — which would
+        // re-serialize every member token under the `SessionState` write lock.
+        AcpEvent::MemberChunk {
+            member,
+            text,
+            tool_call_id,
+            title,
+            status,
+            history_item_id,
+            // Spelled out (not `..`) so a newly-added large field forces this
+            // estimator to be revisited rather than silently under-counted.
+            kind: _,
+        } => {
+            json_str_len(member)
+                + opt_str_size(text)
+                + opt_str_size(tool_call_id)
+                + opt_str_size(title)
+                + opt_str_size(status)
+                + opt_str_size(history_item_id)
+                // `"kind":"<variant>",` — the longest tag is
+                // `tool_call_update` (~28 B with quotes/colon/comma).
+                + 64
+        }
         // Small, infrequent variants: an exact serialized length is cheap here
         // and preserves the prior threshold behavior; the 256 fallback only
         // guards the (practically impossible) serialization failure.
@@ -576,6 +602,7 @@ fn agent_stats_size(stats: &crate::models::message::AgentExecutionStats) -> usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::types::MemberChunkKind;
 
     fn make_envelope(seq: u64, text: &str) -> Arc<EventEnvelope> {
         Arc::new(EventEnvelope {
@@ -859,7 +886,8 @@ mod tests {
         // any structural branch — else an oversized event would be wrongly
         // retained and replayed. Covers plain/escape-heavy text, thinking, nested
         // Claude SDK JSON, a fully-populated ToolCall, an all-`null`-but-near-cap
-        // ToolCallUpdate, and user messages with many blocks / an image.
+        // ToolCallUpdate, member-channel chunks (full and minimal), and user
+        // messages with many blocks / an image.
         let cases: Vec<Arc<EventEnvelope>> = vec![
             make_envelope(1, "plain"),
             make_envelope(2, &"\"\\\n\t".repeat(500)),
@@ -954,6 +982,35 @@ mod tests {
             }),
             user_message_with_image(8, "A".repeat(1000)),
             tool_update_with_image(9, "A".repeat(1000)),
+            // Member-channel chunks: a fully-populated tool frame (every
+            // optional field present, escape-heavy strings)…
+            Arc::new(EventEnvelope {
+                seq: 33,
+                connection_id: "conn-xyz".into(),
+                payload: AcpEvent::MemberChunk {
+                    member: "impl\"x\n".into(),
+                    kind: MemberChunkKind::ToolCallUpdate,
+                    text: Some("te\"xt\n".into()),
+                    tool_call_id: Some("call_1".into()),
+                    title: Some("Send\"Message".into()),
+                    status: Some("completed".into()),
+                    history_item_id: Some("h\"1".into()),
+                },
+            }),
+            // …and the minimal text delta (every option absent).
+            Arc::new(EventEnvelope {
+                seq: 34,
+                connection_id: "conn-xyz".into(),
+                payload: AcpEvent::MemberChunk {
+                    member: "impl-x".into(),
+                    kind: MemberChunkKind::Message,
+                    text: Some("你".into()),
+                    tool_call_id: None,
+                    title: None,
+                    status: None,
+                    history_item_id: None,
+                },
+            }),
         ];
         for env in &cases {
             assert_ge_serialized(env);

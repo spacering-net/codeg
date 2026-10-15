@@ -136,6 +136,7 @@ import {
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
+import { useMemberTimelineStore } from "@/stores/member-timeline-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
 /**
@@ -3916,13 +3917,30 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // there is no one left to render the result. Callers that DO want the
       // deltas landed first call `flushStreamingQueue(key)` before removing —
       // `connect()`'s orphan rescue is the one that does, ahead of its rekey.
+      // The member timeline is per-connection live state like the streaming
+      // queue: a rekeyed connection carries it to the new key BEFORE the
+      // removal walk below can drop the old one, and a removed key takes its
+      // timelines with it (a reopened connection rebuilds from the agent's own
+      // memberEvent replay — see the member-timeline store).
+      if (
+        next !== prev &&
+        action.type === "REKEY_CONNECTION" &&
+        next.has(action.toKey)
+      ) {
+        useMemberTimelineStore
+          .getState()
+          .rekeyContext(action.fromKey, action.toKey)
+      }
       if (
         next !== prev &&
         action.type !== "STREAM_BATCH" &&
         action.type !== "BATCH_TOOL_CALL_UPDATES"
       ) {
         for (const key of prev.keys()) {
-          if (!next.has(key)) discardStreamingKey(key)
+          if (!next.has(key)) {
+            discardStreamingKey(key)
+            useMemberTimelineStore.getState().clearContext(key)
+          }
         }
       }
 
@@ -4765,6 +4783,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             text: e.text,
             parentToolUseId: e.parent_tool_use_id ?? undefined,
           })
+          break
+        case "member_chunk":
+          // An Agent Teams member's own stream, rerouted off the main thread
+          // by the backend (the CLI's memberEvent contract). It feeds the
+          // per-member timeline store — NOT the connection reducer, so a
+          // member's chunks can never enter `liveMessage` or the main
+          // transcript. Deliberately no flush/`settleRetryIncidentsOnProgress`:
+          // member activity says nothing about the MAIN turn's retry state.
+          useMemberTimelineStore.getState().applyMemberChunk(contextKey, e)
           break
         case "claude_sdk_message":
           flushStreamingQueue(contextKey)

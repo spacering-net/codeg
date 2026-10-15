@@ -2186,6 +2186,9 @@ const ConversationTabView = memo(function ConversationTabView({
             ? handleForkFromTurn
             : undefined
         }
+        // Member timelines live per CONNECTION (`tabId` is the contextKey the
+        // member_chunk events route by) — see the overlay for the contract.
+        memberTimelineContextKey={tabId}
       />
     </GoalControlProvider>
   )

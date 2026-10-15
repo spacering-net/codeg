@@ -3360,6 +3360,16 @@
         "collapsedSummary": "서브 에이전트 {count}",
         "collapseAria": "서브 에이전트 접기"
       },
+      "memberTimeline": {
+        "title": "팀 멤버",
+        "collapsedSummary": "팀 멤버 {count}",
+        "collapseAria": "팀 멤버 접기",
+        "userEchoLabel": "메시지 수신됨",
+        "statusPending": "대기 중",
+        "statusRunning": "실행 중",
+        "statusCompleted": "완료",
+        "statusFailed": "실패"
+      },
       "agentPlanOverlay": {
         "title": "에이전트 계획",
         "collapsePlanAria": "계획 접기",

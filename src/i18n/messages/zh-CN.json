@@ -3360,6 +3360,16 @@
         "collapsedSummary": "子智能体 {count}",
         "collapseAria": "折叠子智能体"
       },
+      "memberTimeline": {
+        "title": "团队成员",
+        "collapsedSummary": "团队成员 {count}",
+        "collapseAria": "折叠团队成员",
+        "userEchoLabel": "收到消息",
+        "statusPending": "等待中",
+        "statusRunning": "运行中",
+        "statusCompleted": "已完成",
+        "statusFailed": "失败"
+      },
       "agentPlanOverlay": {
         "title": "计划任务",
         "collapsePlanAria": "折叠计划",

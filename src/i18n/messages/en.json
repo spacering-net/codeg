@@ -3360,6 +3360,16 @@
         "collapsedSummary": "Sub-agents {count}",
         "collapseAria": "Collapse sub-agents"
       },
+      "memberTimeline": {
+        "title": "Team members",
+        "collapsedSummary": "Team members {count}",
+        "collapseAria": "Collapse team members",
+        "userEchoLabel": "Message received",
+        "statusPending": "Pending",
+        "statusRunning": "Running",
+        "statusCompleted": "Completed",
+        "statusFailed": "Failed"
+      },
       "agentPlanOverlay": {
         "title": "Agent Plan",
         "collapsePlanAria": "Collapse plan",

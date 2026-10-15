@@ -2707,6 +2707,30 @@ export type AcpEvent =
    */
   | { type: "content_delta"; text: string; parent_tool_use_id?: string | null }
   | { type: "thinking"; text: string; parent_tool_use_id?: string | null }
+  /**
+   * One chunk of an Agent Teams member's own stream, rerouted off the main
+   * thread by the backend (CodeBuddy `_meta.codebuddy.ai/memberEvent` frames
+   * with no parent link; see the Rust `AcpEvent::MemberChunk`). The frontend
+   * files these into the per-member timeline — never the main conversation —
+   * mirroring the CLI's documented contract. `history_item_id`
+   * (`codebuddy.ai/memberHistoryItemId`) marks a committed-record echo: its
+   * `text` is the whole record and it finalizes the member's streaming buffer.
+   */
+  | {
+      type: "member_chunk"
+      member: string
+      kind:
+        | "message"
+        | "thought"
+        | "user_echo"
+        | "tool_call"
+        | "tool_call_update"
+      text?: string | null
+      tool_call_id?: string | null
+      title?: string | null
+      status?: string | null
+      history_item_id?: string | null
+    }
   | {
       type: "claude_sdk_message"
       session_id: string
