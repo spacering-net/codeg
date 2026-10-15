@@ -3922,11 +3922,11 @@ export async function reorderFolderCommands(
   return getTransport().call("reorder_folder_commands", { folderId, ids })
 }
 
-export async function bootstrapFolderCommandsFromPackageJson(
+export async function syncFolderCommandsFromPackageJson(
   folderId: number,
   folderPath: string
 ): Promise<FolderCommand[]> {
-  return getTransport().call("bootstrap_folder_commands_from_package_json", {
+  return getTransport().call("sync_folder_commands_from_package_json", {
     folderId,
     folderPath,
     includeLocal: true,

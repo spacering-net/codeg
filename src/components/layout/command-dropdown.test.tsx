@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import * as api from "@/lib/api"
 import {
   GLOBAL_COMMANDS_STORAGE_KEY,
   createGlobalCommand,
@@ -62,7 +63,21 @@ vi.mock("@/lib/api", () => ({
         },
       ]
   ),
-  bootstrapFolderCommandsFromPackageJson: vi.fn(async () => []),
+  syncFolderCommandsFromPackageJson: vi.fn(
+    async () =>
+      h.hostCommands ?? [
+        {
+          id: 5,
+          folder_id: 1,
+          name: "dev",
+          command: h.command,
+          sort_order: 0,
+          run_local: h.isLocal,
+          created_at: "",
+          updated_at: "",
+        },
+      ]
+  ),
   runLocalCommand: h.runLocal,
   terminalStop: h.stop,
   terminalKill: h.kill,
@@ -306,6 +321,14 @@ describe("CommandDropdown", () => {
       window.dispatchEvent(new StorageEvent("storage", { key: null }))
     })
     expect(await screen.findByText("addCommand")).toBeInTheDocument()
+  })
+
+  it("syncs commands from package.json every time the folder loads", async () => {
+    const sync = vi.mocked(api.syncFolderCommandsFromPackageJson)
+    sync.mockClear()
+    render(<CommandDropdown />)
+    await act(async () => {})
+    expect(sync).toHaveBeenCalledWith(1, "/repo")
   })
 })
 

@@ -1,17 +1,17 @@
-#[cfg(feature = "tauri-runtime")]
-use crate::db::error::DbError;
-#[cfg(feature = "tauri-runtime")]
-use crate::db::service::folder_command_service;
-#[cfg(feature = "tauri-runtime")]
-use crate::db::AppDatabase;
-#[cfg(feature = "tauri-runtime")]
-use crate::models::FolderCommandInfo;
+use std::collections::HashSet;
 use std::path::Path;
-#[cfg(feature = "tauri-runtime")]
+
+use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 
+use crate::db::error::DbError;
+use crate::db::service::folder_command_service;
+use crate::models::FolderCommandInfo;
+
 #[cfg(feature = "tauri-runtime")]
-static BOOTSTRAP_FOLDER_COMMANDS_LOCK: Mutex<()> = Mutex::const_new(());
+use crate::db::AppDatabase;
+
+static SYNC_FOLDER_COMMANDS_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub(crate) fn load_package_scripts_as_commands(folder_path: &str) -> Vec<(String, String)> {
     let mut has_package_json = false;
@@ -141,37 +141,51 @@ pub async fn reorder_folder_commands(
     folder_command_service::reorder(&db.conn, folder_id, ids).await
 }
 
+/// Add-only sync from package.json scripts into the folder's saved commands.
+/// A script whose name already has a saved command is skipped — the saved
+/// entry (possibly renamed or edited by the user) is never touched, and
+/// scripts removed from package.json are never deleted here.
+pub(crate) async fn sync_folder_commands_core(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    folder_path: String,
+) -> Result<Vec<FolderCommandInfo>, DbError> {
+    let existing = folder_command_service::list_by_folder(conn, folder_id).await?;
+
+    let scripts =
+        tokio::task::spawn_blocking(move || load_package_scripts_as_commands(&folder_path))
+            .await
+            .map_err(|e| DbError::Migration(format!("sync task failed: {e}")))?;
+
+    if scripts.is_empty() {
+        return Ok(existing);
+    }
+
+    // Serialize sync so concurrent calls do not create duplicate commands.
+    let _sync_guard = SYNC_FOLDER_COMMANDS_LOCK.lock().await;
+
+    let latest = folder_command_service::list_by_folder(conn, folder_id).await?;
+    let existing_names: HashSet<&str> = latest.iter().map(|c| c.name.as_str()).collect();
+    let missing: Vec<(String, String)> = scripts
+        .into_iter()
+        .filter(|(name, _)| !existing_names.contains(name.as_str()))
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(latest);
+    }
+
+    folder_command_service::create_many(conn, folder_id, &missing).await?;
+
+    folder_command_service::list_by_folder(conn, folder_id).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn bootstrap_folder_commands_from_package_json(
+pub async fn sync_folder_commands_from_package_json(
     db: tauri::State<'_, AppDatabase>,
     folder_id: i32,
     folder_path: String,
 ) -> Result<Vec<FolderCommandInfo>, DbError> {
-    let existing = folder_command_service::list_by_folder(&db.conn, folder_id).await?;
-    if !existing.is_empty() {
-        return Ok(existing);
-    }
-
-    let path_for_task = folder_path;
-    let commands_to_create =
-        tokio::task::spawn_blocking(move || load_package_scripts_as_commands(&path_for_task))
-            .await
-            .map_err(|e| DbError::Migration(format!("bootstrap task failed: {e}")))?;
-
-    if commands_to_create.is_empty() {
-        return Ok(existing);
-    }
-
-    // Serialize bootstrap so concurrent calls do not create duplicate commands.
-    let _bootstrap_guard = BOOTSTRAP_FOLDER_COMMANDS_LOCK.lock().await;
-
-    let latest = folder_command_service::list_by_folder(&db.conn, folder_id).await?;
-    if !latest.is_empty() {
-        return Ok(latest);
-    }
-
-    folder_command_service::create_many(&db.conn, folder_id, &commands_to_create).await?;
-
-    folder_command_service::list_by_folder(&db.conn, folder_id).await
+    sync_folder_commands_core(&db.conn, folder_id, folder_path).await
 }

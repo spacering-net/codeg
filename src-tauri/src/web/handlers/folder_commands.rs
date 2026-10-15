@@ -157,7 +157,7 @@ pub async fn reorder_folder_commands(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BootstrapFolderCommandsParams {
+pub struct SyncFolderCommandsParams {
     pub folder_id: i32,
     pub folder_path: String,
     /// See [`visible_to_client`].
@@ -165,43 +165,18 @@ pub struct BootstrapFolderCommandsParams {
     pub include_local: bool,
 }
 
-pub async fn bootstrap_folder_commands_from_package_json(
+pub async fn sync_folder_commands_from_package_json(
     Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<BootstrapFolderCommandsParams>,
+    Json(params): Json<SyncFolderCommandsParams>,
 ) -> Result<Json<Vec<FolderCommandInfo>>, AppCommandError> {
-    let db = &state.db;
-
-    let include_local = params.include_local;
-    let existing = folder_command_service::list_by_folder(&db.conn, params.folder_id)
-        .await
-        .map_err(AppCommandError::from)?;
-    if !existing.is_empty() {
-        return Ok(Json(visible_to_client(existing, include_local)));
-    }
-
-    let commands_to_create = tokio::task::spawn_blocking(move || {
-        crate::commands::folder_commands::load_package_scripts_as_commands(&params.folder_path)
-    })
+    let result = crate::commands::folder_commands::sync_folder_commands_core(
+        &state.db.conn,
+        params.folder_id,
+        params.folder_path,
+    )
     .await
-    .map_err(|e| {
-        AppCommandError::new(
-            crate::app_error::AppErrorCode::TaskExecutionFailed,
-            format!("bootstrap task failed: {e}"),
-        )
-    })?;
-
-    if commands_to_create.is_empty() {
-        return Ok(Json(existing));
-    }
-
-    folder_command_service::create_many(&db.conn, params.folder_id, &commands_to_create)
-        .await
-        .map_err(AppCommandError::from)?;
-
-    let result = folder_command_service::list_by_folder(&db.conn, params.folder_id)
-        .await
-        .map_err(AppCommandError::from)?;
-    Ok(Json(visible_to_client(result, include_local)))
+    .map_err(AppCommandError::from)?;
+    Ok(Json(result))
 }
 
 #[cfg(test)]
@@ -269,7 +244,7 @@ mod tests {
 
     #[test]
     fn a_client_that_knows_local_commands_is_shown_them_all() {
-        let params: BootstrapFolderCommandsParams = serde_json::from_value(
+        let params: SyncFolderCommandsParams = serde_json::from_value(
             serde_json::json!({ "folderId": 1, "folderPath": "/repo", "includeLocal": true }),
         )
         .unwrap();
