@@ -26,6 +26,11 @@ import {
 } from "./composer-invocations"
 import { CronBuilderDialog } from "./cron-builder-dialog"
 import { useAgentOptions } from "./use-agent-options"
+import {
+  getSavedSelections,
+  saveConfigPreference,
+  saveModePreference,
+} from "@/lib/selector-prefs-storage"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -102,11 +107,19 @@ export function AutomationEditor({
   // Detected from this device once and shown read-only (Codex-style — no manual
   // override). Still feeds the next-run preview and the cron builder.
   const [timezone] = useState(automation?.timezone ?? detectTimezone())
+  // The selections a NEW automation's pickers open on: the user's last choices
+  // for this agent, read once at mount (see `getSavedSelections`). Without
+  // them the bar renders the agent's own defaults, so the permission chosen on
+  // one run had to be chosen again on every new automation. An existing
+  // automation — or a template-seeded draft — keeps its stored config instead.
+  const [seededSelections] = useState(() =>
+    automation == null ? getSavedSelections(agentType) : null
+  )
   const [modeId, setModeId] = useState<string | null>(
-    automation?.config?.mode_id ?? null
+    automation?.config?.mode_id ?? seededSelections?.modeId ?? null
   )
   const [configValues, setConfigValues] = useState<Record<string, string>>(
-    automation?.config?.config_values ?? {}
+    automation?.config?.config_values ?? seededSelections?.configValues ?? {}
   )
   const [branch, setBranch] = useState(automation?.branch ?? "")
   // Whether `branch` was picked from the remote group — persisted so the engine
@@ -128,6 +141,20 @@ export function AutomationEditor({
   // leaves this false, so submit can persist the original agent instead of
   // silently swapping it (see the submit handler).
   const userChoseAgentRef = useRef(false)
+  // True once the user picks a mode / config option in this editor. A system
+  // agent substitution on a NEW automation re-seeds the pickers from the
+  // substitute's own last selections — but only while they are still untouched
+  // (see the same rule on the task editor's agent pill).
+  const selectionsTouchedRef = useRef(false)
+
+  // What a new conversation of this agent was last left on: the mode and the
+  // config options, from the one memory the chat composer, the task editor and
+  // this editor all share.
+  const seedSelectionsForAgent = (agent: AgentType) => {
+    const saved = getSavedSelections(agent)
+    setModeId(saved.modeId)
+    setConfigValues(saved.configValues)
+  }
 
   const folderPath = useMemo(
     () => folders.find((f) => f.id === folderId)?.path ?? null,
@@ -347,15 +374,24 @@ export function AutomationEditor({
         <AgentSelector
           defaultAgentType={agentType}
           onSelect={(a) => {
-            // Switching agents changes the option universe — reset overrides.
+            // Switching agents changes the option universe — reset overrides,
+            // to the new agent's own last selections rather than to nothing
+            // (which the pickers would render as the agent's defaults).
             userChoseAgentRef.current = true
             setAgentType(a)
-            setModeId(null)
-            setConfigValues({})
+            seedSelectionsForAgent(a)
           }}
           // A system substitution (saved agent unavailable) updates the type but
           // must NOT be treated as a user choice that wipes the saved config.
-          onFallback={setAgentType}
+          // On a NEW automation there is no saved config to protect, so the
+          // substitute's own last selections take over — unless the user has
+          // already picked something here.
+          onFallback={(a) => {
+            setAgentType(a)
+            if (automation == null && !selectionsTouchedRef.current) {
+              seedSelectionsForAgent(a)
+            }
+          }}
         />
       </div>
 
@@ -401,15 +437,31 @@ export function AutomationEditor({
             modeId={modeId}
             configValues={configValues}
             layout="inline"
-            onModeChange={setModeId}
-            onConfigChange={(optionId, valueId) =>
+            onModeChange={(m) => {
+              selectionsTouchedRef.current = true
+              setModeId(m)
+              // Remember it as this agent's last selection, so the next
+              // conversation — here, on the task board, or in the chat —
+              // opens on it instead of the agent's default.
+              const modes = agentOptions.snapshot?.modes
+              if (m != null && modes) {
+                saveModePreference(agentType, { ...modes, current_mode_id: m })
+              }
+            }}
+            onConfigChange={(optionId, valueId) => {
+              selectionsTouchedRef.current = true
               setConfigValues((prev) => {
                 const next = { ...prev }
                 if (valueId === null) delete next[optionId]
                 else next[optionId] = valueId
                 return next
               })
-            }
+              // Same memory as the mode above. The inline bar never clears a
+              // value (`allowInherit` is off), so only real picks land here.
+              if (valueId !== null) {
+                saveConfigPreference(agentType, optionId, valueId)
+              }
+            }}
           />
         </div>
       </div>
