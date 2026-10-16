@@ -106,6 +106,15 @@ export interface TabItemInternal {
    * composer hides the branch picker and shows the "no-folder" chip.
    */
   isChat?: boolean
+  /**
+   * The conversation finished a turn (`pending_review`) while this tab was NOT
+   * the focused one — the user has not looked at the reply yet. Purely a
+   * view-layer overlay: it does not touch `status` (still `pending_review`
+   * underneath) and lives in `unreadConversationIds`, NOT in the persisted
+   * `ConversationStatus` enum, so the backend and the DB are untouched.
+   * Cleared by focusing the tab and lost on restart (in-memory only).
+   */
+  hasUnread?: boolean
 }
 
 export type TabItem = TabItemInternal
@@ -181,6 +190,18 @@ export interface TabStoreState {
     overGroupId: string | null
   } | null
   childSummaries: Map<number, DbConversationSummary>
+  /**
+   * Conversation ids whose latest turn finished while the user was looking
+   * somewhere else — the source of truth behind `TabItemInternal.hasUnread`.
+   *
+   * Keyed by conversation (not tab id) because a turn can complete for a
+   * conversation whose tab is momentarily closed, and because the tab id for a
+   * given conversation is derivable but not stable across reopen. **In-memory
+   * only, never persisted**: a restart drops every entry, degrading an unread
+   * purple dot back to the plain `pending_review` blue — the "needs attention"
+   * information survives, only the "you haven't seen it yet" tint is lost.
+   */
+  unreadConversationIds: Set<number>
   /**
    * Derived from `rawTabs` × `conversations` × `childSummaries`: tab titles and
    * status decorated from the live conversation list, with cross-derive
@@ -557,6 +578,7 @@ function sameDerivedTab(a: TabItemInternal, b: TabItemInternal): boolean {
     a.isPinned === b.isPinned &&
     a.workingDir === b.workingDir &&
     a.status === b.status &&
+    a.hasUnread === b.hasUnread &&
     a.agentTypeProvisional === b.agentTypeProvisional &&
     a.isChat === b.isChat
   )
@@ -1067,7 +1089,7 @@ function focusTab(tabId: string) {
  */
 function recomputeTabs() {
   const st = useTabStore.getState()
-  const { rawTabs, childSummaries } = st
+  const { rawTabs, childSummaries, unreadConversationIds } = st
   const conversations = useAppWorkspaceStore.getState().conversations
   const prev = st.tabs
 
@@ -1091,8 +1113,22 @@ function recomputeTabs() {
             formatConversationTitle(conv.title) ||
             runtime.labels.untitledConversation
           const newStatus = conv.status as ConversationStatus | undefined
-          if (tab.title !== newTitle || tab.status !== newStatus) {
-            const derived = { ...tab, title: newTitle, status: newStatus }
+          // Unread is an overlay derived from the store's own set, never read
+          // off `conv` — it survives a status/title tick because it is
+          // recomputed here rather than carried on the raw tab.
+          const newUnread =
+            unreadConversationIds.has(tab.conversationId) || undefined
+          if (
+            tab.title !== newTitle ||
+            tab.status !== newStatus ||
+            tab.hasUnread !== newUnread
+          ) {
+            const derived = {
+              ...tab,
+              title: newTitle,
+              status: newStatus,
+              hasUnread: newUnread,
+            }
             const prevItem = prevById?.get(tab.id)
             return prevItem && sameDerivedTab(prevItem, derived)
               ? prevItem
@@ -1191,6 +1227,7 @@ function initialTabState() {
     ...readPersistedGroupState(),
     tabDrag: null as TabStoreState["tabDrag"],
     childSummaries: new Map<number, DbConversationSummary>(),
+    unreadConversationIds: new Set<number>(),
     tabs: [] as TabItemInternal[],
     reseedTick: 0,
     saveReconcileTick: 0,
@@ -2772,9 +2809,93 @@ export function pruneOrphanDraftsOnce() {
 useAppWorkspaceStore.subscribe(() => {
   const c = useAppWorkspaceStore.getState().conversations
   if (c !== lastConversations) {
+    const prev = lastConversations
     lastConversations = c
+    reconcileUnread(prev, c)
     recomputeTabs()
   }
+})
+
+/**
+ * Conversation ids on screen right now. Split groups all render at once (each
+ * shows its selected tab, or every tab when tiled), so "visible" is not just
+ * the focused tab — a reply landing in a neighbouring group is already being
+ * watched and must not turn unread.
+ */
+function visibleConversationIds(): Set<number> {
+  const st = useTabStore.getState()
+  const visible = new Set<number>()
+  const add = (tab: TabItemInternal | undefined) => {
+    if (tab?.conversationId != null) visible.add(tab.conversationId)
+  }
+  for (const leaf of leafIds(st.groupLayout)) {
+    if (st.tileByGroup[leaf]) {
+      for (const tab of st.rawTabs) {
+        if (groupOfTab(st.groupOf, st.groupLayout, tab.id) === leaf) add(tab)
+      }
+    } else {
+      add(st.rawTabs.find((t) => t.id === st.groupSelection[leaf]))
+    }
+  }
+  // Defensive: the focused tab is visible even in a transient state where its
+  // group selection has not caught up yet.
+  add(st.rawTabs.find((t) => t.id === st.activeTabId))
+  return visible
+}
+
+/**
+ * Keep `unreadConversationIds` in step with the conversation list: a turn that
+ * just reached `pending_review` while the user was looking elsewhere becomes
+ * unread; a conversation that moved on to any other status stops being unread.
+ *
+ * Requires a PREVIOUS entry for the id. That is what keeps hydration from
+ * painting every historical `pending_review` row purple — the first list
+ * arrives against an empty `prev`, so nothing qualifies as a transition.
+ */
+function reconcileUnread(
+  prev: readonly DbConversationSummary[],
+  next: readonly DbConversationSummary[]
+) {
+  if (next.length === 0) return
+  const prevStatus = new Map(prev.map((c) => [c.id, c.status]))
+  const current = useTabStore.getState().unreadConversationIds
+  let updated: Set<number> | null = null
+  const edit = () => (updated ??= new Set(current))
+
+  const visible = visibleConversationIds()
+  for (const c of next) {
+    if (c.status === "pending_review") {
+      const before = prevStatus.get(c.id)
+      // No prior row (hydration / newly listed) or already pending → not a
+      // fresh arrival. Only a real transition, seen off-screen, is unread.
+      if (before === undefined || before === "pending_review") continue
+      if (visible.has(c.id) || current.has(c.id)) continue
+      edit().add(c.id)
+    } else if (current.has(c.id)) {
+      // Left the review state (marked completed, reopened, cancelled) — the
+      // dot has nothing left to point at.
+      edit().delete(c.id)
+    }
+  }
+  if (updated) useTabStore.setState({ unreadConversationIds: updated })
+}
+
+/**
+ * Focus is the "I have seen it" signal. Watching `activeTabId` at the store
+ * level (rather than clearing inside `focusTab`) covers EVERY route to a tab
+ * becoming active — `switchTab`, the auto-advance in `closeTab` that writes
+ * `activeTabId` directly, remote snapshot apply, and hydration.
+ */
+useTabStore.subscribe((state, prevState) => {
+  if (state.activeTabId === prevState.activeTabId) return
+  const tab = state.rawTabs.find((t) => t.id === state.activeTabId)
+  if (tab?.conversationId == null) return
+  const ids = state.unreadConversationIds
+  if (!ids.has(tab.conversationId)) return
+  const next = new Set(ids)
+  next.delete(tab.conversationId)
+  useTabStore.setState({ unreadConversationIds: next })
+  recomputeTabs()
 })
 
 /** All tab actions as a shallow-stable object. Actions never change identity, so
