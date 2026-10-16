@@ -1256,7 +1256,7 @@ mod async_relay_dedup_tests {
     use crate::chat_channel::session_bridge::{ActiveSession, SessionBridge};
     use crate::chat_channel::traits::ChatChannelBackend;
     use crate::chat_channel::types::{
-        ChannelConnectionStatus, ChannelType, IncomingCommand, RichMessage, SentMessageId,
+        ChannelConnectionStatus, ChannelType, IncomingCommand, RichMessage, SendOutcome, SentMessageId,
     };
     use crate::db::test_helpers;
     use crate::models::agent::AgentType;
@@ -1294,16 +1294,16 @@ mod async_relay_dedup_tests {
         async fn status(&self) -> ChannelConnectionStatus {
             ChannelConnectionStatus::Connected
         }
-        async fn send_message(&self, text: &str) -> Result<SentMessageId, ChatChannelError> {
+        async fn send_message(&self, text: &str) -> Result<SendOutcome, ChatChannelError> {
             self.rec.msgs.lock().await.push(text.to_string());
-            Ok(SentMessageId("1".into()))
+            Ok(SendOutcome::Sent(SentMessageId("1".into())))
         }
         async fn send_rich_message(
             &self,
             message: &RichMessage,
-        ) -> Result<SentMessageId, ChatChannelError> {
+        ) -> Result<SendOutcome, ChatChannelError> {
             self.rec.msgs.lock().await.push(message.body.clone());
-            Ok(SentMessageId("1".into()))
+            Ok(SendOutcome::Sent(SentMessageId("1".into())))
         }
         async fn test_connection(&self) -> Result<(), ChatChannelError> {
             Ok(())

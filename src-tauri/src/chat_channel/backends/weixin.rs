@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -14,8 +14,19 @@ use crate::chat_channel::types::*;
 
 const ILINK_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
 const ILINK_CHANNEL_VERSION: &str = "1.0.2";
+/// iLink reports a reply context it will not accept — typically a
+/// `context_token` that expired after inactivity, or per-token quota exhaustion,
+/// sometimes with `errmsg` "rate limited" or empty — as `ret = -2`.
+const CONTEXT_REJECTED_RET: i64 = -2;
 /// Maximum number of messages buffered while context_token is expired.
 const MAX_PENDING_MESSAGES: usize = 50;
+/// Buffered messages older than this are dropped instead of replayed. A push
+/// nudge is only useful while it is fresh, and replaying a backlog would flood
+/// the chat with hours-old notifications as soon as the user messages the bot.
+const MAX_PENDING_AGE: Duration = Duration::from_secs(10 * 60);
+/// Upper bound on messages replayed on a fresh context_token, protecting the
+/// ~10-message quota per token from being consumed by backlogged notifications.
+const MAX_REPLAY_MESSAGES: usize = 3;
 
 /// Shared HTTP client for QR code auth requests (avoids re-creating TLS state).
 fn qr_client() -> reqwest::Client {
@@ -57,6 +68,8 @@ pub struct WeixinQrcodeStatusPublic {
     pub status: String,
 }
 
+/// One `sendmessage` call. `context_token` may be empty: iLink accepts a
+/// tokenless send as a degraded fallback (see `WeixinBackend::send_text`).
 struct SendRequest<'a> {
     client: &'a reqwest::Client,
     base_url: &'a str,
@@ -65,8 +78,6 @@ struct SendRequest<'a> {
     to_user_id: &'a str,
     context_token: &'a str,
     text: &'a str,
-    reply_context: &'a Mutex<Option<WeixinReplyContext>>,
-    pending_messages: &'a Mutex<Vec<String>>,
 }
 
 // ── QR code auth functions (called before backend exists) ──
@@ -244,6 +255,26 @@ struct WeixinReplyContext {
     expired: bool,
 }
 
+/// A message iLink would not accept yet, retried on the next context refresh.
+#[derive(Clone, Debug)]
+struct PendingMessage {
+    text: String,
+    queued_at: Instant,
+}
+
+/// Queue `msg` for the next `context_token` refresh, or drop it when the
+/// buffer is already full.
+async fn queue_pending(buf: &Mutex<Vec<PendingMessage>>, msg: PendingMessage) -> SendOutcome {
+    let mut buf = buf.lock().await;
+    if buf.len() < MAX_PENDING_MESSAGES {
+        buf.push(msg);
+        SendOutcome::Buffered
+    } else {
+        tracing::warn!("[Weixin] pending buffer full, dropping message");
+        SendOutcome::Dropped
+    }
+}
+
 pub struct WeixinBackend {
     bot_token: String,
     base_url: String,
@@ -252,8 +283,10 @@ pub struct WeixinBackend {
     channel_id: i32,
     shutdown_tx: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
     reply_context: Arc<Mutex<Option<WeixinReplyContext>>>,
-    /// Messages that failed due to expired context_token, resend on next refresh.
-    pending_messages: Arc<Mutex<Vec<String>>>,
+    /// Messages iLink rejected because the reply context was stale. They are
+    /// retried on the next context refresh, minus any that aged out while
+    /// waiting (see `MAX_PENDING_AGE`).
+    pending_messages: Arc<Mutex<Vec<PendingMessage>>>,
     /// Stable X-WECHAT-UIN value for this backend instance.
     wechat_uin: String,
 }
@@ -301,12 +334,17 @@ impl WeixinBackend {
     }
 
     /// Build the JSON body for the iLink sendmessage API.
-    fn build_send_body(to_user_id: &str, context_token: &str, text: &str) -> serde_json::Value {
+    fn build_send_body(
+        to_user_id: &str,
+        context_token: &str,
+        client_id: &str,
+        text: &str,
+    ) -> serde_json::Value {
         serde_json::json!({
             "msg": {
                 "from_user_id": "",
                 "to_user_id": to_user_id,
-                "client_id": format!("codeg-{}", uuid::Uuid::new_v4()),
+                "client_id": client_id,
                 "message_type": 2,
                 "message_state": 2,
                 "context_token": context_token,
@@ -319,10 +357,14 @@ impl WeixinBackend {
         })
     }
 
-    /// Send a message via the iLink API and handle the response.
-    /// Returns `Ok(true)` if sent, `Ok(false)` if buffered due to expired context.
-    async fn do_send(req: SendRequest<'_>) -> Result<bool, ChatChannelError> {
-        let body = Self::build_send_body(req.to_user_id, req.context_token, req.text);
+    /// One `sendmessage` call.
+    ///
+    /// Returns `Ok(Some(client_id))` when iLink accepted the message, or
+    /// `Ok(None)` when it rejected the reply context (see
+    /// `CONTEXT_REJECTED_RET`).
+    async fn do_send(req: SendRequest<'_>) -> Result<Option<String>, ChatChannelError> {
+        let client_id = format!("codeg-{}", uuid::Uuid::new_v4());
+        let body = Self::build_send_body(req.to_user_id, req.context_token, &client_id, req.text);
         let url = format!("{}/ilink/bot/sendmessage", req.base_url);
 
         let resp = req
@@ -343,7 +385,8 @@ impl WeixinBackend {
             )));
         }
 
-        // Check for ret errors in response (e.g. -2 = context expired)
+        // A stale reply context or quota limit comes back as a non-zero `ret`
+        // even though the HTTP call succeeded, so inspect the body before calling it delivered.
         if let Ok(resp_json) = serde_json::from_str::<serde_json::Value>(&resp_text) {
             if let Some(ret) = resp_json.get("ret").and_then(|v| v.as_i64()) {
                 if ret != 0 {
@@ -353,17 +396,8 @@ impl WeixinBackend {
                         .unwrap_or("unknown");
                     tracing::info!("[Weixin] sendmessage ret={ret}, errmsg={errmsg}");
 
-                    if ret == -2 {
-                        // Context token expired — mark stale and buffer
-                        if let Some(ref mut c) = *req.reply_context.lock().await {
-                            c.expired = true;
-                        }
-                        let mut buf = req.pending_messages.lock().await;
-                        if buf.len() < MAX_PENDING_MESSAGES {
-                            buf.push(req.text.to_string());
-                        }
-                        tracing::info!("[Weixin] context_token expired (ret=-2), buffered message");
-                        return Ok(false);
+                    if ret == CONTEXT_REJECTED_RET {
+                        return Ok(None);
                     }
 
                     return Err(ChatChannelError::SendFailed(format!("ret={ret}: {errmsg}")));
@@ -371,10 +405,10 @@ impl WeixinBackend {
             }
         }
 
-        Ok(true)
+        Ok(Some(client_id))
     }
 
-    async fn send_text(&self, text: &str) -> Result<SentMessageId, ChatChannelError> {
+    async fn send_text(&self, text: &str) -> Result<SendOutcome, ChatChannelError> {
         // Extract context data under lock, then release
         let (to_user_id, context_token, expired) = {
             let guard = self.reply_context.lock().await;
@@ -391,19 +425,21 @@ impl WeixinBackend {
             )
         };
 
-        // If context is expired, buffer the message for resend on next refresh
+        // If context is already expired, buffer immediately without network calls.
+        // This avoids blocking other channels behind network timeouts while context is stale.
         if expired {
             tracing::info!(
-                "[Weixin] context expired, buffering message (len={})",
+                "[Weixin] context expired, buffering message immediately (len={})",
                 text.len()
             );
-            let mut buf = self.pending_messages.lock().await;
-            if buf.len() < MAX_PENDING_MESSAGES {
-                buf.push(text.to_string());
-            } else {
-                tracing::info!("[Weixin] pending buffer full, dropping message");
-            }
-            return Ok(SentMessageId(String::new()));
+            return Ok(queue_pending(
+                &self.pending_messages,
+                PendingMessage {
+                    text: text.to_string(),
+                    queued_at: Instant::now(),
+                },
+            )
+            .await);
         }
 
         tracing::info!(
@@ -412,7 +448,7 @@ impl WeixinBackend {
             text.len()
         );
 
-        Self::do_send(SendRequest {
+        let delivered = Self::do_send(SendRequest {
             client: &self.client,
             base_url: &self.base_url,
             bot_token: &self.bot_token,
@@ -420,12 +456,31 @@ impl WeixinBackend {
             to_user_id: &to_user_id,
             context_token: &context_token,
             text,
-            reply_context: &self.reply_context,
-            pending_messages: &self.pending_messages,
         })
         .await?;
 
-        Ok(SentMessageId(String::new()))
+        match delivered {
+            Some(client_id) => Ok(SendOutcome::Sent(SentMessageId(client_id))),
+            None => {
+                // Reply context rejected (ret = -2). Remember it is stale so later
+                // sends buffer immediately, and queue this message.
+                if let Some(ref mut c) = *self.reply_context.lock().await {
+                    c.expired = true;
+                }
+                tracing::info!(
+                    "[Weixin] context_token rejected (ret={CONTEXT_REJECTED_RET}), buffering message (len={})",
+                    text.len()
+                );
+                Ok(queue_pending(
+                    &self.pending_messages,
+                    PendingMessage {
+                        text: text.to_string(),
+                        queued_at: Instant::now(),
+                    },
+                )
+                .await)
+            }
+        }
     }
 }
 
@@ -643,56 +698,21 @@ impl ChatChannelBackend for WeixinBackend {
 
                                     // Store reply context for outbound messages
                                     // Single lock scope to avoid TOCTOU
-                                    if !from_user_id.is_empty() && !context_token.is_empty() {
-                                        let was_expired = {
-                                            let mut guard = reply_context.lock().await;
-                                            let was =
-                                                guard.as_ref().map(|c| c.expired).unwrap_or(false);
-                                            *guard = Some(WeixinReplyContext {
-                                                to_user_id: from_user_id.to_string(),
-                                                context_token: context_token.to_string(),
-                                                expired: false,
-                                            });
-                                            was
-                                        };
+                                    let was_expired = if !from_user_id.is_empty() && !context_token.is_empty() {
+                                        let mut guard = reply_context.lock().await;
+                                        let was =
+                                            guard.as_ref().map(|c| c.expired).unwrap_or(false);
+                                        *guard = Some(WeixinReplyContext {
+                                            to_user_id: from_user_id.to_string(),
+                                            context_token: context_token.to_string(),
+                                            expired: false,
+                                        });
+                                        was
+                                    } else {
+                                        false
+                                    };
 
-                                        // Resend buffered messages with fresh context
-                                        if was_expired {
-                                            let buffered: Vec<String> =
-                                                pending_messages.lock().await.drain(..).collect();
-                                            if !buffered.is_empty() {
-                                                tracing::info!(
-                                                    "[Weixin] context refreshed, resending {} buffered message(s)",
-                                                    buffered.len()
-                                                );
-                                                for pending_text in &buffered {
-                                                    let ok = WeixinBackend::do_send(SendRequest {
-                                                        client: &client,
-                                                        base_url: &base_url,
-                                                        bot_token: &bot_token,
-                                                        wechat_uin: &wechat_uin,
-                                                        to_user_id: from_user_id,
-                                                        context_token,
-                                                        text: pending_text,
-                                                        reply_context: &reply_context,
-                                                        pending_messages: &pending_messages,
-                                                    })
-                                                    .await;
-                                                    if let Err(e) = ok {
-                                                        tracing::error!("[Weixin] resend error: {e}");
-                                                        // Re-buffer remaining on hard error
-                                                        let mut buf = pending_messages.lock().await;
-                                                        if buf.len() < MAX_PENDING_MESSAGES {
-                                                            buf.push(pending_text.clone());
-                                                        }
-                                                    }
-                                                    // If do_send returned Ok(false), it
-                                                    // already re-buffered internally.
-                                                }
-                                            }
-                                        }
-                                    }
-
+                                    // 1. Dispatch incoming user command FIRST before replaying buffered messages
                                     tracing::debug!("[Weixin] dispatching: {text}");
                                     let send_result = command_tx
                                         .send(IncomingCommand {
@@ -706,6 +726,82 @@ impl ChatChannelBackend for WeixinBackend {
                                         .await;
                                     if let Err(e) = send_result {
                                         tracing::error!("[Weixin] command_tx.send failed: {e}");
+                                    }
+
+                                    // 2. Retry what was queued while context was stale, bounded to MAX_REPLAY_MESSAGES
+                                    if was_expired && !from_user_id.is_empty() && !context_token.is_empty() {
+                                        let buffered: Vec<PendingMessage> =
+                                            pending_messages.lock().await.drain(..).collect();
+                                        let now = Instant::now();
+                                        let (stale, fresh): (Vec<_>, Vec<_>) =
+                                            buffered.into_iter().partition(|m| {
+                                                now.duration_since(m.queued_at)
+                                                    >= MAX_PENDING_AGE
+                                            });
+                                        if !stale.is_empty() {
+                                            tracing::info!(
+                                                "[Weixin] dropping {} stale buffered message(s) older than {:?}",
+                                                stale.len(),
+                                                MAX_PENDING_AGE
+                                            );
+                                        }
+                                        if !fresh.is_empty() {
+                                            // Give command_dispatcher a brief head start to answer the user's message
+                                            tokio::time::sleep(Duration::from_millis(300)).await;
+
+                                            let to_replay: Vec<PendingMessage> =
+                                                if fresh.len() > MAX_REPLAY_MESSAGES {
+                                                    let skip = fresh.len() - MAX_REPLAY_MESSAGES;
+                                                    tracing::info!(
+                                                        "[Weixin] bounding replay: replaying latest {} of {} buffered messages",
+                                                        MAX_REPLAY_MESSAGES,
+                                                        fresh.len()
+                                                    );
+                                                    fresh.into_iter().skip(skip).collect()
+                                                } else {
+                                                    fresh
+                                                };
+
+                                            tracing::info!(
+                                                "[Weixin] context refreshed, resending {} buffered message(s)",
+                                                to_replay.len()
+                                            );
+
+                                            for pending in to_replay {
+                                                let result = WeixinBackend::do_send(SendRequest {
+                                                    client: &client,
+                                                    base_url: &base_url,
+                                                    bot_token: &bot_token,
+                                                    wechat_uin: &wechat_uin,
+                                                    to_user_id: from_user_id,
+                                                    context_token,
+                                                    text: &pending.text,
+                                                })
+                                                .await;
+                                                match result {
+                                                    Ok(Some(_)) => {}
+                                                    Ok(None) => {
+                                                        // Context rejected (quota or token expired).
+                                                        // Re-mark expired so subsequent sends buffer, re-queue, and stop replaying.
+                                                        if let Some(ref mut c) = *reply_context.lock().await {
+                                                            c.expired = true;
+                                                        }
+                                                        tracing::info!(
+                                                            "[Weixin] context_token rejected during replay (ret={CONTEXT_REJECTED_RET}), re-queueing and stopping replay"
+                                                        );
+                                                        let _ = queue_pending(&pending_messages, pending).await;
+                                                        break;
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!(
+                                                            "[Weixin] resend error: {e}"
+                                                        );
+                                                        let _ = queue_pending(&pending_messages, pending).await;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -742,14 +838,14 @@ impl ChatChannelBackend for WeixinBackend {
         *self.status.lock().await
     }
 
-    async fn send_message(&self, text: &str) -> Result<SentMessageId, ChatChannelError> {
+    async fn send_message(&self, text: &str) -> Result<SendOutcome, ChatChannelError> {
         self.send_text(text).await
     }
 
     async fn send_rich_message(
         &self,
         message: &RichMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let plain_text = message.to_plain_text();
         self.send_text(&plain_text).await
     }
@@ -798,5 +894,152 @@ impl ChatChannelBackend for WeixinBackend {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl WeixinBackend {
+    pub(crate) async fn set_test_reply_context(
+        &self,
+        to_user_id: &str,
+        context_token: &str,
+        expired: bool,
+    ) {
+        *self.reply_context.lock().await = Some(WeixinReplyContext {
+            to_user_id: to_user_id.to_string(),
+            context_token: context_token.to_string(),
+            expired,
+        });
+    }
+
+    pub(crate) async fn is_context_expired(&self) -> bool {
+        self.reply_context
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.expired)
+            .unwrap_or(false)
+    }
+
+    pub(crate) async fn pending_count(&self) -> usize {
+        self.pending_messages.lock().await.len()
+    }
+
+    pub(crate) async fn push_test_pending(&self, text: &str, age: Duration) {
+        let queued_at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+        self.pending_messages.lock().await.push(PendingMessage {
+            text: text.to_string(),
+            queued_at,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn spawn_mock_server(
+        status_code: u16,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 {status_code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn test_send_success() {
+        let (base_url, _server) = spawn_mock_server(200, r#"{"ret": 0, "errmsg": "ok"}"#).await;
+        let backend = WeixinBackend::new(1, "test_token".into(), base_url);
+        backend
+            .set_test_reply_context("wx_user_1", "valid_token", false)
+            .await;
+
+        let outcome = backend.send_message("hello world").await.unwrap();
+        assert!(outcome.is_sent(), "expected sent outcome, got {outcome:?}");
+        assert_eq!(backend.pending_count().await, 0);
+        assert!(!backend.is_context_expired().await);
+    }
+
+    #[tokio::test]
+    async fn test_send_rejected_context_buffers_and_marks_expired() {
+        let (base_url, _server) =
+            spawn_mock_server(200, r#"{"ret": -2, "errmsg": "token expired"}"#).await;
+        let backend = WeixinBackend::new(1, "test_token".into(), base_url);
+        backend
+            .set_test_reply_context("wx_user_1", "stale_token", false)
+            .await;
+
+        let outcome = backend.send_message("test nudge").await.unwrap();
+        assert_eq!(outcome, SendOutcome::Buffered);
+        assert!(backend.is_context_expired().await, "should mark context as expired");
+        assert_eq!(backend.pending_count().await, 1, "should buffer rejected message");
+    }
+
+    #[tokio::test]
+    async fn test_send_when_expired_buffers_immediately_without_network() {
+        // Point to closed port: if any network call is made, it would fail or timeout
+        let backend = WeixinBackend::new(1, "test_token".into(), "http://127.0.0.1:1".into());
+        backend
+            .set_test_reply_context("wx_user_1", "old_token", true)
+            .await;
+
+        let outcome = backend.send_message("offline nudge").await.unwrap();
+        assert_eq!(outcome, SendOutcome::Buffered);
+        assert_eq!(backend.pending_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_send_buffer_full_reports_dropped() {
+        let backend = WeixinBackend::new(1, "test_token".into(), "http://127.0.0.1:1".into());
+        backend
+            .set_test_reply_context("wx_user_1", "old_token", true)
+            .await;
+
+        // Fill buffer to max capacity
+        for i in 0..MAX_PENDING_MESSAGES {
+            backend.push_test_pending(&format!("msg {i}"), Duration::from_secs(10)).await;
+        }
+        assert_eq!(backend.pending_count().await, MAX_PENDING_MESSAGES);
+
+        let outcome = backend.send_message("overflow message").await.unwrap();
+        assert_eq!(outcome, SendOutcome::Dropped);
+        assert_eq!(backend.pending_count().await, MAX_PENDING_MESSAGES);
+    }
+
+    #[tokio::test]
+    async fn test_stale_buffered_messages_are_dropped_by_age() {
+        let now = Instant::now();
+        let old_msg = PendingMessage {
+            text: "stale 15m".into(),
+            queued_at: now.checked_sub(Duration::from_secs(15 * 60)).unwrap(),
+        };
+        let fresh_msg = PendingMessage {
+            text: "fresh 30s".into(),
+            queued_at: now.checked_sub(Duration::from_secs(30)).unwrap(),
+        };
+        let messages = vec![old_msg, fresh_msg];
+        let (stale, fresh): (Vec<_>, Vec<_>) = messages
+            .into_iter()
+            .partition(|m| now.duration_since(m.queued_at) >= MAX_PENDING_AGE);
+
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].text, "stale 15m");
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].text, "fresh 30s");
     }
 }
