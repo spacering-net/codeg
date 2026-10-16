@@ -376,6 +376,21 @@ describe("aux file tree drag/selection polish", () => {
   })
 })
 
+describe("aux-panel-file-tree-tab search wiring", () => {
+  it("hides the tree with an important class while search results show", () => {
+    // The tree's ScrollArea host is styled `display: flex` by OverlayScrollbars
+    // at the same specificity as `.hidden`, so a plain `hidden` loses and the
+    // tree stays on screen under the results (seen in WebKit).
+    expect(auxSource).toMatch(/searchActive && "hidden!"/)
+  })
+
+  it("routes Cmd/Ctrl+F from anywhere in the tab to the search box", () => {
+    expect(auxSource).toMatch(/onKeyDown=\{handleFindShortcut\}/)
+    expect(auxSource).toMatch(/isFindShortcut\(event\)/)
+    expect(auxSource).toMatch(/searchRef\.current\?\.focus\(\)/)
+  })
+})
+
 describe("workspace-context divergence-aware save guard", () => {
   it("verifies stale and unwatched dirty tabs against disk inside saveFileTab", () => {
     // Blocker #18: every write path funnels through saveFileTab, so the

@@ -143,6 +143,7 @@ import type {
   PromptInputBlock,
   FileTreeNode,
   WorkspaceFileEntry,
+  WorkspaceContentSearchResult,
   DirectoryEntry,
   DirectoryItem,
   UploadAttachmentResult,
@@ -4749,6 +4750,42 @@ export async function listWorkspaceFiles(
   path: string
 ): Promise<WorkspaceFileEntry[]> {
   return getTransport().call("list_workspace_files", { path })
+}
+
+export interface SearchWorkspaceContentParams {
+  /** Absolute path of the workspace folder to search. */
+  rootPath: string
+  query: string
+  caseSensitive?: boolean
+  /** Treat `query` as a regular expression (literal text otherwise). */
+  regex?: boolean
+  /** Matching lines to return; the backend clamps it. */
+  maxResults?: number
+  /** A new search with the same key cancels the previous one. */
+  searchKey?: string
+}
+
+/**
+ * Grep-style search inside the files of a workspace folder, over the same
+ * gitignore-aware walk as `listWorkspaceFiles`. Binary and oversized files are
+ * skipped and the result count is capped (`truncated` says more matched).
+ */
+export async function searchWorkspaceContent(
+  params: SearchWorkspaceContentParams
+): Promise<WorkspaceContentSearchResult> {
+  return getTransport().call("search_workspace_content", {
+    rootPath: params.rootPath,
+    query: params.query,
+    caseSensitive: params.caseSensitive ?? false,
+    regex: params.regex ?? false,
+    maxResults: params.maxResults ?? null,
+    searchKey: params.searchKey ?? null,
+  })
+}
+
+/** Stop the content search running under `searchKey`, if any. */
+export async function cancelWorkspaceSearch(searchKey: string): Promise<void> {
+  return getTransport().call("cancel_workspace_search", { searchKey })
 }
 
 export async function startWorkspaceStateStream(

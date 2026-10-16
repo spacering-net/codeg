@@ -4638,7 +4638,7 @@ pub async fn list_directory_with_files(
 /// Only *authorized* links are returned (see [`crate::folder_links`]): a
 /// symlink that merely happens to sit in the tree — the `secrets -> ~/.ssh` a
 /// cloned repo might ship — is not one of them and stays unfollowed.
-fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
+pub(crate) fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
     let Ok(canonical_root) = std::fs::canonicalize(root) else {
         return Vec::new();
     };
@@ -4939,6 +4939,46 @@ fn build_file_tree(
     Ok(nodes)
 }
 
+/// The walk behind workspace search ([`list_workspace_files`] and the file
+/// tree tab's content search), so both see exactly the same files.
+///
+/// Conservative gitignore parity with the previous client-side pass: respect
+/// in-tree `.gitignore`/`.ignore`/`.git/info/exclude`, but not the global
+/// gitignore or parent-directory ignores (the workspace root is the
+/// boundary). `require_git(false)` keeps `.gitignore` effective even outside
+/// a git repo. `hidden(false)` keeps dotfiles visible. The `filter_entry`
+/// mirrors `get_file_tree`'s hardcoded ignores exactly. Symlinks are not
+/// followed (the builder's default).
+///
+/// `skip_top_level` names root-level entries to leave out of this walk: the
+/// authorized links, which callers walk separately, rooted at their targets.
+pub(crate) fn workspace_walk_builder(root: &Path, skip_top_level: HashSet<String>) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .parents(false)
+        .ignore(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(false)
+        .require_git(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .filter_entry(move |e| {
+            let name = e.file_name().to_string_lossy();
+            if e.depth() == 1 && skip_top_level.contains(name.as_ref()) {
+                return false;
+            }
+            if e.file_type()
+                .is_some_and(|t| entry_presents_as_dir(&t, e.path()))
+            {
+                !FILE_TREE_IGNORED_DIRS.contains(&name.as_ref())
+            } else {
+                name != ".DS_Store"
+            }
+        });
+    builder
+}
+
 /// Flat, gitignore-aware listing of every file and directory under `path`, for
 /// fuzzy file search. Unlike [`get_file_tree`], ignored directories
 /// (`node_modules`, `target`, `dist`, …) are pruned *during* the walk, so no
@@ -4955,36 +4995,7 @@ pub async fn list_workspace_files(
     // walker reports a symlink as a leaf file.
     let linked = authorized_links_in(&root);
     let linked_names: HashSet<String> = linked.iter().map(|(name, _)| name.clone()).collect();
-
-    // Conservative gitignore parity with the previous client-side pass: respect
-    // in-tree `.gitignore`/`.ignore`/`.git/info/exclude`, but not the global
-    // gitignore or parent-directory ignores (the workspace root is the
-    // boundary). `require_git(false)` keeps `.gitignore` effective even outside
-    // a git repo. `hidden(false)` keeps dotfiles visible. The `filter_entry`
-    // mirrors `get_file_tree`'s hardcoded ignores exactly.
-    let walker = WalkBuilder::new(&root)
-        .hidden(false)
-        .parents(false)
-        .ignore(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(false)
-        .require_git(false)
-        .sort_by_file_name(|a, b| a.cmp(b))
-        .filter_entry(move |e| {
-            let name = e.file_name().to_string_lossy();
-            if e.depth() == 1 && linked_names.contains(name.as_ref()) {
-                return false;
-            }
-            if e.file_type()
-                .is_some_and(|t| entry_presents_as_dir(&t, e.path()))
-            {
-                !FILE_TREE_IGNORED_DIRS.contains(&name.as_ref())
-            } else {
-                name != ".DS_Store"
-            }
-        })
-        .build();
+    let walker = workspace_walk_builder(&root, linked_names).build();
 
     let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
     for result in walker {
@@ -5040,26 +5051,7 @@ pub async fn list_workspace_files(
 /// ignore configuration of [`list_workspace_files`]; nested symlinks are not
 /// followed, so this cannot recurse.
 fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
-    let walker = WalkBuilder::new(root)
-        .hidden(false)
-        .parents(false)
-        .ignore(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(false)
-        .require_git(false)
-        .sort_by_file_name(|a, b| a.cmp(b))
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            if e.file_type()
-                .is_some_and(|t| entry_presents_as_dir(&t, e.path()))
-            {
-                !FILE_TREE_IGNORED_DIRS.contains(&name.as_ref())
-            } else {
-                name != ".DS_Store"
-            }
-        })
-        .build();
+    let walker = workspace_walk_builder(root, HashSet::new()).build();
 
     let mut entries = Vec::new();
     for result in walker {

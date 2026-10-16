@@ -67,6 +67,8 @@ pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
 pub mod work_task;
+/// Content search for the file tree tab (both runtimes).
+pub mod workspace_search;
 pub mod workspace_state;
 #[cfg(feature = "tauri-runtime")]
 pub mod workspace_windows;

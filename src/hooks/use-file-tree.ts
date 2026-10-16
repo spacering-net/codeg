@@ -15,6 +15,19 @@ export interface FlatFileEntry {
   lowerName: string
 }
 
+/** Map a `list_workspace_files` listing to search candidates. */
+export function toFlatFileEntries(
+  files: readonly WorkspaceFileEntry[]
+): FlatFileEntry[] {
+  return files.map((f) => ({
+    name: f.name,
+    relativePath: f.path,
+    kind: f.kind,
+    lowerPath: f.path.toLowerCase(),
+    lowerName: f.name.toLowerCase(),
+  }))
+}
+
 interface UseFileTreeOptions {
   folderPath: string | undefined
   enabled: boolean
@@ -59,13 +72,7 @@ export function useFileTree({
         const files: WorkspaceFileEntry[] = await listWorkspaceFiles(
           folderPath!
         )
-        const flat: FlatFileEntry[] = files.map((f) => ({
-          name: f.name,
-          relativePath: f.path,
-          kind: f.kind,
-          lowerPath: f.path.toLowerCase(),
-          lowerName: f.name.toLowerCase(),
-        }))
+        const flat = toFlatFileEntries(files)
 
         if (!canceled) {
           setAllFiles(flat)

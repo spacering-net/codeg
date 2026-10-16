@@ -2885,6 +2885,32 @@
       "newConversation": "محادثة جديدة"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "البحث في هذا المجلد",
+        "placeholderNames": "البحث عن الملفات بالاسم",
+        "placeholderContents": "البحث في محتوى الملفات",
+        "clear": "مسح البحث",
+        "searchContents": "البحث داخل الملفات",
+        "matchCase": "مطابقة حالة الأحرف",
+        "useRegex": "استخدام تعبير نمطي",
+        "resultsLabel": "نتائج البحث",
+        "searching": "جارٍ البحث…",
+        "noResults": "لا توجد نتائج",
+        "nameSummary": "{count, plural, zero {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}}",
+        "contentSummary": "{results, plural, zero {لا نتائج} one {نتيجة واحدة} two {نتيجتان} few {# نتائج} many {# نتيجة} other {# نتيجة}} في {files, plural, zero {صفر ملف} one {ملف واحد} two {ملفين} few {# ملفات} many {# ملفاً} other {# ملف}}",
+        "showingFirst": "عرض أول {count} نتيجة",
+        "fileLimitReached": "توقف البحث بعد {count} ملف",
+        "skippedFiles": "{count, plural, zero {لم يُتخطَّ أي ملف} one {تم تخطي ملف ثنائي أو كبير واحد} two {تم تخطي ملفين ثنائيين أو كبيرين} few {تم تخطي # ملفات ثنائية أو كبيرة} many {تم تخطي # ملفاً ثنائياً أو كبيراً} other {تم تخطي # ملف ثنائي أو كبير}}",
+        "errors": {
+          "emptyQuery": "اكتب شيئاً للبحث عنه",
+          "queryTooLong": "يتجاوز البحث {max} حرفاً",
+          "invalidPattern": "تعبير نمطي غير صالح",
+          "invalidRoot": "لا يمكن البحث في مسار هذا المجلد",
+          "rootNotFound": "هذا المجلد لم يعد موجوداً",
+          "invalidSearchKey": "فشل البحث",
+          "failed": "فشل البحث"
+        }
+      },
       "workspace": "مساحة العمل",
       "retry": "إعادة المحاولة",
       "git": "Git",

@@ -2885,6 +2885,32 @@
       "newConversation": "New Conversation"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "Search this folder",
+        "placeholderNames": "Search files by name",
+        "placeholderContents": "Search in file contents",
+        "clear": "Clear search",
+        "searchContents": "Search inside files",
+        "matchCase": "Match case",
+        "useRegex": "Use regular expression",
+        "resultsLabel": "Search results",
+        "searching": "Searching…",
+        "noResults": "No results",
+        "nameSummary": "{count, plural, one {# result} other {# results}}",
+        "contentSummary": "{results, plural, one {# result} other {# results}} in {files, plural, one {# file} other {# files}}",
+        "showingFirst": "Showing the first {count} results",
+        "fileLimitReached": "stopped after {count} files",
+        "skippedFiles": "{count, plural, one {# binary or large file skipped} other {# binary or large files skipped}}",
+        "errors": {
+          "emptyQuery": "Type something to search for",
+          "queryTooLong": "The search is longer than {max} characters",
+          "invalidPattern": "Invalid regular expression",
+          "invalidRoot": "This folder's path can't be searched",
+          "rootNotFound": "This folder no longer exists",
+          "invalidSearchKey": "Search failed",
+          "failed": "Search failed"
+        }
+      },
       "workspace": "Workspace",
       "retry": "Retry",
       "git": "Git",

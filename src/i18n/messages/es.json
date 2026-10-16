@@ -2885,6 +2885,32 @@
       "newConversation": "Nueva conversación"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "Buscar en esta carpeta",
+        "placeholderNames": "Buscar archivos por nombre",
+        "placeholderContents": "Buscar en el contenido de los archivos",
+        "clear": "Borrar búsqueda",
+        "searchContents": "Buscar dentro de los archivos",
+        "matchCase": "Coincidir mayúsculas y minúsculas",
+        "useRegex": "Usar expresión regular",
+        "resultsLabel": "Resultados de búsqueda",
+        "searching": "Buscando…",
+        "noResults": "Sin resultados",
+        "nameSummary": "{count, plural, one {# resultado} other {# resultados}}",
+        "contentSummary": "{results, plural, one {# resultado} other {# resultados}} en {files, plural, one {# archivo} other {# archivos}}",
+        "showingFirst": "Se muestran los primeros {count} resultados",
+        "fileLimitReached": "detenido tras {count} archivos",
+        "skippedFiles": "{count, plural, one {# archivo binario o demasiado grande omitido} other {# archivos binarios o demasiado grandes omitidos}}",
+        "errors": {
+          "emptyQuery": "Escribe algo para buscar",
+          "queryTooLong": "La búsqueda supera los {max} caracteres",
+          "invalidPattern": "Expresión regular no válida",
+          "invalidRoot": "No se puede buscar en la ruta de esta carpeta",
+          "rootNotFound": "Esta carpeta ya no existe",
+          "invalidSearchKey": "La búsqueda falló",
+          "failed": "La búsqueda falló"
+        }
+      },
       "workspace": "Espacio de trabajo",
       "retry": "Reintentar",
       "git": "Git",
