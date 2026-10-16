@@ -3594,6 +3594,7 @@
         "systemMessage": "システムメッセージ",
         "turnFailed": "このターンは失敗しました：{message}",
         "copyMessage": "コピー",
+        "retryLastQuestion": "最後の質問を再試行",
         "forkFromHere": "ここから分岐",
         "forkBusy": "ターンの実行中は分岐できません",
         "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください",

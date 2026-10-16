@@ -2051,41 +2051,54 @@ const ConversationTabView = memo(function ConversationTabView({
   ])
 
   // AIR session-failure recovery actions — the buttons on a failed turn's
-  // notification (the provider raises it; this view answers it). `retry`
-  // re-submits the LAST user prompt through the message queue — same
-  // mechanism as the live-feedback resend fallback: enqueue survives the
-  // turn-end status race and flushes as soon as the connection can take a
-  // prompt, so the retry is never silently dropped. `login` opens the settings
-  // window on this agent's page (auth lives there) — a `router.push` would
-  // swap the workspace itself for the settings route; `new_session` reuses
-  // the load-error banner's fresh-draft path.
+  // notification (the provider raises it; this view answers it). `retry` is the
+  // shared resend below, `login` opens the settings window on this agent's page
+  // (auth lives there) — a `router.push` would swap the workspace itself for
+  // the settings route; `new_session` reuses the load-error banner's
+  // fresh-draft path.
   const tSessionFailure = useTranslations("Folder.chat.sessionFailure")
   const detailTurns = detail?.turns
+  // Re-submit the newest user prompt — the single mechanism behind both retry
+  // entries: the failed turn's notification action, and the retry button the
+  // newest ANSWER carries in its footer row (see
+  // `MessageListViewProps.onRetryLastQuestion`). Enqueue rather than
+  // `handleSend`: enqueue survives the turn-end status race and flushes as soon
+  // as the connection can take a prompt, so the retry is never silently
+  // dropped.
+  //
+  // Prompt text source: the runtime TIMELINE first — it is what the user sees,
+  // and a failed turn's prompt lives there as an optimistic/promoted turn even
+  // when the persisted detail is stale (field report 2026-08-16: after a
+  // network-drop terminal failure the detail had no user turn yet, so retry
+  // read null and silently did nothing). Persisted detail is the fallback for a
+  // conversation whose runtime session was evicted.
+  const resendLastUserPrompt = useCallback(() => {
+    const text =
+      lastUserPromptText(
+        getTimelineTurns(effectiveConversationId).map((e) => e.turn)
+      ) ?? lastUserPromptText(detailTurns)
+    if (!text) {
+      // Nothing resendable is a dead end for this action — say so instead of
+      // swallowing the click.
+      toast.warning(tSessionFailure("retryUnavailable"))
+      return
+    }
+    mqEnqueue(
+      { blocks: [{ type: "text", text }], displayText: text },
+      selectedModeId
+    )
+  }, [
+    effectiveConversationId,
+    detailTurns,
+    mqEnqueue,
+    selectedModeId,
+    tSessionFailure,
+  ])
   const handleSessionFailureAction = useCallback(
     (action: SessionFailureAction) => {
       switch (action) {
         case "retry": {
-          // Prompt text source: the runtime TIMELINE first — it is what the
-          // user sees, and a failed turn's prompt lives there as an
-          // optimistic/promoted turn even when the persisted detail is stale
-          // (field report 2026-08-16: after a network-drop terminal failure
-          // the detail had no user turn yet, so retry read null and silently
-          // did nothing). Persisted detail is the fallback for a conversation
-          // whose runtime session was evicted.
-          const text =
-            lastUserPromptText(
-              getTimelineTurns(effectiveConversationId).map((e) => e.turn)
-            ) ?? lastUserPromptText(detailTurns)
-          if (!text) {
-            // Nothing resendable is a dead end for this action — say so
-            // instead of swallowing the click.
-            toast.warning(tSessionFailure("retryUnavailable"))
-            return
-          }
-          mqEnqueue(
-            { blocks: [{ type: "text", text }], displayText: text },
-            selectedModeId
-          )
+          resendLastUserPrompt()
           break
         }
         case "login":
@@ -2096,15 +2109,7 @@ const ConversationTabView = memo(function ConversationTabView({
           break
       }
     },
-    [
-      effectiveConversationId,
-      detailTurns,
-      mqEnqueue,
-      selectedModeId,
-      handleOpenAgentsSettings,
-      handleOpenNewSession,
-      tSessionFailure,
-    ]
+    [resendLastUserPrompt, handleOpenAgentsSettings, handleOpenNewSession]
   )
   // Offered to this session's failure notifications while the view is
   // mounted (see `AcpActionsValue.registerSessionFailureActions`). Owners of a
@@ -2185,6 +2190,20 @@ const ConversationTabView = memo(function ConversationTabView({
           conn.supportsFork
             ? handleForkFromTurn
             : undefined
+        }
+        // Retry re-asks the newest question and carries no draft, so unlike a
+        // send it cannot jump a non-empty queue — the same reasoning as fork
+        // above, minus the fork's session question: a retry is an ordinary
+        // prompt on this connection. Same owner gate as the failure
+        // notification's retry (`canRecoverSession`): a viewer watches the
+        // session and cannot prompt it, and a surface with no live connection
+        // has nowhere to enqueue.
+        //
+        // A turn in flight is NOT part of the gate — the enqueue holds the
+        // prompt until the connection can take it, which is exactly what makes
+        // this safe to click in the turn-end race.
+        onRetryLastQuestion={
+          canRecoverSession ? resendLastUserPrompt : undefined
         }
       />
     </GoalControlProvider>

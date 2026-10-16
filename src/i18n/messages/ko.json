@@ -3594,6 +3594,7 @@
         "systemMessage": "시스템 메시지",
         "turnFailed": "이번 턴 실패: {message}",
         "copyMessage": "복사",
+        "retryLastQuestion": "마지막 질문 다시 시도",
         "forkFromHere": "여기서 분기",
         "forkBusy": "턴이 실행 중일 때는 분기할 수 없습니다",
         "forkNotReady": "아직 이 응답에서 분기할 수 없습니다. 잠시 후 다시 시도하세요",

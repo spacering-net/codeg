@@ -3594,6 +3594,7 @@
         "systemMessage": "رسالة النظام",
         "turnFailed": "فشلت هذه الجولة: {message}",
         "copyMessage": "نسخ",
+        "retryLastQuestion": "إعادة المحاولة على السؤال الأخير",
         "forkFromHere": "تفريع من هنا",
         "forkBusy": "لا يمكن التفريع أثناء تنفيذ دور",
         "forkNotReady": "لا يمكن التفريع من هذا الرد بعد، أعد المحاولة بعد قليل",

@@ -6,6 +6,7 @@ import {
   dedupeCompactionItems,
   extractDelegationSources,
   isForkPointUnnamed,
+  markRetryTarget,
   markThreadTail,
   mergeConsecutiveAssistantTurns,
   singletonSourceTurns,
@@ -46,6 +47,7 @@ function assistantItem(
     previousUserIndex: null,
     isLastAssistantRun: false,
     isThreadTail: false,
+    isRetryTarget: false,
     sourceTurns: [],
   }
 }
@@ -339,6 +341,7 @@ function makeItem(
     previousUserIndex: null,
     isLastAssistantRun: false,
     isThreadTail: false,
+    isRetryTarget: false,
     sourceTurns: singletonSourceTurns(turn(group.id)),
   }
 }
@@ -719,6 +722,77 @@ describe("markThreadTail", () => {
   it("marks nothing in an empty thread", () => {
     const items: ThreadItem[] = []
     markThreadTail(items)
+    expect(items).toEqual([])
+  })
+})
+
+describe("markRetryTarget", () => {
+  const compaction: ThreadItem = {
+    key: "persisted-compact",
+    kind: "compaction",
+    meta: { contextCompaction: true },
+  }
+  const retryFlags = (items: ThreadItem[]) =>
+    items.map((it) => (it.kind === "turn" ? it.isRetryTarget : null))
+
+  it("marks the reply that answers the newest user question", () => {
+    const items = [
+      makeUserItem("u1", 0),
+      assistantItem("a1"),
+      makeUserItem("u2", 2),
+      assistantItem("a2"),
+    ]
+    markRetryTarget(items)
+    expect(retryFlags(items)).toEqual([false, false, false, true])
+  })
+
+  it("leaves the newest reply unmarked while a newer question waits", () => {
+    // Retry re-submits the LAST user prompt, so the reply above an unanswered
+    // question would re-ask that question, not its own.
+    const items = [
+      makeUserItem("u1", 0),
+      assistantItem("a1"),
+      makeUserItem("u2", 2),
+    ]
+    markRetryTarget(items)
+    expect(retryFlags(items)).toEqual([false, false, false])
+  })
+
+  it("marks a failed round's closing line", () => {
+    // The error is all the agent said in reply, so it is where the user who
+    // wants another go is looking.
+    const failure = assistantItem("err", {
+      role: "system",
+      parts: [{ type: "turn-error", message: "API Error: 503" }],
+    })
+    const items = [makeUserItem("u1", 0), assistantItem("partial"), failure]
+    markRetryTarget(items)
+    expect(retryFlags(items)).toEqual([false, false, true])
+  })
+
+  it("steps back over a compaction divider to the reply", () => {
+    const items = [makeUserItem("u1", 0), assistantItem("a1"), compaction]
+    markRetryTarget(items)
+    expect(retryFlags(items)).toEqual([false, true, null])
+  })
+
+  it("marks nothing when no question was ever asked", () => {
+    const items = [assistantItem("a1")]
+    markRetryTarget(items)
+    expect(retryFlags(items)).toEqual([false])
+  })
+
+  it("marks nothing when the answer renders no content", () => {
+    // Nothing renders for an empty turn, so there is no footer row to hang the
+    // button on — and the reply above answers an older question.
+    const items = [makeUserItem("u1", 0), assistantItem("empty", { parts: [] })]
+    markRetryTarget(items)
+    expect(retryFlags(items)).toEqual([false, false])
+  })
+
+  it("marks nothing in an empty thread", () => {
+    const items: ThreadItem[] = []
+    markRetryTarget(items)
     expect(items).toEqual([])
   })
 })

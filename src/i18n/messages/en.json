@@ -3594,6 +3594,7 @@
         "systemMessage": "System message",
         "turnFailed": "Turn failed: {message}",
         "copyMessage": "Copy",
+        "retryLastQuestion": "Retry last question",
         "forkFromHere": "Fork from here",
         "forkBusy": "Can't fork while a turn is running",
         "forkNotReady": "Can't fork from this reply just yet — try again in a moment",

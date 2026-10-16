@@ -3594,6 +3594,7 @@
         "systemMessage": "Mensaje del sistema",
         "turnFailed": "El turno falló: {message}",
         "copyMessage": "Copiar",
+        "retryLastQuestion": "Reintentar la última pregunta",
         "forkFromHere": "Bifurcar desde aquí",
         "forkBusy": "No se puede bifurcar mientras hay un turno en curso",
         "forkNotReady": "Todavía no se puede bifurcar desde esta respuesta; inténtalo en un momento",

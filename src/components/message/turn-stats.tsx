@@ -8,6 +8,7 @@ import {
   Coins,
   CopyIcon,
   ListTodo,
+  RefreshCw,
   Split,
 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
@@ -47,6 +48,12 @@ interface TurnStatsProps {
    * name the backend can resolve yet (`unnamed` — the post-turn reparse fills
    * it in a moment later). Only read while `forkDisabled`. */
   forkDisabledReason?: "busy" | "unnamed"
+  /** Ask the question this reply answers all over again. Undefined hides the
+   * affordance — the surface has no live connection to re-ask on, it is not
+   * the conversation's owner, or this reply is not the newest answer (retry
+   * re-submits the LAST user prompt, so only where that is the question this
+   * reply answers can it be offered without lying about what it does). */
+  onRetryLastQuestion?: () => void
 }
 
 const iconButtonClass =
@@ -64,6 +71,7 @@ export function TurnStats({
   onForkFromHere,
   forkDisabled = false,
   forkDisabledReason = "busy",
+  onRetryLastQuestion,
 }: TurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.messageList")
@@ -173,7 +181,14 @@ export function TurnStats({
   if (!isResponseComplete) return null
   // Deliberately not gated on `hasDuration`: nothing in this row renders a
   // duration any more, so a turn carrying only one would open an empty row.
-  if (!hasCopy && !hasUsage && !hasCompletedAt && !hasJump && !onForkFromHere)
+  if (
+    !hasCopy &&
+    !hasUsage &&
+    !hasCompletedAt &&
+    !hasJump &&
+    !onForkFromHere &&
+    !onRetryLastQuestion
+  )
     return null
 
   return (
@@ -198,6 +213,24 @@ export function TurnStats({
             <TooltipContent side="top">
               {isCopied ? t("copied") : t("copyMessage")}
             </TooltipContent>
+          </Tooltip>
+        )}
+        {/* Second in the row, right after copy: only the newest reply ever
+            carries it, and copy — the entry used on every reply — must not
+            jump sideways on the one reply that does. */}
+        {onRetryLastQuestion && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onRetryLastQuestion}
+                className={iconButtonClass}
+                aria-label={t("retryLastQuestion")}
+              >
+                <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t("retryLastQuestion")}</TooltipContent>
           </Tooltip>
         )}
         {hasCopy && (
