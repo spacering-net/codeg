@@ -214,6 +214,115 @@ describe("SidebarConversationCard pin action", () => {
   })
 })
 
+describe("SidebarConversationCard attention indicator", () => {
+  function renderCard(
+    c: DbConversationSummary,
+    needsAttention: boolean,
+    hasUnreadCompletion = false,
+    isSelected = false
+  ) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={isSelected}
+        timeLabel="5m"
+        needsAttention={needsAttention}
+        hasUnreadCompletion={hasUnreadCompletion}
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("shows a persistent needs-input bell instead of the running spinner", () => {
+    const running = { ...conv(1), status: "in_progress" }
+    const { queryByTitle, getByTitle } = renderCard(running, true)
+
+    expect(getByTitle("Needs your input")).toBeDefined()
+    expect(queryByTitle("Running")).toBeNull()
+  })
+
+  it("highlights an unselected conversation that needs input", () => {
+    const { container } = renderCard(conv(2), true)
+    const row = container.querySelector(
+      '[data-conversation-id="2"]'
+    )?.parentElement
+
+    expect(row?.className).toContain("bg-amber-500/10")
+  })
+
+  it("keeps the needs-input highlight when the conversation is selected", () => {
+    const { container } = renderCard(conv(7), true, false, true)
+    const row = container.querySelector(
+      '[data-conversation-id="7"]'
+    )?.parentElement
+
+    expect(row?.className).toContain("bg-amber-500/10")
+  })
+
+  it("restores the running spinner when attention clears", () => {
+    const running = { ...conv(3), status: "in_progress" }
+    const { rerender, queryByTitle, getByTitle } = renderCard(running, true)
+
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationCard
+          conversation={running}
+          isSelected={false}
+          timeLabel="5m"
+          needsAttention={false}
+          onSelect={onSelect}
+          onDoubleClick={onDoubleClick}
+          onRename={onRename}
+          onDelete={onDelete}
+          onStatusChange={onStatusChange}
+        />
+      </NextIntlClientProvider>
+    )
+
+    expect(queryByTitle("Needs your input")).toBeNull()
+    expect(getByTitle("Running")).toBeDefined()
+  })
+
+  it("shows an unread completion icon instead of the running spinner", () => {
+    const running = { ...conv(4), status: "in_progress" }
+    const { queryByTitle, getByTitle } = renderCard(running, false, true)
+
+    expect(getByTitle("Completed - click to review")).toBeDefined()
+    expect(queryByTitle("Running")).toBeNull()
+  })
+
+  it("highlights an unselected conversation with an unread completion", () => {
+    const { container } = renderCard(conv(5), false, true)
+    const row = container.querySelector(
+      '[data-conversation-id="5"]'
+    )?.parentElement
+
+    expect(row?.className).toContain("bg-emerald-500/10")
+  })
+
+  it("keeps the needs-input bell above an unread completion", () => {
+    const { queryByTitle, getByTitle } = renderCard(conv(6), true, true)
+
+    expect(getByTitle("Needs your input")).toBeDefined()
+    expect(queryByTitle("Completed - click to review")).toBeNull()
+  })
+
+  it("associates the attention status with the conversation button", () => {
+    const { container } = renderCard(conv(8), true)
+    const button = container.querySelector('[data-conversation-id="8"]')
+    const descriptionId = button?.getAttribute("aria-describedby")
+
+    expect(descriptionId).toBeTruthy()
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
+      "Needs your input"
+    )
+  })
+})
+
 // The hover-reveal icon buttons live in the row's right slot as siblings of the
 // clickable row button (never nested). They carry only an aria-label (icon, no
 // text), so getByLabelText addresses them unambiguously — distinct from the
