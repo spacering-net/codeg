@@ -1181,6 +1181,12 @@ export const HERMES_PROVIDERS: HermesProviderOption[] = [
     kind: "apiKey",
   },
   {
+    id: "orcarouter",
+    label: "OrcaRouter",
+    needsBaseUrl: false,
+    kind: "apiKey",
+  },
+  {
     id: "openai-api",
     label: "OpenAI / Compatible",
     needsBaseUrl: true,
