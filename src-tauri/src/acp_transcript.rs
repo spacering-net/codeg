@@ -147,6 +147,14 @@ pub enum EntryKind {
     TurnEnd,
 }
 
+/// [`TranscriptEntry::source`] value for the delegation-result notice codeg
+/// injects when a finished sub-agent's result is pushed to its parent.
+///
+/// A prompt carrying it is model-addressed SYSTEM content, not user speech:
+/// readers keep it for the turn structure (the turn splits there, exactly as
+/// at a prompt) but do not render it as a user message in the conversation.
+pub const SOURCE_DELEGATION_RESULT: &str = "delegation-result";
+
 /// One recorded line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptEntry {
@@ -162,6 +170,14 @@ pub struct TranscriptEntry {
     /// reader that predates it sees an ordinary prompt.
     #[serde(rename = "s", default, skip_serializing_if = "std::ops::Not::not")]
     pub steer: bool,
+    /// On a [`EntryKind::Prompt`]: system content codeg injected on the
+    /// agent's behalf — currently only [`SOURCE_DELEGATION_RESULT`], the
+    /// notice delivered when a delegated task finishes. The model received it
+    /// as a prompt, so it splits the turn like any other; the UI does not
+    /// show it as a user message (see the `src` reader in `acp_native`).
+    /// Absent (None) on everything a user actually sent.
+    #[serde(rename = "src", default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// A parsed transcript: its header (when present and readable) plus every
@@ -865,6 +881,7 @@ pub fn record_entry(
     session_id: &str,
     kind: EntryKind,
     payload: serde_json::Value,
+    source: Option<&str>,
 ) -> tokio::sync::oneshot::Receiver<()> {
     record_entry_in(
         &crate::paths::codeg_acp_transcripts_root(),
@@ -872,6 +889,7 @@ pub fn record_entry(
         session_id,
         kind,
         payload,
+        source,
     )
 }
 
@@ -882,12 +900,14 @@ pub fn record_entry_in(
     session_id: &str,
     kind: EntryKind,
     payload: serde_json::Value,
+    source: Option<&str>,
 ) -> tokio::sync::oneshot::Receiver<()> {
     let entry = TranscriptEntry {
         t: now_epoch_ms(),
         k: kind,
         p: payload,
         steer: false,
+        source: source.map(str::to_string),
     };
     queue_for(root, agent_dir, session_id, PendingRecord::Entry(entry))
 }
@@ -899,12 +919,14 @@ pub fn record_steer(
     agent_dir: &str,
     session_id: &str,
     payload: serde_json::Value,
+    source: Option<&str>,
 ) -> tokio::sync::oneshot::Receiver<()> {
     record_steer_in(
         &crate::paths::codeg_acp_transcripts_root(),
         agent_dir,
         session_id,
         payload,
+        source,
     )
 }
 
@@ -914,12 +936,14 @@ pub fn record_steer_in(
     agent_dir: &str,
     session_id: &str,
     payload: serde_json::Value,
+    source: Option<&str>,
 ) -> tokio::sync::oneshot::Receiver<()> {
     let entry = TranscriptEntry {
         t: now_epoch_ms(),
         k: EntryKind::Prompt,
         p: payload,
         steer: true,
+        source: source.map(str::to_string),
     };
     queue_for(root, agent_dir, session_id, PendingRecord::Entry(entry))
 }
@@ -1326,6 +1350,7 @@ mod tests {
             t: 1_750_000_000_001,
             k: kind,
             steer: false,
+            source: None,
             p: payload,
         })
         .unwrap()
@@ -1805,6 +1830,7 @@ mod tests {
             t,
             k: EntryKind::Update,
             steer: false,
+            source: None,
             p: serde_json::json!({
                 "sessionUpdate": kind,
                 "content": { "type": "text", "text": text }
@@ -1812,11 +1838,64 @@ mod tests {
         })
     }
 
+    #[test]
+    fn source_round_trips_as_src_and_is_absent_when_unset() {
+        let plain = TranscriptEntry {
+            t: 7,
+            k: EntryKind::Prompt,
+            steer: false,
+            source: None,
+            p: serde_json::json!([{ "type": "text", "text": "hi" }]),
+        };
+        let encoded = serde_json::to_string(&plain).unwrap();
+        assert!(
+            !encoded.contains("\"src\""),
+            "an unset source adds no bytes to the record: {encoded}"
+        );
+
+        let sourced = TranscriptEntry {
+            source: Some(SOURCE_DELEGATION_RESULT.to_string()),
+            ..plain
+        };
+        let encoded = serde_json::to_string(&sourced).unwrap();
+        assert!(
+            encoded.contains("\"src\":\"delegation-result\""),
+            "got {encoded}"
+        );
+        let decoded: TranscriptEntry = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.source.as_deref(), Some(SOURCE_DELEGATION_RESULT));
+        assert!(!decoded.steer);
+    }
+
+    /// A notice recorded through the steer path keeps both marks: it did not
+    /// start the turn (steer) and it is not user speech (source).
+    #[test]
+    fn record_steer_in_persists_the_source() {
+        let root = temp_root();
+        let ack = record_steer_in(
+            &root,
+            "goose",
+            "s1",
+            serde_json::json!([{ "type": "text", "text": "notice" }]),
+            Some(SOURCE_DELEGATION_RESULT),
+        );
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(ack).unwrap();
+        let transcript = read_transcript_in(&root, "goose", "s1");
+        let entry = transcript.entries.last().expect("one entry");
+        assert!(entry.steer);
+        assert_eq!(entry.source.as_deref(), Some(SOURCE_DELEGATION_RESULT));
+    }
+
     fn prompt_record(t: u64, text: &str) -> PendingRecord {
         PendingRecord::Entry(TranscriptEntry {
             t,
             k: EntryKind::Prompt,
             steer: false,
+            source: None,
             p: serde_json::json!([{ "type": "text", "text": text }]),
         })
     }
@@ -1826,6 +1905,7 @@ mod tests {
             t,
             k: EntryKind::TurnEnd,
             steer: false,
+            source: None,
             p: serde_json::json!({ "stopReason": "end_turn" }),
         })
     }
@@ -1849,6 +1929,7 @@ mod tests {
                 t,
                 k: EntryKind::Update,
                 steer: false,
+                source: None,
                 p: serde_json::json!({
                     "sessionUpdate": "tool_call", "toolCallId": id,
                     "title": "Bash", "kind": "execute", "status": status
@@ -1860,6 +1941,7 @@ mod tests {
                 t,
                 k: EntryKind::Update,
                 steer: false,
+                source: None,
                 p: serde_json::json!({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "image", "data": "AAA", "mimeType": "image/png"}
@@ -1871,6 +1953,7 @@ mod tests {
                 t,
                 k: EntryKind::Update,
                 steer: false,
+                source: None,
                 p: serde_json::json!({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "resource_link", "uri": "file:///a", "name": "a"}
@@ -2065,6 +2148,7 @@ mod tests {
                 t,
                 k: EntryKind::Update,
                 steer: false,
+                source: None,
                 p: serde_json::json!({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": "x"},
@@ -2113,6 +2197,7 @@ mod tests {
             "turn",
             EntryKind::Prompt,
             serde_json::json!([{ "type": "text", "text": "hi" }]),
+            None,
         )
         .await
         .unwrap();
@@ -2131,6 +2216,7 @@ mod tests {
                     "sessionUpdate": "agent_message_chunk",
                     "content": { "type": "text", "text": word }
                 }),
+                None,
             ));
         }
         record_entry_in(
@@ -2139,6 +2225,7 @@ mod tests {
             "turn",
             EntryKind::TurnEnd,
             serde_json::json!({ "stopReason": "end_turn" }),
+            None,
         )
         .await
         .unwrap();
@@ -2179,6 +2266,7 @@ mod tests {
                 "wedged",
                 EntryKind::Prompt,
                 serde_json::json!([{ "type": "text", "text": format!("p{i}") }]),
+                None,
             ));
         }
         // Nothing may be acked while the writes cannot happen.
@@ -2239,6 +2327,7 @@ mod tests {
             "race",
             EntryKind::Prompt,
             serde_json::json!([{ "type": "text", "text": "hi" }]),
+            None,
         );
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         assert!(
@@ -2364,6 +2453,7 @@ mod tests {
             "gate",
             EntryKind::Prompt,
             serde_json::json!([{ "type": "text", "text": "hi" }]),
+            None,
         )
         .await
         .unwrap();

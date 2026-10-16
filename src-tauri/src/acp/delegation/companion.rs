@@ -4198,6 +4198,29 @@ mod tests {
         assert!(required.iter().any(|v| v == "task_ids"));
     }
 
+    /// The schema wording must teach proactive delivery: the result arrives as
+    /// a notification turn, so the parent may end its turn instead of blocking.
+    #[test]
+    fn tool_schema_teaches_proactive_delivery() {
+        let all: Value = serde_json::from_str(TOOL_SCHEMA_JSON).unwrap();
+        let tools = all.as_array().unwrap();
+        let status_desc = tools
+            .iter()
+            .find(|t| t["name"] == "get_delegation_status")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap();
+        assert!(status_desc.contains("DELIVERED to you proactively"));
+        assert!(status_desc.contains("prefer ending your turn over waiting in-turn"));
+        let delegate_desc = tools
+            .iter()
+            .find(|t| t["name"] == "delegate_to_agent")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap();
+        assert!(delegate_desc.contains("delivered proactively as a system notification turn"));
+    }
+
     #[tokio::test]
     async fn custom_agents_extend_the_delegate_enum_after_the_builtins() {
         let mut ctx = ctx();

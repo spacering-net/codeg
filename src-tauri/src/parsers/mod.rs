@@ -475,6 +475,16 @@ impl AgentParser for RouteSanitized {
             if !matches!(turn.role, TurnRole::User) {
                 return true;
             }
+            // The delegation-result notice is a whole-turn decision (the
+            // envelope IS the turn) and drops the turn outright — for the
+            // agents whose store codeg cannot mark (see
+            // `is_delegation_notice_text`).
+            if turn.blocks.iter().any(|block| match block {
+                ContentBlock::Text { text } => is_delegation_notice_text(text),
+                _ => false,
+            }) {
+                return false;
+            }
             turn.blocks.retain_mut(|block| {
                 let ContentBlock::Text { text } = block else {
                     return true;
@@ -529,6 +539,24 @@ fn sanitize_text(text: &mut String) -> bool {
     *text = crate::acp::agent_mentions::strip_internal_agent_routes(text);
     text.truncate(text.trim_end().len());
     true
+}
+
+/// The pushed delegation-result notice, as it lands in a history parser (see
+/// [`crate::acp::delegation::delivery`]): codeg's own side channel handed a
+/// finished sub-agent's result to the parent agent. The model received it as a
+/// prompt, but it is not user speech — no history renders it as a user turn.
+///
+/// ACP-native agents mark it structurally (`TranscriptEntry::source`) and their
+/// parser drops it there. Every OTHER agent writes the notice into its OWN
+/// transcript, where codeg has no marker — so it is recognized by its envelope
+/// instead. Deliberately strict (the opening line AND the closing tag) and
+/// biased toward under-matching, exactly like Claude's interruption markers
+/// (`parsers::claude::is_interrupt_marker`): prose that quotes half the
+/// envelope still renders, which is visible and fixable, where over-matching
+/// would silently delete what someone actually said.
+pub(crate) fn is_delegation_notice_text(text: &str) -> bool {
+    text.trim_start().starts_with("Delegation result")
+        && text.contains("</codeg-delegation-result>")
 }
 
 /// Expand a leading `~` in a relocation env var, for the agents whose OWN
@@ -1906,6 +1934,58 @@ mod route_sanitizer_tests {
             .list_conversations()
             .expect("fixture parses");
         assert_eq!(listed[0].title.as_deref(), Some("hi"));
+    }
+
+    /// The pushed delegation-result notice is model-addressed system content:
+    /// history renders the turn split, never the message. This is the shared
+    /// decorator's job because most agents write the notice into their own
+    /// transcript, where codeg has no structural marker.
+    #[test]
+    fn a_delegation_notice_never_renders_as_a_user_turn() {
+        let notice = "Delegation result: 1 task finished.\n\n<codeg-delegation-result>\n\
+             task t1 (completed, open_code):\ndone\n</codeg-delegation-result>\n\n\
+             Full result: get_delegation_status([\"t1\"]) — or open child \
+             conversation #74.\nThis is a system notification from codeg; no reply needed."
+            .to_string();
+        let detail = sanitized(Fixture {
+            summary: summary(Some("please delegate"), 2),
+            turns: vec![
+                turn(TurnRole::User, "please delegate"),
+                turn(TurnRole::Assistant, "dispatched"),
+                turn(TurnRole::User, &notice),
+                turn(TurnRole::Assistant, "the child finished; here is the summary"),
+            ],
+        });
+
+        assert_eq!(detail.turns.len(), 3, "the notice turn is dropped");
+        assert!(
+            detail.turns.iter().all(|t| !matches!(t.role, TurnRole::User)
+                || t.blocks.iter().all(|b| !matches!(
+                    b,
+                    ContentBlock::Text { text } if text.contains("codeg-delegation-result")
+                ))),
+            "no rendered user turn carries the envelope"
+        );
+        // The count the sidebar shows follows the turns actually rendered.
+        assert_eq!(detail.summary.message_count, 1);
+    }
+
+    /// Under-matching is the contract: prose that quotes half the envelope —
+    /// no closing tag, or the phrase without the tag at all — is a message
+    /// somebody typed and must keep rendering.
+    #[test]
+    fn notice_lookalike_prose_still_renders() {
+        let detail = sanitized(Fixture {
+            summary: summary(Some("hi"), 2),
+            turns: vec![
+                turn(TurnRole::User, "Delegation result: 2 tasks finished."),
+                turn(
+                    TurnRole::User,
+                    "the envelope <codeg-delegation-result> opens with the task line",
+                ),
+            ],
+        });
+        assert_eq!(detail.turns.len(), 2);
     }
 
     #[test]

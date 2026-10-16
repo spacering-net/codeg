@@ -979,6 +979,7 @@ impl ConnectionManager {
         conn_id: &str,
         mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
+        source: Option<String>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1039,6 +1040,7 @@ impl ConnectionManager {
         permit.send(ConnectionCommand::Prompt {
             blocks,
             user_message,
+            source,
         });
         Ok(())
     }
@@ -1064,7 +1066,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None).await
+        self.send_prompt_inner(conn_id, blocks, None, None).await
     }
 
     /// Send a prompt while ensuring a `Conversation` DB row is bound to this
@@ -1525,6 +1527,21 @@ impl ConnectionManager {
             None
         };
 
+        // A delegation-result notice (the push channel's wake-up turn) is
+        // codeg's own side channel telling this parent agent that a sub-agent
+        // finished — system content, never user speech. It is recorded with a
+        // source marker so transcript readers keep the turn split but do not
+        // render it as a user message (`acp_transcript::SOURCE_DELEGATION_RESULT`),
+        // and it is NEVER broadcast as `AcpEvent::UserMessage` — the live view
+        // must not show it either. Recognized by the message id the delegation
+        // sink mints; the id namespace is codeg's own (see `delivery.rs`).
+        let notice_source = client_message_id
+            .as_deref()
+            .filter(|id| {
+                id.starts_with(crate::acp::delegation::delivery::NOTICE_MESSAGE_ID_PREFIX)
+            })
+            .map(|_| crate::acp_transcript::SOURCE_DELEGATION_RESULT.to_string());
+
         // Project the user's prompt blocks for the cross-client viewer
         // broadcast BEFORE `send_prompt_inner` consumes `blocks`, and hand the
         // payload to the connection loop (via `ConnectionCommand::Prompt`) so it
@@ -1533,11 +1550,15 @@ impl ConnectionManager {
         // that it only fires for a prompt actually processed (a failed enqueue
         // delivers no command, so nothing strands a `pending_user_message`).
         // Gated on `delegation.is_none()` (children surface kickoff text
-        // separately) and a bound conversation row (a sidebar-visible turn). The
-        // `message_id` prefers the sender's client-supplied id (exact echo
+        // separately), a bound conversation row (a sidebar-visible turn), and
+        // not being a system notice.
+        // The `message_id` prefers the sender's client-supplied id (exact echo
         // dedup), falling back to a connection-scoped id for non-UI senders.
         let user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)> =
-            if delegation.is_none() && conversation_id_for_status.is_some() {
+            if delegation.is_none()
+                && conversation_id_for_status.is_some()
+                && notice_source.is_none()
+            {
                 let user_blocks = crate::acp::user_blocks_from_prompt(&blocks);
                 if user_blocks.is_empty() {
                     None
@@ -1571,7 +1592,7 @@ impl ConnectionManager {
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self
-            .send_prompt_inner(conn_id, blocks, user_message)
+            .send_prompt_inner(conn_id, blocks, user_message, notice_source)
             .await
         {
             Ok(()) => {
@@ -3258,6 +3279,7 @@ impl ConnectionManager {
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 cmd_tx
                     .send(ConnectionCommand::Steer {
+                    source: None,
                         blocks: wire_blocks,
                         reply: reply_tx,
                     })
@@ -3320,6 +3342,86 @@ impl ConnectionManager {
             Err(join_err) => Err(AcpError::protocol(format!(
                 "steer task did not complete: {join_err}"
             ))),
+        }
+    }
+
+    /// Deliver a system notice into a running turn over native
+    /// `_session/steering` — the delegation-result push's mid-turn delivery,
+    /// used when the parent is busy and its adapter proved native steering.
+    ///
+    /// Deliberately NOT [`Self::submit_feedback_native`]: that path exists for
+    /// user feedback and records a `FeedbackItem` + broadcasts
+    /// `FeedbackSubmitted`, which the UI shows as a note from the user. A
+    /// delegation notice is neither — its only trace is the transcript's steer
+    /// entry, recorded with
+    /// [`crate::acp_transcript::SOURCE_DELEGATION_RESULT`] so transcript
+    /// readers keep the turn split without rendering it as a user message
+    /// (exactly like the notice-turn path).
+    ///
+    /// Errors are the delivery queue's fallback, not user-facing:
+    /// `NoActiveTurn` when the turn settled first or the adapter left the
+    /// payload unconsumed (retry as a notice turn), and a protocol error when
+    /// the adapter does not do native steering at all.
+    pub async fn steer_notice(
+        &self,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+    ) -> Result<(), AcpError> {
+        if blocks.is_empty() {
+            return Err(AcpError::protocol(
+                "steer must contain at least one content block".to_string(),
+            ));
+        }
+        let (state, cmd_tx) = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+            (conn.state.clone(), conn.cmd_tx.clone())
+        };
+        {
+            let s = state.read().await;
+            if !s.native_steering_available {
+                return Err(AcpError::protocol(
+                    "native steering not available on this connection".to_string(),
+                ));
+            }
+            // Cheap pre-flight; the loop's idle arm is the authoritative
+            // `NoActiveTurn` (a turn can settle between this read and the
+            // enqueue — that outcome lands below).
+            if !s.turn_in_flight {
+                return Err(AcpError::NoActiveTurn);
+            }
+        }
+        let (reply, outcome) = tokio::sync::oneshot::channel();
+        cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks,
+                reply,
+                source: Some(crate::acp_transcript::SOURCE_DELEGATION_RESULT.to_string()),
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        match outcome.await {
+            Ok(Ok(SteerOutcome::Injected)) => Ok(()),
+            // Left unconsumed: the caller's queue fallback reroutes it — as a
+            // notice turn, since the turn that would have taken it is over.
+            Ok(Ok(SteerOutcome::PromptRequired)) => Err(AcpError::NoActiveTurn),
+            Ok(Ok(SteerOutcome::StartedNewTurn)) => {
+                // The adapter ignored the `promptRequired` opt-in and ran the
+                // notice as a detached turn of its own — delivered, but the
+                // same downgrade the feedback path applies so later notices
+                // stop paying for the round-trip.
+                state.write().await.native_steering_available = false;
+                tracing::warn!(
+                    connection_id = %conn_id,
+                    "[ACP] _session/steering returned StartedNewTurn for a delegation \
+                     notice; downgrading native steering for this session"
+                );
+                Ok(())
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(AcpError::ProcessExited),
         }
     }
 
@@ -5337,6 +5439,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_delegation_notice_is_never_broadcast_as_a_user_message() {
+        // The delivery push wakes the parent with a prompt, but that prompt is
+        // system content, not user speech: no `UserMessage` payload (the live
+        // view must not render it), and the transcript prompt carries
+        // SOURCE_DELEGATION_RESULT so history readers keep the turn split
+        // without the message.
+        use crate::acp::delegation::delivery::NOTICE_MESSAGE_ID_PREFIX;
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/notice-root").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-notice";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::ClaudeCode,
+            Some(PathBuf::from("/tmp/notice-root")),
+        )
+        .await;
+
+        mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "Delegation result: 1 task finished.".into(),
+            }],
+            Some(folder_id),
+            None,
+            None,
+            Some(format!("{NOTICE_MESSAGE_ID_PREFIX}task-1")),
+        )
+        .await
+        .expect("enqueue should succeed with a live receiver");
+
+        match cmd_rx.try_recv() {
+            Ok(ConnectionCommand::Prompt {
+                blocks,
+                user_message,
+                source,
+            }) => {
+                assert!(
+                    user_message.is_none(),
+                    "a notice must not be broadcast as a user message"
+                );
+                assert_eq!(
+                    source.as_deref(),
+                    Some(crate::acp_transcript::SOURCE_DELEGATION_RESULT),
+                    "the recorded prompt must be marked as system content"
+                );
+                assert!(matches!(
+                    &blocks[0],
+                    PromptInputBlock::Text { text } if text.contains("Delegation result")
+                ));
+            }
+            _ => panic!("expected a Prompt command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn steer_notice_steers_without_becoming_user_feedback() {
+        // The push's mid-turn delivery reuses `_session/steering` but none of
+        // the feedback bookkeeping: no FeedbackItem, no FeedbackSubmitted, no
+        // pending note for `check_user_feedback` to pull. The command carries
+        // the notice source so the recorded steer is system content too.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer_with_source(rx, Ok(SteerOutcome::Injected));
+
+        mgr.steer_notice(
+            "c1",
+            vec![PromptInputBlock::Text {
+                text: "Delegation result: done.".into(),
+            }],
+        )
+        .await
+        .expect("a running turn takes the notice");
+
+        let (blocks, source) = fake_loop.await.unwrap();
+        assert!(matches!(
+            &blocks[0],
+            PromptInputBlock::Text { text } if text.contains("Delegation result")
+        ));
+        assert_eq!(
+            source.as_deref(),
+            Some(crate::acp_transcript::SOURCE_DELEGATION_RESULT)
+        );
+        let state = mgr.get_state("c1").await.unwrap();
+        assert!(
+            state.read().await.feedback.is_empty(),
+            "a notice is not user feedback"
+        );
+        assert!(mgr.read_pending_feedback("c1").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn steer_notice_refuses_without_native_steering() {
+        let mgr = ConnectionManager::new();
+        let _rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_prompting(&mgr, "c1").await;
+
+        let err = mgr
+            .steer_notice(
+                "c1",
+                vec![PromptInputBlock::Text {
+                    text: "Delegation result: done.".into(),
+                }],
+            )
+            .await
+            .expect_err("no native steering on this connection");
+        assert!(matches!(err, AcpError::Protocol(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
     async fn linked_ui_prompt_leaves_the_user_blocks_untouched() {
         use crate::db::test_helpers;
 
@@ -5370,6 +5590,7 @@ mod tests {
         let ConnectionCommand::Prompt {
             blocks,
             user_message,
+            source: _,
         } = command
         else {
             panic!("expected prompt command");
@@ -6100,6 +6321,7 @@ mod tests {
                     text: "filler".into(),
                 }],
                 user_message: None,
+                source: None,
             })
             .await
             .unwrap();
@@ -6111,6 +6333,7 @@ mod tests {
             vec![PromptInputBlock::Text {
                 text: "blocked".into(),
             }],
+            None,
             None,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
@@ -8767,9 +8990,30 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
+                }
+                _ => panic!("expected a Steer command"),
+            }
+        })
+    }
+
+    /// [`answer_steer`] that also reports the command's `source` payload, for
+    /// tests asserting how a steer was classified (a notice vs user feedback).
+    fn answer_steer_with_source(
+        mut rx: tokio::sync::mpsc::Receiver<ConnectionCommand>,
+        outcome: Result<SteerOutcome, AcpError>,
+    ) -> tokio::task::JoinHandle<(Vec<PromptInputBlock>, Option<String>)> {
+        tokio::spawn(async move {
+            match rx.recv().await {
+                Some(ConnectionCommand::Steer {
+                    blocks,
+                    reply,
+                    source,
+                }) => {
+                    let _ = reply.send(outcome);
+                    (blocks, source)
                 }
                 _ => panic!("expected a Steer command"),
             }

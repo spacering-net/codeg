@@ -1073,6 +1073,9 @@ mod tauri_app {
                         &cm_state,
                         db_conn.clone(),
                         effective_data_dir.clone(),
+                        app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                            .inner()
+                            .clone(),
                     );
                     app.manage(broker.clone());
                     app.manage(tokens.clone());

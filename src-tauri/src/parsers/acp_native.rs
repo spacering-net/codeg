@@ -160,7 +160,7 @@ impl AcpNativeParser {
         let user_turns = transcript
             .entries
             .iter()
-            .filter(|e| e.k == EntryKind::Prompt)
+            .filter(|e| e.k == EntryKind::Prompt && e.source.is_none())
             .count();
         ConversationSummary {
             id: session_id.to_string(),
@@ -188,7 +188,9 @@ fn epoch_ms_to_utc(ms: u64) -> DateTime<Utc> {
 }
 
 fn first_prompt_title(entries: &[TranscriptEntry]) -> Option<String> {
-    let first = entries.iter().find(|e| e.k == EntryKind::Prompt)?;
+    let first = entries
+        .iter()
+        .find(|e| e.k == EntryKind::Prompt && e.source.is_none())?;
     let text = prompt_text(&first.p);
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -458,6 +460,17 @@ pub fn project_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
                 } else {
                     steered = false;
                     prompt_start = Some(turns.len());
+                }
+                // System-injected content (the delegation-result notice) is
+                // model-addressed: the split stays — the reply that follows is
+                // its own part — but there is no user turn to render. All the
+                // bookkeeping above still ran, so turn bounds and the steer
+                // duration rule behave exactly as if the message were visible.
+                if entry.source.is_some() {
+                    prompt_just_recorded = true;
+                    turn_start_hint = Some(entry.t);
+                    user_prose_open = false;
+                    continue;
                 }
                 let blocks = prompt_blocks(&entry.p);
                 turns.push(MessageTurn {
@@ -1053,6 +1066,7 @@ mod tests {
             k,
             p,
             steer: false,
+            source: None,
         }
     }
 
@@ -2254,6 +2268,114 @@ mod tests {
             ContentBlock::Text { text } => assert_eq!(text, "still here"),
             other => panic!("expected text, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_delegation_notice_splits_the_turn_without_rendering_a_user_turn() {
+        // The pushed result notice is a real prompt on the wire (the model was
+        // handed it), so the turn split must stay exactly where a prompt puts
+        // it — but it is system content, so no user turn may be rendered for
+        // it, live or from history.
+        let mut notice = prompt(50_000, "Delegation result: 1 task finished.");
+        notice.source = Some(crate::acp_transcript::SOURCE_DELEGATION_RESULT.to_string());
+        let entries = vec![
+            prompt(10_000, "please delegate this"),
+            update(20_000, text_chunk("agent_message_chunk", "dispatched")),
+            turn_end(30_000),
+            notice,
+            update(
+                60_000,
+                text_chunk("agent_message_chunk", "the child finished; here is the summary"),
+            ),
+            turn_end(70_000),
+        ];
+
+        let turns = project_turns(&entries);
+        assert!(
+            turns
+                .iter()
+                .all(|t| !matches!(t.role, TurnRole::User)
+                    || t.blocks.iter().all(|b| !matches!(
+                        b,
+                        ContentBlock::Text { text } if text.contains("Delegation result")
+                    ))),
+            "the notice must not surface as a user turn: {turns:#?}"
+        );
+        // The reply that followed the notice is its own part.
+        assert!(
+            turns.iter().any(|t| matches!(t.role, TurnRole::Assistant)
+                && t.blocks.iter().any(|b| matches!(
+                    b,
+                    ContentBlock::Text { text } if text.contains("here is the summary")
+                ))),
+            "the post-notice reply still renders: {turns:#?}"
+        );
+        // The user turn count is the real prompt only.
+        assert_eq!(
+            turns
+                .iter()
+                .filter(|t| matches!(t.role, TurnRole::User))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_delegation_notice_stays_out_of_the_summary_and_title() {
+        let root = temp_root();
+        let agent = AgentType::custom("acp-native-notice").unwrap();
+        let dir = "acp-native-notice";
+        crate::acp_transcript::append_line_in(
+            &root,
+            dir,
+            "sess1",
+            &serde_json::to_string(&TranscriptHeader::new(
+                "custom:acp-native-notice",
+                "sess1",
+                "/repo/project",
+                1_750_000_000_000,
+            ))
+            .unwrap(),
+        );
+        let mut notice = prompt(1_750_000_000_400, "Delegation result: 1 task finished.");
+        notice.source = Some(crate::acp_transcript::SOURCE_DELEGATION_RESULT.to_string());
+        for e in [
+            prompt(1_750_000_000_100, "build the thing"),
+            update(1_750_000_000_200, text_chunk("agent_message_chunk", "dispatched")),
+            turn_end(1_750_000_000_300),
+            notice,
+            update(
+                1_750_000_000_500,
+                text_chunk("agent_message_chunk", "the child finished"),
+            ),
+            turn_end(1_750_000_000_600),
+        ] {
+            crate::acp_transcript::append_line_in(
+                &root,
+                dir,
+                "sess1",
+                &serde_json::to_string(&e).unwrap(),
+            );
+        }
+
+        let parser = AcpNativeParser::new_in(agent, root.clone());
+        let detail = parser.get_conversation("sess1").expect("found");
+        assert_eq!(
+            detail.summary.message_count, 1,
+            "a notice is not a user message"
+        );
+        assert_eq!(detail.summary.title.as_deref(), Some("build the thing"));
+        assert!(
+            detail
+                .turns
+                .iter()
+                .all(|t| !matches!(t.role, TurnRole::User)
+                    || t.blocks.iter().all(|b| !matches!(
+                        b,
+                        ContentBlock::Text { text } if text.contains("Delegation result")
+                    ))),
+            "history renders no user turn for the notice"
+        );
     }
 
     fn temp_root() -> PathBuf {

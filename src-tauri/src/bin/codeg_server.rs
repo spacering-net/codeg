@@ -273,6 +273,7 @@ async fn async_main() -> ExitCode {
         &connection_manager,
         db.conn.clone(),
         data_dir.clone(),
+        acp_event_bus.clone(),
     );
     let state = Arc::new(AppState {
         db,
