@@ -588,6 +588,14 @@ pub fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Per-entry cap for thinking/text blocks folded into a sub-agent timeline, so
+/// one huge block cannot balloon the stats every detail load carries. Almost
+/// every block is far below it; the ones that reach it are typically the
+/// child's long final report (measured on local Claude Code transcripts: 27 of
+/// 7,715 blocks, the longest ~40K chars), which the card also shows in full as
+/// the Agent call's own result.
+pub(crate) const TIMELINE_ENTRY_MAX_CHARS: usize = 16_384;
+
 /// True when `id` is safe to embed as a single filename component beneath a
 /// session's `subagents/` directory (Claude Code's and CodeBuddy's sub-agent
 /// transcript layout). The id is read straight from transcript JSON

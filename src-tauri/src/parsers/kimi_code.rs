@@ -959,7 +959,7 @@ fn subagent_id_from_output(output: &str) -> Option<&str> {
 /// `tool.call` with its `tool.result` by `toolCallId`. The outer
 /// `tool_args_preview` / `tool_result_preview` helpers are reused so nested calls
 /// render identically to top-level ones. Mirrors `codebuddy.rs`'s
-/// `parse_codebuddy_subagent_tool_calls`.
+/// `parse_codebuddy_subagent_transcript`.
 ///
 /// Intentionally non-recursive: a nested `Agent` call inside the sub-agent shows
 /// as a flat leaf tool here (no further descent), which bounds the work and

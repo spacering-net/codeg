@@ -2460,10 +2460,12 @@ function reducer(
       // Agent transcripts ride along on promotion: the settled card keeps the
       // interleaved order it showed live, and the authoritative detail reload
       // that later replaces `localTurns` supplies `agent_stats.timeline`
-      // parsed from the child's own transcript (Claude Code, Qoder). The only
-      // live prose comes from Claude Code; elsewhere the transcript is tool
-      // markers alone, which the card renders like stats, so a reload from
-      // an agent without a parsed timeline does not change the card's shape.
+      // parsed from the child's own transcript (Claude Code, Qoder, CodeBuddy).
+      // Live sub-agent prose arrives from Claude Code's forwarded chunks and
+      // from CodeBuddy's parented chunks (routed by the backend into the live
+      // Agent capsule); agents without a parsed timeline still render their
+      // transcript as tool markers alone, so a reload does not change the
+      // card's shape.
       const streamingTurns = sourceLiveMessage
         ? buildStreamingTurnsFromLiveMessage(
             current.conversationId,

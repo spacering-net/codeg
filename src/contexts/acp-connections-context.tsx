@@ -231,10 +231,12 @@ export interface ClaudeApiRetryState {
 
 export type LiveContentBlock =
   /**
-   * `parentToolUseId`: subagent attribution (claude-agent-acp ≥0.63,
-   * `_meta.claudeCode.parentToolUseId`). Parented text/thinking belongs to
-   * the live Agent capsule of that tool call — the runtime store routes it
-   * out of the main thread. `undefined` = main-thread content.
+   * `parentToolUseId`: subagent attribution — Claude Code nests it at
+   * `_meta.claudeCode.parentToolUseId` (claude-agent-acp ≥0.63), CodeBuddy
+   * sends it flat at `_meta["codebuddy.ai/parentToolCallId"]`. Parented
+   * text/thinking belongs to the live Agent capsule of that tool call — the
+   * runtime store routes it out of the main thread. `undefined` = main-thread
+   * content.
    */
   | { type: "text"; text: string; parentToolUseId?: string }
   | { type: "thinking"; text: string; parentToolUseId?: string }

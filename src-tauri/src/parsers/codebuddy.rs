@@ -8,8 +8,9 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
-    ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
+    AgentExecutionStats, AgentTimelineEntry, AgentToolCall, AgentType, ContentBlock,
+    ConversationDetail, ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage,
+    UnifiedMessage,
 };
 use crate::parsers::claude::{
     capture_tag, task_notification_status_regex, task_notification_summary_regex,
@@ -20,7 +21,7 @@ use crate::parsers::{
     infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
     merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
     structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
-    ParseError,
+    ParseError, TIMELINE_ENTRY_MAX_CHARS,
 };
 
 /// Resolve CodeBuddy's config dir, honoring `CODEBUDDY_CONFIG_DIR`, else
@@ -1037,16 +1038,29 @@ fn apply_background_lifecycle(
     }
 }
 
-/// Parse a CodeBuddy sub-agent transcript and extract its tool calls.
+/// Parse a CodeBuddy sub-agent transcript into its tool calls and its mixed
+/// activity timeline.
 ///
 /// The sub-agent JSONL uses the same OpenAI-items schema as the main session
-/// (`function_call` / `function_call_result` records); we pair them by `callId`
-/// and reuse the outer parser's name/preview/error helpers so nested calls
-/// render identically to top-level ones. Mirrors `claude.rs`'s
+/// (`function_call` / `function_call_result` records); we pair calls and
+/// results by `callId` and reuse the outer parser's name/preview/error helpers
+/// so nested calls render identically to top-level ones. The timeline is the
+/// card's historical activity view: the child's `reasoning` records and
+/// assistant `message` records interleave with its tool calls exactly as the
+/// model emitted them, and that order is preserved — each `tool_call` entry's
+/// `child_index` anchors into the returned vec by ordinal, which stays exact
+/// because the vec keeps arrival order. Mirrors `claude.rs`'s
 /// `parse_subagent_tool_calls`, which does the same for Claude's schema.
-fn parse_codebuddy_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
+///
+/// Only the sub-agent's own records enter the timeline: the transcript opens
+/// with the dispatching user prompt (`role: "user"` — measured on a real
+/// transcript) and roleless or malformed lines are ignored, so a child that
+/// ran no tools still yields its prose without leaking the prompt.
+fn parse_codebuddy_subagent_transcript(
+    path: &Path,
+) -> (Vec<AgentToolCall>, Vec<AgentTimelineEntry>) {
     let Ok(file) = fs::File::open(path) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let reader = BufReader::new(file);
 
@@ -1054,6 +1068,7 @@ fn parse_codebuddy_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
     let mut calls: Vec<(Option<String>, String, Option<String>)> = Vec::new();
     let mut results: std::collections::HashMap<String, (Option<String>, bool)> =
         std::collections::HashMap::new();
+    let mut timeline: Vec<AgentTimelineEntry> = Vec::new();
 
     for line in reader.lines() {
         let Ok(line) = line else { continue };
@@ -1070,6 +1085,11 @@ fn parse_codebuddy_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
                     resolve_tool_call_name(&value),
                     tool_input_preview(&value).map(|s| truncate_str(&s, 500)),
                 ));
+                timeline.push(AgentTimelineEntry {
+                    entry_type: "tool_call".to_string(),
+                    text: None,
+                    child_index: Some(calls.len() - 1),
+                });
             }
             "function_call_result" => {
                 if let Some(id) = call_id(&value) {
@@ -1077,11 +1097,40 @@ fn parse_codebuddy_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
                     results.insert(id, (output, tool_is_error(&value)));
                 }
             }
+            // The sub-agent's own reasoning, interleaved with its calls. The
+            // text lives in `rawContent[].text` (`reasoning_text` items) —
+            // some records mirror it under `content[]`, which
+            // `reasoning_text` falls back to.
+            "reasoning" => {
+                let text = reasoning_text(&value);
+                if !text.trim().is_empty() {
+                    timeline.push(AgentTimelineEntry {
+                        entry_type: "thinking".to_string(),
+                        text: Some(truncate_str(&text, TIMELINE_ENTRY_MAX_CHARS)),
+                        child_index: None,
+                    });
+                }
+            }
+            // The sub-agent's narration. The transcript's opening `message`
+            // is the dispatching user prompt, excluded by the role guard.
+            "message" => {
+                if value.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+                    continue;
+                }
+                let text = collect_text(&value, "output_text");
+                if !text.trim().is_empty() {
+                    timeline.push(AgentTimelineEntry {
+                        entry_type: "text".to_string(),
+                        text: Some(truncate_str(&text, TIMELINE_ENTRY_MAX_CHARS)),
+                        child_index: None,
+                    });
+                }
+            }
             _ => {}
         }
     }
 
-    calls
+    let tool_calls = calls
         .into_iter()
         .map(|(id, tool_name, input_preview)| {
             let (output_preview, is_error) =
@@ -1093,21 +1142,29 @@ fn parse_codebuddy_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
                 is_error,
             }
         })
-        .collect()
+        .collect();
+
+    (tool_calls, timeline)
 }
 
 /// Build `agent_stats` for an `Agent` `function_call_result` by loading the
-/// sub-agent's own transcript and extracting its nested tool calls — the
-/// historical mirror of the live path, which synthesizes the same `agent_stats`
-/// from the streamed child tool calls (`conversation-runtime-context.tsx`).
+/// sub-agent's own transcript and extracting its nested tool calls and its
+/// thinking/text timeline — the historical mirror of the live path, which
+/// routes the linked chunks into the Agent capsule as they stream (see
+/// `subagent_chunk_parent_tool_use_id`). With both halves populated, the
+/// settled card shows the child's activity in the same order after a reopen
+/// as it did live; the live view may merge successive same-kind chunks into
+/// one entry where the parser writes one entry per transcript record.
 ///
 /// Returns `None` for ordinary results (no sub-agent linkage — see
-/// [`subagent_transcript_id`]), a missing/empty transcript, or a sub-agent that
-/// ran no tools, so the common case stays a plain tool result. A still-running
-/// async worker also lands here (its transcript has no completed calls yet) and
-/// recovers on the next refetch. `main_session_path` is the real `.jsonl` path
-/// the parser is reading; the transcript sits beside it under
-/// `<session_dir>/subagents/`.
+/// [`subagent_transcript_id`]) or a transcript carrying neither calls nor
+/// assistant prose (missing, or only the dispatching prompt / bad lines —
+/// e.g. a worker that has written nothing yet), so those stay plain tool
+/// results. A still-running async worker's transcript may already carry prose
+/// and calls, so its card shows the activity so far and recovers the rest on
+/// the next refetch — the same semantics Claude's parser gives its
+/// sub-agents. `main_session_path` is the real `.jsonl` path the parser is
+/// reading; the transcript sits beside it under `<session_dir>/subagents/`.
 fn agent_stats_from_subagent(
     result: &Value,
     main_session_path: &Path,
@@ -1126,8 +1183,8 @@ fn agent_stats_from_subagent(
     if !transcript.exists() {
         return None;
     }
-    let tool_calls = parse_codebuddy_subagent_tool_calls(&transcript);
-    if tool_calls.is_empty() {
+    let (tool_calls, timeline) = parse_codebuddy_subagent_transcript(&transcript);
+    if tool_calls.is_empty() && timeline.is_empty() {
         return None;
     }
     let tool_count = tool_calls.len() as u32;
@@ -1145,7 +1202,7 @@ fn agent_stats_from_subagent(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
-        timeline: Vec::new(),
+        timeline,
         recovered_result: None,
         // CodeBuddy's sub-agent transcript is a file under the parent session,
         // not a session of its own.
@@ -1295,6 +1352,218 @@ mod tests {
             writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
                 .expect("write line");
         }
+    }
+
+    fn write_subagent_transcript(root: &Path, session_id: &str, agent_id: &str, records: &[Value]) {
+        let dir = root.join(session_id).join("subagents");
+        std::fs::create_dir_all(&dir).expect("create subagents dir");
+        let mut file =
+            std::fs::File::create(dir.join(format!("{agent_id}.jsonl"))).expect("create jsonl");
+        for record in records {
+            writeln!(
+                file,
+                "{}",
+                serde_json::to_string(record).expect("serialize")
+            )
+            .expect("write line");
+        }
+    }
+
+    fn agent_result(agent_id: &str) -> Value {
+        serde_json::json!({
+            "providerData": {"toolResult": {"subAgent": {"sessionId": agent_id}}}
+        })
+    }
+
+    fn subagent_stats(
+        root: &Path,
+        session_id: &str,
+        agent_id: &str,
+    ) -> Option<AgentExecutionStats> {
+        agent_stats_from_subagent(
+            &agent_result(agent_id),
+            &root.join(format!("{session_id}.jsonl")),
+        )
+    }
+
+    fn user_prompt(text: &str) -> Value {
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}]
+        })
+    }
+
+    fn reasoning(raw: &str) -> Value {
+        // `content` deliberately absent: the text lives in `rawContent[].text`.
+        serde_json::json!({
+            "type": "reasoning",
+            "rawContent": [{"type": "reasoning_text", "text": raw}]
+        })
+    }
+
+    fn function_call(call_id: &str, name: &str, args: &str) -> Value {
+        serde_json::json!({
+            "type": "function_call",
+            "callId": call_id,
+            "name": name,
+            "arguments": args
+        })
+    }
+
+    fn function_call_result(call_id: &str, output: &str) -> Value {
+        serde_json::json!({
+            "type": "function_call_result",
+            "callId": call_id,
+            "output": output
+        })
+    }
+
+    fn assistant_message(text: &str) -> Value {
+        serde_json::json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}]
+        })
+    }
+
+    /// The timeline is the card's historical activity view: the child's
+    /// reasoning and narration interleave with its tool calls in transcript
+    /// order, each `tool_call` entry anchoring into `tool_calls` by ordinal.
+    #[test]
+    fn subagent_timeline_orders_thinking_text_and_tool_calls() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-tl-{}", uuid::Uuid::new_v4()));
+        write_subagent_transcript(
+            &root,
+            "sess",
+            "agent-t1",
+            &[
+                user_prompt("DISPATCH do the job"),
+                reasoning("PLAN ONE"),
+                function_call("call_1", "Read", r#"{"path":"src/main.rs"}"#),
+                function_call_result("call_1", "file body"),
+                assistant_message("mid report"),
+                function_call("call_2", "Write", r#"{"path":"out.txt"}"#),
+                function_call_result("call_2", "ok"),
+                assistant_message("FINAL report"),
+            ],
+        );
+        let stats = subagent_stats(&root, "sess", "agent-t1").expect("stats for a busy subagent");
+
+        assert_eq!(stats.tool_calls.len(), 2);
+        assert_eq!(stats.tool_calls[0].tool_name, "Read");
+        assert_eq!(stats.tool_calls[1].tool_name, "Write");
+        assert_eq!(stats.total_tool_use_count, Some(2));
+
+        let kinds: Vec<&str> = stats
+            .timeline
+            .iter()
+            .map(|e| e.entry_type.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["thinking", "tool_call", "text", "tool_call", "text"]
+        );
+        let texts: Vec<&str> = stats
+            .timeline
+            .iter()
+            .filter_map(|e| e.text.as_deref())
+            .collect();
+        assert_eq!(texts, ["PLAN ONE", "mid report", "FINAL report"]);
+        let indexes: Vec<usize> = stats
+            .timeline
+            .iter()
+            .filter_map(|e| e.child_index)
+            .collect();
+        assert_eq!(indexes, [0, 1]);
+
+        // The dispatching prompt is the transcript's first line and must never
+        // surface in the card; a roleless message is ignored the same way.
+        assert!(!texts.iter().any(|t| t.contains("DISPATCH")));
+    }
+
+    /// A roleless `message` (and anything that is not the child's own
+    /// assistant prose) stays out of the timeline.
+    #[test]
+    fn subagent_user_prompt_and_roleless_messages_never_enter_the_timeline() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-up-{}", uuid::Uuid::new_v4()));
+        write_subagent_transcript(
+            &root,
+            "sess",
+            "agent-up",
+            &[
+                user_prompt("DISPATCH secret"),
+                serde_json::json!({
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "ROLELESS"}]
+                }),
+                assistant_message("own prose"),
+            ],
+        );
+        let stats = subagent_stats(&root, "sess", "agent-up").expect("text-only subagent");
+        let texts: Vec<&str> = stats
+            .timeline
+            .iter()
+            .filter_map(|e| e.text.as_deref())
+            .collect();
+        assert_eq!(texts, ["own prose"]);
+    }
+
+    /// Reasoning text lives in `rawContent[].text` and is capped per entry.
+    #[test]
+    fn subagent_thinking_reads_rawcontent_and_truncates() {
+        let long = "x".repeat(TIMELINE_ENTRY_MAX_CHARS + 10);
+        let root = std::env::temp_dir().join(format!("codeg-cb-tr-{}", uuid::Uuid::new_v4()));
+        write_subagent_transcript(
+            &root,
+            "sess",
+            "agent-tr",
+            &[reasoning(&long), reasoning("short thought")],
+        );
+        let stats = subagent_stats(&root, "sess", "agent-tr").expect("reasoning-only subagent");
+        assert_eq!(stats.timeline.len(), 2);
+        let truncated = stats.timeline[0].text.as_deref().expect("truncated text");
+        assert_eq!(truncated.chars().count(), TIMELINE_ENTRY_MAX_CHARS + 3);
+        assert!(truncated.starts_with("xxx"));
+        assert!(truncated.ends_with("..."));
+        assert_eq!(stats.timeline[1].text.as_deref(), Some("short thought"));
+    }
+
+    /// A child that wrote prose but ran no tools still gets `agent_stats` —
+    /// with empty `tool_calls` and a prose timeline — instead of collapsing
+    /// into a plain tool result.
+    #[test]
+    fn subagent_text_only_still_gets_stats() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-to-{}", uuid::Uuid::new_v4()));
+        write_subagent_transcript(
+            &root,
+            "sess",
+            "agent-to",
+            &[
+                user_prompt("DISPATCH"),
+                assistant_message("answer without tools"),
+            ],
+        );
+        let stats = subagent_stats(&root, "sess", "agent-to").expect("text-only subagent");
+        assert!(stats.tool_calls.is_empty());
+        assert_eq!(stats.total_tool_use_count, Some(0));
+        assert_eq!(stats.timeline.len(), 1);
+        assert_eq!(stats.timeline[0].entry_type, "text");
+        assert_eq!(
+            stats.timeline[0].text.as_deref(),
+            Some("answer without tools")
+        );
+    }
+
+    /// A transcript with neither calls nor assistant prose — missing, or only
+    /// the dispatching prompt / bad lines — stays a plain tool result.
+    #[test]
+    fn subagent_without_prose_or_calls_is_no_stats() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-empty-{}", uuid::Uuid::new_v4()));
+        write_subagent_transcript(&root, "sess", "agent-empty", &[user_prompt("DISPATCH")]);
+        assert!(subagent_stats(&root, "sess", "agent-empty").is_none());
+        // A missing transcript is equally `None`.
+        assert!(subagent_stats(&root, "sess", "agent-missing").is_none());
     }
 
     #[test]
