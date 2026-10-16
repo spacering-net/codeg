@@ -1,4 +1,4 @@
-use crate::acp::temp_reclaim as codeg_temp_reclaim;
+﻿use crate::acp::temp_reclaim as codeg_temp_reclaim;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -1062,6 +1062,92 @@ pub async fn acp_antigravity_sign_out(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
     let result = acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityAddAccountStartParams {
+    pub method_id: String,
+}
+
+pub async fn acp_antigravity_add_account_start(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpAntigravityAddAccountStartParams>,
+) -> Result<Json<crate::acp::antigravity_login::AntigravityLoginStart>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_add_account_start_core(&state.db, params.method_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_antigravity_list_accounts(
+) -> Result<Json<crate::acp::antigravity_accounts::AntigravityAccountsState>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_list_accounts_core()
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravitySwitchAccountParams {
+    pub account_id: String,
+}
+
+pub async fn acp_antigravity_switch_account(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpAntigravitySwitchAccountParams>,
+) -> Result<Json<crate::acp::antigravity_accounts::AntigravityAccountsState>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_switch_account_core(&state.connection_manager, params.account_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityDeleteAccountParams {
+    pub account_id: String,
+}
+
+pub async fn acp_antigravity_delete_account(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpAntigravityDeleteAccountParams>,
+) -> Result<Json<crate::acp::antigravity_accounts::AntigravityAccountsState>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_delete_account_core(&state.connection_manager, params.account_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityGetQuotaParams {
+    pub account_id: Option<String>,
+}
+
+pub async fn acp_antigravity_get_quota(
+    Json(params): Json<AcpAntigravityGetQuotaParams>,
+) -> Result<Json<crate::acp::antigravity_accounts::AntigravityQuotaSummary>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_get_quota_core(params.account_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityCheckPendingLoginParams {
+    pub handle: String,
+}
+
+pub async fn acp_antigravity_check_pending_login(
+    Json(params): Json<AcpAntigravityCheckPendingLoginParams>,
+) -> Result<Json<Option<crate::acp::antigravity_accounts::AntigravityAccountsState>>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_check_pending_login_core(params.handle)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
