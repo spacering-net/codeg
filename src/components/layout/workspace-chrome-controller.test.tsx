@@ -39,6 +39,21 @@ const spies = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/api", () => ({ openSettingsWindow: vi.fn() }))
+// The floating ball reads the active ACP connection (to stop a turn) and the
+// zoom level. Both pull provider modules this test does not exercise, and the
+// ACP context imports the workspace store in a shape the stub below does not
+// provide; the ⌘W behaviour under test touches neither.
+vi.mock("@/contexts/acp-connections-context", () => ({
+  useAcpActions: () => ({ cancel: vi.fn() }),
+  // Not a zustand store: it returns the context value directly.
+  useConnectionStore: () => ({ getActiveKey: () => null }),
+}))
+vi.mock("@/hooks/use-appearance", () => ({
+  useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: vi.fn() }),
+}))
+vi.mock("@/components/layout/floating-ball", () => ({
+  FloatingBall: () => null,
+}))
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: { id: 1, path: "/repo" } }),
 }))
