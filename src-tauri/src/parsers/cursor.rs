@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, TimeZone, Utc};
+use regex::Regex;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
@@ -350,7 +352,7 @@ fn first_user_text(conn: &Connection, state: &DecodedState) -> Option<String> {
     let user_ref = wire::first_bytes(&agent_turn, 1)?;
     let msg = read_user_message(conn, &user_ref);
     let text = decode_user_text(conn, &msg)?;
-    (!text.trim().is_empty()).then_some(text)
+    cursor_visible_user_text(&text)
 }
 
 // ---------------------------------------------------------------------------
@@ -853,6 +855,42 @@ fn read_user_message(conn: &Connection, user_ref: &[u8]) -> Vec<u8> {
     read_blob(conn, user_ref).unwrap_or_else(|| user_ref.to_vec())
 }
 
+/// Cursor injects a finished background shell as a `UserMessage`:
+/// `<timestamp>…</timestamp><system_notification>…<task>…</task></system_notification>`
+/// plus an optional `<user_query>Briefly inform the user…</user_query>`.
+/// Claude strips `<system-reminder>`; Grok honors `_meta.hideFromScrollback`.
+/// Cursor's ACP store has neither flag, so the same class is dropped here.
+/// A real prompt that only *mentions* the tag name is left alone — the
+/// patterns require a closed wrapper (and, for `user_query`, Cursor's stock
+/// follow-up sentence). `<timestamp>` is only removed when it sits on the
+/// same injection as `<system_notification>`; a lone date wrapper in user
+/// prose is kept.
+fn cursor_injection_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?s)",
+            r"(?:<timestamp>.*?</timestamp>\s*)?",
+            r"<system_notification>.*?</system_notification>",
+            r"(?:\s*<user_query>\s*Briefly inform the user about the task result.*?</user_query>)?",
+            r"|<user_query>\s*Briefly inform the user about the task result.*?</user_query>",
+        ))
+        .expect("cursor injection regex")
+    })
+}
+
+/// Visible user prose after stripping Cursor's injected wrappers.
+/// `None` if the turn was only an injection (do not render a user bubble).
+fn cursor_visible_user_text(text: &str) -> Option<String> {
+    let cleaned = cursor_injection_regex().replace_all(text, "");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// User prompt text from a decoded `UserMessage`: `text` (1), else the
 /// large-text blob (`text_blob_id`, 18), else `rich_text` (8).
 fn decode_user_text(conn: &Connection, msg: &[u8]) -> Option<String> {
@@ -979,10 +1017,10 @@ fn build_turns(
             if let Some(user_ref) = wire::first_bytes(&agent_turn, 1) {
                 let msg = read_user_message(conn, &user_ref);
                 let mut user_blocks: Vec<ContentBlock> = Vec::new();
-                if let Some(text) = decode_user_text(conn, &msg) {
-                    if !text.trim().is_empty() {
-                        user_blocks.push(ContentBlock::Text { text });
-                    }
+                if let Some(text) = decode_user_text(conn, &msg)
+                    .and_then(|text| cursor_visible_user_text(&text))
+                {
+                    user_blocks.push(ContentBlock::Text { text });
                 }
                 // Text first, then attachments — matching the composer's
                 // send order. An image-only prompt still produces the turn.
@@ -3860,5 +3898,234 @@ mod tests {
             CursorParser::for_env(&env).chats_dir,
             PathBuf::from("/relocated/xdg").join("cursor").join("chats")
         );
+    }
+
+    /// Cursor injects a finished background shell as a `UserMessage` (no
+    /// `hideFromScrollback`, unlike Grok). Captured from conversation 373.
+    const CURSOR_BG_TASK_NOTICE: &str = "\
+<timestamp>Thursday, Oct 15, 2026, 7:57 PM (UTC+8)</timestamp>
+<system_notification>
+The following task has finished. If you were already aware, ignore this notification and do not restate prior responses.
+
+<task>
+kind: shell
+status: error
+task_id: 870807
+title: Search files mentioning 全面复盘
+tool_call_id: call-7e8cb87f-415b-4a3b-8adb-996488ce3b1e-17
+fc_cca59175-c822-9eb3-b35d-2c8dedd21089_0
+detail: signal=SIGTERM
+</task>
+</system_notification>";
+
+    const CURSOR_BG_TASK_NOTICE_WITH_QUERY: &str = "\
+<timestamp>Thursday, Oct 15, 2026, 7:57 PM (UTC+8)</timestamp>
+<system_notification>
+The following task has finished. If you were already aware, ignore this notification and do not restate prior responses.
+
+<task>
+kind: shell
+status: error
+task_id: 870808
+title: Search files mentioning 历史对话记录
+tool_call_id: call-7e8cb87f-415b-4a3b-8adb-996488ce3b1e-18
+fc_cca59175-c822-9eb3-b35d-2c8dedd21089_1
+detail: signal=SIGTERM
+</task>
+</system_notification>
+<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed). If there's no follow-ups needed, don't explicitly say that.</user_query>";
+
+    /// One ACP session whose turns are (user text, assistant text) pairs.
+    fn build_acp_text_turns(root: &Path, session_id: &str, pairs: &[(&str, &str)]) {
+        let session_dir = root.join("acp-sessions").join(session_id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let mut store = StoreBuilder::create(&session_dir.join("store.db"));
+
+        let mut turn_ids = Vec::new();
+        for (user_text, assistant_text) in pairs {
+            turn_ids.push(put_text_only_turn(&mut store, user_text, assistant_text));
+        }
+
+        let mut state = Vec::new();
+        for turn_id in &turn_ids {
+            field_bytes(8, turn_id, &mut state);
+        }
+        field_varint(26, 1_784_000_000_000, &mut state);
+        let root_id = store.put_blob(&state);
+        store.put_meta(&serde_json::json!({
+            "agentId": session_id,
+            "latestRootBlobId": hex_encode(&root_id),
+            "name": "Find Previous Article",
+            "createdAt": 1_784_000_000_000_u64,
+        }));
+        std::fs::write(
+            session_dir.join("meta.json"),
+            r#"{"schemaVersion":1,"cwd":"/Users/me/acp-proj","title":"Find Previous Article"}"#,
+        )
+        .unwrap();
+    }
+
+    fn user_texts(detail: &ConversationDetail) -> Vec<&str> {
+        detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hides_cursor_background_task_notification() {
+        let tmp = tempfile::tempdir().unwrap();
+        build_acp_text_turns(
+            tmp.path(),
+            "acp-bg-notice",
+            &[
+                ("之前持久化过一篇公众号文章", "文章还在原目录。"),
+                (CURSOR_BG_TASK_NOTICE, "那两次全盘搜索已经停掉了。"),
+                (CURSOR_BG_TASK_NOTICE_WITH_QUERY, "不影响结论。"),
+            ],
+        );
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        let detail = parser.get_conversation("acp-bg-notice").unwrap();
+
+        let users = user_texts(&detail);
+        assert_eq!(users, ["之前持久化过一篇公众号文章"]);
+        assert!(users.iter().all(|t| !t.contains("system_notification")));
+        assert!(users.iter().all(|t| !t.contains("<timestamp>")));
+        assert!(users.iter().all(|t| !t.contains("<user_query>")));
+
+        let assistants: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::Assistant))
+            .collect();
+        assert_eq!(assistants.len(), 3);
+        assert!(matches!(
+            &assistants[1].blocks[0],
+            ContentBlock::Text { text } if text == "那两次全盘搜索已经停掉了。"
+        ));
+        assert!(matches!(
+            &assistants[2].blocks[0],
+            ContentBlock::Text { text } if text == "不影响结论。"
+        ));
+    }
+
+    #[test]
+    fn keeps_real_user_text_that_mentions_system_notification() {
+        let tmp = tempfile::tempdir().unwrap();
+        build_acp_text_turns(
+            tmp.path(),
+            "acp-bg-mention",
+            &[(
+                "这段 <system_notification> 是什么意思",
+                "那是 Cursor 的内部通知。",
+            )],
+        );
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        let detail = parser.get_conversation("acp-bg-mention").unwrap();
+        assert_eq!(
+            user_texts(&detail),
+            ["这段 <system_notification> 是什么意思"]
+        );
+    }
+
+    #[test]
+    fn keeps_user_prose_around_a_stripped_injection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mixed = format!("先看这个\n{CURSOR_BG_TASK_NOTICE}\n再继续");
+        build_acp_text_turns(
+            tmp.path(),
+            "acp-bg-mixed",
+            &[(&mixed, "好的。")],
+        );
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        let detail = parser.get_conversation("acp-bg-mixed").unwrap();
+        let users = user_texts(&detail);
+        assert_eq!(users.len(), 1);
+        assert!(users[0].contains("先看这个"));
+        assert!(users[0].contains("再继续"));
+        assert!(!users[0].contains("system_notification"));
+        assert!(!users[0].contains("<timestamp>"));
+    }
+
+    #[test]
+    fn cursor_visible_user_text_drops_only_closed_injections() {
+        assert_eq!(cursor_visible_user_text(CURSOR_BG_TASK_NOTICE), None);
+        assert_eq!(cursor_visible_user_text(CURSOR_BG_TASK_NOTICE_WITH_QUERY), None);
+        assert_eq!(
+            cursor_visible_user_text("这段 <system_notification> 是什么意思"),
+            Some("这段 <system_notification> 是什么意思".into())
+        );
+        assert_eq!(
+            cursor_visible_user_text("比较 <timestamp>2026-10-15</timestamp> 和现在"),
+            Some("比较 <timestamp>2026-10-15</timestamp> 和现在".into())
+        );
+        assert_eq!(
+            cursor_visible_user_text("   \n"),
+            None
+        );
+    }
+
+    #[test]
+    fn keeps_image_when_user_text_is_only_an_injection() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let tmp = tempfile::tempdir().unwrap();
+        let session_dir = tmp.path().join("acp-sessions").join("acp-bg-img");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let mut store = StoreBuilder::create(&session_dir.join("store.db"));
+
+        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\nfakepixels";
+        let png_blob_id = store.put_blob(png_bytes);
+        let mut image = Vec::new();
+        field_bytes(1, &png_blob_id, &mut image);
+        field_str(7, "image/png", &mut image);
+        let mut attachment = Vec::new();
+        field_bytes(1, &image, &mut attachment);
+
+        let mut user_msg = Vec::new();
+        field_str(1, CURSOR_BG_TASK_NOTICE, &mut user_msg);
+        field_bytes(3, &attachment, &mut user_msg);
+        let user_id = store.put_blob(&user_msg);
+        let mut assistant = Vec::new();
+        field_str(1, "图还在。", &mut assistant);
+        let mut step_text = Vec::new();
+        field_bytes(1, &assistant, &mut step_text);
+        let step_id = store.put_blob(&step_text);
+        let mut agent_turn = Vec::new();
+        field_bytes(1, &user_id, &mut agent_turn);
+        field_bytes(2, &step_id, &mut agent_turn);
+        let mut turn = Vec::new();
+        field_bytes(1, &agent_turn, &mut turn);
+        let turn_id = store.put_blob(&turn);
+        let mut state = Vec::new();
+        field_bytes(8, &turn_id, &mut state);
+        field_varint(26, 1_784_000_000_000, &mut state);
+        let root_id = store.put_blob(&state);
+        store.put_meta(&serde_json::json!({
+            "agentId": "acp-bg-img",
+            "latestRootBlobId": hex_encode(&root_id),
+            "createdAt": 1_784_000_000_000_u64,
+        }));
+
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        let detail = parser.get_conversation("acp-bg-img").unwrap();
+        let user = detail
+            .turns
+            .iter()
+            .find(|t| matches!(t.role, TurnRole::User))
+            .expect("image survives");
+        assert_eq!(user.blocks.len(), 1);
+        match &user.blocks[0] {
+            ContentBlock::Image { data, mime_type, .. } => {
+                assert_eq!(data, &STANDARD.encode(png_bytes));
+                assert_eq!(mime_type, "image/png");
+            }
+            other => panic!("expected image only, got {other:?}"),
+        }
     }
 }
