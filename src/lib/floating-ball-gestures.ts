@@ -26,8 +26,11 @@ export type FloatingBallGesture =
   | "left"
   | "right"
   | "up"
+  | "down"
   | "upLeft"
   | "upRight"
+  | "downLeft"
+  | "downRight"
   | "upThenLeft"
   | "upThenRight"
   | "upLeftThenRight"
@@ -35,6 +38,15 @@ export type FloatingBallGesture =
   | "upRightThenDown"
   | "upLeftThenDown"
   | "upDown"
+  | "downUp"
+  | "upThenDownRight"
+  | "downThenUpRight"
+  | "rightThenUp"
+  | "rightThenDown"
+  | "downThenRight"
+  | "downThenLeft"
+  | "downRightThenUp"
+  | "downLeftThenUp"
   | "rightThenLeft"
   | "leftThenRight"
 
@@ -53,6 +65,16 @@ export type FloatingBallAction =
   | "zoomReset"
   | "stopGenerating"
   | "openSettings"
+  | "openTodos"
+  | "openTodosNew"
+  | "openAutomations"
+  | "openCanvas"
+  | "openAgents"
+  | "openSystemAdmin"
+  | "renameConversation"
+  | "openSessionFolder"
+  | "cycleAgent"
+  | "cycleFavoriteAgent"
 
 export const FLOATING_BALL_GESTURES: readonly FloatingBallGesture[] = [
   "tap",
@@ -61,8 +83,11 @@ export const FLOATING_BALL_GESTURES: readonly FloatingBallGesture[] = [
   "left",
   "right",
   "up",
+  "down",
   "upLeft",
   "upRight",
+  "downLeft",
+  "downRight",
   "upThenLeft",
   "upThenRight",
   "upLeftThenRight",
@@ -70,6 +95,15 @@ export const FLOATING_BALL_GESTURES: readonly FloatingBallGesture[] = [
   "upRightThenDown",
   "upLeftThenDown",
   "upDown",
+  "downUp",
+  "upThenDownRight",
+  "downThenUpRight",
+  "rightThenUp",
+  "rightThenDown",
+  "downThenRight",
+  "downThenLeft",
+  "downRightThenUp",
+  "downLeftThenUp",
   "rightThenLeft",
   "leftThenRight",
 ]
@@ -80,6 +114,11 @@ export const FLOATING_BALL_GESTURES: readonly FloatingBallGesture[] = [
  * `upLeftThenRight` and `upRightThenLeft` are deliberately unbound: the trails
  * that reach them pass through the two-stage bindings above, so a stray
  * continuation would fire a second action on the way.
+ *
+ * The ten batch-v82 actions spread across the new downward / compound strokes;
+ * `stopGenerating` stays on an inconspicuous compound on purpose — a gesture
+ * that aborts a running answer must not live next to the ones fingers find
+ * first.
  */
 export const DEFAULT_FLOATING_BALL_BINDINGS: Readonly<
   Record<FloatingBallGesture, FloatingBallAction | null>
@@ -90,8 +129,11 @@ export const DEFAULT_FLOATING_BALL_BINDINGS: Readonly<
   left: "newConversation",
   right: "toggleSidebar",
   up: "panel",
+  down: null,
   upLeft: "toggleSearch",
   upRight: "nextTab",
+  downLeft: null,
+  downRight: null,
   upThenLeft: "prevTab",
   upThenRight: "reopenClosedTab",
   upLeftThenRight: null,
@@ -99,6 +141,15 @@ export const DEFAULT_FLOATING_BALL_BINDINGS: Readonly<
   upRightThenDown: "stopGenerating",
   upLeftThenDown: "zoomOut",
   upDown: "openFolder",
+  downUp: "cycleAgent",
+  upThenDownRight: "openCanvas",
+  downThenUpRight: "cycleFavoriteAgent",
+  rightThenUp: "openTodos",
+  rightThenDown: "openTodosNew",
+  downThenRight: "openAutomations",
+  downThenLeft: "openSessionFolder",
+  downRightThenUp: "openAgents",
+  downLeftThenUp: "openSystemAdmin",
   rightThenLeft: "zoomReset",
   leftThenRight: "zoomIn",
 }
@@ -164,8 +215,17 @@ function foldTrail(path: readonly Segment[]): FloatingBallGesture | null {
   if (a === "L" && b === "R") return "leftThenRight"
   if (a === "R" && b === "L") return "rightThenLeft"
   if (a === "U" && b === "D") return "upDown"
+  if (a === "D" && b === "U") return "downUp"
   if (a === "U" && b === "L") return "upThenLeft"
   if (a === "U" && b === "R") return "upThenRight"
+  if (a === "U" && b === "DR") return "upThenDownRight"
+  if (a === "D" && b === "UR") return "downThenUpRight"
+  if (a === "R" && b === "U") return "rightThenUp"
+  if (a === "R" && b === "D") return "rightThenDown"
+  if (a === "D" && b === "R") return "downThenRight"
+  if (a === "D" && b === "L") return "downThenLeft"
+  if (a === "DR" && b === "U") return "downRightThenUp"
+  if (a === "DL" && b === "U") return "downLeftThenUp"
   if (a === "UL" && b === "R") return "upLeftThenRight"
   if (a === "UR" && b === "L") return "upRightThenLeft"
   if (a === "UR" && b === "D") return "upRightThenDown"
@@ -173,7 +233,7 @@ function foldTrail(path: readonly Segment[]): FloatingBallGesture | null {
   return null
 }
 
-/** A single stage as a gesture. Downward strokes are unbound by default. */
+/** A single stage as a gesture. Downward strokes are bound via the table. */
 function singleStage(stage: Segment): FloatingBallGesture | null {
   switch (stage) {
     case "L":
@@ -182,10 +242,16 @@ function singleStage(stage: Segment): FloatingBallGesture | null {
       return "right"
     case "U":
       return "up"
+    case "D":
+      return "down"
     case "UL":
       return "upLeft"
     case "UR":
       return "upRight"
+    case "DL":
+      return "downLeft"
+    case "DR":
+      return "downRight"
     default:
       return null
   }
@@ -264,9 +330,12 @@ export function createFloatingBallTracker(): FloatingBallTracker {
       anchorY = y
     },
     end(x, y) {
-      const dx = x - originX
-      const dy = y - originY
-      if (!moved || Math.hypot(dx, dy) <= MOVE_PX) return null
+      if (!moved) return null
+      // A completed trail is judged on its stages, not on how far the finger
+      // ended from the origin: round trips (↓↑, ↑↓) naturally land back where
+      // they started, and an origin-displacement check would drop precisely
+      // the strokes drawn most cleanly.
+      if (trail.length === 0) return null
 
       const folded = foldTrail(trail)
       if (folded) return folded

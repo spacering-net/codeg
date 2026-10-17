@@ -80,19 +80,27 @@ describe("single-stroke gestures", () => {
     ).toBe("upRight")
   })
 
-  it("leaves downward strokes unbound", () => {
+  it("names downward strokes as first-class gestures", () => {
+    // Batch v82: down/downLeft/downRight are recognisable now (binding them is
+    // the bindings table's job, not the recogniser's).
     expect(
       run([
         [0, 0],
         [0, S + 20],
       ])
-    ).toBeNull()
+    ).toBe("down")
     expect(
       run([
         [0, 0],
         [-(S + 10), S + 10],
       ])
-    ).toBeNull()
+    ).toBe("downLeft")
+    expect(
+      run([
+        [0, 0],
+        [S + 10, S + 10],
+      ])
+    ).toBe("downRight")
   })
 
   it("ignores movement below the threshold", () => {
@@ -128,6 +136,7 @@ describe("two-stage trails", () => {
     expect(trail([-50, 0], [50, 0])).toBe("leftThenRight")
     expect(trail([50, 0], [-50, 0])).toBe("rightThenLeft")
     expect(trail([0, -50], [0, 50])).toBe("upDown")
+    expect(trail([0, 50], [0, -50])).toBe("downUp")
   })
 
   it("folds an upward start plus a turn", () => {
@@ -135,6 +144,38 @@ describe("two-stage trails", () => {
     expect(trail([0, -50], [60, -50])).toBe("upThenRight")
     expect(trail([-40, -40], [-40, 40])).toBe("upLeftThenDown")
     expect(trail([40, -40], [40, 40])).toBe("upRightThenDown")
+    expect(trail([0, -50], [(S + 10), (S + 10)])).toBe("upThenDownRight")
+  })
+
+  it("folds the batch-v82 downward and horizontal starts", () => {
+    // Each of these pairs previously fell through the jitter-replacement rule
+    // and silently became a different single-stage gesture.
+    expect(trail([0, 50], [S + 10, -(S + 10)])).toBe("downThenUpRight")
+    expect(trail([50, 0], [50, -(S + 20)])).toBe("rightThenUp")
+    expect(trail([50, 0], [50, S + 20])).toBe("rightThenDown")
+    expect(trail([0, 50], [S + 20, 50])).toBe("downThenRight")
+    expect(trail([0, 50], [-(S + 20), 50])).toBe("downThenLeft")
+    expect(trail([S + 10, S + 10], [S + 10, -(S + 20)])).toBe(
+      "downRightThenUp"
+    )
+    expect(trail([-(S + 10), S + 10], [-(S + 10), -(S + 20)])).toBe(
+      "downLeftThenUp"
+    )
+  })
+
+  it("keeps a round trip whose finger lands back at the origin", () => {
+    // Regression (batch v82): end() used to require displacement from the
+    // origin, which dropped a ↓↑ drawn cleanly back to its start.
+    const points: [number, number][] = [
+      ...steps([0, 0], [0, 60]),
+      ...steps([0, 60], [0, 0]),
+    ]
+    expect(run(points)).toBe("downUp")
+    const upDown: [number, number][] = [
+      ...steps([0, 0], [0, -60]),
+      ...steps([0, -60], [0, 0]),
+    ]
+    expect(run(upDown)).toBe("upDown")
   })
 
   it("does not read a horizontal round trip as a stop gesture", () => {
@@ -167,9 +208,17 @@ describe("default bindings", () => {
     const unbound = FLOATING_BALL_GESTURES.filter(
       (gesture) => DEFAULT_FLOATING_BALL_BINDINGS[gesture] === null
     )
-    // The two long corner continuations are the only intentional gaps: a
-    // trail passing through a two-stage binding would otherwise fire twice.
-    expect(unbound.sort()).toEqual(["upLeftThenRight", "upRightThenLeft"])
+    // The long corner continuations are the only intentional gaps: a trail
+    // passing through a two-stage binding would otherwise fire twice. The
+    // straight down family stays recognisable but unbound by default — the
+    // settings UI lets owners bind them.
+    expect(unbound.sort()).toEqual([
+      "down",
+      "downLeft",
+      "downRight",
+      "upLeftThenRight",
+      "upRightThenLeft",
+    ])
   })
 
   it("keeps the MindFS muscle memory for the headline gestures", () => {
