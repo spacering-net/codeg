@@ -29,6 +29,7 @@ pub mod js_text;
 pub mod latest_release;
 pub mod lifecycle;
 pub mod manager;
+pub mod model_visibility;
 pub mod opencode_catalog;
 pub mod opencode_launch;
 pub mod opencode_plugins;

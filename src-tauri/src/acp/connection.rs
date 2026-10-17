@@ -2487,6 +2487,11 @@ pub async fn spawn_agent_connection(
     // this point.
     initial_state.env_pinned_config_option_ids =
         env_pinned_config_option_ids(agent_type, &runtime_env);
+    // The model rows this launch may SHOW, taken in the same breath as the
+    // spawn: for OpenCode, the desktop app's per-model toggles (the user's
+    // own word, not an availability inference). A fresh connect re-reads the
+    // desktop state (no hot reload while the connection lives).
+    initial_state.model_availability = crate::acp::model_visibility::compute(agent_type);
 
     let session_state = Arc::new(RwLock::new(initial_state));
 
@@ -3704,8 +3709,21 @@ async fn emit_session_config_options_values(
     // Drop what this launch froze BEFORE mapping, so every producer of this
     // event — establishment, the answer to a set, and the agent's own
     // `config_option_update` push — is filtered by one rule.
-    let pinned = state.read().await.env_pinned_config_option_ids.clone();
+    let (pinned, availability) = {
+        let guard = state.read().await;
+        (
+            guard.env_pinned_config_option_ids.clone(),
+            guard.model_availability.clone(),
+        )
+    };
     let visible = visible_config_options(&pinned, config_options);
+    // …then the model-side visibility policy: which of the advertised model
+    // rows the user chose to see (`acp::model_visibility`; for OpenCode, the
+    // desktop app's per-model toggles). Also here, before mapping, so the
+    // composer, the picker and the delegation probe all
+    // read the same filtered list — while every decision path (the wire `set`,
+    // preference replay, retirement healing) keeps the agent's raw one.
+    let visible = crate::acp::model_visibility::filter_model_options(&availability, visible);
     emit_with_state(
         state,
         emitter,
@@ -34125,6 +34143,81 @@ mod tests {
         assert_eq!(
             ids(visible_config_options(&[], options())),
             vec!["auto_approve".to_string(), "provider".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_emit_path_filters_the_model_select_into_state_and_event_alike() {
+        use crate::acp::model_visibility::{ModelAvailability, RestrictedAvailability};
+        use agent_client_protocol::schema::v1::SessionConfigValueId;
+
+        // Two consumers, one list: the composer renders the
+        // `SessionConfigOptions` event, while the delegation "default model"
+        // probe reads `SessionState.config_options`. This pins the design that
+        // the filtering sits at the single emit path, so both sides see the
+        // SAME filtered rows — and neither sees the raw ones.
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-model-filter".to_string(),
+            AgentType::OpenCode,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        state.write().await.model_availability =
+            ModelAvailability::Restricted(RestrictedAvailability {
+                opinionated_providers: HashSet::from(["hidden".to_string()]),
+                shown_models: HashSet::new(),
+            });
+        let mut events = state.read().await.event_stream().subscribe();
+
+        let model = SessionConfigOption::select(
+            SessionConfigId::new("model"),
+            "Model",
+            SessionConfigValueId::new("kept/current"),
+            vec![
+                SessionConfigSelectOption::new(SessionConfigValueId::new("kept/a"), "A"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("hidden/b"), "B"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("kept/current"), "Current"),
+            ],
+        )
+        .category(SessionConfigOptionCategory::Model);
+
+        emit_session_config_options_values(&state, &EventEmitter::Noop, vec![model]).await;
+
+        let envelope = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .expect("an event must be emitted")
+            .expect("the event stream is alive");
+        let AcpEvent::SessionConfigOptions { config_options } = &envelope.payload else {
+            panic!(
+                "expected a SessionConfigOptions event, got {:?}",
+                envelope.payload
+            );
+        };
+        let values: Vec<String> = config_options
+            .iter()
+            .flat_map(|option| match &option.kind {
+                SessionConfigKindInfo::Select(select) => {
+                    select.options.iter().map(|row| row.value.clone()).collect()
+                }
+                SessionConfigKindInfo::Boolean(_) => Vec::new(),
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec!["kept/a".to_string(), "kept/current".to_string()],
+            "the event carries the filtered rows (current kept)"
+        );
+
+        let stored = state
+            .read()
+            .await
+            .config_options
+            .clone()
+            .expect("the emit stores the option list on the state");
+        assert_eq!(
+            stored, *config_options,
+            "the probe/state list is exactly the event's filtered list"
         );
     }
 

@@ -2870,6 +2870,9 @@ fn opencode_legacy_config_path() -> PathBuf {
     opencode_config_dir().join("config.json")
 }
 
+/// Resolve the config file OpenCode actually reads: the primary
+/// `opencode.json`, else the legacy `config.json`, else the primary path (a
+/// caller-visible answer even when neither exists).
 fn resolve_opencode_config_path() -> PathBuf {
     let primary = opencode_primary_config_path();
     if primary.exists() {
@@ -2884,6 +2887,7 @@ fn resolve_opencode_config_path() -> PathBuf {
     primary
 }
 
+/// The `auth.json` the credential cascade writes.
 fn opencode_auth_json_path() -> PathBuf {
     crate::parsers::opencode::resolve_opencode_base_dir().join("auth.json")
 }
@@ -7401,7 +7405,7 @@ pub struct PiConfigProjection {
 /// Read pi's native files into a `PiConfigProjection`. Never errors: absent or
 /// malformed files yield `None` / an empty provider list (the panel treats that
 /// as "not configured yet").
-pub(crate) fn load_pi_config_at(pi_dir: &Path) -> PiConfigProjection {
+fn load_pi_config_at(pi_dir: &Path) -> PiConfigProjection {
     let settings = read_json_object_or_empty(&pi_dir.join("settings.json"));
     let string_key = |key: &str| {
         settings

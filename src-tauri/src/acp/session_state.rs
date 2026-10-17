@@ -14,6 +14,7 @@ use crate::acp::event_stream::{
     ConnectionEventStream, RecentEventsBuffer,
 };
 use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
+use crate::acp::model_visibility::ModelAvailability;
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
@@ -439,6 +440,23 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub env_pinned_config_option_ids: Vec<String>,
+    /// Which of the agent's advertised model rows codeg SHOWS the user for this
+    /// launch: the visibility snapshot computed at spawn
+    /// (`acp::model_visibility::compute` — for OpenCode, the desktop app's
+    /// per-model toggles).
+    ///
+    /// Applied once, at the emit choke point
+    /// (`connection::emit_session_config_options_values`), so every producer of
+    /// a `SessionConfigOptions` event — establishment, the answer to a set, the
+    /// agent's own push — goes through one rule and the state the delegation
+    /// probe reads is the same filtered list the composer got. NOT applied to
+    /// any decision path: preference replay, retirement healing and the wire
+    /// `set` all keep reading the agent's raw list.
+    ///
+    /// Fixed for the connection's lifetime — a fresh connect re-reads the
+    /// desktop state. Backend-internal — not serialized, not carried
+    /// on `to_snapshot()`.
+    pub(crate) model_availability: ModelAvailability,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
@@ -762,6 +780,7 @@ impl SessionState {
             asserted_config_values: BTreeMap::new(),
             agent_chosen_config_values: BTreeMap::new(),
             env_pinned_config_option_ids: Vec::new(),
+            model_availability: ModelAvailability::Unfiltered,
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),
