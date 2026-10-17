@@ -36,6 +36,7 @@ import {
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
 import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
+import { rememberRecentConversation } from "@/lib/recent-sessions-prefs"
 import {
   batchCloseSlots,
   pushClosedTab,
@@ -1055,6 +1056,13 @@ function applyGroupInvariants() {
 function focusTab(tabId: string) {
   if (useTabStore.getState().activeTabId !== tabId) {
     useTabStore.setState({ activeTabId: tabId })
+  }
+  // Every activation path funnels through here, so this is the one place the
+  // floating ball's "recent sessions" LRU needs to record a conversation as
+  // "just opened" (bound tabs only; drafts have no DB row yet).
+  const tab = useTabStore.getState().rawTabs.find((t) => t.id === tabId)
+  if (tab?.conversationId != null) {
+    rememberRecentConversation(tab.conversationId)
   }
   applyGroupInvariants()
 }
@@ -2101,6 +2109,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ? prevState.activeTabId
         : (boundTab?.id ?? nextTabs[0]?.id ?? null),
     })
+    // A draft becomes a real session the first time it persists a DB row —
+    // that is its "first open" for the recent-sessions LRU.
+    if (conversationId != null) {
+      rememberRecentConversation(conversationId)
+    }
     recomputeTabs()
   },
 

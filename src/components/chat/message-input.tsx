@@ -183,6 +183,9 @@ export interface ComposerInjectContent {
 
 interface MessageInputProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
+  /** Bumped by the host (floating ball "mode selector" action) to open the
+   *  inline mode dropdown; the effect below re-fires on every increment. */
+  modeSelectorSignal?: number
   placeholder?: string
   defaultPath?: string
   disabled?: boolean
@@ -366,6 +369,7 @@ function modelPickerGroups(
 
 export function MessageInput({
   onSend,
+  modeSelectorSignal: modeSelectorSignalProp = 0,
   placeholder,
   defaultPath,
   disabled = false,
@@ -966,6 +970,17 @@ export function MessageInput({
   // Antigravity after its commands on `/`.
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  // One-shot signal from the floating ball's "mode selector" action: the
+  // imperative openModeSelector handle bumps a counter; the effect below
+  // re-opens the dropdown when it advances. Programmatic trigger clicks are
+  // idempotent while the menu is already open.
+  useEffect(() => {
+    if (modeSelectorSignalProp === 0) return
+    const trigger = containerRef.current?.querySelector<HTMLButtonElement>(
+      "[data-mode-selector-trigger]"
+    )
+    trigger?.click()
+  }, [modeSelectorSignalProp])
   // The trigger char (`/` for agent commands, `$` for Codex skills) and the
   // typed filter token, both derived from the editor caret by
   // `detectSlashTrigger` rather than from a raw string offset.

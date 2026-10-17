@@ -35,6 +35,7 @@ export function InlineModeSelector({
           <Button
             variant="ghost"
             size="xs"
+            data-mode-selector-trigger
             aria-label={currentLabel ? `${label}: ${currentLabel}` : label}
             className="min-w-0 gap-0.5 px-1 text-muted-foreground"
           >
