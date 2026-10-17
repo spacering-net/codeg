@@ -256,6 +256,7 @@ An editor, live and side-by-side diffs, a full git client with a three-pane merg
 - **[Repository Panel](https://docs.codeg.app/guide/repository)** — issues, pull requests, checks, and merges for GitHub, GitLab, Gitea, and Forgejo; any issue or PR can become a to-do
 - **[Automations](https://docs.codeg.app/guide/automations)** — save a configured composer and run it headlessly, on a cron schedule or on demand
 - **[Token Usage](https://docs.codeg.app/guide/token-usage)** — trends, cache hit rate, an activity heatmap, usage by folder, agent, model, and session, and what it would cost at API list prices
+- **[Agent Accounts](docs/agent-accounts.md)**: named accounts on built-in agents, with separate sign-ins and conversation history. See the guide for platform support and backup limits.
 - **[Fork & Steer](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — fork a conversation from a finished reply, or send a message into a turn that is still running, on agents that support it
 - **[Skills](https://docs.codeg.app/guide/skills) & [MCP](https://docs.codeg.app/guide/mcp)** — skill packs per agent, a local MCP scan, and registry search and install
 - **[Project Boot](https://docs.codeg.app/guide/project-boot)** — scaffold a new project visually, with a live preview

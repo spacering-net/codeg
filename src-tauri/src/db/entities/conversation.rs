@@ -50,6 +50,8 @@ pub struct Model {
     /// a parsed session-file title.
     pub title_locked: bool,
     pub agent_type: String,
+    /// None uses the existing default home. A removed account stays bound.
+    pub agent_account_id: Option<String>,
     pub status: ConversationStatus,
     pub kind: ConversationKind,
     pub model: Option<String>,

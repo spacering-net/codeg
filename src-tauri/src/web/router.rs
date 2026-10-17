@@ -1178,6 +1178,18 @@ pub fn build_router(
             "/acp_list_custom_agents",
             post(handlers::acp::acp_list_custom_agents),
         )
+        .route("/acp_list_agent_accounts", post(handlers::agent_accounts::list))
+        .route("/acp_create_agent_account", post(handlers::agent_accounts::create))
+        .route("/acp_rename_agent_account", post(handlers::agent_accounts::rename))
+        .route("/acp_remove_agent_account", post(handlers::agent_accounts::remove))
+        .route("/acp_login_agent_account", post(handlers::agent_accounts::login))
+        .route("/acp_set_agent_account_api_key", post(handlers::agent_accounts::set_api_key))
+        .route("/acp_check_agent_account_auth", post(handlers::agent_accounts::check_auth))
+        .route("/acp_switch_conversation_account", post(handlers::agent_accounts::switch_conversation))
+        .route(
+            "/acp_login_extra_agent",
+            post(handlers::acp::acp_login_extra_agent),
+        )
         .route(
             "/acp_save_custom_agent",
             post(handlers::acp::acp_save_custom_agent),

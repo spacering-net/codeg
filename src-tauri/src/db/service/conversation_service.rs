@@ -12,6 +12,13 @@ use crate::db::error::DbError;
 use crate::db::service::conversation_tag_service;
 use crate::models::{AgentType, AssistantRunSnapshot, DbConversationSummary};
 
+pub fn account_condition(id: Option<&str>) -> sea_orm::sea_query::SimpleExpr {
+    match id {
+        Some(id) => conversation::Column::AgentAccountId.eq(id),
+        None => conversation::Column::AgentAccountId.is_null(),
+    }
+}
+
 pub async fn create(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -27,6 +34,7 @@ pub async fn create(
         git_branch,
         None,
         ConversationKind::Regular,
+        None,
     )
     .await
 }
@@ -50,6 +58,7 @@ pub async fn create_chat(
         git_branch,
         None,
         ConversationKind::Chat,
+        None,
     )
     .await
 }
@@ -74,12 +83,13 @@ pub async fn create_with_delegation(
         ConversationKind::Regular
     };
     create_inner(
-        conn, folder_id, agent_type, title, git_branch, delegation, kind,
+        conn, folder_id, agent_type, title, git_branch, delegation, kind, None,
     )
     .await
 }
 
-async fn create_inner(
+#[allow(clippy::too_many_arguments)]
+pub async fn create_inner(
     conn: &DatabaseConnection,
     folder_id: i32,
     agent_type: AgentType,
@@ -87,7 +97,11 @@ async fn create_inner(
     git_branch: Option<String>,
     delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
     kind: ConversationKind,
+    account_id: Option<String>,
 ) -> Result<conversation::Model, DbError> {
+    if let Some(id) = account_id.as_deref() {
+        super::agent_account_service::resolve(conn, agent_type, id).await?;
+    }
     let at_str = serde_json::to_value(agent_type)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
@@ -118,6 +132,7 @@ async fn create_inner(
         title: Set(title),
         title_locked: Set(false),
         agent_type: Set(at_str),
+        agent_account_id: Set(account_id),
         status: Set(conversation::ConversationStatus::InProgress),
         kind: Set(kind),
         model: Set(None),
@@ -136,6 +151,20 @@ async fn create_inner(
         assistant_snapshot: Set(assistant_snapshot),
     };
     Ok(model.insert(conn).await?)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_with_delegation_for_account(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    git_branch: Option<String>,
+    delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
+    account_id: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    let kind = if delegation.is_some() { ConversationKind::Delegate } else { ConversationKind::Regular };
+    create_inner(conn, folder_id, agent_type, title, git_branch, delegation, kind, account_id).await
 }
 
 pub async fn update_status(
@@ -442,6 +471,14 @@ pub(crate) async fn refresh_codex_auto_titles(
     conn: &DatabaseConnection,
     titles: &HashMap<String, String>,
 ) -> Vec<i32> {
+    refresh_codex_account_titles(conn, titles, None).await
+}
+
+pub(crate) async fn refresh_codex_account_titles(
+    conn: &DatabaseConnection,
+    titles: &HashMap<String, String>,
+    account_id: Option<&str>,
+) -> Vec<i32> {
     if titles.is_empty() {
         return Vec::new();
     }
@@ -456,6 +493,7 @@ pub(crate) async fn refresh_codex_auto_titles(
 
     for external_id_chunk in external_ids.chunks(SQLITE_TITLE_QUERY_CHUNK_SIZE) {
         let candidates = match conversation::Entity::find()
+            .filter(account_condition(account_id))
             .filter(conversation::Column::AgentType.eq(AgentType::Codex.as_wire().into_owned()))
             .filter(conversation::Column::ExternalId.is_in(external_id_chunk.iter().cloned()))
             .filter(conversation::Column::DeletedAt.is_null())
@@ -738,6 +776,7 @@ pub async fn bind_external_id(
                     let holder = conversation::Entity::find()
                         .filter(conversation::Column::ExternalId.eq(external_id.clone()))
                         .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                        .filter(account_condition(current.agent_account_id.as_deref()))
                         .filter(conversation::Column::Id.ne(conversation_id))
                         .one(txn)
                         .await?;
@@ -800,6 +839,7 @@ pub async fn bind_external_id(
                 let already_preserved = conversation::Entity::find()
                     .filter(conversation::Column::ExternalId.eq(previous.clone()))
                     .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                    .filter(account_condition(current.agent_account_id.as_deref()))
                     .filter(conversation::Column::Id.ne(conversation_id))
                     .filter(conversation::Column::DeletedAt.is_null())
                     .one(txn)
@@ -906,6 +946,7 @@ enum BindTxOutcome {
 /// Snapshotted before the re-point because turning the model into an
 /// `ActiveModel` consumes it.
 struct CarriedOverRow {
+    agent_account_id: Option<String>,
     folder_id: i32,
     title: Option<String>,
     title_locked: bool,
@@ -926,6 +967,7 @@ struct CarriedOverRow {
 impl CarriedOverRow {
     fn from(row: &conversation::Model) -> Self {
         Self {
+            agent_account_id: row.agent_account_id.clone(),
             folder_id: row.folder_id,
             title: row.title.clone(),
             title_locked: row.title_locked,
@@ -973,6 +1015,7 @@ impl CarriedOverRow {
             title: Set(self.title),
             title_locked: Set(self.title_locked),
             agent_type: Set(self.agent_type),
+            agent_account_id: Set(self.agent_account_id),
             status: Set(self.status),
             kind: Set(self.kind),
             model: Set(self.model),
@@ -1153,6 +1196,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         title: r.title,
         title_locked: r.title_locked,
         agent_type: parse_agent_type(&r.agent_type),
+        agent_account_id: r.agent_account_id,
         status,
         kind: r.kind.clone(),
         model: r.model,
@@ -1258,7 +1302,8 @@ pub async fn get_by_id(
 /// `codeg://session/<id>` markdown mentions use) or the agent's own session
 /// id stored as `external_id` (a Grok UUID, a Codex thread id, …). Several
 /// rows can share an `external_id` across agents; the most recently updated
-/// live row wins. Missing rows return `Ok(None)` — a stale deep link is not
+/// live default-account row wins. An id shared with another account needs a
+/// numeric Codeg conversation link instead. Missing rows return `Ok(None)` — a stale deep link is not
 /// an error.
 ///
 /// A numeric ref is tried as a primary key *first* and as an `external_id`
@@ -1285,12 +1330,16 @@ pub async fn find_live_by_session_ref(
     let conv = match by_pk {
         Some(conv) => Some(conv),
         None => {
-            conversation::Entity::find()
+            let rows = conversation::Entity::find()
                 .filter(conversation::Column::ExternalId.eq(session_ref))
                 .filter(conversation::Column::DeletedAt.is_null())
                 .order_by_desc(conversation::Column::UpdatedAt)
-                .one(conn)
-                .await?
+                .all(conn)
+                .await?;
+            if rows.len() > 1 && rows.iter().any(|row| row.agent_account_id.is_some()) {
+                return Err(DbError::Validation("This session id belongs to multiple accounts. Use the conversation link from Codeg.".into()));
+            }
+            rows.into_iter().next()
         }
     };
     match conv {
