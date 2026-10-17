@@ -6,7 +6,9 @@ import { useTranslations } from "next-intl"
 
 import {
   FLOATING_BALL_INSET,
+  FLOATING_BALL_SIZE_PX,
   type FloatingBallPosition,
+  type FloatingBallSize,
 } from "@/components/appearance-provider"
 import { useFloatingBall } from "@/hooks/use-appearance"
 import {
@@ -16,14 +18,27 @@ import {
   GESTURE_ONSET_MS,
   LONG_PRESS_MS,
   MOVE_PX,
+  previewGesture,
   resolveTapGesture,
   type FloatingBallAction,
   type FloatingBallGesture,
 } from "@/lib/floating-ball-gestures"
 import { cn } from "@/lib/utils"
 
-const BALL_SIZE = 46
 const PANEL_WIDTH = 208
+
+/**
+ * How far the ball follows the finger during a gesture, as a fraction of the
+ * viewport. MindFS clamps its ring to ±64px because it lives inside an input
+ * row; ours is free-floating, so the follow distance scales with the screen.
+ */
+const GESTURE_FOLLOW_RATIO = 0.18
+
+const ICON_CLASS: Record<FloatingBallSize, string> = {
+  small: "size-4",
+  medium: "size-[18px]",
+  large: "size-5",
+}
 
 /** The rows the tap panel offers, in reading order. */
 const PANEL_ACTIONS: readonly Exclude<FloatingBallAction, "panel">[] = [
@@ -35,6 +50,16 @@ const PANEL_ACTIONS: readonly Exclude<FloatingBallAction, "panel">[] = [
   "prevTab",
   "reopenClosedTab",
   "openFolder",
+  "openTodos",
+  "openTodosNew",
+  "openAutomations",
+  "openCanvas",
+  "openAgents",
+  "openSystemAdmin",
+  "renameConversation",
+  "openSessionFolder",
+  "cycleAgent",
+  "cycleFavoriteAgent",
   "zoomIn",
   "zoomOut",
   "zoomReset",
@@ -43,23 +68,35 @@ const PANEL_ACTIONS: readonly Exclude<FloatingBallAction, "panel">[] = [
 ]
 
 /** Gestures shown in the cheat sheet, with the action they fire. */
-const CHEAT_SHEET = [
+const CHEAT_SHEET: readonly FloatingBallGesture[] = [
   "tap",
   "doubleTap",
   "longPress",
   "left",
   "right",
   "up",
+  "down",
   "upLeft",
   "upRight",
+  "downLeft",
+  "downRight",
   "upThenLeft",
   "upThenRight",
   "upDown",
+  "downUp",
+  "rightThenUp",
+  "rightThenDown",
+  "downThenRight",
+  "downThenLeft",
+  "upThenDownRight",
+  "downThenUpRight",
+  "downRightThenUp",
+  "downLeftThenUp",
   "leftThenRight",
   "rightThenLeft",
   "upLeftThenDown",
   "upRightThenDown",
-] as const satisfies readonly FloatingBallGesture[]
+]
 
 interface FloatingBallProps {
   /** Runs an action against the workspace (tab, panel, zoom, agent turn). */
@@ -68,10 +105,11 @@ interface FloatingBallProps {
 
 function clampPosition(
   position: FloatingBallPosition,
-  viewport: { width: number; height: number }
+  viewport: { width: number; height: number },
+  ballSize: number
 ): FloatingBallPosition {
-  const maxX = Math.max(0, viewport.width - BALL_SIZE - 4)
-  const maxY = Math.max(0, viewport.height - BALL_SIZE - 4)
+  const maxX = Math.max(0, viewport.width - ballSize - 4)
+  const maxY = Math.max(0, viewport.height - ballSize - 4)
   return {
     x: Math.min(Math.max(4, position.x), maxX),
     y: Math.min(Math.max(4, position.y), maxY),
@@ -90,12 +128,12 @@ function clampPosition(
  */
 const DEFAULT_Y_RATIO = 0.55
 
-function defaultPosition(viewport: {
-  width: number
-  height: number
-}): FloatingBallPosition {
+function defaultPosition(
+  viewport: { width: number; height: number },
+  ballSize: number
+): FloatingBallPosition {
   return {
-    x: viewport.width - BALL_SIZE - FLOATING_BALL_INSET,
+    x: viewport.width - ballSize - FLOATING_BALL_INSET,
     y: Math.round(viewport.height * DEFAULT_Y_RATIO),
   }
 }
@@ -119,22 +157,35 @@ function readViewport(): { width: number; height: number } {
  *
  * The gesture vocabulary comes from MindFS's blue-ring menu so the muscle
  * memory carries over; see `floating-ball-gestures.ts`. Actions are dispatched
- * by the caller, which owns the workspace contexts.
+ * by the caller, which owns the workspace contexts. Bindings and the ball's
+ * size are owner-configurable (appearance settings); a swipe shows a live hint
+ * pill naming the action the current trail would fire.
  */
 export function FloatingBall({ onAction }: FloatingBallProps) {
   const t = useTranslations("FloatingBall")
-  const { floatingBallEnabled, floatingBallPosition, setFloatingBallPosition } =
-    useFloatingBall()
+  const {
+    floatingBallEnabled,
+    floatingBallPosition,
+    setFloatingBallPosition,
+    floatingBallBindings,
+    floatingBallSize,
+  } = useFloatingBall()
+
+  const BALL_SIZE = FLOATING_BALL_SIZE_PX[floatingBallSize]
 
   const [viewport, setViewport] = useState(readViewport)
   // The stored position is the only source of truth: deriving the on-screen
   // position from it keeps rotation, window resizing and a reset from another
   // window consistent without copying it into local state.
   const position = floatingBallPosition
-    ? clampPosition(floatingBallPosition, viewport)
-    : defaultPosition(viewport)
+    ? clampPosition(floatingBallPosition, viewport, BALL_SIZE)
+    : defaultPosition(viewport, BALL_SIZE)
   const [panelOpen, setPanelOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Live gesture feedback: the ball follows the finger and a pill names the
+  // action the trail would commit. Both reset on lift-off.
+  const [follow, setFollow] = useState<{ x: number; y: number } | null>(null)
+  const [hint, setHint] = useState<FloatingBallAction | null>(null)
 
   const ballRef = useRef<HTMLButtonElement | null>(null)
   const trackerRef = useRef(createFloatingBallTracker())
@@ -151,6 +202,18 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
   const lastTapAtRef = useRef<number | null>(null)
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const frameRef = useRef<number | null>(null)
+
+  const resolveAction = useCallback(
+    (gesture: FloatingBallGesture): FloatingBallAction | null => {
+      const override = floatingBallBindings[gesture] as
+        | FloatingBallAction
+        | null
+        | undefined
+      if (override !== undefined) return override
+      return DEFAULT_FLOATING_BALL_BINDINGS[gesture]
+    },
+    [floatingBallBindings]
+  )
 
   // Keep the viewport current: it decides both the default corner and where an
   // off-screen ball gets clamped back to.
@@ -175,7 +238,7 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
 
   const fire = useCallback(
     (gesture: FloatingBallGesture) => {
-      const action = DEFAULT_FLOATING_BALL_BINDINGS[gesture]
+      const action = resolveAction(gesture)
       if (!action) return
       if (action === "panel") {
         setSettingsOpen(false)
@@ -191,7 +254,7 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
       setSettingsOpen(false)
       onAction(action)
     },
-    [onAction]
+    [onAction, resolveAction]
   )
 
   const onPointerDown = useCallback(
@@ -231,7 +294,8 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
         event.preventDefault()
         const next = clampPosition(
           { x: drag.origin.x + dx, y: drag.origin.y + dy },
-          readViewport()
+          readViewport(),
+          BALL_SIZE
         )
         // Write the frame directly: a state update per pointer sample would
         // re-render the whole overlay tree on every move.
@@ -249,9 +313,26 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
       if (drag.mode === "gesture") {
         event.preventDefault()
         trackerRef.current.move(event.clientX, event.clientY)
+        // The ball trails the finger, clamped to a fraction of the viewport so
+        // a long swipe cannot throw it off-screen; both reset on lift-off. The
+        // trail offset is gesture-only visual feedback — the stored position
+        // never moves during a gesture.
+        const followLimit = Math.round(
+          Math.min(viewport.width, viewport.height) * GESTURE_FOLLOW_RATIO
+        )
+        setFollow({
+          x: Math.max(-followLimit, Math.min(followLimit, dx)),
+          y: Math.max(-followLimit, Math.min(followLimit, dy)),
+        })
+        setHint(
+          (() => {
+            const gesture = previewGesture(trackerRef.current.trail)
+            return gesture ? resolveAction(gesture) : null
+          })()
+        )
       }
     },
-    []
+    [BALL_SIZE, resolveAction, viewport]
   )
 
   const onPointerUp = useCallback(
@@ -259,6 +340,8 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
       const drag = dragRef.current
       if (!drag || drag.pointerId !== event.pointerId) return
       dragRef.current = null
+      setFollow(null)
+      setHint(null)
       if (frameRef.current !== null) {
         cancelAnimationFrame(frameRef.current)
         frameRef.current = null
@@ -270,14 +353,15 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
         setFloatingBallPosition(
           clampPosition(
             { x: drag.origin.x + dx, y: drag.origin.y + dy },
-            readViewport()
+            readViewport(),
+            BALL_SIZE
           )
         )
         return
       }
 
       if (drag.mode === "gesture") {
-        const gesture = trackerRef.current.end(event.clientX, event.clientY)
+        const gesture = trackerRef.current.end()
         trackerRef.current.reset()
         if (gesture) fire(gesture)
         return
@@ -314,7 +398,7 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
         fire("tap")
       }, DOUBLE_TAP_MS)
     },
-    [clearTapTimer, fire, setFloatingBallPosition]
+    [BALL_SIZE, clearTapTimer, fire, setFloatingBallPosition]
   )
 
   const onPointerCancel = useCallback(
@@ -323,6 +407,8 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
       if (!drag || drag.pointerId !== event.pointerId) return
       dragRef.current = null
       trackerRef.current.reset()
+      setFollow(null)
+      setHint(null)
       if (frameRef.current !== null) {
         cancelAnimationFrame(frameRef.current)
         frameRef.current = null
@@ -375,6 +461,16 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
     Math.max(8, viewport.width - PANEL_WIDTH - 8)
   )
 
+  const cheatRows = CHEAT_SHEET.map((gesture) => ({
+    gesture,
+    action: resolveAction(gesture),
+  })).filter(
+    (
+      row
+    ): row is { gesture: FloatingBallGesture; action: FloatingBallAction } =>
+      row.action !== null
+  )
+
   return (
     <>
       <button
@@ -395,16 +491,47 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
           width: BALL_SIZE,
           height: BALL_SIZE,
           touchAction: "none",
+          // Gesture follow rides on transform (the drag path writes left/top);
+          // the two displacement mechanisms never mix on one press, and the
+          // reset-to-zero transition is the snap-back animation.
+          transform: follow
+            ? `translate(${follow.x}px, ${follow.y}px)`
+            : undefined,
+          transition: follow ? "none" : "transform 0.2s ease-out",
         }}
         className={cn(
           "fixed z-40 flex items-center justify-center rounded-full",
-          "border-2 border-primary-foreground/30 bg-primary text-primary-foreground",
+          // The 6px transparent halo is the touch hit-slop: on the small
+          // preset the visual circle is below the 44px touch minimum, and the
+          // halo restores it without growing what the eye sees.
+          "outline outline-6 outline-transparent",
+          hint
+            ? "border-primary bg-primary"
+            : "border-2 border-primary-foreground/30 bg-primary text-primary-foreground",
           "shadow-lg select-none",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         )}
       >
-        <Command className="size-5" aria-hidden />
+        <Command className={ICON_CLASS[floatingBallSize]} aria-hidden />
       </button>
+
+      {hint && (
+        <div
+          data-floating-ball-hint="true"
+          role="status"
+          style={{
+            // Anchor the pill beside the ball's gesture-followed position.
+            left: Math.min(
+              Math.max(8, position.x + follow!.x + BALL_SIZE + 8),
+              Math.max(8, viewport.width - 160)
+            ),
+            top: Math.max(8, position.y + follow!.y),
+          }}
+          className="fixed z-40 max-w-40 truncate rounded-full bg-popover px-2.5 py-1 text-2xs text-popover-foreground shadow-lg"
+        >
+          {hint === "panel" ? t("panelTitle") : t(`actions.${hint}`)}
+        </div>
+      )}
 
       {panelOpen && (
         <div
@@ -496,25 +623,21 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
                 {t("cheatSheetTitle")}
               </p>
               <ul className="space-y-0.5">
-                {CHEAT_SHEET.map((gesture) => {
-                  const action = DEFAULT_FLOATING_BALL_BINDINGS[gesture]
-                  if (!action) return null
-                  return (
-                    <li
-                      key={gesture}
-                      className="flex items-baseline justify-between gap-2 text-2xs"
-                    >
-                      <span className="text-muted-foreground">
-                        {t(`gestures.${gesture}`)}
-                      </span>
-                      <span className="truncate text-end">
-                        {action === "panel"
-                          ? t("panelTitle")
-                          : t(`actions.${action}`)}
-                      </span>
-                    </li>
-                  )
-                })}
+                {cheatRows.map(({ gesture, action }) => (
+                  <li
+                    key={gesture}
+                    className="flex items-baseline justify-between gap-2 text-2xs"
+                  >
+                    <span className="text-muted-foreground">
+                      {t(`gestures.${gesture}`)}
+                    </span>
+                    <span className="truncate text-end">
+                      {action === "panel"
+                        ? t("panelTitle")
+                        : t(`actions.${action}`)}
+                    </span>
+                  </li>
+                ))}
               </ul>
             </div>
             <p className="text-2xs leading-4 text-muted-foreground">

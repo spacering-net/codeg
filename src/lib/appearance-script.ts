@@ -39,6 +39,12 @@ export const STORAGE_KEY_MESSAGE_NAV_POSITION = "codeg-message-nav-position"
 // 预水合——水合前根本不渲染球。
 export const STORAGE_KEY_FLOATING_BALL_ENABLED = "codeg-floating-ball-enabled"
 export const STORAGE_KEY_FLOATING_BALL_POSITION = "codeg-floating-ball-position"
+// 批v82：手势→动作绑定表（JSON，gesture → action | null；null 表示用户显式清除，
+// 与"缺 key 回退默认"语义不同）、球体三档大小、常用 agent 快切列表。同样无需预水合。
+export const STORAGE_KEY_FLOATING_BALL_BINDINGS = "codeg-floating-ball-bindings"
+export const STORAGE_KEY_FLOATING_BALL_SIZE = "codeg-floating-ball-size"
+export const STORAGE_KEY_FLOATING_BALL_FAVORITE_AGENTS =
+  "codeg-floating-ball-favorite-agents"
 
 // 字体偏好（界面 / 编辑器 / 终端）。
 // 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地

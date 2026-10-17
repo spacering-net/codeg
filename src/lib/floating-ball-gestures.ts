@@ -257,13 +257,28 @@ function singleStage(stage: Segment): FloatingBallGesture | null {
   }
 }
 
+/**
+ * Name the gesture the trail would commit right now, loose-matched — the hint
+ * pill's source of truth. Mirrors the tracker's own folding, so the pill and
+ * the commit can never disagree. An unfinished two-stage trail falls back to
+ * its last stage so the pill shows what a stop right there would fire.
+ */
+export function previewGesture(
+  trail: readonly Segment[]
+): FloatingBallGesture | null {
+  if (trail.length === 0) return null
+  const folded = foldTrail(trail)
+  if (folded) return folded
+  return singleStage(trail[trail.length - 1])
+}
+
 export interface FloatingBallTracker {
   /** Touchdown. */
   start(x: number, y: number): void
   /** Every pointer sample while the press is down. */
   move(x: number, y: number): void
   /** Lift-off: the path gesture, or null when this press was not one. */
-  end(x: number, y: number): FloatingBallGesture | null
+  end(): FloatingBallGesture | null
   /** Whether the press has travelled far enough to be a gesture at all. */
   readonly moved: boolean
   /** Stages recognised so far, oldest first. Exposed for tests and debugging. */
@@ -329,7 +344,7 @@ export function createFloatingBallTracker(): FloatingBallTracker {
       anchorX = x
       anchorY = y
     },
-    end(x, y) {
+    end(): FloatingBallGesture | null {
       if (!moved) return null
       // A completed trail is judged on its stages, not on how far the finger
       // ended from the origin: round trips (↓↑, ↑↓) naturally land back where

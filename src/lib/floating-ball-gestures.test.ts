@@ -40,8 +40,7 @@ function run(points: [number, number][]): FloatingBallGesture | null {
   const tracker = createFloatingBallTracker()
   tracker.start(points[0][0], points[0][1])
   for (const point of points.slice(1)) tracker.move(point[0], point[1])
-  const last = points[points.length - 1]
-  return tracker.end(last[0], last[1])
+  return tracker.end()
 }
 
 const S = SWIPE_PX
@@ -144,7 +143,7 @@ describe("two-stage trails", () => {
     expect(trail([0, -50], [60, -50])).toBe("upThenRight")
     expect(trail([-40, -40], [-40, 40])).toBe("upLeftThenDown")
     expect(trail([40, -40], [40, 40])).toBe("upRightThenDown")
-    expect(trail([0, -50], [(S + 10), (S + 10)])).toBe("upThenDownRight")
+    expect(trail([0, -50], [S + 10, S + 10])).toBe("upThenDownRight")
   })
 
   it("folds the batch-v82 downward and horizontal starts", () => {
@@ -155,9 +154,7 @@ describe("two-stage trails", () => {
     expect(trail([50, 0], [50, S + 20])).toBe("rightThenDown")
     expect(trail([0, 50], [S + 20, 50])).toBe("downThenRight")
     expect(trail([0, 50], [-(S + 20), 50])).toBe("downThenLeft")
-    expect(trail([S + 10, S + 10], [S + 10, -(S + 20)])).toBe(
-      "downRightThenUp"
-    )
+    expect(trail([S + 10, S + 10], [S + 10, -(S + 20)])).toBe("downRightThenUp")
     expect(trail([-(S + 10), S + 10], [-(S + 10), -(S + 20)])).toBe(
       "downLeftThenUp"
     )

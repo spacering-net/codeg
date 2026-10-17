@@ -8,6 +8,9 @@ const appearance = vi.hoisted(() => ({
   enabled: false,
   position: null as { x: number; y: number } | null,
   setPosition: vi.fn(),
+  bindings: {} as Record<string, string | null>,
+  size: "large" as "small" | "medium" | "large",
+  favoriteAgents: [] as string[],
 }))
 
 vi.mock("@/hooks/use-appearance", () => ({
@@ -16,6 +19,12 @@ vi.mock("@/hooks/use-appearance", () => ({
     setFloatingBallEnabled: vi.fn(),
     floatingBallPosition: appearance.position,
     setFloatingBallPosition: appearance.setPosition,
+    floatingBallBindings: appearance.bindings,
+    setFloatingBallBindings: vi.fn(),
+    floatingBallSize: appearance.size,
+    setFloatingBallSize: vi.fn(),
+    floatingBallFavoriteAgents: appearance.favoriteAgents,
+    setFloatingBallFavoriteAgents: vi.fn(),
   }),
 }))
 
