@@ -145,6 +145,12 @@ import {
   getSavedModeId,
   saveModePreference,
 } from "@/lib/selector-prefs-storage"
+import { matchFullAccessMode } from "@/lib/default-mode-prefs"
+import {
+  eventMatchesConversation,
+  FOCUS_MODE_SELECTOR_EVENT,
+  TOGGLE_PLAN_FULL_EVENT,
+} from "@/lib/floating-ball-session-events"
 import {
   adoptLegacyNewConversationDraft,
   buildConversationDraftStorageKey,
@@ -273,6 +279,7 @@ const ConversationTabView = memo(function ConversationTabView({
   // Composer-namespace copy for the queue row's click-to-insert outcomes
   // (same keys the composer's own mid-turn send reports).
   const tCmp = useTranslations("Folder.chat.messageInput")
+  const tBall = useTranslations("FloatingBall")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const tDiag = useTranslations("DiagnosticsSettings")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1624,6 +1631,63 @@ const ConversationTabView = memo(function ConversationTabView({
     [effectiveModes, selectedAgent]
   )
 
+  // Floating-ball "Plan ⇄ full access": classify the advertised modes into a
+  // plan side and a full-access side (id substring weights, same helper the
+  // default-mode logic uses), then hop to the other side. Falls through to
+  // Plan when the current mode is neither; toasts when Plan doesn't exist.
+  const handleTogglePlanFull = useCallback(() => {
+    const availableModes = effectiveModes?.available_modes ?? []
+    if (availableModes.length === 0) {
+      toast.info(tBall("toasts.noModesAvailable"))
+      return
+    }
+    const current = selectedModeIdRef.current
+    const availableIds = availableModes.map((m) => m.id)
+    const planId = availableIds.find((id) => id.toLowerCase().includes("plan"))
+    const fullId = matchFullAccessMode(availableIds)
+    const target =
+      current != null && planId != null && current === planId
+        ? (fullId ?? null)
+        : planId
+    if (target == null) {
+      toast.info(tBall("toasts.noSwitchTarget"))
+      return
+    }
+    handleModeChange(target)
+    // Sync the agent immediately — a mode change should not wait for the next
+    // send's catch-up diff, especially for the full-access side.
+    if (target !== conn.modes?.current_mode_id) {
+      void acpActions.setMode(tabId, target).catch((err) => {
+        console.error("[ConversationDetailPanel] fb setMode:", err)
+      })
+    }
+  }, [acpActions, conn.modes, effectiveModes, handleModeChange, tabId, tBall])
+
+  // Floating-ball hand-offs (delete → header's confirm dialog; mode selector /
+  // plan toggle → this panel's composer). Events carry the DB id and every
+  // mounted panel instance hears them — only the one whose conversation
+  // matches reacts (multi-tab safe, same idiom as rename).
+  const [modeSelectorSignal, setModeSelectorSignal] = useState(0)
+  useEffect(() => {
+    const match = (e: Event) =>
+      eventMatchesConversation(
+        (e as CustomEvent<{ conversationId: number | null }>).detail,
+        dbConversationId
+      )
+    const onFocusMode = (e: Event) => {
+      if (match(e)) setModeSelectorSignal((n) => n + 1)
+    }
+    const onTogglePlan = (e: Event) => {
+      if (match(e)) handleTogglePlanFull()
+    }
+    window.addEventListener(FOCUS_MODE_SELECTOR_EVENT, onFocusMode)
+    window.addEventListener(TOGGLE_PLAN_FULL_EVENT, onTogglePlan)
+    return () => {
+      window.removeEventListener(FOCUS_MODE_SELECTOR_EVENT, onFocusMode)
+      window.removeEventListener(TOGGLE_PLAN_FULL_EVENT, onTogglePlan)
+    }
+  }, [dbConversationId, handleTogglePlanFull])
+
   const handleAnswerQuestion = useCallback(
     (answer: string) => {
       if (connStatus !== "connected") return
@@ -2299,6 +2363,7 @@ const ConversationTabView = memo(function ConversationTabView({
   return (
     <ConversationShell
       resizableWidth
+      modeSelectorSignal={modeSelectorSignal}
       getSentHistory={getSentHistory}
       topBanner={
         <>
@@ -2474,6 +2539,7 @@ const ConversationTabView = memo(function ConversationTabView({
                 </div>
               ) : null}
               <ChatInput
+                modeSelectorSignal={modeSelectorSignal}
                 // composerConnStatus (not connStatus): a chat draft mid-reconnect
                 // reads "connecting" until the connection's cwd matches, so the
                 // send affordance stays disabled until handleSend would accept it.

@@ -22,6 +22,7 @@ import {
 } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { RENAME_CONVERSATION_EVENT } from "@/lib/rename-conversation-events"
+import { DELETE_CONVERSATION_EVENT } from "@/lib/floating-ball-session-events"
 import { ConversationHeaderFolderPicker } from "@/components/chat/conversation-context-bar"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
@@ -65,6 +66,7 @@ import {
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { ConversationHeaderTags } from "./conversation-tag-picker"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { forgetRecentConversation } from "@/lib/recent-sessions-prefs"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -228,6 +230,20 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     return () => window.removeEventListener(RENAME_CONVERSATION_EVENT, onRename)
   }, [conversationId, renameTarget, title])
 
+  // Floating-ball "delete session": reuse this header's existing confirm
+  // dialog instead of minting a second one (same multi-tab idiom as rename).
+  useEffect(() => {
+    if (conversationId == null) return
+    const onDelete = (e: Event) => {
+      const id = (e as CustomEvent<{ conversationId: number | null }>).detail
+        ?.conversationId
+      if (id !== conversationId || deleteTarget != null) return
+      setDeleteTarget({ id: conversationId, tabId, title: displayTitle })
+    }
+    window.addEventListener(DELETE_CONVERSATION_EVENT, onDelete)
+    return () => window.removeEventListener(DELETE_CONVERSATION_EVENT, onDelete)
+  }, [conversationId, deleteTarget, tabId, displayTitle])
+
   const handleStatusChange = useCallback(
     (next: ConversationStatus) => {
       if (conversationId == null) return
@@ -249,6 +265,9 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     if (deleteTarget == null) return
     try {
       await deleteConversation(deleteTarget.id)
+      // Keep the floating ball's recent-sessions LRU from cycling into a
+      // conversation that no longer exists.
+      forgetRecentConversation(deleteTarget.id)
       // The deleted conversation is gone — close its tab and refresh the list.
       // Not recorded for reopen: there is no longer a conversation to reopen.
       closeTab(deleteTarget.tabId, { recordForReopen: false })

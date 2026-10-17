@@ -92,6 +92,8 @@ interface ConversationShellProps {
   selectorsLoading?: boolean
   selectedModeId?: string | null
   onModeChange?: (modeId: string) => void
+  /** Pass-through: see `MessageInput.modeSelectorSignal`. */
+  modeSelectorSignal?: number
   onConfigOptionChange?: (configId: string, valueId: string) => void
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
@@ -198,6 +200,7 @@ export function ConversationShell({
   selectorsLoading = false,
   selectedModeId,
   onModeChange,
+  modeSelectorSignal,
   onConfigOptionChange,
   agentType,
   availableCommands,
@@ -310,6 +313,7 @@ export function ConversationShell({
         {!hideInput && (
           <div className="mx-auto w-full chat-content-w">
             <ChatInput
+              modeSelectorSignal={modeSelectorSignal}
               status={status}
               promptCapabilities={promptCapabilities}
               defaultPath={defaultPath}

@@ -1,7 +1,11 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { openSettingsWindow } from "@/lib/api"
+import {
+  openSettingsWindow,
+  openImportSessionsWindow,
+  updateConversationPinned,
+} from "@/lib/api"
 import {
   useAcpActions,
   useConnectionStore,
@@ -16,6 +20,15 @@ import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { requestCreateTaskFromText } from "@/lib/task-compose-events"
 import { requestRenameConversation } from "@/lib/rename-conversation-events"
+import {
+  requestDeleteConversation,
+  requestFocusModeSelector,
+  requestTogglePlanFull,
+} from "@/lib/floating-ball-session-events"
+import {
+  nextRecentConversation,
+  readRecentSessionDepth,
+} from "@/lib/recent-sessions-prefs"
 import {
   useWorkspaceActions,
   useWorkspaceFileTabs,
@@ -91,6 +104,11 @@ export function WorkspaceChromeController() {
     useTabActions()
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
+  // cycleRecentSessions picks from the localStorage LRU queue; isAvailable
+  // filters to conversations this window can actually open (cross-window
+  // pollution guard: the queue is shared, the tabs are per-window).
+  const conversations = useAppWorkspaceStore((s) => s.conversations)
+  const rawTabs = useTabStore((s) => s.rawTabs)
   // Tab-close/navigation shortcuts used to live in the visible tab strips.
   // Mobile no longer mounts those strips, so this always-mounted controller now
   // owns them too (see the keydown handler below).
@@ -113,7 +131,7 @@ export function WorkspaceChromeController() {
   // whichever conversation happens to be mounted. The active connection is
   // what the workspace considers "the turn in front of the user".
   const { cancel } = useAcpActions()
-  const { getActiveKey } = useConnectionStore()
+  const { getActiveKey, getConnection } = useConnectionStore()
   // Agent cycling (floating ball "next agent" / "favorite agents") needs the
   // same enabled+available list the draft tabs resolve their defaults from.
   const { sortedTypes: sortedAvailableAgents } = useSortedAvailableAgents()
@@ -606,6 +624,92 @@ export function WorkspaceChromeController() {
           confirmDraftAgent(tab.id, next)
           return
         }
+        case "openBallBindings":
+          void openSettingsWindow("appearance").catch((err) => {
+            console.error(
+              "[WorkspaceChromeController] appearance settings:",
+              err
+            )
+          })
+          return
+        case "openCollaboration":
+          void openSettingsWindow("collaboration").catch((err) => {
+            console.error(
+              "[WorkspaceChromeController] collaboration settings:",
+              err
+            )
+          })
+          return
+        case "openImportSessions":
+          void openImportSessionsWindow().catch((err) => {
+            console.error("[WorkspaceChromeController] import sessions:", err)
+          })
+          return
+        case "deleteCurrentConversation":
+          requestDeleteConversation(activeTab?.conversationId ?? null)
+          return
+        case "togglePinConversation": {
+          const conv = conversations.find(
+            (c) => c.id === activeTab?.conversationId
+          )
+          if (!conv) {
+            toast.info(tBall("toasts.renameNeedsSavedSession"))
+            return
+          }
+          void updateConversationPinned(conv.id, conv.pinned_at == null)
+            .then(() => toast.info(tBall("toasts.pinToggled")))
+            .catch((err) => {
+              console.error("[WorkspaceChromeController] pin toggle:", err)
+            })
+          return
+        }
+        case "focusModeSelector":
+          requestFocusModeSelector(activeTab?.conversationId ?? null)
+          return
+        case "togglePlanFullAccess":
+          requestTogglePlanFull(activeTab?.conversationId ?? null)
+          return
+        case "cycleRunningSessions": {
+          // "Running" = this window's connections currently generating. The
+          // connection store is per-window, so a session streaming in another
+          // window is invisible here — the toast phrasing accounts for that.
+          const runningTabs = rawTabs.filter(
+            (tab) => getConnection(tab.id)?.status === "prompting"
+          )
+          if (runningTabs.length === 0) {
+            toast.info(tBall("toasts.noRunningSession"))
+            return
+          }
+          if (runningTabs.length <= 1) {
+            toast.info(tBall("toasts.noOtherRunning"))
+            return
+          }
+          const currentIndex = runningTabs.findIndex(
+            (tab) => tab.id === activeTabId
+          )
+          // Active tab not running → jump to the first running tab; otherwise
+          // step forward through the running set in tab order.
+          const nextIndex = (currentIndex + 1) % runningTabs.length
+          switchTab(runningTabs[nextIndex].id)
+          return
+        }
+        case "cycleRecentSessions": {
+          if (!activeFolder) return
+          const target = nextRecentConversation(
+            activeTab?.conversationId ?? null,
+            readRecentSessionDepth(),
+            (id) =>
+              conversations.some((c) => c.id === id) &&
+              rawTabs.some((tab) => tab.conversationId === id)
+          )
+          if (target == null) {
+            toast.info(tBall("toasts.noOtherRecent"))
+            return
+          }
+          const tab = rawTabs.find((t) => t.conversationId === target)
+          if (tab) switchTab(tab.id)
+          return
+        }
         case "panel":
           return
       }
@@ -617,13 +721,16 @@ export function WorkspaceChromeController() {
       auxPanel,
       cancel,
       confirmDraftAgent,
+      conversations,
       favoriteAgents,
       getActiveKey,
+      getConnection,
       handleOpenFolder,
       handleOpenSettings,
       openChatModeTab,
       openConversations,
       openNewConversationTab,
+      rawTabs,
       reopenClosedTab,
       setSearchOpen,
       setRoute,

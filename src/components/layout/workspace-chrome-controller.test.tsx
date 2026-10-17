@@ -67,7 +67,10 @@ vi.mock("next-intl", () => ({
 vi.mock("@/contexts/acp-connections-context", () => ({
   useAcpActions: () => ({ cancel: vi.fn() }),
   // Not a zustand store: it returns the context value directly.
-  useConnectionStore: () => ({ getActiveKey: () => null }),
+  useConnectionStore: () => ({
+    getActiveKey: () => null,
+    getConnection: () => null,
+  }),
 }))
 vi.mock("@/hooks/use-appearance", () => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: vi.fn() }),
@@ -116,6 +119,11 @@ vi.mock("@/contexts/tab-context", () => ({
     selector: (s: {
       tabs: { id: string; conversationId: number | null; agentType: string }[]
       activeTabId: string | null
+      rawTabs: {
+        id: string
+        conversationId: number | null
+        agentType: string
+      }[]
     }) => T
   ) =>
     selector({
@@ -125,6 +133,12 @@ vi.mock("@/contexts/tab-context", () => ({
           : [{ id: state.activeTabId, conversationId: 7, agentType: "zcode" }]
         : [],
       activeTabId: state.activeTabId,
+      rawTabs:
+        state.activeTabId && state.activeTab
+          ? [state.activeTab]
+          : state.activeTabId
+            ? [{ id: state.activeTabId, conversationId: 7, agentType: "zcode" }]
+            : [],
     }),
 }))
 vi.mock("@/contexts/workspace-context", () => ({
@@ -161,7 +175,8 @@ vi.mock("@/hooks/use-shortcut-settings", () => ({
 }))
 vi.mock("@/stores/app-workspace-store", () => ({
   isConversationDeleted: () => false,
-  useAppWorkspaceStore: { getState: () => ({ getFolder: () => null }) },
+  useAppWorkspaceStore: (selector: (s: { conversations: [] }) => unknown) =>
+    selector({ conversations: [] }),
 }))
 vi.mock("@/lib/closed-tab-stack", () => ({ popClosedTab: () => null }))
 vi.mock("@/components/conversations/search-command-dialog", () => ({

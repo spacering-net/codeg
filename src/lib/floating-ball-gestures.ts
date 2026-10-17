@@ -75,6 +75,15 @@ export type FloatingBallAction =
   | "openSessionFolder"
   | "cycleAgent"
   | "cycleFavoriteAgent"
+  | "openBallBindings"
+  | "cycleRunningSessions"
+  | "cycleRecentSessions"
+  | "deleteCurrentConversation"
+  | "openImportSessions"
+  | "togglePinConversation"
+  | "focusModeSelector"
+  | "togglePlanFullAccess"
+  | "openCollaboration"
 
 export const FLOATING_BALL_GESTURES: readonly FloatingBallGesture[] = [
   "tap",

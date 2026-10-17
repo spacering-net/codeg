@@ -53,6 +53,11 @@ import {
   type ThemeColor,
   type ZoomLevel,
 } from "@/lib/theme-presets"
+import {
+  readRecentSessionDepth,
+  writeRecentSessionDepth,
+  type RecentSessionDepth,
+} from "@/lib/recent-sessions-prefs"
 import { PetManagerSection } from "./pet-manager-section"
 import { FontSettingsSection } from "./font-settings-section"
 import { WorkspaceBackgroundSection } from "./workspace-background-section"
@@ -90,6 +95,15 @@ const BALL_BINDABLE_ACTIONS: readonly FloatingBallAction[] = [
   "openSessionFolder",
   "cycleAgent",
   "cycleFavoriteAgent",
+  "openBallBindings",
+  "cycleRunningSessions",
+  "cycleRecentSessions",
+  "deleteCurrentConversation",
+  "openImportSessions",
+  "togglePinConversation",
+  "focusModeSelector",
+  "togglePlanFullAccess",
+  "openCollaboration",
   "zoomIn",
   "zoomOut",
   "zoomReset",
@@ -104,9 +118,8 @@ function isFloatingBallSize(v: string): v is FloatingBallSize {
 /** Label of a gesture's built-in default, for the placeholder row. */
 function defaultGestureLabel(
   action: FloatingBallAction,
-  // Loosely typed: the two caller namespaces (FloatingBall / AppearanceSettings)
-  // both mirror the actions.* keys, and next-intl's key union would force a
-  // per-namespace overload for no safety gain here.
+  // Loosely typed: callers pass the FloatingBall namespace's t; next-intl's
+  // key union would force a per-key overload for no safety gain here.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   t: any
 ): string {
@@ -187,10 +200,15 @@ export function AppearanceSettings() {
   // 的宽度更小。
   const chatWidthMax = chatContentWidthCeiling(screenWidth, zoomLevel / 100)
 
-  // The binding dropdown renders under the AppearanceSettings namespace, whose
-  // mirrored actions.* keys come from FloatingBall.
+  // Gesture/action labels come from the FloatingBall namespace — the only one
+  // that actually carries translations; the AppearanceSettings.gestures/actions
+  // mirror is legacy and no longer read here.
+  const ballT = useTranslations("FloatingBall")
+  const [recentSessionDepth, setRecentSessionDepth] = useState(
+    readRecentSessionDepth
+  )
   const actionLabel = (action: FloatingBallAction) =>
-    action === "panel" ? t("floatingBall.panelTitle") : t(`actions.${action}`)
+    action === "panel" ? ballT("panelTitle") : ballT(`actions.${action}`)
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -494,7 +512,7 @@ export function AppearanceSettings() {
                     className="flex items-center justify-between gap-2"
                   >
                     <span className="w-40 shrink-0 truncate text-2xs text-muted-foreground">
-                      {t(`gestures.${gesture}`, {
+                      {ballT(`gestures.${gesture}`, {
                         fallback: gesture,
                       })}
                     </span>
@@ -513,9 +531,9 @@ export function AppearanceSettings() {
                             DEFAULT_FLOATING_BALL_BINDINGS[gesture]
                               ? defaultGestureLabel(
                                   DEFAULT_FLOATING_BALL_BINDINGS[gesture],
-                                  t
+                                  ballT
                                 )
-                              : t("floatingBall.bindingCleared")
+                              : ballT("bindingCleared")
                           }
                         />
                       </SelectTrigger>
@@ -524,9 +542,9 @@ export function AppearanceSettings() {
                           {DEFAULT_FLOATING_BALL_BINDINGS[gesture]
                             ? defaultGestureLabel(
                                 DEFAULT_FLOATING_BALL_BINDINGS[gesture],
-                                t
+                                ballT
                               )
-                            : t("floatingBall.bindingCleared")}
+                            : ballT("bindingCleared")}
                         </SelectItem>
                         {BALL_BINDABLE_ACTIONS.map((action) => (
                           <SelectItem
@@ -554,6 +572,34 @@ export function AppearanceSettings() {
             <p className="text-2xs text-muted-foreground leading-4">
               {t("floatingBall.favoriteAgentsHint")}
             </p>
+          </div>
+
+          {/* Depth of the recent-sessions cycle (2 = toggle between the two
+              most recently opened). Read/written straight to localStorage —
+              the writer lives in tab-store, outside React. */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium">{ballT("recentSessionDepth")}</p>
+            <Select
+              value={String(recentSessionDepth)}
+              onValueChange={(v) => {
+                if (v === "2" || v === "3" || v === "4") {
+                  const next = Number(v) as RecentSessionDepth
+                  setRecentSessionDepth(next)
+                  writeRecentSessionDepth(next)
+                }
+              }}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {([2, 3, 4] as const).map((d) => (
+                  <SelectItem key={d} value={String(d)}>
+                    {d}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </section>
         {/* ===== Chat content width ===== */}
