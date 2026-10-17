@@ -95,7 +95,7 @@ describe("useTranscriptKnownInvocations", () => {
       useTranscriptKnownInvocations("claude_code", commands, "/ws")
     )
     expect(sorted(result.current)).toEqual(["/init", "/review"])
-    // Every agent but Codex advertises its skills as commands already.
+    // Every agent but Codex and Antigravity advertises its skills as commands.
     expect(mockUseAgentSkills).toHaveBeenCalledWith(null, "/ws")
   })
 
@@ -107,6 +107,22 @@ describe("useTranscriptKnownInvocations", () => {
     )
     expect(sorted(result.current)).toEqual(["$deploy", "$ship", "/review"])
     expect(mockUseAgentSkills).toHaveBeenCalledWith("codex", "/ws")
+  })
+
+  it("adds Antigravity's on-disk skills under `/`, beside its commands", () => {
+    // Antigravity advertises only its built-ins, never a skill.
+    const skills: AgentSkillItem[] = [
+      { ...CODEX_SKILLS[0], path: "/ws/.agents/skills/ship" },
+    ]
+    mockUseAgentSkills.mockImplementation((agentType) =>
+      agentType === "antigravity" ? skills : NO_SKILLS
+    )
+    const commands = [command("plan"), command("usage")]
+    const { result } = renderHook(() =>
+      useTranscriptKnownInvocations("antigravity", commands, "/ws")
+    )
+    expect(sorted(result.current)).toEqual(["/plan", "/ship", "/usage"])
+    expect(mockUseAgentSkills).toHaveBeenCalledWith("antigravity", "/ws")
   })
 
   it("knows nothing before the agent advertises in a new folder, beyond Codex's disk skills", () => {
@@ -286,19 +302,21 @@ describe("MessageListView", () => {
       const tag = source.slice(start, source.indexOf("/>", start))
       return /\bavailableCommands=\{([^}]*)\}/.exec(tag)?.[1].trim()
     }
-    expect(
-      commandsPassedBy("src/components/canvas/canvas-conversation-surface.tsx")
-    ).toBe("conn.availableCommands")
     // Except with no agent known at all: then nothing it remembered applies,
     // and `[]` is the deliberate answer.
     expect(
       commandsPassedBy("src/components/message/live-transcript-view.tsx")
     ).toBe("transcriptAgent ? conn?.availableCommands : []")
-    const detailPanel =
-      "src/components/conversations/conversation-detail-panel.tsx"
-    expect(commandsPassedBy(detailPanel)).toBe("connectionCommands")
-    expect(read(detailPanel)).toMatch(
-      /const connectionCommands = connIsForOtherAgent \? null : conn\.availableCommands\n/
-    )
+    // A connection still bound to the agent a draft switched away from has
+    // advertised nothing for the selected one: unknown again, never `[]`.
+    for (const surface of [
+      "src/components/conversations/conversation-detail-panel.tsx",
+      "src/components/canvas/canvas-conversation-surface.tsx",
+    ]) {
+      expect(commandsPassedBy(surface)).toBe("connectionCommands")
+      expect(read(surface)).toMatch(
+        /const connectionCommands = connIsForOtherAgent \? null : conn\.availableCommands\n/
+      )
+    }
   })
 })

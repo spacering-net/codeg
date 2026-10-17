@@ -20,7 +20,10 @@ import {
 import {
   buildKnownInvocations,
   commandToReference,
+  diskSkillTrigger,
+  skillsForMenu,
   skillToReference,
+  type InvocationPrefix,
 } from "@/components/chat/composer/invocation-reference"
 import { CommandOptionLabel } from "@/components/chat/composer/command-option-label"
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
@@ -44,7 +47,7 @@ const useIsomorphicLayoutEffect =
 interface UseComposerInvocationsArgs {
   editorRef: RefObject<RichComposerHandle | null>
   agentType: AgentType
-  /** Folder path for project-scoped Codex skills (global skills load regardless). */
+  /** Folder path for project-scoped disk skills (global skills load regardless). */
   folderPath: string | null
   /** Slash commands from the agent-options probe (empty if none / not yet ready). */
   availableCommands: AvailableCommandInfo[]
@@ -55,6 +58,9 @@ export interface ComposerInvocations {
   isOpen: boolean
   commands: AvailableCommandInfo[]
   skills: AgentSkillItem[]
+  /** The trigger `skills` are listed and inserted under (`$` for Codex, `/`
+   *  for Antigravity), or null for an agent whose skills come as commands. */
+  skillTrigger: InvocationPrefix | null
   /** Every invocation this menu could offer, for the composer's `knownInvocations`
    *  — so seeded / pasted text badges exactly what the menu would insert. */
   knownInvocations: KnownInvocations
@@ -75,6 +81,8 @@ export interface ComposerInvocations {
  * untouched. It reuses the shared, pure reference builders + the composer's
  * `isExternalMenuOpen`/`onExternalMenuKeyDown` escape hatch; a selected item
  * becomes a badge that serializes to its literal `/cmd` / `$skill` token on save.
+ * Antigravity's skills, which its server never advertises, join its commands
+ * under `/`.
  */
 export function useComposerInvocations({
   editorRef,
@@ -82,9 +90,10 @@ export function useComposerInvocations({
   folderPath,
   availableCommands,
 }: UseComposerInvocationsArgs): ComposerInvocations {
-  const isCodex = agentType === "codex"
-  // Codex-only `$` skills (filesystem scan — no live session needed).
-  const skills = useAgentSkills(isCodex ? "codex" : null, folderPath)
+  const skillTrigger = diskSkillTrigger(agentType)
+  // Skills from a filesystem scan (no live session needed), only for an agent
+  // that does not advertise them as commands itself.
+  const skills = useAgentSkills(skillTrigger ? agentType : null, folderPath)
   const [open, setOpen] = useState(false)
   const [triggerChar, setTriggerChar] = useState<"/" | "$" | null>(null)
   const [filter, setFilter] = useState("")
@@ -112,14 +121,15 @@ export function useComposerInvocations({
       undefined,
       " "
     )
-    const regex = isCodex ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
+    const regex =
+      skillTrigger === "$" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
     const match = before.match(regex)
     if (!match) return close()
     setTriggerChar(match[2] as "/" | "$")
     setFilter(match[3])
     setRawActiveIndex(0)
     setOpen(true)
-  }, [editorRef, availableCommands.length, skills.length, isCodex, close])
+  }, [editorRef, availableCommands.length, skills.length, skillTrigger, close])
 
   const commands = useMemo(() => {
     if (!open || triggerChar !== "/" || availableCommands.length === 0)
@@ -128,16 +138,16 @@ export function useComposerInvocations({
   }, [open, triggerChar, availableCommands, filter])
 
   const matchedSkills = useMemo(() => {
-    // Skills autocomplete is Codex-only and triggered by `$`.
-    if (!isCodex || !open || triggerChar !== "$" || skills.length === 0)
-      return []
+    // Disk skills are listed only under the trigger their agent invokes them by.
+    if (!skillTrigger || !open || triggerChar !== skillTrigger) return []
+    if (skills.length === 0) return []
     return rankByTextMatch(
       filter,
-      skills,
+      skillsForMenu(skills, availableCommands, skillTrigger),
       (skill) => skill.name,
       (skill) => skill.id
     )
-  }, [isCodex, open, triggerChar, skills, filter])
+  }, [skillTrigger, open, triggerChar, skills, availableCommands, filter])
 
   // Built from the FULL lists, not the filtered ones: this answers "is there
   // such a command", which the current query has no say in.
@@ -145,10 +155,10 @@ export function useComposerInvocations({
     () =>
       buildKnownInvocations(
         availableCommands,
-        isCodex ? skills : null,
-        isCodex ? "$" : "/"
+        skillTrigger ? skills : null,
+        skillTrigger ?? "/"
       ),
-    [availableCommands, isCodex, skills]
+    [availableCommands, skillTrigger, skills]
   )
 
   const count = commands.length + matchedSkills.length
@@ -199,8 +209,9 @@ export function useComposerInvocations({
     [replaceTrigger]
   )
   const selectSkill = useCallback(
-    (skill: AgentSkillItem) => replaceTrigger(skillToReference(skill, "$")),
-    [replaceTrigger]
+    (skill: AgentSkillItem) =>
+      replaceTrigger(skillToReference(skill, skillTrigger ?? "/")),
+    [replaceTrigger, skillTrigger]
   )
 
   const onKeyDown = useCallback(
@@ -245,6 +256,7 @@ export function useComposerInvocations({
     isOpen: open && count > 0,
     commands,
     skills: matchedSkills,
+    skillTrigger,
     knownInvocations,
     activeIndex,
     detect,
@@ -423,7 +435,7 @@ export function ComposerInvocationsPopup({
                   className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
                   title={skill.description ?? undefined}
                 >
-                  {skill.description ?? `$${skill.id}`}
+                  {skill.description ?? `${inv.skillTrigger ?? "/"}${skill.id}`}
                 </span>
               </div>
             </button>

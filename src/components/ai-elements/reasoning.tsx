@@ -255,13 +255,12 @@ export const ReasoningContent = memo(
           plugins={plugins}
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
-          {...props}
           mode={isStreaming ? "streaming" : "static"}
           parseIncompleteMarkdown={isStreaming}
           // An unclosed link shows as text, as in MessageResponse — see
           // LIVE_REMEND for why the default placeholder cannot be used.
           remend={LIVE_REMEND}
-          // Enforce the link icon + safety override after spreading props.
+          // The link icon + safety override, and the diagram blocks.
           components={reasoningComponents}
         >
           {normalized}

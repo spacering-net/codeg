@@ -16,6 +16,7 @@ import {
   scienceReadContent,
 } from "@/lib/api"
 import { invalidateAgentSkillsCache } from "@/hooks/use-agent-skills"
+import { useLatestCall } from "@/hooks/use-latest-call"
 import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type {
   AcpAgentInfo,
@@ -49,7 +50,11 @@ export function ScienceBody({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
+  // A late answer from an earlier Refresh must not overwrite a newer one.
+  const beginLoad = useLatestCall()
+
   const refresh = useCallback(async () => {
+    const current = beginLoad()
     setLoading(true)
     setLoadError(null)
     try {
@@ -57,6 +62,7 @@ export function ScienceBody({
         scienceList(),
         acpListAgents(),
       ])
+      if (!current()) return
       setSkills(skillList)
       // A pi pointed at a custom PI_CODING_AGENT_DIR isn't managed by the
       // default-dir skill store, so it doesn't get a column here.
@@ -67,13 +73,14 @@ export function ScienceBody({
       )
       setReloadKey((k) => k + 1)
     } catch (err) {
+      if (!current()) return
       setLoadError(toErrorMessage(err))
       setSkills([])
       setAgents([])
     } finally {
-      setLoading(false)
+      if (current()) setLoading(false)
     }
-  }, [])
+  }, [beginLoad])
 
   useEffect(() => {
     refresh().catch((err) => {

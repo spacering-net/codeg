@@ -26,6 +26,23 @@
 ; stopped, as before: one left running keeps its file locked. taskkill
 ; returns non-zero when no processes match, which is fine — we ignore the
 ; result.
+;
+; Stopping them is not always enough: whatever starts a companion — an agent,
+; or a codeg still running — can start one again before the installer
+; reaches the file, and a process this installer is not allowed to stop holds
+; the file all the same. But Windows lets the file of a running executable be
+; renamed.
+; So a sidecar whose file is still in use once the processes were stopped is
+; moved aside, to its own name plus `.<n>.old` in the same folder: whatever
+; runs it carries on, and the installer writes the new binary under the old
+; name. The aside files are deleted after the install, or by the next install
+; or uninstall, once nothing runs them any more.
+;
+; Not, though, when an interactive install is about to ask whether to close a
+; running codeg: on a no it stops there, and that codeg would be left without
+; its companion. Silent and passive installs, the updater's included, close it
+; without asking. An install stopped later on, at some other file, leaves a
+; moved file where it is; the next install deletes it and writes the new one.
 
 !macro CODEG_STOP_SIDECARS
   DetailPrint "Stopping codeg-mcp and codeg-computer-helper processes running from $INSTDIR..."
@@ -43,12 +60,56 @@
   Sleep 500
 !macroend
 
+; $R9 = 1 when `path` can be opened for writing, as `File` will have to open
+; it, else 0. A running executable's file cannot be; a missing one counts as
+; writable.
+!macro CODEG_CAN_WRITE path
+  StrCpy $R9 1
+  ${If} ${FileExists} "${path}"
+    ClearErrors
+    FileOpen $R8 "${path}" a
+    ${If} ${Errors}
+      StrCpy $R9 0
+    ${Else}
+      FileClose $R8
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro CODEG_MOVE_ASIDE_IF_IN_USE name
+  !insertmacro CODEG_CAN_WRITE "$INSTDIR\${name}"
+  ${If} $R9 = 0
+    System::Call 'kernel32::GetTickCount() i .R8'
+    DetailPrint "$INSTDIR\${name} is still in use, moving it aside..."
+    Rename "$INSTDIR\${name}" "$INSTDIR\${name}.$R8.old"
+  ${EndIf}
+!macroend
+
+!macro CODEG_DELETE_ASIDE
+  Delete "$INSTDIR\codeg-mcp.exe.*.old"
+  Delete "$INSTDIR\codeg-computer-helper.exe.*.old"
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro CODEG_STOP_SIDECARS
+  !insertmacro CODEG_DELETE_ASIDE
+  ; codeg.exe's file is in use while codeg runs.
+  !insertmacro CODEG_CAN_WRITE "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${If} $R9 = 1
+  ${OrIf} ${Silent}
+  ${OrIf} $PassiveMode = 1
+    !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "codeg-mcp.exe"
+    !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "codeg-computer-helper.exe"
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  !insertmacro CODEG_DELETE_ASIDE
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro CODEG_STOP_SIDECARS
+  !insertmacro CODEG_DELETE_ASIDE
 !macroend
 
 ; Deliberately NOT cleaning up the "launch at login" HKCU Run values here.

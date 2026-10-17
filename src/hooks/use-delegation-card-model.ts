@@ -53,8 +53,26 @@ export interface DelegationCardSource {
   taskIdHint?: string | null
 }
 
+/**
+ * Who a delegation card shows as running the task: an assistant (with the
+ * agent it ran on, when known) or a bare agent. Resolved once here and handed
+ * whole to every surface that draws it (`DelegationIdentityAvatar` /
+ * `DelegationIdentityName`), so none can fall back to the bare agent.
+ */
+export interface DelegationIdentity {
+  /** The agent that runs (ran) the task. For an assistant, taken only from the
+   *  backend's own evidence — never from the call's `agent_type` argument,
+   *  which the backend ignores — so it stays null until that arrives. */
+  agentType: AgentType | null
+  assistantId: number | null
+  /** The assistant's name when the delegation started: the fallback for a row
+   *  the assistants store does not hold. */
+  assistantName: string | null
+}
+
 export interface DelegationCardModel {
   agentType: AgentType | null
+  identity: DelegationIdentity
   task: string | null
   taskId: string | null
   status: DelegationCardStatus
@@ -181,16 +199,37 @@ export function useDelegationCardModel(
   const childLive = useDelegationChildLive(childConnectionId)
   const childAwaitingPermission = childLive?.pendingPermission != null
 
+  // The assistant the task runs as: the live binding → the call's own
+  // `assistant_id` → the broker report → the historical meta. Its name comes
+  // from the same places, bar the call (which carries none).
+  const assistantId =
+    binding?.assistantId ??
+    parsed.assistantId ??
+    toolOutput?.assistantId ??
+    parsedMeta?.assistantId ??
+    null
+  const assistantName =
+    binding?.assistantName ??
+    toolOutput?.assistantName ??
+    parsedMeta?.assistantName ??
+    null
+
   // Live binding → the call's own `agent_type` argument → the broker report's
   // `agent_type` → the historical meta injected from the child's DB row. The
   // last two are what a `resume_delegation` card runs on: its arguments name a
-  // task, never an agent.
+  // task, never an agent. A call that names an assistant skips its own
+  // `agent_type`: the backend ignores it (the assistant decides), so a host
+  // that fills it in anyway must not paint the wrong agent.
   const agentType: AgentType | null =
     binding?.agentType ??
-    parsed.agentType ??
+    (assistantId === null ? parsed.agentType : null) ??
     toolOutput?.agentType ??
     parsedMeta?.agentType ??
     null
+  const identity = useMemo<DelegationIdentity>(
+    () => ({ agentType, assistantId, assistantName }),
+    [agentType, assistantId, assistantName]
+  )
   const status = resolveDelegationStatus({
     binding,
     parsedMeta,
@@ -199,10 +238,18 @@ export function useDelegationCardModel(
     errorText,
     childAwaitingPermission,
   })
-  const errorCode = binding?.errorCode ?? parsedMeta?.errorCode ?? undefined
+  // The report is the only source for a call refused before any delegation
+  // started (`assistant_not_found`, the companion's local refusals): no
+  // binding, no meta.
+  const errorCode =
+    binding?.errorCode ??
+    parsedMeta?.errorCode ??
+    toolOutput?.errorCode ??
+    undefined
 
   return {
     agentType,
+    identity,
     // Parsed raw_input first (full text on hosts that carry it), then the
     // live binding's preview, then the broker meta — the latter two are the
     // only sources on hosts whose announcements never carry arguments
@@ -222,6 +269,7 @@ export function useDelegationCardModel(
     hasModel: Boolean(
       binding ||
       parsed.agentType ||
+      parsed.assistantId ||
       parsed.task ||
       parsedMeta ||
       toolOutput?.agentType ||

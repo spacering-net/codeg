@@ -4,9 +4,6 @@ import { describe, expect, it, vi } from "vitest"
 vi.mock("@/components/ai-elements/link-safety", () => ({
   useStreamdownLinkSafety: () => ({ enabled: false }),
 }))
-vi.mock("@/hooks/use-generative-ui-enabled", () => ({
-  useGenerativeUiEnabled: () => true,
-}))
 // The card's chunk cannot be fetched (offline web client, a deploy that
 // replaced the build underneath an open tab).
 vi.mock("@/components/message/json-render-block", () => {

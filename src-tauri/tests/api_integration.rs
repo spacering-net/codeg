@@ -390,7 +390,9 @@ async fn get_folder_conversation_accepts_turn_window_params() {
     assert_eq!(body["turns_offset"], 0);
     assert_eq!(body["turns_total"], 0);
     assert_eq!(body["assistant_turns_before_offset"], 0);
+    assert_eq!(body["user_turns_before_offset"], 0);
     assert!(body["prefix_hash"].is_string());
+    let window_prefix_hash = body["prefix_hash"].clone();
 
     // No params → legacy full response: none of the window fields serialize.
     let resp = server
@@ -401,6 +403,7 @@ async fn get_folder_conversation_accepts_turn_window_params() {
     assert_eq!(resp.status_code(), 200);
     let body = resp.json::<Value>();
     assert!(body.get("turns_offset").is_none());
+    assert!(body.get("user_turns_before_offset").is_none());
     assert!(body.get("prefix_hash").is_none());
 
     // Both selectors → invalid input.
@@ -424,8 +427,22 @@ async fn get_folder_conversation_accepts_turn_window_params() {
     assert_eq!(resp.status_code(), 200);
     let body = resp.json::<Value>();
     assert_eq!(body["turns_total"], 0);
+    assert_eq!(body["user_turns_before_offset"], 0);
     assert!(body["prefix_hash"].is_string());
     assert!(body["prefix_hash_before_index"].is_string());
+
+    // The navigator's outline of the history above the window: the prefix it
+    // covers fingerprints like the window's own prefix hash.
+    let resp = server
+        .post("/api/get_folder_conversation_outline")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "conversationId": conv_id, "beforeIndex": 0 }))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.json::<Value>();
+    assert_eq!(body["turns"], json!([]));
+    assert_eq!(body["turns_total"], 0);
+    assert_eq!(body["prefix_hash"], window_prefix_hash);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -640,4 +657,105 @@ async fn a_server_that_shares_its_screen_answers_its_web_clients() {
         .await;
     assert_eq!(resp.status_code(), 200);
     assert_eq!(resp.json::<Value>(), json!({}));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Assistants
+// ────────────────────────────────────────────────────────────────────────────
+
+fn assistant_draft(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": "Reviews diffs",
+        "avatar": { "kind": "monogram", "color": "violet" },
+        "agent_config": {
+            "agent_type": "codex",
+            "agent_options": { "config_values": { "model": "gpt-5.5" } },
+            "label_snapshot": {
+                "agent": "Codex CLI",
+                "mode": null,
+                "options": [
+                    { "id": "model", "kind": "select", "name": "Model", "value_label": "GPT-5.5" }
+                ]
+            }
+        },
+        "instructions": "Be terse.",
+        "enabled": true
+    })
+}
+
+#[tokio::test]
+async fn assistants_round_trip_over_http() {
+    let (server, _data, _static) = build_test_server().await;
+    let auth = format!("Bearer {TEST_TOKEN}");
+    let call = |path: &'static str, body: Value| {
+        server
+            .post(path)
+            .add_header("authorization", auth.clone())
+            .json(&body)
+    };
+
+    let resp = call("/api/assistant_list", json!({})).await;
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.json::<Value>(), json!([]));
+
+    let resp = call("/api/assistant_create", json!({ "draft": assistant_draft("Reviewer") })).await;
+    assert_eq!(resp.status_code(), 200);
+    let a: Value = resp.json();
+    assert_eq!(a["name"], "Reviewer");
+    assert_eq!(a["revision"], 1);
+    assert_eq!(a["agent_type"], "codex");
+    assert!(a["deleted_at"].is_null());
+    let a_id = a["id"].as_i64().unwrap();
+
+    let resp = call("/api/assistant_create", json!({ "draft": assistant_draft("Writer") })).await;
+    let b_id = resp.json::<Value>()["id"].as_i64().unwrap();
+
+    // A duplicate name is a conflict carrying its i18n key.
+    let resp = call("/api/assistant_create", json!({ "draft": assistant_draft("writer") })).await;
+    assert_eq!(resp.status_code(), 409);
+    assert_eq!(resp.json::<Value>()["i18n_key"], "errors.duplicateName");
+
+    // An incomplete selection never lands.
+    let mut incomplete = assistant_draft("Other");
+    incomplete["agent_config"]["agent_options"]["config_values"] = json!({});
+    let resp = call("/api/assistant_create", json!({ "draft": incomplete })).await;
+    assert_eq!(resp.status_code(), 400);
+    assert_eq!(resp.json::<Value>()["i18n_key"], "errors.invalidAgentOptions");
+
+    let resp = call(
+        "/api/assistant_update",
+        json!({ "id": a_id, "patch": { "enabled": false } }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200);
+    let updated: Value = resp.json();
+    assert_eq!(updated["enabled"], false);
+    assert_eq!(updated["revision"], 2);
+    assert_eq!(updated["instructions"], "Be terse.");
+
+    let resp = call("/api/assistant_reorder", json!({ "ids": [b_id, a_id] })).await;
+    assert_eq!(resp.status_code(), 200);
+    let moved: Value = resp.json();
+    assert_eq!(moved.as_array().unwrap().len(), 2);
+    assert_eq!(moved[0]["id"], b_id);
+
+    let resp = call("/api/assistant_delete", json!({ "id": a_id })).await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(resp.json::<Value>()["deleted_at"].is_string());
+
+    let resp = call("/api/assistant_delete", json!({ "id": a_id })).await;
+    assert_eq!(resp.status_code(), 404);
+
+    // The list keeps the tombstone, in display order.
+    let resp = call("/api/assistant_list", json!({})).await;
+    let list: Value = resp.json();
+    let ids: Vec<i64> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![b_id, a_id]);
+    assert!(list[1]["deleted_at"].is_string());
 }

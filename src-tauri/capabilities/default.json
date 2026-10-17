@@ -36,6 +36,7 @@
     "core:window:allow-outer-position",
     "core:window:allow-set-position",
     "core:window:allow-scale-factor",
+    "core:window:allow-request-user-attention",
     "opener:default",
     {
       "identifier": "opener:allow-open-path",

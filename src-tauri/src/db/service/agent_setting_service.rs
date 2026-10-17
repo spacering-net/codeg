@@ -10,6 +10,7 @@ use sea_orm::{
 use crate::db::entities::agent_setting;
 use crate::db::error::DbError;
 use crate::models::agent::AgentType;
+use crate::parsers::{AgentEnv, AgentEnvs};
 
 #[derive(Debug, Clone)]
 pub struct AgentDefaultInput {
@@ -43,6 +44,8 @@ fn default_enabled(agent_type: AgentType) -> bool {
             | AgentType::DeepSeek
             | AgentType::Qoder
             | AgentType::Antigravity
+            | AgentType::Kiro
+            | AgentType::ZCode
             // A user who just registered a custom agent wants to use it.
             | AgentType::Custom(_)
     )
@@ -128,6 +131,50 @@ pub async fn get_by_agent_type(
         .one(conn)
         .await?;
     Ok(model)
+}
+
+/// The environment `agent_type` is launched with, from its saved `env_json` —
+/// what a history parser needs to look where the agent actually writes (see
+/// [`AgentEnv`]).
+///
+/// Only `env_json`: the launch also folds in the agent's own config file and
+/// provider credentials (`commands::acp::build_session_runtime_env`), but
+/// those carry API settings rather than a relocated home, and reading them on
+/// every history read would mean reading credential files.
+///
+/// A settings read that fails costs only the overrides: the caller still gets
+/// codeg's own environment, which is where every history read looked before
+/// the settings were consulted at all.
+pub async fn load_agent_env(conn: &DatabaseConnection, agent_type: AgentType) -> AgentEnv {
+    match get_by_agent_type(conn, agent_type).await {
+        Ok(row) => AgentEnv::from_env_json(row.as_ref().and_then(|m| m.env_json.as_deref())),
+        Err(error) => {
+            tracing::warn!(
+                %agent_type,
+                %error,
+                "agent env: settings read failed; reading history with codeg's own environment"
+            );
+            AgentEnv::inherited()
+        }
+    }
+}
+
+/// [`load_agent_env`] for every agent at once, for a caller reading several
+/// agents' histories in one pass.
+pub async fn load_agent_envs(conn: &DatabaseConnection) -> AgentEnvs {
+    let mut envs = AgentEnvs::default();
+    match list_map_by_agent_type(conn).await {
+        Ok(rows) => {
+            for (agent_type, row) in rows {
+                envs.insert(agent_type, AgentEnv::from_env_json(row.env_json.as_deref()));
+            }
+        }
+        Err(error) => tracing::warn!(
+            %error,
+            "agent env: settings read failed; reading history with codeg's own environment"
+        ),
+    }
+    envs
 }
 
 pub async fn update(
@@ -230,4 +277,19 @@ pub async fn find_by_model_provider_id(
 fn is_sqlite_full_error(err: &DbError) -> bool {
     let message = err.to_string();
     message.contains("database or disk is full") || message.contains("(code: 13)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every built-in starts enabled. The match above has no catch-all arm for
+    // "the rest", so a newly added agent missing from it silently ships
+    // disabled — which is how Kiro would have arrived.
+    #[test]
+    fn every_builtin_defaults_to_enabled() {
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            assert!(default_enabled(*agent), "{agent:?} defaults to disabled");
+        }
+    }
 }

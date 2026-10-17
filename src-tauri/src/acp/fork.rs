@@ -7,11 +7,11 @@
 //! reply first.
 
 use agent_client_protocol::schema::v1::{
-    ForkSessionRequest, ForkSessionResponse, Meta, SessionId, AGENT_METHOD_NAMES,
+    ForkSessionRequest, ForkSessionResponse, McpServer, Meta, SessionId, AGENT_METHOD_NAMES,
 };
 use agent_client_protocol::{Agent, ConnectionTo};
 
-use crate::acp::connection::send_capturing_models;
+use crate::acp::connection::{claude_raw_sdk_session_meta, send_capturing_models};
 
 use crate::acp::error::AcpError;
 use crate::models::agent::AgentType;
@@ -208,47 +208,80 @@ impl ForkPoint {
 /// Grok path can parse per-model reasoning-effort data (`None` when the
 /// response has none).
 ///
-/// The fork names no MCP servers, on purpose. It is not the request that makes
-/// the forked session usable: `handle_fork_or_exit` resumes it straight away,
-/// with the connection's servers, and every adapter checked mounts them there.
-/// Naming them on the fork too only starts them twice — codex-acp 1.13 builds
-/// the forked thread from the fork's list, then the resume finds that thread
-/// idle and unsubscribed and cold-restarts it with the resume's config;
-/// glm-acp-agent connects them on the fork and reconnects on the resume;
-/// deepseek-acp mounts them on a session handle the resume replaces with a new
-/// one. claude-agent-acp ignores the field. When there is no resume — the agent
-/// does not advertise it, or it fails — the fork is attached as-is, without
-/// servers, as it always has been.
-///
 /// `fork_point` forks at a chosen message instead of the tail; see [`ForkPoint`].
 /// An agent that does not implement it ignores the unknown `_meta` key, so this
 /// is inert rather than an error wherever it isn't understood. An agent that
 /// DOES implement it but cannot resolve the point answers `invalid_params`,
 /// which surfaces as a fork failure the user can retry from a different turn.
+///
+/// What else the request names depends on the agent; see [`build_fork_request`].
 pub async fn fork_session(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
+    agent_type: AgentType,
     cwd: &str,
+    mcp_servers: &[McpServer],
     fork_point: Option<&ForkPoint>,
 ) -> Result<(ForkSessionResponse, Option<serde_json::Value>), AcpError> {
     send_capturing_models(
         cx,
         AGENT_METHOD_NAMES.session_fork,
-        build_fork_request(session_id, cwd, fork_point),
+        build_fork_request(session_id, agent_type, cwd, mcp_servers, fork_point),
     )
     .await
     .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))
 }
 
+/// The `session/fork` request: the fork point, if any, and — for Claude only —
+/// the settings the session runs with.
+///
+/// The fork is not the request that makes the forked session usable everywhere:
+/// `handle_fork_or_exit` resumes it straight away, with the connection's MCP
+/// servers (and, for Claude, its `_meta.claudeCode`), and every adapter checked
+/// mounts them there. So for every other agent the fork names no MCP servers,
+/// on purpose: naming them on the fork too only starts them twice — codex-acp
+/// 1.13 builds the forked thread from the fork's list, then the resume finds
+/// that thread idle and unsubscribed and cold-restarts it with the resume's
+/// config; glm-acp-agent connects them on the fork and reconnects on the
+/// resume; deepseek-acp mounts them on a session handle the resume replaces
+/// with a new one. When there is no resume — the agent does not advertise it,
+/// or it fails — the fork is attached as-is, without servers, as it always has
+/// been.
+///
+/// claude-agent-acp is the other way round from 0.90.0 (#1317). The fork STARTS
+/// the forked session — a Claude Code process of its own — from the request's
+/// `cwd`, MCP servers and `_meta`, and the resume that follows reuses it only
+/// when those match what the session was started with (the adapter's session
+/// fingerprint: `cwd`, the servers, `_meta.claudeCode` and a few `_meta` keys
+/// codeg never sends; the AIR fork point is not part of it). A fork that names
+/// nothing makes the resume tear that process down and start a second one,
+/// measured live: two CLI processes per fork where one does. So Claude's fork
+/// names exactly what `build_resume_session_request` names — the same servers
+/// and the same `claude_raw_sdk_session_meta` — and the resume then returns the
+/// running session at once (measured 1 ms, where the restart took ~240 ms).
+/// From 0.73.0 through 0.89.x the fork only copied the transcript and read
+/// neither field, so one request serves every version codeg may launch.
 fn build_fork_request(
     session_id: &SessionId,
+    agent_type: AgentType,
     cwd: &str,
+    mcp_servers: &[McpServer],
     fork_point: Option<&ForkPoint>,
 ) -> ForkSessionRequest {
-    let req = ForkSessionRequest::new(session_id.clone(), cwd);
-    match fork_point {
-        Some(point) => req.meta(point.to_meta()),
-        None => req,
+    let mut req = ForkSessionRequest::new(session_id.clone(), cwd);
+    let mut meta = fork_point.map(ForkPoint::to_meta).unwrap_or_default();
+    if let Some(session_meta) = claude_raw_sdk_session_meta(agent_type) {
+        // Disjoint keys: the fork point lives under `jetbrains`, the session's
+        // own settings under `claudeCode`.
+        meta.extend(session_meta);
+        if !mcp_servers.is_empty() {
+            req = req.mcp_servers(mcp_servers.to_vec());
+        }
+    }
+    if meta.is_empty() {
+        req
+    } else {
+        req.meta(meta)
     }
 }
 
@@ -283,7 +316,9 @@ mod tests {
         };
         let wire = serde_json::to_value(build_fork_request(
             &SessionId::new("sess-1"),
+            AgentType::Codex,
             "/work",
+            &[server("other")],
             Some(&point),
         ))
         .unwrap();
@@ -302,17 +337,106 @@ mod tests {
         );
     }
 
-    /// A tail fork is the bare request: no fork point, and no MCP servers — the
-    /// resume that follows every fork is what mounts them (see
-    /// [`fork_session`]), so naming them here would start them twice.
+    fn server(name: &str) -> McpServer {
+        McpServer::Stdio(agent_client_protocol::schema::v1::McpServerStdio::new(
+            name, "/bin/mcp",
+        ))
+    }
+
+    /// For every agent but Claude a tail fork is the bare request: no fork
+    /// point, and no MCP servers — the resume that follows every fork is what
+    /// mounts them (see [`build_fork_request`]), so naming them here would start
+    /// them twice.
     #[test]
     fn a_tail_fork_names_neither_a_fork_point_nor_mcp_servers() {
-        let wire =
-            serde_json::to_value(build_fork_request(&SessionId::new("sess-1"), "/work", None))
-                .unwrap();
+        for agent_type in [AgentType::Codex, AgentType::DeepSeek, AgentType::Grok] {
+            let wire = serde_json::to_value(build_fork_request(
+                &SessionId::new("sess-1"),
+                agent_type,
+                "/work",
+                &[server("codeg-mcp")],
+                None,
+            ))
+            .unwrap();
+            assert_eq!(
+                wire,
+                serde_json::json!({"sessionId": "sess-1", "cwd": "/work"}),
+                "{agent_type:?}"
+            );
+        }
+    }
+
+    /// Claude's fork names exactly the settings its resume names — the same
+    /// servers and the same `_meta.claudeCode` — because claude-agent-acp
+    /// 0.90.0 starts the forked session from the fork, and the resume reuses
+    /// that session only when the two agree (anything else restarts it).
+    #[test]
+    fn a_claude_fork_names_the_settings_its_resume_sends() {
+        let servers = vec![server("codeg-mcp"), server("docs")];
+        let fork = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &servers,
+            None,
+        ))
+        .unwrap();
+        let resume = serde_json::to_value(crate::acp::connection::build_resume_session_request(
+            AgentType::ClaudeCode,
+            SessionId::new("sess-2"),
+            std::path::Path::new("/work"),
+            servers.clone(),
+        ))
+        .unwrap();
+        assert_eq!(fork["cwd"], resume["cwd"]);
+        assert_eq!(fork["mcpServers"], resume["mcpServers"]);
+        assert_eq!(fork["_meta"], resume["_meta"]);
         assert_eq!(
-            wire,
-            serde_json::json!({"sessionId": "sess-1", "cwd": "/work"})
+            fork["_meta"],
+            serde_json::json!({"claudeCode": {"emitRawSDKMessages": true}})
+        );
+        assert_eq!(fork["mcpServers"].as_array().map(Vec::len), Some(2));
+
+        // No servers: none named on either request.
+        let bare = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &[],
+            None,
+        ))
+        .unwrap();
+        assert!(bare.get("mcpServers").is_none());
+        assert_eq!(
+            bare["_meta"],
+            serde_json::json!({"claudeCode": {"emitRawSDKMessages": true}})
+        );
+    }
+
+    /// The fork point and the session's settings ride the same `_meta`, side by
+    /// side: neither replaces the other, and the adapter's session fingerprint
+    /// reads only the `claudeCode` half.
+    #[test]
+    fn a_claude_fork_point_rides_beside_the_session_settings() {
+        let point = ForkPoint {
+            message_id: "msg_01".into(),
+            message_fingerprint: None,
+            message_occurrence: None,
+        };
+        let wire = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &[],
+            Some(&point),
+        ))
+        .unwrap();
+        assert_eq!(
+            wire["_meta"],
+            serde_json::json!({
+                "claudeCode": {"emitRawSDKMessages": true},
+                "jetbrains": {"air": {"fork": {"version": 1, "messageId": "msg_01"}}},
+            })
         );
     }
 

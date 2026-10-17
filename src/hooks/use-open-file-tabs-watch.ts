@@ -35,7 +35,11 @@ import {
   normalizeAbsPath,
   splitAbsPath,
 } from "@/lib/file-open-target"
-import { isImageFile, isOfficePreviewable } from "@/lib/language-detect"
+import {
+  isImageFile,
+  isOfficePreviewable,
+  isPdfFile,
+} from "@/lib/language-detect"
 import { getWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
 import type { FileEditContent } from "@/lib/types"
 import type { FileWorkspaceTab } from "@/contexts/workspace-context"
@@ -291,10 +295,10 @@ export function useOpenFileTabsWatch({
           const path = tab.path
           if (!path) continue
 
-          // Image tabs do not carry an etag and load via readFileBase64.
-          // Bypass the text-file resolver: a single path-match is enough
-          // to trigger a refresh.
-          if (isImageFile(path)) {
+          // Image and PDF tabs do not carry an etag and load via
+          // readFileBase64. Bypass the text-file resolver: a single
+          // path-match is enough to trigger a refresh.
+          if (isImageFile(path) || isPdfFile(path)) {
             void reloadOpenFileBackground(path)
             continue
           }
@@ -462,10 +466,16 @@ export function useOpenFileTabsWatch({
     // Branch ③ — activation freshness for unwatched tabs.
     if (!isTransition) return
     if (tab.loading || tab.saveState === "saving") return
-    // Text files only: image tabs carry no etag (the resolver would
-    // misread a fine image as "missing"), and office tabs are refreshed
-    // by their own officecli watch.
-    if (isImageFile(tab.path) || isOfficePreviewable(tab.path)) return
+    // Text files only: image and PDF tabs carry no etag (the resolver
+    // would misread a fine file as "missing"), and office tabs are
+    // refreshed by their own officecli watch.
+    if (
+      isImageFile(tab.path) ||
+      isPdfFile(tab.path) ||
+      isOfficePreviewable(tab.path)
+    ) {
+      return
+    }
     if (findOwningFolder(tab.path, allFolders)) return
     const io = splitAbsPath(tab.path)
     if (!io) return

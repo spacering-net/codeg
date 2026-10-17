@@ -20,6 +20,10 @@ import {
 } from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetAssistantsStore,
+  useAssistantsStore,
+} from "@/stores/assistants-store"
 
 // AgentIcon renders exactly once per card body execution, so counting its
 // renders counts how many cards actually re-rendered (a card that bails out via
@@ -773,5 +777,73 @@ describe("SidebarConversationCard branch chip", () => {
 
     setBranchTag(false, "#1a7f37")
     expect(screen.queryByTitle("Branch: main")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard — assistant sub-sessions", () => {
+  beforeEach(() => {
+    resetAssistantsStore()
+  })
+
+  function renderChild(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("shows the assistant's avatar where the agent icon goes", () => {
+    useAssistantsStore.getState().merge([
+      {
+        id: 3,
+        uid: "u-3",
+        name: "Reviewer",
+        description: "",
+        avatar: { kind: "emoji", emoji: "🦉", color: "teal" },
+        agent_type: "codex",
+        agent_options: { config_values: {} },
+        label_snapshot: { agent: "Codex", mode: null, options: [] },
+        instructions: "",
+        enabled: true,
+        sort_order: 1,
+        revision: 1,
+        created_at: "2026-10-16T00:00:00Z",
+        updated_at: "2026-10-16T00:00:00Z",
+        deleted_at: null,
+      },
+    ])
+    const before = probe.agentIconRenders
+    const { container } = renderChild({
+      ...conv(7),
+      parent_id: 1,
+      assistant_id: 3,
+      assistant_name: "Reviewer",
+    })
+    expect(
+      container.querySelector('[data-slot="assistant-avatar"]')
+    ).toHaveTextContent("🦉")
+    expect(probe.agentIconRenders).toBe(before)
+  })
+
+  it("draws the generic assistant glyph when the store lacks the row", () => {
+    const before = probe.agentIconRenders
+    const { container } = renderChild({
+      ...conv(8),
+      parent_id: 1,
+      assistant_id: 9,
+      assistant_name: "Planner",
+    })
+    const avatar = container.querySelector('[data-slot="assistant-avatar"]')
+    expect(avatar?.querySelector("svg")).not.toBeNull()
+    // Still not the agent's icon: the row ran as an assistant.
+    expect(probe.agentIconRenders).toBe(before)
   })
 })

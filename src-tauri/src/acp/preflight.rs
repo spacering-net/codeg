@@ -61,9 +61,11 @@ pub struct AdapterInfo {
     pub native_cmd: String,
     /// Display name for the vendor CLI, e.g. "Claude Code CLI".
     pub native_label: String,
-    /// Where the user's own vendor CLI was found, if at all. codeg never
-    /// launches it — it is named so the user sees we did look.
+    /// Where the user's own vendor CLI was found, if at all. Required runtimes
+    /// such as ZCode use this installation; other adapters ship their runtime.
     pub native_path: Option<String>,
+    /// This adapter needs the separately installed official runtime.
+    pub native_required: bool,
     /// Config dir both read, so no second login is needed.
     pub shared_config_dir: String,
     pub docs_url: String,
@@ -84,10 +86,13 @@ pub fn clear_npm_env_cache() {
     *NPM_ENV_CACHE.lock().unwrap() = None;
 }
 
-pub async fn run_preflight(agent_type: AgentType) -> PreflightResult {
+pub async fn run_preflight_with_env(
+    agent_type: AgentType,
+    runtime_env: &std::collections::BTreeMap<String, String>,
+) -> PreflightResult {
     let meta = registry::get_agent_meta(agent_type);
     debug_assert_eq!(meta.agent_type, agent_type);
-    let checks = match &meta.distribution {
+    let mut checks = match &meta.distribution {
         AgentDistribution::Npx { node_required, .. } => check_npm_environment(*node_required).await,
         AgentDistribution::Binary {
             version,
@@ -100,7 +105,52 @@ pub async fn run_preflight(agent_type: AgentType) -> PreflightResult {
             system_cmd,
             ..
         } => check_uv_environment(*uv_required, *system_cmd).await,
+        AgentDistribution::System {
+            cmd, install_url, ..
+        } => vec![build_system_cli_check(
+            cmd,
+            install_url,
+            crate::commands::acp::resolve_system_agent_binary_for(agent_type, cmd).as_deref(),
+        )],
     };
+
+    let mut adapter = probe_adapter(&meta).await;
+    if agent_type == AgentType::ZCode {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let runtime = crate::acp::zcode::resolve_runtime(runtime_env, &cwd).await;
+        // ZCODE_NODE controls both processes. A different Node on the host
+        // PATH must not contradict this shared runtime check.
+        checks
+            .retain(|check| !matches!(check.check_id.as_str(), "node_available" | "node_version"));
+        let installed = adapter.as_ref().is_some_and(|info| info.adapter_installed);
+        if installed {
+            for check in checks
+                .iter_mut()
+                .filter(|check| check.check_id == "npm_available")
+            {
+                if matches!(check.status, CheckStatus::Fail) {
+                    check.status = CheckStatus::Warn;
+                    check.message =
+                        "npm is unavailable; it is needed to install or upgrade the bridge".into();
+                }
+            }
+        }
+        // Launch runs the bridge's JavaScript entry with the validated Node,
+        // so an installed launcher that leads to none still cannot start.
+        let bridge = match &meta.distribution {
+            AgentDistribution::Npx { cmd, .. } => {
+                crate::commands::acp::resolve_npx_command(cmd).await
+            }
+            _ => None,
+        };
+        let entry = bridge.as_deref().and_then(crate::acp::zcode::bridge_entry);
+        checks.extend(zcode_checks(bridge.as_deref(), entry.as_deref(), runtime));
+        if let Some(info) = adapter.as_mut() {
+            info.native_path = crate::acp::zcode::resolve_cli_path(runtime_env, &cwd)
+                .ok()
+                .map(|path| path.display().to_string());
+        }
+    }
 
     let passed = checks
         .iter()
@@ -111,8 +161,58 @@ pub async fn run_preflight(agent_type: AgentType) -> PreflightResult {
         agent_name: meta.name.to_string(),
         passed,
         checks,
-        adapter: probe_adapter(&meta).await,
+        adapter,
     }
+}
+
+/// ZCode's own rows: the bridge Codeg launches and the official runtime it
+/// drives. Sign-in cannot be checked offline, so it is noted on the runtime
+/// row rather than raised as a warning that a working setup could never clear.
+fn zcode_checks(
+    bridge: Option<&std::path::Path>,
+    bridge_entry: Option<&std::path::Path>,
+    runtime: Result<crate::acp::zcode::ZCodeRuntime, crate::acp::zcode::RuntimeError>,
+) -> Vec<CheckItem> {
+    let bridge_check = CheckItem {
+        check_id: "zcode_bridge".into(),
+        label: "ZCode ACP bridge".into(),
+        status: if bridge_entry.is_some() {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
+        message: match (bridge, bridge_entry) {
+            (_, Some(_)) => "ACP bridge is installed".into(),
+            (Some(command), None) => {
+                crate::acp::zcode::bridge_entry_missing_message(&command.to_string_lossy())
+            }
+            (None, None) => "Install the ZCode ACP bridge in Agent Settings".into(),
+        },
+        fixes: vec![],
+    };
+    let runtime_check = CheckItem {
+        check_id: "zcode_runtime".into(),
+        label: "Official ZCode runtime".into(),
+        status: if runtime.is_ok() {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
+        message: match runtime {
+            Ok(runtime) => format!(
+                "ZCode CLI: {}; Node: {}. Sign in through official ZCode; credentials are checked when a session starts.",
+                runtime.cli.display(),
+                runtime.node.display()
+            ),
+            Err(error) => error.to_string(),
+        },
+        fixes: vec![FixAction {
+            label: "ZCode installation guide".into(),
+            kind: FixActionKind::OpenUrl,
+            payload: "https://github.com/zai-org/ZCode".into(),
+        }],
+    };
+    vec![bridge_check, runtime_check]
 }
 
 /// Probe the adapter/vendor-CLI split for an adapter agent (`None` otherwise).
@@ -167,6 +267,7 @@ fn build_adapter_info(
         adapter_package,
         adapter_cmd,
         adapter_installed,
+        native_required: meta.agent_type == AgentType::ZCode,
         native_cmd: relation.native_cmd.to_string(),
         native_label: relation.native_label.to_string(),
         native_path,
@@ -445,6 +546,42 @@ async fn check_uv_environment(
             payload: String::new(),
         }],
     }]
+}
+
+/// Preflight for a [`AgentDistribution::System`] agent: the user's own install
+/// is the only one there is, so the single question is whether it resolves.
+/// Pure over the resolution result so both outcomes are unit-tested without
+/// touching PATH.
+///
+/// A miss is a `Fail` with the vendor's install page as the fix — there is no
+/// codeg-side Install to offer, and a `Warn` would read as "connect anyway".
+fn build_system_cli_check(
+    cmd: &str,
+    install_url: &str,
+    resolved: Option<&std::path::Path>,
+) -> CheckItem {
+    match resolved {
+        Some(path) => CheckItem {
+            check_id: "system_cli".into(),
+            label: cmd.to_string(),
+            status: CheckStatus::Pass,
+            message: format!("Using the system-installed {cmd} at {}", path.display()),
+            fixes: vec![],
+        },
+        None => CheckItem {
+            check_id: "system_cli".into(),
+            label: cmd.to_string(),
+            status: CheckStatus::Fail,
+            message: format!(
+                "{cmd} was not found on PATH or in ~/.local/bin. Install it with the official installer, then refresh."
+            ),
+            fixes: vec![FixAction {
+                label: "Install guide".into(),
+                kind: FixActionKind::OpenUrl,
+                payload: install_url.to_string(),
+            }],
+        },
+    }
 }
 
 /// Run `<uvx> --version` and extract the version token (output looks like
@@ -792,7 +929,7 @@ mod adapter_tests {
         );
         assert_eq!(
             info.adapter_package,
-            "@agentclientprotocol/claude-agent-acp@0.89.0"
+            "@agentclientprotocol/claude-agent-acp@0.91.0"
         );
         assert_eq!(info.adapter_cmd, "claude-agent-acp");
         assert!(!info.adapter_installed);
@@ -831,5 +968,88 @@ mod adapter_tests {
                 "unexpected adapter info for {agent_type:?}"
             );
         }
+    }
+
+    #[test]
+    fn zcode_checks_pass_a_working_setup_and_name_what_blocks_launch() {
+        use crate::acp::zcode::{RuntimeError, ZCodeRuntime};
+        use std::path::Path;
+
+        let runtime = || {
+            Ok(ZCodeRuntime {
+                cli: "/opt/ZCode/resources/glm/zcode.cjs".into(),
+                node: "/usr/local/bin/node".into(),
+            })
+        };
+        let launcher = Path::new("/home/u/.local/share/pnpm/zcode-acp-server");
+        let entry = Path::new(
+            "/home/u/.local/share/pnpm/global/5/node_modules/zcode-acp-server/dist/cli.js",
+        );
+        // Nothing a working setup can't clear: the summary badge stays green.
+        let ready = zcode_checks(Some(launcher), Some(entry), runtime());
+        assert!(ready
+            .iter()
+            .all(|check| matches!(check.status, CheckStatus::Pass)));
+        assert!(ready[1]
+            .message
+            .contains("credentials are checked when a session starts"));
+        // Installed, but a launcher Codeg cannot run with the validated Node.
+        let unreadable = zcode_checks(Some(launcher), None, runtime());
+        assert!(matches!(unreadable[0].status, CheckStatus::Fail));
+        assert!(unreadable[0]
+            .message
+            .contains("/home/u/.local/share/pnpm/zcode-acp-server"));
+        let missing = zcode_checks(None, None, Err(RuntimeError::CliMissing));
+        assert!(missing
+            .iter()
+            .all(|check| matches!(check.status, CheckStatus::Fail)));
+        assert_eq!(
+            missing[0].message,
+            "Install the ZCode ACP bridge in Agent Settings"
+        );
+        assert_eq!(missing[1].message, RuntimeError::CliMissing.to_string());
+    }
+}
+
+#[cfg(test)]
+mod system_cli_tests {
+    use super::*;
+
+    #[test]
+    fn a_resolved_system_cli_passes_and_names_its_path() {
+        let check = build_system_cli_check(
+            "kiro-cli",
+            "https://kiro.dev/docs/getting-started/installation/",
+            Some(std::path::Path::new("/Users/me/.local/bin/kiro-cli")),
+        );
+        assert_eq!(check.check_id, "system_cli");
+        assert!(matches!(check.status, CheckStatus::Pass));
+        assert!(check.message.contains("/Users/me/.local/bin/kiro-cli"));
+        assert!(check.fixes.is_empty());
+    }
+
+    // There is no codeg-side install for a system agent, so a miss must FAIL
+    // (a warn would let the user connect into a spawn error) and hand over the
+    // vendor's own install page as the one fix.
+    #[test]
+    fn a_missing_system_cli_fails_with_the_install_guide() {
+        let url = "https://kiro.dev/docs/getting-started/installation/";
+        let check = build_system_cli_check("kiro-cli", url, None);
+        assert!(matches!(check.status, CheckStatus::Fail));
+        assert!(check.message.contains("kiro-cli"));
+        assert_eq!(check.fixes.len(), 1);
+        assert!(matches!(check.fixes[0].kind, FixActionKind::OpenUrl));
+        assert_eq!(check.fixes[0].payload, url);
+    }
+
+    // Whatever the machine has installed, a system agent's preflight is ONE
+    // check: nothing is cached, pinned or downloadable to report on.
+    #[tokio::test]
+    async fn kiro_preflight_is_the_single_system_check() {
+        let result =
+            run_preflight_with_env(AgentType::Kiro, &std::collections::BTreeMap::new()).await;
+        assert_eq!(result.checks.len(), 1);
+        assert_eq!(result.checks[0].check_id, "system_cli");
+        assert!(result.adapter.is_none());
     }
 }

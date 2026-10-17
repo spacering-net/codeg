@@ -10,6 +10,7 @@ import {
   MIN_ZOOM,
   mermaidSourceFromPre,
   parseSvgSize,
+  plantUmlSourceFromPre,
   stepZoom,
   stripSvgMaxWidth,
   zoomAroundPoint,
@@ -240,6 +241,36 @@ describe("mermaidSourceFromPre", () => {
     expect(mermaidSourceFromPre(pre(undefined, "x"))).toBeNull()
     expect(
       mermaidSourceFromPre(pre("language-mermaid", { nested: 1 }))
+    ).toBeNull()
+  })
+})
+
+describe("plantUmlSourceFromPre", () => {
+  const pre = (className: unknown, children: unknown) => ({
+    props: { className, children },
+  })
+  const SOURCE = "@startuml\nAlice -> Bob: hi\n@enduml"
+
+  it("claims a language-plantuml or language-puml fence", () => {
+    expect(plantUmlSourceFromPre(pre("language-plantuml", SOURCE))).toBe(SOURCE)
+    expect(plantUmlSourceFromPre(pre("language-puml", SOURCE))).toBe(SOURCE)
+    expect(
+      plantUmlSourceFromPre(pre("hljs language-plantuml extra", SOURCE))
+    ).toBe(SOURCE)
+  })
+
+  it("does not claim a look-alike language, or a Mermaid fence", () => {
+    expect(plantUmlSourceFromPre(pre("language-plantumlx", "x"))).toBeNull()
+    expect(plantUmlSourceFromPre(pre("language-puml-lite", "x"))).toBeNull()
+    expect(plantUmlSourceFromPre(pre("language-uml", "x"))).toBeNull()
+    expect(plantUmlSourceFromPre(pre("language-mermaid", "x"))).toBeNull()
+    expect(mermaidSourceFromPre(pre("language-plantuml", "x"))).toBeNull()
+  })
+
+  it("declines anything that is not an element with string content", () => {
+    expect(plantUmlSourceFromPre(null)).toBeNull()
+    expect(
+      plantUmlSourceFromPre(pre("language-plantuml", { nested: 1 }))
     ).toBeNull()
   })
 })

@@ -38,17 +38,22 @@ use base64::{
     Engine as _,
 };
 use futures_util::{SinkExt, Stream, StreamExt};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioIo;
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, EventTarget, State, WebviewWindow};
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest,
-    handshake::client::Request,
-    http::{HeaderMap, HeaderValue},
+    error::UrlError,
+    handshake::client::{Request, Response},
+    http::{HeaderMap, HeaderValue, Uri},
     Error as WsError, Message,
 };
 use tokio_util::sync::CancellationToken;
+use tower_service::Service;
 
 /// Outbound mpsc capacity per remote WS. Bounded so a runaway frontend
 /// cannot exhaust memory by piling client-→-server messages, but generous
@@ -2079,13 +2084,10 @@ async fn connect_with_subprotocol_auth(
 ) -> Result<RemoteWsSocket, WsConnectError> {
     let request = ws_request_with_subprotocol_auth(ws_url, protocol, token, custom_headers)
         .map_err(|_| WsConnectError::Retryable("invalid WebSocket request".into()))?;
-    let (stream, _resp) = tokio::time::timeout(
-        WS_CONNECT_TIMEOUT,
-        tokio_tungstenite::connect_async(request),
-    )
-    .await
-    .map_err(|_| WsConnectError::Retryable("WebSocket connect timed out".into()))?
-    .map_err(WsConnectError::from)?;
+    let (stream, _resp) = tokio::time::timeout(WS_CONNECT_TIMEOUT, connect_remote_ws(request))
+        .await
+        .map_err(|_| WsConnectError::Retryable("WebSocket connect timed out".into()))?
+        .map_err(WsConnectError::from)?;
     Ok(stream)
 }
 
@@ -2132,6 +2134,78 @@ pub(crate) fn ws_request_with_subprotocol_auth(
     );
     request.headers_mut().extend(custom_headers.clone());
     Ok(request)
+}
+
+/// Open the WebSocket `request` names on a remote server: the event socket
+/// ([`connect_with_subprotocol_auth`]) and the built-in browser's tunnel
+/// (`browser::egress`).
+///
+/// `tokio_tungstenite::connect_async` would dial the host's addresses strictly
+/// one after another, so one that never answers keeps the attempt until our
+/// connect timeout cancels it, and the next is never tried. Windows resolves
+/// `localhost` to `::1` before `127.0.0.1`, and WSL's mirrored networking
+/// leaves a SYN from Windows to `::1` unanswered: a connection to a
+/// codeg-server in WSL at `http://localhost:…` served every HTTP call while
+/// its event socket timed out on every retry (#930). Those HTTP calls, like
+/// any browser, give the first address family a head start and then race the
+/// other one (Happy Eyeballs), so this dials through the same connector
+/// reqwest does, then runs the TLS and handshake `connect_async` would have.
+// `result_large_err`: this is `connect_async`'s own result type, tungstenite's
+// error included, and the tunnel matches on its `Http` variant.
+#[allow(clippy::result_large_err)]
+pub(crate) async fn connect_remote_ws(
+    request: Request,
+) -> Result<(RemoteWsSocket, Response), WsError> {
+    connect_remote_ws_via(HttpConnector::new(), request).await
+}
+
+/// [`connect_remote_ws`] over a given connector, so a test can choose what the
+/// host resolves to.
+#[allow(clippy::result_large_err)]
+async fn connect_remote_ws_via<C>(
+    mut connector: C,
+    request: Request,
+) -> Result<(RemoteWsSocket, Response), WsError>
+where
+    C: Service<Uri, Response = TokioIo<TcpStream>>,
+    C::Error: std::error::Error,
+{
+    let uri = request.uri();
+    let default_port = match uri.scheme_str() {
+        Some("ws") => 80,
+        Some("wss") => 443,
+        _ => return Err(WsError::Url(UrlError::UnsupportedUrlScheme)),
+    };
+    let host = uri.host().ok_or(WsError::Url(UrlError::NoHostName))?;
+    let port = uri.port_u16().unwrap_or(default_port);
+    // `host` keeps an IPv6 literal's brackets, which an authority needs.
+    let address: Uri = format!("http://{host}:{port}")
+        .parse()
+        .map_err(|_| WsError::Url(UrlError::NoHostName))?;
+    std::future::poll_fn(|cx| connector.poll_ready(cx))
+        .await
+        .map_err(dial_error)?;
+    let stream = connector
+        .call(address)
+        .await
+        .map_err(dial_error)?
+        .into_inner();
+    tokio_tungstenite::client_async_tls_with_config(request, stream, None, None).await
+}
+
+/// A failed dial as the I/O error `connect_async` would have returned. The
+/// connector's own message is just a label ("tcp connect error"); the kind —
+/// refused, unreachable, … — is on the error it wraps.
+fn dial_error(err: impl std::error::Error) -> WsError {
+    let cause = err.source();
+    let kind = cause
+        .and_then(|cause| cause.downcast_ref::<std::io::Error>())
+        .map_or(std::io::ErrorKind::Other, std::io::Error::kind);
+    let detail = match cause {
+        Some(cause) => format!("{err}: {cause}"),
+        None => err.to_string(),
+    };
+    WsError::Io(std::io::Error::new(kind, detail))
 }
 
 /// Convert an `http://…` or `https://…` base URL into the corresponding
@@ -2989,6 +3063,160 @@ mod tests {
         assert!(stored_ws_target(db.conn.clone(), created.id, current)
             .await
             .is_none());
+    }
+
+    // ─── Dialing the remote host ───────────────────────────────────────
+
+    /// Answers every name with these addresses, in this order: the DNS answer
+    /// a test needs, where the system resolver gives this machine's own.
+    #[derive(Clone)]
+    struct FixedResolver(Vec<std::net::SocketAddr>);
+
+    impl Service<hyper_util::client::legacy::connect::dns::Name> for FixedResolver {
+        type Response = std::vec::IntoIter<std::net::SocketAddr>;
+        type Error = std::io::Error;
+        type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
+            std::future::ready(Ok(self.0.clone().into_iter()))
+        }
+    }
+
+    /// Accepts one event socket, greets it with `__ready__`, holds it open.
+    fn serve_ready_socket(listener: tokio::net::TcpListener) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_test_socket(stream).await;
+            socket
+                .send(Message::Text(
+                    lifecycle_frame(WS_READY_CHANNEL).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            while socket.next().await.is_some() {}
+        })
+    }
+
+    async fn expect_ready(socket: &mut RemoteWsSocket) {
+        let frame = tokio::time::timeout(Duration::from_secs(30), socket.next())
+            .await
+            .expect("the server greets the socket")
+            .expect("the socket stays open")
+            .expect("a frame arrives");
+        assert!(matches!(frame, Message::Text(text) if text.contains(WS_READY_CHANNEL)));
+    }
+
+    /// Wait for a [`serve_ready_socket`] task once its client has hung up.
+    async fn finish(server: tokio::task::JoinHandle<()>) {
+        tokio::time::timeout(Duration::from_secs(30), server)
+            .await
+            .expect("the server sees the client hang up")
+            .unwrap();
+    }
+
+    /// #930: Windows resolves `localhost` to `::1` first, and WSL's mirrored
+    /// networking never answers a SYN from Windows to it. The event socket has
+    /// to go on to the address that does answer — as the connection's HTTP
+    /// calls always did — instead of spending its whole timeout on the first.
+    #[tokio::test]
+    async fn an_event_socket_gets_past_an_address_that_never_answers() {
+        let Ok(listener) = tokio::net::TcpListener::bind("[::1]:0").await else {
+            eprintln!("skipped: no IPv6 loopback to serve the answering address on");
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        let server = serve_ready_socket(listener);
+        // TEST-NET-1 (RFC 5737) plays `::1`'s part: it is routed nowhere, so a
+        // SYN to it normally goes unanswered. A network that rejects it at
+        // once lets a dial without the race through as well; this test tells
+        // the two apart wherever the SYN is dropped instead.
+        let silent = std::net::SocketAddr::from(([192, 0, 2, 1], port));
+        let answering = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+        let connector = HttpConnector::new_with_resolver(FixedResolver(vec![silent, answering]));
+        let request = ws_request_with_subprotocol_auth(
+            &format!("ws://wsl.test:{port}{WS_EVENTS_PATH}"),
+            WS_EVENT_PROTOCOL,
+            "private-token-sentinel",
+            &HeaderMap::new(),
+        )
+        .unwrap();
+
+        let (mut socket, _) = tokio::time::timeout(
+            WS_CONNECT_TIMEOUT,
+            connect_remote_ws_via(connector, request),
+        )
+        .await
+        .expect("the dial must not spend its whole timeout on the silent address")
+        .expect("the answering address accepts the socket");
+        expect_ready(&mut socket).await;
+        drop(socket);
+        finish(server).await;
+    }
+
+    /// The dial takes the host as the URL writes it: a name goes to the system
+    /// resolver, and an IPv6 literal keeps the brackets its address needs.
+    #[tokio::test]
+    async fn an_event_socket_dials_a_host_name_and_an_ipv6_literal() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = serve_ready_socket(listener);
+        let mut socket = connect_with_subprotocol_auth(
+            &format!("ws://localhost:{port}{WS_EVENTS_PATH}"),
+            WS_EVENT_PROTOCOL,
+            "private-token-sentinel",
+            &HeaderMap::new(),
+        )
+        .await
+        .expect("`localhost` reaches a server on 127.0.0.1");
+        expect_ready(&mut socket).await;
+        drop(socket);
+        finish(server).await;
+
+        let Ok(listener) = tokio::net::TcpListener::bind("[::1]:0").await else {
+            eprintln!("skipped the IPv6 literal: no IPv6 loopback");
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        let server = serve_ready_socket(listener);
+        let mut socket = connect_with_subprotocol_auth(
+            &format!("ws://[::1]:{port}{WS_EVENTS_PATH}"),
+            WS_EVENT_PROTOCOL,
+            "private-token-sentinel",
+            &HeaderMap::new(),
+        )
+        .await
+        .expect("a bracketed IPv6 literal is dialed as that address");
+        expect_ready(&mut socket).await;
+        drop(socket);
+        finish(server).await;
+    }
+
+    /// The connector only labels a failed dial; the log line still names the
+    /// I/O error's kind, as it did when tungstenite dialed.
+    #[tokio::test]
+    async fn a_refused_event_socket_names_its_io_error_kind() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = connect_with_subprotocol_auth(
+            &format!("ws://{address}{WS_EVENTS_PATH}"),
+            WS_EVENT_PROTOCOL,
+            "private-token-sentinel",
+            &HeaderMap::new(),
+        )
+        .await
+        .expect_err("nothing listens there any more");
+        assert_eq!(
+            error.to_string(),
+            "WebSocket I/O error (connection refused)"
+        );
     }
 
     // ─── i18n key wire-format tripwire ─────────────────────────────────

@@ -1,6 +1,7 @@
 pub mod acp;
 #[cfg(feature = "tauri-runtime")]
 pub mod app_update;
+pub mod assistants;
 pub mod automation;
 pub mod background;
 pub mod backup;
@@ -39,7 +40,7 @@ pub mod folder_commands;
 pub mod folder_links;
 pub mod folders;
 pub mod forge;
-/// The generative-UI switch and the `json-render` skill it links into agents.
+/// The `ui-render` skill and the agents it is enabled for (Skill Packs > UI).
 pub mod generative_ui;
 pub mod logging;
 pub mod mcp;

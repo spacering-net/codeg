@@ -32,6 +32,7 @@ import { Loader2 } from "lucide-react"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
+import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import {
   Drawer,
   DrawerContent,
@@ -116,6 +117,9 @@ export function SubagentSessionDialog({
 }: Props) {
   const t = useTranslations("Folder.chat.contentParts")
   const sharedT = useTranslations("Folder.chat.shared")
+  // The dialog is a state toggle, not a route: without a history entry behind
+  // it, the back gesture unloads the whole page instead of closing the dialog.
+  useHistoryBackDismiss(open, () => onOpenChange(false))
   const pageHandoffName = usePageHandoffName()
   const [messages, setMessages] = useState<AdaptedMessage[] | null>(null)
   const [error, setError] = useState<string | null>(null)

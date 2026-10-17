@@ -4,7 +4,11 @@ import { NextIntlClientProvider } from "next-intl"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import { AgentConfigSection } from "./agent-config-section"
+import {
+  AgentConfigSection,
+  effectiveSelections,
+  snapshotLabels,
+} from "./agent-config-section"
 import type { AgentOptionsSnapshot } from "@/lib/types"
 
 const SNAPSHOT: AgentOptionsSnapshot = {
@@ -96,5 +100,145 @@ describe("AgentConfigSection subtitles", () => {
     expect(screen.getByText("Model")).toBeInTheDocument()
     await user.hover(screen.getByRole("combobox"))
     expect(screen.queryByRole("tooltip")).toBeNull()
+  })
+})
+
+const SWITCHED: AgentOptionsSnapshot = {
+  ...SNAPSHOT,
+  config_options: [
+    ...SNAPSHOT.config_options,
+    {
+      id: "fast",
+      name: "Fast",
+      description: null,
+      category: null,
+      kind: { type: "boolean", current_value: true },
+    },
+  ],
+  unapplied_config_ids: [],
+}
+
+function renderWith(
+  props: Partial<Parameters<typeof AgentConfigSection>[0]> = {}
+) {
+  return render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <AgentConfigSection
+        snapshot={SWITCHED}
+        loading={false}
+        error={null}
+        onReload={vi.fn()}
+        modeId={null}
+        configValues={{}}
+        onModeChange={vi.fn()}
+        onConfigChange={vi.fn()}
+        layout="stacked"
+        {...props}
+      />
+    </NextIntlClientProvider>
+  )
+}
+
+describe("AgentConfigSection staleness and switches", () => {
+  afterEach(() => cleanup())
+
+  it("shows a snapshot probed for a previous selection as loading", () => {
+    renderWith({ stale: true })
+    expect(screen.queryByRole("combobox")).toBeNull()
+    expect(screen.getByText("Loading options…")).toBeInTheDocument()
+  })
+
+  it("still shows a probe error over a stale snapshot", () => {
+    renderWith({ stale: true, error: "not signed in" })
+    expect(screen.getByText("not signed in")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
+  it("says when the agent did not switch to the selected model, leaving the options editable", async () => {
+    const onReload = vi.fn()
+    const user = userEvent.setup()
+    renderWith({
+      snapshot: { ...SWITCHED, unapplied_config_ids: ["model"] },
+      onReload,
+    })
+    expect(
+      screen.getByText(/didn't switch to the selected model/)
+    ).toBeInTheDocument()
+    expect(screen.getAllByRole("combobox")).toHaveLength(2)
+    await user.click(screen.getByRole("button", { name: "Retry" }))
+    expect(onReload).toHaveBeenCalledTimes(1)
+  })
+
+  it("still says so when the agent then lists nothing at all", () => {
+    const empty: AgentOptionsSnapshot = {
+      modes: null,
+      config_options: [],
+      available_commands: [],
+      unapplied_config_ids: ["model"],
+    }
+    renderWith({ snapshot: empty })
+    expect(
+      screen.getByText(/didn't switch to the selected model/)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+    cleanup()
+    renderWith({ snapshot: empty, layout: "inline" })
+    expect(
+      screen.getByText(/didn't switch to the selected model/)
+    ).toBeInTheDocument()
+  })
+
+  it("offers a switch as On / Off, with the agent default in the stacked layout", async () => {
+    const onConfigChange = vi.fn()
+    const user = userEvent.setup()
+    renderWith({ onConfigChange })
+    const fast = screen.getByRole("combobox", { name: "Fast" })
+    expect(fast).toHaveTextContent("Agent default")
+    await user.click(fast)
+    const list = await screen.findByRole("listbox")
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map((o) => o.textContent)
+    ).toEqual(["Agent default", "On", "Off"])
+    await user.click(within(list).getByRole("option", { name: "Off" }))
+    expect(onConfigChange).toHaveBeenLastCalledWith("fast", "false")
+  })
+
+  it("shows a switch's current state in the inline layout, which has no default item", async () => {
+    const user = userEvent.setup()
+    renderWith({ layout: "inline" })
+    const fast = screen.getByRole("combobox", { name: "Fast" })
+    expect(fast).toHaveTextContent("On")
+    await user.click(fast)
+    const list = await screen.findByRole("listbox")
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map((o) => o.textContent)
+    ).toEqual(["On", "Off"])
+  })
+})
+
+describe("effectiveSelections and snapshotLabels with switches", () => {
+  it("pins a switch's shown state like any other option", () => {
+    expect(effectiveSelections(SWITCHED, null, {})).toEqual({
+      mode_id: null,
+      config_values: { model: "opus", fast: "true" },
+    })
+    expect(
+      effectiveSelections(SWITCHED, null, { fast: "false" }).config_values
+    ).toEqual({ model: "opus", fast: "false" })
+  })
+
+  it("names a switch's value when given the words for it", () => {
+    const labels = { on: "On", off: "Off" }
+    expect(
+      snapshotLabels(SWITCHED, null, { model: "haiku", fast: "false" }, labels)
+    ).toEqual({ config_labels: { model: "Haiku", fast: "Off" } })
+    // Without them a switch gets no label, as before.
+    expect(
+      snapshotLabels(SWITCHED, null, { model: "haiku", fast: "false" })
+    ).toEqual({ config_labels: { model: "Haiku" } })
   })
 })

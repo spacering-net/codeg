@@ -57,6 +57,10 @@ export interface DelegationBinding {
   task: string | null
   /** Broker-minted task id from `delegation_started`. */
   taskId: string | null
+  /** The assistant the child runs as (then `agentType` is ITS agent), and its
+   *  name when the delegation started; null for a plain agent delegation. */
+  assistantId: number | null
+  assistantName: string | null
 }
 
 interface DelegationContextValue {
@@ -134,6 +138,8 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
           status: "running",
           task: envelope.task_preview ?? null,
           taskId: envelope.task_id ?? null,
+          assistantId: envelope.assistant_id ?? null,
+          assistantName: envelope.assistant_name ?? null,
         }
         setByToolUseId((prev) => {
           const m = new Map(prev)
@@ -175,6 +181,8 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
             // label; the card recovers it from the terminal meta instead.
             task: null,
             taskId: null,
+            assistantId: envelope.assistant_id ?? null,
+            assistantName: envelope.assistant_name ?? null,
           }
           const updated: DelegationBinding =
             envelope.result.kind === "ok"

@@ -51,6 +51,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -59,9 +60,9 @@ use gtk::prelude::*;
 use javascriptcore::ValueExt;
 use serde_json::{json, Value};
 use webkit2gtk::{
-    FindController, FindControllerExt, FindOptions, LoadEvent, SnapshotOptions, SnapshotRegion,
-    UserContentInjectedFrames, UserContentManagerExt, UserScript, UserScriptInjectionTime,
-    WebView, WebViewExt,
+    DownloadExt, FindController, FindControllerExt, FindOptions, LoadEvent, SnapshotOptions,
+    SnapshotRegion, URIRequestExt, UserContentInjectedFrames, UserContentManagerExt, UserScript,
+    UserScriptInjectionTime, WebContext, WebContextExt, WebView, WebViewExt,
 };
 
 use super::super::hooks::LoadFailure;
@@ -83,11 +84,25 @@ pub const FRAME_HANDLER_NAME: &str = "codegBrowserFrame";
 /// way a macOS popup shares its controller), so there is no webview to resolve.
 pub type MessageSink = Arc<dyn Fn(String, bool) + Send + Sync>;
 
+type DownloadStart = dyn Fn(&str, &mut PathBuf) -> bool + Send + Sync;
+/// The address, the destination the transfer was given, and whether it got
+/// there: the destination tells two transfers of one address apart.
+type DownloadFinish = dyn Fn(&str, &Path, bool) + Send + Sync;
+
+/// Source-specific callbacks retained for each in-flight download.
+#[derive(Clone)]
+pub struct DownloadHandlers {
+    pub started: Arc<DownloadStart>,
+    pub finished: Arc<DownloadFinish>,
+}
+
 /// Whoever asked for the search in flight, waiting to be told what came of it.
 type FindAnswer = Box<dyn Fn(bool)>;
 
 #[derive(Default)]
 struct SurfaceState {
+    destroyed: Cell<bool>,
+    downloads: RefCell<Option<DownloadHandlers>>,
     channel_installed: Cell<bool>,
     /// What `find_string` searched for last: the same term again is "next
     /// match", a different one starts a new search.
@@ -97,7 +112,7 @@ struct SurfaceState {
     find_waiting: RefCell<Option<FindAnswer>>,
     find_connected: Cell<bool>,
     navigation: RefCell<Option<NavigationSink>>,
-    /// Where `window.close()` goes; `None` until the hook is installed.
+    /// Where native destruction goes; `None` until the hook is installed.
     page_close: RefCell<Option<PageCloseSink>>,
 }
 
@@ -124,6 +139,64 @@ pub fn webview_pointer(webview: &WebView) -> usize {
 /// Drop everything held for a surface that is going away.
 pub fn forget(webview: &WebView) {
     STATES.with(|states| states.borrow_mut().remove(&webview_pointer(webview)));
+}
+
+/// The native widget can die before the deferred registry cleanup runs.
+pub fn is_destroyed(webview: &WebView) -> bool {
+    state(webview_pointer(webview)).is_some_and(|s| s.destroyed.get())
+}
+
+pub fn install_download_handlers(webview: &WebView, handlers: DownloadHandlers) {
+    *state_of(webview_pointer(webview)).downloads.borrow_mut() = Some(handlers);
+}
+
+/// Install once when a profile context is created. Wry's per-view listeners
+/// would all observe every transfer in this context and attribute it to the
+/// first tab. Resolve the actual native source before installing handlers.
+pub fn install_download_context(context: &WebContext) {
+    context.connect_download_started(|_, download| {
+        let handlers = download
+            .web_view()
+            .and_then(|view| state(webview_pointer(&view)))
+            .and_then(|state| state.downloads.borrow().clone());
+        let Some(handlers) = handlers else {
+            download.cancel();
+            return;
+        };
+        let Some(url) = download.request().and_then(|request| request.uri()) else {
+            download.cancel();
+            return;
+        };
+        // Where an accepted transfer was told to write; `None` for a refused
+        // one, which has no registry entry to finish.
+        let accepted: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+        let failed = Rc::new(Cell::new(false));
+        let started = accepted.clone();
+        let started_url = url.clone();
+        download.connect_decide_destination(move |download, suggested| {
+            let mut path = PathBuf::from(suggested);
+            if !(handlers.started)(&started_url, &mut path) {
+                download.cancel();
+                return true;
+            }
+            // Recorded first: the registry entry exists from here on, and a
+            // cancel below emits `failed`, which reports it as unsuccessful.
+            *started.borrow_mut() = Some(path.clone());
+            match tauri::Url::from_file_path(&path) {
+                Ok(uri) => download.set_destination(uri.as_str()),
+                Err(()) => download.cancel(),
+            }
+            true
+        });
+        let error_state = failed.clone();
+        download.connect_failed(move |_, _| error_state.set(true));
+        download.connect_finished(move |_| {
+            let destination = accepted.borrow_mut().take();
+            if let Some(destination) = destination {
+                (handlers.finished)(&url, &destination, !failed.get());
+            }
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -491,9 +564,9 @@ pub fn install_navigation_hooks(
                 report(key, NavigationEvent::Interrupted);
             }
         }
-        // `false`: the engine puts its own error page up, which is what the
-        // window the user is looking at should show. codeg's own message is in
-        // the tab's card, in the workspace window.
+        // `false`: the engine puts its own error page up, which is what an
+        // owned window should show. An embedded tab's view is hidden while
+        // the tab has an error, and the pane shows codeg's own page instead.
         false
     });
     webview.connect_load_failed_with_tls_errors(move |_webview, uri, _certificate, flags| {
@@ -519,22 +592,22 @@ fn report(key: usize, event: NavigationEvent) {
     }
 }
 
-/// Hook `window.close()`. WebKitGTK emits `close` on the webview when the page
-/// asks for its window to go, and wry is already connected
-/// (`webkitgtk::attach_handlers`): it answers by destroying the view and tells
-/// nobody, which leaves the window and its tab behind — the popup that closes
-/// itself at the end of a sign-in flow was left in the strip with a dead view
-/// in it. This handler is the one that reaches the host. It is connected after
-/// wry's and so runs after it, on an instance the emission still holds a
-/// reference to. Idempotent per webview.
+/// Observe native destruction, not `close`: wry's earlier close handler
+/// destroys the widget and disconnects later close handlers. Destruction
+/// still runs during that disposal, allowing the host to retire the surface.
 pub fn install_page_close_hook(webview: &WebView, sink: PageCloseSink) -> Result<(), String> {
     let key = webview_pointer(webview);
-    let state = state_of(key);
-    if state.page_close.borrow().is_some() {
+    let current = state_of(key);
+    if current.page_close.borrow().is_some() {
         return Ok(());
     }
-    *state.page_close.borrow_mut() = Some(sink);
-    webview.connect_close(move |_| report_page_close(key));
+    *current.page_close.borrow_mut() = Some(sink);
+    webview.connect_destroy(move |_| {
+        if let Some(state) = state(key) {
+            state.destroyed.set(true);
+            report_page_close(key);
+        }
+    });
     Ok(())
 }
 

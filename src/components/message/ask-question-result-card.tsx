@@ -56,7 +56,12 @@ export function AskQuestionResultCard({
   const [expanded, setExpanded] = useState(false)
 
   const questions = useMemo(() => parseAskQuestionInput(input), [input])
-  const outcome = useMemo(() => parseAskQuestionOutcome(output), [output])
+  // The asked questions let a CLI answer sentence be read by their exact text
+  // (it escapes nothing) and split a multi-select answer back into its labels.
+  const outcome = useMemo(
+    () => parseAskQuestionOutcome(output, questions),
+    [output, questions]
+  )
 
   const isError = !!errorText?.trim()
   const isRunning = state === "input-available" || state === "input-streaming"

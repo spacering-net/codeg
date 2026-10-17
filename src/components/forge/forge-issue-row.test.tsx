@@ -114,6 +114,19 @@ describe("ForgeIssueRowItem", () => {
     expect(onStart).not.toHaveBeenCalled()
   })
 
+  it("names a task put aside to handle later the way the board does", async () => {
+    const user = userEvent.setup()
+    // Still a live task underneath (a review), so the chip keeps going to the
+    // board and offers no re-trigger — only its word changes.
+    mount(row(), { ...link("review"), deferred: true })
+    expect(screen.queryByRole("button", { name: "To review" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "re-trigger" })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Deferred" }))
+    expect(setRoute).toHaveBeenCalledWith("tasks")
+  })
+
   it("keeps the chip and the re-trigger as separate controls on a finished task", async () => {
     const user = userEvent.setup()
     const onStart = mount(row(), link("done"))

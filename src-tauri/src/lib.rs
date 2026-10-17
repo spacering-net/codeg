@@ -89,7 +89,8 @@ mod tauri_app {
     use crate::chat_channel::manager::ChatChannelManager;
     use crate::commands::{
         acp as acp_commands, app_update as app_update_commands,
-        automation as automation_commands, background as background_commands, backup,
+        assistants as assistant_commands, automation as automation_commands,
+        background as background_commands, backup,
         browser as browser_commands,
         canvas as canvas_commands,
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
@@ -127,12 +128,14 @@ mod tauri_app {
     /// not: the app hears `Exit` alone, from inside the platform's own
     /// teardown, with the loop no longer delivering anything. Whichever
     /// arrives first does the work, and `APP_QUITTING` turns the other into a
-    /// no-op.
+    /// no-op. An update on Windows hears neither — the updater ends the process
+    /// as soon as the installer is running — so `commands::app_update` calls
+    /// this itself just before.
     ///
     /// The process ends soon after this returns, so everything here finishes
     /// before it does: nothing may be left to a spawned task, or to a window
     /// event that `Exit` would never see delivered.
-    fn shut_down(app: &tauri::AppHandle) {
+    pub(crate) fn shut_down(app: &tauri::AppHandle) {
         if APP_QUITTING.swap(true, Ordering::Relaxed) {
             return;
         }
@@ -622,9 +625,8 @@ mod tauri_app {
             // path, which is the same repair with consent attached.
             //
             // Two accepted defects live in `auto-launch`, which this plugin
-            // wraps, and are still unfixed as of its 0.6 line — so there is no
-            // version to upgrade to, and pinning past `auto-launch ^0.5` (what
-            // the plugin requires) would not help:
+            // wraps, and are still there in 0.6.0 — the line the plugin has
+            // required since 2.7 — so there is no version to upgrade to:
             //   * Windows writes the Run value as `{app_path} {args}` with the
             //     path unquoted. Per-user installs land under
             //     `C:\Users\<name>\AppData\Local\codeg\`, so a username with a
@@ -1136,7 +1138,11 @@ mod tauri_app {
                             &computer_tools_for_init,
                         )
                         .await;
-                        crate::commands::generative_ui::apply_persisted_generative_ui_config(
+                        // The generative-UI skill's central copy, and the move
+                        // from 0.35.0's `json-render`: here, before any command
+                        // runs, so the move can never undo a change made on
+                        // the settings page.
+                        crate::commands::generative_ui::install_generative_ui_skill(
                             &db_for_init,
                         )
                         .await;
@@ -1317,6 +1323,17 @@ mod tauri_app {
                     effective_data_dir.clone(),
                 ) {
                     tauri::async_runtime::spawn(crate::work_task::run_task_engine(engine));
+                    // The repository panel's auto-processing mints tasks
+                    // unattended, so it runs only where the task engine does —
+                    // the one process holding this data directory's task lock.
+                    if let Some(processor) = crate::forge::auto::build(
+                        crate::db::AppDatabase {
+                            conn: app.state::<crate::db::AppDatabase>().conn.clone(),
+                        },
+                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    ) {
+                        tauri::async_runtime::spawn(crate::forge::auto::run(processor));
+                    }
                 }
 
                 // OS `codeg://` URLs. Register the listener after the DB is
@@ -1431,7 +1448,7 @@ mod tauri_app {
 
                 #[cfg(all(
                     feature = "browser-child",
-                    any(target_os = "macos", target_os = "windows")
+                    any(target_os = "macos", target_os = "windows", target_os = "linux")
                 ))]
                 crate::browser::surface_child::init_main_thread();
                 crate::browser::surface_window::init_main_thread();
@@ -1674,6 +1691,7 @@ mod tauri_app {
                 conversations::import_selected_sessions,
                 conversations::get_folder_conversation,
                 conversations::get_folder_conversation_turns,
+                conversations::get_folder_conversation_outline,
                 conversations::list_folders,
                 conversations::get_stats,
                 conversations::get_sidebar_data,
@@ -1683,6 +1701,11 @@ mod tauri_app {
                 conversations::update_conversation_status,
                 conversations::update_conversation_title,
                 conversations::update_conversation_pinned,
+                assistant_commands::assistant_list,
+                assistant_commands::assistant_create,
+                assistant_commands::assistant_update,
+                assistant_commands::assistant_delete,
+                assistant_commands::assistant_reorder,
                 conversation_tags::list_conversation_tags,
                 conversation_tags::create_conversation_tag,
                 conversation_tags::update_conversation_tag,
@@ -1907,8 +1930,6 @@ mod tauri_app {
                 feedback_commands::get_feedback_settings,
                 feedback_commands::set_feedback_settings,
                 feedback_commands::submit_session_feedback,
-                crate::commands::generative_ui::get_generative_ui_settings,
-                crate::commands::generative_ui::set_generative_ui_settings,
                 question_commands::get_question_settings,
                 question_commands::set_question_settings,
                 session_info_commands::get_session_info_settings,
@@ -1980,6 +2001,7 @@ mod tauri_app {
                 acp_commands::acp_scan_leaked_temp,
                 acp_commands::acp_reclaim_leaked_temp,
                 acp_commands::acp_download_agent_binary,
+                acp_commands::acp_update_system_agent,
                 acp_commands::acp_install_uv_tool,
                 acp_commands::acp_detect_agent_local_version,
                 acp_commands::acp_fetch_agent_latest_release,
@@ -2044,6 +2066,10 @@ mod tauri_app {
                 science_commands::science_apply_links,
                 science_commands::science_read_content,
                 science_commands::science_open_central_dir,
+                crate::commands::generative_ui::generative_ui_skill_info,
+                crate::commands::generative_ui::generative_ui_list_all_install_statuses,
+                crate::commands::generative_ui::generative_ui_apply_links,
+                crate::commands::generative_ui::generative_ui_read_content,
                 custom_skills_commands::custom_list,
                 custom_skills_commands::custom_list_all_install_statuses,
                 custom_skills_commands::custom_apply_links,
@@ -2068,6 +2094,7 @@ mod tauri_app {
                 office_tools_commands::officecli_render_html,
                 office_tools_commands::start_office_watch,
                 office_tools_commands::stop_office_watch,
+                office_tools_commands::renew_office_watch,
                 folder_commands::list_folder_commands,
                 folder_commands::create_folder_command,
                 folder_commands::update_folder_command,
@@ -2114,6 +2141,7 @@ mod tauri_app {
                 work_task_commands::work_task_deliver_pr,
                 work_task_commands::work_task_complete,
                 work_task_commands::work_task_archive,
+                work_task_commands::work_task_defer,
                 work_task_commands::work_task_cleanup,
                 work_task_commands::work_task_diff,
                 work_task_commands::work_task_changed_files,
@@ -2142,6 +2170,8 @@ mod tauri_app {
                 forge_commands::work_task_lookup_by_source,
                 forge_commands::forge_settings_get,
                 forge_commands::forge_settings_set,
+                forge_commands::forge_auto_status,
+                forge_commands::forge_auto_scan_now,
                 terminal_commands::terminal_spawn,
                 terminal_commands::terminal_write,
                 terminal_commands::terminal_resize,
@@ -2240,3 +2270,5 @@ mod tauri_app {
 
 #[cfg(feature = "tauri-runtime")]
 pub use tauri_app::run;
+#[cfg(feature = "tauri-runtime")]
+pub(crate) use tauri_app::shut_down;

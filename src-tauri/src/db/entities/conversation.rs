@@ -72,6 +72,15 @@ pub struct Model {
     /// Gemini/Cline/OpenClaw stale-external-id fallback matches on
     /// `origin_cwd ?? folder.path`. Always NULL for ordinary conversations.
     pub origin_cwd: Option<String>,
+    /// The assistant a delegation child ran as; `None` for every other row.
+    /// Written once with the child, never updated, and deliberately not a
+    /// foreign key — the child keeps its identity even if the assistant row
+    /// is gone. See `m20261016_000002_conversation_assistant`.
+    pub assistant_id: Option<i32>,
+    /// JSON `AssistantRunSnapshot`: the assistant's name, options and
+    /// instructions as they were when the delegation started. A resume replays
+    /// this, never the assistant's current row.
+    pub assistant_snapshot: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

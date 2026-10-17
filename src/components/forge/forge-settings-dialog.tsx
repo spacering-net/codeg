@@ -8,12 +8,19 @@ import { CircleDot, GitPullRequest, Info, MessageSquare } from "lucide-react"
 import { forgeSettingsGet, forgeSettingsSet } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
+  DEFAULT_FORGE_AUTO_SETTINGS,
+  autoSettingsOf,
+  isAutoActive,
+  sameAutoSettings,
+} from "@/lib/forge-auto"
+import {
   effectiveForgeSettings,
   ownForgeSettings,
   FORGE_GLOBAL_SCOPE,
 } from "@/lib/forge-settings"
 import {
   FORGE_SCENARIO_PROMPT_ALL,
+  type ForgeAutoSettings,
   type ForgeScenarioId,
   type ForgeSettingsStore,
 } from "@/lib/types"
@@ -35,34 +42,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import {
+  ForgeAutoActivity,
+  ForgeAutoSettingsSection,
+} from "./forge-auto-settings"
+import { SCENARIO_LABELS, ScenarioSelect } from "./forge-scenario-select"
 import { initialScenario, scenariosForKind } from "./forge-start-dialog"
 
 /** Longest one standing instruction may be — mirrors `settings::PROMPT_CAP`.
  *  Enforced on the field so the cap is a limit you bump into while typing
  *  rather than an error you meet after pressing Save. */
 const PROMPT_CAP = 4000
-
-/** Literal message keys per scenario — `t()` is typed against the schema, so
- *  these cannot be computed. Shared shape with the trigger dialog's own map;
- *  duplicated rather than exported because this surface needs the PROMPT hint
- *  ("what to type here"), not the trigger hint ("what this will do"). */
-const SCENARIO_LABELS = {
-  fix: "scenarioFix",
-  plan_first: "scenarioPlanFirst",
-  review_fix: "scenarioReviewFix",
-  review_only: "scenarioReviewOnly",
-} as const satisfies Record<ForgeScenarioId, string>
 
 /**
  * The scenario strip of the standing-instructions card, `all` first.
@@ -80,11 +74,13 @@ const PROMPT_KEYS = [
 /**
  * The repository panel's preferences.
  *
- * Two things live here, and they are deliberately different in kind. The first
- * card holds what the TRIGGER DIALOG opens with — starting positions for
- * controls you still see and can still change on every item. The second holds
- * standing instructions, which are the opposite: text you will not see again,
- * appended to every task the panel mints for that scenario.
+ * Two tabs. "General" holds two things that are deliberately different in
+ * kind: what the TRIGGER DIALOG opens with — starting positions for controls
+ * you still see and can still change on every item — and standing
+ * instructions, which are the opposite: text you will not see again, appended
+ * to every task the panel mints for that scenario. "Auto-processing" holds the
+ * rules under which the panel mints tasks with nobody pressing Start at all
+ * (see `forge-auto-settings.tsx`).
  *
  * Scoped like the task settings one click away: a global row, plus an optional
  * per-folder override that wins WHOLESALE. What it does not replace is a
@@ -187,6 +183,10 @@ function ForgeSettingsScope({
   const [writeback, setWriteback] = useState(true)
   const [prompts, setPrompts] = useState<Record<string, string>>({})
   const [promptKey, setPromptKey] = useState<string>(PROMPT_KEYS[0])
+  const [auto, setAuto] = useState<ForgeAutoSettings>(
+    DEFAULT_FORGE_AUTO_SETTINGS
+  )
+  const [section, setSection] = useState<"general" | "auto">("general")
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -211,6 +211,7 @@ function ForgeSettingsScope({
         setPrScenario(initialScenario(true, s?.default_pr_scenario))
         setWriteback(s?.writeback_default ?? true)
         setPrompts(s?.scenario_prompts ?? {})
+        setAuto(autoSettingsOf(s))
       })
       .catch((e) => {
         if (!cancelled) toast.error(toErrorMessage(e))
@@ -224,6 +225,32 @@ function ForgeSettingsScope({
   // settings; while a folder follows the global row there is nothing here to
   // edit, only a switch back to "custom".
   const editing = isGlobal || source === "custom"
+
+  // What this scope RUNS UNDER as stored — a folder without its own row runs
+  // under the global one. "Scan now" scans with exactly this, so it is offered
+  // only when the form on screen says the same thing: a scan with rules other
+  // than the ones in front of the user would answer a question they did not
+  // ask.
+  const storedAuto = autoSettingsOf(
+    store == null
+      ? null
+      : isGlobal
+        ? store.global
+        : effectiveForgeSettings(store, scope)
+  )
+  // The SOURCE is part of what is stored, not only the values: flipping a
+  // folder between its own rules and the global ones, unsaved, leaves the
+  // values on screen equal to the stored ones while the scope a scan would
+  // run under is about to change.
+  const sourceChanged =
+    !isGlobal &&
+    store != null &&
+    (source === "custom") !== (ownForgeSettings(store, scope) != null)
+  const scanBlockedReason = !isAutoActive(storedAuto)
+    ? t("autoScanNowOff")
+    : sourceChanged || !sameAutoSettings(auto, storedAuto)
+      ? t("autoScanNowDirty")
+      : null
 
   const save = async () => {
     setSaving(true)
@@ -245,6 +272,7 @@ function ForgeSettingsScope({
                   .map(([key, text]) => [key, text.trim()] as const)
                   .filter(([, text]) => text.length > 0)
               ),
+              auto,
             }
       )
       onSaved?.(stored)
@@ -324,111 +352,154 @@ function ForgeSettingsScope({
         </div>
 
         {editing ? (
-          <>
-            <SettingCard>
-              <SettingRow
-                icon={CircleDot}
-                title={t("settingsIssueDefault")}
-                description={t("settingsIssueDefaultHint")}
-                control={
-                  <ScenarioSelect
-                    label={t("settingsIssueDefault")}
-                    value={issueScenario}
-                    options={scenariosForKind(false)}
-                    onChange={setIssueScenario}
+          <Tabs
+            value={section}
+            onValueChange={(v) => setSection(v === "auto" ? "auto" : "general")}
+          >
+            {/* Labelled: the General tab nests a second strip (the
+                instruction scenarios) whose names could otherwise be read as
+                siblings of these two. */}
+            <TabsList className="w-full" aria-label={t("settingsSections")}>
+              <TabsTrigger value="general" className="flex-1">
+                {t("settingsTabGeneral")}
+              </TabsTrigger>
+              <TabsTrigger value="auto" className="flex-1">
+                {t("settingsTabAuto")}
+                {/* Says the tab is doing something even while it is not the
+                    one on screen — auto-processing runs unattended. */}
+                {isAutoActive(auto) ? (
+                  <span
+                    aria-hidden
+                    className="size-1.5 rounded-full bg-primary"
                   />
-                }
-              />
-              <SettingRow
-                icon={GitPullRequest}
-                title={t("settingsPrDefault")}
-                description={t("settingsPrDefaultHint")}
-                control={
-                  <ScenarioSelect
-                    label={t("settingsPrDefault")}
-                    value={prScenario}
-                    options={scenariosForKind(true)}
-                    onChange={setPrScenario}
-                  />
-                }
-              />
-              <SettingRow
-                icon={MessageSquare}
-                title={t("settingsWritebackDefault")}
-                description={t("settingsWritebackDefaultHint")}
-                htmlFor="forge-writeback-default"
-                control={
-                  <Switch
-                    id="forge-writeback-default"
-                    checked={writeback}
-                    onCheckedChange={setWriteback}
-                  />
-                }
-              />
-            </SettingCard>
-
-            {/* Where this text ends up, said before the box rather than after
-                it: it is appended AFTER the built-in wording of the scenario
-                and BEFORE whatever is typed in the trigger dialog, which is
-                what stops people from re-stating the built-ins here. */}
-            <SettingNote icon={Info}>{t("settingsPromptsIntro")}</SettingNote>
-            <Tabs value={promptKey} onValueChange={setPromptKey}>
-              <TabsList
-                className="w-full flex-wrap group-data-horizontal/tabs:h-auto"
-                aria-label={t("settingsPromptsLabel")}
-              >
-                {PROMPT_KEYS.map((key) => (
-                  <TabsTrigger
-                    key={key}
-                    value={key}
-                    className="h-7 px-2 text-xs"
-                  >
-                    {key === FORGE_SCENARIO_PROMPT_ALL
-                      ? t("settingsPromptAll")
-                      : t(SCENARIO_LABELS[key])}
-                    {/* A dot on the scenarios that already carry text —
-                        otherwise an instruction typed once stays hidden behind
-                        an unselected segment forever. */}
-                    {prompts[key]?.trim() ? (
-                      <span
-                        aria-hidden
-                        className="size-1.5 rounded-full bg-primary"
-                      />
-                    ) : null}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-            <SettingCard>
-              <SettingRow
-                title={
-                  promptKey === FORGE_SCENARIO_PROMPT_ALL
-                    ? t("settingsPromptAll")
-                    : t(SCENARIO_LABELS[promptKey as ForgeScenarioId])
-                }
-                description={
-                  promptKey === FORGE_SCENARIO_PROMPT_ALL
-                    ? t("settingsPromptAllHint")
-                    : t("settingsPromptScenarioHint")
-                }
-                htmlFor="forge-standing-prompt"
-              >
-                <Textarea
-                  id="forge-standing-prompt"
-                  value={prompts[promptKey] ?? ""}
-                  maxLength={PROMPT_CAP}
-                  onChange={(e) =>
-                    setPrompts((prev) => ({
-                      ...prev,
-                      [promptKey]: e.target.value,
-                    }))
+                ) : null}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="general" className="mt-1 flex flex-col gap-3">
+              <SettingCard>
+                <SettingRow
+                  icon={CircleDot}
+                  title={t("settingsIssueDefault")}
+                  description={t("settingsIssueDefaultHint")}
+                  control={
+                    <ScenarioSelect
+                      label={t("settingsIssueDefault")}
+                      value={issueScenario}
+                      options={scenariosForKind(false)}
+                      onChange={setIssueScenario}
+                    />
                   }
-                  placeholder={t("settingsPromptPlaceholder")}
-                  className="max-h-40 min-h-24 overflow-y-auto bg-background text-sm"
                 />
-              </SettingRow>
-            </SettingCard>
-          </>
+                <SettingRow
+                  icon={GitPullRequest}
+                  title={t("settingsPrDefault")}
+                  description={t("settingsPrDefaultHint")}
+                  control={
+                    <ScenarioSelect
+                      label={t("settingsPrDefault")}
+                      value={prScenario}
+                      options={scenariosForKind(true)}
+                      onChange={setPrScenario}
+                    />
+                  }
+                />
+                <SettingRow
+                  icon={MessageSquare}
+                  title={t("settingsWritebackDefault")}
+                  description={t("settingsWritebackDefaultHint")}
+                  htmlFor="forge-writeback-default"
+                  control={
+                    <Switch
+                      id="forge-writeback-default"
+                      checked={writeback}
+                      onCheckedChange={setWriteback}
+                    />
+                  }
+                />
+              </SettingCard>
+
+              {/* Where this text ends up, said before the box rather than after
+                  it: it is appended AFTER the built-in wording of the scenario
+                  and BEFORE whatever is typed in the trigger dialog, which is
+                  what stops people from re-stating the built-ins here. */}
+              <SettingNote icon={Info}>{t("settingsPromptsIntro")}</SettingNote>
+              <Tabs value={promptKey} onValueChange={setPromptKey}>
+                <TabsList
+                  className="w-full flex-wrap group-data-horizontal/tabs:h-auto"
+                  aria-label={t("settingsPromptsLabel")}
+                >
+                  {PROMPT_KEYS.map((key) => (
+                    <TabsTrigger
+                      key={key}
+                      value={key}
+                      className="h-7 px-2 text-xs"
+                    >
+                      {key === FORGE_SCENARIO_PROMPT_ALL
+                        ? t("settingsPromptAll")
+                        : t(SCENARIO_LABELS[key])}
+                      {/* A dot on the scenarios that already carry text —
+                          otherwise an instruction typed once stays hidden behind
+                          an unselected segment forever. */}
+                      {prompts[key]?.trim() ? (
+                        <span
+                          aria-hidden
+                          className="size-1.5 rounded-full bg-primary"
+                        />
+                      ) : null}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+              <SettingCard>
+                <SettingRow
+                  title={
+                    promptKey === FORGE_SCENARIO_PROMPT_ALL
+                      ? t("settingsPromptAll")
+                      : t(SCENARIO_LABELS[promptKey as ForgeScenarioId])
+                  }
+                  description={
+                    promptKey === FORGE_SCENARIO_PROMPT_ALL
+                      ? t("settingsPromptAllHint")
+                      : t("settingsPromptScenarioHint")
+                  }
+                  htmlFor="forge-standing-prompt"
+                >
+                  <Textarea
+                    id="forge-standing-prompt"
+                    value={prompts[promptKey] ?? ""}
+                    maxLength={PROMPT_CAP}
+                    onChange={(e) =>
+                      setPrompts((prev) => ({
+                        ...prev,
+                        [promptKey]: e.target.value,
+                      }))
+                    }
+                    placeholder={t("settingsPromptPlaceholder")}
+                    className="max-h-40 min-h-24 overflow-y-auto bg-background text-sm"
+                  />
+                </SettingRow>
+              </SettingCard>
+            </TabsContent>
+            <TabsContent value="auto" className="mt-1">
+              <ForgeAutoSettingsSection
+                value={auto}
+                onChange={setAuto}
+                folderId={isGlobal ? null : scope}
+                savedEnabledAt={
+                  isAutoActive(storedAuto) ? storedAuto.enabled_at : null
+                }
+                scanBlockedReason={scanBlockedReason}
+              />
+            </TabsContent>
+          </Tabs>
+        ) : store != null && isAutoActive(storedAuto) ? (
+          // Following the global row, which runs auto-processing: nothing to
+          // edit here, but this folder IS being processed under those rules,
+          // and what that has done belongs in front of whoever opened it.
+          <ForgeAutoActivity
+            folderId={scope}
+            scanBlockedReason={scanBlockedReason}
+          />
         ) : null}
       </div>
 
@@ -449,36 +520,5 @@ function ForgeSettingsScope({
         </Button>
       </DialogFooter>
     </>
-  )
-}
-
-function ScenarioSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string
-  value: ForgeScenarioId
-  options: ForgeScenarioId[]
-  onChange: (next: ForgeScenarioId) => void
-}) {
-  const t = useTranslations("Forge")
-  return (
-    <Select value={value} onValueChange={(v) => onChange(v as ForgeScenarioId)}>
-      <SelectTrigger
-        className="h-8 w-44 bg-background text-xs"
-        aria-label={label}
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((id) => (
-          <SelectItem key={id} value={id} className="text-xs">
-            {t(SCENARIO_LABELS[id])}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   )
 }

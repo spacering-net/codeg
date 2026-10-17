@@ -1,6 +1,14 @@
 import { memo } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 
 import { AppearanceProvider } from "./appearance-provider"
 import {
@@ -131,7 +139,7 @@ describe("window zoom keys", () => {
   }
 
   /** Zoom writes reach Tauri IPC and an on-disk SQLite upsert on the same path. */
-  function zoomWrites(spy: ReturnType<typeof vi.spyOn>): number {
+  function zoomWrites(spy: MockInstance): number {
     return spy.mock.calls.filter(([key]) => key === STORAGE_KEY_ZOOM_LEVEL)
       .length
   }
@@ -146,6 +154,12 @@ describe("window zoom keys", () => {
     )
     return vi.spyOn(Storage.prototype, "setItem")
   }
+
+  // spyOn hands back the method's existing spy when there is one, calls and
+  // all, so each test's spy has to be taken down before the next renderZoom.
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
 
   it("stops writing once a held zoom-out key hits the bottom of the range", () => {
     // 80% is the lowest rung, so every further repeat is a no-op on screen. It

@@ -887,6 +887,10 @@ jobs:
       # updater uses (`tauri signer sign` writes `<file>.sig`). The server's
       # `update::verify` module verifies this signature against the embedded
       # public key before installing — see src-tauri/src/update/verify.rs.
+      # `--app-version` binds it to this release's version (the tag, which
+      # the draft-release job matched against tauri.conf.json): the server
+      # refuses an archive signed for any other version than latest.json
+      # announces, or for none.
       - name: Sign and checksum bundle (Unix)
         if: runner.os != 'Windows'
         env:
@@ -894,7 +898,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          pnpm tauri signer sign "dist/${{ matrix.artifact }}.tar.gz"
+          pnpm tauri signer sign --app-version "${GITHUB_REF_NAME#v}" "dist/${{ matrix.artifact }}.tar.gz"
           test -f "dist/${{ matrix.artifact }}.tar.gz.sig"
           ( cd dist && shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256" )
 
@@ -905,7 +909,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          pnpm tauri signer sign "dist/${{ matrix.artifact }}.zip"
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          pnpm tauri signer sign --app-version $version "dist/${{ matrix.artifact }}.zip"
           if (-not (Test-Path "dist/${{ matrix.artifact }}.zip.sig")) {
             throw "signature not produced for ${{ matrix.artifact }}.zip"
           }
@@ -1004,6 +1009,11 @@ jobs:
           file: Dockerfile.ci
           platforms: linux/amd64,linux/arm64
           push: true
+          # The source label is how ghcr.io ties the package to this
+          # repository: the package page links back here and the package
+          # inherits the repository's access permissions.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
             ${{ secrets.DOCKERHUB_USERNAME }}/codeg:${{ steps.version.outputs.version }}

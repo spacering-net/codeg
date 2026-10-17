@@ -111,6 +111,8 @@ const DEFAULT_BRANCH_TAG: ConversationBranchTag = {
 let branchTagSeq = 0
 let branchFetchSeq = 0
 let lastAppliedBranchFetch = 0
+/** The reorder write in flight, if any: writes run one at a time, in order. */
+let reorderTail: Promise<unknown> = Promise.resolve()
 
 function sameBranchTag(
   a: ConversationBranchTag,
@@ -349,8 +351,14 @@ export const useConversationTagsStore = create<ConversationTagsState>()(
           )
         )
       )
+      // One write at a time, in the order asked: two in flight together could
+      // commit the other way round, and the later move would be lost. Every
+      // one is sent — two can be for different scopes.
+      const ids = [...orderedIds]
+      const write = reorderTail.then(() => apiReorderTags(ids))
+      reorderTail = write.catch(() => {})
       try {
-        await apiReorderTags([...orderedIds])
+        await write
       } catch (err) {
         // Re-read rather than restore a snapshot: anything that landed while
         // the request was out would be erased along with our failed write.
@@ -372,6 +380,7 @@ export function resetConversationTagsStore(): void {
   branchTagSeq = 0
   branchFetchSeq = 0
   lastAppliedBranchFetch = 0
+  reorderTail = Promise.resolve()
   useConversationTagsStore.setState(
     useConversationTagsStore.getInitialState(),
     true
@@ -381,29 +390,42 @@ export function resetConversationTagsStore(): void {
 registerBackendScopedStoreReset(resetConversationTagsStore)
 
 /**
- * Keep this window's tag definitions and branch tag setting live: one fetch
- * of each on mount, every `conversation-tag://changed` broadcast applied in
- * place, and a re-read after a WebSocket reconnect (the broadcaster drops what
- * fires while nobody is listening). Mount once per window — the workspace
- * layout does.
+ * Keep this window's tag definitions and branch tag setting live: every
+ * `conversation-tag://changed` broadcast applied in place, one fetch of each
+ * once broadcasts reach this window, and a re-read after a WebSocket reconnect
+ * (the broadcaster drops what fires while nobody is listening). Mount once per
+ * window — the workspace layout does.
+ *
+ * The fetches wait for the subscription — on a WebSocket transport that is the
+ * server confirming its receiver — because a write landing between a read
+ * taken earlier and the subscription would reach neither, for good.
  */
 export function useConversationTagsSync(): void {
   useEffect(() => {
     let disposed = false
     let unlisten: (() => void) | undefined
-    const store = useConversationTagsStore.getState()
-    void store.fetchTags()
-    void store.fetchBranchTag()
 
     void (async () => {
-      const dispose = await subscribe<ConversationTagChange>(
-        CONVERSATION_TAG_CHANGED_EVENT,
-        (change) => {
-          useConversationTagsStore.getState().applyChange(change)
+      try {
+        const dispose = await subscribe<ConversationTagChange>(
+          CONVERSATION_TAG_CHANGED_EVENT,
+          (change) => {
+            useConversationTagsStore.getState().applyChange(change)
+          }
+        )
+        if (disposed) {
+          dispose()
+          return
         }
-      )
-      if (disposed) dispose()
-      else unlisten = dispose
+        unlisten = dispose
+      } catch (err) {
+        // Not live, but still worth a read: a reconnect re-reads again.
+        console.error("[ConversationTags] subscribe failed:", err)
+      }
+      if (disposed) return
+      const store = useConversationTagsStore.getState()
+      void store.fetchTags()
+      void store.fetchBranchTag()
     })()
 
     const offReconnect = onTransportReconnect(() => {

@@ -518,6 +518,23 @@ describe("normalizeToolName collapses delegate_to_agent across hosts", () => {
   })
 })
 
+describe("codex view_image", () => {
+  // codex-acp streams it as `kind: "read"` titled `View Image <path>` with
+  // `{path}` as its input; the rollout records the raw function name. Both
+  // must land on the same Read card, which shows the picture.
+  it("is a read live and on reload", () => {
+    const path = "/tmp/nanguang-login/login-qr-new.png"
+    expect(
+      inferLiveToolName({
+        title: `View Image ${path}`,
+        kind: "read",
+        rawInput: JSON.stringify({ path }),
+      })
+    ).toBe("read")
+    expect(normalizeToolName("view_image")).toBe("read")
+  })
+})
+
 describe("normalizeToolName collapses delegation companion tools across hosts", () => {
   it.each([
     "get_delegation_status",
@@ -1467,5 +1484,109 @@ describe("inferLiveToolName meta.opencode.toolName override", () => {
     expect(inferLiveToolName({ ...shape, meta: { opencode: "glob" } })).toBe(
       "read"
     )
+  })
+})
+
+describe("inferLiveToolName meta.kiro.canonicalToolName override", () => {
+  // Opening frames captured from kiro-cli 2.24.1 over real ACP, after the
+  // backend's rewrite: `rawInput` is the canonical shape and
+  // `_meta.kiro.canonicalToolName` sits beside Kiro's own `toolName`
+  // (`stamp_kiro_tool_name`).
+  const call = (
+    kiro: Record<string, string>,
+    title: string,
+    kind: string | null,
+    rawInput: unknown
+  ) =>
+    inferLiveToolName({
+      title,
+      kind,
+      rawInput: JSON.stringify(rawInput),
+      meta: { kiro },
+    })
+
+  it("names the calls the input shape gets wrong", () => {
+    // {pattern, path} alone reads as grep, {path} alone as a file read.
+    expect(
+      call(
+        { toolName: "glob", canonicalToolName: "glob" },
+        "Finding *.txt in ws",
+        "search",
+        { pattern: "*.txt", path: "/w" }
+      )
+    ).toBe("glob")
+    expect(
+      call(
+        { toolName: "read", canonicalToolName: "ls" },
+        "Reading listing ws",
+        "read",
+        { path: "/w" }
+      )
+    ).toBe("ls")
+    // {query} is only a web search when the title or kind says so; Kiro's
+    // kind is the generic "search".
+    expect(
+      call(
+        { toolName: "web_search", canonicalToolName: "websearch" },
+        "Searching the web",
+        "search",
+        { query: "agent client protocol" }
+      )
+    ).toBe("websearch")
+  })
+
+  it("keeps the edit/write split the canonical input encodes", () => {
+    expect(
+      call(
+        { toolName: "write", canonicalToolName: "edit" },
+        "Editing a.txt",
+        "edit",
+        { file_path: "/w/a.txt", old_string: "two", new_string: "2" }
+      )
+    ).toBe("edit")
+    expect(
+      call(
+        { toolName: "write", canonicalToolName: "write" },
+        "Creating b.txt",
+        "edit",
+        { file_path: "/w/b.txt", content: "hello" }
+      )
+    ).toBe("write")
+    expect(
+      call(
+        { toolName: "shell", canonicalToolName: "bash" },
+        "Running: ls /w",
+        "execute",
+        { command: "ls /w", description: "List it" }
+      )
+    ).toBe("bash")
+  })
+
+  it("resolves an MCP call to its companion tool", () => {
+    // Title `Running: @<server>/<tool>`, no kind: nothing else names it.
+    expect(
+      call(
+        {
+          toolName: "get_session_info",
+          mcpServerName: "codeg-mcp",
+          canonicalToolName: "mcp__codeg-mcp__get_session_info",
+        },
+        "Running: @codeg-mcp/get_session_info",
+        null,
+        { __tool_use_purpose: "Look it up", session_id: 7 }
+      )
+    ).toBe("get_session_info")
+  })
+
+  it("ignores Kiro's own toolName without the backend's stamp", () => {
+    // Kiro's bare `write` is not a canonical name — without the stamp the
+    // input shape decides, as before.
+    expect(
+      call({ toolName: "write" }, "Editing a.txt", "edit", {
+        file_path: "/w/a.txt",
+        old_string: "a",
+        new_string: "b",
+      })
+    ).toBe("edit")
   })
 })

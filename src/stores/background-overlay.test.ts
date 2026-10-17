@@ -394,6 +394,44 @@ describe("RESOLVE_BACKGROUND_TASK (in-memory launch-card flip)", () => {
     expect(session(7)!.pendingBackgroundSettlements).toEqual([])
   })
 
+  // A sub-agent waiting on background work of its own notifies `completed`
+  // with an interim result, then again when it is done: the card carries the
+  // interim flag the detail parse writes, until the final settlement drops it.
+  it("flips the card to an interim result, then to the final one", () => {
+    actions().appendOptimisticTurn(
+      7,
+      launchCardTurn("t-0", "toolu_01"),
+      "tok-1"
+    )
+    actions().completeTurn(7, null)
+
+    actions().resolveBackgroundTask(7, {
+      ...settlement,
+      summary: "Agent is waiting on its own background work",
+      result: "interim",
+      interim: true,
+    })
+    const interim = ackOutput(session(7)!.localTurns, "toolu_01")
+    expect(parseBackgroundTaskMarker(interim)).toMatchObject({
+      status: "completed",
+      result: "interim",
+      interim: true,
+    })
+    // Key for key what the detail parse writes, `interim` last.
+    expect(interim).toBe(
+      `${BACKGROUND_TASK_MARKER}{"task_id":"agent1","status":"completed","summary":"Agent is waiting on its own background work","result":"interim","interim":true}`
+    )
+
+    actions().resolveBackgroundTask(7, settlement)
+    const final = ackOutput(session(7)!.localTurns, "toolu_01")
+    expect(parseBackgroundTaskMarker(final)).toMatchObject({
+      result: "Build succeeded (exit code 0).",
+      interim: false,
+    })
+    expect(final).not.toContain("interim")
+    expect(session(7)!.pendingBackgroundSettlements).toEqual([])
+  })
+
   it("queues a settlement whose launch turn hasn't promoted yet, then applies it at COMPLETE_TURN", () => {
     // Session exists (a user prompt is in flight) but the launch card is not in
     // any promotable buffer yet — it's mid-stream in liveMessage, un-patchable.

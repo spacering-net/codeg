@@ -23,6 +23,9 @@ import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { pickModelFromTurns } from "./active-session-details"
 import { AgentIcon } from "@/components/agent-icon"
+import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { useDelegationIdentityLabel } from "@/components/message/delegation-identity"
+import { useAssistant } from "@/stores/assistants-store"
 import { ConversationStatusDot } from "./conversation-status-dot"
 
 interface SessionDetailsContentProps {
@@ -173,6 +176,39 @@ function resolveSessionDurationMs(
  * (`sidebar-conversation-hover-details.tsx`) renders its fields in the exact
  * same shape as this view rather than growing a near-copy.
  */
+/** The assistant a delegation sub-session ran as: its avatar and name, by
+ *  the same fallback order the delegation cards use. */
+function AssistantInline({
+  id,
+  snapshotName,
+}: {
+  id: number
+  snapshotName: string | null
+}) {
+  const t = useTranslations("Folder.chat.delegation")
+  const assistant = useAssistant(id)
+  const { name, deleted } = useDelegationIdentityLabel({
+    agentType: null,
+    assistantId: id,
+    assistantName: snapshotName,
+  })
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <AssistantAvatar
+        avatar={assistant?.avatar ?? null}
+        name={name}
+        size={16}
+      />
+      <span className="min-w-0 truncate">{name}</span>
+      {deleted ? (
+        <span className="shrink-0 text-muted-foreground">
+          {t("deletedAssistant")}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 export function InfoItem({
   label,
   children,
@@ -410,6 +446,14 @@ export function SessionDetailsContent({
         {summary.parent_id != null && (
           <InfoItem label={t("parentId")} valueClassName={numeric}>
             {summary.parent_id}
+          </InfoItem>
+        )}
+        {summary.assistant_id != null && (
+          <InfoItem label={t("assistant")}>
+            <AssistantInline
+              id={summary.assistant_id}
+              snapshotName={summary.assistant_name ?? null}
+            />
           </InfoItem>
         )}
         <InfoItem label={t("externalId")} className="@[20rem]:col-span-2">

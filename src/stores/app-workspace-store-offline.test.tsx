@@ -1,5 +1,12 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 import { TabProvider } from "@/contexts/tab-context"
 import {
   buildNewConversationDraftStorageKey,
@@ -48,7 +55,7 @@ vi.mock("@/hooks/use-sorted-available-agents", () => ({
 
 const draftId = "new-offline-draft"
 const draftKey = buildNewConversationDraftStorageKey(draftId)
-let errors: ReturnType<typeof vi.spyOn>
+let errors: MockInstance
 
 beforeEach(() => {
   vi.resetAllMocks()

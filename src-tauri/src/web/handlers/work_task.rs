@@ -179,6 +179,13 @@ pub struct ArchiveParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeferParams {
+    pub id: i32,
+    pub deferred: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffParams {
     pub id: i32,
     #[serde(default)]
@@ -416,6 +423,16 @@ pub async fn work_task_archive(
     Json(params): Json<ArchiveParams>,
 ) -> Result<Json<()>, AppCommandError> {
     core::work_task_archive_core(&state.emitter, &state.db, params.id, params.archived)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_defer(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DeferParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_defer_core(&state.emitter, &state.db, params.id, params.deferred)
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))

@@ -88,6 +88,49 @@ describe("AgentCapsule", () => {
     expect(screen.getByText("ERR BODY")).toBeInTheDocument()
   })
 
+  // An expanded capsule of a running sub-agent streams its live transcript and
+  // a JS-driven shimmer (a style write every frame) into the body. A scroller
+  // that measures its content from a MutationObserver — OverlayScrollbars reads
+  // `scrollWidth` in the callback — turns each of those into a synchronous
+  // layout. The body must scroll natively instead.
+  it("lets a live body change without forcing a synchronous layout read", async () => {
+    const native = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollWidth"
+    )!
+    let reads = 0
+    Object.defineProperty(Element.prototype, "scrollWidth", {
+      configurable: true,
+      get() {
+        reads++
+        return native.get!.call(this)
+      },
+    })
+    try {
+      render(
+        <AgentCapsule title="Working" isRunning isError={false} defaultOpen>
+          <p data-testid="live">first token</p>
+        </AgentCapsule>
+      )
+      // Past any deferred scroller initialization: overlayscrollbars-react
+      // defers to the next animation frame where there is no
+      // requestIdleCallback (jsdom), so two frames cover it.
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      )
+      reads = 0
+
+      const live = screen.getByTestId("live")
+      live.firstChild!.textContent = "first token, second token"
+      live.setAttribute("style", "background-position: 40% center")
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(reads).toBe(0)
+    } finally {
+      Object.defineProperty(Element.prototype, "scrollWidth", native)
+    }
+  })
+
   it("auto-collapses once when running transitions to completed", () => {
     const { rerender } = render(
       <AgentCapsule title="Working" isRunning isError={false}>

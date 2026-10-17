@@ -24,6 +24,7 @@ import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
+  useBooleanOptionLabels,
 } from "@/components/automations/agent-config-section"
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -295,6 +296,7 @@ function TaskSettingsBody({
     loaded != null && editing,
     configValues
   )
+  const booleanLabels = useBooleanOptionLabels()
 
   const save = async () => {
     setSaving(true)
@@ -321,7 +323,7 @@ function TaskSettingsBody({
         config_values,
         label_snapshot: {
           agent_label: getAgentLabel(agentType) ?? agentType,
-          ...snapshotLabels(snapshot, mode_id, config_values),
+          ...snapshotLabels(snapshot, mode_id, config_values, booleanLabels),
         },
         auto_process: autoProcess,
         max_concurrent: Number.isFinite(parsed) && parsed >= 0 ? parsed : 2,
@@ -477,6 +479,7 @@ function TaskSettingsBody({
                       agentType={agentOptions.snapshotAgentType}
                       snapshot={agentOptions.snapshot}
                       loading={agentOptions.loading}
+                      stale={!agentOptions.current}
                       error={agentOptions.error}
                       onReload={agentOptions.reload}
                       modeId={modeId}

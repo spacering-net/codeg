@@ -288,27 +288,23 @@ mod tests {
     /// prints it — and exit status `acp_status`. Every call is logged; see
     /// [`invocations`].
     #[cfg(unix)]
-    async fn fake_opencode(
-        dir: &Path,
-        version: Option<&str>,
-        help: &str,
-        acp_status: u8,
-    ) -> PathBuf {
-        fake_opencode_with_help_on(dir, version, help, acp_status, 2).await
+    fn fake_opencode(dir: &Path, version: Option<&str>, help: &str, acp_status: u8) -> PathBuf {
+        fake_opencode_with_help_on(dir, version, help, acp_status, 2)
     }
 
     /// [`fake_opencode`], printing its `acp --help` on file descriptor
     /// `help_fd` instead: 1 for a 2.x stand-in, since 2.x prints it on stdout.
+    ///
+    /// Written with [`crate::process::write_test_script`], because the probes
+    /// under test do not retry an exec that Linux refuses with `ETXTBSY`.
     #[cfg(unix)]
-    async fn fake_opencode_with_help_on(
+    fn fake_opencode_with_help_on(
         dir: &Path,
         version: Option<&str>,
         help: &str,
         acp_status: u8,
         help_fd: u8,
     ) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
         let bin = dir.join("opencode");
         let version_arm = match version {
             Some(v) => format!("echo '{v}'; exit 0"),
@@ -316,25 +312,13 @@ mod tests {
         };
         let script = format!(
             "#!/bin/sh\n\
-             if [ \"$1\" = \"--noop\" ]; then exit 1; fi\n\
              echo \"$1\" >> '{}'\n\
              if [ \"$1\" = \"--version\" ]; then {version_arm}; fi\n\
              if [ \"$1\" = \"acp\" ]; then printf '%s' '{help}' >&{help_fd}; exit {acp_status}; fi\n\
              exit 1\n",
             dir.join("invocations").display()
         );
-        std::fs::write(&bin, script).expect("write script");
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        // Linux refuses to exec a file while any process still holds a write
-        // fd on it — including a child another test thread forked mid-write —
-        // and the probes under test do not retry that. One exec that gets
-        // through proves every such fd is gone, so the probes that follow
-        // cannot trip over it. (`--noop` exits at once, unlogged.)
-        crate::process::spawn_retrying_exec_busy(|| {
-            std::process::Command::new(&bin).arg("--noop").output()
-        })
-        .await
-        .expect("fake opencode runs");
+        crate::process::write_test_script(&bin, &script);
         bin
     }
 
@@ -351,8 +335,8 @@ mod tests {
     }
 
     /// Pin `bin`'s mtime through a READ-only handle: the owner may set times
-    /// on any fd, and a write fd would reopen the exec window `fake_opencode`
-    /// just closed.
+    /// on any fd, and a write fd here would open the `ETXTBSY` window that
+    /// `fake_opencode` keeps shut.
     #[cfg(unix)]
     fn set_mtime(bin: &Path, mtime: SystemTime) {
         std::fs::File::open(bin)
@@ -366,7 +350,7 @@ mod tests {
         // Asked, this binary would say "no flags", so the flags can only come
         // from the label — and the empty log shows it was not asked at all.
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), Some("0.0.0-1748650942428"), HELP_1_0_41, 0).await;
+        let bin = fake_opencode(dir.path(), Some("0.0.0-1748650942428"), HELP_1_0_41, 0);
         assert_eq!(listen_args(&bin, Some("1.18.33")).await, LISTEN_ARGS);
         assert!(listen_args(&bin, Some("1.0.41")).await.is_empty());
         assert!(invocations(dir.path()).is_empty());
@@ -376,12 +360,12 @@ mod tests {
     #[tokio::test]
     async fn a_path_release_is_read_from_its_version_alone() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), Some("1.18.29"), HELP_1_0_41, 0).await;
+        let bin = fake_opencode(dir.path(), Some("1.18.29"), HELP_1_0_41, 0);
         assert_eq!(listen_args(&bin, None).await, LISTEN_ARGS);
         assert_eq!(invocations(dir.path()), ["--version"]);
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), Some("1.0.41"), HELP_1_18_33, 0).await;
+        let bin = fake_opencode(dir.path(), Some("1.0.41"), HELP_1_18_33, 0);
         assert!(listen_args(&bin, None).await.is_empty());
         assert_eq!(invocations(dir.path()), ["--version"]);
     }
@@ -390,12 +374,12 @@ mod tests {
     #[tokio::test]
     async fn a_preview_build_is_asked_for_its_help() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), Some("0.0.0-dev-202609282300"), HELP_1_18_33, 0).await;
+        let bin = fake_opencode(dir.path(), Some("0.0.0-dev-202609282300"), HELP_1_18_33, 0);
         assert_eq!(listen_args(&bin, None).await, LISTEN_ARGS);
         assert_eq!(invocations(dir.path()), ["--version", "acp"]);
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), Some("0.0.0-1748650942428"), HELP_1_0_41, 0).await;
+        let bin = fake_opencode(dir.path(), Some("0.0.0-1748650942428"), HELP_1_0_41, 0);
         assert!(listen_args(&bin, None).await.is_empty());
     }
 
@@ -410,8 +394,7 @@ mod tests {
         // that launch.
         let dir = tempfile::tempdir().expect("tempdir");
         let bin =
-            fake_opencode_with_help_on(dir.path(), Some("opencode v2.0.24"), HELP_2_0_24, 0, 1)
-                .await;
+            fake_opencode_with_help_on(dir.path(), Some("opencode v2.0.24"), HELP_2_0_24, 0, 1);
         assert!(listen_args(&bin, None).await.is_empty());
         assert_eq!(invocations(dir.path()), ["--version", "acp"]);
     }
@@ -423,7 +406,7 @@ mod tests {
         // binary is asked for `acp --help` straight away (its `--version` is
         // not needed) ...
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_2_0_24, 0, 1).await;
+        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_2_0_24, 0, 1);
         assert!(listen_args(&bin, Some("2.0.24")).await.is_empty());
         assert_eq!(invocations(dir.path()), ["acp"]);
 
@@ -431,7 +414,7 @@ mod tests {
         // with them, read from stdout, where 2.x prints its help. (1.18.33's
         // option list stands in for that help.)
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_1_18_33, 0, 1).await;
+        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_1_18_33, 0, 1);
         assert_eq!(listen_args(&bin, Some("2.1.0")).await, LISTEN_ARGS);
         assert_eq!(invocations(dir.path()), ["acp"]);
     }
@@ -440,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreadable_version_is_asked_for_its_help() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), None, HELP_1_18_33, 0).await;
+        let bin = fake_opencode(dir.path(), None, HELP_1_18_33, 0);
         assert_eq!(listen_args(&bin, None).await, LISTEN_ARGS);
         assert_eq!(invocations(dir.path()), ["--version", "acp"]);
     }
@@ -449,14 +432,14 @@ mod tests {
     #[tokio::test]
     async fn a_help_verdict_is_cached_until_the_binary_changes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), None, HELP_1_0_41, 0).await;
+        let bin = fake_opencode(dir.path(), None, HELP_1_0_41, 0);
         assert_eq!(help_probe(&bin).await, Some(false));
         assert_eq!(help_probe(&bin).await, Some(false));
         assert_eq!(invocations(dir.path()), ["acp"]);
 
         // Upgraded in place. Pin a distinct mtime rather than trusting the
         // filesystem's timestamp granularity to separate the two writes.
-        let bin = fake_opencode(dir.path(), None, HELP_1_18_33, 0).await;
+        let bin = fake_opencode(dir.path(), None, HELP_1_18_33, 0);
         set_mtime(&bin, SystemTime::now() + Duration::from_secs(60));
         assert_eq!(help_probe(&bin).await, Some(true));
         assert_eq!(invocations(dir.path()), ["acp", "acp"]);
@@ -468,7 +451,7 @@ mod tests {
         // Dies mid-help, before listing any options.
         let dir = tempfile::tempdir().expect("tempdir");
         let truncated = "opencode acp\n\nstart ACP (Agent Client Protocol) server\n";
-        let bin = fake_opencode(dir.path(), None, truncated, 1).await;
+        let bin = fake_opencode(dir.path(), None, truncated, 1);
         assert_eq!(help_probe(&bin).await, None);
         assert!(listen_args(&bin, None).await.is_empty());
         assert_eq!(invocations(dir.path()), ["acp", "--version", "acp"]);
@@ -478,7 +461,7 @@ mod tests {
         let failed_at = std::fs::metadata(&bin)
             .and_then(|m| m.modified())
             .expect("mtime");
-        let bin = fake_opencode(dir.path(), None, HELP_1_18_33, 0).await;
+        let bin = fake_opencode(dir.path(), None, HELP_1_18_33, 0);
         set_mtime(&bin, failed_at);
         assert_eq!(listen_args(&bin, None).await, LISTEN_ARGS);
     }

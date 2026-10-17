@@ -13,7 +13,11 @@ import { AgentSelector } from "@/components/chat/agent-selector"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
 import { MessageListView } from "@/components/message/message-list-view"
-import { useAcpActions } from "@/contexts/acp-connections-context"
+import {
+  getCachedSelectors,
+  useAcpActions,
+} from "@/contexts/acp-connections-context"
+import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
@@ -388,6 +392,42 @@ export function CanvasConversationSurface({
   const connStatus = conn.status
   const connSessionId = conn.sessionId
 
+  // A draft card can switch agents, and `connect()` tears the previous agent's
+  // connection down only once the new pick gets past its preflight. Until then
+  // — and for good when the pick can't connect at all — the connection under
+  // this key still belongs to the agent the user just left, often already
+  // `connected`. Never present it as the selected agent's: its mode and config
+  // chips are not this agent's, and a send would reach the agent the user left
+  // while the conversation row is filed under the one they picked. Same rule as
+  // the tab view's `connIsForOtherAgent` (conversation-detail-panel.tsx).
+  const connIsForOtherAgent =
+    conn.agentType != null && conn.agentType !== agentType
+  // Enabled and platform-available, yet nothing installed: the preflight
+  // refuses such an agent before it tears anything down, so a switch to one
+  // never gets past the old connection.
+  const { agents: acpAgents } = useAcpAgents()
+  const selectedAgentNotInstalled = useMemo(() => {
+    const info = acpAgents.find((a) => a.agent_type === agentType)
+    return (
+      info != null && info.enabled && info.available && !info.installed_version
+    )
+  }, [acpAgents, agentType])
+  // What the composer shows. Only ever differs from `connStatus` while the
+  // connection belongs to another agent: still `connecting` while the switch
+  // can complete, `disconnected` when the selected agent can't connect at all.
+  const composerStatus = connIsForOtherAgent
+    ? selectedAgentNotInstalled
+      ? "disconnected"
+      : "connecting"
+    : connStatus
+  const effectiveModes = connIsForOtherAgent
+    ? (getCachedSelectors(agentType)?.modes ?? null)
+    : conn.modes
+  const effectiveConfigOptions = connIsForOtherAgent
+    ? (getCachedSelectors(agentType)?.configOptions ?? null)
+    : conn.configOptions
+  const connectionCommands = connIsForOtherAgent ? null : conn.availableCommands
+
   /**
    * Re-entry repair: let the database have the last word on a session this
    * card is coming back to.
@@ -506,15 +546,17 @@ export function CanvasConversationSurface({
     (nextModeId: string) => {
       setModeId(nextModeId)
       // The preference stores the whole mode SHAPE, not just the id, so it can
-      // be shipped to the backend at connect time.
-      if (conn.modes) {
+      // be shipped to the backend at connect time. Reconciled to the selected
+      // agent, so a change made mid-switch can't save the previous agent's
+      // mode list under this one.
+      if (effectiveModes) {
         saveModePreference(agentType, {
-          ...conn.modes,
+          ...effectiveModes,
           current_mode_id: nextModeId,
         })
       }
     },
-    [agentType, conn.modes]
+    [agentType, effectiveModes]
   )
 
   const handleSend = useCallback(
@@ -526,6 +568,9 @@ export function CanvasConversationSurface({
       // never rolled back.
       const alreadyPersisted = dbConversationIdRef.current != null
       if (!alreadyPersisted && (creatingRef.current || !draftTarget)) return
+      // The composer already reads as not ready while the connection belongs
+      // to another agent; this catches a submit that races the switch.
+      if (connIsForOtherAgent) return
 
       const optimisticTurn = buildOptimisticUserTurn(
         draft,
@@ -640,6 +685,7 @@ export function CanvasConversationSurface({
       agentType,
       appendOptimisticTurn,
       boundFolderId,
+      connIsForOtherAgent,
       connSessionId,
       contextKey,
       draftTarget,
@@ -717,20 +763,20 @@ export function CanvasConversationSurface({
   )
 
   const connectionModes = useMemo(
-    () => conn.modes?.available_modes ?? [],
-    [conn.modes]
+    () => effectiveModes?.available_modes ?? [],
+    [effectiveModes]
   )
   const connectionConfigOptions = useMemo(
-    () => conn.configOptions ?? [],
-    [conn.configOptions]
+    () => effectiveConfigOptions ?? [],
+    [effectiveConfigOptions]
   )
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
     if (modeId && connectionModes.some((mode) => mode.id === modeId)) {
       return modeId
     }
-    return conn.modes?.current_mode_id ?? connectionModes[0]?.id ?? null
-  }, [conn.modes, connectionModes, modeId])
+    return effectiveModes?.current_mode_id ?? connectionModes[0]?.id ?? null
+  }, [effectiveModes, connectionModes, modeId])
 
   // Arrow-key history source, read lazily on the first Up/Down (see
   // `MessageInput.getSentHistory`) so streaming tokens cost nothing here.
@@ -753,7 +799,7 @@ export function CanvasConversationSurface({
           added here later. */}
       <div className="nowheel flex min-h-0 flex-1 flex-col">
         <ConversationShell
-          status={connStatus}
+          status={composerStatus}
           promptCapabilities={conn.promptCapabilities}
           defaultPath={workingDir}
           agentName={getAgentLabel(agentType)}
@@ -782,7 +828,7 @@ export function CanvasConversationSurface({
           onModeChange={handleModeChange}
           onConfigOptionChange={handleSetConfigOption}
           agentType={agentType}
-          availableCommands={conn.availableCommands ?? []}
+          availableCommands={connectionCommands ?? []}
           draftStorageKey={`canvas-draft:${contextKey}`}
           getSentHistory={getSentHistory}
           // The card's own connection key doubles as its composer scope: the
@@ -799,7 +845,7 @@ export function CanvasConversationSurface({
                 defaultAgentType={agentType}
                 onSelect={onAgentTypeChange}
                 onFallback={onAgentTypeChange}
-                disabled={conn.status === "connecting"}
+                // Draft cards can change agents during connection startup.
               />
             </div>
           )}
@@ -812,7 +858,7 @@ export function CanvasConversationSurface({
             // wrong guess) leaves MessageListView's folder fallback in place.
             imageRoot={workingDir}
             agentType={agentType}
-            availableCommands={conn.availableCommands}
+            availableCommands={connectionCommands}
             connStatus={connStatus}
             isActive={isActive}
             sendSignal={sendSignal}

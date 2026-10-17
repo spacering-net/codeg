@@ -1,6 +1,6 @@
 [package]
 name = "codeg"
-version = "0.34.0"
+version = "0.36.0"
 description = "Agent Code Generation App"
 authors = ["feitao"]
 edition = "2021"
@@ -69,8 +69,8 @@ mcp-bin = []
 # tauri's eyes — with a tauri child attached, `is_webview_window()` turns
 # false, `get_webview_window("main")` returns None and every command taking a
 # `tauri::WebviewWindow` argument fails — and it needs no `unstable` feature.
-# Only macOS and Windows compile the child surface; Linux uses owned windows
-# (wry's child build is X11-only and cannot be positioned on Wayland).
+# Linux builds into a GTK Fixed overlay instead of build_as_child, supporting
+# both X11 and Wayland while preserving the workspace's WebviewWindow identity.
 browser-child = ["dep:tauri-runtime-wry", "dep:webview2-com", "dep:windows"]
 # Dev-only puppet driven by a JSON control file (see src/browser/smoke.rs).
 browser-smoke = []
@@ -127,9 +127,13 @@ tauri-build = { version = "2", features = [], optional = true }
 # app's window builders sets one. Turn that off by giving them
 # `.devtools(cfg!(debug_assertions))`, not by taking this feature away — the
 # browser tabs need it.
-tauri = { version = "2.11", features = ["macos-private-api", "tray-icon", "devtools"], optional = true }
+#
+# No `macos-private-api`: since tauri 2.12.1 the transparent windows (the pet
+# and its panel, computer use's strip and marker) need neither it nor
+# `macOSPrivateApi`, and `tauri build` drops it when the config does not ask.
+tauri = { version = "2.12", features = ["tray-icon", "devtools"], optional = true }
 # Only for its `wry` re-export (version-locked to the runtime tauri uses).
-tauri-runtime-wry = { version = "2.11", optional = true, default-features = false }
+tauri-runtime-wry = { version = "2.12", optional = true, default-features = false }
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 async-trait = "0.1"
@@ -212,6 +216,11 @@ http = "1"
 percent-encoding = "2"
 http-body = "1"
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+# Direct deps (already in the graph via reqwest) so a remote workspace's
+# WebSockets dial through the TCP connector its HTTP requests use, Happy
+# Eyeballs included — see `remote_proxy::connect_remote_ws`.
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
+tower-service = "0.3"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io", "rt", "compat"] }
 prost = "0.13"
@@ -220,10 +229,16 @@ qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg", "gif"] }
 include_dir = "0.7"
 sha2 = "0.10"
+# HMAC-SHA256 over a forge webhook's body (GitHub / Gitea signatures) with a
+# constant-time check. Already in the lock tree as a transitive dependency.
+hmac = "0.12"
 aes-gcm = { version = "0.10", features = ["stream"] }
 argon2 = "0.5"
 tempfile = "3"
-minisign-verify = "0.2"
+# The line tauri-plugin-updater verifies with, so the server's self-update
+# (`update::verify`) accepts exactly the signatures the desktop updater does —
+# 0.3 rejects a non-canonical Ed25519 `S`.
+minisign-verify = "0.3"
 semver = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "registry", "std"] }
@@ -231,7 +246,10 @@ tracing-appender = "0.2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = { version = "2", optional = true }
-tauri-plugin-updater = { version = "2", optional = true }
+# `requireSignedVersion` (tauri.conf.json) needs 2.12 or later; 2.14 is the
+# minor `@tauri-apps/plugin-updater` is on, and `tauri build` refuses a JS
+# package and its crate on different minors.
+tauri-plugin-updater = { version = "2.14", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
@@ -248,7 +266,7 @@ tauri-plugin-global-shortcut = { version = "2", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6"
 # Built-in browser macOS shim (isolated world, world-scoped eval, snapshots,
-# back/forward). Versions track the ones wry 0.55 uses so the types line up
+# back/forward). Versions track the ones wry 0.57 uses so the types line up
 # with the handles wry hands out.
 objc2 = "0.6"
 block2 = "0.6"
@@ -261,22 +279,22 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 junction = "1"
 # Built-in browser Windows shim (isolated world over CDP, world-scoped eval,
 # snapshots, find, history, the sign-in identity, the subframe fence, and the
 # workspace window's own resize hook — see `shim::windows::hold_resize_hook`,
 # which is why `Win32_UI_Shell` carries window subclassing here as well as the
 # stream helper).
-# Versions track the ones wry 0.55 uses so the types line up with the handles
+# Versions track the ones wry 0.57 uses so the types line up with the handles
 # wry hands out — a second copy of either crate would make them distinct types.
-webview2-com = { version = "0.38", optional = true }
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"], optional = true }
+webview2-com = { version = "0.39", optional = true }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Built-in browser Linux shim (isolated world, world-scoped eval, snapshots,
 # find, history, typed load failures, the subframe fence). Pinned to the exact
-# versions wry 0.55 resolves: these types are the ones tauri's `with_webview`
+# versions wry 0.57 resolves: these types are the ones tauri's `with_webview`
 # hands out, and a second copy of either crate would make them distinct types.
 #
 # Optional, and carried by `tauri-runtime` alone, because `src/browser` is

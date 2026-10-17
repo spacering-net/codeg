@@ -170,6 +170,9 @@ pub fn build_delegation_stack(
         db: db_arc.clone(),
     })
         as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
+    let assistants = Arc::new(crate::acp::delegation::assistants::DbAssistantLookup {
+        db: db_arc.clone(),
+    }) as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
     let status_lookup = Arc::new(DbChildStatusLookup { db: db_arc }) as Arc<dyn ChildStatusLookup>;
     let meta_writer = Arc::new(ConnectionManagerMetaWriter {
         manager: cm_arc.clone(),
@@ -182,7 +185,8 @@ pub fn build_delegation_stack(
     let broker = Arc::new(
         DelegationBroker::with_writers(spawner, depth_lookup, meta_writer, event_emitter)
             .with_status_lookup(status_lookup)
-            .with_live_reply_lookup(live_reply_lookup),
+            .with_live_reply_lookup(live_reply_lookup)
+            .with_assistants(assistants),
     );
     let tokens = Arc::new(TokenRegistry::default());
     let socket_path = default_socket_path(&std::env::temp_dir());

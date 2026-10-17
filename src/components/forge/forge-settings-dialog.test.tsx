@@ -14,9 +14,10 @@
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import { DEFAULT_FORGE_AUTO_SETTINGS } from "@/lib/forge-auto"
 import type { ForgePanelSettings, ForgeSettingsStore } from "@/lib/types"
 import {
   resetAppWorkspaceStore,
@@ -25,10 +26,17 @@ import {
 
 const forgeSettingsGet = vi.fn()
 const forgeSettingsSet = vi.fn()
+const forgeAutoStatus = vi.fn()
 vi.mock("@/lib/api", () => ({
   forgeSettingsGet: () => forgeSettingsGet(),
   forgeSettingsSet: (folderId: number | null, s: unknown) =>
     forgeSettingsSet(folderId, s),
+  // The auto-processing tab's own reads. Only ever reached by the tests that
+  // open that tab (or show a folder's activity).
+  forgeAutoStatus: (folderId: number) => forgeAutoStatus(folderId),
+  forgeAutoScanNow: vi.fn(),
+  forgeListLabels: () => Promise.resolve({ labels: [], truncated: false }),
+  getWebServerStatus: () => Promise.resolve(null),
 }))
 
 const toastError = vi.fn()
@@ -48,7 +56,7 @@ const STORED: ForgeSettingsStore = { global: GLOBAL, folders: {} }
 function mount(
   { folderId = null as number | null, onSaved = vi.fn() } = {} as {
     folderId?: number | null
-    onSaved?: ReturnType<typeof vi.fn>
+    onSaved?: Mock
   }
 ) {
   render(
@@ -68,7 +76,7 @@ function mount(
  *  form, and the Save button is the one thing that says the load is done. */
 async function mountLoaded(options?: {
   folderId?: number | null
-  onSaved?: ReturnType<typeof vi.fn>
+  onSaved?: Mock
 }) {
   const handles = mount(options)
   await waitFor(() =>
@@ -96,6 +104,13 @@ beforeEach(() => {
     ] as never,
   })
   forgeSettingsGet.mockResolvedValue(STORED)
+  forgeAutoStatus.mockResolvedValue({
+    available: true,
+    scanning: false,
+    last_scan: null,
+    next_scan_at: null,
+    last_delivery_at: null,
+  })
   forgeSettingsSet.mockImplementation((folderId, settings) =>
     Promise.resolve(
       folderId == null
@@ -374,6 +389,104 @@ describe("ForgeSettingsDialog folder scope", () => {
     )
     expect(
       screen.queryByRole("tab", { name: "Custom" })
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe("ForgeSettingsDialog auto-processing", () => {
+  const ON = {
+    ...DEFAULT_FORGE_AUTO_SETTINGS,
+    schedule: true,
+    exclude_labels: ["wontfix"],
+    enabled_at: "2026-10-14T08:00:00Z",
+  }
+
+  /** The auto block rides in the same save as everything else on the row —
+   *  it is part of the scope, not a setting of its own. */
+  it("saves the auto-processing rules with the rest of the row", async () => {
+    const user = userEvent.setup()
+    await mountLoaded()
+
+    await user.click(screen.getByRole("tab", { name: /Auto-processing/ }))
+    await user.click(screen.getByRole("switch", { name: /Scan on a schedule/ }))
+    await user.type(
+      screen.getByRole("textbox", {
+        name: "Only items with one of these labels",
+      }),
+      "codeg{Enter}"
+    )
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(forgeSettingsSet).toHaveBeenCalled())
+    const { folderId, settings } = lastSave()
+    expect(folderId).toBeNull()
+    expect(settings.auto?.schedule).toBe(true)
+    expect(settings.auto?.include_labels).toEqual(["codeg"])
+    // The General tab's values travel unchanged in the same blob.
+    expect(settings.default_issue_scenario).toBe("plan_first")
+    expect(settings.scenario_prompts).toEqual(GLOBAL.scenario_prompts)
+  })
+
+  /** "Scan now" scans with the SAVED rules, so it is held — and says why —
+   *  while the form on screen says something else. */
+  it("holds Scan now while the rules on screen are unsaved", async () => {
+    const user = userEvent.setup()
+    forgeSettingsGet.mockResolvedValue({
+      global: GLOBAL,
+      folders: { "4": { ...GLOBAL, auto: ON } },
+    })
+    await mountLoaded({ folderId: 4 })
+
+    await user.click(screen.getByRole("tab", { name: /Auto-processing/ }))
+    const scanNow = () => screen.getByRole("button", { name: /Scan now/ })
+    await waitFor(() => expect(scanNow()).toBeEnabled())
+    expect(forgeAutoStatus).toHaveBeenCalledWith(4)
+
+    await user.click(screen.getByRole("button", { name: "Remove wontfix" }))
+    expect(scanNow()).toBeDisabled()
+    expect(
+      screen.getByText("Save first — a scan uses the saved rules.")
+    ).toBeInTheDocument()
+  })
+
+  /** Flipping a folder from its own rules to the global ones is an edit too:
+   *  until it is saved, a scan would still run the folder's stored rules —
+   *  not the ones the dialog now says apply. */
+  it("holds Scan now while a source switch is unsaved", async () => {
+    const user = userEvent.setup()
+    forgeSettingsGet.mockResolvedValue({
+      global: GLOBAL,
+      folders: { "4": { ...GLOBAL, auto: ON } },
+    })
+    await mountLoaded({ folderId: 4 })
+
+    await user.click(screen.getByRole("tab", { name: "Global defaults" }))
+    const scanNow = await screen.findByRole("button", { name: /Scan now/ })
+    expect(scanNow).toBeDisabled()
+    expect(
+      screen.getByText("Save first — a scan uses the saved rules.")
+    ).toBeInTheDocument()
+  })
+
+  /** A folder following a global row that runs auto-processing IS being
+   *  processed: its activity belongs on screen even with nothing to edit. */
+  it("shows a following folder's activity under an active global row", async () => {
+    forgeSettingsGet.mockResolvedValue({
+      global: { ...GLOBAL, auto: ON },
+      folders: {},
+    })
+    await mountLoaded({ folderId: 4 })
+
+    expect(
+      screen.getByRole("tab", { name: "Global defaults" })
+    ).toHaveAttribute("aria-selected", "true")
+    expect(
+      await screen.findByRole("button", { name: /Scan now/ })
+    ).toBeInTheDocument()
+    expect(forgeAutoStatus).toHaveBeenCalledWith(4)
+    // Nothing to edit, though.
+    expect(
+      screen.queryByRole("tab", { name: /Auto-processing/ })
     ).not.toBeInTheDocument()
   })
 })

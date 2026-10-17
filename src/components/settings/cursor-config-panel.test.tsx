@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
 import {
   buildCursorEnv,
@@ -260,9 +260,9 @@ describe("CursorConfigPanel", () => {
 
   function renderPanel(overrides?: {
     env?: Record<string, string>
-    onSaveEnv?: ReturnType<typeof vi.fn>
-    onSaved?: ReturnType<typeof vi.fn>
-    onAffectedSessions?: ReturnType<typeof vi.fn>
+    onSaveEnv?: Mock
+    onSaved?: Mock
+    onAffectedSessions?: Mock
   }) {
     const onSaveEnv = overrides?.onSaveEnv ?? vi.fn().mockResolvedValue(0)
     const onSaved = overrides?.onSaved ?? vi.fn()

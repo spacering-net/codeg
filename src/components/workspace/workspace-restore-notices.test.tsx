@@ -1,6 +1,14 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 
@@ -9,8 +17,8 @@ const RESTORE_FAILED = "workspace://restore-failed"
 let desktop = true
 let remoteWindow = false
 let handlers: Map<string, () => void>
-let unsubscribe: ReturnType<typeof vi.fn>
-let call: ReturnType<typeof vi.fn>
+let unsubscribe: Mock
+let call: Mock
 const toastError = vi.fn()
 
 vi.mock("@/lib/transport", () => ({

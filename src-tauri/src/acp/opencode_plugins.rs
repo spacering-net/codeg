@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::parsers::AgentEnv;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -91,16 +92,26 @@ fn opencode_cache_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn xdg_config_home() -> Option<PathBuf> {
+    xdg_config_home_for_env(&AgentEnv::inherited())
+}
+
+/// [`xdg_config_home`] as the OpenCode launched with `env` resolves it.
+pub(crate) fn xdg_config_home_for_env(env: &AgentEnv) -> Option<PathBuf> {
     // An empty XDG_CONFIG_HOME must fall back to ~/.config, not resolve to a
     // relative "opencode/..." path (matches the XDG_DATA_HOME handling).
-    std::env::var_os("XDG_CONFIG_HOME")
+    env.var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
 }
 
 pub(crate) fn xdg_cache_home() -> Option<PathBuf> {
-    std::env::var_os("XDG_CACHE_HOME")
+    xdg_cache_home_for_env(&AgentEnv::inherited())
+}
+
+/// [`xdg_cache_home`] as the OpenCode launched with `env` resolves it.
+pub(crate) fn xdg_cache_home_for_env(env: &AgentEnv) -> Option<PathBuf> {
+    env.var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".cache")))
@@ -142,7 +153,7 @@ fn has_windows_drive_prefix(spec: &str) -> bool {
 }
 
 /// The file opencode will import for a path spec, mirroring
-/// `resolvePathPluginTarget` in opencode 1.18.35: a `file://` URL goes through
+/// `resolvePathPluginTarget` in opencode 1.19.1: a `file://` URL goes through
 /// `fileURLToPath`, anything already absolute is used as-is, and a relative spec
 /// is resolved against the directory opencode runs in — the project, not the
 /// config directory.
@@ -218,7 +229,7 @@ fn file_url_body_to_path(body: &str) -> Option<PathBuf> {
 
 /// The spec opencode uses as its package-directory KEY.
 ///
-/// Mirrors `resolvePluginTarget` in opencode 1.18.35: a bare package name
+/// Mirrors `resolvePluginTarget` in opencode 1.19.1: a bare package name
 /// becomes `<name>@latest`, anything already carrying a version or tag is used
 /// verbatim. Getting this wrong does not fail loudly — it just points codeg at
 /// a directory opencode will never look in.
@@ -230,7 +241,7 @@ pub(crate) fn effective_spec(declared_spec: &str, name: &str) -> String {
     }
 }
 
-/// Mirrors `Npm.sanitize` in opencode 1.18.35: on Windows the characters that
+/// Mirrors `Npm.sanitize` in opencode 1.19.1: on Windows the characters that
 /// cannot appear in a path become `_`. A deliberate no-op everywhere else —
 /// the directory name has to match opencode's byte for byte, and opencode
 /// gates this on `process.platform === "win32"`.
@@ -250,7 +261,7 @@ pub(crate) fn sanitize_spec(spec: &str) -> String {
 }
 
 /// `<cache>/packages/<sanitize(effective_spec)>` — the per-package install root
-/// opencode 1.18.35 uses (`Npm.add`'s `directory()`).
+/// opencode 1.19.1 uses (`Npm.add`'s `directory()`).
 pub(crate) fn plugin_package_dir(cache_dir: &Path, effective_spec: &str) -> PathBuf {
     cache_dir
         .join("packages")

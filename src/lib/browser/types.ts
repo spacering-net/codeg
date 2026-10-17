@@ -347,8 +347,8 @@ export interface BrowserCapabilities {
    *  preference is on (embedded tabs, and the owned window on Linux). */
   signInUserAgent: boolean
   /** A tab shown in an owned window still answers find, history, stop and
-   *  snapshots, and its page still talks to the host — true where the owned
-   *  window is the surface the platform shim is written for (Linux). */
+   *  snapshots, and its page still talks to the host — true where the platform
+   *  shim also drives the owned-window fallback (Linux). */
   ownedWindowControls: boolean
   /** A remote-workspace window's tabs can reach the remote host through its
    *  codeg-server: a profile of their own to proxy (macOS 14+), and on macOS

@@ -1,37 +1,41 @@
 "use client"
 
 /**
- * The "UI" tab of Skill Packs: one switch for generative UI (json-render).
+ * The "UI" tab of Skill Packs: the `ui-render` skill, enabled per agent on
+ * the same matrix as the Experts tab.
  *
- * On, it does two things — assistant replies render ```spec fences as cards,
- * and every agent Codeg starts gets the `json-render` skill that teaches the
- * format — which is why it lives with the skill packs. The switch applies the
- * moment it moves; there is no Save.
+ * An agent with the skill knows how to answer with a ```spec fence, which
+ * the chat renders as cards (always: see `ai-elements/json-render-pre.tsx`).
+ * A cell links the skill into that agent's skill folder, or takes it out,
+ * the moment it is clicked; the cell shows the link on disk.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Info, LayoutDashboard, Loader2, TriangleAlert } from "lucide-react"
-import { toast } from "sonner"
 
+import { SettingNote } from "@/components/shared/setting-card"
 import {
-  SettingCard,
-  SettingNote,
-  SettingRow,
-} from "@/components/shared/setting-card"
-import { Switch } from "@/components/ui/switch"
+  SkillAgentMatrix,
+  type MatrixSkill,
+} from "@/components/settings/skill-agent-matrix"
 import { invalidateAgentSkillsCache } from "@/hooks/use-agent-skills"
-import { primeGenerativeUiEnabled } from "@/hooks/use-generative-ui-enabled"
+import { useLatestCall } from "@/hooks/use-latest-call"
 import {
-  getGenerativeUiSettings,
-  setGenerativeUiSettings,
-  type GenerativeUiSettings,
+  acpListAgents,
+  generativeUiApplyLinks,
+  generativeUiListAllInstallStatuses,
+  generativeUiReadContent,
+  generativeUiSkillInfo,
+  type GenerativeUiSkillInfo,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { onTransportReconnect, subscribe } from "@/lib/platform"
-import { GENERATIVE_UI_SETTINGS_CHANGED_EVENT } from "@/lib/types"
+import { piUsesCustomAgentDir } from "@/lib/pi-config"
+import type { AcpAgentInfo, AgentType, ExpertLinkState } from "@/lib/types"
 
-const SWITCH_ID = "generative-ui-enabled"
+/** The matrix groups rows by category; this pack has one. */
+const CATEGORY = "ui"
+const CATEGORY_SORT: Record<string, number> = { [CATEGORY]: 1 }
 
 export function GenerativeUiBody({
   onRegisterRefresh,
@@ -39,103 +43,110 @@ export function GenerativeUiBody({
   onRegisterRefresh?: (refresh: () => void) => void
 }) {
   const t = useTranslations("GenerativeUiSettings")
-  const [settings, setSettings] = useState<GenerativeUiSettings | null>(null)
+
+  const [skill, setSkill] = useState<GenerativeUiSkillInfo | null>(null)
+  const [agents, setAgents] = useState<AcpAgentInfo[]>([])
+  const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  // Bumped by every save and broadcast: a load that started before one of
-  // them read an older value and must not overwrite it.
-  const generation = useRef(0)
-  // Loads numbered as they start: once one has answered, an earlier one
-  // that answers later is older news.
-  const loadsStarted = useRef(0)
-  const newestLoadAnswered = useRef(0)
+  const [reloadKey, setReloadKey] = useState(0)
 
-  /** Read the stored value — the one answer that cannot be out of order —
-   *  and hand it to this window's chat as well. A failed read leaves the
-   *  switch locked: what it shows can no longer be vouched for. */
-  const load = useCallback(() => {
-    const started = generation.current
-    const read = ++loadsStarted.current
-    const stale = () =>
-      generation.current !== started || read < newestLoadAnswered.current
-    getGenerativeUiSettings()
-      .then((loaded) => {
-        if (stale()) return
-        newestLoadAnswered.current = read
-        setSettings(loaded)
-        setLoadError(null)
-        primeGenerativeUiEnabled(loaded.enabled)
-      })
-      .catch((err: unknown) => {
-        if (stale()) return
-        newestLoadAnswered.current = read
-        setLoadError(toErrorMessage(err))
-      })
-  }, [])
+  // A late answer from an earlier Refresh must not overwrite a newer one.
+  const beginLoad = useLatestCall()
 
-  useEffect(() => {
-    load()
-    onRegisterRefresh?.(load)
-  }, [load, onRegisterRefresh])
-
-  // A save from another window or web client. Broadcasts arrive in the order
-  // the backend applied the saves, so each one is the newest word; one
-  // missed while the connection was down is made up by reading again.
-  useEffect(() => {
-    let disposed = false
-    let unsubscribe: (() => void) | undefined
-    void subscribe<GenerativeUiSettings>(
-      GENERATIVE_UI_SETTINGS_CHANGED_EVENT,
-      (remote) => {
-        generation.current += 1
-        setSettings(remote)
-        // A broadcast is the stored value as of that save: certain again.
-        setLoadError(null)
-      }
-    )
-      .then((fn) => {
-        if (disposed) fn()
-        else unsubscribe = fn
-      })
-      .catch(() => {})
-    const stopReconnect = onTransportReconnect(load)
-    return () => {
-      disposed = true
-      unsubscribe?.()
-      stopReconnect?.()
+  const refresh = useCallback(async () => {
+    const current = beginLoad()
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const [info, agentList] = await Promise.all([
+        generativeUiSkillInfo(),
+        acpListAgents(),
+      ])
+      if (!current()) return
+      setSkill(info)
+      // A pi pointed at a custom PI_CODING_AGENT_DIR isn't managed by the
+      // default-dir skill store, so it doesn't get a column here.
+      setAgents(
+        agentList.filter(
+          (agent) => agent.skills_capable && !piUsesCustomAgentDir(agent)
+        )
+      )
+      setReloadKey((k) => k + 1)
+    } catch (err) {
+      if (!current()) return
+      setLoadError(toErrorMessage(err))
+      setSkill(null)
+      setAgents([])
+    } finally {
+      if (current()) setLoading(false)
     }
-  }, [load])
+  }, [beginLoad])
 
-  const handleToggle = useCallback(
-    async (enabled: boolean) => {
-      setSaving(true)
-      try {
-        const saved = await setGenerativeUiSettings({ enabled })
-        // Shown at once, then read back: a response can arrive after the
-        // broadcast of a later save made elsewhere, and only the stored value
-        // settles which of the two is current.
-        generation.current += 1
-        setSettings(saved)
-        load()
-        invalidateAgentSkillsCache()
-        if (saved.unlink_failures.length > 0) {
-          // Off, but some agent still has the skill; its next launch retries.
-          toast.warning(t("toasts.unlinkFailed"), {
-            description: saved.unlink_failures.join("\n"),
-          })
-        }
-      } catch (err) {
-        toast.error(t("toasts.saveFailed"), {
-          description: toErrorMessage(err),
-        })
-      } finally {
-        setSaving(false)
+  useEffect(() => {
+    refresh().catch((err) => {
+      console.error("[GenerativeUiSettings] initial refresh failed:", err)
+    })
+  }, [refresh])
+
+  // Publish the reload handler so the hub's fixed "Refresh" button can drive
+  // this pack while it is the active tab.
+  useEffect(() => {
+    onRegisterRefresh?.(() => {
+      refresh().catch((err) => {
+        console.error("[GenerativeUiSettings] refresh failed:", err)
+      })
+    })
+  }, [onRegisterRefresh, refresh])
+
+  const translateCategory = useCallback(() => t("category"), [t])
+
+  const translateState = useCallback(
+    (state: ExpertLinkState): string => {
+      switch (state) {
+        case "not_linked":
+          return t("states.not_linked")
+        case "linked_to_codeg":
+          return t("states.linked_to_codeg")
+        case "linked_elsewhere":
+          return t("states.linked_elsewhere")
+        case "blocked_by_real_directory":
+          return t("states.blocked_by_real_directory")
+        case "broken":
+          return t("states.broken")
+        default:
+          return state
       }
     },
-    [load, t]
+    [t]
   )
 
-  if (!settings && !loadError) {
+  const onApplied = useCallback((touched: AgentType[]) => {
+    touched.forEach((agent) => invalidateAgentSkillsCache(agent))
+  }, [])
+
+  const matrixSkills = useMemo<MatrixSkill[]>(
+    () =>
+      skill
+        ? [
+            {
+              id: skill.id,
+              category: CATEGORY,
+              displayName: t("skillName"),
+              description: t("skillDescription"),
+              icon: LayoutDashboard,
+              // A skill of the user's holds the name: nothing can be enabled
+              // until it is renamed.
+              ready: !skill.conflict,
+              badge: skill.conflict
+                ? { label: t("badges.nameTaken"), tone: "amber" }
+                : undefined,
+            },
+          ]
+        : [],
+    [skill, t]
+  )
+
+  if (loading) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -145,43 +156,47 @@ export function GenerativeUiBody({
   }
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto">
-      <div className="flex max-w-2xl flex-col gap-3 pb-4">
-        {loadError ? (
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
-            {loadError}
-          </div>
-        ) : null}
+    <div className="flex flex-col h-full min-h-0">
+      {loadError && (
+        <div className="mb-3 shrink-0 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+          {loadError}
+        </div>
+      )}
 
-        <SettingCard>
-          <SettingRow
-            icon={LayoutDashboard}
-            title={t("switchLabel")}
-            description={t("switchDescription")}
-            htmlFor={SWITCH_ID}
-            control={
-              <Switch
-                id={SWITCH_ID}
-                checked={settings?.enabled ?? false}
-                disabled={!settings || saving || loadError !== null}
-                onCheckedChange={(checked) => void handleToggle(checked)}
-              />
-            }
-          />
-        </SettingCard>
+      {skill?.conflict && (
+        <SettingNote
+          icon={TriangleAlert}
+          className="mb-3 shrink-0 border-amber-500/40 bg-amber-500/5"
+        >
+          {t("conflict")}
+        </SettingNote>
+      )}
 
-        {settings?.skill_conflict ? (
-          <SettingNote
-            icon={TriangleAlert}
-            className="border-amber-500/40 bg-amber-500/5"
-          >
-            {t("conflict")}
+      {skill && (
+        <>
+          <SettingNote icon={Info} className="mb-3 shrink-0">
+            {t("usage")}
           </SettingNote>
-        ) : null}
-
-        <SettingNote icon={Info}>{t("usage")}</SettingNote>
-        <SettingNote icon={Info}>{t("effect")}</SettingNote>
-      </div>
+          {/* No `flex-1`: one row needs no room to scroll, so the card
+              hugs it rather than stretching to the bottom of the tab. */}
+          <div className="min-h-0 min-w-0 flex flex-col">
+            <SkillAgentMatrix
+              key={reloadKey}
+              skills={matrixSkills}
+              agents={agents}
+              categoryOrder={CATEGORY_SORT}
+              translateCategory={translateCategory}
+              translateState={translateState}
+              loadAllStatuses={generativeUiListAllInstallStatuses}
+              applyLinks={generativeUiApplyLinks}
+              loadContent={generativeUiReadContent}
+              onApplied={onApplied}
+              searchable={false}
+              notReadyHint={t("notReadyHint")}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }

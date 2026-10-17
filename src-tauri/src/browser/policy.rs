@@ -17,7 +17,7 @@ use tauri::Url;
 /// local filesystem.
 /// How far back a page-initiated new-window request may look for a user
 /// gesture before it counts as an unsolicited popup. Both surfaces ask it:
-/// the embedded one on macOS and Windows, the owned window on Linux.
+/// embedded tabs on all desktop platforms and the owned-window fallback.
 pub const POPUP_GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub fn navigation_allowed(url: &Url) -> bool {
@@ -44,6 +44,13 @@ pub fn subframe_navigation_allowed(url: &Url) -> bool {
         "about" => matches!(url.as_str(), "about:blank" | "about:srcdoc"),
         _ => false,
     }
+}
+
+/// Called only for a refused scheme. WebKitGTK also reports subframes but
+/// does not identify them, so keep their wider schemes quiet without allowing
+/// those schemes as top-level navigations.
+pub fn report_scheme_denial(url: &Url, main_frame: bool) -> bool {
+    main_frame && !(cfg!(target_os = "linux") && subframe_navigation_allowed(url))
 }
 
 /// The initial URL handed to `browser_open_tab` must already be a web page;
@@ -519,6 +526,24 @@ mod tests {
         for bad in ["file:///etc/passwd", "tauri://localhost/", "codeg-doc://g/x", "about:config"] {
             assert!(!subframe_navigation_allowed(&u(bad)), "{bad}");
         }
+    }
+
+    /// A refused scheme is announced only for the page's own navigation. On
+    /// Linux every frame is asked as if it were the top one, so a scheme a
+    /// frame may hold is refused quietly there: an iframe a page composes
+    /// must not put a "blocked" notice over the page. A scheme no frame may
+    /// hold is still announced.
+    #[test]
+    fn refused_schemes_are_announced_for_the_page_alone() {
+        let frame_scheme = u("data:text/html,<b>x</b>");
+        let local = u("file:///etc/passwd");
+        assert!(!report_scheme_denial(&frame_scheme, false));
+        assert!(!report_scheme_denial(&local, false));
+        assert!(report_scheme_denial(&local, true));
+        assert_eq!(
+            report_scheme_denial(&frame_scheme, true),
+            !cfg!(target_os = "linux")
+        );
     }
 
     #[test]

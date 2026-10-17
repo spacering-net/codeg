@@ -27,6 +27,7 @@ function seedSession(sessionStats: SessionStats) {
           localTurns: [],
           backgroundTurns: [],
           pendingBackgroundSettlements: [],
+          pendingCancelledTurnReports: null,
           optimisticTurns: [],
           liveMessage: null,
           syncState: "awaiting_persist",

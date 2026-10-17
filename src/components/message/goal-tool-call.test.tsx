@@ -243,6 +243,35 @@ describe("GoalToolCallPart", () => {
   })
 })
 
+describe("GoalRunPart error", () => {
+  // claude-agent-acp fences a failed tool's result for markdown clients; the
+  // card shows it as preformatted text, as the transcript records it.
+  it("shows a fenced error without its fence", () => {
+    renderWithIntl(
+      <GoalRunPart
+        part={{
+          type: "goal-run",
+          start: {
+            type: "tool-call",
+            toolCallId: "call-create-goal",
+            toolName: "create_goal",
+            input: JSON.stringify({ objective: "Analyze README file" }),
+            state: "output-error",
+            errorText: "```\nGoal already active.\n```",
+          },
+          end: null,
+          items: [],
+          isRunning: false,
+        }}
+        renderPart={renderTextPart}
+      />
+    )
+    expect(screen.getByText("Goal already active.").textContent).toBe(
+      "Goal already active."
+    )
+  })
+})
+
 describe("GoalCard goal control (codex-acp #293)", () => {
   function renderGoal(
     ui: ReactElement,

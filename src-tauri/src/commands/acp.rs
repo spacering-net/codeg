@@ -540,6 +540,18 @@ fn is_npm_command_candidate(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+/// The refusal every install / upgrade / uninstall entry point returns for a
+/// [`registry::AgentDistribution::System`] agent. The Settings page never
+/// offers those actions for one (it has no version card to hang them on), so
+/// this is the backstop for a direct API call — and it names where the user
+/// CAN manage the install instead of a bare "unsupported".
+fn system_agent_is_user_managed(name: &str, install_url: &str) -> AcpError {
+    AcpError::protocol(format!(
+        "{name} is installed and updated by its own installer ({install_url}); \
+         codeg launches that install and does not install, upgrade or remove it"
+    ))
+}
+
 /// Verify that the agent SDK / binary is installed and usable.
 ///
 /// This is the pre-spawn guard used by the session-page connect path:
@@ -597,6 +609,19 @@ pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), 
             // PATH. Kept consistent with the Settings status/list paths via the
             // shared helper, so connect and the UI never disagree on readiness.
             if uvx_agent_launchable(system_cmd) {
+                Ok(())
+            } else {
+                Err(AcpError::SdkNotInstalled(format!(
+                    "{} is not installed. Please install it in Agent Settings.",
+                    meta.name
+                )))
+            }
+        }
+        registry::AgentDistribution::System { cmd, .. } => {
+            // The same resolution `build_agent` launches with; there is no
+            // cache to consult. INVARIANT: see note above — "is not installed"
+            // is a stable substring the frontend matches against.
+            if resolve_system_agent_binary_for(agent_type, cmd).is_some() {
                 Ok(())
             } else {
                 Err(AcpError::SdkNotInstalled(format!(
@@ -704,6 +729,10 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
         registry::AgentDistribution::Uvx {
             cmd, system_cmd, ..
         } => uvx_displayed_version(agent_type, cmd, system_cmd).await,
+        registry::AgentDistribution::System { cmd, .. } => {
+            let bin = resolve_system_agent_binary_for(agent_type, cmd)?;
+            system_probed_version(agent_type, &bin, None).await
+        }
     }
 }
 
@@ -1093,6 +1122,14 @@ async fn collect_agent_diag(
                     .unwrap_or_else(|| format!("{cmd} (system CLI on PATH)"))
             });
         }
+        registry::AgentDistribution::System { cmd, .. } => {
+            diag.cmd = cmd.to_string();
+            diag.distribution = "system";
+            // Mirrors `verify_agent_installed`: the system resolution is the
+            // whole gate.
+            diag.launchable = resolve_system_agent_binary_for(agent_type, cmd)
+                .map(|p| p.to_string_lossy().to_string());
+        }
     }
 
     diag
@@ -1418,6 +1455,7 @@ fn build_report(
         let launch_label = match a.distribution {
             "npx" => format!("{} (resolve_npx_command)", a.cmd),
             "binary" => format!("{} (cached / system binary)", a.cmd),
+            "system" => format!("{} (system CLI: PATH / ~/.local/bin)", a.cmd),
             _ => format!("{} (uvx launchable)", a.cmd),
         };
         let mut checks = vec![diag_check(
@@ -5004,10 +5042,14 @@ const KIMI_SYNTHETIC_TOKEN_ACCESS: &str = "codeg-local-gate";
 /// past session's model id to draw a gauge, while this one is the budget codeg DECLARES
 /// for a bring-your-own provider whose model is unknown — the managed block routes to
 /// any of the six interface types, so the model behind it may be GPT or Claude, not a
-/// Kimi model at all. Kimi spends the declared number rather than checking it (a live
-/// run with this default emits `llm.request.maxTokens = 262144` and
-/// `usage_update {size: 262144}`), so it is the compaction budget, not a fact about the
-/// model. Users on a bigger window raise it in the config panel.
+/// Kimi model at all. Kimi spends the declared number rather than checking it: a live
+/// run with this default reports `usage_update {size: 262144}`, so it is the
+/// compaction budget, not a fact about the model. Up to 2.1.1 Kimi also turned it
+/// into the request's output cap (`llm.request.maxTokens = 262144`), which an
+/// OpenAI-compatible server rejects when it is above the model's own output limit.
+/// From 2.2.0 it no longer sets the cap: an `openai` / `openai_responses` block
+/// sends none, and a `kimi` block caps output at this window minus the context in
+/// use. Users on a bigger window raise it in the config panel.
 const KIMI_DEFAULT_MAX_CONTEXT_SIZE: i64 = 262_144;
 /// The six native provider `type` values Kimi accepts in `[providers.<name>]`.
 const KIMI_INTERFACE_TYPES: &[&str] = &[
@@ -8144,7 +8186,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.21.6",
+        _ => "hermes-agent@0.22.2",
     };
     let build = |tail: &[&str]| -> Vec<String> {
         let mut argv = vec![
@@ -9172,6 +9214,15 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".gemini/skills", ".agents/skills"],
         }),
+        // Kiro's default agent resources are
+        // `skill://.kiro/skills/*/SKILL.md` (workspace) and
+        // `skill://<KIRO_HOME>/skills/*/SKILL.md` (global, `~/.kiro` by
+        // default) — bundles only, and no shared `.agents/skills` store.
+        AgentType::Kiro => Some(SkillStorageSpec {
+            kind: SkillStorageKind::SkillDirectoryOnly,
+            global_dirs: vec![crate::parsers::kiro::resolve_kiro_home_dir().join("skills")],
+            project_rel_dirs: vec![".kiro/skills"],
+        }),
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -9185,6 +9236,7 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // this function). The dedicated path was normalized to absolute at
         // save time; a non-absolute value (a hand-edited database) is ignored
         // rather than resolved against an arbitrary working directory.
+        AgentType::ZCode => None,
         AgentType::Custom(id) => {
             let decl = crate::acp::custom_registry::skills_decl(id);
             let mut global_dirs = Vec::new();
@@ -10347,7 +10399,7 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
         // `auth.type = "gemini-api-key"` reads (the server says so in its own
         // `auth_required` message). `AGY_ACP_DEFAULT_MODEL` is real — it is
         // the env the server's `get_default_model_id` consults before falling
-        // back to `gemini-3.7-flash-high`. There is NO endpoint override, so
+        // back to `gemini-3.8-flash-high`. There is NO endpoint override, so
         // the base-url slot stays an inert `AGY_BASE_URL` placeholder for the
         // same reason `CURSOR_MODEL`/`QODER_BASE_URL` above are: it keeps the
         // generic cascade off the `OPENAI_*` keys.
@@ -10368,6 +10420,13 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
         // keeps the generic cascade off the `OPENAI_*` keys. The LLM endpoint
         // travels in `providers.json` instead (`persist_cline_local_config`).
         AgentType::Cline => ("CLINE_BASE_URL", "CLINE_API_KEY", "CLINE_MODEL"),
+        // Kiro's non-interactive credential is `KIRO_API_KEY` — the one the
+        // CLI's headless mode documents, and the only sign-in a server/Docker
+        // install without a browser can use. There is no endpoint or model
+        // env: the model is chosen per session over ACP (`session/new`
+        // answers with `models`). The two placeholders keep the generic
+        // cascade off the OPENAI_* keys, like `QODER_BASE_URL` above.
+        AgentType::Kiro => ("KIRO_BASE_URL", "KIRO_API_KEY", "KIRO_MODEL"),
         _ => ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL"),
     }
 }
@@ -10906,6 +10965,14 @@ fn cascade_update_agent_config(
             // METHOD, never a credential, so there is nothing here to
             // reconcile either.
         }
+        AgentType::Kiro => {
+            // Kiro signs in to its own service (`kiro-cli login`, or
+            // `KIRO_API_KEY` in the agent's env) and accepts no custom base
+            // URL, so it stays off the model-provider credential cascade.
+        }
+        AgentType::ZCode => {
+            // Authentication and providers belong to the official ZCode runtime.
+        }
         AgentType::Custom(_) => {
             // Custom agents are deliberately configuration-free: codeg writes
             // no config file for them and they are excluded from the
@@ -10992,15 +11059,35 @@ pub(crate) async fn cascade_update_model_provider(
     Ok(())
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_preflight(
+pub async fn acp_preflight_core(
+    db: &AppDatabase,
     agent_type: AgentType,
     force_refresh: Option<bool>,
 ) -> Result<PreflightResult, AcpError> {
     if force_refresh.unwrap_or(false) {
         preflight::clear_npm_env_cache();
     }
-    Ok(preflight::run_preflight(agent_type).await)
+    let runtime_env = if agent_type == AgentType::ZCode {
+        agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+            .await
+            .map_err(|error| AcpError::protocol(error.to_string()))?
+            .and_then(|setting| setting.env_json)
+            .and_then(|value| serde_json::from_str::<BTreeMap<String, String>>(&value).ok())
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    Ok(preflight::run_preflight_with_env(agent_type, &runtime_env).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_preflight(
+    db: State<'_, AppDatabase>,
+    agent_type: AgentType,
+    force_refresh: Option<bool>,
+) -> Result<PreflightResult, AcpError> {
+    acp_preflight_core(&db, agent_type, force_refresh).await
 }
 
 /// Resolve the full runtime env every ACP spawn should receive — settings
@@ -11722,6 +11809,16 @@ pub(crate) async fn acp_get_agent_status_core(
             let version = uvx_displayed_version(agent_type, cmd, *system_cmd).await;
             (uvx_agent_launchable(*system_cmd), version)
         }
+        // A system agent runs on every platform its vendor ships for; whether
+        // THIS machine has it is `installed_version`, probed from the one
+        // install there can be.
+        registry::AgentDistribution::System { cmd, .. } => {
+            let version = match resolve_system_agent_binary_for(agent_type, cmd) {
+                Some(bin) => system_probed_version(agent_type, &bin, None).await,
+                None => None,
+            };
+            (true, version)
+        }
     };
 
     Ok(crate::acp::types::AcpAgentStatus {
@@ -11821,6 +11918,14 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
                 let version = uvx_displayed_version(agent_type, cmd, *system_cmd).await;
                 (uvx_agent_launchable(*system_cmd), "uvx", version)
             }
+            // Mirror the status path.
+            registry::AgentDistribution::System { cmd, .. } => {
+                let version = match resolve_system_agent_binary_for(agent_type, cmd) {
+                    Some(bin) => system_probed_version(agent_type, &bin, None).await,
+                    None => None,
+                };
+                (true, "system", version)
+            }
         };
 
         let mut env = setting
@@ -11852,8 +11957,10 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             }
         }
         let sort_order = setting.map(|m| m.sort_order).unwrap_or(idx as i32);
-        // Persist detected version to DB for binary agents (npx written during install/upgrade)
-        if dist_type == "binary" {
+        // Persist detected version to DB for binary and system agents (npx
+        // written during install/upgrade). Both are probed on every list, so
+        // the probe is the authority and the row only mirrors it.
+        if dist_type == "binary" || dist_type == "system" {
             let _ = agent_setting_service::set_installed_version(
                 &db.conn,
                 agent_type,
@@ -11944,6 +12051,19 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             available,
             distribution_type: dist_type.to_string(),
             is_acp_adapter: registry::acp_adapter_relation(agent_type).is_some(),
+            install_url: match &meta.distribution {
+                registry::AgentDistribution::System { install_url, .. } => {
+                    Some((*install_url).to_string())
+                }
+                _ => None,
+            },
+            supports_self_update: matches!(
+                meta.distribution,
+                registry::AgentDistribution::System {
+                    update_args: Some(_),
+                    ..
+                }
+            ),
             custom_source: agent_type
                 .custom_id()
                 .and_then(crate::acp::custom_registry::source_of)
@@ -13185,6 +13305,9 @@ pub(crate) async fn acp_download_agent_binary_core(
         registry::AgentDistribution::Uvx { .. } => Err(AcpError::protocol(
             "download is only supported for binary agents",
         )),
+        registry::AgentDistribution::System { install_url, .. } => {
+            Err(system_agent_is_user_managed(meta.name, install_url))
+        }
     };
 
     match &result {
@@ -13218,6 +13341,173 @@ pub async fn acp_download_agent_binary(
 ) -> Result<(), AcpError> {
     let emitter = EventEmitter::Tauri(app);
     acp_download_agent_binary_core(agent_type, version, task_id, &emitter).await
+}
+
+/// Upper bound on a vendor updater run. Generous — it downloads a full build
+/// (Kiro's are 150–360 MB) — but bounded, so a wedged updater cannot hold the
+/// Settings page's package lock forever.
+const SYSTEM_UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Run `program args…`, streaming every stdout/stderr line as an install-log
+/// event. Returns whether it exited successfully, plus its stderr for the error
+/// message. Killed (and reported as a failure) past `timeout`.
+async fn run_streaming_command(
+    program: &std::path::Path,
+    args: &[&str],
+    task_id: &str,
+    emitter: &EventEmitter,
+    timeout: std::time::Duration,
+) -> Result<(bool, String), AcpError> {
+    use tokio::io::BufReader;
+
+    let mut cmd = crate::process::tokio_command(program);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AcpError::protocol(format!("failed to spawn {}: {e}", program.display())))?;
+
+    let pump = |reader: Option<Box<dyn tokio::io::AsyncRead + Unpin + Send>>| {
+        let emitter = emitter.clone();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            match reader {
+                Some(reader) => {
+                    crate::process::collect_lines_lossy(BufReader::new(reader), |line| {
+                        emit_agent_install_event(&emitter, &task_id, AgentInstallEventKind::Log, line);
+                    })
+                    .await
+                }
+                None => String::new(),
+            }
+        })
+    };
+    let stdout = pump(child.stdout.take().map(|s| Box::new(s) as _));
+    let stderr = pump(child.stderr.take().map(|s| Box::new(s) as _));
+
+    let run = async {
+        let (_, stderr) = tokio::join!(stdout, stderr);
+        let status = child.wait().await;
+        (status, stderr.unwrap_or_default())
+    };
+    match tokio::time::timeout(timeout, run).await {
+        Ok((Ok(status), stderr)) => Ok((status.success(), stderr)),
+        Ok((Err(e), _)) => Err(AcpError::protocol(format!(
+            "failed to wait for {}: {e}",
+            program.display()
+        ))),
+        Err(_) => Err(AcpError::protocol(format!(
+            "{} did not finish within {} minutes",
+            program.display(),
+            timeout.as_secs() / 60
+        ))),
+    }
+}
+
+/// Upgrade a [`registry::AgentDistribution::System`] agent in place through
+/// the vendor's own updater (`update_args` — `kiro-cli update
+/// --non-interactive` for Kiro), streaming its output on the shared
+/// agent-install topic like every other install action. The install stays the
+/// user's own: the same copy their terminal runs is the one updated, and codeg
+/// still launches whatever `<cmd>` resolves to afterwards.
+///
+/// An updater that finds nothing newer also succeeds; the re-probed version is
+/// what tells the caller whether anything changed. Sessions already running
+/// keep the build they started with until they reconnect.
+pub(crate) async fn acp_update_system_agent_core(
+    agent_type: AgentType,
+    task_id: String,
+    db: &AppDatabase,
+    emitter: &EventEmitter,
+) -> Result<Option<String>, AcpError> {
+    emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
+    let meta = registry::get_agent_meta(agent_type);
+
+    let result: Result<Option<String>, AcpError> = async {
+        let registry::AgentDistribution::System {
+            cmd,
+            update_args,
+            install_url,
+            ..
+        } = meta.distribution
+        else {
+            return Err(AcpError::protocol(format!(
+                "{} is not updated through its own CLI",
+                meta.name
+            )));
+        };
+        let Some(update_args) = update_args else {
+            return Err(system_agent_is_user_managed(meta.name, install_url));
+        };
+        // INVARIANT: "is not installed" is the stable substring the frontend
+        // matches to surface its install prompt (see `verify_agent_installed`).
+        let bin = resolve_system_agent_binary_for(agent_type, cmd).ok_or_else(|| {
+            AcpError::SdkNotInstalled(format!(
+                "{} is not installed. Please install it in Agent Settings.",
+                meta.name
+            ))
+        })?;
+        emit_agent_install_event(
+            emitter,
+            &task_id,
+            AgentInstallEventKind::Log,
+            format!("$ {} {}", bin.display(), update_args.join(" ")),
+        );
+        let (success, stderr) =
+            run_streaming_command(&bin, update_args, &task_id, emitter, SYSTEM_UPDATE_TIMEOUT)
+                .await?;
+        if !success {
+            let detail = stderr.trim();
+            return Err(AcpError::protocol(if detail.is_empty() {
+                format!("{} update failed", meta.name)
+            } else {
+                format!("{} update failed: {detail}", meta.name)
+            }));
+        }
+        // The probe cache is keyed by the binary's mtime, so an update that
+        // replaced it is re-probed rather than served the old answer.
+        let version = system_probed_version(agent_type, &bin, None).await;
+        agent_setting_service::set_installed_version(&db.conn, agent_type, version.clone())
+            .await
+            .map_err(|e| AcpError::protocol(e.to_string()))?;
+        emit_acp_agents_updated(emitter, "system_agent_updated", Some(agent_type));
+        Ok(version)
+    }
+    .await;
+
+    match &result {
+        Ok(version) => emit_agent_install_event(
+            emitter,
+            &task_id,
+            AgentInstallEventKind::Completed,
+            match version {
+                Some(v) => format!("{} {v}", meta.name),
+                None => meta.name.to_string(),
+            },
+        ),
+        Err(e) => emit_agent_install_event(
+            emitter,
+            &task_id,
+            AgentInstallEventKind::Failed,
+            e.to_string(),
+        ),
+    }
+    result
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_update_system_agent(
+    agent_type: AgentType,
+    task_id: String,
+    db: State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<Option<String>, AcpError> {
+    let emitter = EventEmitter::Tauri(app);
+    acp_update_system_agent_core(agent_type, task_id, &db, &emitter).await
 }
 
 /// Provision ONLY the uv toolchain (uvx) into codeg's cache — independent of
@@ -13318,10 +13608,11 @@ pub(crate) async fn acp_detect_agent_local_version_core(
     // phantom that can no longer be launched. The returned value does NOT depend
     // on the mirror write below, so a swallowed write cannot reintroduce the
     // phantom. (NPX detection runs `npm list`, which can fail transiently, so
-    // for npx we keep the DB value as a best-effort fallback.)
+    // for npx we keep the DB value as a best-effort fallback.) A system agent
+    // is the same case: its one install either resolves or does not exist.
     if matches!(
         registry::get_agent_meta(agent_type).distribution,
-        registry::AgentDistribution::Binary { .. }
+        registry::AgentDistribution::Binary { .. } | registry::AgentDistribution::System { .. }
     ) {
         let _ = agent_setting_service::set_installed_version(conn, agent_type, None).await;
         // Mirror the heal in the clearing direction: a binary that vanished from
@@ -13511,6 +13802,9 @@ pub(crate) async fn acp_prepare_npx_agent_core(
         registry::AgentDistribution::Binary { .. } => Err(AcpError::protocol(
             "prepare is only supported for npx agents",
         )),
+        registry::AgentDistribution::System { install_url, .. } => {
+            Err(system_agent_is_user_managed(meta.name, install_url))
+        }
         registry::AgentDistribution::Uvx {
             package,
             cmd,
@@ -13634,6 +13928,13 @@ pub(crate) async fn acp_uninstall_agent_core(
             }
             registry::AgentDistribution::Uvx { .. } => {
                 binary_cache::clear_uvx_agent_prepared(agent_type)?;
+            }
+            // Removing the user's own install is their installer's job; codeg
+            // owns nothing on disk for this agent. Refusing (rather than
+            // "succeeding" at nothing) also keeps the DB version below intact,
+            // so the agent does not flip to "not installed" while it still is.
+            registry::AgentDistribution::System { install_url, .. } => {
+                return Err(system_agent_is_user_managed(meta.name, install_url));
             }
         }
 
@@ -14375,17 +14676,69 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_version_script(dir: &std::path::Path, name: &str, banner: &str) -> PathBuf {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-
         let bin = dir.join(name);
-        {
-            let mut f = std::fs::File::create(&bin).expect("create script");
-            f.write_all(format!("#!/bin/sh\necho \"{banner}\"\n").as_bytes())
-                .expect("write script");
-        }
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        crate::process::write_test_script(&bin, &format!("#!/bin/sh\necho \"{banner}\"\n"));
         bin
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn streaming_command_reports_exit_status_and_stderr() {
+        let sh = std::path::Path::new("/bin/sh");
+        let (ok, stderr) = run_streaming_command(
+            sh,
+            &["-c", "echo out; echo boom 1>&2; exit 3"],
+            "t",
+            &EventEmitter::Noop,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("spawned");
+        assert!(!ok);
+        assert!(stderr.contains("boom"), "{stderr:?}");
+
+        let (ok, _) = run_streaming_command(
+            sh,
+            &["-c", "true"],
+            "t",
+            &EventEmitter::Noop,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("spawned");
+        assert!(ok);
+    }
+
+    // A wedged updater must not hold the Settings page's package lock forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn streaming_command_gives_up_past_its_timeout() {
+        let err = run_streaming_command(
+            std::path::Path::new("/bin/sh"),
+            &["-c", "sleep 5"],
+            "t",
+            &EventEmitter::Noop,
+            std::time::Duration::from_millis(200),
+        )
+        .await
+        .expect_err("timed out");
+        assert!(err.to_string().contains("did not finish"), "{err}");
+    }
+
+    // Only a system agent with a self-updater can be upgraded this way; every
+    // agent codeg installs itself upgrades through its own actions instead.
+    #[tokio::test]
+    async fn only_self_updating_system_agents_take_the_system_update() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let err = acp_update_system_agent_core(
+            AgentType::Codex,
+            "t".to_string(),
+            &db,
+            &EventEmitter::Noop,
+        )
+        .await
+        .expect_err("codex is not a system agent");
+        assert!(err.to_string().contains("not updated through its own CLI"), "{err}");
     }
 
     #[cfg(unix)]
@@ -16435,10 +16788,8 @@ base_url = \"https://example.test/v1\"
 
     #[cfg(unix)]
     fn fake_pi(dir: &Path, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let script = dir.join(name);
-        fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::process::write_test_script(&script, &format!("#!/bin/sh\n{body}"));
         script
     }
 
@@ -18192,10 +18543,10 @@ wire_api = "chat"
     // own version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.21.6", Some("0.22.0")).unwrap();
-        assert_eq!(spec, "hermes-agent@0.22.0");
+        let spec = build_npm_install_spec("hermes-agent@0.22.2", Some("0.23.0")).unwrap();
+        assert_eq!(spec, "hermes-agent@0.23.0");
         assert!(npm_package_requires_scripts(&spec));
-        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.22.0"));
+        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.23.0"));
     }
 
     #[test]
@@ -19680,7 +20031,7 @@ wire_api = "chat"
         // CLI): `<hermes> acp --setup` / `<hermes> model` when a binary
         // resolves, else `npx -y --package <pin> hermes …`. The `--package`
         // flag is load-bearing in the npx form — the package's DEFAULT bin is
-        // `hermes-agent` (`run_agent:main`), not the `hermes` CLI — and the
+        // `hermes-agent` (`agent.legacy_cli:main`), not the `hermes` CLI — and the
         // pinned spec keeps the on-demand bootstrap on the audited version.
         let (setup, model) = hermes_setup_argvs().await;
         assert_eq!(setup.last().map(String::as_str), Some("--setup"));
@@ -19693,7 +20044,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.21.6")
+                    Some("hermes-agent@0.22.2")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -20305,7 +20656,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.21.6", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.22.2", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -20317,7 +20668,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.21.6",
+            "hermes-agent@0.22.2",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

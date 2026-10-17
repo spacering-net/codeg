@@ -137,7 +137,7 @@ function VirtualizedMessageThreadImpl<T>({
   prependEpoch = 0,
   prependScopeKey,
 }: VirtualizedMessageThreadProps<T>) {
-  const { scrollRef } = useStickToBottomContext()
+  const { scrollRef, stopScroll } = useStickToBottomContext()
   const virtualizerHandleRef = useRef<VirtualizerHandle>(null)
 
   // The loader row occupies virtua index 0 when present, shifting every data
@@ -150,12 +150,22 @@ function VirtualizedMessageThreadImpl<T>({
 
   const scrollToIndex = useCallback<MessageScrollContextValue["scrollToIndex"]>(
     (index, opts) => {
-      virtualizerHandleRef.current?.scrollToIndex(
-        index + rowOffsetRef.current,
-        opts
-      )
+      const handle = virtualizerHandleRef.current
+      if (!handle) return
+      const target = index + rowOffsetRef.current
+      // A jump up to a message leaves the bottom, so it releases the
+      // stick-to-bottom lock the way the user's own scroll would (see
+      // `EscapeLockOnUserScroll`). Left engaged, the lock scrolls back down
+      // on the next content growth, and it discards scroll events while a
+      // resize settles, so it never sees the jump: one made as content
+      // changes — the navigator paging history in, a reply streaming — was
+      // dragged straight back to the bottom. A jump that can't move up (to
+      // the message the view already rests on) keeps the lock, so a reply
+      // still streaming in stays followed.
+      if (handle.getItemOffset(target) < handle.scrollOffset) stopScroll()
+      handle.scrollToIndex(target, opts)
     },
-    []
+    [stopScroll]
   )
   const scrollContextValue = useMemo<MessageScrollContextValue>(
     () => ({ scrollToIndex }),

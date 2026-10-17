@@ -25,6 +25,7 @@ import { CodeBlock } from "./code-block"
 import { JsonTreeView, parseJsonForTree } from "./json-tree"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
 import { MessageResponse } from "./message"
+import { unwrapWholeFence } from "@/lib/fenced-text"
 
 export type ToolProps = ComponentProps<typeof Collapsible>
 
@@ -264,7 +265,8 @@ function formatErrorFieldValue(value: unknown): string {
 }
 
 function renderErrorText(errorText: string): ReactNode {
-  const parsed = parseJson(errorText.trim())
+  const text = unwrapWholeFence(errorText)
+  const parsed = parseJson(text.trim())
 
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     const entries = Object.entries(parsed as Record<string, unknown>)
@@ -288,7 +290,7 @@ function renderErrorText(errorText: string): ReactNode {
 
   return (
     <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs text-destructive">
-      {errorText}
+      {text}
     </pre>
   )
 }

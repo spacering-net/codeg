@@ -25,6 +25,8 @@ use tauri::{
 };
 use tokio::sync::watch;
 
+use super::overlay;
+
 pub const INDICATOR_LABEL: &str = "computer-indicator";
 
 /// The first size, in logical pixels, until the page has measured itself.
@@ -82,12 +84,12 @@ async fn follow(app: AppHandle, mut rx: watch::Receiver<Strip>) {
         match wanted {
             Strip::Shown => {
                 if let Some(window) = window(&app) {
-                    let _ = window.show();
+                    overlay::show(&window);
                 }
             }
             Strip::Hidden => {
                 if let Some(window) = app.get_webview_window(INDICATOR_LABEL) {
-                    let _ = window.hide();
+                    overlay::hide(&window);
                 }
             }
         }

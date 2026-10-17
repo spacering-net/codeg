@@ -1,5 +1,13 @@
 import { act, render } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 
 import { useLongPressToOpenMenu } from "./use-long-press-to-open-menu"
 
@@ -38,7 +46,7 @@ function advance(ms: number) {
 
 interface Fixture {
   host: HTMLElement
-  onContextMenu: ReturnType<typeof vi.fn>
+  onContextMenu: Mock
 }
 
 function renderHost(

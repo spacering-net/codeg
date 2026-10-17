@@ -128,6 +128,8 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "deepseek", label: "DeepSeek Harness" },
   { value: "qoder", label: "Qoder" },
   { value: "antigravity", label: "Google Antigravity" },
+  { value: "kiro", label: "Kiro CLI" },
+  { value: "zcode", label: "ZCode" },
   // pi 同理不作为可分配目标：读写的 ~/.pi/agent/mcp.json 属于第三方 pi 扩展，
   // pi 自身没有 MCP，pi-acp 也不转发线缆上的 mcpServers。给没装该扩展的用户
   // 写这个文件只会造出一个没人读的配置。存量 "pi" 条目照样能改能删——
@@ -318,6 +320,8 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     deepseek: appSet.has("deepseek"),
     qoder: appSet.has("qoder"),
     antigravity: appSet.has("antigravity"),
+    kiro: appSet.has("kiro"),
+    zcode: appSet.has("zcode"),
     pi: appSet.has("pi"),
   }
 }
@@ -693,6 +697,10 @@ export function McpSettings() {
         serverId: selectedLocal.id,
         spec: parsedSpec,
         apps,
+        // What the editor was loaded with — it is reset from this spec
+        // whenever the selection or the scan changes — so the backend can
+        // tell the fields the user edited from the ones they left alone.
+        shownSpec: selectedLocal.spec,
       })
       const next = await refreshLocalServers()
       toast.success(t("toasts.saveSuccess"))

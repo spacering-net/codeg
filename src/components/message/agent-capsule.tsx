@@ -19,7 +19,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/instant-collapsible"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
 interface AgentCapsuleProps {
@@ -186,9 +185,14 @@ export function AgentCapsule({
         )}
       >
         <div className="mt-3 w-full overflow-hidden rounded-md border border-border/60">
-          <ScrollArea className="max-h-72">
+          {/* Native scrolling, like the transcript around it — not ScrollArea:
+              while the sub-agent runs, this body streams its live transcript
+              and a shimmer that rewrites its style every frame, and
+              OverlayScrollbars answers each DOM mutation with a synchronous
+              layout read (`scrollWidth` in its MutationObserver callback). */}
+          <div className="max-h-72 overflow-x-hidden overflow-y-auto scrollbar-thin">
             <div className="space-y-3 px-3.5 py-2">{children}</div>
-          </ScrollArea>
+          </div>
         </div>
       </CollapsibleContent>
     </Collapsible>

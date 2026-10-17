@@ -8,6 +8,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  Clock,
   FolderX,
   GitMerge,
   Loader2,
@@ -18,7 +19,11 @@ import { Button } from "@/components/ui/button"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { formatScheduleFull, formatScheduleShort } from "@/lib/task-schedule"
 import { cn } from "@/lib/utils"
-import { isMergeQueued, worktreeWasRemoved } from "./task-acceptance"
+import {
+  isDeferred,
+  isMergeQueued,
+  worktreeWasRemoved,
+} from "./task-acceptance"
 import { buildTaskActions, type TaskActionItem } from "./task-actions"
 import type { TaskActionHandlers } from "./task-actions"
 import type { WorkTask } from "@/lib/types"
@@ -66,6 +71,11 @@ export function statusLabelKey(status: WorkTask["status"]): StatusLabelKey {
  * attention statuses an outlined amber pill, `done` a bare green check,
  * `failed` a tinted red pill, the rest a muted pill.
  *
+ * A task put aside to handle later reads as exactly that — a muted pill with a
+ * clock, whatever its review or failure underneath (the tooltip still names
+ * it): it waits under Done, where an amber "to review" would claim it needs
+ * the user right now, which is the very thing they just said it does not.
+ *
  * The label truncates inside whatever width it is given (with the full text on
  * `title`): the list view puts the chip in a fixed status column, and locales
  * whose "awaiting input" runs to twenty characters must not blow that column
@@ -80,14 +90,21 @@ export function StatusChip({
 }) {
   const t = useTranslations("Tasks")
   // An interrupted failure (restart) reads differently from an agent failure.
-  const label =
+  const statusLabel =
     task.status === "failed" && task.failure_reason === "interrupted"
       ? t("statusInterrupted")
       : t(statusLabelKey(task.status))
+  const deferred = isDeferred(task)
+  const label = deferred ? t("statusDeferred") : statusLabel
 
   let tone: string
   let icon: React.ReactNode = null
-  switch (task.status) {
+  switch (deferred ? "deferred" : task.status) {
+    case "deferred":
+      tone =
+        "gap-1 rounded-full bg-muted px-2 py-1 text-[0.625rem] text-muted-foreground"
+      icon = <Clock className="size-2.5 shrink-0" aria-hidden="true" />
+      break
     case "queued":
     case "preparing":
     case "running":
@@ -129,7 +146,8 @@ export function StatusChip({
         tone,
         className
       )}
-      title={label}
+      // A deferred chip keeps what it is deferring in its tooltip.
+      title={deferred ? `${label} · ${statusLabel}` : label}
     >
       {icon}
       <span className="truncate">{label}</span>
@@ -145,10 +163,12 @@ export function StatusChip({
  * `failed` reads red rather than the attention column's amber, and `canceled`
  * stays neutral instead of inheriting Done's green (a green bar on a row that
  * says "已取消" is a lie the board gets away with only because its column
- * heading says "Done" once, at the top).
+ * heading says "Done" once, at the top). A task put aside to handle later is
+ * neutral for the same reason — filed under Done, finished it is not.
  */
 export function statusAccent(task: WorkTask): string {
   if (task.archived_at != null) return "bg-muted-foreground/20"
+  if (isDeferred(task)) return "bg-muted-foreground/35"
   switch (task.status) {
     case "todo":
     case "queued":
@@ -538,11 +558,17 @@ export function TaskCard({
           it by the same 12px the buttons clear the card's left, right and
           bottom edges, so the footer sits on one even inset. */}
       {primary || secondaries.length > 0 ? (
-        <div className="mt-3 flex items-center gap-1.5 border-t border-border/60 pt-3">
+        <div className="mt-3 flex items-center gap-1 border-t border-border/60 pt-3">
           {primary ? (
+            // The one thing in the row that may give way: a failed card carries
+            // four round secondaries, and on the narrowest board a long
+            // locale's "retry" would push them out of the card. The label
+            // truncates instead (spelled out whole on hover).
             <Button
               type="button"
               size="xs"
+              className="min-w-0 shrink"
+              title={primary.label}
               onClick={(e) => {
                 // The card itself opens the detail sheet — keep actions local.
                 e.stopPropagation()
@@ -550,18 +576,23 @@ export function TaskCard({
               }}
             >
               <primary.icon className="size-3" aria-hidden="true" />
-              {primary.label}
+              <span className="truncate">{primary.label}</span>
             </Button>
           ) : null}
-          <div className="flex-1" />
           {/* Secondaries are icon-only and round: they are one-per-status at
               most, so a "…" menu just hid them behind an extra click. The
               session viewer always sorts last, anchoring the corner. They
               fade in on hover (opacity only — the row keeps its height, so
-              nothing reflows) and on keyboard focus. */}
-          {secondaries.map((item) => (
-            <CardIconAction key={item.label} item={item} />
-          ))}
+              nothing reflows) and on keyboard focus. One cluster pushed to the
+              end, spaced like the list row's buttons: every pixel it does not
+              take is left to the primary's label. */}
+          {secondaries.length > 0 ? (
+            <div className="ms-auto flex shrink-0 items-center gap-1">
+              {secondaries.map((item) => (
+                <CardIconAction key={item.label} item={item} />
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

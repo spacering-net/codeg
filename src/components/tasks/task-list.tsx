@@ -22,6 +22,10 @@ interface TaskListProps {
    *  offer to clear it, instead of leaving a dead end. */
   filtered: boolean
   onClearFilter: () => void
+  /** The keyword search narrowing the list, or null when there is none. An
+   *  empty list under a search names the query and offers to clear it. */
+  searchQuery?: string | null
+  onClearSearch?: () => void
   onOpen: (taskId: number) => void
   handlersFor: (task: WorkTask) => TaskActionHandlers
 }
@@ -44,6 +48,8 @@ export function TaskList({
   mergeQueueRanks,
   filtered,
   onClearFilter,
+  searchQuery = null,
+  onClearSearch,
   onOpen,
   handlersFor,
 }: TaskListProps) {
@@ -86,19 +92,35 @@ export function TaskList({
               className="size-8 text-muted-foreground/40"
               aria-hidden="true"
             />
-            <p className="text-xs text-muted-foreground">{t("listEmpty")}</p>
-            {/* Only a status filter can empty a list that has tasks behind it,
-                so this is the one way out worth offering. */}
-            {filtered ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={onClearFilter}
-              >
-                {t("statusFilterAll")}
-              </Button>
-            ) : null}
+            <p className="text-xs text-muted-foreground">
+              {searchQuery
+                ? t("searchNoResults", { query: searchQuery })
+                : t("listEmpty")}
+            </p>
+            {/* A search or a status filter is what can empty a list that has
+                tasks behind it, so those are the ways out worth offering. */}
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {searchQuery && onClearSearch ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={onClearSearch}
+                >
+                  {t("clearSearch")}
+                </Button>
+              ) : null}
+              {filtered ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={onClearFilter}
+                >
+                  {t("statusFilterAll")}
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : (
           <ScrollArea className="min-h-0 flex-1">

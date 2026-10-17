@@ -18,6 +18,10 @@ import type {
 import { randomUUID } from "@/lib/utils"
 import { inferLiveToolName } from "@/lib/tool-call-normalization"
 import {
+  toolStatusTerminal,
+  toolStatusUnsettled,
+} from "@/lib/tool-call-lifecycle"
+import {
   acpConnect,
   acpGetAgentStatus,
   acpPrompt,
@@ -125,6 +129,10 @@ import {
   primeNotificationSoundOutput,
   withEventSoundsSuppressed,
 } from "@/lib/notification-sound"
+import {
+  requestWindowAttention,
+  withWindowAttentionSuppressed,
+} from "@/lib/window-attention"
 import {
   getSavedPrefsForConnect,
   saveModePreference,
@@ -284,6 +292,16 @@ export interface LiveMessage {
   role: "assistant" | "tool"
   content: LiveContentBlock[]
   startedAt: number
+}
+
+/** A stopped turn's record (see `ConnectionState.cancelledTurn`). */
+export interface CancelledTurnReports {
+  /** The turn's message, with every later report on one of its tool calls
+   *  folded in. */
+  message: LiveMessage
+  /** The tool calls the turn left open when it ended: the cards these reports
+   *  may settle, and the only ones. */
+  openCalls: ReadonlySet<string>
 }
 
 // ── Per-connection state ──
@@ -452,6 +470,20 @@ export interface ConnectionState {
    */
   outOfTurnToolCalls: ReadonlyMap<string, ToolCallInfo> | null
   /**
+   * A turn the user stopped, while the agent may still be reporting on it.
+   * codeg ends a stopped turn the moment the user asks
+   * (`ConnectionCommand::Cancel` emits `turn_complete` before the agent
+   * answers), so the reports that close the turn's open tool calls — Claude
+   * Code's `failed` with the CLI's refusal for a command, "The turn was
+   * cancelled…" for a sub-agent's — land after the panel promoted the turn.
+   * Folded into this record and handed to the runtime store
+   * (`applyCancelledTurnReports`), they settle its cards as they would have
+   * settled inside the turn; left out, a stopped command reads as completed
+   * until the conversation is reloaded. Kept until the next prompt starts;
+   * `null` otherwise, and for a turn that left no tool call open.
+   */
+  cancelledTurn: CancelledTurnReports | null
+  /**
    * Client-local: the user dismissed (X) the stale banner for the CURRENT
    * drift. Hides the banner without touching the underlying `configStale`
    * state. Reset to `false` whenever a fresh `session_config_stale` arrives (a
@@ -505,6 +537,9 @@ type Action =
       type: "STATUS_CHANGED"
       contextKey: string
       status: ConnectionStatus
+      /** The ending turn's stop reason, when `turn_complete` is what moved
+       *  the status. */
+      stopReason?: string
     }
   | {
       // One AIR typed session-failure upsert (`session_failure` event).
@@ -1696,6 +1731,98 @@ function recordOutOfTurnToolCall(
   return next
 }
 
+type ToolCallUpdateAction = Extract<Action, { type: "TOOL_CALL_UPDATE" }>
+
+/** Fold one `tool_call_update` into the tool call it revises. Shared by the
+ *  in-turn path and a stopped turn's late reports (`foldCancelledTurnReport`),
+ *  so a report lands the same way on either side of the turn's end. */
+function mergeToolCallUpdate(
+  info: ToolCallInfo,
+  update: ToolCallUpdateAction
+): ToolCallInfo {
+  let newChunks: string[]
+  let newTotalBytes: number
+
+  if (update.raw_output === null) {
+    newChunks = info.raw_output_chunks
+    newTotalBytes = info.raw_output_total_bytes
+  } else if (update.raw_output_append) {
+    newChunks = [...info.raw_output_chunks, update.raw_output]
+    newTotalBytes = info.raw_output_total_bytes + update.raw_output.length
+
+    // 超限时从头部批量移除 chunks（单次 slice 替代循环 shift）
+    if (
+      newTotalBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS &&
+      newChunks.length > 1
+    ) {
+      let evictCount = 0
+      let evictedBytes = 0
+      while (
+        evictCount < newChunks.length - 1 &&
+        newTotalBytes - evictedBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS
+      ) {
+        evictedBytes += newChunks[evictCount].length
+        evictCount++
+      }
+      if (evictCount > 0) {
+        newChunks = newChunks.slice(evictCount)
+        newTotalBytes -= evictedBytes
+      }
+    }
+  } else {
+    // 非 append 模式（替换）
+    newChunks = [update.raw_output]
+    newTotalBytes = update.raw_output.length
+  }
+
+  return {
+    ...info,
+    title: update.title ?? info.title,
+    status: update.status ?? info.status,
+    content: update.content ?? info.content,
+    raw_input: update.raw_input ?? info.raw_input,
+    raw_output_chunks: newChunks,
+    locations: update.locations ?? info.locations,
+    meta: update.meta ?? info.meta,
+    raw_output_total_bytes: newTotalBytes,
+    images: update.images !== null ? update.images : info.images,
+  }
+}
+
+/** A stopped turn's record (`ConnectionState.cancelledTurn`), or `null` when
+ *  the turn left no tool call open, which leaves its reports nothing to
+ *  settle. */
+function cancelledTurnOf(message: LiveMessage): CancelledTurnReports | null {
+  const openCalls = new Set<string>()
+  for (const block of message.content) {
+    if (block.type === "tool_call" && toolStatusUnsettled(block.info.status)) {
+      openCalls.add(block.info.tool_call_id)
+    }
+  }
+  return openCalls.size > 0 ? { message, openCalls } : null
+}
+
+/** Fold an out-of-turn report into a stopped turn's record when it revises one
+ *  of that turn's tool calls. Returns `turn` itself otherwise. */
+function foldCancelledTurnReport(
+  turn: CancelledTurnReports | null,
+  update: ToolCallUpdateAction
+): CancelledTurnReports | null {
+  if (!turn) return turn
+  const { content } = turn.message
+  const index = content.findIndex(
+    (b) => b.type === "tool_call" && b.info.tool_call_id === update.tool_call_id
+  )
+  const block = content[index]
+  if (!block || block.type !== "tool_call") return turn
+  const next = content.slice()
+  next[index] = {
+    type: "tool_call",
+    info: mergeToolCallUpdate(block.info, update),
+  }
+  return { ...turn, message: { ...turn.message, content: next } }
+}
+
 function connectionsReducer(
   state: ConnectionsMap,
   action: Action
@@ -1745,6 +1872,7 @@ function connectionsReducer(
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         outOfTurnToolCalls: null,
+        cancelledTurn: null,
       })
       return next
     }
@@ -1806,6 +1934,7 @@ function connectionsReducer(
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         outOfTurnToolCalls: null,
+        cancelledTurn: null,
       })
       return next
     }
@@ -1941,6 +2070,11 @@ function connectionsReducer(
         availableCommands: action.patch.availableCommands,
         usage: action.patch.usage,
         liveMessage: hydratedLiveMessage,
+        // A snapshot with a turn in flight carries a prompt newer than any the
+        // user stopped, which ends that turn's window as the status event of
+        // that prompt would have.
+        cancelledTurn:
+          action.patch.status === "prompting" ? null : current.cancelledTurn,
         // The snapshot's live message REPLACES the local one, and the wire has
         // no `steering` block (the backend never records one — see
         // `snapshot-denormalize`), so every adopted mid-turn message is gone
@@ -2046,6 +2180,8 @@ function connectionsReducer(
         // The out-of-turn window ended: its tool-call contexts (kept only for
         // background permission enrichment) are stale for the new turn.
         updated.outOfTurnToolCalls = null
+        // A new turn ends the window in which a stopped one's reports land.
+        updated.cancelledTurn = null
       } else if (conn.status === "prompting") {
         // Prompt cycle ended: clear in-flight Claude API retry banner.
         updated.claudeApiRetry = null
@@ -2062,6 +2198,16 @@ function connectionsReducer(
         // Likewise a blocked exit_plan_mode approval — cleared via
         // `plan_approval_resolved` normally; this is the turn-end safety net.
         updated.pendingPlanApproval = null
+      }
+      // Keep a stopped turn for the reports that close its cards (see
+      // `ConnectionState.cancelledTurn`). Keyed on the message, so ending the
+      // same turn again keeps the reports already folded in.
+      if (
+        action.stopReason === "cancelled" &&
+        conn.liveMessage &&
+        conn.cancelledTurn?.message.id !== conn.liveMessage.id
+      ) {
+        updated.cancelledTurn = cancelledTurnOf(conn.liveMessage)
       }
       next.set(action.contextKey, updated)
       return next
@@ -2236,8 +2382,10 @@ function connectionsReducer(
       // Out-of-turn: stay out of `liveMessage` (see TOOL_CALL), but merge the
       // registry entry and backfill an open permission dialog waiting for
       // this tool's input — a background permission must still show its
-      // command/diff details. In-turn ordering is safe: the panel flushes
-      // pending tool-call updates at turn_complete BEFORE status flips back.
+      // command/diff details. A report on a tool call of a turn the user
+      // stopped also folds into `cancelledTurn`. In-turn ordering is safe: the
+      // panel flushes pending tool-call updates at turn_complete BEFORE status
+      // flips back.
       if (conn.status !== "prompting") {
         const existing = conn.outOfTurnToolCalls?.get(action.tool_call_id)
         const merged: ToolCallInfo = existing
@@ -2275,6 +2423,7 @@ function connectionsReducer(
             conn.pendingPermission,
             merged
           ),
+          cancelledTurn: foldCancelledTurnReport(conn.cancelledTurn, action),
         })
         return next
       }
@@ -2313,60 +2462,11 @@ function connectionsReducer(
       } else {
         const block = prev.content[existingIndex]
         if (block.type !== "tool_call") return state
-
-        let newChunks: string[]
-        let newTotalBytes: number
-
-        if (action.raw_output === null) {
-          newChunks = block.info.raw_output_chunks
-          newTotalBytes = block.info.raw_output_total_bytes
-        } else if (action.raw_output_append) {
-          newChunks = [...block.info.raw_output_chunks, action.raw_output]
-          newTotalBytes =
-            block.info.raw_output_total_bytes + action.raw_output.length
-
-          // 超限时从头部批量移除 chunks（单次 slice 替代循环 shift）
-          if (
-            newTotalBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS &&
-            newChunks.length > 1
-          ) {
-            let evictCount = 0
-            let evictedBytes = 0
-            while (
-              evictCount < newChunks.length - 1 &&
-              newTotalBytes - evictedBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS
-            ) {
-              evictedBytes += newChunks[evictCount].length
-              evictCount++
-            }
-            if (evictCount > 0) {
-              newChunks = newChunks.slice(evictCount)
-              newTotalBytes -= evictedBytes
-            }
-          }
-        } else {
-          // 非 append 模式（替换）
-          newChunks = [action.raw_output]
-          newTotalBytes = action.raw_output.length
-        }
-
         newContent = [
           ...prev.content.slice(0, existingIndex),
           {
             type: "tool_call" as const,
-            info: {
-              ...block.info,
-              title: action.title ?? block.info.title,
-              status: action.status ?? block.info.status,
-              content: action.content ?? block.info.content,
-              raw_input: action.raw_input ?? block.info.raw_input,
-              raw_output_chunks: newChunks,
-              locations: action.locations ?? block.info.locations,
-              meta: action.meta ?? block.info.meta,
-              raw_output_total_bytes: newTotalBytes,
-              images:
-                action.images !== null ? action.images : block.info.images,
-            },
+            info: mergeToolCallUpdate(block.info, action),
           },
           ...prev.content.slice(existingIndex + 1),
         ]
@@ -3044,6 +3144,10 @@ function connectionsReducer(
  * that map would have to learn about a half-entry. It is a separate, reactive
  * side table read only by `useConnection` (which reports it as `connecting`)
  * and the composer's status chip.
+ *
+ * It names what the surface is waiting FOR: when a newer `connect()` is parked
+ * behind the one in flight (a draft switching agents while it connects), it is
+ * that newest request, which the in-flight call only runs ahead of.
  */
 export interface ConnectPendingInfo {
   agentType: AgentType
@@ -3074,7 +3178,8 @@ export interface ConnectErrorInfo {
 
 interface InternalStore {
   connections: ConnectionsMap
-  /** contextKey → the in-flight `connect()` for it (see ConnectPendingInfo). */
+  /** contextKey → the in-flight `connect()` for it, or the newest request
+   *  parked behind it (see ConnectPendingInfo). */
   connectPending: Map<string, ConnectPendingInfo>
   /** contextKey → why its last `connect()` failed (see ConnectErrorInfo). */
   connectErrors: Map<string, ConnectErrorInfo>
@@ -3087,9 +3192,10 @@ interface InternalStore {
 
 export interface ConnectionStoreApi {
   getConnection(key: string): ConnectionState | undefined
-  /** The in-flight `connect()` for this key, or undefined when none is. The
-   *  returned object is reference-stable for the lifetime of that connect, so
-   *  it is safe as a `useSyncExternalStore` snapshot. */
+  /** The in-flight `connect()` for this key (or the newest request parked
+   *  behind it), or undefined when none is. The returned object is
+   *  reference-stable until the next change, so it is safe as a
+   *  `useSyncExternalStore` snapshot. */
   getConnectPending(key: string): ConnectPendingInfo | undefined
   /** Why the last `connect()` for this key failed, or undefined. Reference-
    *  stable until the next change, like `getConnectPending`. */
@@ -3960,6 +4066,34 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         )
       }
 
+      // A stopped turn's late reports (see `cancelledTurn`) settle the cards of
+      // the turn the panel promoted. Only once a report in the batch closes a
+      // tool call: progress folds in on its own and rides along, rather than
+      // having the runtime store rebuild the turn per batch.
+      const settleCancelledTurnCards = (
+        key: string,
+        batch: ReadonlyArray<{ contextKey: string; status: string | null }>
+      ) => {
+        const nextConn = next.get(key)
+        const folded = nextConn?.cancelledTurn
+        if (!nextConn || !folded) return
+        if (folded === prev.get(key)?.cancelledTurn) return
+        if (
+          !batch.some(
+            (item) => item.contextKey === key && toolStatusTerminal(item.status)
+          )
+        ) {
+          return
+        }
+        const conversationId = nextConn.sessionId
+          ? getConversationIdByExternalIdFromStore(nextConn.sessionId)
+          : null
+        if (conversationId == null) return
+        useConversationRuntimeStore
+          .getState()
+          .actions.applyCancelledTurnReports(conversationId, folded)
+      }
+
       if (action.type === "REMOVE_ALL") {
         notifyAllKeyListeners()
       } else if (action.type === "STREAM_BATCH") {
@@ -3973,6 +4107,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         for (const key of keys) {
           mirrorLiveMessage(key)
           notifyKeyListeners(key)
+          settleCancelledTurnCards(key, action.actions)
         }
       } else if (action.type === "REKEY_CONNECTION") {
         // The connection (with its in-flight liveMessage) moved to toKey; sync
@@ -4867,10 +5002,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               created_at: new Date().toISOString(),
             },
           })
-          // A blocked agent is exactly what a notification is for, and this
-          // was the one such state that never raised one — the sound path had
-          // covered it since it shipped. Body names the agent only: the
-          // question text is the agent's own prose.
+          // A blocked agent is exactly what a notification is for — the sound
+          // path had covered this one since it shipped. Body names the agent
+          // only: the question text is the agent's own prose.
           {
             const nc = quiet
               ? null
@@ -4884,6 +5018,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                   }),
                 })
               )
+              void requestWindowAttention("question_request")
             }
           }
           break
@@ -4911,6 +5046,27 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               created_at: new Date().toISOString(),
             },
           })
+          // Blocked on the user's sign-off exactly like a permission prompt —
+          // which is what Claude Code's own ExitPlanMode arrives as — so it
+          // asks under that event's switches rather than a row of its own,
+          // and every plan approval reads the same whichever agent raised it.
+          // Body names the agent only: the plan is the agent's own prose.
+          {
+            const nc = quiet
+              ? null
+              : storeRef.current.connections.get(contextKey)
+            if (nc) {
+              void notifyDesktop(
+                "permission_request",
+                sessionNotification(contextKey, {
+                  body: t("notificationPlanApproval", {
+                    agent: getAgentLabel(nc.agentType),
+                  }),
+                })
+              )
+              void requestWindowAttention("permission_request")
+            }
+          }
           break
         case "plan_approval_resolved":
           // The approval was answered (this or another window) or canceled.
@@ -4981,16 +5137,21 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           //    the user had to dismiss one by one. Only the single-task case
           //    still carries the agent's own summary — a count says everything
           //    a batch notification usefully can.
+          //
+          //    An interim notification is no task's end (the sub-agent will
+          //    notify again), so it announces nothing; it still flips its card
+          //    below, to the interim result.
+          const finished = (e.settled ?? []).filter((s) => !s.interim)
           if (e.settled && e.settled.length > 0) {
-            if (!quiet) {
+            if (!quiet && finished.length > 0) {
               const nc = storeRef.current.connections.get(contextKey)
               const agentLabel = nc ? getAgentLabel(nc.agentType) : "Agent"
-              const count = e.settled.length
+              const count = finished.length
               const many = tChat("backgroundTasks.notifySettledMany", {
                 agent: agentLabel,
                 count,
               })
-              const single = e.settled[0]
+              const single = finished[0]
               void notifyDesktop(
                 "background_task",
                 sessionNotification(contextKey, {
@@ -5013,6 +5174,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                       : many,
                 })
               )
+              void requestWindowAttention("background_task")
             }
             // 4. flip each async sub-agent's launch card to its terminal
             //    (completed + result) state IN-MEMORY, by rewriting the
@@ -5041,6 +5203,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                   status: settled.status,
                   summary: settled.summary ?? null,
                   result: settled.result ?? null,
+                  interim: settled.interim === true,
                 })
               }
             }
@@ -5076,6 +5239,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                   body: `${agentLabel}: ${tChat("permissionDialog.subtitle")}`,
                 })
               )
+              void requestWindowAttention("permission_request")
             }
           }
           break
@@ -5454,6 +5618,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "STATUS_CHANGED",
             contextKey,
             status: "connected",
+            stopReason: e.stop_reason,
           })
           // Detect pending question from tool calls in the completed turn
           const turnConn = storeRef.current.connections.get(contextKey)
@@ -5516,6 +5681,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                     }),
                   })
                 )
+                void requestWindowAttention("error")
               } else {
                 void notifyDesktop(
                   "turn_complete",
@@ -5523,6 +5689,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                     body: t("notificationTurnComplete", { agent: agentLabel }),
                   })
                 )
+                void requestWindowAttention("turn_complete")
               }
             }
           }
@@ -5594,6 +5761,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 }),
               })
             )
+            void requestWindowAttention("error")
           }
           if (quiet) break
           const connKey = nc?.connectionId ?? contextKey
@@ -5977,15 +6145,18 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // must not fire a burst of cues for turns that finished minutes ago.
           // Doubly true of OS notifications, which unlike a tone stay in the
           // notification centre until the user clears them by hand — and of
-          // toasts, which would re-announce every notice of the gap at once.
+          // toasts, which would re-announce every notice of the gap at once,
+          // and of a taskbar flash for a prompt that was answered long ago.
           envelopeEffectsMutedRef.current += 1
           try {
             withEventSoundsSuppressed(() =>
-              withDesktopNotificationsSuppressed(() => {
-                for (const envelope of events) {
-                  applyMappedEnvelope(contextKey, envelope)
-                }
-              })
+              withDesktopNotificationsSuppressed(() =>
+                withWindowAttentionSuppressed(() => {
+                  for (const envelope of events) {
+                    applyMappedEnvelope(contextKey, envelope)
+                  }
+                })
+              )
             )
           } finally {
             envelopeEffectsMutedRef.current -= 1
@@ -6573,7 +6744,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // `reconnect()` has nothing else to go on.
       lastConnectParamsRef.current.set(contextKey, request)
       if (connectingKeysRef.current.has(contextKey)) {
+        // Parked: the call in flight runs this next, unless a newer request
+        // replaces it first. The surface is waiting on THIS request from now
+        // on, so it is what the pending marker names — a draft that switched
+        // agents mid-connect shows the agent picked last, not the one it left.
         pendingConnectRequestsRef.current.set(contextKey, request)
+        setConnectPending(contextKey, {
+          agentType,
+          workingDir: workingDir ?? null,
+        })
+        setConnectError(contextKey, null)
         return
       }
       connectingKeysRef.current.add(contextKey)
@@ -6593,10 +6773,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // too.
       setConnectError(contextKey, null)
       // Publish THIS attempt's failure — unless the surface let go of the
-      // attempt meanwhile (`disconnect()` marks it abandoned): a late
-      // rejection must not report a failure over whatever it does next.
+      // attempt meanwhile (`disconnect()` marks it abandoned) or parked a
+      // different request behind it: a late rejection must not report a
+      // failure over whatever it does next.
       const publishConnectError = (info: ConnectErrorInfo) => {
         if (abandonedKeysRef.current.has(contextKey)) return
+        const pendingRequest = pendingConnectRequestsRef.current.get(contextKey)
+        if (pendingRequest && !sameConnectRequest(pendingRequest, request))
+          return
         setConnectError(contextKey, info)
         notifyConnectError(contextKey, info)
       }

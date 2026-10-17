@@ -1,6 +1,14 @@
 import { act, render, screen } from "@testing-library/react"
 import { useEffect } from "react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 import {
   WorkspaceProvider,
   useWorkspaceActions,
@@ -8,6 +16,7 @@ import {
   useWorkspaceExternalConflict,
   useWorkspaceFileTabs,
   useWorkspaceView,
+  type FileWorkspaceTab,
 } from "@/contexts/workspace-context"
 import * as api from "@/lib/api"
 import {
@@ -255,11 +264,11 @@ beforeEach(() => {
 })
 
 const mockedApi = api as unknown as {
-  getHomeDirectory: ReturnType<typeof vi.fn>
-  readFileForEdit: ReturnType<typeof vi.fn>
-  gitIsTracked: ReturnType<typeof vi.fn>
-  gitShowFile: ReturnType<typeof vi.fn>
-  saveFileContent: ReturnType<typeof vi.fn>
+  getHomeDirectory: Mock
+  readFileForEdit: Mock
+  gitIsTracked: Mock
+  gitShowFile: Mock
+  saveFileContent: Mock
 }
 
 // Tab identity under the unified model: file tabs are keyed by the
@@ -5105,5 +5114,153 @@ describe("reopening a closed file tab", () => {
       fileTabId("/repo/b.ts"),
       fileTabId("/repo/c.ts"),
     ])
+  })
+})
+
+describe("PDF file tabs", () => {
+  const mockedReadBase64 = api.readFileBase64 as unknown as ReturnType<
+    typeof vi.fn
+  >
+
+  beforeEach(() => {
+    mockedApi.readFileForEdit.mockReset()
+    mockedApi.gitIsTracked.mockReset()
+    mockedApi.gitShowFile.mockReset()
+    mockedReadBase64.mockReset()
+    mockedApi.gitIsTracked.mockResolvedValue(true)
+    mockedApi.gitShowFile.mockResolvedValue("")
+    // "%PDF-1" in base64.
+    mockedReadBase64.mockResolvedValue("JVBERi0x")
+  })
+
+  function PdfProbe({
+    onCapture,
+  }: {
+    onCapture: (tabs: FileWorkspaceTab[]) => void
+  }) {
+    const { openFilePreview, fileTabs } = useWorkspaceContext()
+    onCapture(fileTabs)
+    return (
+      <div>
+        <button onClick={() => void openFilePreview("docs/report.pdf")}>
+          open-pdf
+        </button>
+        <button onClick={() => void openFilePreview("Scan.PDF")}>
+          open-upper-pdf
+        </button>
+        <button onClick={() => void openFilePreview("pic.png")}>
+          open-png
+        </button>
+      </div>
+    )
+  }
+
+  function renderPdfProbe() {
+    let tabs: FileWorkspaceTab[] = []
+    render(
+      <WorkspaceProvider>
+        <PdfProbe onCapture={(next) => (tabs = next)} />
+      </WorkspaceProvider>
+    )
+    return () => tabs
+  }
+
+  it("opens a PDF as bytes at the backend's read ceiling, never as text", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-pdf").click()
+    })
+
+    expect(mockedReadBase64).toHaveBeenCalledWith(
+      "/repo/docs/report.pdf",
+      100_000_000
+    )
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    // Binary: no git base for a gutter that does not exist.
+    expect(mockedApi.gitIsTracked).not.toHaveBeenCalled()
+    expect(tabs()).toHaveLength(1)
+    expect(tabs()[0]).toMatchObject({
+      id: fileTabId("/repo/docs/report.pdf"),
+      kind: "file",
+      language: "pdf",
+      content: "data:application/pdf;base64,JVBERi0x",
+      readonly: true,
+      loading: false,
+      saveState: "idle",
+    })
+  })
+
+  it("recognises the extension in any case", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-upper-pdf").click()
+    })
+
+    expect(tabs()[0]).toMatchObject({
+      language: "pdf",
+      content: "data:application/pdf;base64,JVBERi0x",
+    })
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+  })
+
+  it("leaves images on the default read cap", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-png").click()
+    })
+
+    expect(mockedReadBase64).toHaveBeenCalledWith("/repo/pic.png")
+    expect(tabs()[0]).toMatchObject({
+      language: "image",
+      content: "data:image/png;base64,JVBERi0x",
+    })
+  })
+
+  it("keeps a failed read on the tab instead of retrying it as text", async () => {
+    mockedReadBase64.mockRejectedValueOnce(
+      new Error("File is too large to attach")
+    )
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-pdf").click()
+    })
+
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    expect(tabs()[0]).toMatchObject({
+      language: "pdf",
+      loading: false,
+      saveState: "error",
+      content: 'unableLoadContent:{"message":"File is too large to attach"}',
+    })
+  })
+
+  it("re-reads the bytes when the active PDF changes on disk", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-pdf").click()
+    })
+    mockedReadBase64.mockResolvedValueOnce("JVBERi0y")
+
+    await act(async () => {
+      workspaceStoreMock.emitRoot("/repo", ["docs/report.pdf"])
+    })
+
+    expect(mockedReadBase64).toHaveBeenCalledTimes(2)
+    expect(mockedReadBase64).toHaveBeenLastCalledWith(
+      "/repo/docs/report.pdf",
+      100_000_000
+    )
+    // The text resolver would reject the bytes and put the tab in error.
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    expect(tabs()[0]).toMatchObject({
+      content: "data:application/pdf;base64,JVBERi0y",
+      saveState: "idle",
+      loading: false,
+    })
   })
 })

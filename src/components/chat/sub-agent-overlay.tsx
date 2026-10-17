@@ -16,14 +16,16 @@
  */
 
 import { memo, useState } from "react"
-import { getAgentLabel } from "@/lib/custom-agents"
 import { useTranslations } from "next-intl"
 import { BotIcon, ChevronDownIcon } from "lucide-react"
 
-import { AgentIcon } from "@/components/agent-icon"
 import { CollapsedOverlayChip } from "@/components/chat/collapsed-overlay-chip"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DelegationIdentityAvatar,
+  DelegationIdentityName,
+} from "@/components/message/delegation-identity"
 import { StatusBadge } from "@/components/message/delegation-status-badge"
 import { SubAgentSessionDialog } from "@/components/message/sub-agent-session-dialog"
 import { useSessionViewerHost } from "@/components/message/session-viewer-host"
@@ -121,7 +123,7 @@ const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
   const viewerHost = useSessionViewerHost()
   const [dialogOpen, setDialogOpen] = useState(false)
   const {
-    agentType,
+    identity,
     task,
     taskId,
     status,
@@ -142,16 +144,11 @@ const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
     <div className="min-w-0 flex-1 space-y-1">
       {/* Name line: small icon inline with the name, then task id + status. */}
       <div className="flex items-center gap-1.5">
-        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground">
-          {agentType ? (
-            <AgentIcon agentType={agentType} className="h-3.5 w-3.5" />
-          ) : (
-            <span className="h-1.5 w-1.5 rounded-sm bg-muted-foreground/60" />
-          )}
-        </span>
-        <span className="min-w-0 truncate text-xs font-semibold text-foreground">
-          {agentType ? getAgentLabel(agentType) : t("unknownAgent")}
-        </span>
+        <DelegationIdentityAvatar identity={identity} size="overlay" />
+        <DelegationIdentityName
+          identity={identity}
+          className="min-w-0 truncate text-xs font-semibold text-foreground"
+        />
         {taskId && (
           <span
             className="shrink-0 font-mono text-2xs text-muted-foreground"
@@ -201,7 +198,7 @@ const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
           onOpenChange={setDialogOpen}
           childConversationId={childConversationId}
           childConnectionId={childConnectionId}
-          agentType={agentType}
+          identity={identity}
           kickoffTask={task}
         />
       )}

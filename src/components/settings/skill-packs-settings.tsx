@@ -39,8 +39,8 @@ const TRIGGER_ACTIVE =
  * Unified "Skill Packs" settings hub — a shared generic header + a fixed
  * top-right toolbar over a tabbed switcher for the three curated,
  * codeg-managed skill bundles (Experts, Science, Office), the generative-UI
- * switch that brings its own skill (UI), and the user's own skills (Custom).
- * Each tab renders the existing per-pack body verbatim.
+ * skill that teaches agents the chat's cards (UI), and the user's own skills
+ * (Custom). Each tab renders the existing per-pack body verbatim.
  */
 export function SkillPacksSettings() {
   const t = useTranslations("SkillPacksSettings")

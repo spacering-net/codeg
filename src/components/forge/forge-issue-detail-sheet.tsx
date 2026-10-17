@@ -101,7 +101,7 @@ import {
 } from "@/lib/app-error"
 import { useDiffViewMode } from "@/lib/diff-view-mode-prefs"
 import { mergeForgeRowUpdate } from "@/lib/forge-row-update"
-import { chipStateForLink } from "@/lib/forge-task-chip"
+import { chipStateForLink, isDeferredLink } from "@/lib/forge-task-chip"
 import { cn } from "@/lib/utils"
 import type {
   ForgeChangeDetail,
@@ -2878,7 +2878,9 @@ export function ForgeIssueDetailSheet({
                   )}
                 >
                   <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
-                  {tTasks(statusLabelKey(link.status))}
+                  {isDeferredLink(link)
+                    ? tTasks("statusDeferred")
+                    : tTasks(statusLabelKey(link.status))}
                 </Button>
               </>
             )}

@@ -1,34 +1,36 @@
-//! HTTP handlers for the generative-UI switch — the web-mode mirror of the
-//! Tauri commands in `commands::generative_ui`, sharing its core helpers so
-//! the save + skill cleanup + broadcast chain is identical across transports.
+//! HTTP handlers for the generative-UI skill pack (`ui-render`) — the
+//! web-mode mirror of the commands in `commands::generative_ui`, which they
+//! call as is.
 
-use std::sync::Arc;
-
-use axum::{extract::Extension, Json};
+use axum::Json;
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
-use crate::app_state::AppState;
-use crate::commands::generative_ui::{
-    load_generative_ui_settings, set_generative_ui_settings_core, GenerativeUiSettings,
-};
-
-pub async fn get_generative_ui_settings(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<GenerativeUiSettings>, AppCommandError> {
-    Ok(Json(load_generative_ui_settings(&state.db.conn).await))
-}
+use crate::commands::experts::{ExpertInstallStatus, LinkOp, LinkOpResult};
+use crate::commands::generative_ui::{self as commands, GenerativeUiSkillInfo};
 
 #[derive(Deserialize)]
-pub struct SetGenerativeUiSettingsParams {
-    pub settings: GenerativeUiSettings,
+pub struct ApplyLinksParams {
+    pub ops: Vec<LinkOp>,
 }
 
-pub async fn set_generative_ui_settings(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<SetGenerativeUiSettingsParams>,
-) -> Result<Json<GenerativeUiSettings>, AppCommandError> {
-    let saved =
-        set_generative_ui_settings_core(&state.db.conn, &state.emitter, params.settings).await?;
-    Ok(Json(saved))
+pub async fn generative_ui_skill_info() -> Result<Json<GenerativeUiSkillInfo>, AppCommandError> {
+    Ok(Json(commands::generative_ui_skill_info().await?))
+}
+
+pub async fn generative_ui_list_all_install_statuses(
+) -> Result<Json<Vec<ExpertInstallStatus>>, AppCommandError> {
+    Ok(Json(
+        commands::generative_ui_list_all_install_statuses().await?,
+    ))
+}
+
+pub async fn generative_ui_apply_links(
+    Json(params): Json<ApplyLinksParams>,
+) -> Result<Json<Vec<LinkOpResult>>, AppCommandError> {
+    Ok(Json(commands::generative_ui_apply_links(params.ops).await?))
+}
+
+pub async fn generative_ui_read_content() -> Result<Json<String>, AppCommandError> {
+    Ok(Json(commands::generative_ui_read_content().await?))
 }

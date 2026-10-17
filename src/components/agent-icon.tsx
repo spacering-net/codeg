@@ -440,6 +440,49 @@ const AntigravityMonoIcon = memo(function AntigravityMonoIcon({
   )
 })
 
+const ZCodeColorIcon = memo(function ZCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  // ZCode's Z mark, white on a dark squircle like the official app icon
+  // (zai-org/ZCode public/logo/icons, also zcode.z.ai's favicon). The three
+  // paths are the logo inlined in zcode.z.ai's header, verbatim in its
+  // 256×218 viewBox; the transform scales the mark to the app icon's
+  // proportion (68.75% of the icon's width) and centers it in the 24-box. The
+  // plate keeps the app icon's top-to-bottom #151718 → #000000 gradient on the
+  // 5.3 corner of the other plated marks (Kimi Code, Pi).
+  const id = useId()
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>ZCode</title>
+      <rect width="24" height="24" rx="5.3" fill={`url(#${id})`} />
+      <g fill="#FFFFFF" transform="translate(3.75 4.9831) scale(0.064453)">
+        <path d="M134.4 0.130152L116.48 25.6022C113.665 29.5699 109.054 32.0019 104.064 32.0019H6.3999V0C6.3999 0.130149 134.4 0.130152 134.4 0.130152Z" />
+        <path d="M256 0.130127L102.401 217.732H0L153.599 0.130127H256Z" />
+        <path d="M121.601 217.732L139.65 192.134C142.465 188.166 147.076 185.734 152.067 185.734H249.604V217.736H121.601V217.732Z" />
+      </g>
+      <defs>
+        <linearGradient
+          gradientUnits="userSpaceOnUse"
+          id={id}
+          x1="12"
+          x2="12"
+          y1="0"
+          y2="24"
+        >
+          <stop stopColor="#151718" />
+          <stop offset="1" stopColor="#000000" />
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+})
+
 const CursorMonoIcon = memo(function CursorMonoIcon({
   size = "1em",
 }: IconProps) {
@@ -461,6 +504,32 @@ const CursorMonoIcon = memo(function CursorMonoIcon({
   )
 })
 
+const KiroColorIcon = memo(function KiroColorIcon({ size = "1em" }: IconProps) {
+  // Kiro's ghost mark from the official app icon (kiro.dev/icon.svg), drawn
+  // bare in the brand purple (#9046FF) with its two eyes cut out, so it sits
+  // at the same weight as the other frameless marks instead of carrying the
+  // icon's rounded plate. The paths are the icon's own, translated so the
+  // glyph's 655×796 mask box starts at the origin.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="-70 0 796 796"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Kiro CLI</title>
+      <g transform="translate(-272.637 -202.793)">
+        <path
+          fill="#9046FF"
+          fillRule="evenodd"
+          d="M398.554 818.914C316.315 1001.03 491.477 1046.74 620.672 940.156C658.687 1059.66 801.052 970.473 852.234 877.795C964.787 673.567 919.318 465.357 907.64 422.374C827.637 129.443 427.623 128.946 358.8 423.865C342.651 475.544 342.402 534.18 333.458 595.051C328.986 625.86 325.507 645.488 313.83 677.785C306.873 696.424 297.68 712.819 282.773 740.645C259.915 783.881 269.604 867.113 387.87 823.883L399.051 818.914H398.554ZM636.123 549.353C603.328 549.353 598.359 510.097 598.359 486.742C598.359 465.623 602.086 448.977 609.293 438.293C615.504 428.852 624.697 424.131 636.123 424.131C647.555 424.131 657.492 428.852 664.447 438.541C672.398 449.474 676.623 466.12 676.623 486.742C676.623 525.998 661.471 549.353 636.375 549.353H636.123ZM771.24 549.353C738.445 549.353 733.477 510.097 733.477 486.742C733.477 465.623 737.203 448.977 744.41 438.293C750.621 428.852 759.814 424.131 771.24 424.131C782.672 424.131 792.609 428.852 799.564 438.541C807.516 449.474 811.74 466.12 811.74 486.742C811.74 525.998 796.588 549.353 771.492 549.353H771.24Z"
+        />
+      </g>
+    </svg>
+  )
+})
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyIcon = React.ComponentType<any>
 
@@ -472,6 +541,8 @@ const COLOR_ICONS: Partial<Record<AgentType, AnyIcon>> = {
   kimi_code: KimiCodeColorIcon,
   pi: PiColorIcon,
   deepseek: DeepSeekColorIcon,
+  kiro: KiroColorIcon,
+  zcode: ZCodeColorIcon,
 }
 
 const MONO_ICONS: Partial<Record<AgentType, AnyIcon>> = {

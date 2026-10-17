@@ -59,6 +59,10 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   read_text_file: "read",
   readfile: "read",
   "read file": "read",
+  // Codex's image viewer. codex-acp streams it as `kind: "read"` with the path
+  // as its input, so the live card is already a Read; the rollout keeps the raw
+  // function name, which made the reloaded card a generic tool instead.
+  view_image: "read",
   edit_file: "edit",
   update_file: "edit",
   write_file: "write",
@@ -744,6 +748,16 @@ export function inferLiveToolName(params: {
   const openCodeToolName = extractOpenCodeToolName(params.meta)
   if (openCodeToolName) return normalizeToolName(openCodeToolName)
 
+  // Kiro: the backend rewrites a built-in tool's arguments into the canonical
+  // shape and records the canonical name beside Kiro's own
+  // (`stamp_kiro_tool_name`) — the only way to tell `glob` ({pattern}) from
+  // `grep`, or a directory listing ({path}) from a file read, both of which the
+  // history parser names correctly. An MCP call gets its `mcp__<server>__<tool>`
+  // name, which its `Running: @<server>/<tool>` title never yields. Same
+  // placement, and reason, as OpenCode's above.
+  const kiroToolName = extractKiroToolName(params.meta)
+  if (kiroToolName) return normalizeToolName(kiroToolName)
+
   // Input-shape detection runs FIRST so cross-agent heuristics (Claude Code
   // `Task` tool routed via `subagent_type`, OpenCode sub-agent calls, etc.)
   // keep priority. The meta-tool-name override below only kicks in when the
@@ -875,6 +889,24 @@ function extractOpenCodeToolName(
   const opencode = (meta as Record<string, unknown>).opencode
   if (!opencode || typeof opencode !== "object") return null
   const name = (opencode as Record<string, unknown>).toolName
+  if (typeof name !== "string") return null
+  const trimmed = name.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+/**
+ * The canonical tool name the backend stamps into Kiro's own
+ * `_meta.kiro` namespace (`canonicalToolName`, beside Kiro's `toolName`). Only
+ * the opening frame carries it; the reducer keeps a block's `meta` across
+ * updates that omit it.
+ */
+function extractKiroToolName(
+  meta: Record<string, unknown> | null | undefined
+): string | null {
+  if (!meta || typeof meta !== "object") return null
+  const kiro = (meta as Record<string, unknown>).kiro
+  if (!kiro || typeof kiro !== "object") return null
+  const name = (kiro as Record<string, unknown>).canonicalToolName
   if (typeof name !== "string") return null
   const trimmed = name.trim()
   return trimmed.length > 0 ? trimmed : null

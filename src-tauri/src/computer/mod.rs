@@ -106,4 +106,6 @@ pub mod indicator;
 #[cfg(feature = "tauri-runtime")]
 pub mod marker;
 #[cfg(feature = "tauri-runtime")]
+mod overlay;
+#[cfg(feature = "tauri-runtime")]
 pub mod stop_key;

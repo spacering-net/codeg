@@ -67,6 +67,10 @@ pub struct WorkTaskInfo {
     /// Planned start of a to-do task (`None` = no plan). Cleared the moment the
     /// task is claimed, by the scheduler or by hand.
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// The user put this settled (review / failed) task aside to handle later:
+    /// the board files it under Done until they pick it back up. `None` = not
+    /// put aside. Cleared by every transition out of review / failed.
+    pub deferred_at: Option<DateTime<Utc>>,
     /// Forge provenance ('forge_issue' | 'forge_pr'); `None` = not forge-sourced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,

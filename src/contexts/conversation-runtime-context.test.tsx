@@ -1832,15 +1832,13 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
     type: "tool_call",
     info: toolInfo({ tool_call_id: id, title: "Agent", kind: "other" }),
   })
-  const build = (
-    content: LiveContentBlock[],
-    opts?: { attachAgentTranscripts?: boolean }
-  ) =>
-    buildStreamingTurnsFromLiveMessage(
-      1,
-      { id: "lm-sub", role: "assistant", startedAt: 0, content },
-      opts
-    )
+  const build = (content: LiveContentBlock[]) =>
+    buildStreamingTurnsFromLiveMessage(1, {
+      id: "lm-sub",
+      role: "assistant",
+      startedAt: 0,
+      content,
+    })
 
   it("routes parented text/thinking out of the main thread and attaches them in order", () => {
     const result = build([
@@ -1913,23 +1911,6 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
     expect(
       carrier?.type === "tool_result" ? carrier.agent_transcript : null
     ).toEqual([{ type: "text", text: "just prose" }])
-  })
-
-  it("attachAgentTranscripts:false (promotion) routes blocks out but attaches nothing", () => {
-    const result = build(
-      [
-        agentCall("toolu_agent"),
-        { type: "text", text: "sub prose", parentToolUseId: "toolu_agent" },
-      ],
-      { attachAgentTranscripts: false }
-    )
-    const blocks = result.turns.flatMap((t) => t.blocks)
-    expect(blocks.some((b) => b.type === "text")).toBe(false)
-    for (const b of blocks) {
-      if (b.type === "tool_result") {
-        expect(b.agent_transcript).toBeUndefined()
-      }
-    }
   })
 
   it("drops a parented block whose parent is not a classified agent", () => {
@@ -2042,6 +2023,9 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
       carrier?.type === "tool_result" ? carrier.agent_transcript : null
     ).toEqual([
       { type: "thinking", text: "before" },
+      // The child tool call keeps its chronological position: a marker the
+      // capsule resolves back through `agent_stats.tool_calls` by ordinal.
+      { type: "tool_call", childIndex: 0 },
       { type: "thinking", text: "after" },
     ])
   })

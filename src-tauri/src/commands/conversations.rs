@@ -6,7 +6,9 @@ use tauri::Manager;
 use crate::app_error::AppCommandError;
 use crate::db::entities::conversation;
 use crate::db::entities::folder::FolderKind;
-use crate::db::service::{conversation_service, folder_service, import_service, tab_service};
+use crate::db::service::{
+    agent_setting_service, conversation_service, folder_service, import_service, tab_service,
+};
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
 use crate::models::*;
@@ -16,7 +18,7 @@ use crate::models::*;
 use crate::parsers::codex::CodexParser;
 use crate::parsers::{
     build_agent_parser, folder_name_from_path, normalize_path_for_matching, path_eq_for_matching,
-    AgentParser, ParseError,
+    AgentEnvs, AgentParser, ParseError,
 };
 use crate::web::event_bridge::{
     emit_event, ConversationChange, ConversationsBulkChanged, EventEmitter, ImportScanProgress,
@@ -40,8 +42,9 @@ pub(crate) async fn list_all_conversations_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     options: ListAllConversationsOptions,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
-    let scan = match tokio::task::spawn_blocking(|| {
-        let parser = CodexParser::new();
+    let codex_env = agent_setting_service::load_agent_env(conn, AgentType::Codex).await;
+    let scan = match tokio::task::spawn_blocking(move || {
+        let parser = CodexParser::for_env(&codex_env);
         let titles = parser.load_thread_name_index();
         let present = parser.present_session_ids();
         (titles, present)
@@ -312,6 +315,7 @@ pub async fn save_opened_tabs(
 
 /// Synchronous implementation shared by list_conversations, list_folders, and get_stats.
 fn list_conversations_sync(
+    envs: &AgentEnvs,
     agent_type: Option<AgentType>,
     search: Option<String>,
     sort_by: Option<String>,
@@ -326,12 +330,12 @@ fn list_conversations_sync(
     let mut parsers: Vec<(AgentType, Box<dyn AgentParser>)> =
         crate::models::agent::BUILTIN_AGENT_TYPES
             .iter()
-            .map(|&at| (at, build_agent_parser(at)))
+            .map(|&at| (at, build_agent_parser(at, &envs.get(at))))
             .collect();
     // Registered custom agents read back from codeg's own ACP transcripts, so
     // their sessions participate in folder grouping and stats like any other.
     for custom in crate::acp::custom_registry::all() {
-        parsers.push((custom, build_agent_parser(custom)));
+        parsers.push((custom, build_agent_parser(custom, &envs.get(custom))));
     }
 
     for (at, parser) in &parsers {
@@ -405,15 +409,16 @@ fn list_conversations_sync(
     all_conversations
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn list_conversations(
+pub async fn list_conversations_core(
+    conn: &sea_orm::DatabaseConnection,
     agent_type: Option<AgentType>,
     search: Option<String>,
     sort_by: Option<String>,
     folder_path: Option<String>,
 ) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    let envs = agent_setting_service::load_agent_envs(conn).await;
     tokio::task::spawn_blocking(move || {
-        list_conversations_sync(agent_type, search, sort_by, folder_path)
+        list_conversations_sync(&envs, agent_type, search, sort_by, folder_path)
     })
     .await
     .map_err(|e| {
@@ -422,13 +427,28 @@ pub async fn list_conversations(
     })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_conversation(
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_conversations(
+    db: tauri::State<'_, AppDatabase>,
+    agent_type: Option<AgentType>,
+    search: Option<String>,
+    sort_by: Option<String>,
+    folder_path: Option<String>,
+) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    list_conversations_core(&db.conn, agent_type, search, sort_by, folder_path).await
+}
+
+/// One agent session read straight from the agent's own store by its session
+/// id — the sub-agent transcript viewer's source.
+pub async fn get_conversation_core(
+    conn: &sea_orm::DatabaseConnection,
     agent_type: AgentType,
     conversation_id: String,
 ) -> Result<ConversationDetail, AppCommandError> {
+    let env = agent_setting_service::load_agent_env(conn, agent_type).await;
     tokio::task::spawn_blocking(move || -> Result<ConversationDetail, AppCommandError> {
-        build_agent_parser(agent_type)
+        build_agent_parser(agent_type, &env)
             .get_conversation(&conversation_id)
             .map_err(parse_error_to_app_error)
     })
@@ -439,44 +459,74 @@ pub async fn get_conversation(
     })?
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn list_folders() -> Result<Vec<FolderInfo>, AppCommandError> {
-    tokio::task::spawn_blocking(move || -> Result<Vec<FolderInfo>, AppCommandError> {
-        let all_conversations = list_conversations_sync(None, None, None, None);
-        Ok(compute_folders(&all_conversations))
-    })
-    .await
-    .map_err(|e| {
-        AppCommandError::task_execution_failed("Failed to list folders").with_detail(e.to_string())
-    })?
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn get_conversation(
+    db: tauri::State<'_, AppDatabase>,
+    agent_type: AgentType,
+    conversation_id: String,
+) -> Result<ConversationDetail, AppCommandError> {
+    get_conversation_core(&db.conn, agent_type, conversation_id).await
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_stats() -> Result<AgentStats, AppCommandError> {
-    tokio::task::spawn_blocking(move || -> Result<AgentStats, AppCommandError> {
-        let all_conversations = list_conversations_sync(None, None, None, None);
-        Ok(compute_stats(&all_conversations))
-    })
-    .await
-    .map_err(|e| {
-        AppCommandError::task_execution_failed("Failed to compute conversation stats")
-            .with_detail(e.to_string())
-    })?
+/// Every parsable session on this machine, read in one blocking pass with
+/// each agent's launch environment — shared by the folder/stats/sidebar
+/// aggregates below.
+async fn list_all_local_conversations(
+    conn: &sea_orm::DatabaseConnection,
+    what: &'static str,
+) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    tokio::task::spawn_blocking(move || list_conversations_sync(&envs, None, None, None, None))
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(what).with_detail(e.to_string()))
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_sidebar_data() -> Result<SidebarData, AppCommandError> {
-    tokio::task::spawn_blocking(move || -> Result<SidebarData, AppCommandError> {
-        let all_conversations = list_conversations_sync(None, None, None, None);
-        let folders = compute_folders(&all_conversations);
-        let stats = compute_stats(&all_conversations);
-        Ok(SidebarData { folders, stats })
-    })
-    .await
-    .map_err(|e| {
-        AppCommandError::task_execution_failed("Failed to build sidebar data")
-            .with_detail(e.to_string())
-    })?
+pub async fn list_folders_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<Vec<FolderInfo>, AppCommandError> {
+    let all_conversations = list_all_local_conversations(conn, "Failed to list folders").await?;
+    Ok(compute_folders(&all_conversations))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_folders(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<FolderInfo>, AppCommandError> {
+    list_folders_core(&db.conn).await
+}
+
+pub async fn get_stats_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<AgentStats, AppCommandError> {
+    let all_conversations =
+        list_all_local_conversations(conn, "Failed to compute conversation stats").await?;
+    Ok(compute_stats(&all_conversations))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn get_stats(db: tauri::State<'_, AppDatabase>) -> Result<AgentStats, AppCommandError> {
+    get_stats_core(&db.conn).await
+}
+
+pub async fn get_sidebar_data_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<SidebarData, AppCommandError> {
+    let all_conversations =
+        list_all_local_conversations(conn, "Failed to build sidebar data").await?;
+    let folders = compute_folders(&all_conversations);
+    let stats = compute_stats(&all_conversations);
+    Ok(SidebarData { folders, stats })
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn get_sidebar_data(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<SidebarData, AppCommandError> {
+    get_sidebar_data_core(&db.conn).await
 }
 
 fn compute_folders(all_conversations: &[ConversationSummary]) -> Vec<FolderInfo> {
@@ -801,8 +851,10 @@ pub async fn scan_importable_sessions_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
 ) -> Result<ScanResult, AppCommandError> {
     let progress_emitter = emitter.clone();
-    let summaries =
-        import_service::collect_local_summaries(move |agent_type, done, total, session_count| {
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    let summaries = import_service::collect_local_summaries(
+        &envs,
+        move |agent_type, done, total, session_count| {
             emit_event(
                 &progress_emitter,
                 IMPORT_SCAN_PROGRESS_EVENT,
@@ -813,8 +865,9 @@ pub async fn scan_importable_sessions_core(
                     session_count,
                 },
             );
-        })
-        .await;
+        },
+    )
+    .await;
 
     scan_importable_sessions_from_summaries(conn, emitter, chat_channel_manager, summaries).await
 }
@@ -1193,7 +1246,8 @@ pub async fn import_selected_sessions_core(
         .try_lock()
         .map_err(|_| AppCommandError::invalid_input("An import is already in progress"))?;
 
-    let summaries = import_service::collect_local_summaries(|_, _, _, _| {}).await;
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    let summaries = import_service::collect_local_summaries(&envs, |_, _, _, _| {}).await;
     import_selected_from_summaries(conn, emitter, summaries, selections).await
 }
 
@@ -1264,6 +1318,20 @@ fn build_historical_delegation_meta(child: &DbConversationSummary) -> serde_json
             "task_preview".into(),
             serde_json::Value::String(title.into()),
         );
+    }
+    // The assistant the child ran as, off its row: the reloaded card draws it
+    // even when no live binding or tool result remains.
+    if let Some(assistant_id) = child.assistant_id {
+        obj.insert(
+            "assistant_id".into(),
+            serde_json::Value::Number(assistant_id.into()),
+        );
+        if let Some(name) = child.assistant_name.as_deref() {
+            obj.insert(
+                "assistant_name".into(),
+                serde_json::Value::String(name.into()),
+            );
+        }
     }
     serde_json::Value::Object(obj)
 }
@@ -1485,8 +1553,12 @@ pub async fn get_folder_conversation_core(
                 .flatten()
                 .map(|f| f.path),
         };
+        // The session file is wherever the agent's launch environment put it:
+        // a `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/… in its settings moves it out of
+        // the default directory codeg's own environment names.
+        let agent_env = agent_setting_service::load_agent_env(conn, at).await;
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
-            let parser = build_agent_parser(at);
+            let parser = build_agent_parser(at, &agent_env);
             match parser.get_conversation(&eid) {
                 Ok(d) => {
                     // Claude `/clear` (and similar on-disk id changes) make
@@ -1651,6 +1723,7 @@ pub async fn get_folder_conversation_core(
             turns_offset: None,
             turns_total: None,
             assistant_turns_before_offset: None,
+            user_turns_before_offset: None,
             prefix_hash: None,
             uncovered_prefix_max_ts: None,
         },
@@ -1949,6 +2022,7 @@ fn apply_turn_window(
     detail.turns_offset = Some(meta.offset);
     detail.turns_total = Some(meta.total);
     detail.assistant_turns_before_offset = Some(meta.assistant_before);
+    detail.user_turns_before_offset = Some(meta.user_before);
     detail.prefix_hash = Some(meta.prefix_hash);
     detail.uncovered_prefix_max_ts = meta.uncovered_prefix_max_ts;
 }
@@ -2064,9 +2138,32 @@ pub async fn get_folder_conversation_turns_core(
         turns_offset: meta.offset,
         turns_total: meta.total,
         assistant_turns_before_offset: meta.assistant_before,
+        user_turns_before_offset: meta.user_before,
         prefix_hash: meta.prefix_hash,
         prefix_hash_before_index: seam.prefix_hash,
         uncovered_prefix_max_ts: meta.uncovered_prefix_max_ts,
+    })
+}
+
+/// The message navigator's outline of the history above a loaded window:
+/// `full[0..min(before_index, total))`, each turn reduced by
+/// [`turn_window::nav_outline_turns`](crate::commands::turn_window::nav_outline_turns)
+/// to what the navigator reads. Same light path as the history page (full
+/// parse + delegation meta, no live correlation or sidebar events), so its
+/// turn ids are the ones a page of the same history carries.
+pub async fn get_folder_conversation_outline_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+    before_index: usize,
+) -> Result<ConversationOutline, AppCommandError> {
+    use crate::commands::turn_window;
+    let (detail, _parsed_title) = get_folder_conversation_core(conn, conversation_id).await?;
+    let turns = detail.turns;
+    let end = before_index.min(turns.len());
+    Ok(ConversationOutline {
+        turns: turn_window::nav_outline_turns(&turns[..end]),
+        turns_total: turns.len(),
+        prefix_hash: turn_window::prefix_fingerprint(&turns[..end]),
     })
 }
 
@@ -2102,6 +2199,16 @@ pub async fn get_folder_conversation_turns(
     limit: usize,
 ) -> Result<ConversationTurnsPage, AppCommandError> {
     get_folder_conversation_turns_core(&db.conn, conversation_id, before_index, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn get_folder_conversation_outline(
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+    before_index: usize,
+) -> Result<ConversationOutline, AppCommandError> {
+    get_folder_conversation_outline_core(&db.conn, conversation_id, before_index).await
 }
 
 /// Emit a `conversation://changed` Upsert for `conversation_id` so every
@@ -2960,6 +3067,8 @@ mod tests {
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
             origin_cwd: None,
+            assistant_id: None,
+            assistant_name: None,
             tag_ids: Vec::new(),
         }
     }
@@ -3451,6 +3560,38 @@ mod tests {
         );
     }
 
+    /// A reloaded card of an assistant delegation draws the assistant from the
+    /// child row: its id, and its name as the task started.
+    #[test]
+    fn inject_delegation_meta_carries_the_assistant_off_the_child_row() {
+        let mut turns = vec![tool_use_turn(
+            Some("tu-a"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        let mut child = summary_child(43, "tu-a", "completed");
+        child.assistant_id = Some(3);
+        child.assistant_name = Some("Reviewer".into());
+        inject_delegation_meta(&mut turns, &[child]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .expect("meta should be set");
+        assert_eq!(inner["assistant_id"], 3);
+        assert_eq!(inner["assistant_name"], "Reviewer");
+        assert_eq!(inner["agent_type"], "codex");
+
+        // An agent delegation's meta carries no assistant keys at all.
+        let mut turns = vec![tool_use_turn(
+            Some("tu-b"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(44, "tu-b", "completed")]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .unwrap();
+        assert!(inner.get("assistant_id").is_none());
+        assert!(inner.get("assistant_name").is_none());
+    }
+
     fn tool_result_turn(tool_use_id: &str, output: &str) -> MessageTurn {
         MessageTurn {
             id: "t2".into(),
@@ -3778,6 +3919,7 @@ mod tests {
             parent_conversation_id: parent_id,
             parent_tool_use_id: "tu-historical".into(),
             delegation_call_id: "call-historical".into(),
+            assistant: None,
         };
         conversation_service::create_with_delegation(
             &db.conn,
@@ -4276,6 +4418,88 @@ mod tests {
         assert!(all
             .iter()
             .any(|f| f.id == chat_id && f.kind == FolderKind::Chat));
+    }
+
+    /// Save `env_json` for `agent_type` the way the settings page does.
+    async fn save_agent_env_json(
+        db: &crate::db::AppDatabase,
+        agent_type: AgentType,
+        env_json: &str,
+    ) {
+        agent_setting_service::ensure_defaults(
+            &db.conn,
+            &[agent_setting_service::AgentDefaultInput {
+                agent_type,
+                registry_id: agent_type.to_string(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .expect("seed agent setting");
+        agent_setting_service::update(
+            &db.conn,
+            agent_type,
+            agent_setting_service::AgentSettingsUpdate {
+                enabled: true,
+                env_json: Some(env_json.to_string()),
+                model_provider_id: None,
+            },
+        )
+        .await
+        .expect("save env_json");
+    }
+
+    /// #948: `CLAUDE_CONFIG_DIR` set only in the agent's settings moves the
+    /// transcript out of the directory codeg's own environment names. Opening
+    /// the conversation must read it from where the agent wrote it, not come
+    /// back empty ("no messages"). Hermetic: the relocated dir is a tempdir,
+    /// so nothing here reads the real `~/.claude`.
+    #[tokio::test]
+    async fn a_conversation_is_read_from_the_config_dir_its_agent_settings_name() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let project = config_dir.path().join("projects").join("-relocated-proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let session_id = "0e5f6a10-9b1c-4c2d-8e3f-4a5b6c7d8e9f";
+        std::fs::write(
+            project.join(format!("{session_id}.jsonl")),
+            [
+                r#"{"type":"user","timestamp":"2026-10-14T01:00:00.000Z","uuid":"u1","cwd":"/tmp/codeg-948-proj","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
+                r#"{"type":"assistant","timestamp":"2026-10-14T01:00:05.000Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_01","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"hi"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
+        let db = fresh_in_memory_db().await;
+        save_agent_env_json(
+            &db,
+            AgentType::ClaudeCode,
+            &serde_json::json!({ "CLAUDE_CONFIG_DIR": config_dir.path() }).to_string(),
+        )
+        .await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-948-proj").await;
+        let conversation_id = create_conversation_core(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("relocated".into()),
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::bind_external_id(&db.conn, conversation_id, session_id, &[])
+            .await
+            .expect("bind session");
+
+        let (detail, _) = get_folder_conversation_core(&db.conn, conversation_id)
+            .await
+            .expect("open conversation");
+        assert_eq!(detail.turns.len(), 2, "turns: {:?}", detail.turns);
+
+        // The sub-agent transcript viewer reads by session id the same way.
+        let by_id = get_conversation_core(&db.conn, AgentType::ClaudeCode, session_id.to_string())
+            .await
+            .expect("read by session id");
+        assert_eq!(by_id.turns.len(), 2);
     }
 
     #[tokio::test]
@@ -5313,6 +5537,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: (*tool_use).into(),
                 delegation_call_id: format!("call-{i}"),
+                assistant: None,
             };
             let child = conversation_service::create_with_delegation(
                 &db.conn,
@@ -5671,6 +5896,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -5715,6 +5941,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -6848,6 +7075,8 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                assistant_id: None,
+                assistant_name: None,
                 tag_ids: Vec::new(),
             },
             turns,
@@ -6857,6 +7086,7 @@ mod tests {
             turns_offset: None,
             turns_total: None,
             assistant_turns_before_offset: None,
+            user_turns_before_offset: None,
             prefix_hash: None,
             uncovered_prefix_max_ts: None,
         }
@@ -6892,6 +7122,7 @@ mod tests {
         assert_eq!(detail.turns_offset, Some(2));
         assert_eq!(detail.turns_total, Some(4));
         assert_eq!(detail.assistant_turns_before_offset, Some(1));
+        assert_eq!(detail.user_turns_before_offset, Some(1));
         assert_eq!(
             detail.turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
             vec!["turn-2", "turn-3"]
@@ -6967,6 +7198,7 @@ mod tests {
             page.prefix_hash, page.prefix_hash_before_index,
             "empty transcript: both fingerprints are the seed"
         );
+        assert_eq!(page.user_turns_before_offset, 0);
 
         // Seam-proof shape on a synthetic list: the page [start..before) must
         // report H(0..start) as its own fingerprint and H(0..before) as the
@@ -6981,6 +7213,28 @@ mod tests {
         assert_eq!(
             seam.prefix_hash,
             crate::commands::turn_window::prefix_fingerprint(&turns[..2])
+        );
+    }
+
+    #[tokio::test]
+    async fn outline_core_cuts_the_prefix_at_before_index() {
+        // A conversation without an external_id parses to zero turns: the
+        // outline is empty, `before_index` clamps to the total, and the
+        // fingerprint is the seed — the same value a windowed detail of this
+        // transcript reports as its prefix hash.
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/outline").await;
+        let conv_id = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
+            .await
+            .expect("create conversation");
+        let outline = get_folder_conversation_outline_core(&db.conn, conv_id, 10)
+            .await
+            .expect("outline fetch");
+        assert!(outline.turns.is_empty());
+        assert_eq!(outline.turns_total, 0);
+        assert_eq!(
+            outline.prefix_hash,
+            crate::commands::turn_window::prefix_fingerprint(&[])
         );
     }
 }

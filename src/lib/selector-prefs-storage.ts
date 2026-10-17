@@ -47,12 +47,29 @@ function writeAll(all: AllPrefs) {
   }
 }
 
+/**
+ * Built-in agent types that took over a custom agent, mapped to the custom
+ * agent's id. The database migration that retired it
+ * (`m20261015_000001_kiro_builtin_agent`) cannot reach this device-local
+ * store, so until the built-in has picks of its own it starts from the custom
+ * agent's: both ran the same `kiro-cli acp`, so its saved agent (the mode) is
+ * one the built-in offers too.
+ */
+const RETIRED_CUSTOM_AGENTS = new Map([["kiro", "custom:kiro-cli"]])
+
+function prefsOf(all: AllPrefs, agentType: string): SelectorPrefs | undefined {
+  const own = all[agentType]
+  if (own) return own
+  const retired = RETIRED_CUSTOM_AGENTS.get(agentType)
+  return retired ? all[retired] : undefined
+}
+
 function updatePrefs(
   agentType: string,
   fn: (prefs: SelectorPrefs) => SelectorPrefs
 ) {
   const all = readAll()
-  const existing = all[agentType]
+  const existing = prefsOf(all, agentType)
   // Re-project onto the current schema so legacy fields (`modesHash` /
   // `configHash` from before the backend took ownership of preference
   // application) don't survive across writes. Without this an upgrade
@@ -127,8 +144,7 @@ function healLegacyValues(
 
 /** Read saved mode id for an agent (no validation, just the raw value). */
 export function getSavedModeId(agentType: string): string | null {
-  const all = readAll()
-  return all[agentType]?.modeId ?? null
+  return prefsOf(readAll(), agentType)?.modeId ?? null
 }
 
 /**
@@ -145,8 +161,7 @@ export function getSavedPrefsForConnect(agentType: string): {
   modeId: string | null
   configValues: Record<string, string> | null
 } {
-  const all = readAll()
-  const prefs = all[agentType]
+  const prefs = prefsOf(readAll(), agentType)
   if (!prefs) return { modeId: null, configValues: null }
   const configValues =
     prefs.configValues && Object.keys(prefs.configValues).length > 0

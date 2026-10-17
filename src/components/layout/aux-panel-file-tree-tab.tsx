@@ -2897,7 +2897,13 @@ export function FileTreeTab() {
               ref={treeContainerRef}
               keyboardNavigation
               onKeyDown={handleTreeKeyDown}
-              className="border-0 rounded-none bg-transparent w-max min-w-full px-1.5 focus:outline-none focus-visible:outline-none"
+              // `px-1.5 pt-1.5` inset the row highlight from the panel's sides
+              // and from the title strip above, so a selected root row doesn't
+              // sit flush against the strip. Rows repeat the top inset as a
+              // scroll margin: keyboard navigation scrolls the focused row to
+              // the nearest edge, which would otherwise scroll the padding
+              // away when stepping back up to the root.
+              className="border-0 rounded-none bg-transparent w-max min-w-full px-1.5 pt-1.5 focus:outline-none focus-visible:outline-none [&_[data-tree-row-path]]:scroll-mt-1.5"
               expanded={expandedPaths}
               onExpandedChange={setExpandedPaths}
               selectedPath={focusedTreePath}

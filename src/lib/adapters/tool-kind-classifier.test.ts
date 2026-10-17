@@ -23,6 +23,8 @@ describe("classifyToolKind", () => {
     ["read", "read"],
     ["Read File", "read"],
     ["view", "read"],
+    // codex's image viewer, by its raw rollout name.
+    ["view_image", "read"],
     ["edit", "edit"],
     ["NotebookEdit", "edit"],
     ["replace_in_file", "edit"],

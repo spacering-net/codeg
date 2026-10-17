@@ -67,6 +67,7 @@ import {
   testConfigSyncConnection,
   updateConfigSyncSettings,
   uploadConfigNow,
+  type ApplyReport,
   type ConfigManifest,
   type ConfigSyncSettingsInput,
   type DomainCounts,
@@ -82,6 +83,7 @@ const SCOPE_INCLUDED = [
   "providers",
   "agentSettings",
   "customAgents",
+  "assistants",
   "quickMessages",
   "taskTemplates",
   "preferences",
@@ -139,6 +141,16 @@ export function ConfigSyncSettings() {
     (err: unknown) =>
       toLocalizedErrorMessage(err, tRoot as unknown as AppErrorTranslator),
     [tRoot]
+  )
+  /** The note under an apply's toast: what to restart, and — when an
+   *  assistant here already had a name the file used — that some were
+   *  renamed rather than overwritten. */
+  const appliedDescription = useCallback(
+    (applied: ApplyReport) =>
+      applied.renamed
+        ? `${t("restartHint")} ${t("assistantsRenamed", { count: applied.renamed })}`
+        : t("restartHint"),
+    [t]
   )
 
   const [loaded, setLoaded] = useState(false)
@@ -447,7 +459,7 @@ export function ConfigSyncSettings() {
       // window the user is looking at keeps showing the old values. Saying so
       // is the difference between "it worked" and "it did nothing".
       toast.success(t("restored", { count: outcome.applied.total }), {
-        description: t("restartHint"),
+        description: appliedDescription(outcome.applied),
       })
       // A restore just wrote a rollback point; the undo list has to show it.
       await refreshRollbacks()
@@ -456,7 +468,7 @@ export function ConfigSyncSettings() {
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [localize, refreshRollbacks, t])
+  }, [appliedDescription, localize, refreshRollbacks, t])
 
   const handleExport = useCallback(async () => {
     setBusy("export")
@@ -498,7 +510,7 @@ export function ConfigSyncSettings() {
       const result = await importPickedConfig(source)
       if (mounted.current) {
         toast.success(t("imported", { count: result.applied.total }), {
-          description: t("restartHint"),
+          description: appliedDescription(result.applied),
         })
       }
       await refreshRollbacks()
@@ -507,7 +519,7 @@ export function ConfigSyncSettings() {
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [pendingImport, localize, refreshRollbacks, t])
+  }, [pendingImport, appliedDescription, localize, refreshRollbacks, t])
 
   /**
    * Undo an import or a restore. The backend captures the pre-apply state
@@ -523,7 +535,7 @@ export function ConfigSyncSettings() {
       const result = await applyConfigRollback(id)
       if (mounted.current) {
         toast.success(t("rolledBack", { count: result.applied.total }), {
-          description: t("restartHint"),
+          description: appliedDescription(result.applied),
         })
       }
       // The undo wrote its own rollback point, so it is itself undoable.
@@ -536,7 +548,7 @@ export function ConfigSyncSettings() {
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [pendingRollback, localize, refreshRollbacks, t])
+  }, [pendingRollback, appliedDescription, localize, refreshRollbacks, t])
 
   const syncedLabel = formatTimestamp(lastSyncAt)
   // Only the hosted services need a setup note; "custom" has nothing to say.

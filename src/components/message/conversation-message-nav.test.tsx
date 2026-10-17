@@ -1,18 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent } from "@testing-library/react"
-import type { RefObject } from "react"
 import {
   ConversationMessageNav,
   type MessageNavEntry,
 } from "./conversation-message-nav"
-import type { MessageScrollContextValue } from "./message-scroll-context"
-import { ChatAnimationsContext } from "@/components/appearance-provider"
 
-// Stable `t` (per next-intl mock guidance) — returns the key verbatim, which is
-// enough to address every label in this component (the collapsed chip, the card
-// title/collapse button, the per-entry file-count toggle, etc.).
+// Stable `t` (per next-intl mock guidance) — returns the key verbatim, plus the
+// `count` it was given (`collapsedSummary:3`), so a label that shows a count is
+// checked for the right one.
 const { stableT, mockOpenDiff } = vi.hoisted(() => {
-  const t = (key: string) => key
+  const t = (key: string, values?: Record<string, unknown>) =>
+    values && "count" in values ? `${key}:${String(values.count)}` : key
   return { stableT: t, mockOpenDiff: vi.fn() }
 })
 
@@ -29,6 +27,7 @@ const DELETION_DIFF = "*** Delete File: old.ts\n-a\n-b\n-c\n-d"
 const entries: MessageNavEntry[] = [
   {
     threadIndex: 0,
+    turnIndex: null,
     turnId: "u1",
     ordinal: 1,
     label: "first message",
@@ -40,6 +39,7 @@ const entries: MessageNavEntry[] = [
   {
     // One-sided change: additions only — the -0 must still render.
     threadIndex: 3,
+    turnIndex: null,
     turnId: "u2",
     ordinal: 2,
     label: "edit something",
@@ -59,6 +59,7 @@ const entries: MessageNavEntry[] = [
   {
     // Deleted file — must remain clickable to open its deletion diff.
     threadIndex: 6,
+    turnIndex: null,
     turnId: "u3",
     ordinal: 3,
     label: "delete a file",
@@ -77,12 +78,17 @@ const entries: MessageNavEntry[] = [
   },
 ]
 
-function makeScrollApi() {
-  const scrollToIndex = vi.fn()
-  const scrollApiRef = {
-    current: { scrollToIndex },
-  } as RefObject<MessageScrollContextValue | null>
-  return { scrollToIndex, scrollApiRef }
+/** A message above the loaded window: listed, but not rendered yet. */
+const earlierEntry: MessageNavEntry = {
+  threadIndex: null,
+  turnIndex: 12,
+  turnId: "turn-12",
+  ordinal: 1,
+  label: "an early message",
+  additions: 0,
+  deletions: 0,
+  files: [],
+  hasChanges: false,
 }
 
 describe("ConversationMessageNav", () => {
@@ -91,21 +97,19 @@ describe("ConversationMessageNav", () => {
   })
 
   it("renders nothing when there are no user messages", () => {
-    const { scrollApiRef } = makeScrollApi()
     const { container } = render(
       <ConversationMessageNav
         count={0}
         expanded={false}
         onToggle={vi.fn()}
         entries={[]}
-        scrollApiRef={scrollApiRef}
+        onSelect={vi.fn()}
       />
     )
     expect(container).toBeEmptyDOMElement()
   })
 
   it("collapsed: shows the count chip and expands on click", () => {
-    const { scrollApiRef } = makeScrollApi()
     const onToggle = vi.fn()
     render(
       <ConversationMessageNav
@@ -113,55 +117,96 @@ describe("ConversationMessageNav", () => {
         expanded={false}
         onToggle={onToggle}
         entries={[]}
-        scrollApiRef={scrollApiRef}
+        onSelect={vi.fn()}
       />
     )
     // No card while collapsed.
     expect(screen.queryByText("title")).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "collapsedSummary" }))
+    fireEvent.click(screen.getByRole("button", { name: "collapsedSummary:3" }))
     expect(onToggle).toHaveBeenCalledWith(true)
   })
 
-  it("expanded: clicking a message scrolls to its thread index", () => {
-    const { scrollToIndex, scrollApiRef } = makeScrollApi()
+  it("expanded: clicking a message selects its entry", () => {
+    const onSelect = vi.fn()
     render(
       <ConversationMessageNav
         count={entries.length}
         expanded
         onToggle={vi.fn()}
         entries={entries}
-        scrollApiRef={scrollApiRef}
+        onSelect={onSelect}
       />
     )
     fireEvent.click(screen.getByText("edit something"))
-    expect(scrollToIndex).toHaveBeenCalledWith(3, {
-      align: "start",
-      smooth: true,
-    })
+    expect(onSelect).toHaveBeenCalledWith(entries[1])
   })
 
-  it("expanded: jumps without gliding when chat animations are off", () => {
-    const { scrollToIndex, scrollApiRef } = makeScrollApi()
+  it("selects a message above the loaded window like any other", () => {
+    const onSelect = vi.fn()
     render(
-      <ChatAnimationsContext.Provider value={false}>
-        <ConversationMessageNav
-          count={entries.length}
-          expanded
-          onToggle={vi.fn()}
-          entries={entries}
-          scrollApiRef={scrollApiRef}
-        />
-      </ChatAnimationsContext.Provider>
+      <ConversationMessageNav
+        count={4}
+        expanded
+        onToggle={vi.fn()}
+        entries={[earlierEntry, ...entries]}
+        onSelect={onSelect}
+      />
     )
-    fireEvent.click(screen.getByText("edit something"))
-    expect(scrollToIndex).toHaveBeenCalledWith(3, {
-      align: "start",
-      smooth: false,
-    })
+    fireEvent.click(screen.getByText("an early message"))
+    expect(onSelect).toHaveBeenCalledWith(earlierEntry)
+  })
+
+  it("marks the message being paged in as busy", () => {
+    render(
+      <ConversationMessageNav
+        count={4}
+        expanded
+        onToggle={vi.fn()}
+        entries={[earlierEntry, ...entries]}
+        onSelect={vi.fn()}
+        revealingTurnId="turn-12"
+      />
+    )
+    const revealing = screen.getByText("an early message").closest("button")
+    expect(revealing).toHaveAttribute("aria-busy", "true")
+    const other = screen.getByText("first message").closest("button")
+    expect(other).not.toHaveAttribute("aria-busy")
+  })
+
+  it("says so while the messages above the window are loading", () => {
+    render(
+      <ConversationMessageNav
+        count={5}
+        expanded
+        onToggle={vi.fn()}
+        entries={entries}
+        onSelect={vi.fn()}
+        earlier="loading"
+      />
+    )
+    expect(screen.getByText("loadingEarlier")).toBeInTheDocument()
+    expect(screen.queryByText("loadEarlier")).not.toBeInTheDocument()
+  })
+
+  it("offers a retry when the messages above the window failed to load", () => {
+    const onRetryEarlier = vi.fn()
+    render(
+      <ConversationMessageNav
+        count={5}
+        expanded
+        onToggle={vi.fn()}
+        entries={entries}
+        onSelect={vi.fn()}
+        earlier="error"
+        onRetryEarlier={onRetryEarlier}
+      />
+    )
+    expect(screen.queryByText("loadingEarlier")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "loadEarlier" }))
+    expect(onRetryEarlier).toHaveBeenCalledTimes(1)
   })
 
   it("expanded: the header collapse button collapses the panel", () => {
-    const { scrollApiRef } = makeScrollApi()
     const onToggle = vi.fn()
     render(
       <ConversationMessageNav
@@ -169,7 +214,7 @@ describe("ConversationMessageNav", () => {
         expanded
         onToggle={onToggle}
         entries={entries}
-        scrollApiRef={scrollApiRef}
+        onSelect={vi.fn()}
       />
     )
     fireEvent.click(screen.getByRole("button", { name: "collapse" }))
@@ -177,14 +222,13 @@ describe("ConversationMessageNav", () => {
   })
 
   it("always shows both +N and -N, including a zero side", () => {
-    const { scrollApiRef } = makeScrollApi()
     render(
       <ConversationMessageNav
         count={entries.length}
         expanded
         onToggle={vi.fn()}
         entries={entries}
-        scrollApiRef={scrollApiRef}
+        onSelect={vi.fn()}
       />
     )
     // u2 added 5, deleted 0 — both rendered.
@@ -198,18 +242,17 @@ describe("ConversationMessageNav", () => {
   })
 
   it("opens a file diff when a changed file is clicked", () => {
-    const { scrollApiRef } = makeScrollApi()
     render(
       <ConversationMessageNav
         count={entries.length}
         expanded
         onToggle={vi.fn()}
         entries={entries}
-        scrollApiRef={scrollApiRef}
+        onSelect={vi.fn()}
       />
     )
     // Expand u2's file list (first changed group).
-    fireEvent.click(screen.getAllByRole("button", { name: "fileCount" })[0])
+    fireEvent.click(screen.getAllByRole("button", { name: /^fileCount:/ })[0])
     fireEvent.click(screen.getByTitle("src/a.ts"))
     expect(mockOpenDiff).toHaveBeenCalledWith(
       "/repo/src/a.ts",
@@ -219,18 +262,17 @@ describe("ConversationMessageNav", () => {
   })
 
   it("opens the deletion diff when a deleted file is clicked", () => {
-    const { scrollApiRef } = makeScrollApi()
     render(
       <ConversationMessageNav
         count={entries.length}
         expanded
         onToggle={vi.fn()}
         entries={entries}
-        scrollApiRef={scrollApiRef}
+        onSelect={vi.fn()}
       />
     )
     // Expand u3's file list (second changed group).
-    fireEvent.click(screen.getAllByRole("button", { name: "fileCount" })[1])
+    fireEvent.click(screen.getAllByRole("button", { name: /^fileCount:/ })[1])
     fireEvent.click(screen.getByTitle("old.ts"))
     expect(mockOpenDiff).toHaveBeenCalledWith(
       "/repo/old.ts",

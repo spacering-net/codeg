@@ -36,6 +36,11 @@ interface AgentConfigSectionProps {
    *  caller without it keeps verbatim rendering. */
   agentType?: AgentType | null
   loading: boolean
+  /** The snapshot was probed for a previous selection (another agent, folder
+   *  or model — the hook's `current` is false while its re-probe is pending).
+   *  Rendered as loading: picking off a previous selection's options would put
+   *  its values into the new one. */
+  stale?: boolean
   error: string | null
   onReload: () => void
   modeId: string | null
@@ -57,6 +62,7 @@ interface AgentConfigSectionProps {
 export function AgentConfigSection({
   snapshot,
   loading,
+  stale = false,
   error,
   onReload,
   modeId,
@@ -70,7 +76,7 @@ export function AgentConfigSection({
   const vocabulary = useAgentVocabulary(agentType)
   const inline = layout === "inline"
 
-  if (loading) {
+  if (loading || (stale && !error)) {
     return (
       <div
         className={cn(
@@ -122,15 +128,53 @@ export function AgentConfigSection({
 
   const hasModes = !!snapshot.modes && snapshot.modes.available_modes.length > 0
   const hasOptions = snapshot.config_options.length > 0
+  // The probe asked for the selected model and the agent did not switch to
+  // it: the options below are its OTHER model's. They stay editable (each one
+  // may also be left to the agent), but the user must know — even when the
+  // agent then lists nothing at all.
+  const modelNotSwitched =
+    snapshot.unapplied_config_ids?.includes("model") ?? false
+  const notSwitchedNotice = modelNotSwitched ? (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2",
+        inline ? "h-6" : "justify-between"
+      )}
+    >
+      <p
+        className={cn(
+          "min-w-0 text-xs text-amber-700 dark:text-amber-400",
+          inline && "truncate"
+        )}
+        title={t("modelNotSwitched")}
+      >
+        {t("modelNotSwitched")}
+      </p>
+      <Button
+        size="xs"
+        variant={inline ? "ghost" : "outline"}
+        className="shrink-0"
+        onClick={onReload}
+      >
+        {t("retry")}
+      </Button>
+    </div>
+  ) : null
   if (!hasModes && !hasOptions) {
     // Inline lives in the composer bottom bar — stay silent rather than print a
     // sentence there; the stacked form still surfaces the hint.
-    if (inline) return null
-    return <p className="text-xs text-muted-foreground">{t("configNone")}</p>
+    if (inline) return notSwitchedNotice
+    return (
+      <div className="flex flex-col gap-2">
+        {notSwitchedNotice}
+        <p className="text-xs text-muted-foreground">{t("configNone")}</p>
+      </div>
+    )
   }
   // Mirror the composer: when an agent exposes both modes AND config options,
   // hide the standalone mode row (some agents surface mode as a config option).
   const showMode = hasModes && !hasOptions
+  const booleanLabels = { on: t("booleanOn"), off: t("booleanOff") }
 
   return (
     <div
@@ -140,6 +184,7 @@ export function AgentConfigSection({
           : "flex flex-col gap-2.5 rounded-lg border border-border bg-card/40 p-3"
       )}
     >
+      {notSwitchedNotice}
       {showMode && snapshot.modes ? (
         <FlatSelect
           label={t("mode")}
@@ -162,6 +207,7 @@ export function AgentConfigSection({
           option={vocabulary.configOption(option)}
           value={configValues[option.id] ?? null}
           inheritLabel={t("inherit")}
+          booleanLabels={booleanLabels}
           inline={inline}
           allowInherit={!inline}
           onChange={(v) => onConfigChange(option.id, v)}
@@ -169,6 +215,18 @@ export function AgentConfigSection({
       ))}
     </div>
   )
+}
+
+/** The value a boolean option is shown — and saved — with: the wire encoding
+ *  launch replay sends (`"true"` / `"false"`). */
+function booleanValue(current: boolean): string {
+  return current ? "true" : "false"
+}
+
+/** How a switch's value is named, for {@link snapshotLabels}. */
+export function useBooleanOptionLabels(): { on: string; off: string } {
+  const t = useTranslations("Automations")
+  return { on: t("booleanOn"), off: t("booleanOff") }
 }
 
 /**
@@ -190,8 +248,12 @@ export function effectiveSelections(
 
   const config: Record<string, string> = {}
   for (const option of snapshot.config_options) {
-    if (option.kind.type !== "select") continue
-    const effective = configValues[option.id] ?? option.kind.current_value
+    // A switch shows its current state when untouched, so it pins it too.
+    const effective =
+      configValues[option.id] ??
+      (option.kind.type === "select"
+        ? option.kind.current_value
+        : booleanValue(option.kind.current_value))
     if (effective != null && effective !== "") config[option.id] = effective
   }
   // Defensive: never drop a user override for an option this snapshot doesn't
@@ -234,7 +296,10 @@ function selectValueLabel(
 export function snapshotLabels(
   snapshot: AgentOptionsSnapshot | null,
   modeId: string | null,
-  configValues: Record<string, string>
+  configValues: Record<string, string>,
+  /** How a switch's value is named, in the reader's language. Without them a
+   *  switch gets no label (and the detail page shows its raw value). */
+  booleanLabels?: { on: string; off: string }
 ): { mode_label?: string; config_labels?: Record<string, string> } {
   if (!snapshot) return {}
   const out: { mode_label?: string; config_labels?: Record<string, string> } =
@@ -247,9 +312,15 @@ export function snapshotLabels(
 
   const config_labels: Record<string, string> = {}
   for (const option of snapshot.config_options) {
-    if (option.kind.type !== "select") continue
     const value = configValues[option.id]
     if (value == null) continue
+    if (option.kind.type === "boolean") {
+      if (booleanLabels && (value === "true" || value === "false")) {
+        config_labels[option.id] =
+          value === "true" ? booleanLabels.on : booleanLabels.off
+      }
+      continue
+    }
     const name = selectValueLabel(option.kind, value)
     if (name) config_labels[option.id] = name
   }
@@ -400,6 +471,7 @@ function ConfigOptionRow({
   option,
   value,
   inheritLabel,
+  booleanLabels,
   inline,
   allowInherit,
   onChange,
@@ -407,11 +479,30 @@ function ConfigOptionRow({
   option: SessionConfigOptionInfo
   value: string | null
   inheritLabel: string
+  booleanLabels: { on: string; off: string }
   inline?: boolean
   allowInherit: boolean
   onChange: (v: string | null) => void
 }) {
-  if (option.kind.type !== "select") return null
+  if (option.kind.type === "boolean") {
+    // On / off as two items, plus the inherit escape hatch where the layout
+    // allows one — the same tri-state the stacked select rows have.
+    return (
+      <FlatSelect
+        label={option.name}
+        value={value}
+        inheritLabel={inheritLabel}
+        inline={inline}
+        allowInherit={allowInherit}
+        currentValue={booleanValue(option.kind.current_value)}
+        onChange={onChange}
+        items={[
+          { value: "true", name: booleanLabels.on },
+          { value: "false", name: booleanLabels.off },
+        ]}
+      />
+    )
+  }
   const groups = option.kind.groups
   return (
     <FieldRow

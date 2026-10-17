@@ -112,6 +112,7 @@ function SelectItem({
   className,
   children,
   description,
+  badge,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Item> & {
   /**
@@ -122,6 +123,9 @@ function SelectItem({
    * and blow up a compact chip's height.
    */
   description?: string | null
+  /** A small chip after the label in the open list only (the agent's
+   *  "Recommended" pick) — outside `ItemText` for the same reason. */
+  badge?: string | null
 }) {
   const normalizedDescription = description?.trim()
   return (
@@ -142,7 +146,16 @@ function SelectItem({
           <CheckIcon className="pointer-events-none" />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      {badge ? (
+        <span className="flex items-center gap-1.5">
+          <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+          <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-px text-[0.625rem] leading-none">
+            {badge}
+          </span>
+        </span>
+      ) : (
+        <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      )}
       {normalizedDescription ? (
         // Same treatment as the chat composer's menu rows
         // (`DropdownRadioItemContent`), so the two surfaces read alike.

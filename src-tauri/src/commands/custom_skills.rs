@@ -163,8 +163,9 @@ fn reserved_ids() -> BTreeSet<String> {
     set.extend(crate::commands::experts::bundled_ids());
     set.extend(crate::commands::science::bundled_ids());
     set.extend(crate::commands::office_tools::bundled_skill_ids());
-    // `json-render` only while the directory is the copy Codeg wrote: a skill
-    // of that name the user made themselves stays theirs to see and edit.
+    // `ui-render` (and 0.35.0's `json-render`, until startup moves it over)
+    // only while the directory is the copy Codeg wrote: a skill of that name
+    // the user made themselves stays theirs to see and edit.
     set.extend(crate::commands::generative_ui::reserved_skill_ids());
     set
 }
@@ -1106,13 +1107,13 @@ mod tests {
     }
 
     /// The generative-UI skill shares the central store but is only Codeg's
-    /// once its marker is there; until then a `json-render` is the user's.
+    /// once its marker is there; until then a `ui-render` is the user's.
     #[cfg(unix)]
     #[tokio::test]
-    async fn fs_json_render_stays_custom_until_codeg_marks_it() {
+    async fn fs_ui_render_stays_custom_until_codeg_marks_it() {
         with_temp_home(|| async {
             let id = crate::commands::generative_ui::SKILL_ID;
-            let content = "---\nname: json-render\n---\nmine\n";
+            let content = "---\nname: ui-render\n---\nmine\n";
             custom_create_skill(id.into(), content.into())
                 .await
                 .expect("free until Codeg claims it");

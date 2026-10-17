@@ -59,6 +59,41 @@ describe("parseUserMessageSegments", () => {
       expect(attrs.meta?.agentType).toBe("codex")
     })
 
+    it("parses an assistant link and strips the leading @", () => {
+      const attrs = onlyReference(
+        "ask [@Code Reviewer](codeg://assistant/3) first"
+      )
+      expect(attrs.refType).toBe("assistant")
+      expect(attrs.label).toBe("Code Reviewer")
+      expect(attrs.meta?.assistantId).toBe(3)
+    })
+
+    it.each([
+      "Rev](x) [y",
+      "back\\slash",
+      "a*b_c~d`e",
+      "<tag> & (paren)",
+      "@everyone",
+      "https://example.com",
+      "名前 🦊",
+      "مساعد المراجعة",
+    ])(
+      "brings an assistant named %j back from what the composer sends",
+      (name) => {
+        const sent = referenceToMarkdown({
+          refType: "assistant",
+          id: "3",
+          label: name,
+          uri: "codeg://assistant/3",
+          meta: { assistantId: 3 },
+        })
+        const attrs = onlyReference(`ask ${sent} first`)
+        expect(attrs.refType).toBe("assistant")
+        expect(attrs.id).toBe("3")
+        expect(attrs.label).toBe(name)
+      }
+    )
+
     it("parses a session link", () => {
       const attrs = onlyReference("re [My chat](codeg://session/42)")
       expect(attrs.refType).toBe("session")

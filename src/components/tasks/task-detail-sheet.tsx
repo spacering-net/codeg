@@ -28,6 +28,7 @@ import {
   GitCommitHorizontal,
   GitMerge,
   GitPullRequestArrow,
+  Inbox,
   ListX,
   Loader2,
   MessageSquareText,
@@ -43,6 +44,7 @@ import {
   getFolderConversation,
   workTaskChangedFiles,
   workTaskCleanup,
+  workTaskDefer,
   workTaskDelete,
   workTaskDiff,
   workTaskEvents,
@@ -70,10 +72,12 @@ import { getAgentLabel } from "@/lib/custom-agents"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
+  canDefer,
   canDeliverToPr,
   canRemoveWorktree,
   deliveredPrUrl,
   hasNothingToMerge,
+  isDeferred,
   isMergeQueued,
   mustDeliverToPr,
   usesMergeRequests,
@@ -439,6 +443,23 @@ export function TaskDetailSheet({
   const isReview = task.status === "review" && !archived
   /** Accepted already, waiting for the project's one merge slot. */
   const mergeQueued = isReview && isMergeQueued(task)
+  /** Put aside to handle later ("以后处理") — it waits under Done. */
+  const deferred = !archived && isDeferred(task)
+  /** "以后处理" on a task that can take it, the way back on one that has it. */
+  const deferToggle = (): ZoneAction | null =>
+    deferred
+      ? {
+          icon: Inbox,
+          label: t("actionUndefer"),
+          onClick: () => run(() => workTaskDefer(task.id, false)),
+        }
+      : canDefer(task)
+        ? {
+            icon: Clock,
+            label: t("actionDefer"),
+            onClick: () => run(() => workTaskDefer(task.id, true)),
+          }
+        : null
   const isRestart =
     !archived && (task.status === "failed" || task.status === "canceled")
   // A note for a restart (failed / canceled): both stopped for a reason the
@@ -479,11 +500,14 @@ export function TaskDetailSheet({
       // the primary action (same swap the board card makes). A task that came
       // from a pull request has no local merge at all: its work belongs on
       // that pull request's branch, and the backend refuses anything else.
+      //
+      // A task put aside to handle later keeps every acceptance on offer, but
+      // none of them leads: like its card, it leads with the follow-up below.
       if (hasNothingToMerge(task)) {
         zoneActions.push({
           icon: CircleCheck,
           label: t("actionComplete"),
-          filled: true,
+          filled: !deferred,
           onClick: () => onComplete(task),
         })
       } else if (mustDeliverToPr(task)) {
@@ -494,14 +518,14 @@ export function TaskDetailSheet({
               ? "actionDeliverPrBackMr"
               : "actionDeliverPrBack"
           ),
-          filled: true,
+          filled: !deferred,
           onClick: () => onDeliverPr(task),
         })
       } else {
         zoneActions.push({
           icon: GitMerge,
           label: t("actionMerge"),
-          filled: true,
+          filled: !deferred,
           onClick: () => onMerge(task),
         })
         // A second way to accept, not a replacement: a task that came from an
@@ -518,12 +542,21 @@ export function TaskDetailSheet({
         }
       }
     }
-    zoneActions.push({
+    const followUp: ZoneAction = {
       icon: Undo2,
       label: t("actionFollowUp"),
       expanded: composerOpen,
       onClick: () => setComposerOpen((v) => !v),
-    })
+    }
+    // Picking a deferred task back up is what the user came here for — the
+    // follow-up leads, the way it does on the card in Done.
+    if (deferred && !mergeQueued) {
+      zoneActions.unshift({ ...followUp, filled: true })
+    } else {
+      zoneActions.push(followUp)
+    }
+    const toggle = deferToggle()
+    if (toggle) zoneActions.push(toggle)
     zoneActions.push({
       icon: Ban,
       label: t("actionAbandon"),
@@ -571,7 +604,7 @@ export function TaskDetailSheet({
           break
         // The two restarts open the note box rather than firing: the send
         // button inside it is what actually restarts (see `submitRestart`).
-        case "failed":
+        case "failed": {
           zoneActions.push({
             icon: RotateCw,
             label: t("actionRetry"),
@@ -579,8 +612,11 @@ export function TaskDetailSheet({
             expanded: composerOpen,
             onClick: () => setComposerOpen((v) => !v),
           })
+          const toggle = deferToggle()
+          if (toggle) zoneActions.push(toggle)
           zoneActions.push(archive(t("actionArchive")))
           break
+        }
         case "done":
           zoneActions.push(archive(t("actionArchive"), true))
           break
@@ -835,7 +871,9 @@ export function TaskDetailSheet({
                 <section
                   className={cn(
                     "flex flex-col gap-3 rounded-xl border p-3",
-                    isReview
+                    // A deferred review is not waiting on the user right now —
+                    // they said so — so it drops the amber with its column.
+                    isReview && !deferred
                       ? "border-amber-500/30 bg-amber-500/5 dark:border-amber-400/25"
                       : "border-border/70 bg-muted/30"
                   )}
@@ -1679,6 +1717,14 @@ const EVENT_KIND_KEYS = {
   forge_writeback_failed: "eventForgeWritebackFailed",
 } as const
 
+/** What set off the repository panel's auto-processing, for a task it
+ *  created — the `auto` field the backend stamps on the `created` event. */
+const AUTO_TRIGGER_KEYS = {
+  schedule: "eventAutoSchedule",
+  webhook: "eventAutoWebhook",
+  manual: "eventAutoManual",
+} as const
+
 const STATUS_KEYS = new Set([
   "todo",
   "queued",
@@ -1729,8 +1775,18 @@ function TimelineRow({ event }: { event: WorkTaskEvent }) {
     event.kind in EVENT_KIND_KEYS
       ? EVENT_KIND_KEYS[event.kind as keyof typeof EVENT_KIND_KEYS]
       : null
-  const label = key ? t(key) : event.kind
-  const detail = timelineDetail(event)
+  // A task nobody clicked says where it came from: the repository panel's
+  // auto-processing, and which trigger woke it.
+  const rawAuto = event.kind === "created" ? event.payload?.auto : undefined
+  const autoTrigger = typeof rawAuto === "string" ? rawAuto : null
+  const label =
+    autoTrigger != null ? t("eventCreatedAuto") : key ? t(key) : event.kind
+  const detail =
+    autoTrigger != null
+      ? autoTrigger in AUTO_TRIGGER_KEYS
+        ? t(AUTO_TRIGGER_KEYS[autoTrigger as keyof typeof AUTO_TRIGGER_KEYS])
+        : autoTrigger
+      : timelineDetail(event)
   return (
     // ml-[3px] puts the rail under the centre of the header's dot above, and
     // 3px + the 1px rail + pl-2.5 lands the text at the same 14px inset as the

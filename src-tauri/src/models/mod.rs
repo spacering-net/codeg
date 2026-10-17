@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod assistant;
 pub mod automation;
 pub mod background;
 pub mod canvas;
@@ -15,6 +16,10 @@ pub mod token_usage;
 pub mod work_task;
 
 pub use agent::AgentType;
+pub use assistant::{
+    AssistantAgentConfig, AssistantAvatar, AssistantDraft, AssistantInfo, AssistantLabelSnapshot,
+    AssistantOptionKind, AssistantOptionLabel, AssistantPatch, AssistantRunSnapshot,
+};
 pub use automation::{
     AutomationAction, AutomationConfig, AutomationDraft, AutomationInfo, AutomationRunInfo,
     AutomationRunStatus, IsolationMode, TriggerKind,
@@ -24,18 +29,18 @@ pub use canvas::{CanvasBoard, CanvasBoardSummary, CanvasMutation, CanvasNode, Ca
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationBranchTag, ConversationDetail,
-    ConversationSummary, ConversationTagDetail, ConversationTurnsPage, DbConversationDetail,
-    DbConversationSummary, FolderInfo, ImportFolderOutcome, ImportResult, ImportSelectedResult,
-    ScanFolder, ScanResult, ScanSession, ScanSessionStatus, SelectedSessionKey, SessionStats,
-    SidebarData,
+    ConversationOutline, ConversationSummary, ConversationTagDetail, ConversationTurnsPage,
+    DbConversationDetail, DbConversationSummary, FolderInfo, ImportFolderOutcome, ImportResult,
+    ImportSelectedResult, ScanFolder, ScanResult, ScanSession, ScanSessionStatus,
+    SelectedSessionKey, SessionStats, SidebarData,
 };
 pub use folder::{
     FolderCommandInfo, FolderDetail, FolderGroupDetail, FolderHistoryEntry, OpenedTab,
     OpenedTabsSnapshot, SaveTabsOutcome, SidebarEntryKind, SidebarLayoutEntry,
 };
 pub use message::{
-    AgentExecutionStats, AgentToolCall, ContentBlock, ImageData, MessageRole, MessageTurn,
-    TurnRole, TurnUsage, UnifiedMessage,
+    AgentExecutionStats, AgentTimelineEntry, AgentToolCall, ContentBlock, ImageData, MessageRole,
+    MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
 pub use quick_message::QuickMessageInfo;
 pub use remote_workspace_connection::{

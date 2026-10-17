@@ -182,6 +182,182 @@ const CODEX_NOTE_PREFIX = "user_note: "
 const CODEX_OTHER_OPTION = "None of the above"
 
 /**
+ * The Claude Code CLI's own AskUserQuestion (its `tool_result` text, which is
+ * what a Claude Code transcript keeps) and qodercli's port of it (its
+ * `llmContent`, which qoder's ACP `tool_call_update` also streams verbatim)
+ * report the answers as plain sentences, not the companion's JSON envelope:
+ *   answered: `Your questions have been answered: "Q1"="A1", "Q2"="A2". You can
+ *     now continue with these answers in mind.`
+ *   declined: `The user did not answer the questions.`
+ * Only answered questions appear, in question order. A multi-select answer is
+ * its labels joined with ", " (a typed "Other" answer replaces or joins them);
+ * a question answered with notes alone reads `"Q"=(no option selected)`; and
+ * any entry may trail a ` selected preview:\n…` block and/or ` notes: …`.
+ * Nothing is escaped, so a question, an answer or a note may itself contain
+ * `"`, ", " or even text shaped like another entry, and no reading is exact.
+ * With the asked questions at hand each entry is found by its exact `"Q"=` key
+ * (`parseAnchoredEntries`). Without them `ANSWER_PAIR_RE` takes the pairs that
+ * open an entry: it cuts a value at its first inner quote, and a note that
+ * types a whole `, "Q"="A"` still reads as an answer. The sentences carry no
+ * header, so each answer keeps `header: ""` and the card matches it by
+ * question text (`byQuestion`).
+ */
+const ANSWERED_SENTENCE_PREFIX = "Your questions have been answered: "
+const DID_NOT_ANSWER_RE = /^The user did not answer the questions\.?$/
+const ANSWER_PAIR_RE = /(?:^|, )"([^"]+)"="([^"]*)"/g
+/** Joins the sentence's entries, and a multi-select answer's picks. */
+const LIST_SEPARATOR = ", "
+/** Where a quoted answer that trails a preview or notes block closes. */
+const ANSWER_TAIL_MARKERS = ['" selected preview:\n', '" notes: ']
+/** An entry's value when the user wrote notes but picked nothing. */
+const NOTES_ONLY_VALUE = "(no option selected) notes: "
+
+function parseAnsweredSentence(
+  body: string,
+  questions: readonly AskQuestion[] | undefined
+): AskQuestionOutcome | null {
+  const text = body.trim()
+  if (!text.startsWith(ANSWERED_SENTENCE_PREFIX)) return null
+  const entries = text.slice(ANSWERED_SENTENCE_PREFIX.length)
+  const answers =
+    (questions && parseAnchoredEntries(entries, questions)) ??
+    parseQuotedPairs(entries)
+  return { declined: false, answers }
+}
+
+/**
+ * Read the entries by the asked questions' own text: each answered question
+ * opens its entry with `"<question>"=`, so the entry runs from that key to the
+ * next answered question's key. Returns `null` when no asked question is found
+ * (an input that doesn't belong to this result), so the pair regex can try.
+ */
+function parseAnchoredEntries(
+  entries: string,
+  questions: readonly AskQuestion[]
+): AskQuestionAnswer[] | null {
+  const found: { question: AskQuestion; start: number; valueStart: number }[] =
+    []
+  let cursor = 0
+  for (const question of questions) {
+    if (!question.question) continue
+    const key = `"${question.question}"=`
+    let at = entries.indexOf(key, cursor)
+    // The key anywhere but at the head of a well-formed entry is that text
+    // inside an earlier answer, preview or note.
+    while (at >= 0 && !opensEntry(entries, at, at + key.length)) {
+      at = entries.indexOf(key, at + 1)
+    }
+    if (at < 0) continue
+    found.push({ question, start: at, valueStart: at + key.length })
+    cursor = at + key.length
+  }
+  if (found.length === 0) return null
+  return found.map(({ question, valueStart }, i) => {
+    const next = found[i + 1]
+    const end = next ? next.start - LIST_SEPARATOR.length : entries.length
+    const value = quotedAnswer(entries.slice(valueStart, end))
+    return {
+      header: "",
+      question: question.question,
+      selected: value ? splitJoinedPicks(value, question) : [],
+    }
+  })
+}
+
+/**
+ * Whether the `"Q"=` key at `at` heads an entry: entries open the list or
+ * follow ", ", and a value opens with its quote or is the notes-only marker
+ * (which the CLI writes only before notes).
+ */
+function opensEntry(entries: string, at: number, valueStart: number): boolean {
+  const afterSeparator =
+    at === 0 || entries.startsWith(LIST_SEPARATOR, at - LIST_SEPARATOR.length)
+  return (
+    afterSeparator &&
+    (entries.startsWith('"', valueStart) ||
+      entries.startsWith(NOTES_ONLY_VALUE, valueStart))
+  )
+}
+
+/** The answer of one entry, read from just after its `"Q"=` key. */
+function quotedAnswer(entry: string): string {
+  // `(no option selected)` — notes without a pick — names no answer.
+  if (!entry.startsWith('"')) return ""
+  const rest = entry.slice(1)
+  let close = -1
+  for (const marker of ANSWER_TAIL_MARKERS) {
+    const at = rest.indexOf(marker)
+    if (at >= 0 && (close < 0 || at < close)) close = at
+  }
+  // Untailed, the answer closes on the entry's last quote: the sentence's
+  // closing ". You can now continue…" after the last entry holds none.
+  if (close < 0) close = rest.lastIndexOf('"')
+  return (close < 0 ? rest : rest.slice(0, close)).trim()
+}
+
+/**
+ * Split a multi-select answer, its picks joined with ", ", back into picks. A
+ * label may itself contain ", ", so at each position the longest run of parts
+ * that spells an option label wins; parts that spell none are joined back into
+ * one free-text "Other" answer. A single-select answer is always one pick.
+ *
+ * The joined text can't tell a typed answer that merely contains a label
+ * (`custom, Alpha`) from that label picked beside typed text. codeg's own card
+ * sends the latter (its labels, then the typed answer), so a part that spells
+ * a label always reads as picked.
+ */
+function splitJoinedPicks(value: string, question: AskQuestion): string[] {
+  const labels = new Set(question.options.map((o) => o.label))
+  if (!question.multiSelect || labels.has(value)) return [value]
+  // No label spans more parts than this, which keeps a long typed answer
+  // (many commas, no labels) linear.
+  const longestLabel = question.options.reduce(
+    (most, o) => Math.max(most, o.label.split(LIST_SEPARATOR).length),
+    1
+  )
+  const parts = value.split(LIST_SEPARATOR)
+  const picks: string[] = []
+  let typed: string[] = []
+  let i = 0
+  while (i < parts.length) {
+    let end = Math.min(parts.length, i + longestLabel)
+    while (end > i && !labels.has(parts.slice(i, end).join(LIST_SEPARATOR))) {
+      end -= 1
+    }
+    if (end === i) {
+      typed.push(parts[i])
+      i += 1
+      continue
+    }
+    if (typed.length > 0) {
+      picks.push(typed.join(LIST_SEPARATOR))
+      typed = []
+    }
+    picks.push(parts.slice(i, end).join(LIST_SEPARATOR))
+    i = end
+  }
+  if (typed.length > 0) picks.push(typed.join(LIST_SEPARATOR))
+  return picks
+}
+
+/** Every `"Q"="A"` pair, for a sentence read without its questions. */
+function parseQuotedPairs(entries: string): AskQuestionAnswer[] {
+  const answers: AskQuestionAnswer[] = []
+  for (const match of entries.matchAll(ANSWER_PAIR_RE)) {
+    const question = match[1].trim()
+    const answer = match[2].trim()
+    // A pair with no question text names nothing; drop it.
+    if (!question) continue
+    answers.push({
+      header: "",
+      question,
+      selected: answer ? [answer] : [],
+    })
+  }
+  return answers
+}
+
+/**
  * Decode one codex `request_user_input` answer list into what the user chose.
  *
  * codex encodes an answer as option labels plus a free-form note written as a
@@ -358,13 +534,19 @@ function parseOutcomeJson(output: string): AskQuestionOutcome | null {
  * `content` instead of `structuredContent` (see `render_ask_result`):
  *   "The user dismissed the question(s) …"  (declined)
  *   "The user answered your question(s):\n1. [Header] Question\n   → a, b\n…"
+ * qodercli / claude-code's native AskUserQuestion persists yet another shape —
+ * plain sentences ("Your questions have been answered: …" / "The user did not
+ * answer the questions.") — parsed by `parseAnsweredSentence`. That sentence
+ * escapes nothing, so pass the asked `questions` (from `parseAskQuestionInput`)
+ * whenever they're known: they are what reads it reliably.
  *
  * Returns `null` when there is no output yet (the call is still in flight). In
  * the fallback, selections are split on ", " (lossy for a label containing a
  * comma — the structured envelope keeps such a label intact as one array entry).
  */
 export function parseAskQuestionOutcome(
-  output: string | null | undefined
+  output: string | null | undefined,
+  questions?: readonly AskQuestion[]
 ): AskQuestionOutcome | null {
   if (!output || !output.trim()) return null
 
@@ -375,7 +557,20 @@ export function parseAskQuestionOutcome(
   const fromJson = parseOutcomeJson(body)
   if (fromJson) return fromJson
 
-  if (/\bdismissed the question/i.test(body)) {
+  // qodercli / claude-code's native AskUserQuestion sentences (see
+  // `parseAnsweredSentence`) — before the line-based fallback, whose
+  // `N. [header] question` shape cannot match them and would report an empty
+  // "no selection" outcome for a genuinely answered ask.
+  const fromSentence = parseAnsweredSentence(body, questions)
+  if (fromSentence) return fromSentence
+
+  // The decline sentences ride one arm: the companion's dismissal wording and
+  // qodercli's "did not answer" sentence (an unanswered native ask), which is
+  // the whole result. Anywhere else it is just text, e.g. a typed answer.
+  if (
+    /\bdismissed the question/i.test(body) ||
+    DID_NOT_ANSWER_RE.test(body.trim())
+  ) {
     return { declined: true, answers: [] }
   }
 

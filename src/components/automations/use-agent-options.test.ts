@@ -151,3 +151,56 @@ describe("useAgentOptions model-scoped probes", () => {
     expect(result.current[1].snapshot).toBe(result.current[0].snapshot)
   })
 })
+
+/**
+ * `current` is what an editor gates its rows on: the snapshot on screen must
+ * have been probed for the selection being edited — the same agent, folder
+ * and model — or a value picked off it would land in another selection.
+ */
+describe("useAgentOptions provenance", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("reports the model a snapshot was probed for, and when it is stale", async () => {
+    const folder = `/tmp/use-agent-options-model-${Math.random()}`
+    const { result, rerender } = renderHook(
+      ({ model }: { model: string | null }) =>
+        useAgentOptions("open_code", folder, true, model ? { model } : null),
+      { initialProps: { model: null as string | null } }
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(result.current.snapshotModel).toBeNull()
+    expect(result.current.current).toBe(true)
+
+    // A model picked: still debouncing, the shown snapshot is the no-model one.
+    rerender({ model: "model-b" })
+    expect(result.current.snapshotModel).toBeNull()
+    expect(result.current.current).toBe(false)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(result.current.snapshotModel).toBe("model-b")
+    expect(result.current.current).toBe(true)
+
+    // Back to a model probed moments ago: a cache hit is current at once
+    // after the debounce, and uses the same null for "no model".
+    rerender({ model: null })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(result.current.snapshotModel).toBeNull()
+    expect(result.current.current).toBe(true)
+  })
+})

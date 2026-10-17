@@ -1,17 +1,20 @@
 //! Owned-window surface: a top-level `WebviewWindow` attached to the owner
-//! (`parent`). The only surface on Linux, the fallback everywhere else, and
-//! the shape popups take when they cannot be adopted as tabs.
+//! (`parent`). An explicit fallback on every desktop platform, and the shape
+//! popups take when their opener is an owned window.
 //!
 //! On Linux this window is also where the page ↔ host channel and the rest of
-//! the shim live, because there is no embedded surface to put them on: the
+//! the shared Linux shim live alongside the embedded surface: the
 //! engine webview behind the window is taken hold of once, at creation, and
 //! every operation afterwards goes through `platform`. On macOS and Windows an
 //! owned window is a fallback that the host does not hold the webview of, and
 //! `platform` answers the same calls by saying so.
 
-use tauri::webview::{DownloadEvent, PageLoadEvent};
+use tauri::webview::PageLoadEvent;
+#[cfg(not(target_os = "linux"))]
+use tauri::webview::DownloadEvent;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
+#[cfg(not(target_os = "linux"))]
 use super::downloads;
 use super::events;
 use super::hooks;
@@ -41,7 +44,27 @@ pub fn create(
     devtools: bool,
     profile: &str,
 ) -> tauri::Result<WebviewWindow> {
-    build(app, owner, tab_id, label, title, background, devtools, profile, None)
+    #[cfg(target_os = "linux")]
+    {
+        let app_handle = app.clone();
+        let owner = owner.clone();
+        let (tab_id, label, title, profile) = (
+            tab_id.to_string(),
+            label.to_string(),
+            title.to_string(),
+            profile.to_string(),
+        );
+        platform::run_on_main(app, move || {
+            build(
+                &app_handle, &owner, &tab_id, &label, &title, background, devtools, &profile, None,
+            )
+        })
+        .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        build(app, owner, tab_id, label, title, background, devtools, profile, None)
+    }
 }
 
 /// A window's container and proxy: `profile`'s.
@@ -69,7 +92,12 @@ fn in_profile<'a>(
         .additional_browser_args(
             &profile::windows_args_for(profile).map_err(|e| tauri::Error::Io(std::io::Error::other(e)))?,
         );
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    let builder = builder.with_related_view(
+        super::shim::linux_context::related_view(profile)
+            .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?,
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     let builder = {
         let builder = builder.data_directory(profile::directory(profile));
         // A remote profile's egress, else the app's proxy (see
@@ -96,15 +124,29 @@ fn in_profile<'a>(
 }
 
 /// A window of `profile` that is never shown, on `url`: the remote-egress
-/// probe's page (see `browser/egress.rs`) where the profile's tabs are owned
-/// windows (Linux, and Windows without the embedded surface), built with the
-/// profile's folder, arguments and proxy exactly as they are. None of a tab's
-/// hooks: the page is the listener's own and goes nowhere else.
+/// probe's page (see `browser/egress.rs`) on Linux and on Windows without the
+/// embedded surface, built with the profile's folder, arguments and proxy
+/// exactly as they are. None of a tab's hooks: the page is the listener's own
+/// and goes nowhere else.
 #[cfg_attr(
     any(target_os = "macos", all(target_os = "windows", feature = "browser-child")),
     allow(dead_code)
 )]
 pub fn open_probe(app: &AppHandle, label: &str, profile: &str, url: Url) -> tauri::Result<WebviewWindow> {
+    #[cfg(target_os = "linux")]
+    {
+        let handle = app.clone();
+        let (label, profile) = (label.to_string(), profile.to_string());
+        platform::run_on_main(app, move || build_probe(&handle, &label, &profile, url))
+            .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        build_probe(app, label, profile, url)
+    }
+}
+
+fn build_probe(app: &AppHandle, label: &str, profile: &str, url: Url) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("codeg")
         .visible(false)
@@ -152,7 +194,7 @@ fn build(
                     // is refused quietly: the scheme list stays the top-level
                     // one, because a page must not be able to put `data:` in
                     // the address bar by asking for it as a navigation.
-                    if !(cfg!(target_os = "linux") && policy::subframe_navigation_allowed(url)) {
+                    if policy::report_scheme_denial(url, true) {
                         hooks::navigation_blocked(&app, &tab_id, url.as_str(), NavigationBlockReason::Scheme);
                     }
                     return false;
@@ -186,8 +228,9 @@ fn build(
             let app = app.clone();
             let tab_id = tab_id.to_string();
             move |_window, title| hooks::title_changed(&app, &tab_id, title)
-        })
-        .on_download({
+        });
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.on_download({
             let app = app.clone();
             let tab_id = tab_id.to_string();
             move |_webview, event| match event {
@@ -202,8 +245,8 @@ fn build(
                 // must not silently become "allowed".
                 _ => false,
             }
-        })
-        .disable_drag_drop_handler()
+        });
+    let builder = builder.disable_drag_drop_handler()
         .zoom_hotkeys_enabled(true)
         .browser_extensions_enabled(false);
     // The same identity the embedded tabs start with. An owned window keeps it
@@ -323,7 +366,7 @@ mod platform {
         MAIN_THREAD.get() == Some(&std::thread::current().id())
     }
 
-    fn run_on_main<R: Send + 'static>(
+    pub(super) fn run_on_main<R: Send + 'static>(
         app: &AppHandle,
         f: impl FnOnce() -> R + Send + 'static,
     ) -> Result<R, SurfaceError> {
@@ -347,7 +390,12 @@ mod platform {
     ) -> Result<T, SurfaceError> {
         let label = window.label().to_string();
         run_on_main(window.app_handle(), move || {
-            WEBVIEWS.with(|live| live.borrow().get(&label).map(|live| f(&live.webview)))
+            WEBVIEWS.with(|live| {
+                live.borrow()
+                    .get(&label)
+                    .filter(|live| !shim::is_destroyed(&live.webview))
+                    .map(|live| f(&live.webview))
+            })
         })?
         .ok_or_else(|| SurfaceError("this window has no engine webview".into()))
     }
@@ -361,6 +409,7 @@ mod platform {
         let tab = tab_id.to_string();
         let sink = hooks::navigation_sink(app, tab_id);
         let closing = hooks::page_close_sink(app, tab_id);
+        let native_app = app.clone();
         let (tx, rx) = mpsc::channel();
         let asked = window.with_webview(move |platform| {
             let webview = platform.inner();
@@ -376,6 +425,10 @@ mod platform {
                      a page closing its own window is ignored"
                 );
             }
+            shim::install_download_handlers(
+                &webview,
+                super::super::downloads::linux_handlers(&native_app, &tab),
+            );
             // An entry already under this label is a window that went without
             // its `Destroyed` being seen. Its state is keyed by a pointer that
             // the allocator can hand out again, so it is let go of here rather
@@ -411,6 +464,13 @@ mod platform {
         if let Some(live) = live {
             shim::forget(&live.webview);
         }
+    }
+
+    /// Both Linux surface kinds share this store; release it only after the
+    /// profile-removal command has closed all of their tabs.
+    pub fn forget_profile_context(app: &AppHandle, profile: &str) -> Result<(), SurfaceError> {
+        let profile = profile.to_string();
+        run_on_main(app, move || super::super::shim::linux_context::forget(&profile))
     }
 
     /// Build the new window from the one that asked for it.

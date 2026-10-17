@@ -1,6 +1,6 @@
 /**
- * Geometry and detection helpers for the Mermaid diagram viewport
- * (see `./mermaid-block.tsx`).
+ * Geometry and detection helpers for the diagram viewport that Mermaid and
+ * PlantUML fences render into (see `./mermaid-block.tsx`).
  *
  * Kept free of React and the DOM on purpose: jsdom reports zero for every
  * measurement, so none of this could be covered through the component. The
@@ -217,6 +217,9 @@ export function stripSvgMaxWidth(svg: string): string {
  */
 const MERMAID_LANGUAGE = /(?:^|\s)language-mermaid(?:\s|$)/
 
+/** `language-plantuml`, or `language-puml` (PlantUML's file extension). */
+const PLANTUML_LANGUAGE = /(?:^|\s)language-(?:plantuml|puml)(?:\s|$)/
+
 interface ElementLike {
   props?: { className?: unknown; children?: unknown }
 }
@@ -226,22 +229,32 @@ function isElementLike(value: unknown): value is ElementLike {
 }
 
 /**
- * The Mermaid source inside a `<pre>`'s child, or `null` when that child is
- * anything else.
+ * The fence source inside a `<pre>`'s child when its language matches, or
+ * `null` when that child is anything else.
  *
- * This is the interception point for the whole feature: Markdown renders
+ * This is the interception point for the diagram blocks: Markdown renders
  * ` ```mermaid ` as `<pre><code class="language-mermaid">…</code></pre>`, and
  * overriding `components.pre` lets us claim exactly that shape while every
  * other fence keeps flowing to Streamdown's own code block. Reading the source
  * off `props.children` as a string mirrors how Streamdown's `MarkdownCode`
  * does it, so a fence we claim carries the same text it would have.
  */
-export function mermaidSourceFromPre(child: unknown): string | null {
+function fenceSourceFromPre(child: unknown, language: RegExp): string | null {
   if (!isElementLike(child)) return null
   const className = child.props?.className
-  if (typeof className !== "string" || !MERMAID_LANGUAGE.test(className)) {
+  if (typeof className !== "string" || !language.test(className)) {
     return null
   }
   const source = child.props?.children
   return typeof source === "string" ? source : null
+}
+
+/** The source of a ` ```mermaid ` fence, or `null` for any other `<pre>` child. */
+export function mermaidSourceFromPre(child: unknown): string | null {
+  return fenceSourceFromPre(child, MERMAID_LANGUAGE)
+}
+
+/** The source of a ` ```plantuml ` / ` ```puml ` fence, or `null` otherwise. */
+export function plantUmlSourceFromPre(child: unknown): string | null {
+  return fenceSourceFromPre(child, PLANTUML_LANGUAGE)
 }

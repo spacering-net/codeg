@@ -107,6 +107,37 @@ describe("SessionDetailsDialog", () => {
     expect(mockGet).not.toHaveBeenCalled()
   })
 
+  it("names the assistant a delegation sub-session ran as", () => {
+    const { getByText, queryByText, rerender } = renderWithIntl(
+      <SessionDetailsDialog
+        open
+        onOpenChange={() => {}}
+        summary={summary({
+          parent_id: 3,
+          assistant_id: 5,
+          assistant_name: "Reviewer",
+        })}
+        stats={fullStats}
+      />
+    )
+    expect(getByText("Assistant")).toBeTruthy()
+    // Not in the store here: the name it carried.
+    expect(getByText("Reviewer")).toBeTruthy()
+
+    // A plain session has no such row.
+    rerender(
+      wrap(
+        <SessionDetailsDialog
+          open
+          onOpenChange={() => {}}
+          summary={summary()}
+          stats={fullStats}
+        />
+      )
+    )
+    expect(queryByText("Assistant")).toBeNull()
+  })
+
   it("falls back to completed summary timestamps when stats duration is missing", () => {
     const completedSummary = summary({
       status: "completed",

@@ -144,20 +144,65 @@ pub async fn officecli_render_html(
 pub struct OfficeWatchParams {
     pub root_path: String,
     pub path: String,
+    /// The watch a release names (what its start returned). Absent from a
+    /// start, and from a release an older client sends.
+    #[serde(default)]
+    pub cap: Option<String>,
+    /// The page's hold a release names (what its start returned). Absent as
+    /// `cap` is.
+    #[serde(default)]
+    pub hold: Option<String>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenewOfficeWatchParams {
+    pub root_path: String,
+    pub path: String,
+    pub cap: String,
+    /// The page's hold to renew (what its start returned).
+    #[serde(default)]
+    pub hold: Option<String>,
+}
+
+// Everything reaching these is a web page's: its references lapse once the
+// page goes quiet (see "Who holds a watch" in `crate::office_watch`).
 
 pub async fn start_office_watch(
     Json(params): Json<OfficeWatchParams>,
 ) -> Result<Json<crate::office_watch::OfficeWatchStarted>, AppCommandError> {
     // `?` converts WatchError → AppCommandError, carrying the machine code.
-    let result =
-        crate::office_watch::start_office_watch_core(params.root_path, params.path).await?;
+    let result = crate::office_watch::start_office_watch_core(
+        params.root_path,
+        params.path,
+        crate::office_watch::WatchHolder::Web,
+    )
+    .await?;
     Ok(Json(result))
 }
 
 pub async fn stop_office_watch(
     Json(params): Json<OfficeWatchParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    crate::office_watch::stop_office_watch_core(params.root_path, params.path).await?;
+    crate::office_watch::stop_office_watch_core(
+        params.root_path,
+        params.path,
+        params.cap,
+        params.hold,
+        crate::office_watch::WatchHolder::Web,
+    )
+    .await?;
     Ok(Json(()))
+}
+
+pub async fn renew_office_watch(
+    Json(params): Json<RenewOfficeWatchParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    Ok(Json(crate::office_watch::renew_office_watch_core(
+        &params.root_path,
+        &params.path,
+        &params.cap,
+        params.hold.as_deref(),
+        crate::office_watch::WatchHolder::Web,
+    )))
 }

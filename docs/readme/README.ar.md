@@ -31,7 +31,7 @@
 
 <table>
   <tr>
-    <td width="50%" valign="top">🧩 <strong>واجهة واحدة لكل الوكلاء</strong><br/>خمسة عشر وكيلاً مدمجًا، ويمكن لأي وكيل متوافق مع ACP الانضمام — ويُعرض عملهم جميعًا كمحادثة منظَّمة موحّدة، لا كطرفية.</td>
+    <td width="50%" valign="top">🧩 <strong>واجهة واحدة لكل الوكلاء</strong><br/>سبعة عشر وكيلاً مدمجًا، ويمكن لأي وكيل متوافق مع ACP الانضمام — ويُعرض عملهم جميعًا كمحادثة منظَّمة موحّدة، لا كطرفية.</td>
     <td width="50%" valign="top">🔎 <strong>جلسات تنتقل معك</strong><br/>استورد السجل الذي يحفظه كل وكيل على القرص، وابحث فيه، واستأنفه، ثم سلّمه إلى وكيل آخر.</td>
   </tr>
   <tr>
@@ -59,13 +59,6 @@
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
-      <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
-    </td>
-    <td>شكراً لخدمة الترحيل LQ router على رعاية هذا المشروع! LQ router هي خدمة ترحيل احترافية للذكاء الاصطناعي بمستوى المؤسسات، توفّر للشركات والمطورين الأفراد وصولاً مستقراً وفعّالاً ومنخفض التكلفة إلى واجهات API لنماذج الذكاء الاصطناعي. تدعم المنصة النماذج الرائدة مثل GPT وClaude وGrok وGemini، بمعامل تسعير لـ GPT Pro يبدأ من 0.1 فقط. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">انضم إلى المجموعة عبر الموقع الرسمي واحصل على رصيد تجريبي بقيمة دولار واحد</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://go.apimart.ai/gh-codeg" target="_blank"><img src="../images/apimart-ai.png" alt="APIMart" width="200" /></a><br/>
       <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
     </td>
@@ -84,10 +77,10 @@
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG" target="_blank"><img src="../images/fluxion-ai.png" alt="Fluxion AI" width="160" /></a><br/>
-      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">Fluxion AI</a></strong>
+      <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG" target="_blank"><img src="../images/sidrune-ai.png" alt="Sidrune AI" width="200" /></a><br/>
+      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">Sidrune AI</a></strong>
     </td>
-    <td>شكراً لـ Fluxion AI على رعاية هذا المشروع! توفّر Fluxion AI وصولاً سريعاً وموثوقاً ومنخفض التكلفة عبر واجهة API موحّدة واحدة إلى GPT وClaude وGemini وغيرها من نماذج الذكاء الاصطناعي الرائدة. يمكن للمستخدمين الجدد الحصول على رصيد API بقيمة 3 دولارات عبر <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">رابطنا المخصّص</a>.</td>
+    <td>شكراً لـ Sidrune AI على رعاية هذا المشروع! توفّر Sidrune AI واجهة API واحدة للوصول إلى GPT وClaude وغيرها من نماذج الذكاء الاصطناعي الرئيسية. يحصل المستخدمون الجدد على رصيد API بقيمة 3 دولارات عند التسجيل عبر <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">رابطنا المخصّص</a> باستخدام الرمز الترويجي <code>SDRCODEG</code>.</td>
   </tr>
   <tr>
     <td align="center" width="220">
@@ -108,9 +101,9 @@
 
 ### واجهة واحدة لكل الوكلاء
 
-يضم Codeg خمسة عشر وكيلاً مدمجًا، ويمكن لأي وكيل آخر متوافق مع ACP الانضمام من السجل العام أو عبر ملف distribution JSON الخاص به. ويتواصل Codeg مع كلٍّ منهم عبر Agent Client Protocol، فيحصلون جميعًا على المحادثة الغنية نفسها — بطاقات الأدوات، والفروقات الحيّة، والخطط، وطلبات الأذونات — بدلاً من طرفية تُضطر إلى التحديق فيها.
+يضم Codeg سبعة عشر وكيلاً مدمجًا، ويمكن لأي وكيل آخر متوافق مع ACP الانضمام من السجل العام أو عبر ملف distribution JSON الخاص به. ويتواصل Codeg مع كلٍّ منهم عبر Agent Client Protocol، فيحصلون جميعًا على المحادثة الغنية نفسها — بطاقات الأدوات، والفروقات الحيّة، والخطط، وطلبات الأذونات — بدلاً من طرفية تُضطر إلى التحديق فيها. فعّل «عرض الواجهة» لوكيلٍ ما، فيصبح قادرًا على الرد ببطاقات وجداول ورسوم بيانية تفاعلية.
 
-[التوثيق ←](https://docs.codeg.app/guide/supported-agents) · [الوكلاء المخصّصون ←](https://docs.codeg.app/guide/custom-agents)
+[التوثيق ←](https://docs.codeg.app/guide/supported-agents) · [الوكلاء المخصّصون ←](https://docs.codeg.app/guide/custom-agents) · [عرض الواجهة ←](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
 </td>
 <td width="50%">
@@ -125,9 +118,9 @@
 
 ### كل جلسة قابلة للبحث
 
-يقرأ Codeg السجل الذي تحفظه واجهة CLI لكل وكيل على القرص: استورده بنقرة واحدة، وابحث فيه كله، واستأنف أي جلسة من حيث توقفت. اذكر جلسة قديمة بـ `@`، فيستطيع الوكيل الذي تحادثه قراءتها — حتى لو كتبها وكيل آخر.
+يقرأ Codeg السجل الذي تحفظه واجهة CLI لكل وكيل على القرص: استورده بنقرة واحدة، وابحث فيه كله، واستأنف أي جلسة من حيث توقفت. اذكر جلسة قديمة بـ `@`، فيستطيع الوكيل الذي تحادثه قراءتها — حتى لو كتبها وكيل آخر. وامنح المحادثات وسومًا ملوّنة، عامةً أو خاصةً بمجلد واحد، ثم صفِّ الشريط الجانبي بها.
 
-[التوثيق ←](https://docs.codeg.app/guide/aggregation)
+[التوثيق ←](https://docs.codeg.app/guide/aggregation) · [الوسوم ←](https://docs.codeg.app/guide/workspace#tag-conversations)
 
 </td>
 <td width="50%">
@@ -159,9 +152,9 @@
 
 ### مهامّ قيد الانتظار تعمل دون إشراف
 
-دوّن ما تريد إنجازه وانصرف إلى شأنك. تحصل كل مهمة على شجرة عمل git وفرعٍ خاصّين بها، وتبدأ فورًا أو وفق جدول زمني، ثم تنتظر في «مراجعة»؛ اقبل الفروقات فيتولّى الوكيل دمجها، ويتحقق Codeg من git قبل أن يعدّها منجزة.
+دوّن ما تريد إنجازه وانصرف إلى شأنك. تحصل كل مهمة على شجرة عمل git وفرعٍ خاصّين بها، وتبدأ فورًا أو وفق جدول زمني، ثم تنتظر مراجعتك؛ اقبل الفروقات فيتولّى الوكيل دمجها، ويتحقق Codeg من git قبل أن يعدّها منجزة. ويمكن للوحة المستودع أن تضيفها نيابةً عنك: فهي تلتقط المشكلات وطلبات السحب حسب الوسم والكاتب، على فترات منتظمة أو عند وصول webhook.
 
-[التوثيق ←](https://docs.codeg.app/guide/tasks)
+[التوثيق ←](https://docs.codeg.app/guide/tasks) · [المعالجة التلقائية ←](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
 </td>
 <td width="50%">
@@ -193,9 +186,9 @@
 
 ### سطح المكتب والخادم والأجهزة المحمولة وقنوات المحادثة
 
-شغّل Codeg كتطبيق سطح مكتب، أو كخادم مستضاف ذاتيًا تفتحه من أي متصفح، أو كحاوية Docker واحدة. وتُبقي تطبيقات iPhone وiPad وAndroid الأصلية — إضافةً إلى قنوات Telegram وLark وWeChat — وكلاءك في متناول يدك، بينما تبقى ملفاتك وجلساتك على جهازك أنت.
+شغّل Codeg كتطبيق سطح مكتب، أو كخادم مستضاف ذاتيًا تفتحه من أي متصفح، أو كحاوية Docker واحدة، وافتح خادمًا بعيدًا من تطبيق سطح المكتب في نافذة مساحة عمل خاصة به. وتُبقي تطبيقات iPhone وiPad وAndroid الأصلية — إضافةً إلى قنوات Telegram وLark وWeChat — وكلاءك في متناول يدك، بينما تبقى ملفاتك وجلساتك على أجهزة تتحكم بها أنت.
 
-[التوثيق ←](https://docs.codeg.app/getting-started/deployment) · [التطبيقات المحمولة ←](https://docs.codeg.app/getting-started/installation#mobile-apps) · [قنوات المحادثة ←](https://docs.codeg.app/guide/chat-channels)
+[التوثيق ←](https://docs.codeg.app/getting-started/deployment) · [مساحات العمل البعيدة ←](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [التطبيقات المحمولة ←](https://docs.codeg.app/getting-started/installation#mobile-apps) · [قنوات المحادثة ←](https://docs.codeg.app/guide/chat-channels)
 
 </td>
 <td width="50%">
@@ -210,7 +203,7 @@
 
 ### مستندات Office والبحث العلمي
 
-اطلب عرضًا تقديميًا أو تقريرًا أو جدول بيانات، وشاهد ملف `.pptx` أو `.docx` أو `.xlsx` الحقيقي يُعرض مباشرةً بجوار المحادثة. أما مهارات البحث المضمَّنة — الفرضيات، وتصميم التجارب، والإحصاء، والبحث في الأدبيات — فتعمل مع أي وكيل.
+اطلب عرضًا تقديميًا أو تقريرًا أو جدول بيانات، وشاهد ملف `.pptx` أو `.docx` أو `.xlsx` الحقيقي يُعرض مباشرةً بجوار المحادثة، بينما تُفتح ملفات PDF في عارض خاص بها. أما مهارات البحث المضمَّنة — الفرضيات، وتصميم التجارب، والإحصاء، والبحث في الأدبيات — فتعمل مع أي وكيل.
 
 [التوثيق ←](https://docs.codeg.app/guide/office) · [البحث العلمي ←](https://docs.codeg.app/guide/research)
 
@@ -227,7 +220,7 @@
 
 ### استخدام المتصفح والحاسوب
 
-في تطبيق سطح المكتب، تُفتح الروابط في متصفح مدمج بجوار ملفاتك: سلّم الوكيل صفحةً أو عنصرًا أو لقطة شاشة أو خطأً من وحدة التحكم، أو دعه يقود صفحةً تشاركها. ومع «استخدام الحاسوب»، المتاح حاليًا كمعاينة، يستطيع الوكلاء أيضًا رؤية النوافذ التي تشاركها والتحكم فيها — و«إيقاف» على بُعد نقرة واحدة.
+في تطبيق سطح المكتب، تُفتح الروابط في متصفح مدمج بجوار ملفاتك، بمقاس سطح المكتب أو الجهاز اللوحي أو الهاتف: سلّم الوكيل صفحةً أو عنصرًا أو لقطة شاشة أو خطأً من وحدة التحكم، أو دعه يقود صفحةً تشاركها. ومع «استخدام الحاسوب»، المتاح حاليًا كمعاينة، يستطيع الوكلاء أيضًا رؤية النوافذ التي تشاركها والتحكم فيها — و«إيقاف» على بُعد نقرة واحدة.
 
 [التوثيق ←](https://docs.codeg.app/guide/browser) · [استخدام الحاسوب ←](https://docs.codeg.app/guide/computer-use)
 
@@ -262,18 +255,19 @@
 
 - **[لوحة المستودع](https://docs.codeg.app/guide/repository)** — المشكلات وطلبات السحب والفحوصات وعمليات الدمج لـ GitHub وGitLab وGitea وForgejo؛ ويمكن لأي مشكلة أو طلب سحب أن يتحول إلى مهمة قيد الانتظار
 - **[الأتمتة](https://docs.codeg.app/guide/automations)** — احفظ مربع الإدخال بإعداداته وشغّله بلا واجهة، وفق جدول cron أو عند الطلب
-- **[استخدام الرموز](https://docs.codeg.app/guide/token-usage)** — الاتجاهات، ونسبة إصابة التخزين المؤقت، وخريطة حرارية للنشاط، والاستخدام حسب المجلد والوكيل والنموذج والجلسة
+- **[استخدام الرموز](https://docs.codeg.app/guide/token-usage)** — الاتجاهات، ونسبة إصابة التخزين المؤقت، وخريطة حرارية للنشاط، والاستخدام حسب المجلد والوكيل والنموذج والجلسة، وما سيكلّفه ذلك بأسعار API المعلنة
 - **[التفريع والتوجيه](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — مع الوكلاء الذين يدعمون ذلك، فرّع محادثة من رد مكتمل، أو أرسل رسالة إلى دورٍ لا يزال قيد التنفيذ
 - **[المهارات](https://docs.codeg.app/guide/skills) و[MCP](https://docs.codeg.app/guide/mcp)** — حزم مهارات لكل وكيل، وفحص MCP المحلي، والبحث في السجل والتثبيت منه
 - **[مُنشئ المشروع](https://docs.codeg.app/guide/project-boot)** — أنشئ مشروعًا جديدًا بصريًا، مع معاينة حية
-- **[اجعله على ذوقك](https://docs.codeg.app/reference/settings/appearance)** — اثنتا عشرة سمة يمكنك إعادة تلوينها رمزًا لونيًا تلو الآخر، وخلفيات، واستدارة الزوايا، وCSS مخصّص — بأيٍّ من لغات الواجهة العشر
+- **[الإشعارات](https://docs.codeg.app/reference/settings/general#desktop-notifications)** — إشعارات سطح المكتب، وأصوات التنبيه، وزر شريط مهام يومض أو أيقونة Dock تقفز عندما ينتهي دورٌ أو يحتاجك وكيل
+- **[اجعله على ذوقك](https://docs.codeg.app/reference/settings/appearance)** — اثنتا عشرة سمة يمكنك إعادة تلوينها رمزًا لونيًا تلو الآخر، وخلفيات، واستدارة الزوايا، وعرض المحادثة، وCSS مخصّص، وحيوان أليف على سطح المكتب — بأيٍّ من لغات الواجهة العشر
 - **[النسخ الاحتياطي والمزامنة](https://docs.codeg.app/reference/settings/system#backup-restore)** — نسخ احتياطية مشفّرة، ومزامنة الإعدادات بين الأجهزة عبر ملف أو خادم WebDAV الخاص بك
 - **[مخطط URL](../../docs/url-scheme.md)** — يفتح `codeg://session/<id>` محادثةً من تطبيق آخر (سطح المكتب)
 - **والمزيد** — يضيف كل إصدار تقريبًا شيئًا جديدًا؛ و[ملاحظات الإصدار](https://github.com/spacering-net/codeg/releases) هي القائمة الكاملة
 
 ## 🤖 الوكلاء المدعومون
 
-يتواصل Codeg مع كل وكيل عبر [Agent Client Protocol](https://agentclientprotocol.com)، فيحصل كلٌّ منهم على الواجهة المنظَّمة نفسها. ويأتي بخمسة عشر وكيلاً مدمجًا، يتولّى تثبيت معظمهم وتثبيت إصداراتهم وتحديثهم نيابةً عنك:
+يتواصل Codeg مع كل وكيل عبر [Agent Client Protocol](https://agentclientprotocol.com)، فيحصل كلٌّ منهم على الواجهة المنظَّمة نفسها. ويأتي بسبعة عشر وكيلاً مدمجًا، يتولّى تثبيت معظمهم وتثبيت إصداراتهم وتحديثهم نيابةً عنك:
 
 <p>
   <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
@@ -291,6 +285,8 @@
   <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
   <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
   <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://kiro.dev/cli/"><kbd><img src="../images/agents/kiro.svg" alt="" width="16" valign="middle" /> Kiro CLI</kbd></a> &nbsp;
+  <a href="../agents/zcode.md"><kbd><img src="../images/agents/zcode.svg" alt="" width="16" valign="middle" /> ZCode</kbd></a> &nbsp;
   <a href="https://docs.codeg.app/guide/custom-agents"><kbd>+ أي وكيل ACP</kbd></a>
 </p>
 
@@ -317,8 +313,10 @@ $env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 **Docker** — الخادم نفسه، داخل حاوية واحدة:
 
 ```bash
-docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
+docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/spacering-net/codeg:latest
 ```
+
+في الحالتين، افتح `http://<host>:3080` في المتصفح وأدخل رمز الوصول الذي يطبعه الخادم عند بدء تشغيله (وفي الحاوية يعرضه `docker logs`)، أو عيّن `CODEG_TOKEN` لتختار رمزك بنفسك.
 
 **الهاتف واللوحي** — ثبّت [تطبيق iOS](https://apps.apple.com/app/codeg-client/id6785199071) أو [حزمة Android APK](https://github.com/xintaofei/codeg-android/releases/latest)، ثم وجّهه إلى **خدمة الويب** في تطبيق سطح المكتب أو إلى خادم `codeg-server` الخاص بك: العنوان والرمز، وانتهى الأمر. خطوات الاقتران في [التطبيقات المحمولة](https://docs.codeg.app/getting-started/installation#mobile-apps).
 
@@ -362,6 +360,8 @@ docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
 - [Superpowers](https://github.com/obra/superpowers) — يُشغِّل وحدة مهارات الخبراء في Codeg
 - [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) — يُشغِّل سير عمل مستندات Office في Codeg
 - [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) — يُشغِّل مهارات البحث العلمي في Codeg (مجموعة فرعية مرخّصة بموجب MIT)
+- [json-render](https://github.com/vercel-labs/json-render) — يُشغِّل بطاقات «عرض الواجهة» وجداولها ورسومها البيانية في Codeg
+- [cua-driver](https://github.com/trycua/cua) — يُشغِّل «استخدام الحاسوب» في Codeg
 
 ## 📜 الترخيص
 

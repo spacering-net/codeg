@@ -18,6 +18,7 @@ import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
+  useBooleanOptionLabels,
 } from "./agent-config-section"
 import { BranchPicker } from "@/components/shared/branch-picker"
 import {
@@ -169,6 +170,7 @@ export function AutomationEditor({
     true,
     configValues
   )
+  const booleanLabels = useBooleanOptionLabels()
   const invocations = useComposerInvocations({
     editorRef,
     agentType,
@@ -266,7 +268,7 @@ export function AutomationEditor({
       const label_snapshot = {
         agent_label: getAgentLabel(agentType) ?? agentType,
         ...(folderName ? { folder_label: folderName } : {}),
-        ...snapshotLabels(snapshot, mode_id, config_values),
+        ...snapshotLabels(snapshot, mode_id, config_values, booleanLabels),
       }
 
       // Enqueue-task automations never run in place: canonicalize the
@@ -396,6 +398,7 @@ export function AutomationEditor({
             agentType={agentOptions.snapshotAgentType}
             snapshot={agentOptions.snapshot}
             loading={agentOptions.loading}
+            stale={!agentOptions.current}
             error={agentOptions.error}
             onReload={agentOptions.reload}
             modeId={modeId}

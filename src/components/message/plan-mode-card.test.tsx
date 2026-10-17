@@ -118,6 +118,20 @@ describe("PlanModeCard", () => {
     expect(screen.getByText("boom")).toBeInTheDocument()
   })
 
+  // claude-agent-acp fences a failed tool's result for markdown clients; the
+  // card shows it as preformatted text, as the transcript records it.
+  it("shows a fenced error without its fence", () => {
+    renderCard({
+      toolName: "exitplanmode",
+      input: "{}",
+      errorText: "```\nThe user rejected the plan.\n```",
+      state: "output-error",
+    })
+    expect(screen.getByText("The user rejected the plan.").textContent).toBe(
+      "The user rejected the plan."
+    )
+  })
+
   it("reports an approved codex plan review from its rawOutput", () => {
     // codex-acp ≥1.1.8: codeg seeds the call from the permission request (no
     // input), and codex's follow-up update supplies the decision text.

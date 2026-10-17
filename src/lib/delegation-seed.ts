@@ -36,6 +36,8 @@ export function buildDelegationSeedEnvelopes(
       agent_type: d.agent_type,
       task_preview: d.task_preview ?? null,
       task_id: d.task_id ?? null,
+      assistant_id: d.assistant_id ?? null,
+      assistant_name: d.assistant_name ?? null,
     })
   }
   return out

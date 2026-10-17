@@ -242,6 +242,7 @@ pub async fn pet_list_active_sessions_core(
                 }
             }
             entry.title = summary.title.unwrap_or_default();
+            entry.assistant_name = summary.assistant_name;
         }
         entries.push(entry);
     }
@@ -662,6 +663,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await

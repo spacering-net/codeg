@@ -5,6 +5,7 @@
 //! scope and why REST-direct beat shelling out to `gh`/`glab`).
 
 pub mod auth;
+pub mod auto;
 pub mod deliver;
 pub mod envelope;
 pub mod gitea;
@@ -431,6 +432,138 @@ pub struct ForgeSourceMeta {
     /// which is the posture the old folder setting shipped with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writeback: Option<bool>,
+}
+
+/// Pages one auto-processing scan reads per collection before it hands the
+/// rest of the window to the next scan ([`OpenItemsScan::resume`]). A budget
+/// per scan, not a cap on what is ever read: ten thousand items a scan, so a
+/// backlog that size is worked through over several scans instead of spending
+/// the hour's API quota in one go and failing every time.
+pub const SCAN_MAX_PAGES: u32 = 100;
+
+/// Rows per scan page. The maximum both GitHub and GitLab serve; Gitea clamps
+/// it to its own `MAX_RESPONSE_ITEMS` (50 by default) and its client asks for
+/// that instead.
+pub const SCAN_PAGE_SIZE: u32 = 100;
+
+/// Pages a scan carrying on with a cut-short window reads AGAIN before the
+/// page its cursor names — see [`ScanCursor`] for what they absorb.
+pub const SCAN_CONTINUATION_OVERLAP_PAGES: u32 = 1;
+
+/// Where one collection of a scan's listing stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionCursor {
+    /// Read on from this page next time.
+    Next(u32),
+    /// Read to its last page — the rest of the window has nothing more here.
+    Done,
+}
+
+/// Where a listing cut short by the page budget carries on: per collection
+/// it reads (GitHub's one mixed feed; GitLab's and Gitea's one per kind), the
+/// next page — or that it was read to the end.
+///
+/// A PAGE number rather than a timestamp, and within the SAME window: the
+/// lists are newest-updated (Gitea: newest-created) first, so an item updated
+/// while the window is being worked through moves to the front, which shifts
+/// what follows DOWN a place — read again, never skipped. A timestamp
+/// resumption would need the opposite order, where every such update shifts
+/// the unread rows UP into pages already read and loses one at each boundary.
+///
+/// An item LEAVING the list (closed or deleted) does shift the rest up, and
+/// between two scans of a sweep — minutes apart — that is no longer rare: one
+/// read item closed moves the first unread one back onto the last page read.
+/// So a scan carrying on starts [`SCAN_CONTINUATION_OVERLAP_PAGES`] early and
+/// reads that page again; up to a page's worth of such closures lands inside
+/// the overlap, and the pick-up check absorbs the rows read twice. Within one
+/// scan the same shift needs a closure in the seconds between two page reads
+/// to matter, and is accepted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanCursor {
+    collections: std::collections::BTreeMap<&'static str, CollectionCursor>,
+}
+
+impl ScanCursor {
+    /// The page to read `collection` from, or `None` when it was already read
+    /// to its end in this window. A collection the cursor has never seen
+    /// starts at page 1.
+    pub fn first_page(&self, collection: &'static str) -> Option<u32> {
+        match self.collections.get(collection) {
+            None => Some(1),
+            Some(CollectionCursor::Next(page)) => Some(*page),
+            Some(CollectionCursor::Done) => None,
+        }
+    }
+
+    pub fn record(&mut self, collection: &'static str, at: CollectionCursor) {
+        self.collections.insert(collection, at);
+    }
+
+    /// Whether some collection still has pages to read.
+    pub fn has_more(&self) -> bool {
+        self.collections
+            .values()
+            .any(|at| matches!(at, CollectionCursor::Next(_)))
+    }
+}
+
+/// What one auto-processing scan read from a repository: OPEN items of the
+/// wanted kinds updated at or after the scan's window start — all of them, or
+/// as many as the page budget allowed.
+#[derive(Debug, Clone, Default)]
+pub struct OpenItemsScan {
+    pub rows: Vec<ForgeIssueRow>,
+    /// `None` when every collection was read to its end; otherwise where the
+    /// next scan of the SAME window carries on.
+    pub resume: Option<ScanCursor>,
+}
+
+/// Read one collection of a scan listing from where `from` says, under the
+/// page budget, and record where it stands in `to`. `fetch_page` returns a
+/// page's rows and whether the server offers a page after it. Shared by the
+/// three forges so the budget and the cursor arithmetic exist once.
+pub(crate) async fn scan_collection<F, Fut>(
+    collection: &'static str,
+    from: &ScanCursor,
+    to: &mut ScanCursor,
+    rows: &mut Vec<ForgeIssueRow>,
+    budget: u32,
+    mut fetch_page: F,
+) -> Result<(), ForgeError>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<(Vec<ForgeIssueRow>, bool), ForgeError>>,
+{
+    let Some(cursor_page) = from.first_page(collection) else {
+        to.record(collection, CollectionCursor::Done);
+        return Ok(());
+    };
+    // Carrying on: back up into the overlap (never before page 1). Progress
+    // is still `budget - overlap` pages a scan.
+    let first = cursor_page
+        .saturating_sub(SCAN_CONTINUATION_OVERLAP_PAGES)
+        .max(1);
+    for page in first..first.saturating_add(budget) {
+        let (mut got, has_next) = fetch_page(page).await?;
+        rows.append(&mut got);
+        if !has_next {
+            to.record(collection, CollectionCursor::Done);
+            return Ok(());
+        }
+    }
+    to.record(
+        collection,
+        CollectionCursor::Next(first.saturating_add(budget)),
+    );
+    Ok(())
+}
+
+/// A scan watermark as every forge's "updated since" parameter accepts it:
+/// RFC 3339, whole seconds, `Z`. Rounded DOWN by the truncation, which errs
+/// toward reading an item twice — the dedup absorbs that — never toward
+/// missing one.
+pub fn scan_timestamp(since: chrono::DateTime<chrono::Utc>) -> String {
+    since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// List rows carry the body for the trigger snapshot; cap it so a megabyte

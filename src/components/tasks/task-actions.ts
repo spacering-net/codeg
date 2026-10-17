@@ -4,17 +4,22 @@ import {
   Ban,
   CalendarClock,
   CircleCheck,
+  Clock,
   GitMerge,
   GitPullRequestArrow,
+  Inbox,
   ListX,
   MessageSquareText,
   Pencil,
   Play,
   RotateCw,
+  Undo2,
   type LucideIcon,
 } from "lucide-react"
 import {
+  canDefer,
   hasNothingToMerge,
+  isDeferred,
   isMergeQueued,
   mustDeliverToPr,
   usesMergeRequests,
@@ -48,6 +53,13 @@ export interface TaskActionHandlers {
   onComplete: () => void
   /** Toggles by `task.archived_at` (archive ⇄ unarchive). */
   onArchive: () => void
+  /** Toggles by `isDeferred(task)`: puts a reviewed / failed task aside to
+   *  handle later ("以后处理" — it waits under Done), or brings it back. */
+  onDefer: () => void
+  /** Opens the follow-up dialog ("继续处理") — the step that picks a deferred
+   *  reviewed task back up: the agent continues in the same session and the
+   *  task returns to running. */
+  onFollowUp: () => void
   /** Opens the editor dialog — offered while editable (todo / failed). */
   onEdit: () => void
   /** Opens the schedule dialog — to-do tasks only (plan / re-plan / clear). */
@@ -67,6 +79,9 @@ type ActionLabelKey =
   | "actionComplete"
   | "actionArchive"
   | "actionUnarchive"
+  | "actionDefer"
+  | "actionUndefer"
+  | "actionFollowUp"
   | "actionEdit"
   | "actionSchedule"
 
@@ -76,6 +91,12 @@ type ActionLabelKey =
  * and the secondaries (edit / archive) on the right, always ending in "查看会话"
  * when a session exists. The full set — with labels — lives in the detail
  * sheet. `merging` has no primary: it cannot be canceled.
+ *
+ * "以后处理" (handle later) is the attention column's way out without a
+ * decision: a reviewed or failed task can be put aside (see `canDefer`) and
+ * waits under Done. There, a deferred reviewed task leads with "继续处理" — the
+ * follow-up that starts its next run — and a deferred failed one keeps its
+ * retry; both offer the way back to "needs you" in place of "handle later".
  */
 export function buildTaskActions(
   task: WorkTask,
@@ -135,6 +156,19 @@ export function buildTaskActions(
           })
           break
         }
+        // Put aside to handle later: picking it back up is what this card is
+        // for now, so the follow-up leads — straight from Done to a running
+        // agent. The acceptances wait in the drawer, or in "needs you" once
+        // the task is moved back there.
+        if (isDeferred(task)) {
+          primary = {
+            icon: Undo2,
+            label: t("actionFollowUp"),
+            onClick: handlers.onFollowUp,
+          }
+          secondaries.push(deferToggle(task, t, handlers))
+          break
+        }
         // Nothing was changed ⟹ nothing to merge: offer the acceptance that
         // actually applies. A task that came from a pull request has its own
         // one — its work goes back to that pull request, never onto the local
@@ -162,6 +196,7 @@ export function buildTaskActions(
             onClick: handlers.onMerge,
           }
         }
+        if (canDefer(task)) secondaries.push(deferToggle(task, t, handlers))
         break
       case "merging":
         break
@@ -176,6 +211,11 @@ export function buildTaskActions(
           label: t("actionEdit"),
           onClick: handlers.onEdit,
         })
+        // Deferred or not, a failed task picks back up the same way (retry);
+        // only the way out of / back into "needs you" swaps.
+        if (canDefer(task) || isDeferred(task)) {
+          secondaries.push(deferToggle(task, t, handlers))
+        }
         secondaries.push({
           icon: Archive,
           label: t("actionArchive"),
@@ -213,4 +253,15 @@ export function buildTaskActions(
     })
   }
   return { primary, secondaries }
+}
+
+/** "以后处理", or — on a task already put aside — the way back to "needs you". */
+function deferToggle(
+  task: WorkTask,
+  t: (key: ActionLabelKey) => string,
+  handlers: TaskActionHandlers
+): TaskActionItem {
+  return isDeferred(task)
+    ? { icon: Inbox, label: t("actionUndefer"), onClick: handlers.onDefer }
+    : { icon: Clock, label: t("actionDefer"), onClick: handlers.onDefer }
 }

@@ -213,3 +213,49 @@ async fn cors_preflight_covers_the_proxy_route() {
         "*"
     );
 }
+
+/// The document page's shim starts from the version the watch reported just
+/// before the page was fetched, never one read after: a later one could claim
+/// an edit the page doesn't show, and the page would never catch up on it.
+#[tokio::test]
+async fn proxy_reads_the_document_version_before_the_page() {
+    let (server, _data, _static) = build_proxy_server().await;
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let asked_h = asked.clone();
+    let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+        let asked = asked_h.clone();
+        async move {
+            asked.lock().unwrap().push(uri.path().to_string());
+            let (content_type, body) = if uri.path() == "/api/status" {
+                ("application/json", r#"{"fmt":"docx","version":7}"#)
+            } else {
+                (
+                    "text/html; charset=utf-8",
+                    "<html><head><title>doc</title></head><body>hi</body></html>",
+                )
+            };
+            axum::response::Response::builder()
+                .header(header::CONTENT_TYPE, content_type)
+                .body(axum::body::Body::from(body))
+                .unwrap()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    codeg_lib::office_watch::insert_known_port_for_test(port, TEST_CAP);
+
+    let resp = server
+        .get(&format!("/api/office-watch-proxy/{port}/?cap={TEST_CAP}"))
+        .await;
+
+    codeg_lib::office_watch::remove_known_port_for_test(port);
+    assert_eq!(resp.status_code(), 200);
+    assert!(
+        resp.text().contains(r#"Number("7")"#),
+        "the shim must start from the version read before the page"
+    );
+    assert_eq!(*asked.lock().unwrap(), vec!["/api/status", "/"]);
+}

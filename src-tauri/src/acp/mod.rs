@@ -49,6 +49,7 @@ pub mod temp_reclaim;
 pub mod terminal_runtime;
 pub mod types;
 pub mod work_task_tools;
+pub mod zcode;
 
 pub use idle_sweep::{idle_sweep_task, idle_timeout_from_env, SWEEP_INTERVAL_SECS};
 pub use internal_bus::{EventBusMetrics, EventBusMetricsSnapshot, InternalEventBus};
@@ -78,11 +79,10 @@ pub use types::{
 /// sidebar on every restart. The second is codeg#500, where the split is the
 /// whole point.
 ///
-/// Empty — and free — for every built-in agent: their history lives in the
-/// agent's own store, codeg records no transcript, and so nothing can ever be
-/// carried forward. Only custom agents can produce a non-empty answer.
+/// Empty for agents with native history stores. Custom agents and ZCode
+/// use Codeg transcripts and can carry continuation ancestors forward.
 pub fn continued_session_ids(agent_type: crate::models::AgentType, session_id: &str) -> Vec<String> {
-    if agent_type.custom_id().is_none() {
+    if !agent_type.uses_acp_transcript() {
         return Vec::new();
     }
     crate::acp_transcript::continuation_ancestors(registry::registry_id_for(agent_type), session_id)

@@ -146,7 +146,10 @@ async function renderPanel(agents: AcpAgentInfo[]) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  // Reset, not just clear: a test's mockResolvedValue/mockImplementation must
+  // not reach the next one, and restoreAllMocks only takes down spyOn spies —
+  // resetting puts every stubbed api function back on its never-settling stub.
+  vi.resetAllMocks()
   vi.spyOn(console, "warn").mockImplementation(() => {})
 })
 

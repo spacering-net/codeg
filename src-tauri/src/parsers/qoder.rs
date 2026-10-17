@@ -8,8 +8,8 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageRole, TurnUsage,
-    UnifiedMessage,
+    AgentExecutionStats, AgentType, ContentBlock, ConversationDetail, ConversationSummary,
+    MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
 use crate::parsers::claude::{
     api_error_text, capture_title_record, extract_assistant_content, extract_usage,
@@ -20,7 +20,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, latest_turn_prompt_usage_tokens, merge_context_window_stats,
     relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, with_reported_context_percent, AgentParser, ParseError,
+    title_from_user_text, with_reported_context_percent, AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve Qoder's global config dir the way Qoder itself does.
@@ -57,10 +57,16 @@ use crate::parsers::{
 /// passes, and the `QODERCN_*` twin, which belongs to the separate `.qoder-cn`
 /// distribution rather than the `@qoder-ai/qodercli` package pinned here.
 pub(crate) fn resolve_qoder_config_dir() -> PathBuf {
+    resolve_qoder_config_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_qoder_config_dir`] for the Qoder launched with `env`.
+pub(crate) fn resolve_qoder_config_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_qoder_config_dir_from(
-        std::env::var_os("QODER_CONFIG_DIR"),
-        std::env::var_os("QODER_CLI_HOME").or_else(|| std::env::var_os("GEMINI_CLI_HOME")),
-        std::env::var_os("QODER_CONFIG_DIR_NAME"),
+        env.var_os("QODER_CONFIG_DIR"),
+        env.var_os("QODER_CLI_HOME")
+            .or_else(|| env.var_os("GEMINI_CLI_HOME")),
+        env.var_os("QODER_CONFIG_DIR_NAME"),
         dirs::home_dir(),
     )
 }
@@ -156,8 +162,13 @@ pub struct QoderParser {
 
 impl QoderParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Qoder launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_qoder_config_dir().join("projects"),
+            base_dir: resolve_qoder_config_dir_for_env(env).join("projects"),
         }
     }
 
@@ -297,10 +308,11 @@ impl ReportedContext {
 /// by construction.
 ///
 /// Same correction `parsers::codex::codex_usage_counters` applies for the same
-/// reason. Deliberately NOT a `FACT_SCHEMA_VERSION` bump: the only transcripts
-/// that can carry non-zero counters are ones recorded with the launch env this
-/// release also introduces, so there are no stored rows computed the old way to
-/// rebuild.
+/// reason. This is what `FACT_SCHEMA_VERSION` 3 exists for: sessions with real
+/// counters are not only the ones codeg launched with the usage launch env —
+/// a custom/BYO model has always exposed them, and the parser reads every
+/// session under `~/.qoder/projects` — so stored rows need a full rebuild
+/// under the new rule.
 fn qoder_turn_usage(value: &Value) -> Option<TurnUsage> {
     let mut usage = extract_usage(value)?;
     let cached = usage
@@ -743,7 +755,7 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                     Some(display) => vec![ContentBlock::Text {
                         text: display.clone(),
                     }],
-                    None => extract_user_content(value),
+                    None => with_recorded_ask_answers(value, extract_user_content(value)),
                 };
                 if content.is_empty() {
                     continue;
@@ -776,11 +788,22 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                 if content.is_empty() {
                     continue;
                 }
+                // A blank `model` names nothing, so it is dropped here, once,
+                // for every use below: stored, it would overwrite the last valid
+                // model, block the launch-model fallback, and give its bubble
+                // (and turn) an empty name.
                 let entry_model = value
                     .pointer("/message/model")
                     .and_then(Value::as_str)
+                    .filter(|m| !m.trim().is_empty())
                     .map(String::from);
-                if model.is_none() {
+                // Last NON-EMPTY model wins: a mid-session switch has to land
+                // in `summary.model` (the details dialog reads it ahead of the
+                // turns) and in the context-window fallback below. Pinning the
+                // FIRST model here left both on the session's opening model —
+                // a switch to Qwen3.8-Flash still displayed DeepSeek-Flash
+                // next to the new model's 200K window.
+                if entry_model.is_some() {
                     model.clone_from(&entry_model);
                 }
                 let message_id = value
@@ -790,9 +813,10 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
 
                 // One API response streams as SEVERAL records (thinking,
                 // tool_use, final text) sharing one `message.id`; adjacent
-                // fragments merge into a single bubble. Every one of them
-                // repeats the response's full usage, so the claim below keeps it
-                // on exactly one message — including across the turn boundary a
+                // fragments merge into a single bubble. 1.1.65 repeats the
+                // response's full usage on every one of them, 1.1.67 writes it
+                // on the last one only; either way the claim below keeps it on
+                // exactly one message — including across the turn boundary a
                 // tool result opens, where the trailing fragment lands in a
                 // different bubble than its siblings.
                 let merges_into_pending = message_id.is_some()
@@ -819,9 +843,9 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                 // Read off the RAW record rather than the claimed usage: the
                 // claim exists to stop one response's counters being added up
                 // once per fragment, but occupancy is a level, not a sum, and
-                // every fragment repeats the same one. Taking it here keeps the
-                // figure even when the claim handed the usage to an earlier
-                // bubble.
+                // every fragment that carries usage carries the same one. Taking
+                // it here keeps the figure even when the claim handed the usage
+                // to an earlier bubble.
                 if let Some(reported) = extract_reported_context(value) {
                     reported_context = Some(reported);
                 }
@@ -929,6 +953,348 @@ fn is_human_prompt(value: &Value) -> bool {
     }
 }
 
+/// A `user` record's content, with an answered `AskUserQuestion` result
+/// carrying the answers Qoder recorded (`toolUseResult`) rather than the
+/// sentence it handed the model (see [`qoder_ask_envelope_from_recorded`]).
+///
+/// Qoder writes one tool result per `user` record, and `toolUseResult` belongs
+/// to it; with any other number of results the pairing is not certain, so the
+/// content is left as it is.
+fn with_recorded_ask_answers(record: &Value, mut content: Vec<ContentBlock>) -> Vec<ContentBlock> {
+    let mut results = content
+        .iter_mut()
+        .filter(|block| matches!(block, ContentBlock::ToolResult { .. }));
+    let (
+        Some(ContentBlock::ToolResult {
+            output_preview,
+            is_error: false,
+            ..
+        }),
+        None,
+    ) = (results.next(), results.next())
+    else {
+        return content;
+    };
+    if let Some(envelope) = record
+        .get("toolUseResult")
+        .and_then(qoder_ask_envelope_from_recorded)
+    {
+        *output_preview = Some(envelope);
+    }
+    content
+}
+
+/// Qoder's native question tool, by the name it records in transcripts and
+/// stamps on its live `tool_call` (`_meta.qoder.toolName`).
+pub(crate) const QODER_ASK_USER_QUESTION_TOOL: &str = "AskUserQuestion";
+
+/// One question of a Qoder `AskUserQuestion` call, as the call's own input
+/// states it: `questions[i]` of the live `tool_call`'s `rawInput`, and of the
+/// `toolUseResult` the transcript records next to the result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QoderAskQuestion {
+    question: String,
+    header: String,
+    multi_select: bool,
+    labels: Vec<String>,
+}
+
+impl QoderAskQuestion {
+    /// The questions of an `AskUserQuestion` input, in order. `None` unless
+    /// every entry carries its `question` text: that text is what Qoder keys
+    /// each answer by, so a list missing one cannot be matched to the answers.
+    pub(crate) fn list_from(questions: Option<&Value>) -> Option<Vec<Self>> {
+        let parsed = questions?
+            .as_array()?
+            .iter()
+            .map(|item| {
+                Some(Self {
+                    question: item.get("question")?.as_str()?.to_string(),
+                    header: item
+                        .get("header")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    multi_select: item
+                        .get("multiSelect")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    labels: item
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .map(|options| {
+                            options
+                                .iter()
+                                .filter_map(|option| option.get("label").and_then(Value::as_str))
+                                .filter(|label| !label.is_empty())
+                                .map(String::from)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!parsed.is_empty()).then_some(parsed)
+    }
+
+    /// One RECORDED answer back as the picks the question card partitions
+    /// against the options, claiming no choice the record cannot prove.
+    ///
+    /// A single-select answer is one pick, verbatim: an offered label or the
+    /// user's own text. A multi-select answer reaches Qoder as a list, but
+    /// Qoder keeps it as one string, `values.join(", ")`, with the user's own
+    /// "Other" text in that same list (codeg's card writes it after the chosen
+    /// labels; see `crate::acp::question::build_elicitation_response`). So:
+    ///
+    /// - read exactly one way as offered labels joined by ", " → those labels;
+    /// - not readable as labels at all (the user's own text is in it) → the
+    ///   literal text, one pick, which the card shows as typed text — it
+    ///   cannot equal a label, or it would have read as one;
+    /// - readable several ways (options like "Red", "Green" and "Red, Green")
+    ///   → the literal text if it is no label, and no pick at all if it is
+    ///   one, since the card would show that label as chosen.
+    ///
+    /// A live call codeg answered itself does not need this: it renders the
+    /// reply as sent, before Qoder flattened it (see
+    /// [`qoder_ask_envelope_from_reply`]).
+    fn picks(&self, answer: &str) -> Vec<String> {
+        if answer.is_empty() {
+            return Vec::new();
+        }
+        if !self.multi_select {
+            return vec![answer.to_string()];
+        }
+        match self.label_reading(answer) {
+            LabelReading::Unique(labels) => labels,
+            LabelReading::Unreadable => vec![answer.to_string()],
+            LabelReading::Ambiguous if self.labels.iter().any(|label| label == answer) => {
+                Vec::new()
+            }
+            LabelReading::Ambiguous => vec![answer.to_string()],
+        }
+    }
+
+    /// How `answer` reads as offered labels joined by ", ".
+    ///
+    /// Counted per suffix from the end, capped at two (all [`Self::picks`]
+    /// needs is none, one, or several), so the cost stays linear in the
+    /// answer's length even when labels are joins of one another ("A",
+    /// "A, A") and a long answer could otherwise be split in exponentially
+    /// many ways.
+    fn label_reading(&self, answer: &str) -> LabelReading {
+        let mut labels: Vec<&str> = self.labels.iter().map(String::as_str).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        let end = answer.len();
+        // How many readings `label`, placed at byte `at`, opens: none unless
+        // it ends the answer (one) or is followed by ", " and a suffix that
+        // reads (as many as that suffix does).
+        let through = |readings: &[u8], at: usize, label: &str| -> u8 {
+            if !answer[at..].starts_with(label) {
+                return 0;
+            }
+            let after = at + label.len();
+            if after == end {
+                1
+            } else if answer[after..].starts_with(", ") {
+                readings[after + 2]
+            } else {
+                0
+            }
+        };
+        // `readings[at]`: the readings of `answer[at..]`, 2 meaning "several".
+        let mut readings = vec![0u8; end + 1];
+        for at in (0..end).rev().filter(|&at| answer.is_char_boundary(at)) {
+            readings[at] = labels
+                .iter()
+                .map(|label| through(&readings, at, label))
+                .fold(0u8, |total, count| total.saturating_add(count).min(2));
+        }
+        match readings[0] {
+            0 => LabelReading::Unreadable,
+            1 => {
+                // Exactly one label opens the only reading at each step.
+                let mut picks = Vec::new();
+                let mut at = 0;
+                while let Some(label) = labels
+                    .iter()
+                    .find(|label| through(&readings, at, label) > 0)
+                {
+                    picks.push((*label).to_string());
+                    at += label.len() + 2;
+                    if at > end {
+                        break;
+                    }
+                }
+                LabelReading::Unique(picks)
+            }
+            _ => LabelReading::Ambiguous,
+        }
+    }
+}
+
+/// How a recorded multi-select answer reads as the offered labels; see
+/// [`QoderAskQuestion::picks`].
+enum LabelReading {
+    /// Not as labels at all: the user's own text is in it.
+    Unreadable,
+    /// Exactly one way.
+    Unique(Vec<String>),
+    /// More than one way, so no reading can be trusted.
+    Ambiguous,
+}
+
+/// The answers codeg itself sent back for a Qoder `AskUserQuestion`, as the
+/// envelope the question card reads.
+///
+/// This is the one source that is exact: Qoder's form keys question `n` as
+/// `q<n>` and codeg's reply writes a multi-select's chosen labels and the
+/// user's own text as separate entries, before Qoder flattens them into one
+/// string for everything it records or streams (see [`QoderAskQuestion::picks`]).
+/// `questions` are the call's own, in order, as its opening `tool_call`
+/// carried them.
+pub(crate) fn qoder_ask_envelope_from_reply(
+    questions: &[QoderAskQuestion],
+    reply: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    let answered: Vec<_> = questions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, question)| {
+            let picks: Vec<String> = match reply.get(&format!("q{index}"))? {
+                Value::String(answer) => vec![answer.clone()],
+                Value::Array(values) => values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect(),
+                _ => return None,
+            };
+            let picks: Vec<String> = picks.into_iter().filter(|pick| !pick.is_empty()).collect();
+            (!picks.is_empty()).then_some((question, picks))
+        })
+        .collect();
+    (!answered.is_empty()).then(|| qoder_ask_envelope(answered))
+}
+
+/// The answer envelope codeg's question card reads (`parseAskQuestionOutcome`
+/// in `src/lib/ask-question.ts`): the `{answers: [{header, question, selected}],
+/// declined}` shape codeg-mcp's `ask_user_question` records, and the one the
+/// OpenCode and Grok history parsers rebuild for their own native asks.
+fn qoder_ask_envelope(answered: Vec<(&QoderAskQuestion, Vec<String>)>) -> String {
+    let answers: Vec<Value> = answered
+        .into_iter()
+        .map(|(question, selected)| {
+            serde_json::json!({
+                "header": question.header,
+                "question": question.question,
+                "selected": selected,
+            })
+        })
+        .collect();
+    serde_json::json!({ "answers": answers, "declined": false }).to_string()
+}
+
+/// The answers Qoder recorded for an `AskUserQuestion` call, as the envelope
+/// the question card reads: `{questions, answers: {"<question>": "<answer>"}}`,
+/// one string per answered question (a multi-select flattened to one
+/// `", "`-joined string, which [`QoderAskQuestion::picks`] splits only when
+/// that is unambiguous).
+///
+/// Qoder keeps this object in two places: the transcript record that carries
+/// the call's result (`toolUseResult`), and the `rawOutput` of the single,
+/// already-completed `tool_call` a `session/load` replay sends for the call.
+/// Beside it is only the sentence Qoder hands the model (see
+/// [`qoder_ask_envelope_from_result_text`]), which the card cannot read, so
+/// without this every answered question reloads with nothing selected.
+///
+/// `None` for anything else, including a declined ask, whose recorded result
+/// is only `{isHardFailure}`; and when no question was answered, which leaves
+/// the call's own output in place.
+pub(crate) fn qoder_ask_envelope_from_recorded(recorded: &Value) -> Option<String> {
+    let questions = QoderAskQuestion::list_from(recorded.get("questions"))?;
+    let answers = recorded.get("answers")?.as_object()?;
+    let answered: Vec<_> = questions
+        .iter()
+        .filter_map(|question| {
+            let picks = match answers.get(&question.question)? {
+                Value::String(answer) => question.picks(answer),
+                Value::Array(values) => values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect(),
+                _ => return None,
+            };
+            (!picks.is_empty()).then_some((question, picks))
+        })
+        .collect();
+    (!answered.is_empty()).then(|| qoder_ask_envelope(answered))
+}
+
+/// The start and end of the sentence Qoder's `AskUserQuestion` returns once
+/// questions are answered (deobfuscated from the 1.1.67 bundle; the same
+/// strings ship in every release from 1.1.23 through 1.1.69, and again in
+/// 1.1.72).
+const QODER_ANSWERED_PREFIX: &str = "Your questions have been answered: ";
+const QODER_ANSWERED_SUFFIX: &str = ". You can now continue with these answers in mind.";
+
+/// The answers in the result text Qoder's completion frame carries for an
+/// `AskUserQuestion` call, read against the questions the call was opened
+/// with, as the envelope the question card reads: the live path's fallback
+/// for a call codeg did not answer itself (when it did, the reply it sent is
+/// exact; see [`qoder_ask_envelope_from_reply`]).
+///
+/// That frame's `rawOutput` and `content` are both the sentence handed to the
+/// model:
+/// `Your questions have been answered: "Q1"="A1", "Q2"="B, C". You can now
+/// continue with these answers in mind.`, one entry per answered question in
+/// question order (`AskUserQuestion.execute`). Knowing the question texts is
+/// what lets each answer be cut out whole: an entry opens with
+/// `"<question>"="` and its answer runs to the next answered question's
+/// `", "<question>"="` or to the closing quote, so quotes or ", " inside a
+/// question or an answer do not split it. The answer text is then the same
+/// string the transcript records, and splits into picks by the same rule
+/// ([`QoderAskQuestion::picks`]).
+///
+/// `None`, leaving the frame's own output in place, for any text that is not
+/// that sentence: a rejection, the "did not answer" sentence, a future
+/// rewording, or entries that do not line up with the questions.
+pub(crate) fn qoder_ask_envelope_from_result_text(
+    questions: &[QoderAskQuestion],
+    text: &str,
+) -> Option<String> {
+    let mut rest = text
+        .trim()
+        .strip_prefix(QODER_ANSWERED_PREFIX)?
+        .strip_suffix(QODER_ANSWERED_SUFFIX)?;
+    let mut answered = Vec::new();
+    for (index, question) in questions.iter().enumerate() {
+        let Some(entry) = rest.strip_prefix(&format!("\"{}\"=\"", question.question)) else {
+            // Unanswered questions have no entry.
+            continue;
+        };
+        let next_entry = questions[index + 1..]
+            .iter()
+            .filter_map(|later| entry.find(&format!("\", \"{}\"=\"", later.question)))
+            .min();
+        let answer = match next_entry {
+            Some(end) => {
+                // Past the `", ` that closes this entry and separates the next.
+                rest = &entry[end + 3..];
+                &entry[..end]
+            }
+            None => {
+                let answer = entry.strip_suffix('"')?;
+                rest = "";
+                answer
+            }
+        };
+        answered.push((question, question.picks(answer)));
+    }
+    (rest.is_empty() && !answered.is_empty()).then(|| qoder_ask_envelope(answered))
+}
+
 impl AgentParser for QoderParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
@@ -1018,6 +1384,7 @@ fn parse_detail(path: &Path, conversation_id: &str) -> Result<ConversationDetail
     structurize_read_tool_output(&mut turns);
     resolve_patch_line_numbers(&mut turns, transcript.cwd.as_deref());
     backfill_turn_durations(&mut turns, &[]);
+    attach_subagent_tool_calls(&mut turns, path);
 
     // Qoder's own `token-stats` beats any reconstruction; the Anthropic-shaped
     // fallback is prompt tokens only (`output_tokens` is the reply, which does
@@ -1038,8 +1405,16 @@ fn parse_detail(path: &Path, conversation_id: &str) -> Result<ConversationDetail
     // produced: for a session recorded before `QODER_EXPOSE_TOKEN_USAGE` there
     // is no division to do, and where there is, Qoder's figure is the original
     // and the division is a round-trip through a rounded window.
+    //
+    // Sub-agent spend lands on the TURNS, after the occupancy above was read:
+    // a sub-agent's context is its own and never occupied the parent's window
+    // (claude attributes in the same order). Landing it on turns is also what
+    // keeps the details dialog, its totals and the Token board on ONE number —
+    // the board's per-turn facts come from turn usage.
+    attribute_subagent_usage(&mut turns, path);
+    let session_stats = compute_session_stats(&turns);
     let session_stats = with_reported_context_percent(
-        merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens),
+        merge_context_window_stats(session_stats, used_tokens, max_tokens),
         transcript.reported_context.map(ReportedContext::percent),
     );
 
@@ -1063,6 +1438,302 @@ fn parse_detail(path: &Path, conversation_id: &str) -> Result<ConversationDetail
         session_stats,
         transcript_watermark: Some(transcript_watermark),
     })
+}
+
+/// Attach each sub-agent's own transcript to the `Agent` tool result that
+/// launched it, as `agent_stats`.
+///
+/// Qoder (1.1.68, same layout as Claude Code) writes one
+/// `subagents/agent-<agentId>.jsonl` per delegated run, an
+/// `agent-<agentId>.meta.json` naming the agent type (`agentType`) and the
+/// launching tool call (`toolUseId`, absent when there is none), and a
+/// `task-<taskId>.json` keyed back by `parentToolUseId`. The task file records
+/// the run's lifecycle — `status` (`running` → `completed` / `failed` /
+/// `cancelled`, or `interrupted` once a later process finds its owner gone)
+/// and `result` (the final report, the error message, or a placeholder) — but
+/// no usage or duration: those ride only on the task notification the run
+/// delivers to the parent. The conversation itself stays the main chain; this
+/// only annotates the Agent card with the sub-agent's PROCESS, mirroring what
+/// `parsers::claude` does for Claude Code's sidechain layout.
+///
+/// The mapping is explicit (`meta.json` → parent tool-call id), never
+/// positional: it survives parallel sub-agents, interleaved streams, and a
+/// session resumed long after the run. Only runs whose tool call is in the
+/// turns being built are parsed — a run launched on a branch since rewound
+/// away has nothing to annotate here.
+fn attach_subagent_tool_calls(turns: &mut [MessageTurn], session_path: &Path) {
+    let dir = session_path.with_extension("").join("subagents");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+
+    // The tool results in view that still have no stats: the only ids a meta
+    // or task file is worth reading for.
+    let mut pending: HashSet<String> = turns
+        .iter()
+        .flat_map(|turn| turn.blocks.iter())
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult {
+                tool_use_id: Some(id),
+                agent_stats: None,
+                ..
+            } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+
+    struct TaskInfo {
+        status: Option<String>,
+        // What the task file filed as the run's outcome. For a COMPLETED run
+        // that is the child's final report — reachable here even when the
+        // parent turn died before the async result was delivered. The parser
+        // attaches it whatever the status; the card decides what to show.
+        result: Option<String>,
+    }
+
+    // Directory order is filesystem-defined. Read in name order so that two
+    // files naming the same tool call resolve the same way on every parse
+    // (the first one wins, below and in `tasks`).
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+
+    let mut tasks: HashMap<String, TaskInfo> = HashMap::new();
+    // (parent tool-call id, transcript path, agent type)
+    let mut agents: Vec<(String, PathBuf, Option<String>)> = Vec::new();
+    for path in paths {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if name.starts_with("task-") && name.ends_with(".json") {
+            let Ok(bytes) = fs::read(&path) else { continue };
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            let Some(parent) = value
+                .get("parentToolUseId")
+                .and_then(Value::as_str)
+                .filter(|s| pending.contains(*s))
+            else {
+                continue;
+            };
+            tasks.entry(parent.to_string()).or_insert_with(|| TaskInfo {
+                status: value
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                result: value
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string),
+            });
+        } else if name.starts_with("agent-") && name.ends_with(".meta.json") {
+            let Ok(bytes) = fs::read(&path) else { continue };
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            let Some(parent) = value
+                .get("toolUseId")
+                .and_then(Value::as_str)
+                .filter(|s| pending.contains(*s))
+            else {
+                continue;
+            };
+            let transcript = path.with_file_name(format!(
+                "{}.jsonl",
+                name.trim_end_matches(".meta.json")
+            ));
+            if transcript.exists() {
+                agents.push((
+                    parent.to_string(),
+                    transcript,
+                    value
+                        .get("agentType")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                ));
+            }
+        }
+    }
+
+    for (parent, transcript, agent_type) in agents {
+        // A second run naming the same tool call: the first (in name order)
+        // already landed, and stats are never overwritten.
+        if !pending.remove(&parent) {
+            continue;
+        }
+        let (calls, timeline, _usage, _started, transcript_duration) =
+            crate::parsers::claude::parse_subagent_tool_calls(&transcript);
+        let info = tasks.remove(&parent);
+        let stats = AgentExecutionStats {
+            agent_type,
+            status: info.as_ref().and_then(|i| i.status.clone()),
+            // Neither the task nor the meta file records a duration; the child
+            // transcript's own first/last-record span stands in.
+            total_duration_ms: transcript_duration,
+            total_tool_use_count: Some(calls.len() as u32),
+            tool_calls: calls,
+            timeline,
+            recovered_result: info.and_then(|i| i.result),
+            ..Default::default()
+        };
+        let target = turns
+            .iter_mut()
+            .flat_map(|turn| turn.blocks.iter_mut())
+            .find_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    agent_stats,
+                    ..
+                } if *id == parent && agent_stats.is_none() => Some(agent_stats),
+                _ => None,
+            });
+        if let Some(slot) = target {
+            *slot = Some(stats);
+        }
+    }
+}
+
+/// Fold this session's SUB-AGENT spend into its turns, from the sub-agent
+/// transcripts Qoder writes beside it.
+///
+/// Every delegated run gets `<sessionId>/subagents/agent-<agentId>.jsonl` —
+/// the same layout Claude Code uses (`parsers::claude::attribute_subagent_usage`)
+/// — and it is the unit of truth here for the same reasons: the run's own
+/// counters ride its assistant records (Anthropic FIELD NAMES over Qoder's
+/// OpenAI SEMANTICS, so [`qoder_turn_usage`] splits the cached prefix out),
+/// while the alternative — the run's segment log under
+/// `logs/sessions/<encoded-cwd>/<sessionId>/segments/` — is rotated by Qoder's
+/// 30-day `sessionRetention`, and in some entrypoints its sub-agent turns are
+/// indistinguishable from main-chain ones by `turn_id`.
+///
+/// One API response streams as SEVERAL records sharing one `message.id` —
+/// 1.1.65 repeats the same counters on each, 1.1.67 writes them on the last one
+/// only — so calls are deduped by that id: counted once, exactly as the main
+/// transcript does (`ClaudeRecordAccumulator`).
+///
+/// Every file in the directory is read exactly once, referenced or not
+/// (mirroring claude): a sub-agent that was interrupted, or one launched on a
+/// branch that was later rewound away, still spent its tokens. The MAIN chain
+/// counts only the current branch; sub-agent transcripts do not participate in
+/// that walk, so their spend is counted regardless — a deliberate rule, noted
+/// here rather than derived.
+///
+/// Each call lands on the assistant turn current when THAT call was recorded
+/// (by its own timestamp), not on the run's launching turn: a background
+/// sub-agent keeps working while the parent has moved on, and per-call
+/// placement keeps the turn-level numbers — which the Token board reads —
+/// closer to where the spend actually happened. The board attributes the spend
+/// to the parent turn's model; that limitation is claude's too.
+///
+/// Runs AFTER the context-window occupancy was read: a sub-agent's context is
+/// its own and never occupied the parent's window.
+fn attribute_subagent_usage(turns: &mut [MessageTurn], session_path: &Path) {
+    let dir = session_path.with_extension("").join("subagents");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let mut transcripts: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
+    // Directory order is filesystem-defined; sort so attribution is identical
+    // on every parse of the same session.
+    transcripts.sort();
+
+    for transcript in transcripts {
+        for (recorded_at, usage) in subagent_call_usage(&transcript) {
+            // The turn that was speaking when this call happened. Falling back
+            // to the last assistant turn keeps the tokens in the session even
+            // when the record carries no usable timestamp.
+            let target = recorded_at
+                .and_then(|ts| {
+                    turns
+                        .iter()
+                        .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= ts)
+                })
+                .or_else(|| {
+                    turns
+                        .iter()
+                        .rposition(|t| matches!(t.role, TurnRole::Assistant))
+                });
+            let Some(turn) = target.and_then(|i| turns.get_mut(i)) else {
+                continue;
+            };
+            turn.usage = Some(match turn.usage.take() {
+                Some(own) => TurnUsage {
+                    input_tokens: own.input_tokens.saturating_add(usage.input_tokens),
+                    output_tokens: own.output_tokens.saturating_add(usage.output_tokens),
+                    cache_creation_input_tokens: own
+                        .cache_creation_input_tokens
+                        .saturating_add(usage.cache_creation_input_tokens),
+                    cache_read_input_tokens: own
+                        .cache_read_input_tokens
+                        .saturating_add(usage.cache_read_input_tokens),
+                },
+                None => usage,
+            });
+        }
+    }
+}
+
+/// One sub-agent transcript's calls: `(recorded at, usage)` per API response,
+/// deduped by `message.id` with the largest counters winning, and a record
+/// without an id counted on its own — the same rule the main transcript
+/// applies (`ClaudeRecordAccumulator::claim_assistant_usage`).
+/// Local rather than the shared `parsers::claude::parse_subagent_tool_calls`:
+/// that one reads usage with `extract_usage` (Anthropic semantics, where the
+/// cached counters are disjoint), while Qoder's counters need
+/// [`qoder_turn_usage`]'s cache split.
+fn subagent_call_usage(path: &Path) -> Vec<(Option<DateTime<Utc>>, TurnUsage)> {
+    let Ok(bytes) = fs::read(path) else {
+        return Vec::new();
+    };
+    let mut per_call: HashMap<String, (Option<DateTime<Utc>>, TurnUsage)> = HashMap::new();
+    for line in bytes.split(|b| *b == b'\n') {
+        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(usage) = qoder_turn_usage(&value) else {
+            continue;
+        };
+        // A record with no `message.id` cannot be grouped with anything, so it
+        // gets a key of its own rather than being dropped — the parent
+        // transcript and claude's sub-agent reader treat the same shape so.
+        let key = value
+            .pointer("/message/id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("__ungrouped-{}__", per_call.len()));
+        let billable = |u: &TurnUsage| {
+            u.input_tokens
+                .saturating_add(u.output_tokens)
+                .saturating_add(u.cache_creation_input_tokens)
+                .saturating_add(u.cache_read_input_tokens)
+        };
+        match per_call.get_mut(&key) {
+            Some(slot) => {
+                if billable(&usage) > billable(&slot.1) {
+                    slot.1 = usage;
+                }
+                if slot.0.is_none() {
+                    slot.0 = record_timestamp(&value);
+                }
+            }
+            None => {
+                per_call.insert(key, (record_timestamp(&value), usage));
+            }
+        }
+    }
+    per_call.into_values().collect()
 }
 
 #[cfg(test)]
@@ -1152,6 +1823,601 @@ mod tests {
         assert_eq!(
             s.ended_at.as_ref().map(|t| t.to_rfc3339()),
             Some("2026-08-16T15:45:34+00:00".to_string())
+        );
+    }
+
+    // A mid-session model switch must reach the summary: the details dialog
+    // reads `summary.model` ahead of the turns, so a summary pinned to the
+    // session's OPENING model contradicted the context gauge (which follows
+    // the last turn's window — Qwen3.8-Flash's 200K next to DeepSeek-Flash).
+    #[test]
+    fn summary_model_follows_a_mid_session_switch() {
+        let tmp = tempfile::tempdir().unwrap();
+        const SWITCHED_ANSWER_LINE: &str = r#"{"type":"assistant","uuid":"b1","timestamp":"2026-08-16T15:46:00.000Z","message":{"id":"chatcmpl-2","type":"message","role":"assistant","model":"qfmodel","stop_reason":"end_turn","content":[{"type":"text","text":"second","citations":null}],"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}},"parentUuid":"a3","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.45","gitBranch":"main"}"#;
+        write_session(
+            tmp.path(),
+            "s1",
+            &[
+                RUNTIME_CONFIG,
+                USER_LINE,
+                THINKING_LINE,
+                TOOL_USE_LINE,
+                TOOL_RESULT_LINE,
+                ANSWER_LINE,
+                SWITCHED_ANSWER_LINE,
+            ],
+        );
+
+        let summaries = parser_in(tmp.path()).list_conversations().unwrap();
+        assert_eq!(summaries[0].model.as_deref(), Some("qfmodel"));
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        assert_eq!(detail.summary.model.as_deref(), Some("qfmodel"));
+    }
+
+    // A blank `model` on a later record must not blank the summary (or block
+    // the launch-model fallback): only non-empty strings may overwrite the
+    // last valid one, matching the "Last NON-EMPTY model wins" contract.
+    #[test]
+    fn summary_model_ignores_a_blank_later_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        const BLANK_MODEL_LINE: &str = r#"{"type":"assistant","uuid":"b2","timestamp":"2026-08-16T15:47:00.000Z","message":{"id":"chatcmpl-3","type":"message","role":"assistant","model":"","stop_reason":"end_turn","content":[{"type":"text","text":"third","citations":null}],"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}},"parentUuid":"a3","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.45","gitBranch":"main"}"#;
+        write_session(tmp.path(), "s1", &[USER_LINE, ANSWER_LINE, BLANK_MODEL_LINE]);
+
+        let summaries = parser_in(tmp.path()).list_conversations().unwrap();
+        assert_eq!(summaries[0].model.as_deref(), Some("qmodel_38max"));
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        assert_eq!(detail.summary.model.as_deref(), Some("qmodel_38max"));
+        // Nor does it name the turn it opens: that turn names no model (the
+        // Token board then falls back to the session's) rather than "".
+        let blank_turn = detail
+            .turns
+            .iter()
+            .rev()
+            .find(|t| matches!(t.role, crate::models::TurnRole::Assistant))
+            .expect("assistant turn");
+        assert_eq!(blank_turn.model, None);
+    }
+
+    // The same on a later FRAGMENT of one response: the bubble it merges into
+    // keeps the model its earlier fragment named.
+    #[test]
+    fn a_blank_model_on_a_later_fragment_keeps_the_bubbles_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blank_tool_use = TOOL_USE_LINE.replace(r#""model":"qmodel_38max""#, r#""model":"""#);
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, THINKING_LINE, &blank_tool_use],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let assistants: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, crate::models::TurnRole::Assistant))
+            .collect();
+        assert_eq!(assistants.len(), 1, "the two fragments are one bubble");
+        assert!(
+            assistants[0]
+                .blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. })),
+            "the blank-model fragment's tool call is kept, not dropped"
+        );
+        assert_eq!(assistants[0].model.as_deref(), Some("qmodel_38max"));
+    }
+
+    /// Write one sub-agent transcript beside a session, in the layout Qoder
+    /// (and Claude Code) uses: `<sessionId>/subagents/agent-<agentId>.jsonl`.
+    fn write_subagent(tmp: &std::path::Path, session_id: &str, agent_id: &str, lines: &[&str]) {
+        let dir = tmp
+            .join("projects")
+            .join("-private-tmp-probe")
+            .join(session_id)
+            .join("subagents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("agent-{agent_id}.jsonl")),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+    }
+
+    /// One sub-agent API response as Qoder writes it: Anthropic field NAMES
+    /// over OpenAI SEMANTICS — `input_tokens` 35,000 of which 34,000 is the
+    /// cached prefix, `output_tokens` 300.
+    const SUB_AGENT_CALL: &str = r#"{"type":"assistant","uuid":"c1","timestamp":"2026-08-16T15:45:35.000Z","isSidechain":true,"agentId":"aExplore-1","parent_tool_use_id":"call_1","message":{"id":"msg-sub-1","type":"message","role":"assistant","model":"auto","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":35000,"cache_creation_input_tokens":0,"cache_read_input_tokens":34000,"output_tokens":300}},"version":"1.1.65"}"#;
+
+    // Sub-agent spend lives in the run's OWN transcript
+    // (`<sessionId>/subagents/agent-<agentId>.jsonl`, the layout claude uses):
+    // one API response streams as several records sharing one `message.id`,
+    // each repeating the same counters in 1.1.65, and Qoder's counters need
+    // the cache split. This pins the whole fold: dedup, split, and turn
+    // placement. (1.1.67 writes them on the last record only: see
+    // `usage_on_the_last_fragment_only_counts_once`.)
+    #[test]
+    fn sub_agent_usage_folds_from_its_transcript_with_cache_split() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(tmp.path(), "s1", &[USER_LINE, ANSWER_LINE]);
+        // The same response as Qoder 1.1.65 streams it — several fragments,
+        // each repeating the identical usage block.
+        write_subagent(
+            tmp.path(),
+            "s1",
+            "aExplore-1",
+            &[SUB_AGENT_CALL, SUB_AGENT_CALL],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        // The call (15:45:35) lands on the assistant turn current then —
+        // ANSWER_LINE's, at 15:45:34.
+        let turn = detail
+            .turns
+            .iter()
+            .rev()
+            .find(|t| matches!(t.role, crate::models::TurnRole::Assistant))
+            .expect("assistant turn");
+        let usage = turn.usage.clone().expect("turn usage");
+        // 35,000 input of which 34,000 cached → 1,000 fresh in; counted ONCE
+        // despite two records sharing `msg-sub-1`.
+        assert_eq!(usage.input_tokens, 5 + 1_000);
+        assert_eq!(usage.cache_read_input_tokens, 5 + 34_000);
+        assert_eq!(usage.output_tokens, 2 + 300);
+
+        // The details dialog's total is the sum of the turns, sub-agent spend
+        // included — one number for the dialog and the Token board.
+        let stats = detail.session_stats.expect("session stats");
+        assert_eq!(
+            stats.total_tokens,
+            Some(5 + 2 + 5 + 1_000 + 34_000 + 300)
+        );
+        // The board's side of that number: its per-turn facts are built from
+        // turn usage, which is why the fold lands there and not only in the
+        // session total.
+        let facts = crate::commands::token_usage::facts_from_turns(
+            &detail.turns,
+            detail.summary.model.as_deref(),
+        );
+        let board_total: i64 = facts.iter().map(|f| f.total_tokens()).sum();
+        assert_eq!(board_total, 5 + 2 + 5 + 1_000 + 34_000 + 300);
+    }
+
+    // A record with no `message.id` cannot be grouped with any other, so each
+    // one is its own call — counted, not dropped (the parent transcript's rule).
+    #[test]
+    fn sub_agent_records_without_a_message_id_each_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(tmp.path(), "s1", &[USER_LINE, ANSWER_LINE]);
+        let no_id = SUB_AGENT_CALL.replace(r#""id":"msg-sub-1","#, "");
+        let empty_id = SUB_AGENT_CALL.replace(r#""id":"msg-sub-1""#, r#""id":"""#);
+        // Two of each shape: neither the missing ids nor the empty ones may
+        // collapse into one call between themselves.
+        write_subagent(
+            tmp.path(),
+            "s1",
+            "aExplore-1",
+            &[&no_id, &no_id, &empty_id, &empty_id],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let usage = detail
+            .turns
+            .iter()
+            .rev()
+            .find(|t| matches!(t.role, crate::models::TurnRole::Assistant))
+            .and_then(|t| t.usage.clone())
+            .expect("turn usage");
+        assert_eq!(usage.input_tokens, 5 + 4 * 1_000);
+        assert_eq!(usage.cache_read_input_tokens, 5 + 4 * 34_000);
+        assert_eq!(usage.output_tokens, 2 + 4 * 300);
+    }
+
+    // 1.1.67 writes a response's usage on its LAST fragment only, in the main
+    // transcript and a sub-agent's alike, where 1.1.65 repeated it on every
+    // one. A response whose opening fragment carries nothing must still count,
+    // once, on the bubble its fragments merged into.
+    #[test]
+    fn usage_on_the_last_fragment_only_counts_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let thinking = THINKING_LINE.replace(
+            r#","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":5,"output_tokens":2}"#,
+            "",
+        );
+        assert_ne!(thinking, THINKING_LINE, "fixture must lose its usage");
+        // In 1.1.67 the answer after a tool result is a response of its own.
+        let answer = ANSWER_LINE.replace(r#""id":"chatcmpl-1""#, r#""id":"chatcmpl-2""#);
+        write_session(
+            tmp.path(),
+            "s1",
+            &[
+                USER_LINE,
+                &thinking,
+                TOOL_USE_LINE,
+                TOOL_RESULT_LINE,
+                &answer,
+            ],
+        );
+        let opening = SUB_AGENT_CALL.replace(
+            r#","usage":{"input_tokens":35000,"cache_creation_input_tokens":0,"cache_read_input_tokens":34000,"output_tokens":300}"#,
+            "",
+        );
+        assert_ne!(opening, SUB_AGENT_CALL, "fixture must lose its usage");
+        write_subagent(tmp.path(), "s1", "aExplore-1", &[&opening, SUB_AGENT_CALL]);
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let assistant: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, crate::models::TurnRole::Assistant))
+            .collect();
+        assert_eq!(assistant.len(), 2);
+        // The thinking + tool_use bubble keeps the usage its second fragment
+        // brought: input 10 of which 5 cached.
+        let first = assistant[0].usage.clone().expect("first response's usage");
+        assert_eq!(first.input_tokens, 5);
+        assert_eq!(first.cache_read_input_tokens, 5);
+        assert_eq!(first.output_tokens, 2);
+        // The sub-agent call (15:45:35) lands on the answer (15:45:34), once.
+        let second = assistant[1].usage.clone().expect("second response's usage");
+        assert_eq!(second.input_tokens, 5 + 1_000);
+        assert_eq!(second.cache_read_input_tokens, 5 + 34_000);
+        assert_eq!(second.output_tokens, 2 + 300);
+        assert_eq!(
+            detail.session_stats.expect("session stats").total_tokens,
+            Some(2 * (5 + 5 + 2) + 1_000 + 34_000 + 300)
+        );
+    }
+
+    #[test]
+    fn sub_agent_calls_land_on_the_turn_current_when_each_happened() {
+        let tmp = tempfile::tempdir().unwrap();
+        const SWITCHED_ANSWER_LINE: &str = r#"{"type":"assistant","uuid":"b1","timestamp":"2026-08-16T15:46:00.000Z","message":{"id":"chatcmpl-2","type":"message","role":"assistant","model":"qfmodel","stop_reason":"end_turn","content":[{"type":"text","text":"second","citations":null}],"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}},"parentUuid":"a3","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.45","gitBranch":"main"}"#;
+        const SECOND_CALL: &str = r#"{"type":"assistant","uuid":"c2","timestamp":"2026-08-16T15:46:30.000Z","isSidechain":true,"agentId":"aExplore-1","parent_tool_use_id":"call_1","message":{"id":"msg-sub-2","type":"message","role":"assistant","model":"auto","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":35000,"cache_creation_input_tokens":0,"cache_read_input_tokens":34000,"output_tokens":300}},"version":"1.1.65"}"#;
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, ANSWER_LINE, SWITCHED_ANSWER_LINE],
+        );
+        // First call right after the first answer; second after the switch.
+        write_subagent(
+            tmp.path(),
+            "s1",
+            "aExplore-1",
+            &[SUB_AGENT_CALL, SECOND_CALL],
+        );
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let assistants: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, crate::models::TurnRole::Assistant))
+            .collect();
+        assert_eq!(assistants.len(), 2, "two answers, two turns");
+        let first = assistants[0].usage.clone().expect("first turn usage");
+        let second = assistants[1].usage.clone().expect("second turn usage");
+        // Each call lands on the turn current at ITS OWN timestamp — a
+        // background sub-agent keeps working after the parent moves on.
+        assert_eq!(first.input_tokens, 5 + 1_000);
+        assert_eq!(first.cache_read_input_tokens, 5 + 34_000);
+        assert_eq!(first.output_tokens, 2 + 300);
+        assert_eq!(second.input_tokens, 10 + 1_000);
+        assert_eq!(second.cache_read_input_tokens, 34_000);
+        assert_eq!(second.output_tokens, 2 + 300);
+    }
+
+    #[test]
+    fn sub_agent_usage_does_not_touch_the_context_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(
+            tmp.path(),
+            "s1",
+            &[RUNTIME_CONFIG, USER_LINE, ANSWER_LINE],
+        );
+        // Control parse: no `subagents/` directory at all.
+        let baseline = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let baseline_stats = baseline.session_stats.clone().expect("baseline stats");
+        assert_eq!(baseline_stats.total_tokens, Some(5 + 2 + 5));
+
+        write_subagent(tmp.path(), "s1", "aExplore-1", &[SUB_AGENT_CALL]);
+        let with_sub = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let stats = with_sub.session_stats.expect("stats");
+        // A sub-agent's context is its own: occupancy and window are untouched
+        // (the fold runs after they were read) while the totals grow.
+        assert_eq!(
+            stats.context_window_used_tokens,
+            baseline_stats.context_window_used_tokens
+        );
+        assert_eq!(
+            stats.context_window_max_tokens,
+            baseline_stats.context_window_max_tokens
+        );
+        assert!(stats.total_tokens.unwrap() > baseline_stats.total_tokens.unwrap());
+    }
+
+    #[test]
+    fn agent_card_stats_carry_the_childs_mixed_timeline_in_arrival_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"读文件","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
+        let agent_result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","content":"以下是文件前 60 行…"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aExplore-abc123","description":"读文件"},"parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
+        let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
+        let path = write_session(tmp.path(), "s1", &[USER_LINE, agent_use, agent_result, active_leaf]);
+
+        let sub = path.with_extension("").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("agent-aExplore-abc123.meta.json"),
+            r#"{"agentType":"Explore","toolUseId":"call_agent1","description":"读文件","invocationName":"Explore"}"#,
+        )
+        .unwrap();
+        // The child thinks, narrates, calls, then reports — the exact shape
+        // Anthropic-form transcripts interleave on disk.
+        let child_thinking = r#"{"type":"assistant","uuid":"c0","timestamp":"2026-08-16T15:45:34.000Z","message":{"id":"cm1","role":"assistant","model":"qmodel","content":[{"type":"thinking","thinking":"Need the notes first.","signature":""}]}}"#;
+        let child_text = r#"{"type":"assistant","uuid":"c0b","timestamp":"2026-08-16T15:45:34.200Z","message":{"id":"cm1","role":"assistant","model":"qmodel","content":[{"type":"text","text":"Reading."}]}}"#;
+        let child_use = r#"{"type":"assistant","uuid":"c1","timestamp":"2026-08-16T15:45:35.000Z","message":{"role":"assistant","model":"qmodel","content":[{"type":"tool_use","id":"call_r1","name":"Read","input":{"file_path":"/private/tmp/probe/NOTES.md"}}]},"isSidechain":true,"sessionId":"s1"}"#;
+        let child_result = r#"{"type":"user","uuid":"c2","timestamp":"2026-08-16T15:45:35.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_r1","content":"1\t# NOTES"}]},"isSidechain":true,"sessionId":"s1"}"#;
+        std::fs::write(
+            sub.join("agent-aExplore-abc123.jsonl"),
+            [child_thinking, child_text, child_use, child_result].join("\n") + "\n",
+        )
+        .unwrap();
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let stats = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    agent_stats,
+                    ..
+                } if tool_use_id.as_deref() == Some("call_agent1") => agent_stats.clone(),
+                _ => None,
+            })
+            .expect("Agent result carries agent_stats");
+        assert_eq!(
+            stats
+                .timeline
+                .iter()
+                .map(|e| (e.entry_type.as_str(), e.child_index, e.text.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("thinking", None, Some("Need the notes first.")),
+                ("text", None, Some("Reading.")),
+                ("tool_call", Some(0), None),
+            ]
+        );
+        assert_eq!(stats.tool_calls[0].tool_name, "Read");
+        // No task file here, and Qoder's never records a duration anyway: the
+        // child transcript's own first-to-last record span (34.000 → 35.500).
+        assert_eq!(stats.total_duration_ms, Some(1_500));
+    }
+
+    /// A turn the provider killed mid-flight: the CLI writes an `is_error`
+    /// tool_result for each still-pending Agent call, while the children
+    /// actually completed — their task files carry the full reports. The
+    /// attach ignores the error flag (the FRONTEND decides what to show) and
+    /// lands the stats, the timeline AND the recovered report on the errored
+    /// result.
+    #[test]
+    fn an_errored_agent_result_still_carries_stats_and_the_recovered_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"调研","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
+        let agent_result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","is_error":true,"content":"Error: tool execution produced no result"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aExplore-abc123","description":"调研"},"parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
+        let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
+        let path = write_session(tmp.path(), "s1", &[USER_LINE, agent_use, agent_result, active_leaf]);
+
+        let sub = path.with_extension("").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("agent-aExplore-abc123.meta.json"),
+            r#"{"agentType":"Explore","toolUseId":"call_agent1","description":"调研","invocationName":"Explore"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            sub.join("task-t1.json"),
+            // The shape qodercli 1.1.68 writes once the run completes: no
+            // usage or duration (those ride only on the task notification).
+            r#"{"taskId":"t1","sessionId":"s1","executionId":"e1","agentId":"aExplore-abc123","agentType":"Explore","description":"调研","invocationName":"Explore","parentToolUseId":"call_agent1","status":"completed","summary":"Agent \"Explore\" finished","result":"The full research report, thousands of words.","createdAt":1786895133100,"updatedAt":1786895138000,"completedAt":1786895138000}"#,
+        )
+        .unwrap();
+        let child_use = r#"{"type":"assistant","uuid":"c1","timestamp":"2026-08-16T15:45:35.000Z","message":{"role":"assistant","model":"qmodel","content":[{"type":"tool_use","id":"call_r1","name":"Read","input":{"file_path":"/private/tmp/probe/NOTES.md"}}]},"isSidechain":true,"sessionId":"s1"}"#;
+        let child_result = r#"{"type":"user","uuid":"c2","timestamp":"2026-08-16T15:45:35.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_r1","content":"1\t# NOTES"}]},"isSidechain":true,"sessionId":"s1"}"#;
+        std::fs::write(
+            sub.join("agent-aExplore-abc123.jsonl"),
+            [child_use, child_result].join("\n") + "\n",
+        )
+        .unwrap();
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let (is_error, stats) = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    agent_stats,
+                    ..
+                } if tool_use_id.as_deref() == Some("call_agent1") => {
+                    Some((*is_error, agent_stats.clone()))
+                }
+                _ => None,
+            })
+            .expect("Agent result present");
+        assert!(is_error, "fixture precondition: the result is an error");
+        let stats = stats.expect("errored Agent result still carries stats");
+        assert_eq!(stats.status.as_deref(), Some("completed"));
+        assert_eq!(
+            stats.recovered_result.as_deref(),
+            Some("The full research report, thousands of words.")
+        );
+        assert_eq!(
+            stats
+                .timeline
+                .iter()
+                .map(|e| e.entry_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tool_call"]
+        );
+    }
+
+    #[test]
+    fn a_task_file_without_a_result_field_leaves_recovered_result_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"调研","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
+        let agent_result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","content":"以下是文件前 60 行…"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aExplore-abc123","description":"调研"},"parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
+        let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
+        let path = write_session(tmp.path(), "s1", &[USER_LINE, agent_use, agent_result, active_leaf]);
+
+        let sub = path.with_extension("").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("agent-aExplore-abc123.meta.json"),
+            r#"{"agentType":"Explore","toolUseId":"call_agent1","description":"调研","invocationName":"Explore"}"#,
+        )
+        .unwrap();
+        // A task still `running` — the only state Qoder writes without a
+        // `result` (every terminal transition files one).
+        std::fs::write(
+            sub.join("task-t1.json"),
+            r#"{"taskId":"t1","sessionId":"s1","executionId":"e1","agentId":"aExplore-abc123","agentType":"Explore","description":"调研","invocationName":"Explore","parentToolUseId":"call_agent1","status":"running","createdAt":1786895133100,"updatedAt":1786895133100}"#,
+        )
+        .unwrap();
+        let child_use = r#"{"type":"assistant","uuid":"c1","timestamp":"2026-08-16T15:45:35.000Z","message":{"role":"assistant","model":"qmodel","content":[{"type":"tool_use","id":"call_r1","name":"Read","input":{"file_path":"/private/tmp/probe/NOTES.md"}}]},"isSidechain":true,"sessionId":"s1"}"#;
+        let child_result = r#"{"type":"user","uuid":"c2","timestamp":"2026-08-16T15:45:35.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_r1","content":"1\t# NOTES"}]},"isSidechain":true,"sessionId":"s1"}"#;
+        std::fs::write(
+            sub.join("agent-aExplore-abc123.jsonl"),
+            [child_use, child_result].join("\n") + "\n",
+        )
+        .unwrap();
+
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        let stats = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    agent_stats,
+                    ..
+                } if tool_use_id.as_deref() == Some("call_agent1") => agent_stats.clone(),
+                _ => None,
+            })
+            .expect("Agent result carries agent_stats");
+        assert_eq!(stats.status.as_deref(), Some("running"));
+        assert_eq!(stats.recovered_result, None);
+    }
+
+    /// Session `s1` launching one Agent call (`call_agent1`) whose tool_result
+    /// is `agent_result`; returns its (created) `subagents` directory.
+    fn agent_session_with_subagents(root: &Path, agent_result: &str) -> PathBuf {
+        let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"调研","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.68","gitBranch":"main"}"#;
+        let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
+        let path = write_session(
+            root,
+            "s1",
+            &[USER_LINE, agent_use, agent_result, active_leaf],
+        );
+        let sub = path.with_extension("").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        sub
+    }
+
+    /// One child run under `sub`: its meta file naming `tool_use_id`, and a
+    /// transcript holding a single call of `tool` (and that call's result).
+    fn write_child_run(sub: &Path, agent_id: &str, tool_use_id: &str, tool: &str) {
+        std::fs::write(
+            sub.join(format!("agent-{agent_id}.meta.json")),
+            format!(
+                r#"{{"agentType":"Explore","toolUseId":"{tool_use_id}","description":"调研"}}"#
+            ),
+        )
+        .unwrap();
+        let call = format!(
+            r#"{{"type":"assistant","uuid":"c1","timestamp":"2026-08-16T15:45:35.000Z","message":{{"role":"assistant","model":"qmodel","content":[{{"type":"tool_use","id":"call_{agent_id}","name":"{tool}","input":{{}}}}]}},"isSidechain":true,"sessionId":"s1"}}"#
+        );
+        let result = format!(
+            r#"{{"type":"user","uuid":"c2","timestamp":"2026-08-16T15:45:36.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"call_{agent_id}","content":"ok"}}]}},"isSidechain":true,"sessionId":"s1"}}"#
+        );
+        std::fs::write(
+            sub.join(format!("agent-{agent_id}.jsonl")),
+            format!("{call}\n{result}\n"),
+        )
+        .unwrap();
+    }
+
+    fn agent_stats_of(tmp: &Path, tool_use_id: &str) -> Option<AgentExecutionStats> {
+        parser_in(tmp)
+            .get_conversation("s1")
+            .unwrap()
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    agent_stats,
+                    ..
+                } if id == tool_use_id => Some(agent_stats.clone()),
+                _ => None,
+            })
+            .expect("the Agent result is in the turns")
+    }
+
+    /// A dead process's `running` task is rewritten to `interrupted` with a
+    /// placeholder `result` (qodercli 1.1.68). The parser stays dumb and lands
+    /// both; the status is what lets the card refuse to present the
+    /// placeholder as the child's report.
+    #[test]
+    fn an_interrupted_tasks_placeholder_result_rides_along_with_its_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let errored = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","is_error":true,"content":"Error: tool execution produced no result"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.68","gitBranch":"main"}"#;
+        let sub = agent_session_with_subagents(tmp.path(), errored);
+        write_child_run(&sub, "aExplore-abc123", "call_agent1", "Read");
+        std::fs::write(
+            sub.join("task-t1.json"),
+            r#"{"taskId":"t1","agentId":"aExplore-abc123","parentToolUseId":"call_agent1","status":"interrupted","summary":"Agent task \"调研\" stopped before it could finish.","result":"The process that owned this subagent task is no longer running.","createdAt":1786895133100,"updatedAt":1786895200000,"completedAt":1786895200000}"#,
+        )
+        .unwrap();
+
+        let stats = agent_stats_of(tmp.path(), "call_agent1").expect("stats attached");
+        assert_eq!(stats.status.as_deref(), Some("interrupted"));
+        assert_eq!(
+            stats.recovered_result.as_deref(),
+            Some("The process that owned this subagent task is no longer running.")
+        );
+    }
+
+    /// Runs naming the same tool call resolve the same way on every parse —
+    /// the first in file-name order — whatever order the directory lists them
+    /// in; a run naming a tool call that is not in the turns is skipped.
+    #[test]
+    fn the_first_run_in_name_order_wins_a_shared_tool_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","content":"report"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.68","gitBranch":"main"}"#;
+        let sub = agent_session_with_subagents(tmp.path(), result);
+        // Twelve rivals, each calling a tool named after its run, created out
+        // of name order with the winner neither first nor last: a listing in
+        // creation order (or its reverse) never agrees with name order, and a
+        // hash-ordered one only by a one-in-twelve chance.
+        for n in [7, 3, 0, 10, 5, 1, 11, 8, 2, 9, 4, 6] {
+            let run = format!("run-{n:02}");
+            write_child_run(&sub, &run, "call_agent1", &run);
+        }
+        // Sorts ahead of every rival, but its tool call is not in the turns.
+        write_child_run(&sub, "a-elsewhere", "call_rewound_away", "Grep");
+
+        let stats = agent_stats_of(tmp.path(), "call_agent1").expect("stats attached");
+        assert_eq!(
+            stats
+                .tool_calls
+                .iter()
+                .map(|c| c.tool_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["run-00"]
         );
     }
 
@@ -1962,5 +3228,306 @@ mod tests {
         assert_eq!(s.context_window_max_tokens, Some(262_144));
         let percent = s.context_window_usage_percent.expect("percent");
         assert!((percent - (10.0 / 262_144.0) * 100.0).abs() < 1e-9, "{percent}");
+    }
+
+    // An `AskUserQuestion` round captured from a real qodercli 1.1.67 ACP
+    // session (driven over `elicitation/create` with `--fake-responses`; usage,
+    // anchors and paths trimmed): a single-select and a multi-select question,
+    // answered "B" and "X" plus the user's own text.
+    const ASK_PROMPT_LINE: &str = r#"{"type":"user","uuid":"q-u1","timestamp":"2026-10-12T23:56:20.355Z","message":{"role":"user","content":[{"type":"text","text":"Ask me a question."}]},"permissionMode":"default","origin":{"kind":"human"},"promptId":"p1","parentUuid":null,"isSidechain":false,"cwd":"/w","sessionId":"s1","userType":"external","entrypoint":"acp","version":"unknown","gitBranch":"HEAD"}"#;
+    const ASK_TOOL_USE_LINE: &str = r#"{"type":"assistant","uuid":"q-a1","timestamp":"2026-10-12T23:56:20.647Z","message":{"id":"msg_1","type":"message","role":"assistant","model":"auto","stop_reason":"tool_use","stop_sequence":null,"content":[{"type":"tool_use","id":"toolu_b857","name":"AskUserQuestion","input":{"questions":[{"question":"Pick A or B?","header":"Choice","options":[{"label":"A","description":"Option A."},{"label":"B","description":"Option B."}],"multiSelect":false},{"question":"Which extras?","header":"Extras","options":[{"label":"X","description":"Extra X."},{"label":"Y","description":"Extra Y."}],"multiSelect":true}]}}]},"parentUuid":"q-u1","isSidechain":false,"cwd":"/w","sessionId":"s1","userType":"external","entrypoint":"acp","version":"unknown","gitBranch":"HEAD"}"#;
+    const ASK_RESULT_LINE: &str = r#"{"type":"user","uuid":"q-u2","timestamp":"2026-10-12T23:56:20.751Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b857","content":"Your questions have been answered: \"Pick A or B?\"=\"B\", \"Which extras?\"=\"X, free text\". You can now continue with these answers in mind."}]},"sourceToolAssistantUUID":"q-a1","promptId":"p1","toolUseResult":{"questions":[{"question":"Pick A or B?","header":"Choice","options":[{"label":"A","description":"Option A."},{"label":"B","description":"Option B."}],"multiSelect":false},{"question":"Which extras?","header":"Extras","options":[{"label":"X","description":"Extra X."},{"label":"Y","description":"Extra Y."}],"multiSelect":true}],"answers":{"Pick A or B?":"B","Which extras?":"X, free text"}},"parentUuid":"q-a1","isSidechain":false,"cwd":"/w","sessionId":"s1","userType":"external","entrypoint":"acp","version":"unknown","gitBranch":"HEAD"}"#;
+    // The same ask declined: Qoder rejects the call like any denied tool.
+    const ASK_DECLINED_LINE: &str = r#"{"type":"user","uuid":"q-u2","timestamp":"2026-10-12T23:56:20.751Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b857","content":"The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). Do not repeat this call; take a different approach, or if you cannot proceed without it, tell the user what you were trying to do and why you need it.","is_error":true}]},"sourceToolAssistantUUID":"q-a1","promptId":"p1","toolUseResult":{"isHardFailure":false},"toolDenialKind":"user-rejected","parentUuid":"q-a1","isSidechain":false,"cwd":"/w","sessionId":"s1","userType":"external","entrypoint":"acp","version":"unknown","gitBranch":"HEAD"}"#;
+    const ASK_DONE_LINE: &str = r#"{"type":"assistant","uuid":"q-a2","timestamp":"2026-10-12T23:56:20.880Z","message":{"id":"msg_2","type":"message","role":"assistant","model":"auto","stop_reason":"end_turn","stop_sequence":null,"content":[{"type":"text","text":"done","citations":null}]},"parentUuid":"q-u2","isSidechain":false,"cwd":"/w","sessionId":"s1","userType":"external","entrypoint":"acp","version":"unknown","gitBranch":"HEAD"}"#;
+
+    fn ask_result_output(result_line: &str) -> (Option<String>, bool) {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(
+            tmp.path(),
+            "s1",
+            &[
+                ASK_PROMPT_LINE,
+                ASK_TOOL_USE_LINE,
+                result_line,
+                ASK_DONE_LINE,
+            ],
+        );
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        detail
+            .turns
+            .iter()
+            .flat_map(|turn| turn.blocks.iter())
+            .find_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    output_preview,
+                    is_error,
+                    ..
+                } if tool_use_id.as_deref() == Some("toolu_b857") => {
+                    Some((output_preview.clone(), *is_error))
+                }
+                _ => None,
+            })
+            .expect("the ask's result is in the transcript")
+    }
+
+    // The question card cannot read the sentence Qoder hands the model, so an
+    // answered ask has to reload carrying the answers Qoder recorded beside it
+    // — or every question shows nothing selected. "X" plus the user's own text
+    // is one `", "`-joined string by now, and stays the text the agent got.
+    #[test]
+    fn an_answered_ask_reloads_with_its_recorded_answers() {
+        let (output, is_error) = ask_result_output(ASK_RESULT_LINE);
+        assert!(!is_error);
+        let envelope: Value = serde_json::from_str(&output.expect("output")).unwrap();
+        assert_eq!(
+            envelope,
+            serde_json::json!({
+                "answers": [
+                    {"header": "Choice", "question": "Pick A or B?", "selected": ["B"]},
+                    {"header": "Extras", "question": "Which extras?", "selected": ["X, free text"]},
+                ],
+                "declined": false,
+            })
+        );
+    }
+
+    // A declined ask keeps Qoder's own rejection: there are no answers to show.
+    #[test]
+    fn a_declined_ask_keeps_its_rejection() {
+        let (output, is_error) = ask_result_output(ASK_DECLINED_LINE);
+        assert!(is_error);
+        assert!(output
+            .expect("output")
+            .starts_with("The user doesn't want to proceed with this tool use."));
+    }
+
+    fn ask_questions(questions: Value) -> Vec<QoderAskQuestion> {
+        QoderAskQuestion::list_from(Some(&questions)).expect("questions")
+    }
+
+    // A multi-select answer is one `", "`-joined string. It splits back into
+    // picks only when every part is an offered label (a label containing ", "
+    // staying whole); with the user's own text in it, "Blue, teal" could be
+    // Blue plus "teal" or the text "Blue, teal", so it stays the literal text
+    // rather than claim a choice the user may have typed.
+    #[test]
+    fn a_multi_select_answer_splits_only_into_offered_labels() {
+        let questions = ask_questions(serde_json::json!([{
+            "question": "Colors?",
+            "header": "Colors",
+            "multiSelect": true,
+            "options": [{"label": "Red, Green"}, {"label": "Red"}, {"label": "Blue"}],
+        }]));
+        assert_eq!(
+            questions[0].picks("Red, Green, Blue"),
+            ["Red, Green", "Blue"]
+        );
+        assert_eq!(questions[0].picks("Blue, Red"), ["Blue", "Red"]);
+        assert_eq!(
+            questions[0].picks("Red, Green, Blue, teal, maybe"),
+            ["Red, Green, Blue, teal, maybe"]
+        );
+        assert_eq!(questions[0].picks("Bluest"), ["Bluest"]);
+        assert_eq!(questions[0].picks("my own"), ["my own"]);
+        assert!(questions[0].picks("").is_empty());
+
+        // "Red, Green" is both an option and Red plus Green: nothing it shows
+        // as chosen could be trusted, so it claims nothing — and the text,
+        // being an option itself, cannot stand in either.
+        let questions = ask_questions(serde_json::json!([{
+            "question": "Colors?",
+            "multiSelect": true,
+            "options": [{"label": "Red, Green"}, {"label": "Red"}, {"label": "Green"}],
+        }]));
+        assert!(questions[0].picks("Red, Green").is_empty());
+        // Several readings again, but the text is no option: it stays the text.
+        let questions = ask_questions(serde_json::json!([{
+            "question": "Colors?",
+            "multiSelect": true,
+            "options": [{"label": "Red, Green"}, {"label": "Red"}, {"label": "Green"},
+                        {"label": "Blue"}],
+        }]));
+        assert_eq!(questions[0].picks("Red, Green, Blue"), ["Red, Green, Blue"]);
+        assert_eq!(questions[0].picks("Blue, Red"), ["Blue", "Red"]);
+    }
+
+    // Labels that are joins of each other read a long answer in exponentially
+    // many ways; counting readings per suffix keeps that linear, and every
+    // outcome still claims nothing it cannot prove.
+    #[test]
+    fn self_similar_labels_are_read_in_linear_time() {
+        let questions = ask_questions(serde_json::json!([{
+            "question": "Pick?",
+            "multiSelect": true,
+            "options": [{"label": "A"}, {"label": "A, A"}],
+        }]));
+        // Thousands of "A" before the user's own text: unreadable as labels,
+        // so the literal text — after a linear pass, not a combinatorial one.
+        let long = format!("{}custom", "A, ".repeat(5_000));
+        assert_eq!(questions[0].picks(&long), [long.as_str()]);
+        // A, A is the option "A, A" or A twice; the text is an option itself,
+        // so nothing is claimed.
+        assert!(questions[0].picks("A, A").is_empty());
+        // Several readings, and the text is no option: it stays the text.
+        assert_eq!(questions[0].picks("A, A, A"), ["A, A, A"]);
+        assert_eq!(questions[0].picks("A"), ["A"]);
+    }
+
+    // What codeg itself sent back is exact: each question's own entry, chosen
+    // labels and the user's own text kept apart.
+    #[test]
+    fn the_reply_codeg_sent_is_read_as_sent() {
+        let questions = ask_questions(serde_json::json!([
+            {"question": "Pick A or B?", "header": "Choice", "options": [{"label": "A"}, {"label": "B"}]},
+            {"question": "Skipped?", "header": "Skip", "options": [{"label": "No"}]},
+            {"question": "Which extras?", "header": "Extras", "multiSelect": true,
+             "options": [{"label": "X"}, {"label": "Y"}]},
+        ]));
+        let reply = serde_json::json!({"q0": "B", "q2": ["X", "free, text"]});
+        let envelope: Value = serde_json::from_str(
+            &qoder_ask_envelope_from_reply(&questions, reply.as_object().unwrap())
+                .expect("envelope"),
+        )
+        .unwrap();
+        assert_eq!(
+            envelope,
+            serde_json::json!({
+                "answers": [
+                    {"header": "Choice", "question": "Pick A or B?", "selected": ["B"]},
+                    {"header": "Extras", "question": "Which extras?", "selected": ["X", "free, text"]},
+                ],
+                "declined": false,
+            })
+        );
+        assert_eq!(
+            qoder_ask_envelope_from_reply(&questions, &serde_json::Map::new()),
+            None
+        );
+    }
+
+    // A single-select answer is one pick, whatever punctuation it carries.
+    #[test]
+    fn a_single_select_answer_is_never_split() {
+        let questions = ask_questions(serde_json::json!([{
+            "question": "Pick?",
+            "options": [{"label": "A"}, {"label": "B"}],
+        }]));
+        assert_eq!(questions[0].picks("A, B"), ["A, B"]);
+    }
+
+    // The live completion carries only the sentence; read against the known
+    // questions it gives the same envelope the transcript does — quotes and
+    // ", " inside a question or an answer included, unanswered questions left
+    // out.
+    #[test]
+    fn the_answered_sentence_reads_back_against_its_questions() {
+        let questions = ask_questions(serde_json::json!([
+            {"question": "Rename \"foo\"?", "header": "Rename", "options": [{"label": "Yes"}]},
+            {"question": "Skipped?", "header": "Skip", "options": [{"label": "No"}]},
+            {"question": "Which extras?", "header": "Extras", "multiSelect": true,
+             "options": [{"label": "X"}, {"label": "Y"}]},
+            {"question": "Which\nlines?", "header": "Lines", "multiSelect": true,
+             "options": [{"label": "X"}, {"label": "Y"}]},
+        ]));
+        let text = concat!(
+            "Your questions have been answered: ",
+            "\"Rename \"foo\"?\"=\"say \"hi\", then go\", ",
+            "\"Which extras?\"=\"X, Y, free text\", ",
+            "\"Which\nlines?\"=\"Y, X\". ",
+            "You can now continue with these answers in mind.",
+        );
+        let envelope: Value = serde_json::from_str(
+            &qoder_ask_envelope_from_result_text(&questions, text).expect("envelope"),
+        )
+        .unwrap();
+        assert_eq!(
+            envelope,
+            serde_json::json!({
+                "answers": [
+                    {"header": "Rename", "question": "Rename \"foo\"?", "selected": ["say \"hi\", then go"]},
+                    {"header": "Extras", "question": "Which extras?", "selected": ["X, Y, free text"]},
+                    {"header": "Lines", "question": "Which\nlines?", "selected": ["Y", "X"]},
+                ],
+                "declined": false,
+            })
+        );
+
+        // Only a later question answered: the earlier ones have no entry.
+        let text = "Your questions have been answered: \"Which extras?\"=\"Y\". You can now \
+                    continue with these answers in mind.";
+        let envelope: Value = serde_json::from_str(
+            &qoder_ask_envelope_from_result_text(&questions, text).expect("envelope"),
+        )
+        .unwrap();
+        assert_eq!(
+            envelope["answers"],
+            serde_json::json!([{"header": "Extras", "question": "Which extras?", "selected": ["Y"]}])
+        );
+    }
+
+    // Anything but the answered sentence is left as it came.
+    #[test]
+    fn other_result_text_is_not_read_as_answers() {
+        let questions = ask_questions(serde_json::json!([
+            {"question": "Pick A or B?", "options": [{"label": "A"}, {"label": "B"}]},
+        ]));
+        for text in [
+            "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+            "The user did not answer the questions.",
+            // An entry for a question this call never asked.
+            "Your questions have been answered: \"Other?\"=\"A\". You can now continue with \
+             these answers in mind.",
+            "Your questions have been answered: . You can now continue with these answers in \
+             mind.",
+        ] {
+            assert_eq!(
+                qoder_ask_envelope_from_result_text(&questions, text),
+                None,
+                "{text}"
+            );
+        }
+        assert!(
+            QoderAskQuestion::list_from(Some(&serde_json::json!([{"header": "No text"}])))
+                .is_none()
+        );
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_config_dir_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("QODER_CONFIG_DIR", "/relocated/qoder")]);
+        assert_eq!(
+            QoderParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/qoder").join("projects")
+        );
+
+        // No config-dir override: the home keys, in order, and the dir name.
+        let env = AgentEnv::with_overrides(&[
+            ("QODER_CONFIG_DIR", ""),
+            ("QODER_CLI_HOME", "/relocated/qoder-home"),
+            ("GEMINI_CLI_HOME", "/relocated/unused"),
+            ("QODER_CONFIG_DIR_NAME", ".qoder-alt"),
+        ]);
+        assert_eq!(
+            QoderParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/qoder-home")
+                .join(".qoder-alt")
+                .join("projects")
+        );
+        let env = AgentEnv::with_overrides(&[
+            ("QODER_CONFIG_DIR", ""),
+            ("QODER_CLI_HOME", ""),
+            ("GEMINI_CLI_HOME", "/relocated/gemini-home"),
+            ("QODER_CONFIG_DIR_NAME", ""),
+        ]);
+        assert_eq!(
+            QoderParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/gemini-home")
+                .join(".qoder")
+                .join("projects")
+        );
     }
 }

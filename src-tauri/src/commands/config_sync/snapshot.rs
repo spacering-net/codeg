@@ -25,11 +25,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::domains::{count_entries, CONFIG_DOMAINS};
+use super::domains::{count_entries, CONFIG_DOMAINS, DOMAIN_ASSISTANTS};
 use crate::app_error::{
     AppCommandError, CONFIG_SYNC_I18N_KEY_BAD_DOMAIN, CONFIG_SYNC_I18N_KEY_CHECKSUM,
     CONFIG_SYNC_I18N_KEY_INVALID_SNAPSHOT, CONFIG_SYNC_I18N_KEY_NEWER_SCHEMA,
     CONFIG_SYNC_I18N_KEY_NO_ROLLBACK,
+};
+use crate::web::event_bridge::{
+    emit_event, AssistantChange, EventEmitter, ASSISTANT_CHANGED_EVENT,
 };
 
 /// Bump only for a change older binaries cannot read. Adding a domain does not
@@ -102,6 +105,11 @@ pub struct ConfigManifest {
 pub struct ApplyReport {
     pub domains: BTreeMap<String, usize>,
     pub total: usize,
+    /// Entries stored under another name than the snapshot's because a
+    /// different one here already had it (assistants, whose names are
+    /// unique) — so the confirmation can say so.
+    #[serde(default)]
+    pub renamed: usize,
 }
 
 /// Read every domain out of the local database.
@@ -122,8 +130,13 @@ pub async fn collect_snapshot_core(
 /// Upsert every domain the snapshot carries, in [`CONFIG_DOMAINS`] order, in a
 /// single transaction. Domains this binary does not know are ignored — a
 /// snapshot from a newer build stays partially usable.
+///
+/// Open windows hold some of this configuration in live stores; once the
+/// transaction has committed, those that track it by broadcast are told to
+/// re-read (`assistant://changed` `Resync`).
 pub async fn apply_snapshot_core(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
     snapshot: &ConfigSnapshot,
 ) -> Result<ApplyReport, AppCommandError> {
     reject_newer_schema(snapshot.schema_version)?;
@@ -145,8 +158,11 @@ pub async fn apply_snapshot_core(
         };
         match (domain.apply)(&tx, value).await {
             Ok(applied) => {
-                report.total += applied;
-                report.domains.insert(domain.id.to_string(), applied);
+                report.total += applied.written;
+                report.renamed += applied.renamed;
+                report
+                    .domains
+                    .insert(domain.id.to_string(), applied.written);
             }
             Err(err) => {
                 // Roll back explicitly so the failure surfaces as the domain's
@@ -160,6 +176,13 @@ pub async fn apply_snapshot_core(
     tx.commit().await.map_err(|e| {
         AppCommandError::database_error("Commit config apply").with_detail(e.to_string())
     })?;
+    if report
+        .domains
+        .get(DOMAIN_ASSISTANTS)
+        .is_some_and(|&n| n > 0)
+    {
+        emit_event(emitter, ASSISTANT_CHANGED_EVENT, AssistantChange::Resync);
+    }
     Ok(report)
 }
 
@@ -589,7 +612,7 @@ mod tests {
         let parsed = parse_snapshot(&bytes).expect("parse");
 
         let target = fresh_in_memory_db().await;
-        let report = apply_snapshot_core(&target.conn, &parsed)
+        let report = apply_snapshot_core(&target.conn, &EventEmitter::Noop, &parsed)
             .await
             .expect("apply");
         assert!(report.total >= 4, "unexpected apply report: {report:?}");
@@ -657,7 +680,7 @@ mod tests {
             )]),
         };
 
-        apply_snapshot_core(&target.conn, &snapshot)
+        apply_snapshot_core(&target.conn, &EventEmitter::Noop, &snapshot)
             .await
             .expect("apply");
 
@@ -687,10 +710,10 @@ mod tests {
         let snapshot = collect_snapshot_core(&source.conn).await.expect("collect");
 
         let target = fresh_in_memory_db().await;
-        apply_snapshot_core(&target.conn, &snapshot)
+        apply_snapshot_core(&target.conn, &EventEmitter::Noop, &snapshot)
             .await
             .expect("first apply");
-        apply_snapshot_core(&target.conn, &snapshot)
+        apply_snapshot_core(&target.conn, &EventEmitter::Noop, &snapshot)
             .await
             .expect("second apply");
 
@@ -709,6 +732,57 @@ mod tests {
                 .expect("messages")
                 .len(),
             1
+        );
+    }
+
+    /// Open windows keep assistants in a live store: an apply that wrote any
+    /// tells them to re-read, once it has committed — and stays quiet when it
+    /// wrote none. A rename is reported, so the confirmation can say so.
+    #[tokio::test]
+    async fn an_apply_writing_assistants_asks_open_windows_to_re_read() {
+        use crate::web::event_bridge::WebEventBroadcaster;
+        let broadcaster = std::sync::Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster);
+        let target = fresh_in_memory_db().await;
+
+        let row = serde_json::json!({
+            "uid": "u-1",
+            "name": "Reviewer",
+            "avatar": { "kind": "monogram", "color": "teal" },
+            "agentType": "codex",
+            "agentOptions": { "config_values": {} },
+            "labelSnapshot": { "agent": "Codex", "mode": null, "options": [] }
+        });
+        let with = |rows: Value| ConfigSnapshot {
+            schema_version: SCHEMA_VERSION,
+            domains: BTreeMap::from([(DOMAIN_ASSISTANTS.to_string(), rows)]),
+        };
+
+        let report = apply_snapshot_core(&target.conn, &emitter, &with(serde_json::json!([row])))
+            .await
+            .expect("apply");
+        assert_eq!(report.domains.get(DOMAIN_ASSISTANTS), Some(&1));
+        let evt = rx.try_recv().expect("a resync broadcast");
+        assert_eq!(evt.channel, ASSISTANT_CHANGED_EVENT);
+        assert_eq!(evt.payload["kind"], "resync");
+        assert!(rx.try_recv().is_err(), "exactly one");
+
+        // A second machine's assistant of the same name lands renamed.
+        let mut other = row.clone();
+        other["uid"] = Value::from("u-2");
+        let report = apply_snapshot_core(&target.conn, &emitter, &with(serde_json::json!([other])))
+            .await
+            .expect("apply");
+        assert_eq!(report.renamed, 1);
+        rx.try_recv().expect("a resync broadcast");
+
+        apply_snapshot_core(&target.conn, &emitter, &with(serde_json::json!([])))
+            .await
+            .expect("apply");
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing written, nothing to re-read"
         );
     }
 
@@ -733,7 +807,7 @@ mod tests {
         let source = fresh_in_memory_db().await;
         seed_source(&source.conn).await;
         let snapshot = collect_snapshot_core(&source.conn).await.expect("collect");
-        apply_snapshot_core(&target.conn, &snapshot)
+        apply_snapshot_core(&target.conn, &EventEmitter::Noop, &snapshot)
             .await
             .expect("apply");
 
@@ -788,7 +862,7 @@ mod tests {
                 }]),
             )]),
         };
-        apply_snapshot_core(&target.conn, &snapshot)
+        apply_snapshot_core(&target.conn, &EventEmitter::Noop, &snapshot)
             .await
             .expect("apply");
 

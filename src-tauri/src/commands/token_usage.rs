@@ -118,6 +118,15 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   the cache-write column stayed 0. Totals are unchanged; the columns are
 ///   not.
 ///   See `parsers::codex::codex_usage_counters`.
+/// * `5` — Qoder sub-agent spend counted. Each delegated run writes its own
+///   transcript (`<sessionId>/subagents/agent-*.jsonl`) and nothing read it,
+///   so a session that delegated work was short by everything its
+///   sub-agents spent. Now each call is deduped by `message.id`, has its
+///   cached prefix split out, and lands on the turn current at its own
+///   timestamp — totals grow for unchanged transcripts. The same release
+///   made a Qoder session's model its LAST one instead of its first, which
+///   is what a turn naming no model falls back to. See
+///   `parsers::qoder::attribute_subagent_usage`.
 ///
 /// Only the accounting stored in `token_usage_turn` counts: the four token
 /// counters, the duration and the timestamp. A conversation's context WINDOW is
@@ -132,7 +141,7 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-const FACT_SCHEMA_VERSION: &str = "4";
+const FACT_SCHEMA_VERSION: &str = "5";
 
 const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
@@ -1366,6 +1375,8 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                assistant_id: None,
+                assistant_name: None,
                 tag_ids: Vec::new(),
             },
             turns,
@@ -1375,6 +1386,7 @@ mod tests {
             turns_offset: None,
             turns_total: None,
             assistant_turns_before_offset: None,
+            user_turns_before_offset: None,
             prefix_hash: None,
             uncovered_prefix_max_ts: None,
         }

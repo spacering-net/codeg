@@ -60,6 +60,8 @@ function renderRow(
     onUnqueueMerge: noop,
     onComplete: noop,
     onArchive: noop,
+    onDefer: noop,
+    onFollowUp: noop,
     onEdit: noop,
     onSchedule: noop,
     ...handlers,
@@ -227,5 +229,37 @@ describe("TaskRow", () => {
       })
     )
     expect(screen.queryByText("Worktree removed")).toBeNull()
+  })
+
+  it("puts a reviewed row aside, and a deferred row stops asking for the user", async () => {
+    const onDefer = vi.fn()
+    const { unmount } = renderRow(task(), { onDefer })
+    // Waiting on the user: the primary is filled.
+    expect(screen.getByRole("button", { name: "Merge" })).toHaveAttribute(
+      "data-variant",
+      "default"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Handle later" }))
+    expect(onDefer).toHaveBeenCalledTimes(1)
+    unmount()
+
+    const onFollowUp = vi.fn()
+    const onBack = vi.fn()
+    renderRow(task({ deferred_at: "2026-08-01T02:00:00Z" }), {
+      onFollowUp,
+      onDefer: onBack,
+    })
+    expect(screen.getByText("Deferred")).toBeInTheDocument()
+    // Put aside by the user's own word: the follow-up leads, but outlined —
+    // the filled button is reserved for rows that are waiting right now.
+    const followUp = screen.getByRole("button", { name: "Follow up" })
+    expect(followUp).toHaveAttribute("data-variant", "outline")
+    await userEvent.click(followUp)
+    expect(onFollowUp).toHaveBeenCalledTimes(1)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Back to Needs you" })
+    )
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull()
   })
 })

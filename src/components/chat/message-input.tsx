@@ -137,6 +137,8 @@ import {
 import {
   buildKnownInvocations,
   commandToReference,
+  diskSkillTrigger,
+  skillsForMenu,
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
 import { CommandOptionLabel } from "@/components/chat/composer/command-option-label"
@@ -410,16 +412,19 @@ export function MessageInput({
   // upload / attachment toasts — read as a single coherent group when
   // scanning the file. Same namespace, no extra runtime cost.
   const tAttach = useTranslations("Folder.chat.messageInput")
-  // The `$` prefix autocomplete is Codex-only: Codex advertises very few
-  // native slash commands, so we augment the dropdown with the agent's
-  // skills read from disk. Other agents already surface their full command
-  // set through ACP `availableCommands`, so injecting skills there would
-  // be duplicate/extra UI noise — skip the skills fetch for them entirely.
-  const skillAgentType = agentType === "codex" ? "codex" : null
+  // Skills read from disk feed the menu only for an agent that does not
+  // advertise them itself: Codex under `$` (its native command set is very
+  // small), Antigravity under `/` beside its commands (its ACP server lists
+  // only its built-ins). Every other agent surfaces its skills through ACP
+  // `availableCommands`, so a disk scan would only repeat them — skip it.
+  const skillTrigger = diskSkillTrigger(agentType)
   // Pass the working dir so we see both global skills and folder-scoped
   // project skills (e.g. `{folder}/.codex/skills`). Without this, users
   // only ever saw global skills in the `$` autocomplete.
-  const availableSkills = useAgentSkills(skillAgentType, defaultPath ?? null)
+  const availableSkills = useAgentSkills(
+    skillTrigger ? (agentType ?? null) : null,
+    defaultPath ?? null
+  )
   const skillPrefix = agentType === "codex" ? "$" : "/"
   // Exactly what the `/`·`$` menu below can offer. Seeding or pasting text turns
   // a bare `/cmd`·`$skill` token into a badge only when it is on this list, so
@@ -955,9 +960,10 @@ export function MessageInput({
   //
   // The slash list shows the agent's own `availableCommands` verbatim —
   // experts are advertised as commands and now appear here alongside the
-  // rest. Codex additionally gets a `$`-triggered skills list (experts are
-  // symlinked skills, so they surface there) because its native command set
-  // is very small.
+  // rest. An agent that does not advertise its skills also gets the ones read
+  // from disk (experts are symlinked skills, so they surface there too): Codex
+  // on a `$`-triggered list, because its native command set is very small, and
+  // Antigravity after its commands on `/`.
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   // The trigger char (`/` for agent commands, `$` for Codex skills) and the
@@ -977,23 +983,29 @@ export function MessageInput({
     return rankByTextMatch(slashFilter, slashCommands, (cmd) => cmd.name)
   }, [slashMenuOpen, slashCommands, slashTriggerChar, slashFilter])
   const filteredSlashSkills = useMemo(() => {
-    // Skills autocomplete is Codex-only and triggered by `$`.
-    if (agentType !== "codex") return []
+    // Disk skills are listed only under the trigger their agent invokes them by.
+    if (!skillTrigger || slashTriggerChar !== skillTrigger) return []
     if (!slashMenuOpen || availableSkills.length === 0) return []
-    if (slashTriggerChar !== "$") return []
     return rankByTextMatch(
       slashFilter,
-      availableSkills,
+      skillsForMenu(availableSkills, slashCommands, skillTrigger),
       (skill) => skill.name,
       (skill) => skill.id
     )
-  }, [slashMenuOpen, availableSkills, agentType, slashTriggerChar, slashFilter])
+  }, [
+    slashMenuOpen,
+    availableSkills,
+    slashCommands,
+    skillTrigger,
+    slashTriggerChar,
+    slashFilter,
+  ])
   const slashAutocompleteCount =
     filteredSlashCommands.length + filteredSlashSkills.length
   // `/` is fed by the agent's own command list, which only exists once the
   // connection is up — so while it is being established the panel shows a
-  // loading row rather than nothing at all. `$` (Codex skills) is read from
-  // disk and never waits on a connection.
+  // loading row rather than nothing at all. Disk skills (Codex's `$` list,
+  // Antigravity's `/` rows) never wait on a connection.
   const slashLoading =
     slashMenuOpen &&
     slashTriggerChar === "/" &&
@@ -1027,7 +1039,12 @@ export function MessageInput({
     if (!slashMenuOpen || slashAutocompleteCount === 0) return
     const container = slashMenuListRef.current
     if (!container) return
-    const el = container.children[slashSelectedIndex] as HTMLElement | undefined
+    // Rows by their marker, not by child position: the loading row can sit
+    // above them (an agent's disk skills show while its commands still load).
+    const el =
+      container.querySelectorAll<HTMLElement>("[data-slash-row]")[
+        slashSelectedIndex
+      ]
     if (!el) return
     const elTop = el.offsetTop
     const elBottom = elTop + el.offsetHeight
@@ -1040,7 +1057,8 @@ export function MessageInput({
     }
   }, [slashMenuOpen, slashSelectedIndex, slashAutocompleteCount])
 
-  // ── Editor-driven `/` (commands) and `$` (Codex skills) trigger detection ──
+  // ── Editor-driven `/` (commands, plus Antigravity's skills) and `$` (Codex
+  // skills) trigger detection ──
   // The `@` mention panel is now owned by RichComposer; this only handles the
   // runtime-command menus. We inspect the text before the collapsed caret in the
   // current block: a `/` (any agent) or `$` (Codex) at the start or right after
@@ -1063,26 +1081,32 @@ export function MessageInput({
       " "
     )
     const regex =
-      agentType === "codex" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
+      skillTrigger === "$" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
     const match = before.match(regex)
     if (!match) return close()
     const trigger = match[2] as "/" | "$"
-    // Only `/` is gated here. Its source is the agent's own command list, which
-    // exists only once the connection is up — so an empty list means "nothing to
-    // show" unless the connection is still coming, where the panel opens on a
-    // loading row instead. `$` (the on-disk Codex skills) is deliberately
-    // ungated: `useAgentSkills` reports an in-flight scan as an empty list, so
-    // closing on empty would strand a `$` typed before the scan lands. Left
-    // open, the panel simply stays hidden until the skills arrive and then
-    // fills itself in — no second keystroke needed.
-    if (trigger === "/" && slashCommands.length === 0 && !commandsLoading) {
+    // Only a commands-only `/` is gated here. Its source is the agent's own
+    // command list, which exists only once the connection is up — so an empty
+    // list means "nothing to show" unless the connection is still coming, where
+    // the panel opens on a loading row instead. A trigger that also lists disk
+    // skills (Codex's `$`, Antigravity's `/`) is deliberately ungated:
+    // `useAgentSkills` reports an in-flight scan as an empty list, so closing on
+    // empty would strand a trigger typed before the scan lands. Left open, the
+    // panel simply stays hidden until the skills arrive and then fills itself
+    // in — no second keystroke needed.
+    if (
+      trigger === "/" &&
+      skillTrigger !== "/" &&
+      slashCommands.length === 0 &&
+      !commandsLoading
+    ) {
       return close()
     }
     setSlashTriggerChar(trigger)
     setSlashFilter(match[3])
     setSlashSelectedIndex(0)
     setSlashMenuOpen(true)
-  }, [slashCommands.length, commandsLoading, agentType])
+  }, [slashCommands.length, commandsLoading, skillTrigger])
 
   useEffect(() => {
     detectSlashTriggerRef.current = detectSlashTrigger
@@ -1111,9 +1135,10 @@ export function MessageInput({
 
   // Replace the live `/`-or-`$` token immediately before the caret with
   // an inline reference badge (+ a trailing space unless one already follows),
-  // then close the menu. Used by both the command (`/`) and Codex-skill (`$`)
-  // selections — the badge serializes back to its literal `/cmd` / `$skill`
-  // token on send (see invocation-reference / referenceToMarkdown).
+  // then close the menu. Used by both the command (`/`) and disk-skill (`$` for
+  // Codex, `/` for Antigravity) selections — the badge serializes back to its
+  // literal `/cmd` / `$skill` token on send (see invocation-reference /
+  // referenceToMarkdown).
   const replaceTriggerWithReference = useCallback(
     (ref: ReferenceAttrs) => {
       const editor = editorRef.current?.getEditor()
@@ -2114,6 +2139,7 @@ export function MessageInput({
               <button
                 key={`cmd-${cmd.name}`}
                 type="button"
+                data-slash-row=""
                 className={cn(
                   "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm",
                   i === slashSelectedIndex
@@ -2134,6 +2160,7 @@ export function MessageInput({
                 <button
                   key={`skill-${skill.scope}-${skill.id}`}
                   type="button"
+                  data-slash-row=""
                   className={cn(
                     "flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm",
                     absoluteIndex === slashSelectedIndex

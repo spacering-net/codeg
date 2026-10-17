@@ -36,6 +36,7 @@
 //! `delegation_call_id` routing — strictly a continuation of the original
 //! task, never a second iteration on it (the tool takes no task text).
 
+pub mod assistants;
 pub mod broker;
 pub mod companion;
 pub mod depth;
