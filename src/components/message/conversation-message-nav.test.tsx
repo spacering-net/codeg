@@ -281,3 +281,89 @@ describe("ConversationMessageNav", () => {
     )
   })
 })
+
+describe("ConversationMessageNav — bottom-end compact placement", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("collapsed chip mirrors its flat edge and chevron to the end side", () => {
+    const { container } = render(
+      <ConversationMessageNav
+        count={3}
+        expanded={false}
+        onToggle={vi.fn()}
+        entries={[]}
+        onSelect={vi.fn()}
+        edge="end"
+      />
+    )
+    const chip = screen.getByRole("button", { name: "collapsedSummary:3" })
+    expect(chip.className).toContain("rounded-s-full")
+    expect(chip.className).toContain("rounded-e-none")
+    expect(chip.className).not.toContain("border-e")
+    expect(chip.className).toContain("border-s")
+    // Summary padding mirrors too, so the text clears the rounded side.
+    expect(container.querySelector(".ps-3")).not.toBeNull()
+    expect(container.querySelector(".pe-3")).toBeNull()
+  })
+
+  it("compact rows stay one line per turn and drop the file drill-down", () => {
+    render(
+      <ConversationMessageNav
+        count={entries.length}
+        expanded
+        onToggle={vi.fn()}
+        entries={entries}
+        onSelect={vi.fn()}
+        edge="end"
+        compact
+      />
+    )
+    // Every turn is listed.
+    expect(screen.getByText("first message")).toBeInTheDocument()
+    expect(screen.getByText("edit something")).toBeInTheDocument()
+    expect(screen.getByText("delete a file")).toBeInTheDocument()
+    // But the per-file expander is gone — no drill-down affordance.
+    expect(
+      screen.queryByRole("button", { name: /^fileCount:/ })
+    ).not.toBeInTheDocument()
+  })
+
+  it("compact rows still jump to their message and show change counts", () => {
+    const onSelect = vi.fn()
+    render(
+      <ConversationMessageNav
+        count={entries.length}
+        expanded
+        onToggle={vi.fn()}
+        entries={entries}
+        onSelect={onSelect}
+        compact
+      />
+    )
+    const row = screen.getByText("edit something").closest("button")
+    expect(row).not.toBeNull()
+    expect(row).toHaveTextContent("+5")
+    fireEvent.click(row as HTMLElement)
+    expect(onSelect).toHaveBeenCalledWith(entries[1])
+  })
+
+  it("default placement is unchanged: start edge, roomy card", () => {
+    const { container } = render(
+      <ConversationMessageNav
+        count={entries.length}
+        expanded
+        onToggle={vi.fn()}
+        entries={entries}
+        onSelect={vi.fn()}
+      />
+    )
+    // File drill-down exists (historical behaviour preserved).
+    expect(
+      screen.getAllByRole("button", { name: /^fileCount:/ }).length
+    ).toBeGreaterThan(0)
+    expect(container.querySelector(".w-72")).not.toBeNull()
+    expect(container.querySelector(".w-64")).toBeNull()
+  })
+})

@@ -181,6 +181,13 @@
       "sectionDescription": "会话区域内的折叠/展开、工具调用、工作状态等动画，以及平滑滚动。关闭后界面立即更新、不再有过渡动画；加载转圈图标仍会旋转。",
       "enable": "启用聊天区域动画"
     },
+    "messageNav": {
+      "sectionTitle": "消息导航",
+      "sectionDescription": "会话消息导航卡的位置。右下角会变成紧凑卡片：每次用户回话一行，贴在输入框上方，不挡阅读区。",
+      "positionStart": "左上（默认）",
+      "positionBottomEnd": "右下（紧凑）",
+      "hint": "计划面板与子智能体面板始终留在左上。"
+    },
     "chatWidth": {
       "sectionTitle": "聊天区域宽度",
       "sectionDescription": "会话列与输入框的最大宽度。也可以直接拖动聊天区域左右两侧的边缘来调整。",

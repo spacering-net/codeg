@@ -181,6 +181,13 @@
       "sectionDescription": "Animaciones de plegado/desplegado, llamadas a herramientas y estado de trabajo en el área de conversación, además del desplazamiento suave. Desactívalas para actualizaciones inmediatas. Los indicadores de carga siguen girando.",
       "enable": "Activar las animaciones del chat"
     },
+    "messageNav": {
+      "sectionTitle": "Navegador de mensajes",
+      "sectionDescription": "Posición del navegador de mensajes. Abajo a la derecha se convierte en una tarjeta compacta con una fila por mensaje del usuario, sobre el cuadro de entrada.",
+      "positionStart": "Arriba a la izquierda (predeterminado)",
+      "positionBottomEnd": "Abajo a la derecha (compacto)",
+      "hint": "Los paneles de plan y de subagentes siguen arriba a la izquierda."
+    },
     "chatWidth": {
       "sectionTitle": "Ancho del chat",
       "sectionDescription": "Ancho máximo de la columna de conversación y del cuadro de entrada. También puedes arrastrar los bordes del chat para ajustarlo.",

@@ -181,6 +181,13 @@
       "sectionDescription": "Animações de recolher/expandir, chamadas de ferramentas e estado de trabalho na área de conversa, além da rolagem suave. Desative para atualizações instantâneas. Os indicadores de carregamento continuam girando.",
       "enable": "Ativar as animações do chat"
     },
+    "messageNav": {
+      "sectionTitle": "Navegador de mensagens",
+      "sectionDescription": "Posição do navegador de mensagens. No canto inferior direito vira um cartão compacto com uma linha por mensagem do usuário, acima do campo de entrada.",
+      "positionStart": "Canto superior esquerdo (padrão)",
+      "positionBottomEnd": "Canto inferior direito (compacto)",
+      "hint": "Os painéis de plano e de subagentes permanecem no canto superior esquerdo."
+    },
     "chatWidth": {
       "sectionTitle": "Largura do chat",
       "sectionDescription": "Largura máxima da coluna de conversa e da caixa de entrada. Você também pode arrastar as bordas do chat para ajustá-la.",

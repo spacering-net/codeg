@@ -2,6 +2,7 @@
 
 import {
   LayoutGrid,
+  MapPinned,
   Monitor,
   Moon,
   MoveHorizontal,
@@ -29,6 +30,7 @@ import {
   useWelcomeQuickActions,
   useChatAnimationsSetting,
   useChatContentWidth,
+  useMessageNavPosition,
 } from "@/hooks/use-appearance"
 import {
   CHAT_CONTENT_DEFAULT,
@@ -68,6 +70,7 @@ export function AppearanceSettings() {
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
   const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
+  const { messageNavPosition, setMessageNavPosition } = useMessageNavPosition()
   const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
   const [screenWidth] = useState(readScreenWidth)
   // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
@@ -145,7 +148,6 @@ export function AppearanceSettings() {
             </p>
           </div>
         </section>
-
         {/* ===== Theme Color ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
@@ -197,10 +199,8 @@ export function AppearanceSettings() {
             })}
           </p>
         </section>
-
         {/* ===== Custom style (token overrides + free-form CSS) ===== */}
         <CustomStyleSection />
-
         {/* ===== Zoom Level ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
@@ -240,13 +240,10 @@ export function AppearanceSettings() {
             </p>
           </div>
         </section>
-
         {/* ===== Fonts ===== */}
         <FontSettingsSection />
-
         {/* ===== Workspace background ===== */}
         <WorkspaceBackgroundSection />
-
         {/* ===== New conversation — mode selection area ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
@@ -270,7 +267,6 @@ export function AppearanceSettings() {
             </span>
           </label>
         </section>
-
         {/* ===== Chat animations ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
@@ -294,8 +290,44 @@ export function AppearanceSettings() {
             </span>
           </label>
         </section>
+        {/* ===== Message navigator placement ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <MapPinned className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("messageNav.sectionTitle")}
+            </h2>
+          </div>
 
-        {/* ===== Chat content width ===== */}
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("messageNav.sectionDescription")}
+          </p>
+
+          <div className="space-y-2">
+            <Select
+              value={messageNavPosition}
+              onValueChange={(value) =>
+                setMessageNavPosition(value as "start" | "bottom-end")
+              }
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder={t("placeholder")} />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectItem value="start">
+                  {t("messageNav.positionStart")}
+                </SelectItem>
+                <SelectItem value="bottom-end">
+                  {t("messageNav.positionBottomEnd")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-2xs text-muted-foreground leading-4">
+              {t("messageNav.hint")}
+            </p>
+          </div>
+        </section>
+        {/* ===== Chat content width ===== */}{" "}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
             <MoveHorizontal className="h-4 w-4 text-muted-foreground" />
@@ -348,7 +380,6 @@ export function AppearanceSettings() {
             </div>
           </div>
         </section>
-
         {/* ===== Desktop Pet ===== */}
         <PetManagerSection />
       </div>

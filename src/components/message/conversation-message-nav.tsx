@@ -68,6 +68,14 @@ interface ConversationMessageNavProps {
    *  is loading, or failed to (offering `onRetryEarlier`). */
   earlier?: "loading" | "error" | null
   onRetryEarlier?: () => void
+  /** Which edge the card is flush against. `start` = the overlay stack's
+   *  inline-start edge (historical layout); `end` = a bottom-end card that grows
+   *  upward, for the compact bottom-right placement. */
+  edge?: "start" | "end"
+  /** One row per user turn: single-line label, no per-file drill-down. Used by
+   *  the bottom-right placement, where the card is a glanceable index rather
+   *  than an inspector. */
+  compact?: boolean
 }
 
 /**
@@ -93,6 +101,8 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
   revealingTurnId = null,
   earlier = null,
   onRetryEarlier,
+  edge = "start",
+  compact = false,
 }: ConversationMessageNavProps) {
   const t = useTranslations("Folder.chat.messageNav")
   const { openSessionFileDiff } = useWorkspaceActions()
@@ -126,14 +136,32 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
         icon={<MapPinned className="size-3" />}
         summary={t("collapsedSummary", { count })}
         onClick={() => onToggle(true)}
+        edge={edge}
       />
     )
   }
 
   return (
-    <div className="pointer-events-none flex max-w-[min(22rem,calc(100%-2rem))]">
-      <div className="pointer-events-auto w-72 max-w-full rounded-xl border bg-card/60 hover:bg-card/95 shadow-lg backdrop-blur transition-colors supports-[backdrop-filter]:bg-card/50 supports-[backdrop-filter]:hover:bg-card/85">
-        <div className="flex items-center justify-between border-b px-3 py-2">
+    <div
+      className={cn(
+        "pointer-events-none flex",
+        compact
+          ? "max-w-[min(16rem,calc(100%-2rem))]"
+          : "max-w-[min(22rem,calc(100%-2rem))]"
+      )}
+    >
+      <div
+        className={cn(
+          "pointer-events-auto max-w-full border bg-card/60 shadow-lg backdrop-blur transition-colors hover:bg-card/95 supports-[backdrop-filter]:bg-card/50 supports-[backdrop-filter]:hover:bg-card/85",
+          compact ? "w-64 rounded-xl" : "w-72 rounded-xl"
+        )}
+      >
+        <div
+          className={cn(
+            "flex items-center justify-between border-b px-3",
+            compact ? "py-1.5" : "py-2"
+          )}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <MapPinned className="h-4 w-4 text-muted-foreground" />
             <span className="truncate text-sm font-medium">{t("title")}</span>
@@ -152,7 +180,12 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
           </Button>
         </div>
 
-        <div className="max-h-96 space-y-1.5 overflow-y-auto p-2">
+        <div
+          className={cn(
+            "overflow-y-auto p-2",
+            compact ? "max-h-72 space-y-1" : "max-h-96 space-y-1.5"
+          )}
+        >
           {earlier === "loading" && (
             <div className="flex items-center gap-2 px-2.5 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -175,6 +208,44 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
             const uniqueFileCount = new Set(
               entry.files.map((file) => normalizeSlashPath(file.path))
             ).size
+
+            if (compact) {
+              // Compact placement: one tight row per user turn. No per-file
+              // drill-down — the card is a jump index, not an inspector.
+              return (
+                <button
+                  key={entry.turnId}
+                  type="button"
+                  onClick={() => onSelect(entry)}
+                  aria-busy={isRevealing || undefined}
+                  title={entry.label}
+                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/40"
+                >
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-muted/40 px-1 text-3xs tabular-nums text-muted-foreground">
+                    {isRevealing && (
+                      <Loader2
+                        aria-hidden="true"
+                        className="size-2.5 animate-spin"
+                      />
+                    )}
+                    #{entry.ordinal}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs leading-4 text-foreground">
+                    {entry.label}
+                  </span>
+                  {entry.hasChanges && (
+                    <span className="shrink-0 font-mono text-3xs tabular-nums">
+                      <span className="text-green-600 dark:text-green-400">
+                        +{entry.additions}
+                      </span>
+                      <span className="ms-1 text-red-600 dark:text-red-400">
+                        -{entry.deletions}
+                      </span>
+                    </span>
+                  )}
+                </button>
+              )
+            }
 
             return (
               <div

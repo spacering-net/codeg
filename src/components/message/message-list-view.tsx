@@ -92,7 +92,10 @@ import { buildMessageNavEntries } from "@/components/message/message-nav-entries
 import { useMessageNavJump } from "@/components/message/use-message-nav-jump"
 import { useConversationOutline } from "@/hooks/use-conversation-outline"
 import { useModelLabels } from "@/hooks/use-model-labels"
-import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
+import {
+  useChatAnimationsEnabled,
+  useMessageNavPosition,
+} from "@/hooks/use-appearance"
 import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
@@ -1192,6 +1195,11 @@ export function MessageListView({
   }, [refetchDetail, conversationId])
 
   const chatAnimations = useChatAnimationsEnabled()
+  // Opt-in bottom-end placement for the message navigator. Read through the
+  // appearance context, so flipping it in the settings window moves the card in
+  // this window too (the provider re-broadcasts via the storage event).
+  const { messageNavPosition } = useMessageNavPosition()
+  const navAtBottomEnd = messageNavPosition === "bottom-end"
   const shouldUseSmoothResize = !(
     isActive &&
     !detailLoading &&
@@ -1787,7 +1795,7 @@ export function MessageListView({
         hover. Logical `start-0` + `items-start` keep the anchor and the bullet
         on the same side, so the whole stack mirrors cleanly in RTL. */}
         <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
-          {showMessageNav && userMessageCount > 0 && (
+          {showMessageNav && userMessageCount > 0 && !navAtBottomEnd && (
             <ConversationMessageNav
               count={userMessageCount}
               expanded={navExpanded}
@@ -1818,6 +1826,31 @@ export function MessageListView({
             overlayKey={subAgentOverlayKey}
           />
         </div>
+        {/* Bottom-end placement (opt-in via appearance settings): the message
+            navigator alone moves here as a compact one-row-per-turn card that
+            grows upward. The plan and sub-agent panels stay on the start edge —
+            they are live status, not navigation. */}
+        {showMessageNav && userMessageCount > 0 && navAtBottomEnd && (
+          <div className="pointer-events-none absolute end-2 bottom-4 z-20 flex flex-col items-end">
+            <ConversationMessageNav
+              count={userMessageCount}
+              expanded={navExpanded}
+              onToggle={setNavExpanded}
+              entries={navEntries}
+              onSelect={navJump.select}
+              revealingTurnId={navJump.revealingTurnId}
+              earlier={
+                earlierOutlineState.status === "loading" ||
+                earlierOutlineState.status === "error"
+                  ? earlierOutlineState.status
+                  : null
+              }
+              onRetryEarlier={earlierOutline.retry}
+              edge="end"
+              compact
+            />
+          </div>
+        )}
         <SelectionActionBubble
           containerRef={selectionBoxRef}
           onQuote={onQuoteSelection}

@@ -29,6 +29,11 @@ export const STORAGE_KEY_CHAT_ANIMATIONS = "codeg-chat-animations"
 // （48rem）。需预水合，避免会话首屏先按默认宽度排版再跳变。
 export const STORAGE_KEY_CHAT_CONTENT_WIDTH = "codeg-chat-content-width"
 
+// 消息导航卡的位置：`"start"`（缺省，逻辑起始边＝LTR 左上）或 `"bottom-end"`
+// （右下角紧凑卡片）。只影响消息导航自己——计划/子智能体面板始终留在起始边。
+// 缺省即历史行为，无需预水合（水合前不渲染任何 overlay）。
+export const STORAGE_KEY_MESSAGE_NAV_POSITION = "codeg-message-nav-position"
+
 // 字体偏好（界面 / 编辑器 / 终端）。
 // 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地
 // 预水合写入 --font-sans；编辑器/终端字体只走各自的 Monaco/xterm 选项，水合后才挂载，

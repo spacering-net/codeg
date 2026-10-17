@@ -181,6 +181,13 @@
       "sectionDescription": "Animations de pliage/dépliage, d'appels d'outils et d'état de travail dans la zone de conversation, ainsi que le défilement fluide. Désactivez-les pour des mises à jour instantanées. Les indicateurs de chargement continuent de tourner.",
       "enable": "Activer les animations du chat"
     },
+    "messageNav": {
+      "sectionTitle": "Navigateur de messages",
+      "sectionDescription": "Position du navigateur de messages. En bas à droite, il devient une carte compacte avec une ligne par message utilisateur, au-dessus de la zone de saisie.",
+      "positionStart": "En haut à gauche (par défaut)",
+      "positionBottomEnd": "En bas à droite (compact)",
+      "hint": "Les panneaux de plan et de sous-agents restent en haut à gauche."
+    },
     "chatWidth": {
       "sectionTitle": "Largeur du chat",
       "sectionDescription": "Largeur maximale de la colonne de conversation et de la zone de saisie. Vous pouvez aussi faire glisser les bords du chat pour l'ajuster.",

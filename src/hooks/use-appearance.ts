@@ -4,6 +4,7 @@ import { useContext } from "react"
 import {
   AppearanceContext,
   ChatAnimationsContext,
+  DEFAULT_MESSAGE_NAV_POSITION,
 } from "@/components/appearance-provider"
 import {
   applyChatContentWidth,
@@ -43,6 +44,18 @@ export function useWelcomeQuickActions() {
 export function useChatAnimationsSetting() {
   const { chatAnimations, setChatAnimations } = useAppearance()
   return { chatAnimations, setChatAnimations }
+}
+
+/**
+ * 消息导航卡位置。Provider 之外（测试、独立窗口）回退为默认起始边，
+ * 不抛错——和 `useChatContentWidth` 的降级方式一致。
+ */
+export function useMessageNavPosition() {
+  const ctx = useContext(AppearanceContext)
+  return {
+    messageNavPosition: ctx?.messageNavPosition ?? DEFAULT_MESSAGE_NAV_POSITION,
+    setMessageNavPosition: ctx?.setMessageNavPosition ?? (() => {}),
+  }
 }
 
 /**

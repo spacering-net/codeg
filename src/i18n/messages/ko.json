@@ -181,6 +181,13 @@
       "sectionDescription": "대화 영역의 접기/펼치기, 도구 호출, 작업 상태 등의 애니메이션과 부드러운 스크롤을 제어합니다. 끄면 즉시 갱신됩니다. 스피너는 계속 회전합니다.",
       "enable": "채팅 애니메이션 사용"
     },
+    "messageNav": {
+      "sectionTitle": "메시지 탐색기",
+      "sectionDescription": "대화 메시지 탐색기의 위치입니다. 오른쪽 아래를 선택하면 사용자 발화마다 한 줄인 컴팩트 카드로 입력창 위에 표시됩니다.",
+      "positionStart": "왼쪽 위(기본)",
+      "positionBottomEnd": "오른쪽 아래(컴팩트)",
+      "hint": "계획 및 하위 에이전트 패널은 항상 왼쪽 위에 남습니다."
+    },
     "chatWidth": {
       "sectionTitle": "채팅 너비",
       "sectionDescription": "대화 영역과 입력창의 최대 너비입니다. 채팅 영역의 좌우 가장자리를 드래그해서 조정할 수도 있습니다.",

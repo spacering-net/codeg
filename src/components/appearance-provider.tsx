@@ -38,6 +38,7 @@ import {
   STORAGE_KEY_ZOOM_LEVEL,
   STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
+  STORAGE_KEY_MESSAGE_NAV_POSITION,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
@@ -116,6 +117,12 @@ function syncAppearanceMode(mode: string) {
 
 export type FontSelection = { id: string; custom: string }
 
+/** 消息导航卡位置。`start` = 逻辑起始边（LTR 左上，历史行为）；
+ *  `bottom-end` = 右下角紧凑卡片。 */
+export type MessageNavPosition = "start" | "bottom-end"
+
+export const DEFAULT_MESSAGE_NAV_POSITION: MessageNavPosition = "start"
+
 type AppearanceContextValue = {
   themeColor: ThemeColor
   setThemeColor: (color: ThemeColor) => void
@@ -127,6 +134,9 @@ type AppearanceContextValue = {
   /** 聊天区域动画总开关，默认开启；关闭时 <html> 带 data-chat-animations="off" */
   chatAnimations: boolean
   setChatAnimations: (on: boolean) => void
+  /** 消息导航卡位置：起始边（默认，左上）或右下角紧凑卡片。 */
+  messageNavPosition: MessageNavPosition
+  setMessageNavPosition: (position: MessageNavPosition) => void
   /**
    * 聊天内容宽度（100% 缩放下的 px，落到 CSS 时换成 rem，随缩放变化），
    * null = 内置默认（48rem）。拖拽手柄与外观设置页共用；set 会持久化并落到
@@ -277,6 +287,18 @@ function readBool(key: string, def: boolean): boolean {
   }
 }
 
+function readMessageNavPosition(): MessageNavPosition {
+  if (typeof document === "undefined") return DEFAULT_MESSAGE_NAV_POSITION
+  try {
+    return localStorage.getItem(STORAGE_KEY_MESSAGE_NAV_POSITION) ===
+      "bottom-end"
+      ? "bottom-end"
+      : DEFAULT_MESSAGE_NAV_POSITION
+  } catch {
+    return DEFAULT_MESSAGE_NAV_POSITION
+  }
+}
+
 function readNumber(
   key: string,
   def: number,
@@ -417,6 +439,10 @@ export function AppearanceProvider({
       document.documentElement.setAttribute("data-chat-animations", "off")
     }
   }, [chatAnimations])
+
+  // 消息导航卡位置。默认起始边（历史行为），仅在用户显式选右下角时才变。
+  const [messageNavPosition, setMessageNavPositionState] =
+    useState<MessageNavPosition>(() => readMessageNavPosition())
 
   // 聊天内容宽度：DOM 变量由 inline 脚本预置，这里持有状态供设置页回显。
   const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
@@ -580,6 +606,14 @@ export function AppearanceProvider({
   const setChatAnimations = useCallback((on: boolean) => {
     setChatAnimationsState(on)
     persist(STORAGE_KEY_CHAT_ANIMATIONS, on ? "1" : "0")
+  }, [])
+
+  const setMessageNavPosition = useCallback((position: MessageNavPosition) => {
+    setMessageNavPositionState(position)
+    persist(
+      STORAGE_KEY_MESSAGE_NAV_POSITION,
+      position === "bottom-end" ? "bottom-end" : "start"
+    )
   }, [])
 
   const setChatContentWidth = useCallback((px: number | null) => {
@@ -1033,6 +1067,10 @@ export function AppearanceProvider({
       if (e.key === STORAGE_KEY_CHAT_ANIMATIONS) {
         setChatAnimationsState(readBool(STORAGE_KEY_CHAT_ANIMATIONS, true))
       }
+      // 外观设置是独立窗口：那边改了导航卡位置，工作区窗口要跟着搬。
+      if (e.key === STORAGE_KEY_MESSAGE_NAV_POSITION) {
+        setMessageNavPositionState(readMessageNavPosition())
+      }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
       }
@@ -1139,6 +1177,8 @@ export function AppearanceProvider({
         setShowWelcomeQuickActions,
         chatAnimations,
         setChatAnimations,
+        messageNavPosition,
+        setMessageNavPosition,
         chatContentWidth,
         setChatContentWidth,
         previewChatContentWidth: applyChatContentWidth,

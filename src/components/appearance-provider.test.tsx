@@ -16,11 +16,13 @@ import {
   useChatAnimationsSetting,
   useChatContentWidth,
   useCustomStyle,
+  useMessageNavPosition,
 } from "@/hooks/use-appearance"
 import {
   STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_CUSTOM_THEME,
+  STORAGE_KEY_MESSAGE_NAV_POSITION,
   STORAGE_KEY_ZOOM_LEVEL,
 } from "@/lib/appearance-script"
 
@@ -448,5 +450,77 @@ describe("chat content width", () => {
     })
     expect(screen.getByTestId("width").textContent).toBe("1100")
     expect(rootVar()).toBe("68.75rem")
+  })
+})
+
+describe("message navigator placement", () => {
+  function NavPositionProbe() {
+    const { messageNavPosition, setMessageNavPosition } = useMessageNavPosition()
+    return (
+      <>
+        <span data-testid="navpos">{messageNavPosition}</span>
+        <button onClick={() => setMessageNavPosition("bottom-end")}>
+          to-end
+        </button>
+        <button onClick={() => setMessageNavPosition("start")}>to-start</button>
+      </>
+    )
+  }
+
+  it("defaults to the start edge and persists an explicit choice", () => {
+    render(
+      <AppearanceProvider>
+        <NavPositionProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("navpos").textContent).toBe("start")
+    fireEvent.click(screen.getByText("to-end"))
+    expect(screen.getByTestId("navpos").textContent).toBe("bottom-end")
+    expect(localStorage.getItem(STORAGE_KEY_MESSAGE_NAV_POSITION)).toBe(
+      "bottom-end"
+    )
+  })
+
+  it("restores the stored placement on mount", () => {
+    localStorage.setItem(STORAGE_KEY_MESSAGE_NAV_POSITION, "bottom-end")
+    render(
+      <AppearanceProvider>
+        <NavPositionProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("navpos").textContent).toBe("bottom-end")
+  })
+
+  it("treats an unknown stored value as the default", () => {
+    localStorage.setItem(STORAGE_KEY_MESSAGE_NAV_POSITION, "top-left")
+    render(
+      <AppearanceProvider>
+        <NavPositionProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("navpos").textContent).toBe("start")
+  })
+
+  it("falls back to the default outside a provider", () => {
+    render(<NavPositionProbe />)
+    expect(screen.getByTestId("navpos").textContent).toBe("start")
+  })
+
+  it("follows the settings window's change via the storage event", () => {
+    render(
+      <AppearanceProvider>
+        <NavPositionProbe />
+      </AppearanceProvider>
+    )
+    localStorage.setItem(STORAGE_KEY_MESSAGE_NAV_POSITION, "bottom-end")
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY_MESSAGE_NAV_POSITION,
+          newValue: "bottom-end",
+        })
+      )
+    })
+    expect(screen.getByTestId("navpos").textContent).toBe("bottom-end")
   })
 })

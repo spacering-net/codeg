@@ -181,6 +181,13 @@
       "sectionDescription": "Entrance, expand/collapse, tool-call and working-status animations in the conversation area, plus smooth scrolling. Turn off for instant, motion-free updates. Spinners keep rotating.",
       "enable": "Enable chat animations"
     },
+    "messageNav": {
+      "sectionTitle": "Message navigator",
+      "sectionDescription": "Where the per-conversation message navigator sits. Bottom-right keeps it as a compact one-row-per-turn card above the composer, out of the reading column.",
+      "positionStart": "Top-left (default)",
+      "positionBottomEnd": "Bottom-right (compact)",
+      "hint": "Plan and sub-agent panels stay top-left either way."
+    },
     "chatWidth": {
       "sectionTitle": "Chat width",
       "sectionDescription": "Maximum width of the conversation column and the composer. You can also drag the edges of the chat column to adjust it.",

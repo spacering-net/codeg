@@ -181,6 +181,13 @@
       "sectionDescription": "Animationen für Ein-/Ausklappen, Tool-Aufrufe und Arbeitsstatus im Unterhaltungsbereich sowie sanftes Scrollen. Wenn deaktiviert, werden Änderungen sofort angezeigt. Ladeanzeigen drehen sich weiterhin.",
       "enable": "Chat-Animationen aktivieren"
     },
+    "messageNav": {
+      "sectionTitle": "Nachrichten-Navigator",
+      "sectionDescription": "Position des Nachrichten-Navigators. Unten rechts wird er zu einer kompakten Karte mit einer Zeile pro Nutzernachricht über dem Eingabefeld.",
+      "positionStart": "Oben links (Standard)",
+      "positionBottomEnd": "Unten rechts (kompakt)",
+      "hint": "Plan- und Subagenten-Panels bleiben in beiden Fällen oben links."
+    },
     "chatWidth": {
       "sectionTitle": "Chat-Breite",
       "sectionDescription": "Maximale Breite der Unterhaltungsspalte und des Eingabefelds. Sie lässt sich auch durch Ziehen der Chat-Ränder anpassen.",

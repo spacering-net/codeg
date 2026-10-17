@@ -35,13 +35,19 @@ interface CollapsedOverlayChipProps {
   summary: string
   /** Expands the owning overlay into its full card. */
   onClick: () => void
+  /** Which edge the chip is flush against. `start` (default) is the inline-start
+   *  edge the overlay stack pins to; `end` mirrors it for an overlay anchored to
+   *  the inline-end edge (flat side and chevron flip). */
+  edge?: "start" | "end"
 }
 
 export function CollapsedOverlayChip({
   icon,
   summary,
   onClick,
+  edge = "start",
 }: CollapsedOverlayChipProps) {
+  const atEnd = edge === "end"
   return (
     <div className="pointer-events-none flex">
       <button
@@ -50,7 +56,10 @@ export function CollapsedOverlayChip({
         aria-expanded={false}
         onClick={onClick}
         className={cn(
-          "group/chip pointer-events-auto flex items-center rounded-s-none rounded-e-full border-y border-e",
+          "group/chip pointer-events-auto flex items-center border-y",
+          atEnd
+            ? "rounded-e-none rounded-s-full border-s"
+            : "rounded-s-none rounded-e-full border-e",
           "bg-secondary/70 text-secondary-foreground opacity-60 shadow-md transition-[background-color,opacity] duration-150 hover:bg-secondary hover:opacity-100 focus-visible:opacity-100",
           "cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50"
         )}
@@ -58,9 +67,19 @@ export function CollapsedOverlayChip({
         {/* Fixed icon cap — the whole resting chip is just this bullet cap. */}
         <span className="grid size-5 shrink-0 place-items-center">{icon}</span>
         {/* Summary: hidden at rest (no width), revealed on hover/focus. */}
-        <span className="hidden items-center gap-1 whitespace-nowrap pe-3 text-sm font-medium group-hover/chip:flex group-focus-visible/chip:flex">
+        <span
+          className={cn(
+            "hidden items-center gap-1 whitespace-nowrap text-sm font-medium group-hover/chip:flex group-focus-visible/chip:flex",
+            atEnd ? "ps-3" : "pe-3"
+          )}
+        >
           {summary}
-          <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground rtl:-scale-x-100" />
+          <ChevronRightIcon
+            className={cn(
+              "size-3 shrink-0 text-muted-foreground rtl:-scale-x-100",
+              atEnd && "-scale-x-100 rtl:scale-x-100"
+            )}
+          />
         </span>
       </button>
     </div>
