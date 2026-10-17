@@ -47,7 +47,9 @@ import {
 import { AgentIcon } from "@/components/agent-icon"
 import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { ExtraAgentSignIn } from "@/components/settings/extra-agent-sign-in"
 import { CustomAgentMcpToggle } from "@/components/settings/custom-agent-mcp-toggle"
+import { AgentAccounts } from "@/components/settings/agent-accounts"
 import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
 import {
   AlertDialog,
@@ -101,6 +103,7 @@ import {
   acpPrepareNpxAgent,
   acpReorderAgents,
   acpDeleteCustomAgent,
+  acpListCustomAgents,
   acpUninstallAgent,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
@@ -117,6 +120,7 @@ import type {
   AdapterInfo,
   AgentLatestRelease,
   AgentType,
+  BuiltinAgentType,
   CheckStatus,
   CodexGranularApproval,
   CodexSandboxStructuredConfig,
@@ -180,6 +184,25 @@ import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 import { QoderConfigPanel } from "./qoder-config-panel"
+
+function familyLabelFromIsolator(key: string): string {
+  if (key.startsWith("CLAUDE")) return "Claude"
+  if (key.startsWith("CODEX")) return "Codex"
+  if (key.startsWith("GROK")) return "Grok"
+  if (key.startsWith("GEMINI")) return "Gemini"
+  if (key.startsWith("OPENCODE")) return "OpenCode"
+  return key
+}
+
+/** The built-in agent an extra slot's home variable belongs to. */
+function builtinAgentFromIsolator(key: string): BuiltinAgentType | null {
+  if (key.startsWith("CLAUDE")) return "claude_code"
+  if (key.startsWith("CODEX")) return "codex"
+  if (key.startsWith("GROK")) return "grok"
+  if (key.startsWith("GEMINI")) return "gemini"
+  if (key.startsWith("OPENCODE")) return "open_code"
+  return null
+}
 
 interface AgentCheckState {
   result?: PreflightResult
@@ -4652,6 +4675,10 @@ export function AcpAgentSettings() {
     null
   )
   const [removingCustomAgent, setRemovingCustomAgent] = useState(false)
+  const [extraSlotIsolator, setExtraSlotIsolator] = useState<{
+    key: string
+    home: string
+  } | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [checkState, setCheckState] = useState<
     Partial<Record<AgentType, AgentCheckState>>
@@ -4787,6 +4814,29 @@ export function AcpAgentSettings() {
       null,
     [selectedAgentType, sortedAgents]
   )
+
+  useEffect(() => {
+    const registryId = selectedAgent
+      ? customAgentId(selectedAgent.agent_type)
+      : null
+    if (!registryId) {
+      setExtraSlotIsolator(null)
+      return
+    }
+    let cancelled = false
+    void acpListCustomAgents()
+      .then((rows) => {
+        if (cancelled) return
+        const row = rows.find((item) => item.registryId === registryId)
+        setExtraSlotIsolator(row?.isolatedLogin ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setExtraSlotIsolator(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedAgent])
   const agentTypesKey = useMemo(
     () =>
       [...new Set(agents.map((agent) => agent.agent_type))].sort().join(","),
@@ -8524,6 +8574,12 @@ export function AcpAgentSettings() {
               />
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {!isCustomAgentType(selectedAgent.agent_type) && (
+                  <AgentAccounts
+                    key={selectedAgent.agent_type}
+                    agentType={selectedAgent.agent_type}
+                  />
+                )}
                 <div className="space-y-2">
                   {selectedCurrent?.error && (
                     <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400 flex items-start gap-2">
@@ -12013,6 +12069,18 @@ supports_websockets = true`}
                   // dialog) so the panel reads as one stack of settings rather
                   // than four differently-shaped boxes.
                   <>
+                    {extraSlotIsolator &&
+                    customAgentId(selectedAgent.agent_type) ? (
+                      <ExtraAgentSignIn
+                        key={selectedAgent.agent_type}
+                        registryId={customAgentId(selectedAgent.agent_type)!}
+                        family={familyLabelFromIsolator(extraSlotIsolator.key)}
+                        builtinAgent={builtinAgentFromIsolator(
+                          extraSlotIsolator.key
+                        )}
+                        home={extraSlotIsolator.home}
+                      />
+                    ) : null}
                     <SettingCard>
                       <SettingRow
                         icon={Pencil}

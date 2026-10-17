@@ -1252,6 +1252,13 @@ impl DelegationListener {
                 return report_failed("invalid_working_dir", "missing or empty task");
             }
         };
+        let agent_account_id = match req.input.get("agent_account_id") {
+            None => None,
+            Some(serde_json::Value::String(id)) if !id.trim().is_empty() && id.len() <= 128 => {
+                Some(id.clone())
+            }
+            _ => return report_failed("invalid_agent_account", "Choose a valid agent account."),
+        };
         // The `working_dir` the LLM explicitly passed (before defaulting),
         // used by the broker's correlation key. `None` when omitted —
         // symmetric with the ACP `raw_input`, which also omits it then.
@@ -1269,6 +1276,7 @@ impl DelegationListener {
             parent_conversation_id,
             parent_tool_use_id: req.parent_tool_use_id,
             agent_type,
+            agent_account_id,
             task,
             working_dir,
             requested_working_dir,
@@ -2261,6 +2269,37 @@ mod tests {
         assert_eq!(report.error_code.as_deref(), Some("invalid_agent_type"));
     }
 
+    #[tokio::test]
+    async fn account_arguments_reach_the_native_spawner_without_normalization() {
+        let mock = Arc::new(MockSpawner::new());
+        let broker = make_broker(mock.clone()).await;
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens.register("tok".into(), TokenEntry {
+            parent_connection_id: "parent-conn".into(),
+            working_dir: std::env::temp_dir(),
+        }).await;
+        let listener = make_listener(broker, tokens, Some(1));
+        for account in [None, Some("default"), Some("work-account")] {
+            mock.queue_spawn(Ok("account-child".into())).await;
+            mock.queue_send(Ok(42)).await;
+            let mut input = json!({"agent_type":"claude_code", "task":"review"});
+            if let Some(id) = account { input["agent_account_id"] = json!(id); }
+            let report = listener.process(make_request(input).await).await;
+            assert_eq!(report.status, TaskStatus::Running);
+            let args = mock.spawn_args.lock().await;
+            let last = args.last().unwrap();
+            assert_eq!(last.agent_type, AgentType::ClaudeCode);
+            assert_eq!(last.agent_account_id.as_deref(), account);
+        }
+        for invalid in [json!(null), json!(false), json!(""), json!(" "), json!({"id":"work"})] {
+            let report = listener.process(make_request(json!({
+                "agent_type":"claude_code", "task":"review", "agent_account_id":invalid,
+            })).await).await;
+            assert_eq!(report.error_code.as_deref(), Some("invalid_agent_account"));
+        }
+        assert_eq!(mock.spawn_args.lock().await.len(), 3);
+    }
+
     /// Full async round-trip through the listener: `delegate_to_agent` returns a
     /// Running ack, the lifecycle resolves the child via `complete_call`, and a
     /// follow-up `get_delegation_status` collects the Completed result.
@@ -2360,6 +2399,7 @@ mod tests {
                 parent_conversation_id: 1,
                 parent_tool_use_id: "pt-1".into(),
                 agent_type: AgentType::Codex,
+                agent_account_id: None,
                 task: "do x".into(),
                 working_dir: None,
                 requested_working_dir: None,
@@ -2514,6 +2554,7 @@ mod tests {
                         parent_conversation_id: 1,
                         parent_tool_use_id: tool_use.into(),
                         agent_type: AgentType::Codex,
+                        agent_account_id: None,
                         task: "do x".into(),
                         working_dir: None,
                         requested_working_dir: None,
@@ -2617,6 +2658,7 @@ mod tests {
                 parent_conversation_id: 1,
                 parent_tool_use_id: "pt-1".into(),
                 agent_type: AgentType::Codex,
+                agent_account_id: None,
                 task: "do x".into(),
                 working_dir: None,
                 requested_working_dir: None,
@@ -2669,6 +2711,7 @@ mod tests {
                     parent_conversation_id: 1,
                     parent_tool_use_id: "pt-cancel".into(),
                     agent_type: AgentType::Codex,
+                    agent_account_id: None,
                     task: "do x".into(),
                     working_dir: None,
                     requested_working_dir: None,
@@ -2734,6 +2777,7 @@ mod tests {
                     child_conversation_id: 42,
                     status: Ts::Canceled,
                     agent_type: AgentType::Codex,
+                    agent_account_id: None,
                     parent_id: Some(1),
                     parent_tool_use_id: Some("pt-orig".into()),
                     external_id: Some("ext-1".into()),

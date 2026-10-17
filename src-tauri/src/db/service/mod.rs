@@ -21,3 +21,4 @@ pub mod tab_service;
 pub mod thread_binding_service;
 pub mod token_usage_service;
 pub mod work_task_service;
+pub mod agent_account_service;

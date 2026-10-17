@@ -180,6 +180,13 @@ pub struct DeepSeekParser {
 }
 
 impl DeepSeekParser {
+    pub fn with_account_home(home: &Path) -> Self {
+        Self {
+            base_dir: home.join("sessions"),
+            attachments_root: home.join("attachments/v1"),
+        }
+    }
+
     pub fn new() -> Self {
         Self::for_env(&AgentEnv::inherited())
     }

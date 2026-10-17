@@ -60,6 +60,7 @@ pub mod remote_proxy;
 pub mod remote_workspace;
 pub mod science;
 pub mod session_info;
+pub mod subscription_quota;
 pub mod system_settings;
 pub mod terminal;
 pub mod token_usage;
@@ -71,3 +72,5 @@ pub mod work_task;
 pub mod workspace_state;
 #[cfg(feature = "tauri-runtime")]
 pub mod workspace_windows;
+pub mod agent_accounts;
+pub mod account_switch;
