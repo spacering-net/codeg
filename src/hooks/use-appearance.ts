@@ -4,6 +4,7 @@ import { useContext } from "react"
 import {
   AppearanceContext,
   ChatAnimationsContext,
+  DEFAULT_FLOATING_BALL_SIZE,
 } from "@/components/appearance-provider"
 import {
   applyChatContentWidth,
@@ -56,6 +57,13 @@ export function useFloatingBall() {
     setFloatingBallEnabled: ctx?.setFloatingBallEnabled ?? (() => {}),
     floatingBallPosition: ctx?.floatingBallPosition ?? null,
     setFloatingBallPosition: ctx?.setFloatingBallPosition ?? (() => {}),
+    floatingBallBindings: ctx?.floatingBallBindings ?? {},
+    setFloatingBallBindings: ctx?.setFloatingBallBindings ?? (() => {}),
+    floatingBallSize: ctx?.floatingBallSize ?? DEFAULT_FLOATING_BALL_SIZE,
+    setFloatingBallSize: ctx?.setFloatingBallSize ?? (() => {}),
+    floatingBallFavoriteAgents: ctx?.floatingBallFavoriteAgents ?? [],
+    setFloatingBallFavoriteAgents:
+      ctx?.setFloatingBallFavoriteAgents ?? (() => {}),
   }
 }
 

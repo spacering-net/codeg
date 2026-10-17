@@ -40,6 +40,9 @@ import {
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_FLOATING_BALL_ENABLED,
   STORAGE_KEY_FLOATING_BALL_POSITION,
+  STORAGE_KEY_FLOATING_BALL_BINDINGS,
+  STORAGE_KEY_FLOATING_BALL_SIZE,
+  STORAGE_KEY_FLOATING_BALL_FAVORITE_AGENTS,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
@@ -124,6 +127,29 @@ export type FloatingBallPosition = { x: number; y: number }
 /** 缺省停靠：右下角，距右边与底边各 18px（底边让出安全区）。 */
 export const FLOATING_BALL_INSET = 18
 
+/**
+ * 手势→动作绑定覆盖表。value 为 null 表示用户显式清除该手势（必须与"缺 key
+ * 回退默认"区分，否则清除功能失效）；未出现的 key 一律取当前默认表。
+ */
+export type FloatingBallBindingsOverride = Partial<
+  Record<string, string | null>
+>
+
+/** 球体三档大小：默认大（46px），中 40、小 36。 */
+export type FloatingBallSize = "small" | "medium" | "large"
+
+export const FLOATING_BALL_SIZE_PX: Record<FloatingBallSize, number> = {
+  small: 36,
+  medium: 40,
+  large: 46,
+}
+
+export const DEFAULT_FLOATING_BALL_SIZE: FloatingBallSize = "large"
+
+function isFloatingBallSize(v: unknown): v is FloatingBallSize {
+  return v === "small" || v === "medium" || v === "large"
+}
+
 type AppearanceContextValue = {
   themeColor: ThemeColor
   setThemeColor: (color: ThemeColor) => void
@@ -141,6 +167,15 @@ type AppearanceContextValue = {
   /** 悬浮球停靠位置；null = 右下角缺省位。 */
   floatingBallPosition: FloatingBallPosition | null
   setFloatingBallPosition: (position: FloatingBallPosition | null) => void
+  /** 手势绑定覆盖表（null = 用户清除）；缺 key 回退默认表。 */
+  floatingBallBindings: FloatingBallBindingsOverride
+  setFloatingBallBindings: (bindings: FloatingBallBindingsOverride) => void
+  /** 球体三档大小。 */
+  floatingBallSize: FloatingBallSize
+  setFloatingBallSize: (size: FloatingBallSize) => void
+  /** 常用 agent 快切列表（agentType 数组，2-3 个）。 */
+  floatingBallFavoriteAgents: string[]
+  setFloatingBallFavoriteAgents: (agents: string[]) => void
   /**
    * 聊天内容宽度（100% 缩放下的 px，落到 CSS 时换成 rem，随缩放变化），
    * null = 内置默认（48rem）。拖拽手柄与外观设置页共用；set 会持久化并落到
@@ -313,6 +348,47 @@ function readFloatingBallPosition(): FloatingBallPosition | null {
   }
 }
 
+function readFloatingBallBindings(): FloatingBallBindingsOverride {
+  if (typeof document === "undefined") return {}
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_FLOATING_BALL_BINDINGS)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== "object" || parsed === null) return {}
+    const out: FloatingBallBindingsOverride = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      // null survives on purpose: it means "user cleared this gesture".
+      if (v === null || typeof v === "string") out[k] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function readFloatingBallSize(): FloatingBallSize {
+  if (typeof document === "undefined") return DEFAULT_FLOATING_BALL_SIZE
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_FLOATING_BALL_SIZE)
+    return isFloatingBallSize(raw) ? raw : DEFAULT_FLOATING_BALL_SIZE
+  } catch {
+    return DEFAULT_FLOATING_BALL_SIZE
+  }
+}
+
+function readFloatingBallFavoriteAgents(): string[] {
+  if (typeof document === "undefined") return []
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_FLOATING_BALL_FAVORITE_AGENTS)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((v): v is string => typeof v === "string").slice(0, 5)
+  } catch {
+    return []
+  }
+}
+
 function readNumber(
   key: string,
   def: number,
@@ -460,6 +536,12 @@ export function AppearanceProvider({
   )
   const [floatingBallPosition, setFloatingBallPositionState] =
     useState<FloatingBallPosition | null>(() => readFloatingBallPosition())
+  const [floatingBallBindings, setFloatingBallBindingsState] =
+    useState<FloatingBallBindingsOverride>(() => readFloatingBallBindings())
+  const [floatingBallSize, setFloatingBallSizeState] =
+    useState<FloatingBallSize>(() => readFloatingBallSize())
+  const [floatingBallFavoriteAgents, setFloatingBallFavoriteAgentsState] =
+    useState<string[]>(() => readFloatingBallFavoriteAgents())
 
   // 聊天内容宽度：DOM 变量由 inline 脚本预置，这里持有状态供设置页回显。
   const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
@@ -648,6 +730,36 @@ export function AppearanceProvider({
     },
     []
   )
+
+  const setFloatingBallBindings = useCallback(
+    (bindings: FloatingBallBindingsOverride) => {
+      setFloatingBallBindingsState(bindings)
+      const hasKeys = Object.keys(bindings).length > 0
+      if (!hasKeys) {
+        try {
+          localStorage.removeItem(STORAGE_KEY_FLOATING_BALL_BINDINGS)
+        } catch {
+          // 存不进去也不影响本窗口——绑定只是便利，不是数据。
+        }
+        return
+      }
+      persist(STORAGE_KEY_FLOATING_BALL_BINDINGS, JSON.stringify(bindings))
+    },
+    []
+  )
+
+  const setFloatingBallSize = useCallback((size: FloatingBallSize) => {
+    setFloatingBallSizeState(size)
+    persist(STORAGE_KEY_FLOATING_BALL_SIZE, size)
+  }, [])
+
+  const setFloatingBallFavoriteAgents = useCallback((agents: string[]) => {
+    setFloatingBallFavoriteAgentsState(agents)
+    persist(
+      STORAGE_KEY_FLOATING_BALL_FAVORITE_AGENTS,
+      JSON.stringify(agents.slice(0, 5))
+    )
+  }, [])
 
   const setChatContentWidth = useCallback((px: number | null) => {
     chatContentWidthRef.current = px
@@ -1109,6 +1221,15 @@ export function AppearanceProvider({
       if (e.key === STORAGE_KEY_FLOATING_BALL_POSITION) {
         setFloatingBallPositionState(readFloatingBallPosition())
       }
+      if (e.key === STORAGE_KEY_FLOATING_BALL_BINDINGS) {
+        setFloatingBallBindingsState(readFloatingBallBindings())
+      }
+      if (e.key === STORAGE_KEY_FLOATING_BALL_SIZE) {
+        setFloatingBallSizeState(readFloatingBallSize())
+      }
+      if (e.key === STORAGE_KEY_FLOATING_BALL_FAVORITE_AGENTS) {
+        setFloatingBallFavoriteAgentsState(readFloatingBallFavoriteAgents())
+      }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
       }
@@ -1219,6 +1340,12 @@ export function AppearanceProvider({
         setFloatingBallEnabled,
         floatingBallPosition,
         setFloatingBallPosition,
+        floatingBallBindings,
+        setFloatingBallBindings,
+        floatingBallSize,
+        setFloatingBallSize,
+        floatingBallFavoriteAgents,
+        setFloatingBallFavoriteAgents,
         chatContentWidth,
         setChatContentWidth,
         previewChatContentWidth: applyChatContentWidth,
