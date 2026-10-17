@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "新規セッションの既定モード",
+      "sectionDescription": "新しいセッションがどの権限モードで起動するか。セッション内で手動切り替えした場合はそちらが優先されます。",
+      "yolo": "既定でフルアクセス（Yolo）",
+      "yoloHint": "オンにすると、各新セッションはそのエージェントの最強権限モードで起動します（zcode は Yolo、codex は full access、claude は bypass permissions）。モード名を認識できないエージェントは各自の既定にフォールバックし、下に一覧表示されます。",
+      "perAgent": "エージェント別の指定（モード id を固定）",
+      "followYolo": "Yolo スイッチに従う",
+      "matched": "起動モード：{mode}",
+      "noFullAccessMode": "フルアクセスモードを認識できません",
+      "noAgents": "有効なエージェントがありません——一度会話を開いてモード一覧を報告させてください。",
+      "clearManual": "手動モード記録をクリア",
+      "clearManualHint": "現在 {count} 個のエージェントに手動選択が保存されており、上の設定より優先されます。"
     }
   },
   "SystemSettings": {

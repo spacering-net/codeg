@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "新会话默认模式",
+      "sectionDescription": "新会话以什么权限模式启动。会话里手动切换过模式后，以手动选择为准。",
+      "yolo": "默认开启最高权限（Yolo）",
+      "yoloHint": "开启后，每个新会话以该 agent 的最高权限模式启动（zcode 为 Yolo，codex 为 full access，claude 为 bypass permissions）。模式名无法识别的 agent 回落到各自默认——下方按 agent 明示实际结果。",
+      "perAgent": "按 agent 指定（精确固定模式 id）",
+      "followYolo": "跟随 Yolo 开关",
+      "matched": "将启动为：{mode}",
+      "noFullAccessMode": "未识别到最高权限模式",
+      "noAgents": "尚无启用中的 agent——先开一次会话让 agent 上报模式列表。",
+      "clearManual": "清除手动模式记录",
+      "clearManualHint": "当前有 {count} 个 agent 保存了手动选择，会盖过上面所有设置。"
     }
   },
   "SystemSettings": {

@@ -18,6 +18,8 @@
  */
 
 import type { SessionModeStateInfo } from "@/lib/types"
+import { getCachedAgentModes } from "@/lib/agent-modes-cache"
+import { resolveDefaultModeForAgent } from "@/lib/default-mode-prefs"
 
 const STORAGE_KEY = "codeg:selector-prefs"
 
@@ -162,13 +164,26 @@ export function getSavedPrefsForConnect(agentType: string): {
   configValues: Record<string, string> | null
 } {
   const prefs = prefsOf(readAll(), agentType)
-  if (!prefs) return { modeId: null, configValues: null }
+  if (prefs && prefs.modeId) {
+    const configValues =
+      prefs.configValues && Object.keys(prefs.configValues).length > 0
+        ? healLegacyValues(prefs.configValues)
+        : null
+    return { modeId: prefs.modeId, configValues }
+  }
+  // No manual mode pick: fall back to the default-mode settings (per-agent
+  // pin, then the Yolo switch), matched against the modes list the agent
+  // advertised last time. Config values still flow from the manual store —
+  // a default mode and a saved model choice are independent knobs.
   const configValues =
-    prefs.configValues && Object.keys(prefs.configValues).length > 0
+    prefs?.configValues && Object.keys(prefs.configValues).length > 0
       ? healLegacyValues(prefs.configValues)
       : null
   return {
-    modeId: prefs.modeId ?? null,
+    modeId: resolveDefaultModeForAgent(
+      agentType,
+      getCachedAgentModes(agentType)
+    ),
     configValues,
   }
 }
@@ -183,6 +198,24 @@ export function saveModePreference(
     ...prefs,
     modeId: modes.current_mode_id,
   }))
+}
+
+/** agentTypes that hold a manual mode pick — the "clear manual values"
+ *  affordance counts these. */
+export function getAllSavedModeIds(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [agentType, prefs] of Object.entries(readAll())) {
+    if (prefs.modeId) out[agentType] = prefs.modeId
+  }
+  return out
+}
+
+/** Drop every manual mode pick, for every agent. Config values survive. */
+export function clearAllSavedModePreferences() {
+  const all = readAll()
+  for (const agentType of Object.keys(all)) {
+    updatePrefs(agentType, (prefs) => ({ ...prefs, modeId: undefined }))
+  }
 }
 
 export function saveConfigPreference(

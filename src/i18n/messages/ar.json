@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "الوضع الافتراضي للجلسات الجديدة",
+      "sectionDescription": "بأي وضع صلاحيات تبدأ الجلسة الجديدة. التبديل اليدوي داخل الجلسة له الأولوية.",
+      "yolo": "وصول كامل افتراضيًا (Yolo)",
+      "yoloHint": "عند التشغيل، تبدأ كل جلسة جديدة في أقوى وضع للوكيل (zcode: Yolo، codex: full access، claude: bypass permissions). الوكلاء الذين لا يُتعرّف على أسماء أوضاعهم يعودون لافتراضيهم — يُعرض ذلك لكل وكيل أدناه.",
+      "perAgent": "لكل وكيل (تثبيت معرّف الوضع)",
+      "followYolo": "اتبع مفتاح Yolo",
+      "matched": "سيبدأ في: {mode}",
+      "noFullAccessMode": "لم يُتعرّف على وضع وصول كامل",
+      "noAgents": "لا يوجد وكلاء مفعّلون — افتح جلسة مرة ليبلغ الوكلاء قوائم أوضاعهم.",
+      "clearManual": "محو الاختيارات اليدوية",
+      "clearManualHint": "{count} وكيل يحتفظ حاليًا باختيار يدوي يتجاوز كل ما سبق."
     }
   },
   "SystemSettings": {

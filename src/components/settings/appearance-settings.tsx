@@ -42,6 +42,18 @@ import {
 } from "@/lib/floating-ball-gestures"
 import { type FloatingBallSize } from "@/components/appearance-provider"
 import {
+  isYoloEnabled,
+  setYoloEnabled,
+  getAgentDefaultMode,
+  setAgentDefaultMode,
+  matchFullAccessMode,
+} from "@/lib/default-mode-prefs"
+import { getCachedAgentModes } from "@/lib/agent-modes-cache"
+import {
+  getAllSavedModeIds,
+  clearAllSavedModePreferences,
+} from "@/lib/selector-prefs-storage"
+import {
   CHAT_CONTENT_DEFAULT,
   CHAT_CONTENT_MIN,
   chatContentWidthCeiling,
@@ -162,6 +174,125 @@ function FavoriteAgentsPicker() {
         </span>
       )}
     </div>
+  )
+}
+
+/**
+ * New-session default mode. Two layers: a global full-access ("Yolo") switch
+ * matched against each agent's own advertised mode names, and an explicit
+ * per-agent pin for anything the substring match can't express. A session the
+ * user has manually switched keeps its manual pick (selector-prefs) — this
+ * only speaks for sessions that never had one, and the button below clears
+ * those manual picks so the switch regains control.
+ */
+function DefaultModeSection() {
+  const t = useTranslations("AppearanceSettings.defaultMode")
+  const { agents } = useAcpAgents()
+  const usable = agents.filter((a) => a.enabled && a.available)
+  // A change to any of the preference modules re-reads them wholesale; the
+  // modules are plain localStorage readers, so a version counter forces the
+  // derived rows to recompute.
+  const [version, setVersion] = useState(0)
+  const bump = () => setVersion((v) => v + 1)
+
+  const yolo = isYoloEnabled()
+  const manualPicks = Object.keys(getAllSavedModeIds()).length
+
+  return (
+    <section
+      className="rounded-xl border bg-card p-4 space-y-4"
+      data-version={version}
+    >
+      <h2 className="text-sm font-semibold">{t("sectionTitle")}</h2>
+      <p className="text-xs text-muted-foreground leading-5">
+        {t("sectionDescription")}
+      </p>
+
+      <label className="flex items-center gap-2">
+        <Switch
+          checked={yolo}
+          onCheckedChange={(on) => {
+            setYoloEnabled(on)
+            bump()
+          }}
+        />
+        <span className="text-xs text-muted-foreground">{t("yolo")}</span>
+      </label>
+      <p className="text-2xs text-muted-foreground leading-4">
+        {t("yoloHint")}
+      </p>
+
+      <div className="space-y-2">
+        <p className="text-xs font-medium">{t("perAgent")}</p>
+        <div className="space-y-1">
+          {usable.map((agent) => {
+            const cached = getCachedAgentModes(agent.agent_type)
+            const pinned = getAgentDefaultMode(agent.agent_type)
+            const matched = yolo && !pinned ? matchFullAccessMode(cached) : null
+            return (
+              <div
+                key={agent.agent_type}
+                className="flex items-center justify-between gap-2"
+              >
+                <span className="w-36 shrink-0 truncate text-2xs text-muted-foreground">
+                  {agent.name}
+                </span>
+                <div className="flex items-center gap-2">
+                  {yolo && !pinned && (
+                    <span className="w-40 truncate text-right text-2xs text-muted-foreground">
+                      {matched
+                        ? t("matched", { mode: matched })
+                        : t("noFullAccessMode")}
+                    </span>
+                  )}
+                  <Select
+                    value={pinned ?? ""}
+                    onValueChange={(v) => {
+                      setAgentDefaultMode(agent.agent_type, v === "" ? null : v)
+                      bump()
+                    }}
+                  >
+                    <SelectTrigger className="h-7 w-44 text-2xs">
+                      <SelectValue placeholder={t("followYolo")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="" className="text-2xs">
+                        {t("followYolo")}
+                      </SelectItem>
+                      {cached.map((id) => (
+                        <SelectItem key={id} value={id} className="text-2xs">
+                          {id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {usable.length === 0 && (
+          <p className="text-2xs text-muted-foreground">{t("noAgents")}</p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={manualPicks === 0}
+          onClick={() => {
+            clearAllSavedModePreferences()
+            bump()
+          }}
+        >
+          {t("clearManual")}
+        </Button>
+        <span className="text-2xs text-muted-foreground">
+          {t("clearManualHint", { count: manualPicks })}
+        </span>
+      </div>
+    </section>
   )
 }
 
@@ -385,6 +516,8 @@ export function AppearanceSettings() {
             </span>
           </label>
         </section>
+        {/* ===== New-session default mode (incl. the Yolo switch) ===== */}
+        <DefaultModeSection />
         {/* ===== Chat animations ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">

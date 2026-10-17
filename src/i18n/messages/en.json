@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "New-session default mode",
+      "sectionDescription": "What permission mode a NEW session starts in. Once you manually switch a session's mode, that session keeps your pick.",
+      "yolo": "Full access by default (Yolo)",
+      "yoloHint": "When on, each new session starts in the agent's most powerful mode (zcode Yolo, codex full access, claude bypass permissions). Agents whose mode names are not recognized fall back to their own default — shown per agent below.",
+      "perAgent": "Per-agent override (mode id pinned exactly)",
+      "followYolo": "Follow the Yolo switch",
+      "matched": "Starts in: {mode}",
+      "noFullAccessMode": "No full-access mode recognized",
+      "noAgents": "No enabled agents yet — open a conversation once so agents report their modes.",
+      "clearManual": "Clear manual mode picks",
+      "clearManualHint": "{count} agent(s) currently keep a manual pick that overrides everything above."
     }
   },
   "SystemSettings": {

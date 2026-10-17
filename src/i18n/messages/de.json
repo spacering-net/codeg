@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "Standardmodus neuer Sitzungen",
+      "sectionDescription": "Mit welchem Berechtigungsmodus eine NEUE Sitzung startet. Wer in einer Sitzung manuell umschaltet, behält diese Wahl.",
+      "yolo": "Standardmäßig voller Zugriff (Yolo)",
+      "yoloHint": "Wenn aktiv, startet jede neue Sitzung im stärksten Modus des Agenten (zcode: Yolo, codex: full access, claude: bypass permissions). Agenten mit unerkannten Modusnamen fallen auf ihren eigenen Standard zurück – unten pro Agent angezeigt.",
+      "perAgent": "Pro Agent festlegen (Modus-Id fixieren)",
+      "followYolo": "Yolo-Schalter folgen",
+      "matched": "Startet mit: {mode}",
+      "noFullAccessMode": "Kein Vollzugriffsmodus erkannt",
+      "noAgents": "Noch keine aktiven Agenten – einmal eine Sitzung öffnen, damit die Modusliste gemeldet wird.",
+      "clearManual": "Manuelle Moduswahl löschen",
+      "clearManualHint": "{count} Agent(s) behalten derzeit eine manuelle Wahl, die alles oben überschreibt."
     }
   },
   "SystemSettings": {

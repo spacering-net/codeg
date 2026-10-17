@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "Mode par défaut des nouvelles sessions",
+      "sectionDescription": "Mode de permission avec lequel une NOUVELLE session démarre. Un changement manuel dans une session reste prioritaire.",
+      "yolo": "Accès complet par défaut (Yolo)",
+      "yoloHint": "Activé, chaque nouvelle session démarre dans le mode le plus puissant de l'agent (zcode : Yolo, codex : full access, claude : bypass permissions). Les agents dont les noms de modes ne sont pas reconnus retombent sur leur défaut — indiqué par agent ci-dessous.",
+      "perAgent": "Par agent (id de mode fixé)",
+      "followYolo": "Suivre l'interrupteur Yolo",
+      "matched": "Démarre en : {mode}",
+      "noFullAccessMode": "Aucun mode d'accès complet reconnu",
+      "noAgents": "Aucun agent activé — ouvrez une session une fois pour que les agents signalent leurs modes.",
+      "clearManual": "Effacer les choix manuels",
+      "clearManualHint": "{count} agent(s) conservent actuellement un choix manuel qui prime sur tout ce qui précède."
     }
   },
   "SystemSettings": {

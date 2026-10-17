@@ -319,6 +319,19 @@
       "openSessionFolder": "Session files",
       "cycleAgent": "Next agent",
       "cycleFavoriteAgent": "Favorite agents"
+    },
+    "defaultMode": {
+      "sectionTitle": "새 세션 기본 모드",
+      "sectionDescription": "새 세션이 어떤 권한 모드로 시작할지 정합니다. 세션에서 직접 모드를 바꾸면 그 선택이 우선합니다.",
+      "yolo": "기본 최고 권한 (Yolo)",
+      "yoloHint": "켜면 새 세션이 각 에이전트의 최고 권한 모드로 시작합니다(zcode는 Yolo, codex는 full access, claude는 bypass permissions). 모드 이름을 인식하지 못한 에이전트는 자체 기본값으로 돌아가며 아래에 표시됩니다.",
+      "perAgent": "에이전트별 지정(모드 id 고정)",
+      "followYolo": "Yolo 스위치 따름",
+      "matched": "시작 모드: {mode}",
+      "noFullAccessMode": "최고 권한 모드를 인식하지 못했습니다",
+      "noAgents": "활성화된 에이전트가 없습니다 — 한 번 세션을 열어 모드 목록을 받아오세요.",
+      "clearManual": "수동 모드 기록 지우기",
+      "clearManualHint": "현재 {count}개 에이전트에 수동 선택이 저장되어 있어 위 설정보다 우선합니다."
     }
   },
   "SystemSettings": {

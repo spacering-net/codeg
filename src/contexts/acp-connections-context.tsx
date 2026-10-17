@@ -140,6 +140,7 @@ import {
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
+import { rememberAgentModes } from "@/lib/agent-modes-cache"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
 /**
@@ -5303,6 +5304,11 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             }
             entry.modes = e.modes
             selectorsCache.set(modeConn.agentType, entry)
+            // Feed the default-mode fallback: the advertised list outlives the
+            // session so a NEW session can request a valid preferred id at
+            // connect time. Deliberately NOT saveModePreference — that is the
+            // user's manual pick; this only remembers what exists.
+            rememberAgentModes(modeConn.agentType, e.modes)
           }
           break
         }
