@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { openSettingsWindow } from "@/lib/api"
+import {
+  useAcpActions,
+  useConnectionStore,
+} from "@/contexts/acp-connections-context"
+import { useZoomLevel } from "@/hooks/use-appearance"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useSidebarContext } from "@/contexts/sidebar-context"
@@ -39,7 +44,10 @@ import { getCurrentWindowLabel } from "@/lib/browser/window-label"
 import { closeCurrentWindow } from "@/lib/platform"
 import { getShellTransport, isDesktop } from "@/lib/transport"
 import { SearchCommandDialog } from "@/components/conversations/search-command-dialog"
+import { FloatingBall } from "@/components/layout/floating-ball"
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
+import { stepZoom, DEFAULT_ZOOM_LEVEL } from "@/lib/theme-presets"
+import type { FloatingBallAction } from "@/lib/floating-ball-gestures"
 
 /**
  * Headless owner of the workspace's global keyboard shortcuts and the two
@@ -75,6 +83,13 @@ export function WorkspaceChromeController() {
   } = useWorkspaceActions()
   const { openConversations } = useWorkbenchRoute()
   const { shortcuts } = useShortcutSettings()
+  const { zoomLevel, setZoomLevel } = useZoomLevel()
+  // Stopping a turn is the one floating-ball action with no shortcut: the
+  // composer's stop button is the only other entry point, and it belongs to
+  // whichever conversation happens to be mounted. The active connection is
+  // what the workspace considers "the turn in front of the user".
+  const { cancel } = useAcpActions()
+  const { getActiveKey } = useConnectionStore()
   // Search open-state is shared (see search-dialog-context): the trigger lives
   // in the sidebar, but this always-mounted controller owns the dialog and the
   // ⌘K shortcut so search works even when the sidebar is collapsed.
@@ -206,6 +221,70 @@ export function WorkspaceChromeController() {
     }
   }, [])
 
+  // Reopen the most recently closed tab, at the slot it was closed from. Shared
+  // by the shortcut and the floating ball so the two cannot drift.
+  const reopenClosedTab = useCallback(() => {
+    // Every entry carries the slot it was closed from, and each opener
+    // puts the tab back there (clamped to the strip) rather than at the
+    // end.
+    while (true) {
+      const closed = popClosedTab()
+      if (!closed) return
+      if (closed.kind === "file") {
+        void openFilePreview(closed.path, {
+          folderId: closed.folderId ?? undefined,
+          index: closed.index,
+        })
+        return
+      }
+      if (closed.kind === "browser") {
+        // Back at the page it was showing; a tab already on that page is
+        // activated instead (the usual one-tab-per-URL rule).
+        openBrowserTab(closed.url, {
+          folderId: closed.folderId ?? undefined,
+          index: closed.index,
+          profile: closed.profile,
+          // Said only when it was remote: otherwise the address decides,
+          // as it does when the tab comes back after a restart.
+          ...(closed.remote === true ? { remote: true } : {}),
+          ...(closed.device ? { device: closed.device } : {}),
+        })
+        return
+      }
+      if (closed.conversationId != null) {
+        // A deletion seen at any point wins. `applyConversationRemove`
+        // purges what is on the stack when it runs, but a tab that was
+        // still open then gets recorded afterwards, when the user closes
+        // it by hand — that entry can only be caught here.
+        if (isConversationDeleted(closed.conversationId)) continue
+        openConversations()
+        openTab(
+          closed.folderId,
+          closed.conversationId,
+          closed.agentType,
+          closed.isPinned,
+          closed.title,
+          { index: closed.index }
+        )
+        return
+      }
+      const folder = useAppWorkspaceStore.getState().getFolder(closed.folderId)
+      const workingDir = closed.workingDir ?? folder?.path
+      if (!workingDir) continue
+      openConversations()
+      openNewConversationTab(closed.folderId, workingDir, {
+        index: closed.index,
+      })
+      return
+    }
+  }, [
+    openBrowserTab,
+    openConversations,
+    openFilePreview,
+    openNewConversationTab,
+    openTab,
+  ])
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (matchShortcutEvent(e, shortcuts.toggle_search)) {
@@ -332,61 +411,8 @@ export function WorkspaceChromeController() {
 
       if (matchShortcutEvent(e, shortcuts.reopen_last_closed_tab)) {
         e.preventDefault()
-        // Every entry carries the slot it was closed from, and each opener
-        // puts the tab back there (clamped to the strip) rather than at the
-        // end.
-        while (true) {
-          const closed = popClosedTab()
-          if (!closed) return
-          if (closed.kind === "file") {
-            void openFilePreview(closed.path, {
-              folderId: closed.folderId ?? undefined,
-              index: closed.index,
-            })
-            return
-          }
-          if (closed.kind === "browser") {
-            // Back at the page it was showing; a tab already on that page is
-            // activated instead (the usual one-tab-per-URL rule).
-            openBrowserTab(closed.url, {
-              folderId: closed.folderId ?? undefined,
-              index: closed.index,
-              profile: closed.profile,
-              // Said only when it was remote: otherwise the address decides,
-              // as it does when the tab comes back after a restart.
-              ...(closed.remote === true ? { remote: true } : {}),
-              ...(closed.device ? { device: closed.device } : {}),
-            })
-            return
-          }
-          if (closed.conversationId != null) {
-            // A deletion seen at any point wins. `applyConversationRemove`
-            // purges what is on the stack when it runs, but a tab that was
-            // still open then gets recorded afterwards, when the user closes
-            // it by hand — that entry can only be caught here.
-            if (isConversationDeleted(closed.conversationId)) continue
-            openConversations()
-            openTab(
-              closed.folderId,
-              closed.conversationId,
-              closed.agentType,
-              closed.isPinned,
-              closed.title,
-              { index: closed.index }
-            )
-            return
-          }
-          const folder = useAppWorkspaceStore
-            .getState()
-            .getFolder(closed.folderId)
-          const workingDir = closed.workingDir ?? folder?.path
-          if (!workingDir) continue
-          openConversations()
-          openNewConversationTab(closed.folderId, workingDir, {
-            index: closed.index,
-          })
-          return
-        }
+        reopenClosedTab()
+        return
       }
     }
     document.addEventListener("keydown", handleKeyDown)
@@ -410,6 +436,7 @@ export function WorkspaceChromeController() {
     activeTabId,
     switchTab,
     closeCurrentTab,
+    reopenClosedTab,
     mode,
     activePane,
     filesMaximized,
@@ -419,10 +446,88 @@ export function WorkspaceChromeController() {
     switchFileTab,
   ])
 
+  const handleFloatingBallAction = useCallback(
+    (action: FloatingBallAction) => {
+      switch (action) {
+        case "newConversation":
+          if (!activeFolder) return
+          openConversations()
+          openNewConversationTab(activeFolder.id, activeFolder.path)
+          return
+        case "toggleSidebar":
+          toggle()
+          return
+        case "toggleSearch":
+          setSearchOpen((prev) => !prev)
+          return
+        case "toggleTerminal":
+          toggleTerminal()
+          return
+        case "nextTab":
+        case "prevTab": {
+          if (tabs.length < 2 || !activeTabId) return
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId)
+          if (currentIndex === -1) return
+          const offset = action === "nextTab" ? 1 : -1
+          const nextIndex = (currentIndex + offset + tabs.length) % tabs.length
+          switchTab(tabs[nextIndex].id)
+          return
+        }
+        case "reopenClosedTab":
+          reopenClosedTab()
+          return
+        case "openFolder":
+          void handleOpenFolder()
+          return
+        case "zoomIn":
+          setZoomLevel(stepZoom(zoomLevel, 1))
+          return
+        case "zoomOut":
+          setZoomLevel(stepZoom(zoomLevel, -1))
+          return
+        case "zoomReset":
+          setZoomLevel(DEFAULT_ZOOM_LEVEL)
+          return
+        case "stopGenerating": {
+          const key = getActiveKey()
+          if (!key) return
+          void cancel(key).catch((err) => {
+            console.error("[WorkspaceChromeController] stop failed:", err)
+          })
+          return
+        }
+        case "openSettings":
+          handleOpenSettings()
+          return
+        case "panel":
+          return
+      }
+    },
+    [
+      activeFolder,
+      activeTabId,
+      cancel,
+      getActiveKey,
+      handleOpenFolder,
+      handleOpenSettings,
+      openConversations,
+      openNewConversationTab,
+      reopenClosedTab,
+      setSearchOpen,
+      setZoomLevel,
+      switchTab,
+      tabs,
+      toggle,
+      toggleTerminal,
+      zoomLevel,
+    ]
+  )
+
   return (
     <>
       <SearchCommandDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <WorkspaceFolderDialog open={browserOpen} onOpenChange={setBrowserOpen} />
+      <FloatingBall onAction={handleFloatingBallAction} />
     </>
   )
 }

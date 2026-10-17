@@ -246,6 +246,13 @@
         "appliedToast": "Wallpaper applied",
         "credit": "Images from wallhaven.cc · SFW only"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "Floating Ball",
+      "sectionDescription": "A draggable ball over the workspace that turns swipes into shortcuts — built for the phone, where there is no keyboard.",
+      "enable": "Show floating ball",
+      "hint": "Drag to move; swipe quickly for a gesture; long press for the panel and cheat sheet.",
+      "resetPosition": "Reset position"
     }
   },
   "SystemSettings": {
@@ -7280,6 +7287,47 @@
         "bypassed": "This computer's browser engine sends some addresses around the tunnel, so the remote host's pages stay closed rather than load from this computer.",
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "Floating ball",
+    "panelTitle": "Quick actions",
+    "settingsTitle": "Floating ball",
+    "close": "Close",
+    "resetPosition": "Reset position",
+    "cheatSheetTitle": "Gestures",
+    "hint": "Drag the ball to move it. Swipe quickly for a gesture; press and hold to open this panel.",
+    "actions": {
+      "newConversation": "New conversation",
+      "toggleSidebar": "Toggle sidebar",
+      "toggleSearch": "Search",
+      "toggleTerminal": "Toggle terminal",
+      "nextTab": "Next tab",
+      "prevTab": "Previous tab",
+      "reopenClosedTab": "Reopen closed tab",
+      "openFolder": "Open folder",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "zoomReset": "Reset zoom",
+      "stopGenerating": "Stop generating",
+      "openSettings": "Settings"
+    },
+    "gestures": {
+      "tap": "Tap",
+      "doubleTap": "Double tap",
+      "longPress": "Long press",
+      "left": "Swipe left",
+      "right": "Swipe right",
+      "up": "Swipe up",
+      "upLeft": "Up-left",
+      "upRight": "Up-right",
+      "upThenLeft": "Up, then left",
+      "upThenRight": "Up, then right",
+      "upDown": "Up, then down",
+      "leftThenRight": "Left, then right",
+      "rightThenLeft": "Right, then left",
+      "upLeftThenDown": "Up-left, then down",
+      "upRightThenDown": "Up-right, then down"
     }
   }
 }

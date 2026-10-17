@@ -246,6 +246,13 @@
         "appliedToast": "Hintergrund angewendet",
         "credit": "Bilder von wallhaven.cc · nur SFW"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "Schwebekugel",
+      "sectionDescription": "Eine verschiebbare Kugel über dem Arbeitsbereich, die Wischgesten in Tastenkürzel verwandelt – gedacht für das Telefon ohne Tastatur.",
+      "enable": "Schwebekugel anzeigen",
+      "hint": "Ziehen zum Verschieben, schnelles Wischen für eine Geste, langes Drücken für Panel und Gestenübersicht.",
+      "resetPosition": "Position zurücksetzen"
     }
   },
   "SystemSettings": {
@@ -7280,6 +7287,47 @@
         "bypassed": "Die Browser-Engine dieses Computers schickt manche Adressen am Tunnel vorbei, daher bleiben die Seiten des entfernten Hosts geschlossen, statt von diesem Computer geladen zu werden.",
         "probeFailed": "Der integrierte Browser konnte nicht bestätigen, dass er den entfernten Host über den Tunnel erreicht. Versuche es gleich noch einmal."
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "Schwebekugel",
+    "panelTitle": "Schnellaktionen",
+    "settingsTitle": "Schwebekugel",
+    "close": "Schließen",
+    "resetPosition": "Position zurücksetzen",
+    "cheatSheetTitle": "Gesten",
+    "hint": "Ziehe die Kugel, um sie zu verschieben. Schnelles Wischen löst eine Geste aus, langes Drücken öffnet dieses Panel.",
+    "actions": {
+      "newConversation": "Neue Unterhaltung",
+      "toggleSidebar": "Seitenleiste umschalten",
+      "toggleSearch": "Suchen",
+      "toggleTerminal": "Terminal umschalten",
+      "nextTab": "Nächster Tab",
+      "prevTab": "Vorheriger Tab",
+      "reopenClosedTab": "Geschlossenen Tab wieder öffnen",
+      "openFolder": "Ordner öffnen",
+      "zoomIn": "Vergrößern",
+      "zoomOut": "Verkleinern",
+      "zoomReset": "Zoom zurücksetzen",
+      "stopGenerating": "Generierung stoppen",
+      "openSettings": "Einstellungen"
+    },
+    "gestures": {
+      "tap": "Tippen",
+      "doubleTap": "Doppeltippen",
+      "longPress": "Langes Drücken",
+      "left": "Nach links wischen",
+      "right": "Nach rechts wischen",
+      "up": "Nach oben wischen",
+      "upLeft": "Oben links",
+      "upRight": "Oben rechts",
+      "upThenLeft": "Oben, dann links",
+      "upThenRight": "Oben, dann rechts",
+      "upDown": "Oben, dann unten",
+      "leftThenRight": "Links, dann rechts",
+      "rightThenLeft": "Rechts, dann links",
+      "upLeftThenDown": "Oben links, dann unten",
+      "upRightThenDown": "Oben rechts, dann unten"
     }
   }
 }

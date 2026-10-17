@@ -246,6 +246,13 @@
         "appliedToast": "壁纸已应用",
         "credit": "图片来源 wallhaven.cc · 仅 SFW 内容"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "悬浮球",
+      "sectionDescription": "工作区上的可拖动悬浮球，把滑动手势变成快捷键——为没有键盘的手机而设。",
+      "enable": "显示悬浮球",
+      "hint": "拖动可移动；快速滑动触发手势；长按打开面板与手势表。",
+      "resetPosition": "重置位置"
     }
   },
   "SystemSettings": {
@@ -7280,6 +7287,47 @@
         "bypassed": "这台电脑的浏览器引擎会让部分地址绕过隧道，为避免从这台电脑加载，远端主机的页面不会打开。",
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "悬浮球",
+    "panelTitle": "快捷操作",
+    "settingsTitle": "悬浮球",
+    "close": "关闭",
+    "resetPosition": "重置位置",
+    "cheatSheetTitle": "手势",
+    "hint": "拖动悬浮球可移动位置。快速滑动触发手势，长按打开此面板。",
+    "actions": {
+      "newConversation": "新建会话",
+      "toggleSidebar": "切换侧栏",
+      "toggleSearch": "搜索",
+      "toggleTerminal": "切换终端",
+      "nextTab": "下一个标签",
+      "prevTab": "上一个标签",
+      "reopenClosedTab": "恢复关闭的标签",
+      "openFolder": "打开文件夹",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "zoomReset": "重置缩放",
+      "stopGenerating": "停止生成",
+      "openSettings": "设置"
+    },
+    "gestures": {
+      "tap": "单击",
+      "doubleTap": "双击",
+      "longPress": "长按",
+      "left": "左滑",
+      "right": "右滑",
+      "up": "上滑",
+      "upLeft": "左上滑",
+      "upRight": "右上滑",
+      "upThenLeft": "上滑后左滑",
+      "upThenRight": "上滑后右滑",
+      "upDown": "上滑后下滑",
+      "leftThenRight": "左滑后右滑",
+      "rightThenLeft": "右滑后左滑",
+      "upLeftThenDown": "左上滑后下滑",
+      "upRightThenDown": "右上滑后下滑"
     }
   }
 }

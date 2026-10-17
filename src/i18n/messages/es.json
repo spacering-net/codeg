@@ -246,6 +246,13 @@
         "appliedToast": "Fondo aplicado",
         "credit": "Imágenes de wallhaven.cc · solo SFW"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "Bola flotante",
+      "sectionDescription": "Una bola arrastrable sobre el espacio de trabajo que convierte los deslizamientos en atajos, pensada para el teléfono, donde no hay teclado.",
+      "enable": "Mostrar bola flotante",
+      "hint": "Arrastra para mover, desliza rápido para un gesto, mantén pulsado para el panel y la lista de gestos.",
+      "resetPosition": "Restablecer posición"
     }
   },
   "SystemSettings": {
@@ -7280,6 +7287,47 @@
         "bypassed": "El motor del navegador de este equipo envía algunas direcciones por fuera del túnel, así que las páginas del host remoto no se abren para no cargarlas desde este equipo.",
         "probeFailed": "El navegador integrado no pudo confirmar que llega al host remoto a través del túnel. Vuelve a intentarlo en un momento."
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "Bola flotante",
+    "panelTitle": "Acciones rápidas",
+    "settingsTitle": "Bola flotante",
+    "close": "Cerrar",
+    "resetPosition": "Restablecer posición",
+    "cheatSheetTitle": "Gestos",
+    "hint": "Arrastra la bola para moverla. Un deslizamiento rápido activa un gesto; una pulsación larga abre este panel.",
+    "actions": {
+      "newConversation": "Nueva conversación",
+      "toggleSidebar": "Mostrar u ocultar la barra lateral",
+      "toggleSearch": "Buscar",
+      "toggleTerminal": "Mostrar u ocultar la terminal",
+      "nextTab": "Pestaña siguiente",
+      "prevTab": "Pestaña anterior",
+      "reopenClosedTab": "Reabrir pestaña cerrada",
+      "openFolder": "Abrir carpeta",
+      "zoomIn": "Acercar",
+      "zoomOut": "Alejar",
+      "zoomReset": "Restablecer zoom",
+      "stopGenerating": "Detener la generación",
+      "openSettings": "Ajustes"
+    },
+    "gestures": {
+      "tap": "Toque",
+      "doubleTap": "Doble toque",
+      "longPress": "Pulsación larga",
+      "left": "Deslizar a la izquierda",
+      "right": "Deslizar a la derecha",
+      "up": "Deslizar hacia arriba",
+      "upLeft": "Arriba a la izquierda",
+      "upRight": "Arriba a la derecha",
+      "upThenLeft": "Arriba y luego a la izquierda",
+      "upThenRight": "Arriba y luego a la derecha",
+      "upDown": "Arriba y luego abajo",
+      "leftThenRight": "Izquierda y luego derecha",
+      "rightThenLeft": "Derecha y luego izquierda",
+      "upLeftThenDown": "Arriba a la izquierda y luego abajo",
+      "upRightThenDown": "Arriba a la derecha y luego abajo"
     }
   }
 }

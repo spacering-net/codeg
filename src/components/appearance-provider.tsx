@@ -39,6 +39,8 @@ import {
   STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_MESSAGE_NAV_POSITION,
+  STORAGE_KEY_FLOATING_BALL_ENABLED,
+  STORAGE_KEY_FLOATING_BALL_POSITION,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
@@ -123,6 +125,12 @@ export type MessageNavPosition = "start" | "bottom-end"
 
 export const DEFAULT_MESSAGE_NAV_POSITION: MessageNavPosition = "start"
 
+/** 悬浮球停靠位置（视口坐标 px，左上角原点）。 */
+export type FloatingBallPosition = { x: number; y: number }
+
+/** 缺省停靠：右下角，距右边与底边各 18px（底边让出安全区）。 */
+export const FLOATING_BALL_INSET = 18
+
 type AppearanceContextValue = {
   themeColor: ThemeColor
   setThemeColor: (color: ThemeColor) => void
@@ -137,6 +145,12 @@ type AppearanceContextValue = {
   /** 消息导航卡位置：起始边（默认，左上）或右下角紧凑卡片。 */
   messageNavPosition: MessageNavPosition
   setMessageNavPosition: (position: MessageNavPosition) => void
+  /** 悬浮球（手势入口）是否显示，默认关闭。 */
+  floatingBallEnabled: boolean
+  setFloatingBallEnabled: (on: boolean) => void
+  /** 悬浮球停靠位置；null = 右下角缺省位。 */
+  floatingBallPosition: FloatingBallPosition | null
+  setFloatingBallPosition: (position: FloatingBallPosition | null) => void
   /**
    * 聊天内容宽度（100% 缩放下的 px，落到 CSS 时换成 rem，随缩放变化），
    * null = 内置默认（48rem）。拖拽手柄与外观设置页共用；set 会持久化并落到
@@ -299,6 +313,28 @@ function readMessageNavPosition(): MessageNavPosition {
   }
 }
 
+function readFloatingBallPosition(): FloatingBallPosition | null {
+  if (typeof document === "undefined") return null
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_FLOATING_BALL_POSITION)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== "object" || parsed === null) return null
+    const { x, y } = parsed as Record<string, unknown>
+    if (
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      !Number.isFinite(x) ||
+      !Number.isFinite(y)
+    ) {
+      return null
+    }
+    return { x, y }
+  } catch {
+    return null
+  }
+}
+
 function readNumber(
   key: string,
   def: number,
@@ -443,6 +479,13 @@ export function AppearanceProvider({
   // 消息导航卡位置。默认起始边（历史行为），仅在用户显式选右下角时才变。
   const [messageNavPosition, setMessageNavPositionState] =
     useState<MessageNavPosition>(() => readMessageNavPosition())
+
+  // 悬浮球：默认不显示，显式开启后才挂载；位置缺省为右下角。
+  const [floatingBallEnabled, setFloatingBallEnabledState] = useState<boolean>(
+    () => readBool(STORAGE_KEY_FLOATING_BALL_ENABLED, false)
+  )
+  const [floatingBallPosition, setFloatingBallPositionState] =
+    useState<FloatingBallPosition | null>(() => readFloatingBallPosition())
 
   // 聊天内容宽度：DOM 变量由 inline 脚本预置，这里持有状态供设置页回显。
   const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
@@ -615,6 +658,30 @@ export function AppearanceProvider({
       position === "bottom-end" ? "bottom-end" : "start"
     )
   }, [])
+
+  const setFloatingBallEnabled = useCallback((on: boolean) => {
+    setFloatingBallEnabledState(on)
+    persist(STORAGE_KEY_FLOATING_BALL_ENABLED, on ? "1" : "0")
+  }, [])
+
+  const setFloatingBallPosition = useCallback(
+    (position: FloatingBallPosition | null) => {
+      setFloatingBallPositionState(position)
+      if (position === null) {
+        try {
+          localStorage.removeItem(STORAGE_KEY_FLOATING_BALL_POSITION)
+        } catch {
+          // 存不进去也不影响本窗口——位置只是便利，不是数据。
+        }
+        return
+      }
+      persist(
+        STORAGE_KEY_FLOATING_BALL_POSITION,
+        JSON.stringify({ x: Math.round(position.x), y: Math.round(position.y) })
+      )
+    },
+    []
+  )
 
   const setChatContentWidth = useCallback((px: number | null) => {
     chatContentWidthRef.current = px
@@ -1071,6 +1138,15 @@ export function AppearanceProvider({
       if (e.key === STORAGE_KEY_MESSAGE_NAV_POSITION) {
         setMessageNavPositionState(readMessageNavPosition())
       }
+      // 悬浮球同样在外观设置里开关，那边的改动要立刻反映到工作区窗口。
+      if (e.key === STORAGE_KEY_FLOATING_BALL_ENABLED) {
+        setFloatingBallEnabledState(
+          readBool(STORAGE_KEY_FLOATING_BALL_ENABLED, false)
+        )
+      }
+      if (e.key === STORAGE_KEY_FLOATING_BALL_POSITION) {
+        setFloatingBallPositionState(readFloatingBallPosition())
+      }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
       }
@@ -1179,6 +1255,10 @@ export function AppearanceProvider({
         setChatAnimations,
         messageNavPosition,
         setMessageNavPosition,
+        floatingBallEnabled,
+        setFloatingBallEnabled,
+        floatingBallPosition,
+        setFloatingBallPosition,
         chatContentWidth,
         setChatContentWidth,
         previewChatContentWidth: applyChatContentWidth,

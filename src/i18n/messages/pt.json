@@ -246,6 +246,13 @@
         "appliedToast": "Papel de parede aplicado",
         "credit": "Imagens de wallhaven.cc · apenas SFW"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "Bola flutuante",
+      "sectionDescription": "Uma bola arrastável sobre o espaço de trabalho que transforma deslizes em atalhos — feita para o telefone, onde não há teclado.",
+      "enable": "Mostrar bola flutuante",
+      "hint": "Arraste para mover, deslize rápido para um gesto, toque e segure para o painel e a lista de gestos.",
+      "resetPosition": "Redefinir posição"
     }
   },
   "SystemSettings": {
@@ -7280,6 +7287,47 @@
         "bypassed": "O mecanismo do navegador deste computador envia alguns endereços por fora do túnel, então as páginas do host remoto não abrem para não serem carregadas deste computador.",
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "Bola flutuante",
+    "panelTitle": "Ações rápidas",
+    "settingsTitle": "Bola flutuante",
+    "close": "Fechar",
+    "resetPosition": "Redefinir posição",
+    "cheatSheetTitle": "Gestos",
+    "hint": "Arraste a bola para movê-la. Um deslize rápido dispara um gesto; um toque longo abre este painel.",
+    "actions": {
+      "newConversation": "Nova conversa",
+      "toggleSidebar": "Alternar barra lateral",
+      "toggleSearch": "Pesquisar",
+      "toggleTerminal": "Alternar terminal",
+      "nextTab": "Próxima aba",
+      "prevTab": "Aba anterior",
+      "reopenClosedTab": "Reabrir aba fechada",
+      "openFolder": "Abrir pasta",
+      "zoomIn": "Aumentar zoom",
+      "zoomOut": "Diminuir zoom",
+      "zoomReset": "Redefinir zoom",
+      "stopGenerating": "Parar geração",
+      "openSettings": "Configurações"
+    },
+    "gestures": {
+      "tap": "Toque",
+      "doubleTap": "Toque duplo",
+      "longPress": "Toque longo",
+      "left": "Deslizar para a esquerda",
+      "right": "Deslizar para a direita",
+      "up": "Deslizar para cima",
+      "upLeft": "Cima-esquerda",
+      "upRight": "Cima-direita",
+      "upThenLeft": "Cima, depois esquerda",
+      "upThenRight": "Cima, depois direita",
+      "upDown": "Cima, depois baixo",
+      "leftThenRight": "Esquerda, depois direita",
+      "rightThenLeft": "Direita, depois esquerda",
+      "upLeftThenDown": "Cima-esquerda, depois baixo",
+      "upRightThenDown": "Cima-direita, depois baixo"
     }
   }
 }

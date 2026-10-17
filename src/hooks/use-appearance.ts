@@ -59,6 +59,20 @@ export function useMessageNavPosition() {
 }
 
 /**
+ * 悬浮球开关与停靠位置。同样允许在 Provider 之外降级：球只在工作区里渲染，
+ * 设置页是另一个窗口，那里只读开关、不渲染球。
+ */
+export function useFloatingBall() {
+  const ctx = useContext(AppearanceContext)
+  return {
+    floatingBallEnabled: ctx?.floatingBallEnabled ?? false,
+    setFloatingBallEnabled: ctx?.setFloatingBallEnabled ?? (() => {}),
+    floatingBallPosition: ctx?.floatingBallPosition ?? null,
+    setFloatingBallPosition: ctx?.setFloatingBallPosition ?? (() => {}),
+  }
+}
+
+/**
  * 聊天区域是否播放动画。供 JS 驱动的动画（Shimmer、平滑滚动）读取；
  * 在 Provider 之外（测试、独立窗口）回退为开启，不抛错。读的是只装这一个布尔值的
  * ChatAnimationsContext，其它外观设置变化不会让这些热路径组件重渲染。
