@@ -7419,6 +7419,11 @@
       "upLeftThenRight": "左上から右",
       "upRightThenLeft": "右上から左"
     },
-    "favoriteAgentsEmpty": "利用可能なエージェントがありません"
+    "favoriteAgentsEmpty": "利用可能なエージェントがありません",
+    "toasts": {
+      "renameNeedsSavedSession": "名前の変更は保存済みセッションのみ有効です。まずメッセージを送信してください。",
+      "sessionFolderNeedsWorkspace": "先にワークスペースフォルダを開いてください。",
+      "cycleNeedsMoreAgents": "利用可能なエージェントが1つだけのため、切り替えできません。"
+    }
   }
 }

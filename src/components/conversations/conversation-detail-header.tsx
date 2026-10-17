@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useEffect, useState } from "react"
 import {
   ChevronRight,
   Circle,
@@ -21,6 +21,7 @@ import {
   updateConversationTitle,
 } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { RENAME_CONVERSATION_EVENT } from "@/lib/rename-conversation-events"
 import { ConversationHeaderFolderPicker } from "@/components/chat/conversation-context-bar"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
@@ -210,6 +211,22 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     }
     setRenameTarget(null)
   }, [renameTarget, renameValue, refreshConversations])
+
+  // Floating-ball "rename session": the event carries the DB id and every
+  // mounted header instance hears it — only the one whose conversation matches
+  // opens its dialog (multi-tab safe). Drafts (id null) have nothing to rename.
+  useEffect(() => {
+    if (conversationId == null) return
+    const onRename = (e: Event) => {
+      const id = (e as CustomEvent<{ conversationId: number }>).detail
+        ?.conversationId
+      if (id !== conversationId || renameTarget != null) return
+      setRenameValue(title || "")
+      setRenameTarget({ id: conversationId, title })
+    }
+    window.addEventListener(RENAME_CONVERSATION_EVENT, onRename)
+    return () => window.removeEventListener(RENAME_CONVERSATION_EVENT, onRename)
+  }, [conversationId, renameTarget, title])
 
   const handleStatusChange = useCallback(
     (next: ConversationStatus) => {

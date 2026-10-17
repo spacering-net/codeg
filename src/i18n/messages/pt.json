@@ -7419,6 +7419,11 @@
       "upLeftThenRight": "Cima-esq., depois direita",
       "upRightThenLeft": "Cima-dir., depois esquerda"
     },
-    "favoriteAgentsEmpty": "Nenhum agente disponível"
+    "favoriteAgentsEmpty": "Nenhum agente disponível",
+    "toasts": {
+      "renameNeedsSavedSession": "Renomear só funciona em sessões salvas — envie uma mensagem primeiro.",
+      "sessionFolderNeedsWorkspace": "Abra antes uma pasta de espaço de trabalho.",
+      "cycleNeedsMoreAgents": "Só há um agente disponível — nada para alternar."
+    }
   }
 }

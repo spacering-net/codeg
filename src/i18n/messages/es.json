@@ -7419,6 +7419,11 @@
       "upLeftThenRight": "Arriba-izq., luego derecha",
       "upRightThenLeft": "Arriba-der., luego izquierda"
     },
-    "favoriteAgentsEmpty": "No hay agentes disponibles"
+    "favoriteAgentsEmpty": "No hay agentes disponibles",
+    "toasts": {
+      "renameNeedsSavedSession": "Renombrar solo funciona en sesiones guardadas: envía un mensaje primero.",
+      "sessionFolderNeedsWorkspace": "Abre antes una carpeta de espacio de trabajo.",
+      "cycleNeedsMoreAgents": "Solo hay un agente disponible: nada que alternar."
+    }
   }
 }

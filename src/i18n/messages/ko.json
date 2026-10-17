@@ -7419,6 +7419,11 @@
       "upLeftThenRight": "왼위→오른",
       "upRightThenLeft": "오른위→왼"
     },
-    "favoriteAgentsEmpty": "사용 가능한 에이전트가 없습니다"
+    "favoriteAgentsEmpty": "사용 가능한 에이전트가 없습니다",
+    "toasts": {
+      "renameNeedsSavedSession": "이름 바꾸기는 저장된 세션에만 적용됩니다. 먼저 메시지를 보내세요.",
+      "sessionFolderNeedsWorkspace": "먼저 작업 공간 폴더를 여세요.",
+      "cycleNeedsMoreAgents": "사용 가능한 에이전트가 하나뿐이어서 전환할 수 없습니다."
+    }
   }
 }
