@@ -104,6 +104,20 @@ describe("FloatingBall", () => {
     expect(screen.getByLabelText("Floating ball")).toBeInTheDocument()
   })
 
+  it("defaults to the right edge, clear of the composer and status bar", () => {
+    appearance.enabled = true
+    renderBall()
+    const ball = screen.getByLabelText("Floating ball") as HTMLElement
+    const x = parseFloat(ball.style.left)
+    const y = parseFloat(ball.style.top)
+    // Flush to the trailing edge...
+    expect(x).toBe(window.innerWidth - 46 - 18)
+    // ...but well above the bottom, where the composer's send button and the
+    // status bar's alerts/MCP badges sit.
+    expect(y).toBe(Math.round(window.innerHeight * 0.55))
+    expect(y).toBeLessThan(window.innerHeight - 46 - 18)
+  })
+
   it("opens the action panel on a single tap, after the double-tap window", () => {
     appearance.enabled = true
     const onAction = renderBall()

@@ -78,13 +78,25 @@ function clampPosition(
   }
 }
 
+/**
+ * Where a freshly enabled ball lands: the right edge, a little below the
+ * vertical middle.
+ *
+ * The bottom-right corner is not free in this workspace. The composer's send
+ * button occupies the corner above the status bar, and the status bar itself
+ * carries the MCP health light and the alerts badge — measured at 390×844 and
+ * 1280×800, both covered by the old corner default. The right edge around 55%
+ * is the one band that is empty on both phone and desktop.
+ */
+const DEFAULT_Y_RATIO = 0.55
+
 function defaultPosition(viewport: {
   width: number
   height: number
 }): FloatingBallPosition {
   return {
     x: viewport.width - BALL_SIZE - FLOATING_BALL_INSET,
-    y: viewport.height - BALL_SIZE - FLOATING_BALL_INSET,
+    y: Math.round(viewport.height * DEFAULT_Y_RATIO),
   }
 }
 
@@ -346,10 +358,18 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
   if (!floatingBallEnabled) return null
 
   // The panel opens toward the middle of the screen: above the ball when it
-  // sits in the lower half, below it otherwise.
+  // sits in the lower half, below it otherwise. Its height is capped to the
+  // space actually left on that side, so a long action list scrolls instead of
+  // pushing the header off-screen.
   const opensUpward = position.y > viewport.height / 2
   const panelBottom = opensUpward ? viewport.height - position.y + 8 : undefined
   const panelTop = opensUpward ? undefined : position.y + BALL_SIZE + 8
+  const panelMaxHeight = Math.max(
+    120,
+    (opensUpward
+      ? position.y - 8
+      : viewport.height - position.y - BALL_SIZE - 8) - 8
+  )
   const panelLeft = Math.min(
     Math.max(8, position.x + BALL_SIZE - PANEL_WIDTH),
     Math.max(8, viewport.width - PANEL_WIDTH - 8)
@@ -396,9 +416,10 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
             top: panelTop,
             bottom: panelBottom,
             width: PANEL_WIDTH,
+            maxHeight: panelMaxHeight,
           }}
           className={cn(
-            "fixed z-40 flex max-h-[60vh] flex-col overflow-hidden rounded-xl",
+            "fixed z-40 flex flex-col overflow-hidden rounded-xl",
             "border bg-popover text-popover-foreground shadow-2xl"
           )}
         >
@@ -441,9 +462,10 @@ export function FloatingBall({ onAction }: FloatingBallProps) {
             top: panelTop,
             bottom: panelBottom,
             width: PANEL_WIDTH,
+            maxHeight: panelMaxHeight,
           }}
           className={cn(
-            "fixed z-40 flex max-h-[60vh] flex-col overflow-hidden rounded-xl",
+            "fixed z-40 flex flex-col overflow-hidden rounded-xl",
             "border bg-popover text-popover-foreground shadow-2xl"
           )}
         >
