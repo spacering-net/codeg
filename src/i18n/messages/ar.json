@@ -7466,6 +7466,11 @@
       "upLeftThenRight": "أعلى-يسار ثم يمين",
       "upRightThenLeft": "أعلى-يمين ثم يسار"
     },
-    "favoriteAgentsEmpty": "لا يوجد وكلاء متاحون"
+    "favoriteAgentsEmpty": "لا يوجد وكلاء متاحون",
+    "toasts": {
+      "renameNeedsSavedSession": "إعادة التسمية تعمل على الجلسات المحفوظة فقط — أرسل رسالة أولاً.",
+      "sessionFolderNeedsWorkspace": "افتح مجلد مساحة العمل أولاً.",
+      "cycleNeedsMoreAgents": "وكيل واحد متاح فقط — لا يوجد ما يمكن التبديل إليه."
+    }
   }
 }

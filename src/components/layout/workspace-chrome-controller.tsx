@@ -6,13 +6,16 @@ import {
   useAcpActions,
   useConnectionStore,
 } from "@/contexts/acp-connections-context"
-import { useZoomLevel } from "@/hooks/use-appearance"
+import { useZoomLevel, useFloatingBall } from "@/hooks/use-appearance"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
+import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
+import { requestCreateTaskFromText } from "@/lib/task-compose-events"
+import { requestRenameConversation } from "@/lib/rename-conversation-events"
 import {
   useWorkspaceActions,
   useWorkspaceFileTabs,
@@ -47,7 +50,27 @@ import { SearchCommandDialog } from "@/components/conversations/search-command-d
 import { FloatingBall } from "@/components/layout/floating-ball"
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
 import { stepZoom, DEFAULT_ZOOM_LEVEL } from "@/lib/theme-presets"
+import { toast } from "sonner"
+import { useTranslations } from "next-intl"
+import type { AgentType } from "@/lib/types"
 import type { FloatingBallAction } from "@/lib/floating-ball-gestures"
+
+/**
+ * Next entry in a cycling list. With a current agent it picks the following
+ * one (wrapping); without one — or when the current agent has since dropped
+ * out of the list — it starts from the head. The favorites list re-reads its
+ * configured order on every stroke, so cycling there follows what settings
+ * shows rather than a stale snapshot.
+ */
+function nextInCycle(
+  current: AgentType | undefined,
+  list: AgentType[]
+): AgentType {
+  if (list.length === 0) return current ?? list[0]
+  if (current == null || !list.includes(current)) return list[0]
+  const index = list.indexOf(current)
+  return list[(index + 1) % list.length]
+}
 
 /**
  * Headless owner of the workspace's global keyboard shortcuts and the two
@@ -58,6 +81,7 @@ import type { FloatingBallAction } from "@/lib/floating-ball-gestures"
  * visible bar. Renders no visible chrome — only the dialogs.
  */
 export function WorkspaceChromeController() {
+  const tBall = useTranslations("FloatingBall")
   const { activeFolder } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
   const { toggle } = useSidebarContext()
@@ -81,7 +105,7 @@ export function WorkspaceChromeController() {
     openBrowserTab,
     setActivePane,
   } = useWorkspaceActions()
-  const { openConversations } = useWorkbenchRoute()
+  const { openConversations, setRoute } = useWorkbenchRoute()
   const { shortcuts } = useShortcutSettings()
   const { zoomLevel, setZoomLevel } = useZoomLevel()
   // Stopping a turn is the one floating-ball action with no shortcut: the
@@ -90,6 +114,16 @@ export function WorkspaceChromeController() {
   // what the workspace considers "the turn in front of the user".
   const { cancel } = useAcpActions()
   const { getActiveKey } = useConnectionStore()
+  // Agent cycling (floating ball "next agent" / "favorite agents") needs the
+  // same enabled+available list the draft tabs resolve their defaults from.
+  const { sortedTypes: sortedAvailableAgents } = useSortedAvailableAgents()
+  const { confirmDraftAgent, openChatModeTab } = useTabActions()
+  // Session files ("open the session folder") opens the aux panel's file tree;
+  // no active folder means there is nothing to reveal (same guard as the
+  // toggle-files keyboard shortcut below).
+  const auxPanel = useAuxPanelContext()
+  const activeTab = tabs.find((tab) => tab.id === activeTabId)
+  const { floatingBallFavoriteAgents: favoriteAgents } = useFloatingBall()
   // Search open-state is shared (see search-dialog-context): the trigger lives
   // in the sidebar, but this always-mounted controller owns the dialog and the
   // ⌘K shortcut so search works even when the sidebar is collapsed.
@@ -499,23 +533,104 @@ export function WorkspaceChromeController() {
         case "openSettings":
           handleOpenSettings()
           return
+        case "openTodos":
+          setRoute("tasks")
+          return
+        case "openTodosNew":
+          // Park the draft before switching — the Tasks page consumes it on
+          // mount, and on the live event when the route is already active.
+          requestCreateTaskFromText({
+            text: "",
+            folderId: activeFolder?.id ?? null,
+          })
+          setRoute("tasks")
+          return
+        case "openAutomations":
+          setRoute("automations")
+          return
+        case "openCanvas":
+          setRoute("canvas")
+          return
+        case "openAgents":
+          void openSettingsWindow("agents").catch((err) => {
+            console.error("[WorkspaceChromeController] agents settings:", err)
+          })
+          return
+        case "openSystemAdmin":
+          void openSettingsWindow("system").catch((err) => {
+            console.error("[WorkspaceChromeController] system settings:", err)
+          })
+          return
+        case "renameConversation": {
+          const id = activeTab?.conversationId
+          if (id == null) {
+            toast.info(tBall("toasts.renameNeedsSavedSession"))
+            return
+          }
+          requestRenameConversation({ conversationId: id })
+          return
+        }
+        case "openSessionFolder":
+          if (!activeFolder) {
+            toast.info(tBall("toasts.sessionFolderNeedsWorkspace"))
+            return
+          }
+          auxPanel.openTab("file_tree")
+          return
+        case "cycleAgent":
+        case "cycleFavoriteAgent": {
+          const list =
+            action === "cycleAgent"
+              ? sortedAvailableAgents
+              : sortedAvailableAgents.filter((a) => favoriteAgents.includes(a))
+          if (list.length <= 1) {
+            toast.info(tBall("toasts.cycleNeedsMoreAgents"))
+            return
+          }
+          const tab = activeTab
+          // The switch retargets the draft's ACP connection via
+          // useConnectionLifecycle; a persisted conversation's agent is fixed,
+          // so open a fresh draft pinned to the next agent instead.
+          if (!tab || tab.conversationId != null) {
+            const next = nextInCycle(tab?.agentType, list)
+            if (activeFolder) {
+              openNewConversationTab(activeFolder.id, activeFolder.path, {
+                forceAgent: next,
+              })
+            } else {
+              openChatModeTab({ forceAgent: next })
+            }
+            return
+          }
+          const next = nextInCycle(tab.agentType, list)
+          confirmDraftAgent(tab.id, next)
+          return
+        }
         case "panel":
           return
       }
     },
     [
       activeFolder,
+      activeTab,
       activeTabId,
+      auxPanel,
       cancel,
+      confirmDraftAgent,
+      favoriteAgents,
       getActiveKey,
       handleOpenFolder,
       handleOpenSettings,
+      openChatModeTab,
       openConversations,
       openNewConversationTab,
       reopenClosedTab,
       setSearchOpen,
+      setRoute,
       setZoomLevel,
+      sortedAvailableAgents,
       switchTab,
+      tBall,
       tabs,
       toggle,
       toggleTerminal,

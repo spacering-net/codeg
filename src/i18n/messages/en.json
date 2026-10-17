@@ -7466,6 +7466,11 @@
       "upLeftThenRight": "Up-left, then right",
       "upRightThenLeft": "Up-right, then left"
     },
-    "favoriteAgentsEmpty": "No available agents"
+    "favoriteAgentsEmpty": "No available agents",
+    "toasts": {
+      "renameNeedsSavedSession": "Rename works on a saved session — send a message first.",
+      "sessionFolderNeedsWorkspace": "Open a workspace folder first.",
+      "cycleNeedsMoreAgents": "Only one agent available — nothing to cycle."
+    }
   }
 }

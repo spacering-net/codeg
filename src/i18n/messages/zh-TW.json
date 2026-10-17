@@ -7466,6 +7466,11 @@
       "upLeftThenRight": "左上再右",
       "upRightThenLeft": "右上再左"
     },
-    "favoriteAgentsEmpty": "暫無可用代理人"
+    "favoriteAgentsEmpty": "暫無可用代理人",
+    "toasts": {
+      "renameNeedsSavedSession": "重新命名只對已儲存的會話生效——先發一則訊息。",
+      "sessionFolderNeedsWorkspace": "請先開啟一個工作區資料夾。",
+      "cycleNeedsMoreAgents": "可用智慧型代理只有一個，無可切換。"
+    }
   }
 }

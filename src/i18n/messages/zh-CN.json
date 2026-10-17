@@ -7466,6 +7466,11 @@
       "upLeftThenRight": "左上再右",
       "upRightThenLeft": "右上再左"
     },
-    "favoriteAgentsEmpty": "暂无可用智能体"
+    "favoriteAgentsEmpty": "暂无可用智能体",
+    "toasts": {
+      "renameNeedsSavedSession": "重命名只对已保存的会话生效——先发一条消息。",
+      "sessionFolderNeedsWorkspace": "请先打开一个工作区文件夹。",
+      "cycleNeedsMoreAgents": "可用智能体只有一个，无可切换。"
+    }
   }
 }
