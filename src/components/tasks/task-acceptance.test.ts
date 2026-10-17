@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 import type { WorkTask } from "@/lib/types"
 import {
+  canDefer,
   canDeliverToPr,
   canRemoveWorktree,
   deliveredPrUrl,
   hasNothingToMerge,
   isAnotherTaskMerging,
+  isDeferred,
   isMergeQueued,
   isWorktreeGone,
   mergeQueueRanks,
@@ -338,6 +340,8 @@ describe("the acceptance a review-only pull-request task offers", () => {
     onUnqueueMerge: () => {},
     onComplete: () => {},
     onArchive: () => {},
+    onDefer: () => {},
+    onFollowUp: () => {},
     onEdit: () => {},
     onSchedule: () => {},
   }
@@ -362,5 +366,141 @@ describe("the acceptance a review-only pull-request task offers", () => {
     const withWork = task({ ...fromPr, files_changed: 2 })
     expect(canDeliverToPr(withWork)).toBe(true)
     expect(primary(withWork)).toBe("actionDeliverPrBack")
+  })
+})
+
+describe("handle later (以后处理)", () => {
+  const at = "2026-08-01T02:00:00Z"
+
+  it("is offered on a reviewed or failed task, and nowhere else", () => {
+    expect(canDefer(task())).toBe(true)
+    expect(canDefer(task({ status: "failed" }))).toBe(true)
+    // A live agent is answered or stopped, never parked out of sight; a merge
+    // is in flight; finished tasks have nothing left to handle.
+    for (const status of [
+      "todo",
+      "queued",
+      "preparing",
+      "running",
+      "awaiting_input",
+      "merging",
+      "done",
+      "canceled",
+    ] as const) {
+      expect(canDefer(task({ status }))).toBe(false)
+    }
+  })
+
+  it("is not offered twice, on an archived task, or on one queued to merge", () => {
+    expect(canDefer(task({ deferred_at: at }))).toBe(false)
+    expect(canDefer(task({ status: "failed", archived_at: at }))).toBe(false)
+    // An acceptance already made — the decision left is leaving the queue.
+    expect(canDefer(task({ merge_queued: queued(at) }))).toBe(false)
+  })
+
+  it("reads the mark only where it can live", () => {
+    expect(isDeferred(task({ deferred_at: at }))).toBe(true)
+    expect(isDeferred(task({ status: "failed", deferred_at: at }))).toBe(true)
+    expect(isDeferred(task())).toBe(false)
+    // The backend clears the mark on every way out of review / failed; a stale
+    // one must still never pull a running task off "In progress".
+    expect(isDeferred(task({ status: "running", deferred_at: at }))).toBe(false)
+    expect(isDeferred(task({ status: "done", deferred_at: at }))).toBe(false)
+  })
+})
+
+describe("the actions a deferred task offers", () => {
+  const calls: string[] = []
+  const handler = (name: string) => () => {
+    calls.push(name)
+  }
+  const handlers = {
+    onStart: handler("start"),
+    onCancel: handler("cancel"),
+    onRetry: handler("retry"),
+    onRequeue: handler("requeue"),
+    onViewSession: handler("viewSession"),
+    onMerge: handler("merge"),
+    onDeliverPr: handler("deliverPr"),
+    onUnqueueMerge: handler("unqueueMerge"),
+    onComplete: handler("complete"),
+    onArchive: handler("archive"),
+    onDefer: handler("defer"),
+    onFollowUp: handler("followUp"),
+    onEdit: handler("edit"),
+    onSchedule: handler("schedule"),
+  }
+  const actions = (t: WorkTask) => {
+    const { primary, secondaries } = buildTaskActions(t, (key) => key, handlers)
+    return {
+      primary: primary?.label ?? null,
+      secondaries: secondaries.map((s) => s.label),
+      click: (label: string) => {
+        calls.length = 0
+        const item = [primary, ...secondaries].find((a) => a?.label === label)
+        item?.onClick()
+        return [...calls]
+      },
+    }
+  }
+  const deferredAt = "2026-08-01T02:00:00Z"
+
+  it("puts a reviewed task aside from its card, beside the acceptance", () => {
+    const reviewed = actions(task({ files_changed: 3 }))
+    expect(reviewed.primary).toBe("actionMerge")
+    expect(reviewed.secondaries).toEqual(["actionDefer", "actionViewSession"])
+    expect(reviewed.click("actionDefer")).toEqual(["defer"])
+  })
+
+  it("leads a deferred reviewed task with the follow-up that resumes it", () => {
+    // Picking it back up is what the card in Done is for: the follow-up starts
+    // the next run straight from there.
+    const parked = actions(task({ files_changed: 3, deferred_at: deferredAt }))
+    expect(parked.primary).toBe("actionFollowUp")
+    expect(parked.click("actionFollowUp")).toEqual(["followUp"])
+    expect(parked.secondaries).toEqual(["actionUndefer", "actionViewSession"])
+    expect(parked.click("actionUndefer")).toEqual(["defer"])
+  })
+
+  it("keeps a failed task's retry, deferred or not", () => {
+    const failed = actions(task({ status: "failed" }))
+    expect(failed.primary).toBe("actionRetry")
+    expect(failed.secondaries).toEqual([
+      "actionEdit",
+      "actionDefer",
+      "actionArchive",
+      "actionViewSession",
+    ])
+    const parked = actions(task({ status: "failed", deferred_at: deferredAt }))
+    expect(parked.primary).toBe("actionRetry")
+    expect(parked.secondaries).toEqual([
+      "actionEdit",
+      "actionUndefer",
+      "actionArchive",
+      "actionViewSession",
+    ])
+  })
+
+  it("never offers it where it cannot apply", () => {
+    // Queued to merge: only the way out of the queue.
+    expect(
+      actions(
+        task({ files_changed: 3, merge_queued: queued("2026-08-01T00:30:00Z") })
+      ).secondaries
+    ).toEqual(["actionUnqueueMerge", "actionViewSession"])
+    // Waiting on a question: the agent is live — cancel, not park.
+    expect(actions(task({ status: "awaiting_input" })).secondaries).toEqual([
+      "actionViewSession",
+    ])
+    // Archived: one way back, which is unarchiving.
+    const archived = actions(
+      task({
+        status: "failed",
+        archived_at: deferredAt,
+        deferred_at: deferredAt,
+      })
+    )
+    expect(archived.primary).toBe("actionUnarchive")
+    expect(archived.secondaries).toEqual(["actionViewSession"])
   })
 })

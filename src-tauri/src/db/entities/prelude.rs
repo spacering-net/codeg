@@ -2,6 +2,7 @@
 
 pub use super::agent_setting::Entity as AgentSetting;
 pub use super::app_metadata::Entity as AppMetadata;
+pub use super::assistant::Entity as Assistant;
 pub use super::automation::Entity as Automation;
 pub use super::automation_run::Entity as AutomationRun;
 pub use super::canvas_board::Entity as CanvasBoard;

@@ -1,7 +1,13 @@
 import { downloadImage } from "@/lib/image-download"
 import { saveTextFile, type SaveFileResult } from "@/lib/save-file"
 
-export type DiagramFormat = "svg" | "png" | "mmd"
+/** The two image formats, plus the fence source as a Mermaid or PlantUML file. */
+export type DiagramFormat = "svg" | "png" | "mmd" | "puml"
+
+const SOURCE_FILTER_NAMES: Partial<Record<DiagramFormat, string>> = {
+  mmd: "Mermaid",
+  puml: "PlantUML",
+}
 
 /** Multiplier applied to the diagram's own size when rasterizing to PNG. */
 const PNG_SCALE = 3
@@ -122,7 +128,8 @@ export function svgToPngBase64(
 }
 
 /**
- * Save a diagram in one of the three formats offered by its toolbar.
+ * Save a diagram in one of the formats offered by its toolbar: SVG, PNG, or
+ * its source in the fence's own language.
  *
  * Goes through the shared save helpers rather than a bare `<a download>` (what
  * Streamdown's own toolbar does): on desktop that means a real system Save As
@@ -131,22 +138,23 @@ export function svgToPngBase64(
  */
 export async function saveDiagram(opts: {
   format: DiagramFormat
-  /** Rendered SVG markup. Not needed for `"mmd"`. */
+  /** Rendered SVG markup. Not needed for `"mmd"` / `"puml"`. */
   svg: string | null
-  /** Original ```mermaid fence body. */
+  /** Original ```mermaid / ```plantuml fence body. */
   source: string
   /** File name without extension. */
   baseName?: string
 }): Promise<SaveFileResult> {
   const { format, svg, source, baseName = "diagram" } = opts
 
-  if (format === "mmd") {
+  const sourceFilterName = SOURCE_FILTER_NAMES[format]
+  if (sourceFilterName) {
     return saveTextFile({
       content: source,
-      suggestedName: `${baseName}.mmd`,
+      suggestedName: `${baseName}.${format}`,
       mimeType: "text/plain",
-      filterName: "Mermaid",
-      ext: "mmd",
+      filterName: sourceFilterName,
+      ext: format,
     })
   }
 

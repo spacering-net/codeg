@@ -1,13 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react"
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeAll, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/components/ai-elements/link-safety", () => ({
   useStreamdownLinkSafety: () => ({ enabled: false }),
-}))
-
-const genui = vi.hoisted(() => ({ enabled: true }))
-vi.mock("@/hooks/use-generative-ui-enabled", () => ({
-  useGenerativeUiEnabled: () => genui.enabled,
 }))
 
 import { JsonRenderScope } from "./json-render-pre"
@@ -53,10 +48,6 @@ function reply(text: string, mode?: "streaming" | "static") {
 const card = (container: HTMLElement) =>
   container.querySelector("[data-json-render]")
 
-beforeEach(() => {
-  genui.enabled = true
-})
-
 // Load the card's chunk once up front. A fence the card claims would
 // otherwise show its code (the Suspense fallback) for a moment, and the
 // "stays code" checks below could pass on that moment alone. Under a full,
@@ -64,6 +55,8 @@ beforeEach(() => {
 // here first and given time.
 beforeAll(async () => {
   await import("@/components/message/json-render-block")
+  // The chart chunk too, for the chart below.
+  await import("@/components/message/json-render-charts")
   const { container, unmount } = render(reply(SPEC))
   await waitFor(() => expect(card(container)).not.toBeNull(), {
     timeout: 10_000,
@@ -84,13 +77,6 @@ describe("spec fences in messages", () => {
 
   it("stay code outside an assistant reply", async () => {
     const { container } = render(<MessageResponse>{SPEC}</MessageResponse>)
-    await waitFor(() => expect(container.textContent).toContain('"op"'))
-    expect(card(container)).toBeNull()
-  })
-
-  it("stay code while generative UI is off", async () => {
-    genui.enabled = false
-    const { container } = render(reply(SPEC))
     await waitFor(() => expect(container.textContent).toContain('"op"'))
     expect(card(container)).toBeNull()
   })
@@ -144,6 +130,63 @@ describe("spec fences in messages", () => {
     expect(card(container)).toBeNull()
     errors.mockRestore()
   })
+
+  it("draw a chart with the real chart chunk", async () => {
+    // jsdom lays nothing out; give the chart's measuring box a size.
+    const real = HTMLElement.prototype.getBoundingClientRect
+    const measure = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (!this.classList.contains("recharts-responsive-container")) {
+          return real.call(this)
+        }
+        return { width: 400, height: 250, top: 0, left: 0 } as DOMRect
+      })
+    const chart = fence(
+      [
+        ROOT,
+        line({
+          op: "add",
+          path: "/elements/main",
+          value: {
+            type: "Card",
+            props: { title: "Builds per day" },
+            children: ["bars"],
+          },
+        }),
+        line({
+          op: "add",
+          path: "/elements/bars",
+          value: {
+            type: "BarChart",
+            props: {
+              data: [
+                { day: "Mon", builds: 4 },
+                { day: "Tue", builds: 7 },
+              ],
+              xKey: "day",
+              series: [{ key: "builds", label: "Builds" }],
+            },
+            children: [],
+          },
+        }),
+      ].join("\n")
+    )
+    const { container } = render(reply(chart, "static"))
+    await waitFor(
+      () =>
+        expect(
+          container.querySelectorAll(".recharts-bar-rectangle path")
+        ).toHaveLength(2),
+      { timeout: 10_000 }
+    )
+    expect(screen.getByText("Builds per day")).toBeInTheDocument()
+    expect(container.textContent).not.toContain('"op"')
+    measure.mockRestore()
+    // The wait above allows 10s, so the test's own budget has to cover it:
+    // under a loaded full run, drawing the chart can outlast vitest's 5s
+    // default before the bars appear.
+  }, 30_000)
 
   it("grow while the reply streams, from the first line on", async () => {
     const onlyRoot = `Here it is:\n\n\`\`\`spec\n${ROOT}\n`

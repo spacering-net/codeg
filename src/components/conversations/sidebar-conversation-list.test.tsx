@@ -8,7 +8,15 @@ import {
 } from "react"
 import { act, fireEvent, render } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 
 import {
   SidebarConversationList,
@@ -486,7 +494,7 @@ function firePointer(
 }
 
 describe("SidebarConversationList — folder drag gesture", () => {
-  let rectSpy: ReturnType<typeof vi.spyOn>
+  let rectSpy: MockInstance
 
   beforeEach(() => {
     vi.useFakeTimers({ now: FIXED })

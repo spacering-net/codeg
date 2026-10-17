@@ -197,6 +197,7 @@ async fn main() -> ExitCode {
         features: CompanionFeatures::parse(args.features.as_deref()),
         custom_agents: parse_csv(args.custom_agents.as_deref()),
         disabled_agents: parse_csv(args.disabled_agents.as_deref()),
+        assistant_support: Default::default(),
     };
 
     let stdin = tokio::io::stdin();

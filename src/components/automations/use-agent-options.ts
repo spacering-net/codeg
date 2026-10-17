@@ -72,6 +72,13 @@ function fetchOptions(
   return promise
 }
 
+/** Test-only: forget every cached and in-flight probe, so a test cannot be
+ *  served another test's snapshot. */
+export function __resetAgentOptionsCacheForTests(): void {
+  snapshotCache.clear()
+  inflight.clear()
+}
+
 export interface AgentOptionsState {
   snapshot: AgentOptionsSnapshot | null
   /** Which agent `snapshot` was probed from — NOT necessarily the `agentType`
@@ -81,6 +88,15 @@ export interface AgentOptionsState {
    *  agent's own vocabulary, say — has to key on this rather than on the
    *  currently-selected agent. Null whenever `snapshot` is. */
   snapshotAgentType: AgentType | null
+  /** The model the shown snapshot was probed FOR — the request's own key, not
+   *  the agent's answer (`null` when probed without one). Diverges from the
+   *  host's selection for the same debounce window as `snapshotAgentType`. */
+  snapshotModel: string | null
+  /** Whether the shown snapshot was probed for the current (agent, folder,
+   *  model). When false, its options belong to a previous selection and must
+   *  not be offered for picking: a value chosen off them would land in the new
+   *  selection. */
+  current: boolean
   loading: boolean
   error: string | null
   reload: () => void
@@ -112,10 +128,12 @@ export function useAgentOptions(
   preferredConfigValues?: Record<string, string> | null
 ): AgentOptionsState {
   const preferredModel = preferredConfigValues?.model ?? null
-  // Snapshot and its producer live in ONE state value so they can never be
+  // Snapshot and its provenance live in ONE state value so they can never be
   // rendered out of step — see `snapshotAgentType`.
   const [loaded, setLoaded] = useState<{
     agent: AgentType
+    folder: string | null
+    model: string | null
     snapshot: AgentOptionsSnapshot
   } | null>(null)
   const [loading, setLoading] = useState(false)
@@ -140,7 +158,7 @@ export function useAgentOptions(
       } else {
         const cached = readCache(agent, folder, model)
         if (cached) {
-          setLoaded({ agent, snapshot: cached })
+          setLoaded({ agent, folder, model, snapshot: cached })
           setError(null)
           setLoading(false)
           return
@@ -152,7 +170,7 @@ export function useAgentOptions(
       fetchOptions(agent, folder, model)
         .then((fresh) => {
           if (reqRef.current !== id) return
-          setLoaded({ agent, snapshot: fresh })
+          setLoaded({ agent, folder, model, snapshot: fresh })
           setLoading(false)
         })
         .catch((e) => {
@@ -207,6 +225,12 @@ export function useAgentOptions(
   return {
     snapshot: loaded?.snapshot ?? null,
     snapshotAgentType: loaded?.agent ?? null,
+    snapshotModel: loaded?.model ?? null,
+    current:
+      loaded !== null &&
+      loaded.agent === agentType &&
+      loaded.folder === (folderPath ?? null) &&
+      loaded.model === preferredModel,
     loading,
     error,
     reload,

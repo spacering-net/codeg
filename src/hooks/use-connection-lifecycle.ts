@@ -273,15 +273,23 @@ export function useConnectionLifecycle({
   //   "connecting" — `connect()` is in flight: agent spawn, ACP `initialize`,
   //                  then `session/resume|load|new`
   // (The third leg, session init after `connected`, has its own task below.)
-  // A task's label is fixed when it is added, so a leg change retires the old
-  // row and mints a new one rather than leaving stale wording on screen.
+  // A task's label is fixed when it is added, so a change to what it names
+  // retires the old row and mints a new one rather than leaving stale wording
+  // on screen. That is the leg, and also the agent: a draft can switch agents
+  // while it connects, and the status reads `connecting` straight through it.
+  // The agent named is the one actually coming up — the entry's own while one
+  // is there (the switch has yet to tear it down, or a failed preflight left
+  // it running), else the one asked for.
+  const connAgentType = conn.agentType
   const taskIdRef = useRef<string | null>(null)
-  const taskPhaseRef = useRef<"preparing" | "connecting" | null>(null)
+  const taskLabelKeyRef = useRef<string | null>(null)
   useEffect(() => {
     const phase =
       status === "connecting" ? "connecting" : preparing ? "preparing" : null
-    if (phase !== null && phase === taskPhaseRef.current) return
-    taskPhaseRef.current = phase
+    const taskAgentType = connAgentType ?? agentType
+    const labelKey = phase === null ? null : `${phase}:${taskAgentType}`
+    if (labelKey !== null && labelKey === taskLabelKeyRef.current) return
+    taskLabelKeyRef.current = labelKey
     if (taskIdRef.current) {
       const finished = taskIdRef.current
       taskIdRef.current = null
@@ -300,9 +308,11 @@ export function useConnectionLifecycle({
       }
     }
     if (phase === null) return
-    const id = `acp-${phase}-${Date.now()}`
+    // The agent is in the id too: a switch can retire a row and mint its
+    // replacement within the same millisecond.
+    const id = `acp-${phase}-${taskAgentType}-${Date.now()}`
     taskIdRef.current = id
-    const agent = getAgentLabel(agentType)
+    const agent = getAgentLabel(taskAgentType)
     addTask(
       id,
       phase === "connecting"
@@ -313,7 +323,16 @@ export function useConnectionLifecycle({
         : t("tasks.preparingDescription")
     )
     updateTask(id, { status: "running" })
-  }, [status, preparing, addTask, updateTask, removeTask, agentType, t])
+  }, [
+    status,
+    preparing,
+    addTask,
+    updateTask,
+    removeTask,
+    agentType,
+    connAgentType,
+    t,
+  ])
 
   const clearSelectorTask = useCallback(() => {
     if (selectorTaskIdRef.current) {
@@ -432,13 +451,24 @@ export function useConnectionLifecycle({
     touchActivity,
   ])
 
+  // Why connecting failed, for the composer's inline banner. The auto-connect's
+  // own rejection says it first; a request parked behind another in-flight
+  // connect never rejects to it (its promise resolves at once, and the run
+  // that fails comes later), so fall back to what the provider published for
+  // this key — the record the toast and the status chip show — as long as it
+  // names the agent this surface wants. `detail ?? title` is the text that
+  // request would have rejected with.
+  const publishedConnectError =
+    conn.connectError?.agentType === agentType ? conn.connectError : null
   const autoConnectError =
     status === "connected" || status === "prompting"
       ? null
       : lastAutoConnectError?.contextKey === contextKey &&
           lastAutoConnectError.agentType === agentType
         ? lastAutoConnectError.message
-        : null
+        : publishedConnectError
+          ? (publishedConnectError.detail ?? publishedConnectError.title)
+          : null
 
   // sendPrompt, connCancel, connRespondPermission are stable (depend
   // only on actions + contextKey), so these callbacks are effectively stable.
@@ -508,12 +538,19 @@ export function useConnectionLifecycle({
 
   const handleSetConfigOption = useCallback(
     (configId: string, valueId: string) => {
+      // The connection here still belongs to another agent (a draft mid-switch,
+      // or one whose new pick could not connect), so the options on screen are
+      // the selected agent's cached ones. Applying the edit would hand the
+      // other agent a value from a list that isn't its own, and file it under
+      // that agent's saved preferences. Dropped, as an edit is when there is
+      // no connection here at all.
+      if (connAgentType != null && connAgentType !== agentType) return
       touchActivity(contextKey)
       connSetConfigOption(configId, valueId).catch((e: unknown) =>
         console.error("[ConnLifecycle] setConfigOption:", e)
       )
     },
-    [connSetConfigOption, contextKey, touchActivity]
+    [agentType, connAgentType, connSetConfigOption, contextKey, touchActivity]
   )
 
   const handleRespondPermission = useCallback(

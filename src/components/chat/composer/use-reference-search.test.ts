@@ -4,9 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { FlatFileEntry } from "@/hooks/use-file-tree"
 import type {
   AcpAgentInfo,
+  AssistantInfo,
   DbConversationSummary,
   GitLogEntry,
 } from "@/lib/types"
+import {
+  resetAssistantsStore,
+  useAssistantsStore,
+} from "@/stores/assistants-store"
 
 import type { ReferenceKind } from "./types"
 import type { SuggestionGroup } from "./suggestion/types"
@@ -47,6 +52,31 @@ function makeAgent(
   } as unknown as AcpAgentInfo
 }
 
+function makeAssistant(
+  id: number,
+  name: string,
+  over: Partial<AssistantInfo> = {}
+): AssistantInfo {
+  return {
+    id,
+    uid: `u-${id}`,
+    name,
+    description: "",
+    avatar: { kind: "monogram", color: "teal" },
+    agent_type: "codex",
+    agent_options: { config_values: {} },
+    label_snapshot: { agent: "Codex", mode: null, options: [] },
+    instructions: "",
+    enabled: true,
+    sort_order: id,
+    revision: 1,
+    created_at: "2026-10-16T00:00:00Z",
+    updated_at: "2026-10-16T00:00:00Z",
+    deleted_at: null,
+    ...over,
+  }
+}
+
 function makeConversation(id: number, title: string): DbConversationSummary {
   return {
     id,
@@ -80,6 +110,7 @@ function emptySources(
     files: [],
     workspaceRoot: null,
     agents: [],
+    assistants: [],
     sessions: [],
     commits: [],
     repoKey: null,
@@ -93,11 +124,12 @@ const itemsOf = (groups: SuggestionGroup[], kind: ReferenceKind) =>
 // --- pure builder -----------------------------------------------------------
 
 describe("buildReferenceGroups", () => {
-  it("returns the four groups in a fixed order (no skill group)", () => {
+  it("returns the five groups in a fixed order (no skill group)", () => {
     const groups = buildReferenceGroups("", emptySources())
     expect(groups.map((g) => g.kind)).toEqual([
       "file",
       "agent",
+      "assistant",
       "session",
       "commit",
     ])
@@ -105,7 +137,7 @@ describe("buildReferenceGroups", () => {
 
   it("keeps every group present (empty groups are not dropped)", () => {
     const groups = buildReferenceGroups("", emptySources())
-    expect(groups).toHaveLength(4)
+    expect(groups).toHaveLength(5)
     expect(groups.every((g) => g.items.length === 0)).toBe(true)
   })
 
@@ -114,6 +146,7 @@ describe("buildReferenceGroups", () => {
     expect(groups.map((g) => g.label)).toEqual([
       DEFAULT_GROUP_LABELS.file,
       DEFAULT_GROUP_LABELS.agent,
+      DEFAULT_GROUP_LABELS.assistant,
       DEFAULT_GROUP_LABELS.session,
       DEFAULT_GROUP_LABELS.commit,
     ])
@@ -123,6 +156,7 @@ describe("buildReferenceGroups", () => {
     const labels = {
       file: "文件",
       agent: "智能体",
+      assistant: "助手",
       session: "会话",
       commit: "提交",
       skill: "技能",
@@ -197,6 +231,77 @@ describe("buildReferenceGroups", () => {
     const agents = itemsOf(groups, "agent")
     expect(agents).toHaveLength(1)
     expect(agents[0].reference.id).toBe("codex")
+  })
+
+  it("adapts assistants into codeg://assistant references", () => {
+    const groups = buildReferenceGroups(
+      "",
+      emptySources({
+        agents: [makeAgent("codex", { name: "Codex" })],
+        assistants: [
+          makeAssistant(3, "Reviewer", { description: "Reviews diffs" }),
+          makeAssistant(4, "Planner"),
+        ],
+      })
+    )
+    const items = itemsOf(groups, "assistant")
+    expect(items.map((i) => i.reference)).toEqual([
+      {
+        refType: "assistant",
+        id: "3",
+        label: "Reviewer",
+        uri: "codeg://assistant/3",
+        meta: { assistantId: 3 },
+      },
+      {
+        refType: "assistant",
+        id: "4",
+        label: "Planner",
+        uri: "codeg://assistant/4",
+        meta: { assistantId: 4 },
+      },
+    ])
+    // The description, or the agent it runs on when there is none.
+    expect(items.map((i) => i.detail)).toEqual(["Reviews diffs", "Codex"])
+  })
+
+  it("offers only the assistants that can be delegated to", () => {
+    const groups = buildReferenceGroups(
+      "",
+      emptySources({
+        agents: [makeAgent("codex"), makeAgent("gemini", { enabled: false })],
+        assistants: [
+          makeAssistant(1, "Live"),
+          makeAssistant(2, "Switched off", { enabled: false }),
+          makeAssistant(3, "On a disabled agent", { agent_type: "gemini" }),
+          makeAssistant(4, "On an unknown agent", { agent_type: "grok" }),
+          makeAssistant(5, "Deleted", {
+            deleted_at: "2026-10-16T01:00:00Z",
+          }),
+        ],
+      })
+    )
+    expect(itemsOf(groups, "assistant").map((i) => i.reference.label)).toEqual([
+      "Live",
+    ])
+  })
+
+  it("finds an assistant by its name, description or agent", () => {
+    const sources = emptySources({
+      agents: [makeAgent("codex"), makeAgent("open_code")],
+      assistants: [
+        makeAssistant(1, "Reviewer", { description: "Reads diffs" }),
+        makeAssistant(2, "Planner", { agent_type: "open_code" }),
+      ],
+    })
+    const labels = (query: string) =>
+      itemsOf(buildReferenceGroups(query, sources), "assistant").map(
+        (i) => i.reference.label
+      )
+    expect(labels("review")).toEqual(["Reviewer"])
+    expect(labels("diffs")).toEqual(["Reviewer"])
+    expect(labels("opencode")).toEqual(["Planner"])
+    expect(labels("open_code")).toEqual(["Planner"])
   })
 
   it("adapts sessions into codeg://session references", () => {
@@ -307,6 +412,7 @@ vi.mock("@/lib/api", () => ({
 
 describe("useReferenceSearch", () => {
   beforeEach(() => {
+    resetAssistantsStore()
     mocks.agents = []
     mocks.files = { allFiles: [], loaded: false }
     mocks.listAllConversations.mockReset().mockResolvedValue([])
@@ -483,6 +589,98 @@ describe("useReferenceSearch", () => {
     // The stale invocation must not render repo A commits into repo B's panel;
     // it bails so the next keystroke re-queries the current folder.
     expect(groups).toEqual([])
+  })
+
+  it("loads nothing for the tabs the panel isn't showing", async () => {
+    mocks.agents = [makeAgent("codex", { name: "Codex" })]
+    mocks.files = { allFiles: [makeFile("a.ts")], loaded: true }
+    mocks.listAllConversations.mockResolvedValue([makeConversation(1, "x")])
+    mocks.gitLog.mockResolvedValue({
+      entries: [makeCommit("abc1234")],
+      has_upstream: false,
+    })
+
+    const { result } = renderHook(() =>
+      useReferenceSearch({ defaultPath: "/repo", enabled: true })
+    )
+    let groups!: SuggestionGroup[]
+    await act(async () => {
+      groups = (await result.current("", undefined, [
+        "file",
+      ])) as SuggestionGroup[]
+    })
+
+    // Sessions and commits were hidden: neither request goes out.
+    expect(mocks.listAllConversations).not.toHaveBeenCalled()
+    expect(mocks.gitLog).not.toHaveBeenCalled()
+    expect(itemsOf(groups, "file")).toHaveLength(1)
+    expect(itemsOf(groups, "agent")).toHaveLength(0)
+    expect(itemsOf(groups, "assistant")).toHaveLength(0)
+    expect(itemsOf(groups, "session")).toHaveLength(0)
+    expect(itemsOf(groups, "commit")).toHaveLength(0)
+    // Still every group, so the provider's shape doesn't depend on the tabs.
+    expect(groups.map((g) => g.kind)).toEqual([
+      "file",
+      "agent",
+      "assistant",
+      "session",
+      "commit",
+    ])
+  })
+
+  it("reads the assistants from the store, and live", async () => {
+    mocks.agents = [makeAgent("codex", { name: "Codex" })]
+    useAssistantsStore.getState().merge([makeAssistant(3, "Reviewer")])
+    const { result } = renderHook(() =>
+      useReferenceSearch({ defaultPath: null, enabled: true })
+    )
+    const search = result.current
+    let groups!: SuggestionGroup[]
+    await act(async () => {
+      groups = (await search("", undefined, ["assistant"])) as SuggestionGroup[]
+    })
+    expect(itemsOf(groups, "assistant").map((i) => i.reference.id)).toEqual([
+      "3",
+    ])
+    // Only the shown tabs are adapted: the agent tab is hidden here.
+    expect(itemsOf(groups, "agent")).toHaveLength(0)
+
+    act(() => {
+      useAssistantsStore.getState().merge([makeAssistant(4, "Planner")])
+    })
+    // Same search function, fresh rows.
+    expect(result.current).toBe(search)
+    await act(async () => {
+      groups = (await search("", undefined, ["assistant"])) as SuggestionGroup[]
+    })
+    expect(itemsOf(groups, "assistant").map((i) => i.reference.id)).toEqual([
+      "3",
+      "4",
+    ])
+  })
+
+  it("keeps the git-log cache while the commit tab is hidden", async () => {
+    mocks.gitLog.mockResolvedValue({
+      entries: [makeCommit("abc1234")],
+      has_upstream: false,
+    })
+    const { result } = renderHook(() =>
+      useReferenceSearch({ defaultPath: "/repo", enabled: true })
+    )
+    let shownAgain!: SuggestionGroup[]
+    await act(async () => {
+      await result.current("")
+      await result.current("", undefined, ["agent", "file"])
+      shownAgain = (await result.current("", undefined, [
+        "agent",
+        "file",
+        "commit",
+      ])) as SuggestionGroup[]
+    })
+    // Hiding the tab didn't throw away what was already loaded…
+    expect(mocks.gitLog).toHaveBeenCalledTimes(1)
+    // …so switching it back on shows it straight away.
+    expect(itemsOf(shownAgain, "commit")).toHaveLength(1)
   })
 
   it("retries a lazy fetch after it rejects (a failure is never cached)", async () => {

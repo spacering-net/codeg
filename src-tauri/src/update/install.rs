@@ -345,7 +345,7 @@ pub async fn perform_update(
 
     // 2. Verify before touching anything executable.
     on_progress(UpdatePhase::Verifying, 0, None);
-    verify::verify_release_signature(&archive, &sig_b64).map_err(|e| {
+    verify::verify_release_signature(&archive, &sig_b64, &manifest.version).map_err(|e| {
         AppCommandError::new(
             crate::app_error::AppErrorCode::TaskExecutionFailed,
             "Update signature verification failed",

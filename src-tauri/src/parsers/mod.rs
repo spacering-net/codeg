@@ -1,4 +1,5 @@
 pub mod acp_native;
+mod agent_env;
 pub mod antigravity;
 pub mod claude;
 pub mod cline;
@@ -12,6 +13,7 @@ pub mod gemini;
 pub mod grok;
 pub mod hermes;
 pub mod kimi_code;
+pub mod kiro;
 pub mod openclaw;
 pub mod opencode;
 mod opencode_context_window;
@@ -22,6 +24,8 @@ mod summary_cache;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+pub use agent_env::{AgentEnv, AgentEnvs};
 
 /// A root of external agent-CLI transcript data, archived under
 /// `external/<agent>/` by the optional "include conversation content" toggle.
@@ -325,6 +329,19 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             include_top: None,
             indexes: &[],
         },
+        ExternalSource {
+            // Kiro keeps each session as `<id>.jsonl` (event log) + `<id>.json`
+            // (metadata) under `<KIRO_HOME>/sessions/cli/` (default
+            // `~/.kiro/...`). The root is the `sessions/` subtree, never
+            // `<KIRO_HOME>` itself, whose `settings/`, `agents/` and MCP config
+            // are the user's configuration, not conversation content.
+            agent: "kiro",
+            root: kiro::resolve_kiro_sessions_root(),
+            is_file: false,
+            sqlite: false,
+            include_top: None,
+            indexes: &[],
+        },
     ];
     if let Some(home) = dirs::home_dir() {
         sources.push(ExternalSource {
@@ -373,35 +390,56 @@ pub trait AgentParser {
 /// happens to know about it. `codeg-mcp` is injected into every MCP-capable
 /// agent, so the frame lands in each of their native transcripts; a per-parser
 /// fix would silently miss whichever parser was written next.
-pub fn build_agent_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
+///
+/// `env` is the environment this agent is launched with — load it with
+/// `agent_setting_service::load_agent_env`. Each agent keeps its history where
+/// THAT environment points (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …), and a
+/// relocation set in the agent's settings never reaches codeg's own process,
+/// so a parser handed [`AgentEnv::inherited`] instead reads the default
+/// directory while the agent writes elsewhere (#948).
+pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
     let inner: Box<dyn AgentParser> = match agent_type {
-        AgentType::ClaudeCode => Box::new(claude::ClaudeParser::new()),
-        AgentType::Codex => Box::new(codex::CodexParser::new()),
-        AgentType::OpenCode => Box::new(opencode::OpenCodeParser::new()),
-        AgentType::Gemini => Box::new(gemini::GeminiParser::new()),
+        AgentType::ClaudeCode => Box::new(claude::ClaudeParser::for_env(env)),
+        AgentType::Codex => Box::new(codex::CodexParser::for_env(env)),
+        AgentType::OpenCode => Box::new(opencode::OpenCodeParser::for_env(env)),
+        AgentType::Gemini => Box::new(gemini::GeminiParser::for_env(env)),
+        // This parser reads a fixed `~/.openclaw/agents` and follows no
+        // relocation variable at all — not even codeg's own — so `env` has
+        // nothing to move for it.
         AgentType::OpenClaw => Box::new(openclaw::OpenClawParser::new()),
-        AgentType::Cline => Box::new(cline::ClineParser::new()),
-        AgentType::Hermes => Box::new(hermes::HermesParser::new()),
-        AgentType::CodeBuddy => Box::new(codebuddy::CodeBuddyParser::new()),
-        AgentType::KimiCode => Box::new(kimi_code::KimiCodeParser::new()),
-        AgentType::Pi => Box::new(pi::PiParser::new()),
-        AgentType::Grok => Box::new(grok::GrokParser::new()),
-        AgentType::Cursor => Box::new(cursor::CursorParser::new()),
-        AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::new()),
-        AgentType::Qoder => Box::new(qoder::QoderParser::new()),
-        AgentType::Antigravity => Box::new(antigravity::AntigravityParser::new()),
+        AgentType::Cline => Box::new(cline::ClineParser::for_env(env)),
+        AgentType::Hermes => Box::new(hermes::HermesParser::for_env(env)),
+        AgentType::CodeBuddy => Box::new(codebuddy::CodeBuddyParser::for_env(env)),
+        AgentType::KimiCode => Box::new(kimi_code::KimiCodeParser::for_env(env)),
+        AgentType::Pi => Box::new(pi::PiParser::for_env(env)),
+        AgentType::Grok => Box::new(grok::GrokParser::for_env(env)),
+        AgentType::Cursor => Box::new(cursor::CursorParser::for_env(env)),
+        AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::for_env(env)),
+        AgentType::Qoder => Box::new(qoder::QoderParser::for_env(env)),
+        AgentType::Antigravity => Box::new(antigravity::AntigravityParser::for_env(env)),
+        AgentType::Kiro => Box::new(kiro::KiroParser::for_env(env)),
         // Custom ACP agents have no native store to reverse-engineer; their
         // history is codeg's own ACP transcript.
-        AgentType::Custom(_) => Box::new(acp_native::AcpNativeParser::new(agent_type)),
+        AgentType::Custom(_) | AgentType::ZCode => {
+            Box::new(acp_native::AcpNativeParser::new(agent_type))
+        }
     };
     Box::new(RouteSanitized(inner))
 }
 
-/// Removes Codeg's internal `@agent` routing frame from whatever a parser read
-/// back out of an agent's own transcript.
+/// A parser wrapped the way [`build_agent_parser`] wraps every one, for tests
+/// that build their parser over a fixture directory.
+#[cfg(test)]
+pub(crate) fn sanitized(inner: impl AgentParser + 'static) -> Box<dyn AgentParser> {
+    Box::new(RouteSanitized(Box::new(inner)))
+}
+
+/// Removes Codeg's internal prompt frames — the `@agent` and `@assistant`
+/// routing frames and the assistant brief — from whatever a parser read back
+/// out of an agent's own transcript.
 ///
 /// Only complete frames that re-render byte-for-byte are touched (see
-/// [`crate::acp::agent_mentions::strip_internal_agent_routes`]), and the
+/// [`crate::acp::agent_mentions::strip_internal_frames`]), and the
 /// separator that opens one is scrubbed from every prompt at ingress, so
 /// look-alike user prose is never eligible. A BLOCK left with no content after
 /// stripping carried nothing but the frame and is dropped; a user turn left
@@ -486,17 +524,17 @@ fn sanitize_summary(summary: &mut ConversationSummary) {
 ///
 /// The trailing trim only runs when a frame WAS removed, and it is load-bearing
 /// for the agents that join a prompt's text blocks into one record with a blank
-/// line: `strip_internal_agent_routes` absorbs a single newline adjacent to the
+/// line: `strip_internal_frames` absorbs a single newline adjacent to the
 /// frame, so `"prose\n\n<frame>"` comes back as `"prose\n"` — which
 /// `whitespace-pre-wrap` paints as an extra blank line under the message. Text
 /// with no frame in it is never touched.
 fn sanitize_text(text: &mut String) -> bool {
     // Single scan short-circuit: history with no frame pays one memchr per
     // string, not a parse attempt.
-    if !crate::acp::agent_mentions::contains_internal_agent_routes(text) {
+    if !crate::acp::agent_mentions::contains_internal_frames(text) {
         return false;
     }
-    *text = crate::acp::agent_mentions::strip_internal_agent_routes(text);
+    *text = crate::acp::agent_mentions::strip_internal_frames(text);
     text.truncate(text.trim_end().len());
     true
 }
@@ -1862,7 +1900,7 @@ mod route_sanitizer_tests {
         let truncated = super::truncate_str(format!("hi{frame}").trim(), 80);
         assert!(
             truncated.contains('\u{001e}')
-                && !crate::acp::agent_mentions::contains_internal_agent_routes(&truncated),
+                && !crate::acp::agent_mentions::contains_internal_frames(&truncated),
             "fixture must straddle the frame, or it proves nothing"
         );
 
@@ -2066,6 +2104,52 @@ mod route_sanitizer_tests {
             detail.turns[0].blocks.as_slice(),
             [ContentBlock::Text { text }] if text == "real prompt"
         ));
+    }
+
+    /// A delegated assistant child's first prompt is the task plus the brief
+    /// frame. History shows the task alone — in its own block or joined into
+    /// the task's — the title carries no instruction text, and a record that
+    /// held only the brief is neither rendered nor counted.
+    #[test]
+    fn an_assistant_brief_never_surfaces_in_history() {
+        let task = "Review the diff in /repo and report findings";
+        let brief = crate::acp::agent_mentions::render_assistant_brief(
+            "Reviewer",
+            "Cite file and line.\n- Be terse",
+        )
+        .expect("brief");
+
+        let mut own_block = turn(TurnRole::User, task);
+        own_block.blocks.push(ContentBlock::Text {
+            text: brief.clone(),
+        });
+        let joined = turn(TurnRole::User, &format!("{task}\n\n{brief}"));
+        for user in [own_block, joined] {
+            let detail = sanitized(Fixture {
+                summary: summary(Some(&format!("{task} {brief}")[..120]), 2),
+                turns: vec![user, turn(TurnRole::Assistant, "found two issues")],
+            });
+            assert_eq!(detail.turns.len(), 2);
+            assert!(matches!(
+                detail.turns[0].blocks.as_slice(),
+                [ContentBlock::Text { text }] if text == task
+            ));
+            assert_eq!(detail.summary.message_count, 2);
+            let title = detail.summary.title.expect("title kept");
+            assert!(title.starts_with("Review the diff"));
+            assert!(!title.contains("codeg_internal") && !title.contains('\u{1e}'));
+        }
+
+        let detail = sanitized(Fixture {
+            summary: summary(Some(task), 3),
+            turns: vec![
+                turn(TurnRole::User, task),
+                turn(TurnRole::User, &brief),
+                turn(TurnRole::Assistant, "done"),
+            ],
+        });
+        assert_eq!(detail.turns.len(), 2, "the brief-only record is dropped");
+        assert_eq!(detail.summary.message_count, 2);
     }
 
     #[test]

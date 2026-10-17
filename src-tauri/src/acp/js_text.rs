@@ -1,6 +1,7 @@
-//! JavaScript's string semantics, for the places codeg ports one of
-//! codex-acp's helpers and has to read text exactly the way the adapter does
-//! (`acp::service_error`, `parsers::codex_desktop_attachments`).
+//! JavaScript's string semantics, for the places codeg ports an agent's
+//! JavaScript helper and has to read text exactly the way the agent does
+//! (codex-acp's in `acp::service_error` and `parsers::codex_desktop_attachments`,
+//! Kimi Code's prompt metadata in `parsers::kimi_code`).
 
 /// JavaScript's `\s`, which is also what `String.prototype.trim` strips: its
 /// WhiteSpace and LineTerminator characters. Not `char::is_whitespace`, which

@@ -26,7 +26,9 @@
             "cursor",
             "deepseek",
             "qoder",
-            "antigravity"
+            "antigravity",
+            "kiro",
+            "zcode"
           ],
           "description": "Which local agent runs the sub-task. Pick the one best suited to the work — or, when the user's message names an agent via `@AgentName` / `codeg://agent/<agent_type>`, use that exact `<agent_type>` slug (e.g. `codeg://agent/claude_code` means `claude_code`)."
         },
@@ -104,7 +106,7 @@
   },
   {
     "name": "check_user_feedback",
-    "description": "IMPORTANT: This tool gives you the ability to receive the user's real-time guidance while you work, preventing you from going down the wrong path and wasting effort. The user can type corrections, new requirements, or hints at any time during your turn — but you will NEVER see them unless you call this tool. Without it, you could spend minutes on work the user has already tried to redirect.\n\nWhen to call:\n- After thinking through your approach but BEFORE starting implementation — the user may have clarified requirements.\n- Before making a significant decision (choosing an architecture, picking which files to modify, deciding on an approach) — the user may prefer a different direction.\n- After completing a sub-task and before moving to the next step — the user may want to adjust priorities.\n- When you pause to plan or organize your next steps — a natural checkpoint to read any pending guidance.\n\nThis is a quick, non-blocking snapshot that returns instantly. It either returns the user's messages (treat as HIGH-PRIORITY steering and adjust immediately) or an empty result (continue your current plan). Call it proactively — do not wait to be asked.",
+    "description": "IMPORTANT: This tool gives you the ability to receive the user's real-time guidance while you work, preventing you from going down the wrong path and wasting effort. The user can type corrections, new requirements, or hints at any time during your turn — but you will NEVER see them unless you call this tool. Without it, you could spend minutes on work the user has already tried to redirect.\n\nWhen to call:\n- After thinking through your approach but BEFORE starting implementation — the user may have clarified requirements.\n- Before making a significant decision (choosing an architecture, picking which files to modify, deciding on an approach) — the user may prefer a different direction.\n- After completing a sub-task and before moving to the next step — the user may want to adjust priorities.\n- When you pause to plan or organize your next steps — a natural checkpoint to read any pending guidance.\n\nThis is a quick, non-blocking snapshot that returns instantly. It either returns the user's messages (treat as HIGH-PRIORITY steering and adjust immediately) or an empty result. Call it at the checkpoints above — do not wait to be asked. If the result is empty, continue your task immediately. Do NOT call this tool again until you reach the next natural checkpoint — never call it twice in a row without doing other work in between.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -112,7 +114,7 @@
   },
   {
     "name": "ask_user_question",
-    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls.",
+    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered \u2014 including picking a recommended option or telling you to proceed \u2014 act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
     "inputSchema": {
       "type": "object",
       "required": [

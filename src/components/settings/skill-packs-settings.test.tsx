@@ -113,7 +113,7 @@ describe("SkillPacksSettings", () => {
     expect(screen.queryByTestId("experts-body")).not.toBeInTheDocument()
   })
 
-  it("honors a ?tab=ui deep-link to the generative-UI switch", () => {
+  it("honors a ?tab=ui deep-link to the generative-UI skill", () => {
     currentSearch = "tab=ui"
     renderHub()
     expect(screen.getByTestId("ui-body")).toBeInTheDocument()

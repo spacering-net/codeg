@@ -28,7 +28,6 @@ use crate::db::entities::conversation::ConversationStatus;
 use crate::db::error::DbError;
 use crate::db::service::conversation_service;
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
-use crate::models::AgentType;
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
 use tokio::sync::RwLock;
 
@@ -625,9 +624,13 @@ fn find_delegation_args(
     }
     let obj = value.as_object()?;
     // Direct hit: this object declares a delegation field at its top level.
+    // `assistant_id` counts whether a host sent it as a number or a string.
     if obj.get("task").and_then(|v| v.as_str()).is_some()
         || obj.get("agent_type").and_then(|v| v.as_str()).is_some()
         || obj.get("working_dir").and_then(|v| v.as_str()).is_some()
+        || obj
+            .get("assistant_id")
+            .is_some_and(|v| v.is_number() || v.is_string())
     {
         return Some(obj.clone());
     }
@@ -660,11 +663,11 @@ pub(crate) const CURSOR_IDENTITYLESS_MCP_TITLE: &str = "MCP: tool";
 ///   rephrase it (`Delegate to codex`). We match by substring so any
 ///   form containing `delegate_to_agent` is captured.
 /// * `raw_input` is the JSON arg blob the agent sent to the MCP server. The
-///   `delegate_to_agent` schema requires `agent_type` AND `task`; presence
-///   of both — after peeling any wrapper layers via [`find_delegation_args`] —
-///   is a near-zero false-positive shape check that catches any host that
-///   mangles the title beyond recognition, including ones that wrap their
-///   tool-call args.
+///   `delegate_to_agent` schema requires `task` plus a target — `agent_type`,
+///   or `assistant_id` for an assistant; `task` with either — after peeling
+///   any wrapper layers via [`find_delegation_args`] — is a near-zero
+///   false-positive shape check that catches any host that mangles the title
+///   beyond recognition, including ones that wrap their tool-call args.
 fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
     let normalized_title = title.to_ascii_lowercase().replace([' ', '-'], "_");
     if normalized_title.contains("delegate_to_agent") {
@@ -675,7 +678,10 @@ fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
             if let Some(args) = find_delegation_args(&v, 0) {
                 let has_task = args.get("task").and_then(|t| t.as_str()).is_some();
                 let has_agent_type = args.get("agent_type").and_then(|a| a.as_str()).is_some();
-                if has_task && has_agent_type {
+                let has_assistant_id = args
+                    .get("assistant_id")
+                    .is_some_and(|v| v.is_number() || v.is_string());
+                if has_task && (has_agent_type || has_assistant_id) {
                     return true;
                 }
             }
@@ -703,15 +709,16 @@ fn extract_delegation_match_key(raw_input: Option<&str>) -> Option<DelegationMat
     let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     let args = find_delegation_args(&parsed, 0)?;
     let task = args.get("task").and_then(|v| v.as_str())?.to_string();
-    // Parse `agent_type` through the same serde path the MCP listener uses,
-    // so the stored enum equals `DelegationRequest::agent_type`.
-    let agent_type: AgentType = serde_json::from_value(args.get("agent_type")?.clone()).ok()?;
     let working_dir = args
         .get("working_dir")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let args = serde_json::Value::Object(args);
+    // The same parser the MCP listener dispatches the call with, so the
+    // target here equals `DelegationRequest::target()` for the same arguments.
+    let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
     Some(DelegationMatchKey {
-        agent_type,
+        target,
         task,
         working_dir,
     })
@@ -898,9 +905,48 @@ mod delegation_title_tests {
     fn extract_match_key_pulls_agent_task_and_dir() {
         let raw = r#"{"agent_type":"codex","task":"smoke test","working_dir":"/tmp"}"#;
         let key = extract_delegation_match_key(Some(raw)).expect("key parses");
-        assert_eq!(key.agent_type, AgentType::Codex);
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
         assert_eq!(key.task, "smoke test");
         assert_eq!(key.working_dir.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn an_assistant_call_is_keyed_by_its_assistant_never_its_agent_type() {
+        use crate::acp::delegation::types::DelegationTarget;
+        // The host may fill `agent_type` with anything when it names an
+        // assistant: the broker keys the call by the assistant, so must we.
+        for raw in [
+            r#"{"assistant_id":3,"task":"review"}"#,
+            r#"{"assistant_id":"3","agent_type":"codex","task":"review"}"#,
+            r#"{"params":{"input":{"assistant_id":3,"agent_type":"garbage","task":"review"}}}"#,
+        ] {
+            let key = extract_delegation_match_key(Some(raw)).expect("assistant key parses");
+            assert_eq!(key.target, DelegationTarget::Assistant(3), "{raw}");
+            assert_eq!(key.task, "review");
+        }
+        // An invalid id is no key at all (the listener refuses the call).
+        assert!(
+            extract_delegation_match_key(Some(r#"{"assistant_id":0,"task":"x"}"#)).is_none()
+        );
+    }
+
+    #[test]
+    fn an_assistant_call_is_recognized_by_its_shape() {
+        assert!(is_delegation_invocation(
+            "some host title",
+            Some(r#"{"assistant_id":3,"task":"review"}"#)
+        ));
+        assert!(is_delegation_invocation(
+            "some host title",
+            Some(r#"{"arguments":{"assistant_id":"3","task":"review"}}"#)
+        ));
+        assert!(!is_delegation_invocation(
+            "some host title",
+            Some(r#"{"assistant_id":3}"#)
+        ));
     }
 
     #[test]
@@ -934,7 +980,10 @@ mod delegation_title_tests {
         // `findDelegationArgs` walker in delegated-sub-thread.tsx).
         let nested = r#"{"params":{"input":{"agent_type":"codex","task":"t","working_dir":"/w"}}}"#;
         let key = extract_delegation_match_key(Some(nested)).expect("nested key parses");
-        assert_eq!(key.agent_type, AgentType::Codex);
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
         assert_eq!(key.task, "t");
         assert_eq!(key.working_dir.as_deref(), Some("/w"));
 
@@ -959,7 +1008,10 @@ mod delegation_title_tests {
         let inner = r#"{"agent_type":"codex","task":"double"}"#;
         let double = serde_json::Value::String(inner.to_string()).to_string();
         let key = extract_delegation_match_key(Some(&double)).expect("double-encoded parses");
-        assert_eq!(key.agent_type, AgentType::Codex);
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
         assert_eq!(key.task, "double");
     }
 
@@ -1115,7 +1167,7 @@ mod delegation_registration_tests {
 
     fn codex_key(task: &str) -> DelegationMatchKey {
         DelegationMatchKey {
-            agent_type: AgentType::Codex,
+            target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex),
             task: task.to_string(),
             working_dir: None,
         }
@@ -1794,6 +1846,7 @@ mod tests {
             status: crate::acp::types::ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3006,6 +3059,7 @@ mod tests {
             working_dir: None,
             requested_working_dir: None,
             external_handle: None,
+            assistant: None,
         }
     }
 

@@ -88,7 +88,9 @@ import {
   type MessageNavEntry,
 } from "@/components/message/conversation-message-nav"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
-import { extractSessionFilesGrouped } from "@/lib/session-files"
+import { buildMessageNavEntries } from "@/components/message/message-nav-entries"
+import { useMessageNavJump } from "@/components/message/use-message-nav-jump"
+import { useConversationOutline } from "@/hooks/use-conversation-outline"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
 import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
@@ -1170,7 +1172,8 @@ export function MessageListView({
   )
   const hasOlderTurns = isWindowedDetail(detail) && detail.turns_offset > 0
   const loadingOlderTurns = session?.loadingOlderTurns ?? false
-  const { loadOlderTurns, refetchDetail } = useConversationRuntimeActions()
+  const { loadOlderTurns, loadOlderTurnsThrough, refetchDetail } =
+    useConversationRuntimeActions()
   const handleLoadOlder = useCallback(() => {
     loadOlderTurns(conversationId)
   }, [loadOlderTurns, conversationId])
@@ -1567,63 +1570,74 @@ export function MessageListView({
   // never overlaps the composer or the tab strip.
   const selectionBoxRef = useRef<HTMLDivElement | null>(null)
 
-  // Cheap user-message tally for the collapsed chip — counts user turns without
-  // parsing any file diffs.
-  const userMessageCount = useMemo(() => {
-    if (!showMessageNav) return 0
+  // The loaded user messages: how many, and where each renders. Cheap — no
+  // diff parsing — so the collapsed chip and the jumps can use it while
+  // streaming.
+  const loadedUserMessages = useMemo(() => {
+    const threadIndexByTurnId = new Map<string, number>()
     let count = 0
-    for (const item of threadItems) {
-      if (item.kind === "turn" && item.group.role === "user") count += 1
-    }
-    return count
-  }, [showMessageNav, threadItems])
-
-  // One entry per user message — including ones with no edits (placeholders).
-  // Computed lazily: only while the panel is expanded, since
-  // `extractSessionFilesGrouped` parses every turn's diffs. Collapsed (the
-  // default) it stays EMPTY, keeping the streaming hot path free of diff parsing.
-  //
-  // Windowed loading caveat (accepted degradation): counts, ordinals and file
-  // summaries cover only the LOADED window — paging in older history extends
-  // them. Nav targets are recomputed with the items on every prepend, so the
-  // indices themselves never go stale.
-  const navEntries = useMemo<MessageNavEntry[]>(() => {
-    if (!showMessageNav || !navExpanded) return EMPTY_NAV_ENTRIES
-    const turns = timelineTurns.map((item) => item.turn)
-    const groups = extractSessionFilesGrouped(turns, { includeEmpty: true })
-    if (groups.length === 0) return EMPTY_NAV_ENTRIES
-
-    const indexByTurnId = new Map<string, number>()
+    if (!showMessageNav) return { count, threadIndexByTurnId }
     for (let i = 0; i < threadItems.length; i++) {
       const item = threadItems[i]
       if (item.kind === "turn" && item.group.role === "user") {
-        indexByTurnId.set(item.group.id, i)
+        count += 1
+        threadIndexByTurnId.set(item.group.id, i)
       }
     }
+    return { count, threadIndexByTurnId }
+  }, [showMessageNav, threadItems])
 
-    const entries: MessageNavEntry[] = []
-    for (const group of groups) {
-      const threadIndex = indexByTurnId.get(group.userTurnId)
-      if (threadIndex == null) continue
-      let additions = 0
-      let deletions = 0
-      for (const file of group.files) {
-        additions += file.additions
-        deletions += file.deletions
-      }
-      entries.push({
-        threadIndex,
-        turnId: group.userTurnId,
-        ordinal: entries.length + 1,
-        label: group.userMessage,
-        additions,
-        deletions,
-        files: group.files,
-        hasChanges: group.files.length > 0,
-      })
-    }
+  // A long conversation is loaded a window at a time (reverse infinite
+  // scroll), but the navigator covers all of it: the window reports how many
+  // user messages lie above it, and their outline is fetched while the panel
+  // is open. A server that doesn't report the count predates the outline too;
+  // the navigator then covers the loaded window only.
+  const windowedDetail = isWindowedDetail(detail) ? detail : null
+  const earlierUserCount = showMessageNav
+    ? (windowedDetail?.user_turns_before_offset ?? 0)
+    : 0
+  const userMessageCount = earlierUserCount + loadedUserMessages.count
+  const earlierOutline = useConversationOutline({
+    fetchId: session?.dbConversationId ?? conversationId,
+    offset: windowedDetail?.turns_offset ?? 0,
+    prefixHash: windowedDetail?.prefix_hash ?? null,
+    enabled: navExpanded && earlierUserCount > 0,
+  })
+  const earlierOutlineState = earlierOutline.state
+
+  // One entry per user message — including ones with no edits (placeholders).
+  // Computed lazily: only while the panel is expanded, since grouping parses
+  // every turn's diffs. Collapsed (the default) it stays EMPTY, keeping the
+  // streaming hot path free of diff parsing. Thread indices are recomputed
+  // with the items on every prepend, so the jump targets never go stale.
+  const navEntries = useMemo<MessageNavEntry[]>(() => {
+    if (!showMessageNav || !navExpanded) return EMPTY_NAV_ENTRIES
+    const entries = buildMessageNavEntries({
+      earlierTurns:
+        earlierOutlineState.status === "ready"
+          ? earlierOutlineState.turns
+          : null,
+      earlierUserCount,
+      loadedTurns: timelineTurns.map((item) => item.turn),
+      threadIndexByTurnId: loadedUserMessages.threadIndexByTurnId,
+    })
     return entries.length > 0 ? entries : EMPTY_NAV_ENTRIES
-  }, [showMessageNav, navExpanded, timelineTurns, threadItems])
+  }, [
+    showMessageNav,
+    navExpanded,
+    earlierOutlineState,
+    earlierUserCount,
+    timelineTurns,
+    loadedUserMessages,
+  ])
+
+  const navJump = useMessageNavJump({
+    conversationId,
+    threadIndexByTurnId: loadedUserMessages.threadIndexByTurnId,
+    scrollApiRef,
+    smooth: chatAnimations,
+    loadOlderTurnsThrough,
+  })
 
   const hasRenderableContent = threadItems.length > 0 || Boolean(liveMessage)
 
@@ -1779,7 +1793,15 @@ export function MessageListView({
               expanded={navExpanded}
               onToggle={setNavExpanded}
               entries={navEntries}
-              scrollApiRef={scrollApiRef}
+              onSelect={navJump.select}
+              revealingTurnId={navJump.revealingTurnId}
+              earlier={
+                earlierOutlineState.status === "loading" ||
+                earlierOutlineState.status === "error"
+                  ? earlierOutlineState.status
+                  : null
+              }
+              onRetryEarlier={earlierOutline.retry}
             />
           )}
           <AgentPlanOverlay

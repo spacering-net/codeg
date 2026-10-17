@@ -72,6 +72,10 @@ export interface BackgroundTaskLifecycle {
   summary: string | null
   /** The notification's `<result>` markdown (parser-capped). */
   result: string | null
+  /** The latest notification says the task will notify again (it stopped
+   *  while background work of its own still runs, or it is being resumed), so
+   *  its result may be interim. Says nothing about whether it still runs. */
+  interim: boolean
 }
 
 /** Parse a parser-rewritten lifecycle marker out of a tool output preview.
@@ -93,6 +97,7 @@ export function parseBackgroundTaskMarker(
       status: typeof payload.status === "string" ? payload.status : null,
       summary: typeof payload.summary === "string" ? payload.summary : null,
       result: typeof payload.result === "string" ? payload.result : null,
+      interim: payload.interim === true,
     }
   } catch {
     return null

@@ -9,6 +9,7 @@ import { asRecord, extractPlanMarkdown } from "@/lib/plan-parse"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { cn } from "@/lib/utils"
+import { unwrapWholeFence } from "@/lib/fenced-text"
 
 /**
  * Dedicated rendering for plan-*mode* transition tools — Claude Code's
@@ -199,7 +200,7 @@ export const PlanModeCard = memo(function PlanModeCard({
       )}
       {isError && errorText && (
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-destructive/10 p-3 text-xs text-destructive">
-          {errorText}
+          {unwrapWholeFence(errorText)}
         </pre>
       )}
     </div>

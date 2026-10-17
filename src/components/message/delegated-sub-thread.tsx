@@ -71,7 +71,7 @@ export function DelegatedSubThread({
     meta,
   }
   const {
-    agentType,
+    identity,
     task,
     taskId,
     status,
@@ -94,7 +94,7 @@ export function DelegatedSubThread({
       className="@container/delegcard rounded-lg border border-border bg-card ws-msg-card"
     >
       <DelegationCardRow
-        agentType={agentType}
+        identity={identity}
         taskId={taskId}
         status={status}
         errorCode={errorCode}
@@ -114,7 +114,7 @@ export function DelegatedSubThread({
           onOpenChange={setDialogOpen}
           childConversationId={childConversationId}
           childConnectionId={childConnectionId}
-          agentType={agentType}
+          identity={identity}
           kickoffTask={task}
         />
       )}

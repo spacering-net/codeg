@@ -439,11 +439,12 @@ mod tests {
     ///
     /// `tempfile::tempdir()` honours `$TMPDIR`, and these tests then add
     /// `/.tmpXXXXXX/codeg-delegation-*.sock` on top — about 38 bytes. That is
-    /// fine against the ~20-byte default and fatal against codeg's own
-    /// per-session `TMPDIR`, which is 72 bytes (`/var/folders/…/T/codeg-acp/
-    /// <pid>-<hex>`): the composed path reaches 110 and `sun_path` caps at 104
-    /// on macOS. The whole suite went red inside a codeg session and green
-    /// outside it, for reasons having nothing to do with the code under test.
+    /// fine against a stock temp directory and was fatal against the 72-byte
+    /// per-session `TMPDIR` codeg exported before #754 (`/var/folders/…/T/
+    /// codeg-acp/<pid>-<hex>`): the composed path reached 110 and `sun_path`
+    /// caps at 104 on macOS. The whole suite went red inside a codeg session
+    /// and green outside it, for reasons having nothing to do with the code
+    /// under test — and a hand-set `TMPDIR` can still do the same.
     ///
     /// Rooting in `/tmp` — the same move `scratch_dir`'s socket tests make —
     /// keeps the result near 40 bytes no matter what the environment says.

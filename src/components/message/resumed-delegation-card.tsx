@@ -104,7 +104,7 @@ export function ResumedDelegationCard({
   )
 
   const {
-    agentType,
+    identity,
     task,
     taskId,
     status,
@@ -143,14 +143,14 @@ export function ResumedDelegationCard({
       <div className="flex w-full items-stretch">
         <div className="min-w-0 flex-1">
           <DelegationCardRow
-            agentType={agentType}
+            identity={identity}
             taskId={taskId}
             status={status}
             errorCode={errorCode}
             task={task}
             avatarBadge={
               <span
-                className="absolute -bottom-0.5 -right-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background"
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background"
                 title={t("resumed")}
               >
                 <RotateCcw className="h-2.5 w-2.5 text-muted-foreground" />
@@ -206,7 +206,7 @@ export function ResumedDelegationCard({
           onOpenChange={setDialogOpen}
           childConversationId={childConversationId}
           childConnectionId={childConnectionId}
-          agentType={agentType}
+          identity={identity}
           kickoffTask={task}
         />
       )}

@@ -1,5 +1,10 @@
 import { render } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
+
+import {
+  resetAssistantsStore,
+  useAssistantsStore,
+} from "@/stores/assistants-store"
 
 import { ReferenceBadge } from "./reference-badge"
 import type { ReferenceAttrs } from "../types"
@@ -115,5 +120,60 @@ describe("ReferenceBadge", () => {
     expect(badge).toHaveClass("text-rose-700")
     expect(container.querySelector(".lucide-command")).not.toBeNull()
     expect(container.querySelector(".lucide-sparkles")).toBeNull()
+  })
+})
+
+describe("ReferenceBadge — assistants", () => {
+  const assistantRef = (id: number, label: string) =>
+    ref({
+      refType: "assistant",
+      id: String(id),
+      label,
+      uri: `codeg://assistant/${id}`,
+      meta: { assistantId: id },
+    })
+
+  beforeEach(() => {
+    resetAssistantsStore()
+  })
+
+  it("draws the assistant's current avatar, keeping the name it was sent with", () => {
+    useAssistantsStore.getState().merge([
+      {
+        id: 3,
+        uid: "u-3",
+        name: "Renamed since",
+        description: "",
+        avatar: { kind: "emoji", emoji: "🦉", color: "teal" },
+        agent_type: "codex",
+        agent_options: { config_values: {} },
+        label_snapshot: { agent: "Codex", mode: null, options: [] },
+        instructions: "",
+        enabled: true,
+        sort_order: 1,
+        revision: 2,
+        created_at: "2026-10-16T00:00:00Z",
+        updated_at: "2026-10-16T00:00:00Z",
+        deleted_at: null,
+      },
+    ])
+    const { container } = render(
+      <ReferenceBadge data={assistantRef(3, "Reviewer")} />
+    )
+    const badge = badgeOf(container)
+    expect(badge).toHaveTextContent("🦉")
+    expect(badge).toHaveTextContent("Reviewer")
+    expect(badge).not.toHaveTextContent("Renamed since")
+    expect(badge).toHaveClass("text-teal-700")
+  })
+
+  it("draws the generic glyph for an assistant this window does not know", () => {
+    const { container } = render(
+      <ReferenceBadge data={assistantRef(9, "Gone")} />
+    )
+    const avatar = container.querySelector('[data-slot="assistant-avatar"]')
+    expect(avatar).not.toBeNull()
+    expect(avatar?.querySelector("svg")).not.toBeNull()
+    expect(badgeOf(container)).toHaveTextContent("Gone")
   })
 })

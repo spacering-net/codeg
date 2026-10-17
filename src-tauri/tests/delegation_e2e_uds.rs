@@ -39,12 +39,12 @@ use tokio::sync::oneshot;
 /// `$TMPDIR` happens to be.
 ///
 /// `tempfile::tempdir()` honours `$TMPDIR`, and these tests then add
-/// `/.tmpXXXXXX/codeg-e2e-*.sock` on top. That is fine against the ~20-byte
-/// default and fatal against codeg's own per-session `TMPDIR`, which is 72
-/// bytes: `codeg-e2e-batch.sock` composed to exactly 104 there, and `sun_path`
-/// caps at 104 on macOS. Three of these tests went red inside a codeg session
-/// and green outside it, for reasons having nothing to do with the code under
-/// test.
+/// `/.tmpXXXXXX/codeg-e2e-*.sock` on top. That is fine against a stock temp
+/// directory and was fatal against the 72-byte per-session `TMPDIR` codeg
+/// exported before #754: `codeg-e2e-batch.sock` composed to exactly 104 there,
+/// and `sun_path` caps at 104 on macOS. Three of these tests went red inside a
+/// codeg session and green outside it, for reasons having nothing to do with
+/// the code under test — and a hand-set `TMPDIR` can still do the same.
 ///
 /// Rooting in `/tmp` keeps the result near 40 bytes whatever the environment
 /// says. Still unique per test: `tempdir_in` mints a fresh name.
@@ -701,4 +701,198 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
 
     // The re-check found the revoked token → declined, not a parked/hung ask.
     assert_eq!(resp.outcome["declined"], true);
+}
+
+/// In-memory assistants for the assistant e2e: one usable assistant, 3.
+struct OneAssistant;
+#[async_trait]
+impl codeg_lib::acp::delegation::assistants::AssistantLookup for OneAssistant {
+    async fn delegatable(&self, id: i32) -> Option<codeg_lib::models::AssistantInfo> {
+        (id == 3).then(reviewer_assistant)
+    }
+    async fn roster(&self) -> Vec<codeg_lib::models::AssistantInfo> {
+        vec![reviewer_assistant()]
+    }
+}
+
+fn reviewer_assistant() -> codeg_lib::models::AssistantInfo {
+    let now = chrono::Utc::now();
+    codeg_lib::models::AssistantInfo {
+        id: 3,
+        uid: "uid-3".into(),
+        name: "Reviewer".into(),
+        description: "Reviews diffs".into(),
+        avatar: codeg_lib::models::AssistantAvatar::Monogram {
+            color: "teal".into(),
+        },
+        agent_type: AgentType::Codex,
+        agent_options: codeg_lib::acp::delegation::types::AgentDelegationDefaults {
+            mode_id: Some("read-only".into()),
+            config_values: [
+                ("model".to_string(), "gpt-5.5".to_string()),
+                ("reasoning_effort".to_string(), "high".to_string()),
+            ]
+            .into(),
+        },
+        label_snapshot: Default::default(),
+        instructions: "Cite file and line for every finding.".into(),
+        enabled: true,
+        sort_order: 1,
+        revision: 1,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    }
+}
+
+/// The whole assistant path over a real socket, starting where the delegating
+/// agent does — the companion: `tools/list` offers `assistant_id` with the
+/// roster, a `tools/call` naming the assistant is forwarded (the companion
+/// probed its parent), and the child launches on the assistant's agent with
+/// every one of its options and none of the per-agent defaults, its brief
+/// riding the first prompt.
+#[tokio::test]
+async fn end_to_end_uds_assistant_delegation() {
+    use codeg_lib::acp::delegation::companion::{
+        dispatch_line, CompanionContext, CompanionFeatures, InflightCalls, LineAction,
+    };
+
+    let mock = Arc::new(MockSpawner::new());
+    mock.queue_spawn(Ok("child-conn-a".into())).await;
+    mock.queue_send(Ok(91)).await;
+
+    let broker = Arc::new(
+        DelegationBroker::new(
+            mock.clone() as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRoot) as Arc<dyn ConversationDepthLookup>,
+        )
+        .with_assistants(Arc::new(OneAssistant)),
+    );
+    broker
+        .set_config(DelegationConfig {
+            enabled: true,
+            depth_limit: 8,
+            // What the user set for DIRECT Codex delegations.
+            agent_defaults: [(
+                AgentType::Codex,
+                codeg_lib::acp::delegation::types::AgentDelegationDefaults {
+                    mode_id: Some("auto".into()),
+                    config_values: [("sandbox".to_string(), "read-only".to_string())].into(),
+                },
+            )]
+            .into(),
+            ..DelegationConfig::default()
+        })
+        .await;
+
+    let tokens = Arc::new(TokenRegistry::default());
+    tokens
+        .register(
+            "tok".into(),
+            TokenEntry {
+                parent_connection_id: "p1".into(),
+                working_dir: PathBuf::from("/tmp"),
+            },
+        )
+        .await;
+    let listener = DelegationListener::new(
+        broker.clone(),
+        tokens,
+        Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
+        Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
+        Arc::new(StubQuestions::default()) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
+        Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
+        Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
+        Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs)
+            as Arc<dyn codeg_lib::acp::browser_tools::BrowserToolAccess>,
+        Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
+            as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
+    );
+    let dir = socket_dir();
+    let socket = dir.path().join("codeg-e2e-assistant.sock");
+    let socket_for_listener = socket.clone();
+    let listener_task = tokio::spawn(async move {
+        let _ = listener.run(socket_for_listener).await;
+    });
+    for _ in 0..50 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(socket.exists(), "listener never bound the socket");
+
+    let ctx = CompanionContext {
+        parent_connection_id: "p1".into(),
+        socket_path: socket.to_string_lossy().to_string(),
+        token: "tok".into(),
+        features: CompanionFeatures::parse(Some("delegation")),
+        custom_agents: Vec::new(),
+        disabled_agents: Vec::new(),
+        assistant_support: Default::default(),
+    };
+    let inflight = Arc::new(InflightCalls::new());
+
+    // tools/list: the schema takes `assistant_id` and names the roster.
+    let LineAction::Respond(resp) = dispatch_line(
+        &ctx,
+        inflight.clone(),
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+    )
+    .await
+    else {
+        panic!("tools/list answers inline");
+    };
+    let tools = resp.result.unwrap()["tools"].clone();
+    let delegate = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "delegate_to_agent")
+        .unwrap()
+        .clone();
+    assert_eq!(delegate["inputSchema"]["required"], json!(["task"]));
+    assert!(delegate["inputSchema"]["properties"]["assistant_id"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("3: Reviewer [Codex CLI] — Reviews diffs"));
+
+    // tools/call naming the assistant (the host also passed a stray agent).
+    let call = json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {
+            "name": "delegate_to_agent",
+            "arguments": {"assistant_id": 3, "agent_type": "claude_code", "task": "review the diff"}
+        }
+    })
+    .to_string();
+    let LineAction::Spawn(spawned) = dispatch_line(&ctx, inflight, &call).await else {
+        panic!("tools/call spawns");
+    };
+    let result = spawned.future.await.response.unwrap().result.unwrap();
+    listener_task.abort();
+    let report = &result["structuredContent"];
+    assert_eq!(report["status"], "running");
+    assert_eq!(report["agent_type"], "codex");
+    assert_eq!(report["assistant_id"], 3);
+    assert_eq!(report["assistant_name"], "Reviewer");
+
+    let spawn = mock.spawn_args.lock().await[0].clone();
+    assert_eq!(spawn.agent_type, AgentType::Codex, "the assistant's agent, not the stray one");
+    assert_eq!(spawn.preferred_mode_id.as_deref(), Some("read-only"));
+    assert_eq!(
+        spawn.preferred_config_values,
+        [
+            ("model".to_string(), "gpt-5.5".to_string()),
+            ("reasoning_effort".to_string(), "high".to_string()),
+        ]
+        .into(),
+        "every assistant option, and no per-agent default (no sandbox)"
+    );
+    let send = mock.send_args.lock().await[0].clone();
+    assert_eq!(send.task, "review the diff");
+    let brief = send.brief.expect("the brief rides the first prompt");
+    assert!(brief.contains("Cite file and line for every finding."));
+    assert_eq!(send.link.assistant.expect("the child row learns its assistant").id, 3);
 }

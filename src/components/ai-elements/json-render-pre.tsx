@@ -3,16 +3,18 @@
 /**
  * The `pre` override `MessageResponse` installs: Mermaid's, plus json-render.
  *
- * With generative UI on, a ```spec fence in an assistant reply renders as a
- * json-render card (`components/message/json-render-block.tsx`, loaded the
- * first time one appears). Every other fence — and a spec fence anywhere else:
- * a user message, a tool's output, the switch off — goes on to
- * `MermaidAwarePre` exactly as before.
+ * A ```spec fence in an assistant reply renders as a json-render card
+ * (`components/message/json-render-block.tsx`, loaded the first time one
+ * appears). No switch gates it: an agent writes the fence once it has the
+ * `ui-render` skill, which is what the user enables per agent (Settings >
+ * Skill Packs > UI), and a card it drew stays a card after that. Every other
+ * fence — and a spec fence anywhere else: a user message, a tool's output —
+ * goes on to `MermaidAwarePre` exactly as before.
  *
  * The override itself must be a module constant: neither `MessageResponse`
- * nor Streamdown re-renders when `components` changes, so the switch and the
- * reply scope are read inside the fence's own component, the way Mermaid
- * reads the appearance setting.
+ * nor Streamdown re-renders when `components` changes, so the reply scope is
+ * read inside the fence's own component, the way Mermaid reads the appearance
+ * setting.
  */
 
 import {
@@ -26,7 +28,6 @@ import {
 } from "react"
 import type { Components } from "streamdown"
 
-import { useGenerativeUiEnabled } from "@/hooks/use-generative-ui-enabled"
 import { MermaidAwarePre } from "./mermaid-block"
 
 const JsonRenderBlock = lazy(
@@ -105,9 +106,8 @@ function SpecFence({
   children?: ReactNode
 }) {
   const inReply = useContext(AssistantReplyContext)
-  const enabled = useGenerativeUiEnabled()
   const code = <MermaidAwarePre>{children}</MermaidAwarePre>
-  if (!inReply || !enabled) return code
+  if (!inReply) return code
   return (
     <CardBoundary source={source} fallback={code}>
       <Suspense fallback={code}>

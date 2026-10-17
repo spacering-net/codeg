@@ -599,6 +599,15 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             trims: false,
             default_rel: &[".gemini"],
         }],
+        // `KIRO_HOME` names the `.kiro` directory ITSELF (agents, prompts,
+        // skills, steering, settings and sessions all hang off it), the same
+        // shape `GEMINI_HOME` has for Antigravity — see
+        // `parsers::kiro::resolve_kiro_home_dir`.
+        AgentType::Kiro => &[RootSlot {
+            candidates: &[("KIRO_HOME", "", VERBATIM)],
+            trims: false,
+            default_rel: &[".kiro"],
+        }],
         AgentType::ClaudeCode => &[RootSlot {
             candidates: &[("CLAUDE_CONFIG_DIR", "", VERBATIM)],
             trims: false,
@@ -697,7 +706,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // A custom ACP agent has no codeg-known private directory layout —
         // codeg never reads its store (history comes from codeg's own ACP
         // transcript), so there is nothing to widen the sandbox roots for.
-        AgentType::Custom(_) => &[],
+        AgentType::Custom(_) | AgentType::ZCode => &[],
     }
 }
 
@@ -2114,8 +2123,9 @@ mod tests {
     fn root_slots_match_parser_resolvers() {
         use crate::parsers;
 
-        let expected: [(AgentType, PathBuf); 12] = [
+        let expected: [(AgentType, PathBuf); 13] = [
             (AgentType::Grok, parsers::grok::resolve_grok_home_dir()),
+            (AgentType::Kiro, parsers::kiro::resolve_kiro_home_dir()),
             (
                 AgentType::ClaudeCode,
                 parsers::claude::resolve_claude_config_dir(),
@@ -2168,6 +2178,175 @@ mod tests {
                 "{agent_type:?}: slot default {roots:?} drifted from resolver {}",
                 resolver_root.display()
             );
+        }
+    }
+
+    /// The history parsers must look where the slot table says the LAUNCHED
+    /// agent lives once its settings relocate it. They used to read codeg's
+    /// own environment only, so a `CLAUDE_CONFIG_DIR` in `env_json` moved the
+    /// agent and its write root but left its history unreadable (#948).
+    ///
+    /// Each candidate wins in turn — the higher-precedence ones blanked
+    /// (removed for the child), the lower ones relocated elsewhere — so a
+    /// resolver reading the wrong key, or the right keys in the wrong order,
+    /// fails. Every value names a directory that does not exist under a fresh
+    /// tempdir, so nothing on the machine can change the answer (pi looks for
+    /// a `settings.json` under its agent dir); no skip is needed for variables
+    /// set in this process, because every candidate is overridden one way or
+    /// the other.
+    #[test]
+    fn parser_resolvers_follow_a_relocation_in_the_launch_env() {
+        use crate::parsers::{self, AgentEnv};
+
+        let base = tempfile::tempdir().expect("tempdir");
+
+        type Resolver = fn(&AgentEnv) -> PathBuf;
+        // `(agent, resolver its history parser is built from, slot index,
+        // where under that slot's root the resolver points)`.
+        let cases: [(AgentType, Resolver, usize, &[&str]); 17] = [
+            (
+                AgentType::Grok,
+                parsers::grok::resolve_grok_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Qoder,
+                parsers::qoder::resolve_qoder_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Antigravity,
+                parsers::antigravity::resolve_antigravity_sessions_dir_for_env,
+                0,
+                &["antigravity-acp", "conversations"],
+            ),
+            (
+                AgentType::Kiro,
+                parsers::kiro::resolve_kiro_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::ClaudeCode,
+                parsers::claude::resolve_claude_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Codex,
+                parsers::codex::resolve_codex_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Gemini,
+                parsers::gemini::resolve_gemini_base_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::CodeBuddy,
+                parsers::codebuddy::resolve_codebuddy_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::KimiCode,
+                parsers::kimi_code::resolve_kimi_code_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Cursor,
+                parsers::cursor::resolve_cursor_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Hermes,
+                parsers::hermes::resolve_hermes_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::OpenCode,
+                parsers::opencode::resolve_opencode_base_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Cline,
+                parsers::cline::cline_data_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Pi,
+                parsers::pi::resolve_pi_agent_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Pi,
+                parsers::pi::resolve_pi_sessions_dir_for_env,
+                1,
+                &[],
+            ),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_sessions_root_for_env,
+                1,
+                &[],
+            ),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_attachments_root_for_env,
+                0,
+                &["attachments", "v1"],
+            ),
+        ];
+
+        for (agent_type, resolve, slot_index, under_root) in cases {
+            let slot = &agent_root_slots(agent_type)[slot_index];
+            for winner in 0..slot.candidates.len() {
+                let runtime_env: BTreeMap<String, String> = slot
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (key, _, _))| {
+                        let value = match index.cmp(&winner) {
+                            std::cmp::Ordering::Less => String::new(),
+                            std::cmp::Ordering::Equal => base
+                                .path()
+                                .join("relocated")
+                                .join(key)
+                                .to_string_lossy()
+                                .into_owned(),
+                            std::cmp::Ordering::Greater => base
+                                .path()
+                                .join("unused")
+                                .join(key)
+                                .to_string_lossy()
+                                .into_owned(),
+                        };
+                        ((*key).to_string(), value)
+                    })
+                    .collect();
+                let key = slot.candidates[winner].0;
+
+                let root = resolve_root_slot(slot, &runtime_env)
+                    .expect("an absolute relocation resolves to a root");
+                let expected = under_root
+                    .iter()
+                    .fold(root, |path, segment| path.join(segment));
+                assert_eq!(
+                    resolve(&AgentEnv::from_overrides(runtime_env)),
+                    expected,
+                    "{agent_type:?} with {key} winning"
+                );
+            }
         }
     }
 

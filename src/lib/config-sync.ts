@@ -25,6 +25,7 @@ export const CONFIG_DOMAIN_IDS = [
   "modelProviders",
   "agentSettings",
   "customAgents",
+  "assistants",
   "quickMessages",
   "taskTemplates",
   "preferences",
@@ -57,6 +58,9 @@ export interface ConfigManifest {
 export interface ApplyReport {
   domains: DomainCounts
   total: number
+  /** Entries stored under another name than the file's, because a different
+   *  one here already had it (assistants). Absent from an older backend. */
+  renamed?: number
 }
 
 export interface ConfigExportSummary {

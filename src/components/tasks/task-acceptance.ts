@@ -1,4 +1,46 @@
-import type { WorkTask } from "@/lib/types"
+import type { WorkTask, WorkTaskStatus } from "@/lib/types"
+
+/**
+ * The statuses a task can be put aside in ("以后处理") — mirror of the backend's
+ * `DEFERRABLE_STATUSES`: settled and waiting on the user, with nothing running
+ * that a deferral would leave hanging out of sight. `awaiting_input` waits on
+ * the user too, but its agent is live and holds a slot (it is answered or
+ * canceled, not parked), and `merging` is in flight.
+ */
+const DEFERRABLE_STATUSES: ReadonlySet<WorkTaskStatus> = new Set([
+  "review",
+  "failed",
+])
+
+/**
+ * Whether the user put this task aside to handle later. Such a task waits under
+ * Done instead of "needs you" and leaves the attention badge — but nothing
+ * else about it changed: it is still a reviewed (or failed) task, and its
+ * follow-up / retry / merge picks it back up and clears the mark.
+ *
+ * Read off the status as well as the mark. The backend clears the mark on
+ * every way out of review / failed, so the two always agree — and if they ever
+ * did not, a stale mark must not pull a running task off "In progress".
+ */
+export function isDeferred(task: WorkTask): boolean {
+  return task.deferred_at != null && DEFERRABLE_STATUSES.has(task.status)
+}
+
+/**
+ * Whether "以后处理" is on offer — the same conditions the backend's
+ * `set_deferred` enforces: a reviewed or failed task not already put aside,
+ * not archived (that already put it away), and not waiting in its project's
+ * merge queue (an acceptance already made; its decision left is leaving the
+ * queue, not when to look at the task).
+ */
+export function canDefer(task: WorkTask): boolean {
+  return (
+    DEFERRABLE_STATUSES.has(task.status) &&
+    task.deferred_at == null &&
+    task.archived_at == null &&
+    task.merge_queued == null
+  )
+}
 
 /**
  * Whether the task's worktree is gone: it ran in one (every generation does),

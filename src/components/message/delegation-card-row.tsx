@@ -1,8 +1,9 @@
 "use client"
 
 /**
- * The one row every sub-agent delegation card is built from: avatar, agent
- * label, `#taskId`, status badge, task preview, and the "查看会话" affordance.
+ * The one row every sub-agent delegation card is built from: avatar, the
+ * agent's or assistant's name, `#taskId`, status badge, task preview, and the
+ * "查看会话" affordance.
  *
  * Shared by `DelegatedSubThread` (the `delegate_to_agent` card) and
  * `ResumedDelegationCard` (the `resume_delegation` card) so the two can never
@@ -17,31 +18,36 @@
  */
 
 import type { ReactNode } from "react"
-import { getAgentLabel } from "@/lib/custom-agents"
 import { Eye } from "lucide-react"
 import { useTranslations } from "next-intl"
 
-import { AgentIcon } from "@/components/agent-icon"
+import {
+  DelegationIdentityAvatar,
+  DelegationIdentityName,
+} from "@/components/message/delegation-identity"
 import { StatusBadge } from "@/components/message/delegation-status-badge"
+import type { DelegationIdentity } from "@/hooks/use-delegation-card-model"
 import type { DelegationCardStatus } from "@/lib/delegation-card"
-import type { AgentType } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 interface Props {
-  agentType: AgentType | null
+  /** Who ran the task: an assistant, or a bare agent. */
+  identity: DelegationIdentity
   /** Broker task id; rendered as a `#`-prefixed 8-char handle when present. */
   taskId: string | null
   status: DelegationCardStatus
   errorCode?: string
   /** The sub-agent's task text, one clamped line. */
   task: string | null
-  /** Small overlay on the avatar's corner — the ⟳ a resumed run wears. */
+  /** Small mark on the avatar's corner — the ⟳ a resumed run wears (placed
+   *  by `DelegationIdentityAvatar`). */
   avatarBadge?: ReactNode
   /** Omitted when the child conversation is unknown (nothing to open). */
   onOpenSession?: () => void
 }
 
 export function DelegationCardRow({
-  agentType,
+  identity,
   taskId,
   status,
   errorCode,
@@ -54,21 +60,22 @@ export function DelegationCardRow({
   return (
     <div className="flex w-full items-stretch rounded-lg overflow-hidden">
       <div className="flex flex-1 min-w-0 items-center gap-3 px-3 py-2.5 text-left">
-        <span className="relative shrink-0">
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-foreground">
-            {agentType ? (
-              <AgentIcon agentType={agentType} className="h-5 w-5" />
-            ) : (
-              <span className="h-2.5 w-2.5 rounded-sm bg-muted-foreground/60" />
-            )}
-          </span>
-          {avatarBadge}
-        </span>
+        <DelegationIdentityAvatar
+          identity={identity}
+          size="card"
+          badge={avatarBadge}
+        />
         <div className="min-w-0 flex-1 space-y-0.5">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">
-              {agentType ? getAgentLabel(agentType) : t("unknownAgent")}
-            </span>
+            <DelegationIdentityName
+              identity={identity}
+              // An agent's short label never needed to truncate here; an
+              // assistant's name plus "· Agent" can run long.
+              className={cn(
+                "text-sm font-semibold text-foreground",
+                identity.assistantId !== null && "min-w-0 truncate"
+              )}
+            />
             {taskId && (
               <span
                 className="shrink-0 font-mono text-xs text-muted-foreground"

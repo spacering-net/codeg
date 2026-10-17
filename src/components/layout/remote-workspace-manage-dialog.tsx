@@ -460,9 +460,7 @@ export function RemoteWorkspaceManageDialog({
                     </div>
                   ) : filteredConnections.length === 0 ? (
                     <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground">
-                      {connections.length === 0
-                        ? t("empty")
-                        : t("searchPlaceholder")}
+                      {connections.length === 0 ? t("empty") : t("noMatches")}
                     </div>
                   ) : (
                     <Reorder.Group

@@ -15,6 +15,9 @@ function Tabs({
     <TabsPrimitive.Root
       data-slot="tabs"
       data-orientation={orientation}
+      // Radix needs it too, not just the attribute: it drives the list's
+      // `aria-orientation` and which arrow keys move between triggers.
+      orientation={orientation}
       className={cn(
         "gap-2 group/tabs flex data-horizontal:flex-col",
         className

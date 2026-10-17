@@ -694,6 +694,33 @@ pub async fn work_task_archive_core(
     Ok(())
 }
 
+/// Put a reviewed / failed task aside to handle later (`deferred = true`), or
+/// bring it back to "needs you" (pure DB; no engine needed). A deferred task
+/// waits under Done and leaves the attention badge, but stays resumable as it
+/// was: its follow-up, retry or merge picks it back up and clears the mark.
+pub async fn work_task_defer_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    deferred: bool,
+) -> Result<(), DbError> {
+    if !work_task_service::set_deferred(&db.conn, id, deferred).await? {
+        return Err(DbError::Validation(if deferred {
+            "only a reviewed or failed task can be put aside — and not while it is archived or \
+             waiting to merge"
+                .to_string()
+        } else {
+            "task is not put aside".to_string()
+        }));
+    }
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id },
+    );
+    Ok(())
+}
+
 pub async fn work_task_cleanup_core(id: i32) -> Result<(), DbError> {
     engine()?
         .cleanup_task(id)
@@ -1057,6 +1084,17 @@ pub async fn work_task_archive(
     archived: bool,
 ) -> Result<(), DbError> {
     work_task_archive_core(&EventEmitter::Tauri(app), &db, id, archived).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_defer(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    deferred: bool,
+) -> Result<(), DbError> {
+    work_task_defer_core(&EventEmitter::Tauri(app), &db, id, deferred).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1494,5 +1532,71 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(info.title, "Renamed");
+    }
+
+    /// "Handle later" from the board: the row moves (the change broadcast
+    /// is what re-files the card under Done on every open client), and a
+    /// refusal says which way it was refused without broadcasting anything.
+    #[tokio::test]
+    async fn deferring_broadcasts_the_row_and_refusals_stay_quiet() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-defer-core").await;
+        let task = work_task_service::create(&db.conn, draft(folder_id, "Fix login", None))
+            .await
+            .unwrap();
+        let broadcaster = std::sync::Arc::new(crate::web::event_bridge::WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+
+        // A to-do task has nothing to put aside yet.
+        let refused = work_task_defer_core(&emitter, &db, task.id, true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("reviewed or failed"), "{refused}");
+        let not_deferred = work_task_defer_core(&emitter, &db, task.id, false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(not_deferred.contains("not put aside"), "{not_deferred}");
+        assert!(rx.try_recv().is_err(), "a refusal must not broadcast");
+
+        // Drive it to review, the way the engine does.
+        let seq = work_task_service::claim_for_run(&db.conn, task.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(work_task_service::begin_setup(&db.conn, task.id, seq)
+            .await
+            .unwrap());
+        assert!(
+            work_task_service::mark_running(&db.conn, task.id, seq, 1, "c")
+                .await
+                .unwrap()
+        );
+        assert!(
+            work_task_service::settle_review(&db.conn, task.id, seq, None, None)
+                .await
+                .unwrap()
+        );
+
+        for deferred in [true, false] {
+            work_task_defer_core(&emitter, &db, task.id, deferred)
+                .await
+                .unwrap();
+            let event = rx.try_recv().expect("the moved row should broadcast");
+            assert_eq!(event.channel, WORK_TASK_CHANGED_EVENT);
+            assert_eq!(event.payload["kind"], "upsert");
+            assert_eq!(event.payload["id"], task.id);
+            assert_eq!(
+                work_task_get_core(&db, task.id)
+                    .await
+                    .unwrap()
+                    .deferred_at
+                    .is_some(),
+                deferred
+            );
+        }
+        assert_eq!(work_task_attention_count_core(&db).await.unwrap(), 1);
     }
 }

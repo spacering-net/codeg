@@ -57,12 +57,14 @@ import {
   MIN_ZOOM,
   mermaidSourceFromPre,
   parseSvgSize,
+  plantUmlSourceFromPre,
   stepZoom,
   stripSvgMaxWidth,
   zoomAroundPoint,
   type Point,
   type Size,
 } from "./mermaid-view"
+import { renderPlantUml } from "./plantuml-engine"
 import { useMermaidEngine } from "./streamdown-plugins"
 
 // --- Why this file exists ----------------------------------------------------
@@ -92,9 +94,22 @@ import { useMermaidEngine } from "./streamdown-plugins"
 //
 // The engine is still Streamdown's: `useMermaidEngine` hands back the same
 // lazily-imported `@streamdown/mermaid` singleton the plugin config uses.
+//
+// ```plantuml fences are claimed at the same point and drawn into the same
+// card — zoom, pan, fullscreen, copy, download — by PlantUML's own browser
+// engine (`./plantuml-engine.ts`). Streamdown has no PlantUML support of its
+// own, so without this such a fence is plain text.
 
 /** Unique id for Mermaid's temporary DOM node — it renders through the document. */
 let renderSeq = 0
+
+type DiagramKind = "mermaid" | "plantuml"
+
+/**
+ * Draws one diagram source as SVG markup. `signal` aborts once nobody is
+ * waiting for the answer any more (the source changed, the block unmounted).
+ */
+type DiagramRenderer = (source: string, signal: AbortSignal) => Promise<string>
 
 const useIsomorphicLayoutEffect =
   typeof window === "undefined" ? useEffect : useLayoutEffect
@@ -113,53 +128,69 @@ interface RenderState {
 const IDLE: RenderState = { svg: null, error: null, pending: true }
 
 /**
- * Render `source` whenever the engine, the source, or the theme config changes
- * — but only once the block has been scrolled near the viewport.
+ * Mermaid as a {@link DiagramRenderer}, or `null` until its engine has loaded.
+ *
+ * Must be called before {@link useRenderedDiagram} in the same component: its
+ * ref effect then runs ahead of the render effect in the same commit, so the
+ * renderer never reads a stale engine.
  */
-function useRenderedDiagram(
-  source: string,
-  config: MermaidConfig,
-  active: boolean
-): RenderState & { retry: () => void } {
+function useMermaidRenderer(config: MermaidConfig): DiagramRenderer | null {
   const engine = useMermaidEngine()
-  const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState<RenderState>(IDLE)
 
   // The engine is a process-wide singleton that resolves exactly once, so what
-  // the effect cares about is only whether it is *there* — never its identity.
-  // Keying the effect on the object instead would turn any hook that returns a
-  // fresh wrapper into an infinite render/re-render loop, since the effect ends
+  // the renderer cares about is only whether it is *there* — never its
+  // identity. Keying on the object instead would turn any hook that returns a
+  // fresh wrapper into an infinite render/re-render loop, since rendering ends
   // in a setState. Cheap invariant to pin down; expensive one to debug.
   const engineRef = useRef(engine)
   const ready = Boolean(engine)
-  // Declared before the render effect so it has already run by the time that
-  // one reads the ref in the same commit.
   useEffect(() => {
     engineRef.current = engine
   }, [engine])
 
+  return useMemo(() => {
+    if (!ready) return null
+    return async (source: string) => {
+      const mermaid = engineRef.current
+      if (!mermaid) throw new Error("Mermaid is not loaded")
+      renderSeq += 1
+      const id = `codeg-mermaid-${renderSeq}`
+      const { svg } = await mermaid.getMermaid(config).render(id, source)
+      return svg
+    }
+  }, [ready, config])
+}
+
+/**
+ * Render `source` whenever the renderer (its engine, its theme) or the source
+ * changes — but only once the block has been scrolled near the viewport.
+ * `render` is `null` while its engine is still loading.
+ */
+function useRenderedDiagram(
+  render: DiagramRenderer | null,
+  source: string,
+  active: boolean
+): RenderState & { retry: () => void } {
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<RenderState>(IDLE)
+
   useEffect(() => {
-    const mermaid = engineRef.current
-    if (!active || !ready || !mermaid) return
-    let cancelled = false
-    renderSeq += 1
-    const id = `codeg-mermaid-${renderSeq}`
+    if (!active || !render) return
+    const controller = new AbortController()
     void (async () => {
       try {
-        const { svg } = await mermaid.getMermaid(config).render(id, source)
-        if (cancelled) return
+        const svg = await render(source, controller.signal)
+        if (controller.signal.aborted) return
         setState({ svg: stripSvgMaxWidth(svg), error: null, pending: false })
       } catch (err) {
-        if (cancelled) return
+        if (controller.signal.aborted) return
         const message =
           err instanceof Error ? err.message : "Failed to render diagram"
         setState((prev) => ({ ...prev, error: message, pending: false }))
       }
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [ready, source, config, active, attempt])
+    return () => controller.abort()
+  }, [render, source, active, attempt])
 
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
   return { ...state, retry }
@@ -550,7 +581,15 @@ function CopySourceButton({ source }: { source: string }) {
   )
 }
 
-function DownloadMenu({ svg, source }: { svg: string | null; source: string }) {
+function DownloadMenu({
+  kind,
+  svg,
+  source,
+}: {
+  kind: DiagramKind
+  svg: string | null
+  source: string
+}) {
   const t = useTranslations("Folder.chat.mermaid")
 
   const save = useCallback(
@@ -585,9 +624,15 @@ function DownloadMenu({ svg, source }: { svg: string | null; source: string }) {
         <DropdownMenuItem disabled={!svg} onSelect={() => void save("png")}>
           {t("downloadPng")}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void save("mmd")}>
-          {t("downloadMmd")}
-        </DropdownMenuItem>
+        {kind === "plantuml" ? (
+          <DropdownMenuItem onSelect={() => void save("puml")}>
+            {t("downloadPuml")}
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem onSelect={() => void save("mmd")}>
+            {t("downloadMmd")}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -618,10 +663,12 @@ function ControlChip({
 }
 
 function DiagramError({
+  kind,
   message,
   source,
   onRetry,
 }: {
+  kind: DiagramKind
   message: string
   source: string
   onRetry: () => void
@@ -631,7 +678,9 @@ function DiagramError({
     <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
       <div className="flex items-start justify-between gap-3">
         <p className="text-destructive text-sm">
-          {t("renderFailed", { message })}
+          {t(kind === "plantuml" ? "plantumlRenderFailed" : "renderFailed", {
+            message,
+          })}
         </p>
         <Button onClick={onRetry} size="xs" type="button" variant="outline">
           {t("retry")}
@@ -650,10 +699,12 @@ function DiagramError({
 }
 
 function FullscreenDiagram({
+  kind,
   svg,
   source,
   natural,
 }: {
+  kind: DiagramKind
   svg: string
   source: string
   natural: Size | null
@@ -676,7 +727,7 @@ function FullscreenDiagram({
         <div className="flex items-center gap-0.5">
           <ZoomControls controller={controller} />
           <span className="mx-1 h-4 w-px bg-border" />
-          <DownloadMenu source={source} svg={svg} />
+          <DownloadMenu kind={kind} source={source} svg={svg} />
           <CopySourceButton source={source} />
           <DialogClose asChild>
             <Button
@@ -701,36 +752,40 @@ function FullscreenDiagram({
   )
 }
 
-function MermaidBlockImpl({ source }: { source: string }) {
+/**
+ * The card a rendered diagram sits in — the same for both fence languages.
+ * Rendering itself stays with the block that owns the engine.
+ */
+function DiagramCard({
+  kind,
+  source,
+  state,
+  active,
+  setRoot,
+}: {
+  kind: DiagramKind
+  source: string
+  state: RenderState & { retry: () => void }
+  active: boolean
+  setRoot: (element: HTMLDivElement | null) => void
+}) {
   const t = useTranslations("Folder.chat.mermaid")
-  const { isDarkMode } = useAppearance()
-  const [root, setRoot] = useState<HTMLDivElement | null>(null)
-  const active = useNearViewport(root)
-
-  // Mermaid's own dark palette. Reading `isDarkMode` from context is what makes
-  // a live theme switch work at all: a context update pierces the `memo` around
-  // `MessageResponse` and the one around Streamdown itself, neither of which
-  // compares anything theme-shaped.
-  const config = useMemo<MermaidConfig>(
-    () => ({ theme: isDarkMode ? "dark" : "default" }),
-    [isDarkMode]
-  )
-
-  const { svg, error, pending, retry } = useRenderedDiagram(
-    source,
-    config,
-    active
-  )
-  // Mermaid always emits a viewBox. If one ever does not, the diagram still
-  // renders at its natural flow size and the zoom controls stay disabled
-  // rather than pretending to work.
+  const { svg, error, pending, retry } = state
+  // Mermaid and PlantUML both emit a viewBox. If one ever does not, the
+  // diagram still renders at its natural flow size and the zoom controls stay
+  // disabled rather than pretending to work.
   const natural = useMemo(() => (svg ? parseSvgSize(svg) : null), [svg])
   const controller = useViewportController(natural, "width")
 
   if (error && !svg) {
     return (
       <div className="my-4" ref={setRoot}>
-        <DiagramError message={error} onRetry={retry} source={source} />
+        <DiagramError
+          kind={kind}
+          message={error}
+          onRetry={retry}
+          source={source}
+        />
       </div>
     )
   }
@@ -751,7 +806,7 @@ function MermaidBlockImpl({ source }: { source: string }) {
   return (
     <div
       className="relative my-4 overflow-hidden rounded-xl border border-border bg-card"
-      data-codeg="mermaid-block"
+      data-codeg={`${kind}-block`}
       ref={setRoot}
     >
       {/* The height comes from the fit factor, not from the current zoom:
@@ -779,7 +834,7 @@ function MermaidBlockImpl({ source }: { source: string }) {
         />
       )}
       <ControlChip className="top-2 right-2">
-        <DownloadMenu source={source} svg={svg} />
+        <DownloadMenu kind={kind} source={source} svg={svg} />
         <CopySourceButton source={source} />
         <Dialog>
           <DialogTrigger asChild>
@@ -793,7 +848,12 @@ function MermaidBlockImpl({ source }: { source: string }) {
               <MaximizeIcon />
             </Button>
           </DialogTrigger>
-          <FullscreenDiagram natural={natural} source={source} svg={svg} />
+          <FullscreenDiagram
+            kind={kind}
+            natural={natural}
+            source={source}
+            svg={svg}
+          />
         </Dialog>
       </ControlChip>
       <ControlChip className="bottom-2 left-2">
@@ -803,24 +863,78 @@ function MermaidBlockImpl({ source }: { source: string }) {
   )
 }
 
+function MermaidBlockImpl({ source }: { source: string }) {
+  const { isDarkMode } = useAppearance()
+  const [root, setRoot] = useState<HTMLDivElement | null>(null)
+  const active = useNearViewport(root)
+
+  // Mermaid's own dark palette. Reading `isDarkMode` from context is what makes
+  // a live theme switch work at all: a context update pierces the `memo` around
+  // `MessageResponse` and the one around Streamdown itself, neither of which
+  // compares anything theme-shaped.
+  const config = useMemo<MermaidConfig>(
+    () => ({ theme: isDarkMode ? "dark" : "default" }),
+    [isDarkMode]
+  )
+  const render = useMermaidRenderer(config)
+  const state = useRenderedDiagram(render, source, active)
+
+  return (
+    <DiagramCard
+      active={active}
+      kind="mermaid"
+      setRoot={setRoot}
+      source={source}
+      state={state}
+    />
+  )
+}
+
 const MermaidBlock = memo(MermaidBlockImpl)
 MermaidBlock.displayName = "MermaidBlock"
+
+function PlantUmlBlockImpl({ source }: { source: string }) {
+  const { isDarkMode } = useAppearance()
+  const [root, setRoot] = useState<HTMLDivElement | null>(null)
+  const active = useNearViewport(root)
+
+  // PlantUML's own dark palette, switched live the same way as Mermaid's.
+  const render = useCallback<DiagramRenderer>(
+    (text, signal) => renderPlantUml(text, { dark: isDarkMode, signal }),
+    [isDarkMode]
+  )
+  const state = useRenderedDiagram(render, source, active)
+
+  return (
+    <DiagramCard
+      active={active}
+      kind="plantuml"
+      setRoot={setRoot}
+      source={source}
+      state={state}
+    />
+  )
+}
+
+const PlantUmlBlock = memo(PlantUmlBlockImpl)
+PlantUmlBlock.displayName = "PlantUmlBlock"
 
 /**
  * `pre` override installed on every `<Streamdown>` in the app.
  *
- * Claims ` ```mermaid ` and reproduces Streamdown's default behaviour for
- * everything else: its own `pre` does nothing but stamp `data-block` on the
- * child, and that flag is what its `code` component reads to tell a fenced
- * block from inline code. Dropping it would render every code fence as inline
- * code, so the passthrough is load-bearing.
+ * Claims ` ```mermaid ` and ` ```plantuml ` (or ` ```puml `), and reproduces
+ * Streamdown's default behaviour for everything else: its own `pre` does
+ * nothing but stamp `data-block` on the child, and that flag is what its
+ * `code` component reads to tell a fenced block from inline code. Dropping it
+ * would render every code fence as inline code, so the passthrough is
+ * load-bearing.
  */
 export function MermaidAwarePre({ children }: { children?: ReactNode }) {
-  const source = isValidElement(children)
-    ? mermaidSourceFromPre(children)
-    : null
-  if (source !== null) return <MermaidBlock source={source} />
   if (!isValidElement(children)) return <>{children}</>
+  const mermaid = mermaidSourceFromPre(children)
+  if (mermaid !== null) return <MermaidBlock source={mermaid} />
+  const plantUml = plantUmlSourceFromPre(children)
+  if (plantUml !== null) return <PlantUmlBlock source={plantUml} />
   return cloneElement(children as ReactElement<{ "data-block"?: string }>, {
     "data-block": "true",
   })

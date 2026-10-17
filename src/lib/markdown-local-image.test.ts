@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   createLocalImageLoader,
   LOCAL_IMAGE_MAX_BYTES,
+  localImageMime,
   localImagePath,
   resolveLocalImage,
 } from "./markdown-local-image"
@@ -63,6 +64,31 @@ describe("local Markdown image paths", () => {
     ["config.json", "/repo"],
   ])("refuses an image outside its transcript: %s", (source, root) => {
     expect(resolveLocalImage(source, root)).toBeNull()
+  })
+})
+
+describe("localImageMime", () => {
+  it.each([
+    ["/tmp/login-qr-new.png", "image/png"],
+    ["C:\\shots\\Shot.JPG", "image/jpeg"],
+    ["~/a.jpeg", "image/jpeg"],
+    ["icon.svg", "image/svg+xml"],
+    ["photo.webp", "image/webp"],
+  ])("knows %s as %s", (path, mime) => {
+    expect(localImageMime(path)).toBe(mime)
+  })
+
+  it.each([
+    "notes.md",
+    "archive.png.zip",
+    "/repo/shots.png/README",
+    "Makefile",
+    // Extensions that name an `Object.prototype` key, not a MIME entry.
+    "x.constructor",
+    "x.__proto__",
+    "",
+  ])("knows %s as no image", (path) => {
+    expect(localImageMime(path)).toBeNull()
   })
 })
 

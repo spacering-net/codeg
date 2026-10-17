@@ -12,7 +12,7 @@ use crate::models::{
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     merge_context_window_stats, relocate_orphaned_tool_results, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Caps mirroring the Grok parser: bound a single tool output / input preview
@@ -25,9 +25,14 @@ const CURSOR_TOOL_INPUT_CAP: usize = 8_000;
 /// The CLI's chat store (`chats/`) and `cli-config.json` live under this path;
 /// the user-level `mcp.json` does NOT (the CLI hardcodes `~/.cursor/mcp.json`).
 pub(crate) fn resolve_cursor_config_dir() -> PathBuf {
+    resolve_cursor_config_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The config home of the Cursor CLI launched with `env`.
+pub(crate) fn resolve_cursor_config_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_cursor_config_from(
-        std::env::var_os("CURSOR_CONFIG_DIR"),
-        std::env::var_os("XDG_CONFIG_HOME"),
+        env.var_os("CURSOR_CONFIG_DIR"),
+        env.var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
     )
 }
@@ -99,7 +104,13 @@ pub struct CursorParser {
 
 impl CursorParser {
     pub fn new() -> Self {
-        let config_dir = resolve_cursor_config_dir();
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Cursor CLI launched with `env`. The turn-timing
+    /// journal is codeg's own and does not move with it.
+    pub fn for_env(env: &AgentEnv) -> Self {
+        let config_dir = resolve_cursor_config_dir_for_env(env);
         Self {
             chats_dir: config_dir.join("chats"),
             acp_sessions_dir: config_dir.join("acp-sessions"),
@@ -1119,6 +1130,47 @@ fn build_turns(
 /// SUFFIX whose stale tail hash-collides with the store's newest turn. Both
 /// are documented in `turn_timings`' module docs; the latter is pinned by
 /// `accepted_residual_missing_tail_lines_can_misattribute_span`.
+/// The hashes a stored user turn's text may have been journaled under.
+///
+/// The connection hashes the prompt's own text blocks BEFORE it appends
+/// codeg's internal frames (the `@agent` / `@assistant` routing frames, the
+/// assistant brief), while Cursor stores the prompt it received: the user's
+/// text, then each frame, joined by whatever its ACP server puts between
+/// blocks. So the user's text is everything before the first frame, less one
+/// joiner — the very string seen between two frames when there are several,
+/// otherwise each of the usual ones in turn. Text without a frame keeps its
+/// single exact hash.
+fn user_prompt_hashes(text: &str) -> Vec<String> {
+    use crate::acp::agent_mentions::internal_frame_spans;
+    use crate::turn_timings::prompt_hash;
+    let spans = internal_frame_spans(text);
+    let Some(&(first_start, first_end)) = spans.first() else {
+        return vec![prompt_hash(text)];
+    };
+    let prefix = &text[..first_start];
+    let mut joiners: Vec<&str> = Vec::new();
+    if let Some(&(second_start, _)) = spans.get(1) {
+        joiners.push(&text[first_end..second_start]);
+    }
+    joiners.extend(["\n\n", "\r\n", "\n", " "]);
+    let mut candidates: Vec<&str> = vec![prefix];
+    candidates.extend(
+        joiners
+            .iter()
+            .filter(|j| !j.is_empty())
+            .filter_map(|j| prefix.strip_suffix(*j)),
+    );
+    candidates.push(prefix.trim_end());
+    let mut hashes: Vec<String> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let hash = prompt_hash(candidate);
+        if !hashes.contains(&hash) {
+            hashes.push(hash);
+        }
+    }
+    hashes
+}
+
 fn apply_turn_timing_journal(
     turns: &mut [MessageTurn],
     journal: &[crate::turn_timings::TurnTiming],
@@ -1168,7 +1220,7 @@ fn apply_turn_timing_journal(
     if journal.len() > user_indices.len() {
         return;
     }
-    let user_hash = |turns: &[MessageTurn], user_idx: usize| -> String {
+    let user_hash = |turns: &[MessageTurn], user_idx: usize| -> Vec<String> {
         let text: String = turns[user_idx]
             .blocks
             .iter()
@@ -1177,16 +1229,15 @@ fn apply_turn_timing_journal(
                 _ => None,
             })
             .collect();
-        crate::turn_timings::prompt_hash(&text)
+        user_prompt_hashes(&text)
     };
     let mut j = journal.len();
     for (pos, &user_idx) in user_indices.iter().enumerate().rev() {
         if j == 0 {
             break;
         }
-        let turn_sha = user_hash(turns, user_idx);
         let entry = &journal[j - 1];
-        if turn_sha != entry.prompt_sha {
+        if !user_hash(turns, user_idx).contains(&entry.prompt_sha) {
             break;
         }
         // Same-hash-run equality guard (see the doc comment). Runs are counted
@@ -1201,7 +1252,7 @@ fn apply_turn_timing_journal(
         let store_run = user_indices[..=pos]
             .iter()
             .rev()
-            .take_while(|&&u| user_hash(turns, u) == entry.prompt_sha)
+            .take_while(|&&u| user_hash(turns, u).contains(&entry.prompt_sha))
             .count();
         if (journal_run > 1 || store_run > 1) && journal_run != store_run {
             break;
@@ -2832,6 +2883,81 @@ mod tests {
         );
     }
 
+    /// A routed or briefed prompt reaches Cursor with codeg's internal frames
+    /// appended after the user's text, while the connection journaled the hash
+    /// of the user's text alone. The pairing must see through the frames —
+    /// whatever Cursor put between the prompt's blocks — or every such turn
+    /// loses its clock.
+    #[test]
+    fn a_turn_carrying_internal_frames_still_pairs_with_its_journal_line() {
+        use crate::acp::agent_mentions::{
+            append_agent_routes, append_assistant_routes, render_assistant_brief,
+        };
+        use crate::acp::types::PromptInputBlock;
+
+        let visible = "ask [@Codex](codeg://agent/codex) and [@Reviewer](codeg://assistant/3) ";
+        let mut prompt = vec![PromptInputBlock::Text {
+            text: visible.into(),
+        }];
+        append_agent_routes(&mut prompt, true);
+        append_assistant_routes(&mut prompt, true);
+        prompt.push(PromptInputBlock::Text {
+            text: render_assistant_brief("Reviewer", "Cite line numbers.").unwrap(),
+        });
+        let parts: Vec<String> = prompt
+            .iter()
+            .map(|b| match b {
+                PromptInputBlock::Text { text } => text.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(parts.len(), 4, "the fixture must carry every frame kind");
+
+        for joiner in ["", "\n", "\n\n", " "] {
+            let tmp = tempfile::tempdir().unwrap();
+            let session_dir = tmp.path().join("acp-sessions").join("acp-frames");
+            std::fs::create_dir_all(&session_dir).unwrap();
+            let mut store = StoreBuilder::create(&session_dir.join("store.db"));
+            let turn = put_text_only_turn(&mut store, &parts.join(joiner), "done");
+            let mut state = Vec::new();
+            field_bytes(8, &turn, &mut state);
+            let root_id = store.put_blob(&state);
+            store.put_meta(&serde_json::json!({
+                "agentId": "acp-frames",
+                "latestRootBlobId": hex_encode(&root_id),
+                "createdAt": 1_784_000_000_000_u64,
+            }));
+            crate::turn_timings::append_turn_timing_in(
+                &tmp.path().join("turn-timings"),
+                crate::turn_timings::CURSOR_JOURNAL_AGENT,
+                "acp-frames",
+                &crate::turn_timings::TurnTiming {
+                    v: crate::turn_timings::TURN_TIMING_SCHEMA_VERSION,
+                    ord: 1,
+                    conn: "conn-1".into(),
+                    // What the connection hashes: the user's own text blocks.
+                    prompt_sha: crate::turn_timings::prompt_hash(visible),
+                    started_at_ms: 1_784_000_100_000,
+                    ended_at_ms: 1_784_000_104_000,
+                },
+            );
+
+            let parser = crate::parsers::sanitized(CursorParser::with_base_dir(
+                tmp.path().join("chats"),
+            ));
+            let detail = parser.get_conversation("acp-frames").unwrap();
+            assert_eq!(
+                detail.turns[1].duration_ms,
+                Some(4_000),
+                "joiner {joiner:?} must still pair"
+            );
+            let ContentBlock::Text { text } = &detail.turns[0].blocks[0] else {
+                panic!("user text");
+            };
+            assert_eq!(text, visible.trim_end(), "the frames are gone from the bubble");
+        }
+    }
+
     /// Builds one `[user text → shell tool (f59/f60 stamps) → assistant
     /// text]` DAG turn and returns its blob id. The tool stamps give the
     /// turn a tool-span fallback clock (the case the journal must REPLACE,
@@ -3713,5 +3839,26 @@ mod tests {
         assert!(matches!(image_only.role, TurnRole::User));
         assert_eq!(image_only.blocks.len(), 1);
         assert!(matches!(&image_only.blocks[0], ContentBlock::Image { .. }));
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_config_dir_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("CURSOR_CONFIG_DIR", "/relocated/cursor")]);
+        let parser = CursorParser::for_env(&env);
+        let config_dir = PathBuf::from("/relocated/cursor");
+        assert_eq!(parser.chats_dir, config_dir.join("chats"));
+        assert_eq!(parser.acp_sessions_dir, config_dir.join("acp-sessions"));
+
+        // Removed for the child, `CURSOR_CONFIG_DIR` gives way to the XDG home.
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", ""),
+            ("XDG_CONFIG_HOME", "/relocated/xdg"),
+        ]);
+        assert_eq!(
+            CursorParser::for_env(&env).chats_dir,
+            PathBuf::from("/relocated/xdg").join("cursor").join("chats")
+        );
     }
 }

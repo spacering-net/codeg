@@ -5,12 +5,12 @@ use sea_orm::{
 
 use crate::db::entities::conversation;
 use crate::db::error::DbError;
-use crate::db::service::conversation_service;
+use crate::db::service::{agent_setting_service, conversation_service};
 use crate::models::{AgentType, ConversationSummary, ImportResult};
-use crate::parsers::{build_agent_parser, path_eq_for_matching, AgentParser};
+use crate::parsers::{build_agent_parser, path_eq_for_matching, AgentEnv, AgentEnvs, AgentParser};
 
 /// Every locally-parsable agent, in the canonical parser order.
-const ALL_PARSER_AGENTS: [AgentType; 15] = [
+const ALL_PARSER_AGENTS: [AgentType; 17] = [
     AgentType::ClaudeCode,
     AgentType::Codex,
     AgentType::OpenCode,
@@ -26,16 +26,21 @@ const ALL_PARSER_AGENTS: [AgentType; 15] = [
     AgentType::DeepSeek,
     AgentType::Qoder,
     AgentType::Antigravity,
+    AgentType::Kiro,
+    // Codeg-owned ACP history only; no scan of ZCode's native SQLite store.
+    AgentType::ZCode,
 ];
 
-fn build_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
-    build_agent_parser(agent_type)
+fn build_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
+    build_agent_parser(agent_type, env)
 }
 
 /// List every local agent's sessions — one `spawn_blocking` per parser so the
-/// filesystem walks run concurrently (each closure captures only the Copy
-/// `AgentType` and constructs its parser inside, since `dyn AgentParser` is
-/// not `Send`). `on_agent_done(agent, done, total, session_count)` fires once
+/// filesystem walks run concurrently (each closure captures the Copy
+/// `AgentType` and that agent's launch environment from `envs`, and constructs
+/// its parser inside, since `dyn AgentParser` is not `Send`). The environment
+/// is what finds a store the agent's settings relocated (`CLAUDE_CONFIG_DIR`,
+/// `CODEX_HOME`, …). `on_agent_done(agent, done, total, session_count)` fires once
 /// per parser (in fixed parser order) so callers can surface scan progress. A
 /// parser error is logged and contributes zero sessions; the scan still
 /// completes.
@@ -47,6 +52,7 @@ fn build_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
 /// Duplicates are dropped by `(agent_type, id)`, matching
 /// `list_conversations_sync`.
 pub(crate) async fn collect_local_summaries<F>(
+    envs: &AgentEnvs,
     mut on_agent_done: F,
 ) -> Vec<(AgentType, ConversationSummary)>
 where
@@ -58,10 +64,11 @@ where
         ALL_PARSER_AGENTS
             .into_iter()
             .map(|at| {
+                let env = envs.get(at);
                 (
                     at,
                     tokio::task::spawn_blocking(move || {
-                        match build_parser(at).list_conversations() {
+                        match build_parser(at, &env).list_conversations() {
                             Ok(convs) => convs,
                             Err(e) => {
                                 tracing::error!("Error listing {} conversations: {}", at, e);
@@ -218,7 +225,8 @@ pub async fn import_local_conversations(
     folder_id: i32,
     folder_path: &str,
 ) -> Result<(ImportResult, Vec<i32>), DbError> {
-    let summaries = collect_local_summaries(|_, _, _, _| {}).await;
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    let summaries = collect_local_summaries(&envs, |_, _, _, _| {}).await;
     let matched: Vec<(AgentType, ConversationSummary)> = summaries
         .into_iter()
         .filter(|(_, c)| {
@@ -656,6 +664,8 @@ async fn import_one(
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        assistant_id: Set(None),
+        assistant_snapshot: Set(None),
     };
     conv.insert(conn).await?;
     Ok(ImportOutcome::Imported)
@@ -1103,6 +1113,8 @@ mod tests {
             deleted_at: Set(Some(now)),
             pinned_at: Set(None),
             origin_cwd: Set(None),
+            assistant_id: Set(None),
+            assistant_snapshot: Set(None),
         }
         .insert(&db.conn)
         .await
@@ -1465,6 +1477,8 @@ mod tests {
             deleted_at: Set(None),
             pinned_at: Set(None),
             origin_cwd: Set(None),
+            assistant_id: Set(None),
+            assistant_snapshot: Set(None),
         }
         .insert(&db.conn)
         .await

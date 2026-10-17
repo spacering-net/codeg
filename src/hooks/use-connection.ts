@@ -6,6 +6,7 @@ import {
   useConnectionStore,
   getCachedSelectors,
   type ClaudeApiRetryState,
+  type ConnectErrorInfo,
   type ConnectionState,
   type PendingPermission,
   type PendingUserMessage,
@@ -56,6 +57,12 @@ export interface UseConnectionReturn {
    */
   isViewer: boolean
   status: ConnectionStatus | null
+  /** Why the last `connect()` for this contextKey failed, as the provider
+   *  published it (the toast and the status chip read the same record), or
+   *  null. Covers requests whose own promise never reported it: a request
+   *  parked behind another in-flight connect resolves at once and is run, and
+   *  can fail, later. */
+  connectError: ConnectErrorInfo | null
   promptCapabilities: PromptCapabilitiesInfo
   supportsFork: boolean
   selectorsReady: boolean
@@ -155,6 +162,9 @@ const CONN_NON_RENDER_KEYS = new Set<keyof ConnectionState>([
   // enrichment); no useConnection consumer renders it, and it can churn per
   // background tool event.
   "outOfTurnToolCalls",
+  // A stopped turn with its late reports folded in: handed to the runtime
+  // store by the connection dispatch, never rendered from here.
+  "cancelledTurn",
 ])
 
 // Shallow-equal two connection snapshots for RENDER purposes: equal iff every
@@ -240,6 +250,16 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   // placeholder, no loading cue and no status-bar task. A real entry always
   // wins: once it exists, its own status is the more specific truth.
   const status = connection?.status ?? (connectPending ? "connecting" : null)
+  const getConnectErrorSnapshot = useCallback(
+    () => store.getConnectError(contextKey),
+    [store, contextKey]
+  )
+  const connectError =
+    useSyncExternalStore(
+      subscribe,
+      getConnectErrorSnapshot,
+      getConnectErrorSnapshot
+    ) ?? null
   const promptCapabilities =
     connection?.promptCapabilities ?? DEFAULT_PROMPT_CAPABILITIES
   const supportsFork = connection?.supportsFork ?? false
@@ -353,6 +373,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       agentType,
       isViewer,
       status,
+      connectError,
       promptCapabilities,
       supportsFork,
       selectorsReady,
@@ -395,6 +416,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       agentType,
       isViewer,
       status,
+      connectError,
       promptCapabilities,
       supportsFork,
       selectorsReady,

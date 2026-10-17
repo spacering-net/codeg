@@ -408,11 +408,11 @@ async fn handle_acp_envelope(
                         || session
                             .tool_call_inputs
                             .get(tool_call_id)
-                            .map(|s| extract_agent_type(s).is_some())
+                            .map(|s| names_delegation_target(s))
                             .unwrap_or(false)
                         || raw_input
                             .as_deref()
-                            .map(|s| extract_agent_type(s).is_some())
+                            .map(names_delegation_target)
                             .unwrap_or(false);
                     let target = session.target.clone();
                     if is_delegation {
@@ -428,13 +428,15 @@ async fn handle_acp_envelope(
                             // and it no-ops when the completion event already
                             // rendered first.
                             if !already_rendered {
-                                let agent = session
-                                    .tool_call_inputs
-                                    .get(tool_call_id)
-                                    .map(String::as_str)
-                                    .or(raw_input.as_deref())
-                                    .and_then(extract_agent_type)
-                                    .unwrap_or_else(|| "agent".to_string());
+                                let agent = delegation_target_label(
+                                    session
+                                        .tool_call_inputs
+                                        .get(tool_call_id)
+                                        .map(String::as_str)
+                                        .or(raw_input.as_deref()),
+                                    report.as_ref().and_then(|r| r.assistant_name.as_deref()),
+                                )
+                                .unwrap_or_else(|| "agent".to_string());
                                 let body =
                                     format_delegation_terminal(&agent, report.as_ref().unwrap());
                                 session.delegation_rendered.insert(tool_call_id.clone());
@@ -449,13 +451,15 @@ async fn handle_acp_envelope(
                             // `DelegationCompleted` render needs the agent_type.
                             // Suppressed once the result has rendered, so a late
                             // re-emitted ack can't appear after the result.
-                            let agent = session
-                                .tool_call_inputs
-                                .get(tool_call_id)
-                                .map(String::as_str)
-                                .or(raw_input.as_deref())
-                                .and_then(extract_agent_type)
-                                .unwrap_or_else(|| "agent".to_string());
+                            let agent = delegation_target_label(
+                                session
+                                    .tool_call_inputs
+                                    .get(tool_call_id)
+                                    .map(String::as_str)
+                                    .or(raw_input.as_deref()),
+                                report.as_ref().and_then(|r| r.assistant_name.as_deref()),
+                            )
+                            .unwrap_or_else(|| "agent".to_string());
                             drop(guard);
                             let msg = RichMessage::info(format_delegation_ack(&agent));
                             let _ = manager.send_to_target(&target, &msg).await;
@@ -483,6 +487,7 @@ async fn handle_acp_envelope(
         AcpEvent::DelegationCompleted {
             parent_tool_use_id,
             result,
+            assistant_name,
             ..
         } => {
             let mut guard = bridge.lock().await;
@@ -493,12 +498,10 @@ async fn handle_acp_envelope(
                 // here at all, so this arm naturally no-ops for synthetic ids —
                 // the terminal `ToolCallUpdate` is their surface.)
                 if !session.delegation_rendered.contains(parent_tool_use_id) {
-                    let agent = session
-                        .tool_call_inputs
-                        .remove(parent_tool_use_id)
-                        .as_deref()
-                        .and_then(extract_agent_type)
-                        .unwrap_or_else(|| "sub-agent".to_string());
+                    let stored_input = session.tool_call_inputs.remove(parent_tool_use_id);
+                    let agent =
+                        delegation_target_label(stored_input.as_deref(), assistant_name.as_deref())
+                            .unwrap_or_else(|| "sub-agent".to_string());
                     session
                         .delegation_rendered
                         .insert(parent_tool_use_id.clone());
@@ -967,6 +970,40 @@ fn extract_agent_type(raw_input: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The `assistant_id` a `delegate_to_agent` raw_input names, by the same
+/// parser the listener dispatches with.
+fn extract_assistant_id(raw_input: &str) -> Option<i32> {
+    let parsed: serde_json::Value = serde_json::from_str(raw_input).ok()?;
+    match crate::acp::delegation::types::delegation_target_from_args(&parsed) {
+        Ok(crate::acp::delegation::types::DelegationTarget::Assistant(id)) => Some(id),
+        _ => None,
+    }
+}
+
+/// Whether a raw_input looks like `delegate_to_agent` arguments: an agent
+/// slug, or a task for an assistant.
+fn names_delegation_target(raw_input: &str) -> bool {
+    extract_agent_type(raw_input).is_some()
+        || (extract_assistant_id(raw_input).is_some()
+            && serde_json::from_str::<serde_json::Value>(raw_input)
+                .ok()
+                .is_some_and(|v| v.get("task").is_some()))
+}
+
+/// Who a delegation went to, for the relay's lines: the assistant's name when
+/// the report or event carried it, `assistant #<id>` when only the arguments
+/// named one, otherwise the agent slug the caller supplied.
+fn delegation_target_label(raw_input: Option<&str>, assistant_name: Option<&str>) -> Option<String> {
+    if let Some(name) = assistant_name.map(str::trim).filter(|n| !n.is_empty()) {
+        return Some(name.to_string());
+    }
+    let raw_input = raw_input?;
+    if let Some(id) = extract_assistant_id(raw_input) {
+        return Some(format!("assistant #{id}"));
+    }
+    extract_agent_type(raw_input)
+}
+
 /// Ack line for a `delegate_to_agent` call: under async delegation the tool
 /// output is just a task id, so the channel shows that the sub-agent started
 /// and is running in the background. The result lands later via
@@ -982,6 +1019,8 @@ struct DelegationReportView {
     error_code: Option<String>,
     message: Option<String>,
     text: Option<String>,
+    /// The assistant the task ran as, when it ran as one.
+    assistant_name: Option<String>,
 }
 
 impl DelegationReportView {
@@ -1017,6 +1056,10 @@ fn parse_delegation_report(raw_output: Option<&str>) -> Option<DelegationReportV
             .map(str::to_string),
         text: report
             .get("text")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        assistant_name: report
+            .get("assistant_name")
             .and_then(|v| v.as_str())
             .map(str::to_string),
     })
@@ -1120,6 +1163,34 @@ mod delegation_relay_tests {
         );
         assert_eq!(extract_agent_type(r#"{"task":"x"}"#), None);
         assert_eq!(extract_agent_type("not json"), None);
+    }
+
+    #[test]
+    fn an_assistant_delegation_is_labeled_by_the_assistant() {
+        // The report's name wins; the arguments alone give `assistant #<id>`.
+        assert_eq!(
+            delegation_target_label(Some(r#"{"assistant_id":3,"task":"x"}"#), Some("Reviewer")),
+            Some("Reviewer".into())
+        );
+        assert_eq!(
+            delegation_target_label(
+                Some(r#"{"assistant_id":"3","agent_type":"codex","task":"x"}"#),
+                None
+            ),
+            Some("assistant #3".into())
+        );
+        assert_eq!(
+            delegation_target_label(Some(r#"{"agent_type":"codex","task":"x"}"#), None),
+            Some("codex".into())
+        );
+        assert_eq!(delegation_target_label(None, Some("  ")), None);
+        assert!(names_delegation_target(r#"{"assistant_id":3,"task":"x"}"#));
+        assert!(!names_delegation_target(r#"{"assistant_id":3}"#));
+        let report = parse_delegation_report(Some(
+            r#"{"structuredContent":{"status":"running","assistant_name":"Reviewer"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(report.assistant_name.as_deref(), Some("Reviewer"));
     }
 
     #[test]
@@ -1385,6 +1456,8 @@ mod async_relay_dedup_tests {
                     duration_ms: 3,
                     text_preview: Some("done".into()),
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         }
     }

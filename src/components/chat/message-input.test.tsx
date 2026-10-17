@@ -1527,6 +1527,212 @@ describe("MessageInput slash menu rows", () => {
   })
 })
 
+// Antigravity's ACP server advertises only its built-ins and never a skill, so
+// the skills it loads reach the `/` menu from disk, after those commands.
+describe("MessageInput slash menu for skills an agent does not advertise", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    agentSkills.mockReturnValue([])
+    agentSkills.mockClear()
+  })
+
+  // What antigravity 1.4.0 advertises, all of it.
+  const COMMANDS = [
+    { name: "plan", description: "Plan carefully before executing a task." },
+    { name: "logout", description: "Log out and clear stored credentials." },
+    { name: "usage", description: "Show model token usage and quota limits." },
+  ]
+  const DEPLOY = {
+    id: "deploy",
+    name: "Deploy",
+    description: "Ship the build",
+    scope: "global",
+  }
+  // Sending `/plan` runs the built-in, never a skill of that name.
+  const SHADOWED = {
+    id: "plan",
+    name: "Plan skill",
+    description: "A skill named like a command",
+    scope: "project",
+  }
+
+  async function mountAndType(
+    props: Partial<React.ComponentProps<typeof MessageInput>>,
+    text = "/"
+  ) {
+    const view = renderInput(props)
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    act(() => {
+      editor.commands.insertContent(text)
+    })
+    return { editor, view }
+  }
+
+  function rerenderInput(
+    view: ReturnType<typeof renderInput>,
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} {...props} />
+      </NextIntlClientProvider>
+    )
+  }
+
+  it("lists Antigravity's skills from disk after its commands", async () => {
+    agentSkills.mockReturnValue([DEPLOY, SHADOWED])
+    await mountAndType({
+      agentType: "antigravity",
+      availableCommands: COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/plan/),
+      expect.stringMatching(/^\/logout/),
+      expect.stringMatching(/^\/usage/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Plan skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("antigravity", null)
+  })
+
+  it("inserts a picked Antigravity skill as its `/` token", async () => {
+    agentSkills.mockReturnValue([DEPLOY])
+    const { editor } = await mountAndType(
+      { agentType: "antigravity", availableCommands: COMMANDS },
+      "/dep"
+    )
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("Deploy")).toBeInTheDocument()
+
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+    await waitFor(() =>
+      expect(composerHandle.current?.getText()).toBe("/deploy ")
+    )
+    expect(JSON.stringify(composerHandle.current?.getJSON())).toContain(
+      '"refType":"skill"'
+    )
+  })
+
+  // `useAgentSkills` reports an in-flight scan as an empty list, and with no
+  // connection there are no commands either: the `/` must stay armed.
+  it("fills in Antigravity's skills on `/` with no commands to show", async () => {
+    const { view } = await mountAndType({
+      agentType: "antigravity",
+      availableCommands: [],
+      commandsLoading: false,
+    })
+    expect(screen.queryByTestId("slash-menu")).toBeNull()
+
+    agentSkills.mockReturnValue([DEPLOY])
+    rerenderInput(view, {
+      agentType: "antigravity",
+      availableCommands: [],
+      commandsLoading: false,
+    })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("Deploy")).toBeInTheDocument()
+  })
+
+  it("keeps a `$` typed for Antigravity as plain text", async () => {
+    agentSkills.mockReturnValue([DEPLOY])
+    await mountAndType(
+      { agentType: "antigravity", availableCommands: COMMANDS },
+      "$dep"
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByTestId("slash-menu")).toBeNull()
+  })
+
+  it("keeps Codex's disk skills off its `/` menu", async () => {
+    agentSkills.mockReturnValue([DEPLOY])
+    await mountAndType({ agentType: "codex", availableCommands: COMMANDS })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("/plan")).toBeInTheDocument()
+    expect(within(menu).queryByText("Deploy")).toBeNull()
+  })
+
+  it("reads no skills from disk for an agent that advertises its own", async () => {
+    await mountAndType({
+      agentType: "claude_code",
+      availableCommands: COMMANDS,
+    })
+    await screen.findByTestId("slash-menu")
+    expect(agentSkills).toHaveBeenCalledWith(null, null)
+    expect(agentSkills).not.toHaveBeenCalledWith("claude_code", null)
+  })
+
+  // While the commands still load, the loading row sits above the skills, so
+  // the row kept in view must be found among the rows, not by child position.
+  it("keeps the highlighted skill in view below the loading row", async () => {
+    const ROW = 40
+    const skills = Array.from({ length: 8 }, (_, i) => ({
+      id: `skill-${i}`,
+      name: `Skill ${i}`,
+      description: `Skill number ${i}`,
+      scope: "global",
+    }))
+    agentSkills.mockReturnValue(skills)
+    const { editor } = await mountAndType({
+      agentType: "antigravity",
+      availableCommands: [],
+      commandsLoading: true,
+    })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByRole("status")).toBeInTheDocument()
+
+    // jsdom lays nothing out: give the list a four-row viewport and each row
+    // its place under the one-row loading status.
+    const list = menu.firstElementChild as HTMLElement
+    let scrollTop = 0
+    Object.defineProperty(list, "clientHeight", { value: 4 * ROW })
+    Object.defineProperty(list, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value
+      },
+    })
+    within(menu)
+      .getAllByRole("button")
+      .forEach((row, i) => {
+        Object.defineProperty(row, "offsetTop", { value: ROW + i * ROW })
+        Object.defineProperty(row, "offsetHeight", { value: ROW })
+      })
+
+    // Down to the fifth skill, whose bottom edge lies at 6 rows.
+    for (let i = 0; i < 4; i++) {
+      act(() => {
+        ;(editor.view.dom as HTMLElement).dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "ArrowDown",
+            bubbles: true,
+            cancelable: true,
+          })
+        )
+      })
+    }
+    await waitFor(() => expect(scrollTop).toBe(2 * ROW))
+  })
+})
+
 describe("MessageInput slash badges", () => {
   afterEach(() => {
     cleanup()

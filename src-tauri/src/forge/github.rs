@@ -31,12 +31,13 @@ use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
 use super::{
-    sanitize_web_url, truncate_chars, urlencode_query, validate_state_filter, ForgeChangeDetail,
-    ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList, ForgeCheckState,
-    ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList, ForgeIssueRow,
-    ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
+    sanitize_web_url, scan_timestamp, truncate_chars, urlencode_query, validate_state_filter,
+    ForgeChangeDetail, ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList,
+    ForgeCheckState, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
+    ForgeIssueRow, ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
     ForgeMergeStrategy, ForgeProvider, ForgeStateAction, ForgeTab, ListIssuesRequest,
-    ResolvedNewIssue, BODY_CAP, LABEL_PAGE_SIZE,
+    OpenItemsScan, ResolvedNewIssue, ScanCursor, BODY_CAP, LABEL_PAGE_SIZE, SCAN_MAX_PAGES,
+    SCAN_PAGE_SIZE,
 };
 
 /// How deep search pagination goes, per GitHub's documented limit. Beyond this
@@ -292,6 +293,71 @@ pub async fn list_issues(
         reachable_count: (page_data.total_count > SEARCH_RESULT_CAP).then_some(SEARCH_RESULT_CAP),
         has_next: i64::from(page) * i64::from(per_page) < reachable,
         incomplete: page_data.incomplete_results,
+    })
+}
+
+/// Every OPEN item of the wanted kinds updated at or after `since` (every open
+/// item when `None`) — what an auto-processing scan reads — starting from
+/// where `from` says (a fresh cursor for a new window; the previous scan's
+/// [`OpenItemsScan::resume`] to carry on with one cut short).
+///
+/// `/repos/{o}/{r}/issues`, NOT the search endpoint the workbench list uses,
+/// and on purpose — rule 1 above is about PAGE NUMBERS for a person, which a
+/// scan has no use for. What it needs is the opposite trade: the plain feed is
+/// served from the primary store, so a scan a webhook set off seconds after an
+/// issue was filed does find it (search's index trails writes); it filters by
+/// `since` server-side; and it spends the core quota instead of search's
+/// thirty a minute, which the user's own browsing needs. The feed mixes both
+/// kinds — exactly what a scan of both wants — and the `pull_request` key,
+/// reliable on this endpoint, splits them.
+///
+/// Newest-updated first: an item updated while the window is being read moves
+/// to the front, so the rows behind it shift down and are read twice rather
+/// than skipped (see [`ScanCursor`]).
+pub async fn list_open_items(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    issues: bool,
+    pulls: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    from: &ScanCursor,
+) -> Result<OpenItemsScan, ForgeError> {
+    let repo = super::normalize_repo(owner_repo)
+        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
+    let mut rows = Vec::new();
+    let mut cursor = ScanCursor::default();
+    if issues || pulls {
+        super::scan_collection("feed", from, &mut cursor, &mut rows, SCAN_MAX_PAGES, |page| {
+            let mut url = format!(
+                "{}/repos/{repo}/issues?state=open&sort=updated&direction=desc\
+                 &per_page={SCAN_PAGE_SIZE}&page={page}",
+                auth.api_base
+            );
+            if let Some(since) = since {
+                url.push_str(&format!("&since={}", urlencode_query(&scan_timestamp(since))));
+            }
+            async move {
+                let response = api_get(auth, &url).await?;
+                let has_next = has_next_link(response.headers());
+                let raw: Vec<RawIssue> = response
+                    .json()
+                    .await
+                    .map_err(|e| ForgeError::Network(format!("bad issues payload: {e}")))?;
+                let kept = raw
+                    .into_iter()
+                    .filter_map(|item| {
+                        let is_pr = item.pull_request.is_some();
+                        ((is_pr && pulls) || (!is_pr && issues)).then(|| item.into_row(is_pr))
+                    })
+                    .collect();
+                Ok((kept, has_next))
+            }
+        })
+        .await?;
+    }
+    Ok(OpenItemsScan {
+        rows,
+        resume: cursor.has_more().then_some(cursor),
     })
 }
 
@@ -2691,5 +2757,170 @@ mod tests {
         assert_eq!(file_status("renamed"), ForgeFileStatus::Renamed);
         assert_eq!(file_status("changed"), ForgeFileStatus::Modified);
         assert_eq!(file_status("unchanged"), ForgeFileStatus::Modified);
+    }
+}
+
+/// `list_open_items` — the auto-processing scan's read — kept apart from the
+/// workbench list's tests above, because it reads a different endpoint for a
+/// different reason (see its doc).
+#[cfg(test)]
+mod open_items_tests {
+    use super::*;
+    use axum::extract::Query;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    use axum::Json;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: ForgeProvider::GitHub,
+            server_host: "github.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    fn item(number: i64, pr: bool) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "number": number,
+            "title": format!("item {number}"),
+            "state": "open",
+            "updated_at": "2026-10-14T09:00:00Z",
+            "html_url": format!("https://github.test/acme/app/issues/{number}"),
+            "user": { "login": "alice" },
+            "labels": [{ "name": "bug", "color": "d73a4a" }],
+        });
+        if pr {
+            v["pull_request"] = serde_json::json!({ "merged_at": null });
+            v["draft"] = serde_json::json!(true);
+        }
+        v
+    }
+
+    /// Two pages of the mixed feed — a `Link: rel="next"` on the first — or,
+    /// with `endless`, a `next` on every page.
+    async fn serve(endless: bool) -> (String, Arc<Mutex<Vec<HashMap<String, String>>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/repos/acme/app/issues",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let log = log.clone();
+                async move {
+                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    log.lock().unwrap().push(q);
+                    let mut headers = HeaderMap::new();
+                    if endless || page == 1 {
+                        headers.insert(
+                            "link",
+                            format!("<https://api.test/x?page={}>; rel=\"next\"", page + 1)
+                                .parse()
+                                .unwrap(),
+                        );
+                    }
+                    let rows = if page == 1 {
+                        vec![item(1, false), item(2, true)]
+                    } else {
+                        vec![item(3, false)]
+                    };
+                    (headers, Json(serde_json::Value::Array(rows)))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// The plain feed, open only, freshest first, cut at `since` server-side,
+    /// every page read — and the kinds split off the `pull_request` key.
+    #[tokio::test]
+    async fn the_scan_reads_every_page_of_the_open_feed_since_the_window() {
+        let (base, seen) = serve(false).await;
+        let auth = auth_for(base);
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00.750Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth, "Acme/App", true, false, Some(since), &fresh)
+            .await
+            .expect("listed");
+        assert_eq!(scan.resume, None, "a listing read to its end leaves nothing to carry on");
+        let numbers: Vec<i64> = scan.rows.iter().map(|r| r.number).collect();
+        assert_eq!(numbers, vec![1, 3], "issues only");
+        assert!(scan.rows.iter().all(|r| !r.is_pr));
+
+        let queries = seen.lock().unwrap().clone();
+        assert_eq!(queries.len(), 2, "both pages");
+        let first = &queries[0];
+        assert_eq!(first.get("state").map(String::as_str), Some("open"));
+        assert_eq!(first.get("sort").map(String::as_str), Some("updated"));
+        // Newest-updated first: an item updated mid-read moves to the front
+        // and shifts the rest DOWN — read twice, never skipped.
+        assert_eq!(first.get("direction").map(String::as_str), Some("desc"));
+        assert_eq!(first.get("per_page").map(String::as_str), Some("100"));
+        assert_eq!(
+            first.get("since").map(String::as_str),
+            Some("2026-10-14T08:00:00Z"),
+            "whole seconds, rounded down"
+        );
+        assert_eq!(queries[1].get("page").map(String::as_str), Some("2"));
+
+        let prs = list_open_items(&auth, "acme/app", false, true, None, &ScanCursor::default())
+            .await
+            .expect("listed");
+        assert_eq!(prs.rows.len(), 1);
+        assert!(prs.rows[0].is_pr && prs.rows[0].draft);
+        // No window, no parameter.
+        assert!(!seen.lock().unwrap().last().unwrap().contains_key("since"));
+    }
+
+    /// A server that never stops offering a next page is read up to the
+    /// budget and handed on with a cursor — never looped on forever, never
+    /// passed off as the whole listing — and the next call carries on from the
+    /// page after the last one read.
+    #[tokio::test]
+    async fn an_endless_feed_stops_at_the_budget_and_carries_on_from_there() {
+        let (base, seen) = serve(true).await;
+        let auth = auth_for(base);
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth, "acme/app", true, true, None, &fresh)
+            .await
+            .expect("listed");
+        assert_eq!(seen.lock().unwrap().len(), SCAN_MAX_PAGES as usize);
+        let cursor = scan.resume.expect("cut short");
+        assert_eq!(cursor.first_page("feed"), Some(SCAN_MAX_PAGES + 1));
+
+        seen.lock().unwrap().clear();
+        let more = list_open_items(&auth, "acme/app", true, true, None, &cursor)
+            .await
+            .expect("listed");
+        // Carrying on re-reads the overlap first, then moves on.
+        let first_asked = seen.lock().unwrap()[0].get("page").cloned();
+        let restart = SCAN_MAX_PAGES + 1 - crate::forge::SCAN_CONTINUATION_OVERLAP_PAGES;
+        assert_eq!(first_asked, Some(restart.to_string()));
+        assert_eq!(
+            more.resume.and_then(|c| c.first_page("feed")),
+            Some(restart + SCAN_MAX_PAGES)
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_for_no_kind_asks_nothing() {
+        let (base, seen) = serve(false).await;
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth_for(base), "acme/app", false, false, None, &fresh)
+            .await
+            .expect("listed");
+        assert!(scan.resume.is_none() && scan.rows.is_empty());
+        assert!(seen.lock().unwrap().is_empty());
     }
 }

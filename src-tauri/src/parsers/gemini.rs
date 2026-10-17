@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 
 use crate::models::*;
 use crate::parsers::{
-    folder_name_from_path, title_from_user_text, truncate_str, AgentParser, ParseError,
+    folder_name_from_path, title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 pub struct GeminiParser {
@@ -23,8 +23,14 @@ impl Default for GeminiParser {
 
 impl GeminiParser {
     pub fn new() -> Self {
-        let base_dir = resolve_gemini_base_dir();
-        Self { base_dir }
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Gemini CLI launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
+        Self {
+            base_dir: resolve_gemini_base_dir_for_env(env),
+        }
     }
 
     /// Test-only constructor that lets callers point the parser at a fixture
@@ -916,7 +922,13 @@ impl GeminiParser {
 }
 
 pub(crate) fn resolve_gemini_base_dir() -> PathBuf {
-    resolve_gemini_base_dir_from(std::env::var_os("GEMINI_CLI_HOME"), dirs::home_dir())
+    resolve_gemini_base_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The `.gemini` dir of the Gemini CLI launched with `env`: under its
+/// `GEMINI_CLI_HOME`, else under `~`.
+pub(crate) fn resolve_gemini_base_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_base_dir_from(env.var_os("GEMINI_CLI_HOME"), dirs::home_dir())
 }
 
 fn resolve_gemini_base_dir_from(
@@ -1787,5 +1799,17 @@ mod tests {
             ContentBlock::Image { data, mime_type, uri }
             if data == "QUJD" && mime_type == "image/png" && uri.is_none()
         ));
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env =
+            crate::parsers::AgentEnv::with_overrides(&[("GEMINI_CLI_HOME", "/relocated/gemini")]);
+        assert_eq!(
+            GeminiParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/gemini").join(".gemini")
+        );
     }
 }

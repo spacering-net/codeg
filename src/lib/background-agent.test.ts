@@ -15,7 +15,27 @@ describe("parseBackgroundTaskMarker", () => {
       status: "completed",
       summary: 'Agent "Run pnpm build" finished',
       result: "Build OK",
+      interim: false,
     })
+  })
+
+  // The detail parse and the live settle both add `"interim": true` when the
+  // sub-agent's notification says it will notify again.
+  it("parses an interim marker", () => {
+    const output = `${BACKGROUND_TASK_MARKER}{"task_id":"a0a4","status":"completed","summary":"Agent \\"probe\\" is waiting on its own background work","result":"ok","interim":true}`
+    expect(parseBackgroundTaskMarker(output)).toEqual({
+      taskId: "a0a4",
+      status: "completed",
+      summary: 'Agent "probe" is waiting on its own background work',
+      result: "ok",
+      interim: true,
+    })
+    // Anything but `true` is no interim flag.
+    expect(
+      parseBackgroundTaskMarker(
+        `${BACKGROUND_TASK_MARKER}{"task_id":"a0a4","status":"completed","summary":null,"result":null,"interim":"yes"}`
+      )?.interim
+    ).toBe(false)
   })
 
   it("parses an unsettled marker (null status — never rendered as running)", () => {
@@ -25,6 +45,7 @@ describe("parseBackgroundTaskMarker", () => {
       status: null,
       summary: null,
       result: null,
+      interim: false,
     })
   })
 

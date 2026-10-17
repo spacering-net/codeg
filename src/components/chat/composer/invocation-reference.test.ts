@@ -7,6 +7,8 @@ import {
   commandInputHint,
   commandInvocationToken,
   commandToReference,
+  diskSkillTrigger,
+  skillsForMenu,
   skillToReference,
 } from "./invocation-reference"
 import { referenceToMarkdown } from "./reference-text"
@@ -107,6 +109,45 @@ describe("buildKnownInvocations", () => {
   it("is empty for an agent that has advertised nothing yet", () => {
     expect(buildKnownInvocations(null).size).toBe(0)
     expect(buildKnownInvocations([]).size).toBe(0)
+  })
+})
+
+describe("diskSkillTrigger", () => {
+  it("lists Codex's disk skills under its own `$` syntax", () => {
+    expect(diskSkillTrigger("codex")).toBe("$")
+  })
+
+  // Antigravity's server advertises only /plan, /logout and /usage, so its
+  // skills can only come from disk.
+  it("lists Antigravity's disk skills under `/`", () => {
+    expect(diskSkillTrigger("antigravity")).toBe("/")
+  })
+
+  it("scans nothing for an agent that advertises its skills as commands", () => {
+    for (const agent of ["claude_code", "kimi_code", "gemini", "custom:x"]) {
+      expect(diskSkillTrigger(agent)).toBeNull()
+    }
+    expect(diskSkillTrigger(null)).toBeNull()
+    expect(diskSkillTrigger(undefined)).toBeNull()
+  })
+})
+
+describe("skillsForMenu", () => {
+  const skills = [skill("plan", "Plan"), skill("ship", "Ship")]
+
+  it("leaves out a `/` skill an advertised command shadows", () => {
+    expect(
+      skillsForMenu(skills, [cmd("plan"), cmd("usage")], "/").map((s) => s.id)
+    ).toEqual(["ship"])
+  })
+
+  it("keeps every `$` skill, which shares no menu with the commands", () => {
+    // Codex advertises a skill as a command named `$ship`, listed under `/`.
+    expect(skillsForMenu(skills, [cmd("plan"), cmd("$ship")], "$")).toBe(skills)
+  })
+
+  it("keeps every skill while there are no commands to collide with", () => {
+    expect(skillsForMenu(skills, [], "/")).toBe(skills)
   })
 })
 

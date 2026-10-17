@@ -44,7 +44,7 @@ export type FileFlowNode = Node<FileNodeData, "file">
  * refetches) and its markdown/source toggle are the very ones the file column
  * uses — "open in workspace" is then a route switch away from this exact tab.
  * The body is `FileDocumentView`, shared with the transcript's file viewer
- * drawer, so all three surfaces branch identically on image / office /
+ * drawer, so all three surfaces branch identically on image / PDF / office /
  * markdown / HTML / source.
  *
  * The open is a BACKGROUND one. A board can hold a dozen file cards and mounts

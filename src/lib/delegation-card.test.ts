@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { ALL_AGENT_TYPES } from "@/lib/types"
 import {
+  coerceAssistantId,
   isAffirmedResume,
   isRefusedResume,
   parseDelegateTaskId,
@@ -92,6 +93,9 @@ describe("codex live-wire result envelope", () => {
       agentType: "codex",
       // No refusal code — this is a real ack. See `isRefusedResume`.
       errorCode: null,
+      // A plain agent delegation names no assistant.
+      assistantId: null,
+      assistantName: null,
     })
   })
 
@@ -245,6 +249,75 @@ describe("parseToolOutput agent type", () => {
     expect(
       parseToolOutput(JSON.stringify({ task_id: "t-1", status: "running" }))
     ).toMatchObject({ kind: "ack", agentType: null })
+  })
+})
+
+describe("assistant identity", () => {
+  it("reads assistant_id off the call, a numeric string included", () => {
+    expect(
+      parseInput(
+        JSON.stringify({ assistant_id: 3, task: "review", agent_type: "codex" })
+      )
+    ).toMatchObject({ assistantId: 3, agentType: "codex", task: "review" })
+    expect(parseInput(JSON.stringify({ assistant_id: "12" })).assistantId).toBe(
+      12
+    )
+  })
+
+  it("finds the arguments by assistant_id alone, wrapped or not", () => {
+    // A call naming only an assistant still is a delegation call.
+    expect(
+      parseInput(
+        JSON.stringify({
+          toolName: "delegate_to_agent",
+          args: { assistant_id: 4 },
+        })
+      ).assistantId
+    ).toBe(4)
+  })
+
+  it("ignores an id the backend would refuse", () => {
+    for (const value of [0, -1, 1.5, "03", "abc", "", 2 ** 31, null, true]) {
+      expect(coerceAssistantId(value)).toBeNull()
+    }
+    expect(coerceAssistantId(2 ** 31 - 1)).toBe(2 ** 31 - 1)
+  })
+
+  it("reads the assistant off the broker meta", () => {
+    expect(
+      parseDelegationMeta({
+        "codeg.delegation": {
+          status: "running",
+          assistant_id: 3,
+          assistant_name: "Reviewer",
+        },
+      })
+    ).toMatchObject({ assistantId: 3, assistantName: "Reviewer" })
+    expect(
+      parseDelegationMeta({ "codeg.delegation": { status: "running" } })
+    ).toMatchObject({ assistantId: null, assistantName: null })
+  })
+
+  it("reads the assistant off a report, ack and outcome alike", () => {
+    const report = {
+      task_id: "t-1",
+      agent_type: "codex",
+      assistant_id: 3,
+      assistant_name: "Reviewer",
+    }
+    expect(
+      parseToolOutput(JSON.stringify({ ...report, status: "running" }))
+    ).toMatchObject({ kind: "ack", assistantId: 3, assistantName: "Reviewer" })
+    expect(
+      parseToolOutput(
+        JSON.stringify({ ...report, status: "failed", error_code: "timeout" })
+      )
+    ).toMatchObject({
+      kind: "outcome",
+      isError: true,
+      assistantId: 3,
+      assistantName: "Reviewer",
+    })
   })
 })
 

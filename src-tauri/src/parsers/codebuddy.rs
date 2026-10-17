@@ -19,13 +19,19 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
     merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
-    structurize_read_tool_output, title_from_user_text, truncate_str, AgentParser, ParseError,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Resolve CodeBuddy's config dir, honoring `CODEBUDDY_CONFIG_DIR`, else
 /// `~/.codebuddy` (mirrors `resolve_claude_config_dir`).
 pub(crate) fn resolve_codebuddy_config_dir() -> PathBuf {
-    resolve_codebuddy_config_dir_from(std::env::var_os("CODEBUDDY_CONFIG_DIR"), dirs::home_dir())
+    resolve_codebuddy_config_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The config dir of the CodeBuddy launched with `env`.
+pub(crate) fn resolve_codebuddy_config_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_codebuddy_config_dir_from(env.var_os("CODEBUDDY_CONFIG_DIR"), dirs::home_dir())
 }
 
 fn resolve_codebuddy_config_dir_from(
@@ -52,8 +58,13 @@ pub struct CodeBuddyParser {
 
 impl CodeBuddyParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the CodeBuddy launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_codebuddy_config_dir().join("projects"),
+            base_dir: resolve_codebuddy_config_dir_for_env(env).join("projects"),
         }
     }
 
@@ -117,7 +128,7 @@ impl CodeBuddyParser {
                     "user" if !is_injected_user_record(&value) => {
                         message_count += 1;
                         if first_user_text.is_none() {
-                            let text = collect_text(&value, "input_text");
+                            let text = shown_user_text(collect_text(&value, "input_text"));
                             if !text.trim().is_empty() {
                                 first_user_text = Some(title_from_user_text(text.trim()));
                             }
@@ -231,6 +242,7 @@ impl CodeBuddyParser {
                             // no fallback title.
                             capture_task_notification(&text, &mut background_notifications);
                         } else {
+                            let text = shown_user_text(text);
                             message_count += 1;
                             if first_user_text.is_none() && !text.trim().is_empty() {
                                 first_user_text = Some(title_from_user_text(text.trim()));
@@ -585,6 +597,28 @@ fn call_id(value: &Value) -> Option<String> {
         .map(String::from)
 }
 
+/// What a prompt record shows: the text the person typed.
+///
+/// A prompt command is persisted as the command tags Claude Code introduced
+/// followed by the prompt it expands to: `<command-message>init
+/// </command-message> <command-name>/init</command-name>`, plus ` <command-args>
+/// …</command-args>` when it has arguments, then a line break and the expansion.
+/// CodeBuddy's custom commands, MCP prompts and workflows were already stored
+/// this way in 2.164.0, and since 2.167.0 its built-in ones such as `/init` are
+/// too, where they used to be stored as the bare expansion. CodeBuddy's own
+/// history replay shows the invocation alone, and so does this; the expansion is
+/// written for the model. Only a record that OPENS with the tags is one, so a
+/// prompt that merely mentions them is left as typed.
+fn shown_user_text(text: String) -> String {
+    let head = text.trim_start();
+    if head.starts_with("<command-message>") || head.starts_with("<command-name>") {
+        if let Some(display) = crate::parsers::claude::slash_command_display(head) {
+            return display;
+        }
+    }
+    text
+}
+
 /// Concatenate the `text` of every `content[]` item of the given `item_type`
 /// (`input_text` for user turns, `output_text` for assistant turns).
 fn collect_text(value: &Value, item_type: &str) -> String {
@@ -842,12 +876,13 @@ fn tool_is_error(value: &Value) -> bool {
 /// `agentCapabilities.metaPromptSupport`; per the 2.159.0 changelog it reaches
 /// the model but is not shown, broadcast or replayed as a user message):
 /// `markAcpMetaPromptItems` stamps the same flag on its user items. codeg never
-/// sends one, but another client's would land here. Since 2.162.0 it also
-/// covers the task-list reminders CodeBuddy persists for the model: a
-/// `<system-reminder>` text flagged `{isMeta, skipRun, startsNewUserRequest:
-/// false, taskReminderKind: "task" | "todo", taskReminderAnchorId}` that it
-/// leaves out of its own replay (`CODEBUDDY_DISABLE_TASK_REMINDERS=1` turns
-/// them off).
+/// sends one, but another client's would land here. It also covers the
+/// task-list reminders CodeBuddy 2.162.0 through 2.164.0 persisted for the
+/// model: a `<system-reminder>` text flagged `{isMeta, skipRun,
+/// startsNewUserRequest: false, taskReminderKind: "task" | "todo",
+/// taskReminderAnchorId}` that it leaves out of its own replay. 2.167.0 stopped
+/// writing them (and dropped the `CODEBUDDY_DISABLE_TASK_REMINDERS` switch), but
+/// the ones already on disk stay there.
 ///
 /// CodeBuddy's OWN renderer skips exactly these records when it replays a
 /// session (`"message" === type && "user" === role && (isMeta ||
@@ -1110,6 +1145,8 @@ fn agent_stats_from_subagent(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        timeline: Vec::new(),
+        recovered_result: None,
         // CodeBuddy's sub-agent transcript is a file under the parent session,
         // not a session of its own.
         child_session_id: None,
@@ -1496,6 +1533,72 @@ mod tests {
         assert_eq!(user_texts, vec!["fix the bug"]);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    // Since 2.167.0 `/init` is stored the way custom commands already were:
+    // the command tags, then the prompt they expand to. The bubble shows what
+    // was typed, as CodeBuddy's own replay does; a prompt that only mentions the
+    // tags stays as typed.
+    #[test]
+    fn prompt_commands_show_as_typed() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-command-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-command";
+        let user = |id: &str, ts: i64, text: &str| {
+            json!({"id":id,"type":"message","role":"user","timestamp":ts,"cwd":"/Users/demo/app",
+                   "sessionId":sid,"content":[{"type":"input_text","text":text}]})
+        };
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                user(
+                    "u1",
+                    1781821844178,
+                    "<command-message>init</command-message> <command-name>/init</command-name>\n\
+                     Please analyze this codebase and create a CODEBUDDY.md file",
+                ),
+                json!({"id":"a1","type":"message","role":"assistant","timestamp":1781821845000i64,
+                       "cwd":"/Users/demo/app","sessionId":sid,"content":[{"type":"output_text","text":"Created."}]}),
+                user(
+                    "u2",
+                    1781821846000,
+                    "<command-message>review</command-message> <command-name>/review</command-name> \
+                     <command-args>src/main.rs</command-args>\nReview the file for bugs",
+                ),
+                user(
+                    "u3",
+                    1781821847000,
+                    "why does <command-name>/x</command-name> appear here?",
+                ),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        let detail = parser.get_conversation(sid).expect("detail");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(summaries[0].title.as_deref(), Some("/init"));
+        assert_eq!(detail.summary.title.as_deref(), Some("/init"));
+        let user_texts: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            user_texts,
+            vec![
+                "/init",
+                "/review src/main.rs",
+                "why does <command-name>/x</command-name> appear here?",
+            ]
+        );
     }
 
     /// Parse one session through BOTH title paths (list + detail) and assert
@@ -2605,5 +2708,16 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_config_dir_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("CODEBUDDY_CONFIG_DIR", "/relocated/codebuddy")]);
+        assert_eq!(
+            CodeBuddyParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/codebuddy").join("projects")
+        );
     }
 }

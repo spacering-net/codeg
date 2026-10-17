@@ -13,6 +13,9 @@
 //! right place per runtime), but drive the platform updater instead of the
 //! in-place tarball swap.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::app_error::AppCommandError;
@@ -60,6 +63,34 @@ pub async fn perform_app_update(
 /// never killed mid-stream.
 const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// `app.updater()`, except that the app quits properly before a Windows
+/// installer takes over.
+///
+/// On Windows a successful install never returns: the plugin launches the
+/// installer and ends the process with `std::process::exit(0)` right away, so
+/// no `RunEvent::Exit` arrives and the quit in `shut_down` never runs. The
+/// agents would outlive the app, and with them the codeg-mcp companions they
+/// run from the folder the installer is about to write, along with terminals
+/// and office watches; the open workspace windows would not be remembered for
+/// the relaunch either. The plugin calls this hook just before it launches the
+/// installer, in place of its default one, which only did
+/// `cleanup_before_exit`. `quit` records that it ran.
+fn updater(
+    app: &tauri::AppHandle,
+    quit: Arc<AtomicBool>,
+) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
+    let quitting = app.clone();
+    app.updater_builder()
+        .on_before_exit(move || {
+            quit.store(true, Ordering::SeqCst);
+            // Called on a runtime worker (`download_and_install` is awaited in
+            // a spawned task), where `shut_down`'s `block_on`s would panic.
+            tokio::task::block_in_place(|| crate::shut_down(&quitting));
+            quitting.cleanup_before_exit();
+        })
+        .build()
+}
+
 /// Re-check, download, and install the update, driving progress into the shared
 /// handle. On success leaves the state at `ReadyToRestart`. Returns the error
 /// message (already stringified) so the caller can record it.
@@ -68,7 +99,8 @@ async fn run_download(
     handle: AppUpdateStateHandle,
     emitter: EventEmitter,
 ) -> Result<(), String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
+    let quit = Arc::new(AtomicBool::new(false));
+    let updater = updater(&app, quit.clone()).map_err(|e| e.to_string())?;
     let update = tokio::time::timeout(CHECK_TIMEOUT, updater.check())
         .await
         // "timed out" is what the frontend's `normalizeAppUpdateError` keys on
@@ -80,14 +112,14 @@ async fn run_download(
         .ok_or_else(|| "No update available".to_string())?;
     let version = update.version.clone();
 
-    let pe = std::sync::Arc::new(update_state::ProgressEmitter::new(
+    let pe = Arc::new(update_state::ProgressEmitter::new(
         handle.clone(),
         emitter.clone(),
     ));
     let pe_chunk = pe.clone();
     let pe_finish = pe.clone();
     let mut downloaded: u64 = 0;
-    update
+    let installed = update
         .download_and_install(
             move |chunk_len, content_len| {
                 downloaded += chunk_len as u64;
@@ -97,8 +129,18 @@ async fn run_download(
                 pe_finish.installing();
             },
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
+    if let Err(err) = installed {
+        if quit.load(Ordering::SeqCst) {
+            // Windows, and the installer failed to start after the app had
+            // already shut down for it: its agents, terminals and web service
+            // are gone. Come back up as the version still installed rather
+            // than carry on half torn down.
+            tracing::error!("[update] the installer did not start: {err}; relaunching");
+            app.restart();
+        }
+        return Err(err.to_string());
+    }
 
     // The desktop app relaunches itself, so there is no supervisor trial or
     // restart-delay metadata to carry (those are server-only).
@@ -125,6 +167,12 @@ pub async fn restart_app(
             "No staged update to restart into",
         ));
     }
+    // Off the main thread on purpose: from here `restart()` goes through
+    // `RunEvent::Exit`, where the single-instance plugin removes its socket
+    // before tauri relaunches. On the main thread it relaunches straight away,
+    // and on macOS (tauri 2.12.2+ relaunches through LaunchServices and waits
+    // for the launch) the new instance finds the old one still listening,
+    // hands it its arguments and quits — nothing is left running.
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         app.restart();

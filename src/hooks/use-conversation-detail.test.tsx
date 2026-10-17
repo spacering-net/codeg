@@ -44,6 +44,7 @@ function seedSession(
           localTurns: [],
           backgroundTurns: [],
           pendingBackgroundSettlements: [],
+          pendingCancelledTurnReports: null,
           optimisticTurns: [],
           liveMessage: null,
           syncState: "idle",

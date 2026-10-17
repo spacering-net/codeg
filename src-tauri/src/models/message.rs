@@ -21,7 +21,22 @@ pub struct AgentToolCall {
     pub is_error: bool,
 }
 
+/// One mixed-timeline entry of a sub-agent's execution, in arrival order.
+/// Field shape mirrors the frontend `AgentTranscriptEntry` union (camelCase
+/// `childIndex`) so the adapter can forward it 1:1 as the card's historical
+/// transcript. `text` carries thinking/text content; `child_index` is the
+/// entry's ordinal into `tool_calls` (tool_call entries only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTimelineEntry {
+    #[serde(rename = "type")]
+    pub entry_type: String, // "thinking" | "text" | "tool_call"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(rename = "childIndex", skip_serializing_if = "Option::is_none")]
+    pub child_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentExecutionStats {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
@@ -50,6 +65,24 @@ pub struct AgentExecutionStats {
     /// Tool calls extracted from the subagent's own JSONL transcript.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tool_calls: Vec<AgentToolCall>,
+    /// The sub-agent's thinking/text/tool activity in arrival order, from the
+    /// same transcript pass that produced `tool_calls`. Every `tool_call`
+    /// entry's `child_index` anchors into `tool_calls` at the same ordinal,
+    /// so the two stay consistent by construction.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub timeline: Vec<AgentTimelineEntry>,
+    /// What the child's task file filed as its outcome (Qoder): for a run
+    /// whose `status` is `completed`, its final report — recoverable here after
+    /// the parent turn died before the async result was delivered (the card's
+    /// tool_result is then an error, and the report exists only here). Other
+    /// statuses file the error message or a placeholder instead. DISPLAY
+    /// POLICY IS THE FRONTEND'S: only an errored card whose `status` is
+    /// `completed` renders it; a normally completed async child delivered its
+    /// result via the notification turn, so this field must stay invisible
+    /// there. Parsers stay dumb and attach it whenever the task file carries
+    /// one.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub recovered_result: Option<String>,
     /// The child's own session id, when the sub-agent ran as a standalone
     /// session on disk rather than as chunks folded into the parent's stream
     /// (Grok: every `spawn_subagent` child is a full session directory). Lets

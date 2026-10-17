@@ -8,6 +8,9 @@ import type { ReferenceAttrs } from "./types"
 // (ai-elements/markdown-link.tsx). Mirrors the schemes the adapters emit
 // (suggestion/adapters.ts) and the node's allow-list (nodes/reference-node.ts).
 const AGENT_URI = /^codeg:\/\/agent\/(.+)$/i
+// Assistant ids are positive integers, never zero-padded — the shape the
+// backend's routing scan (`agent_mentions.rs`) accepts, and the adapter writes.
+const ASSISTANT_URI = /^codeg:\/\/assistant\/([1-9]\d{0,9})$/i
 const SESSION_URI = /^codeg:\/\/session\/(.+)$/i
 const COMMIT_URI = /^codeg:\/\/commit\/.*@(.+)$/i
 // command / skill / expert tokens, surfaced as badges in transcript user messages
@@ -103,6 +106,21 @@ export function parseCodegReferenceUri(
       label: (label || type).replace(/^@/, "") || type,
       uri,
       meta: { agentType: type as AgentType },
+    }
+  }
+
+  const assistant = uri.match(ASSISTANT_URI)
+  if (assistant) {
+    const id = assistant[1]
+    return {
+      refType: "assistant",
+      id,
+      // The link text is `@name`, as for an agent: strip a single leading `@`.
+      // The label is the name the sender saw; the badge draws the current
+      // avatar from the store by id.
+      label: (label || `#${id}`).replace(/^@/, "") || `#${id}`,
+      uri,
+      meta: { assistantId: Number(id) },
     }
   }
 

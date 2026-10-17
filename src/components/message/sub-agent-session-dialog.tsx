@@ -27,7 +27,10 @@
 
 import { useTranslations } from "next-intl"
 
-import { AgentIcon } from "@/components/agent-icon"
+import {
+  DelegationIdentityAvatar,
+  DelegationIdentityName,
+} from "@/components/message/delegation-identity"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
 import {
   Drawer,
@@ -36,15 +39,16 @@ import {
   DrawerTitle,
   SIDE_PANEL_CONTENT_CLASS,
 } from "@/components/ui/drawer"
-import { type AgentType } from "@/lib/types"
-import { getAgentLabel } from "@/lib/custom-agents"
+import type { DelegationIdentity } from "@/hooks/use-delegation-card-model"
+import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   childConversationId: number
   childConnectionId: string | null
-  agentType: AgentType | null
+  /** Who ran the task — titles the drawer; its agent drives the transcript. */
+  identity: DelegationIdentity
   /**
    * The parent's `delegate_to_agent` task text — the child's kickoff prompt,
    * known synchronously in the card. Surfaced so the kickoff user turn can be
@@ -59,10 +63,13 @@ export function SubAgentSessionDialog({
   onOpenChange,
   childConversationId,
   childConnectionId,
-  agentType,
+  identity,
   kickoffTask,
 }: Props) {
   const t = useTranslations("Folder.chat.delegation")
+  // The drawer is a state toggle, not a route: without a history entry behind
+  // it, the back gesture unloads the whole page instead of closing the panel.
+  useHistoryBackDismiss(open, () => onOpenChange(false))
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
@@ -83,21 +90,16 @@ export function SubAgentSessionDialog({
                 16px, so anything else here leaves the header's icon hanging off
                 the column it titles. `pr-12` clears the close button. */}
             <div className="flex items-center gap-3 border-b border-border px-4 py-2.5 pr-12">
-              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground">
-                {agentType ? (
-                  <AgentIcon agentType={agentType} className="h-4 w-4" />
-                ) : (
-                  <span className="h-2 w-2 rounded-sm bg-muted-foreground/60" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-                {agentType ? getAgentLabel(agentType) : t("unknownAgent")}
-              </span>
+              <DelegationIdentityAvatar identity={identity} size="header" />
+              <DelegationIdentityName
+                identity={identity}
+                className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
+              />
             </div>
             <LiveTranscriptView
               conversationId={childConversationId}
               connectionId={childConnectionId}
-              agentType={agentType}
+              agentType={identity.agentType}
               kickoffText={kickoffTask}
             />
           </div>

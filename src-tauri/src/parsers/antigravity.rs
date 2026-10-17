@@ -55,7 +55,8 @@ use crate::parsers::expand_home_prefix;
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
-    structurize_read_tool_output, title_from_user_text, truncate_str, AgentParser, ParseError,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Bound a single tool output / input preview so one enormous step cannot blow
@@ -81,7 +82,11 @@ const METADATA_FILE_SUFFIX: &str = "meta";
 /// Empty counts as unset — Python treats `""` as falsy at that branch — so a
 /// blank override never resolves the home to the process's cwd.
 pub(crate) fn resolve_gemini_home() -> PathBuf {
-    resolve_gemini_home_from(std::env::var_os("GEMINI_HOME"), dirs::home_dir())
+    resolve_gemini_home_for_env(&AgentEnv::inherited())
+}
+
+fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_home_from(env.var_os("GEMINI_HOME"), dirs::home_dir())
 }
 
 /// The same resolution for an EXPLICIT `GEMINI_HOME`, so a caller holding a
@@ -128,7 +133,14 @@ pub(crate) fn resolve_antigravity_acp_dir() -> PathBuf {
 
 /// `<home>/antigravity-acp/conversations` — the session trajectories.
 pub(crate) fn resolve_antigravity_sessions_dir() -> PathBuf {
-    resolve_antigravity_acp_dir().join(SESSIONS_DIR_NAME)
+    resolve_antigravity_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_antigravity_sessions_dir`] for the server launched with `env`.
+pub(crate) fn resolve_antigravity_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_home_for_env(env)
+        .join(ACP_SUBDIR)
+        .join(SESSIONS_DIR_NAME)
 }
 
 /// `<home>/config` — the config shared with every other Gemini/Antigravity
@@ -490,8 +502,13 @@ pub struct AntigravityParser {
 
 impl AntigravityParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Antigravity server launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_antigravity_sessions_dir(),
+            base_dir: resolve_antigravity_sessions_dir_for_env(env),
         }
     }
 
@@ -2061,5 +2078,18 @@ mod tests {
             &blocks[1],
             ContentBlock::ToolResult { output_preview: Some(out), .. } if out.contains("a.txt")
         ));
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("GEMINI_HOME", "/relocated/agy")]);
+        assert_eq!(
+            AntigravityParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/agy")
+                .join("antigravity-acp")
+                .join("conversations")
+        );
     }
 }

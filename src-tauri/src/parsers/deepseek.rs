@@ -15,7 +15,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
     resolve_patch_line_numbers, structurize_read_tool_output, title_from_user_text, truncate_str,
-    AgentParser, ParseError,
+    AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve the DeepSeek Harness home the way `@deepseek-ai/dsh-home-paths`'
@@ -40,7 +40,11 @@ fn resolve_dsh_home_from(dsh_home_env: Option<OsString>, home_dir: Option<PathBu
 /// skills store, the credentials document, and (unless relocated) the session
 /// logs.
 pub(crate) fn resolve_dsh_home_dir() -> PathBuf {
-    resolve_dsh_home_from(std::env::var_os("DSH_HOME"), dirs::home_dir())
+    resolve_dsh_home_dir_for_env(&AgentEnv::inherited())
+}
+
+fn resolve_dsh_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_dsh_home_from(env.var_os("DSH_HOME"), dirs::home_dir())
 }
 
 /// Resolve the shared cross-agent home the way `dsh-skill-filesystem` does:
@@ -65,9 +69,14 @@ fn resolve_dsh_agents_home_from(
 /// `DEEPSEEK_ACP_SESSIONS_ROOT` wins, else `$DSH_HOME/sessions`, else
 /// `~/.dsh/sessions`.
 pub(crate) fn resolve_deepseek_sessions_root() -> PathBuf {
+    resolve_deepseek_sessions_root_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_deepseek_sessions_root`] for the harness launched with `env`.
+pub(crate) fn resolve_deepseek_sessions_root_for_env(env: &AgentEnv) -> PathBuf {
     resolve_deepseek_sessions_root_from(
-        std::env::var_os("DEEPSEEK_ACP_SESSIONS_ROOT"),
-        std::env::var_os("DSH_HOME"),
+        env.var_os("DEEPSEEK_ACP_SESSIONS_ROOT"),
+        env.var_os("DSH_HOME"),
         dirs::home_dir(),
     )
 }
@@ -90,7 +99,14 @@ fn resolve_deepseek_sessions_root_from(
 /// `DEEPSEEK_ACP_SESSIONS_ROOT` relocates the logs alone, so a deployment that
 /// uses it keeps its attachments under `$DSH_HOME` all the same.
 pub(crate) fn resolve_deepseek_attachments_root() -> PathBuf {
-    resolve_dsh_home_dir().join("attachments").join("v1")
+    resolve_deepseek_attachments_root_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_deepseek_attachments_root`] for the harness launched with `env`.
+pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_dsh_home_dir_for_env(env)
+        .join("attachments")
+        .join("v1")
 }
 
 /// DeepSeek Harness (driven through the `deepseek-acp` editor bridge) persists
@@ -165,9 +181,14 @@ pub struct DeepSeekParser {
 
 impl DeepSeekParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the harness launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_deepseek_sessions_root(),
-            attachments_root: resolve_deepseek_attachments_root(),
+            base_dir: resolve_deepseek_sessions_root_for_env(env),
+            attachments_root: resolve_deepseek_attachments_root_for_env(env),
         }
     }
 
@@ -2725,5 +2746,23 @@ mod tests {
         // No `start` to measure against, and no `summary` to count.
         assert!(marker.get("durationMs").is_none());
         assert!(marker.get("preTokens").is_none());
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_both_roots_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[
+            ("DEEPSEEK_ACP_SESSIONS_ROOT", "/relocated/ds-sessions"),
+            ("DSH_HOME", "/relocated/dsh"),
+        ]);
+        let parser = DeepSeekParser::for_env(&env);
+        assert_eq!(parser.base_dir, PathBuf::from("/relocated/ds-sessions"));
+        assert_eq!(
+            parser.attachments_root,
+            PathBuf::from("/relocated/dsh")
+                .join("attachments")
+                .join("v1")
+        );
     }
 }

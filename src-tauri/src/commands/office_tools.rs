@@ -1063,6 +1063,7 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::DeepSeek,
         AgentType::Qoder,
         AgentType::Antigravity,
+        AgentType::Kiro,
     ];
     // Custom agents that declared the shared skills store join the built-in
     // set — the same `skill_storage_spec` gate every skills surface uses, so
@@ -1411,18 +1412,51 @@ pub async fn start_office_watch(
     root_path: String,
     path: String,
 ) -> Result<crate::office_watch::OfficeWatchStarted, AppCommandError> {
-    crate::office_watch::start_office_watch_core(root_path, path)
-        .await
-        .map_err(Into::into)
+    crate::office_watch::start_office_watch_core(
+        root_path,
+        path,
+        crate::office_watch::WatchHolder::Desktop,
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Release one reference to the watch preview for an office file; kills the
-/// server when the last viewer goes away.
+/// server when the last viewer goes away. `cap` names the watch the caller
+/// acquired: a release for one that has since been replaced is a no-op.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn stop_office_watch(root_path: String, path: String) -> Result<(), AppCommandError> {
-    crate::office_watch::stop_office_watch_core(root_path, path)
-        .await
-        .map_err(Into::into)
+pub async fn stop_office_watch(
+    root_path: String,
+    path: String,
+    cap: Option<String>,
+) -> Result<(), AppCommandError> {
+    crate::office_watch::stop_office_watch_core(
+        root_path,
+        path,
+        cap,
+        None,
+        crate::office_watch::WatchHolder::Desktop,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+/// Whether the watch named by `cap` is still the live one serving an office
+/// file (see `crate::office_watch::renew_office_watch_core`; a desktop
+/// window's references never lapse, so for it this only asks).
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn renew_office_watch(
+    root_path: String,
+    path: String,
+    cap: String,
+) -> Result<bool, AppCommandError> {
+    Ok(crate::office_watch::renew_office_watch_core(
+        &root_path,
+        &path,
+        &cap,
+        None,
+        crate::office_watch::WatchHolder::Desktop,
+    ))
 }
 
 #[cfg(test)]

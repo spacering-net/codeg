@@ -20,6 +20,7 @@ import {
   TaskAgentMark,
   WorktreeRemovedChip,
 } from "./task-card"
+import { isDeferred } from "./task-acceptance"
 import {
   buildTaskActions,
   type TaskActionHandlers,
@@ -45,11 +46,11 @@ export const TASK_LIST_CELLS = {
   location: "hidden w-[11rem] shrink-0 overflow-hidden lg:flex",
   changes: "hidden w-[4.5rem] shrink-0 justify-end md:flex",
   updated: "hidden w-[3rem] shrink-0 justify-end sm:flex",
-  /** Four 24px buttons with 4px gutters = 108px, the widest action set any
-   *  status offers (to-do: start / edit / schedule / session). Icon-only, so
-   *  this width is locale-independent — and fixed, so the right edge is a rule
-   *  rather than a ragged margin. */
-  actions: "w-[7rem] shrink-0 justify-end",
+  /** Five 24px buttons with 4px gutters = 136px, the widest action set any
+   *  status offers (failed: retry / edit / handle later / archive / session).
+   *  Icon-only, so this width is locale-independent — and fixed, so the right
+   *  edge is a rule rather than a ragged margin. */
+  actions: "w-[8.5rem] shrink-0 justify-end",
 } as const
 
 /** Horizontal rhythm of one list line — header and rows share it. */
@@ -98,9 +99,11 @@ export function TaskRow({
   const archived = task.archived_at != null
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
   // The filled primary is reserved for "this one is waiting on you". An
-  // archived task is settled by definition, however it got there.
+  // archived task is settled by definition, however it got there — and one
+  // put aside to handle later is, by the user's own word, not waiting yet.
   const needsUser =
     !archived &&
+    !isDeferred(task) &&
     (task.status === "review" ||
       task.status === "awaiting_input" ||
       task.status === "failed")

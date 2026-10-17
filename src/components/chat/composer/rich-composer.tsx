@@ -23,6 +23,7 @@ import {
   type KnownInvocations,
 } from "@/lib/invocation-token"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
+import { useVisibleMentionTabs } from "@/lib/mention-panel-prefs"
 import { cn } from "@/lib/utils"
 
 import { buildComposerExtensions } from "./editor-config"
@@ -327,6 +328,10 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     // (so Enter defers to the panel without waiting for a re-render).
     const mentionOpenRef = useRef(false)
     const popupRef = useRef<SuggestionPopupHandle>(null)
+    // Which `@` tabs to show and in what order — the user's preference from
+    // Settings → General, the same for every host. Read here rather than by
+    // each host so none of them can forget it; live across windows.
+    const mentionTabs = useVisibleMentionTabs()
     // Stable controller created once (refs/setState are stable), so the editor
     // is built a single time with it.
     const mentionController = useMemo<MentionController>(
@@ -728,6 +733,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             moreLabel={mentionUiLabels?.more}
             countLabel={mentionUiLabels?.count}
             tabLabels={tabLabels}
+            tabs={mentionTabs}
           />
         )}
       </div>

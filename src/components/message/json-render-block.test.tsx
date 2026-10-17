@@ -151,6 +151,43 @@ describe("json-render Link in Codeg", () => {
   })
 })
 
+describe("json-render Card in Codeg", () => {
+  it("draws no shadow, whatever classes the spec gives it", () => {
+    const card = (key: string, props: object, children: string[] = []) =>
+      line({
+        op: "add",
+        path: `/elements/${key}`,
+        value: { type: "Card", props, children },
+      })
+    const { container } = render(
+      <JsonRenderBlock
+        source={[
+          line({ op: "add", path: "/root", value: "main" }),
+          card("main", { title: "Outer" }, ["inner", "note"]),
+          card("inner", { maxWidth: "sm", className: "shadow-lg" }),
+          line({
+            op: "add",
+            path: "/elements/note",
+            value: { type: "Text", props: { text: "Inside" } },
+          }),
+        ].join("\n")}
+        fallback={null}
+      />
+    )
+    const cards = container.querySelectorAll('[data-slot="card"]')
+    expect(cards).toHaveLength(2)
+    for (const node of cards) {
+      expect(
+        [...node.classList].filter((name) => name.startsWith("shadow-"))
+      ).toEqual(["shadow-none"])
+    }
+    // The rest is json-render's own card.
+    expect(screen.getByText("Outer")).toBeInTheDocument()
+    expect(screen.getByText("Inside")).toBeInTheDocument()
+    expect(cards[1].classList.contains("max-w-xs")).toBe(true)
+  })
+})
+
 describe("json-render fallback", () => {
   it("shows the fence as code when the spec cannot render", () => {
     render(

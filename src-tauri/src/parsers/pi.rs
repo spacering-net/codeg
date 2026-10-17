@@ -16,7 +16,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, latest_turn_total_usage_tokens, merge_context_window_stats,
     relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve the `pi` coding agent's sessions directory, honoring (highest
@@ -45,9 +45,14 @@ use crate::parsers::{
 /// `--<dashed-cwd>--/` buckets and the FLAT directory a custom `sessionDir`
 /// produces (pi uses the configured path verbatim, with no per-cwd bucket).
 pub(crate) fn resolve_pi_sessions_dir() -> PathBuf {
+    resolve_pi_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_pi_sessions_dir`] for the pi launched with `env`.
+pub(crate) fn resolve_pi_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_pi_sessions_dir_from(
-        std::env::var_os("PI_CODING_AGENT_SESSION_DIR"),
-        std::env::var_os("PI_CODING_AGENT_DIR"),
+        env.var_os("PI_CODING_AGENT_SESSION_DIR"),
+        env.var_os("PI_CODING_AGENT_DIR"),
         dirs::home_dir(),
     )
 }
@@ -73,8 +78,13 @@ pub(crate) fn resolve_pi_agent_dir_from(
 }
 
 pub(crate) fn resolve_pi_agent_dir() -> PathBuf {
+    resolve_pi_agent_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_pi_agent_dir`] for the pi launched with `env`.
+pub(crate) fn resolve_pi_agent_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_pi_agent_dir_from(
-        std::env::var_os("PI_CODING_AGENT_DIR"),
+        env.var_os("PI_CODING_AGENT_DIR"),
         dirs::home_dir().as_deref(),
     )
 }
@@ -328,9 +338,14 @@ pub struct PiParser {
 
 impl PiParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the pi launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_pi_sessions_dir(),
-            agent_dir: resolve_pi_agent_dir(),
+            base_dir: resolve_pi_sessions_dir_for_env(env),
+            agent_dir: resolve_pi_agent_dir_for_env(env),
         }
     }
 
@@ -2847,5 +2862,18 @@ mod tests {
                 "contents: {contents}"
             );
         }
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_both_dirs_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[
+            ("PI_CODING_AGENT_DIR", "/relocated/pi-agent"),
+            ("PI_CODING_AGENT_SESSION_DIR", "/relocated/pi-sessions"),
+        ]);
+        let parser = PiParser::for_env(&env);
+        assert_eq!(parser.base_dir, PathBuf::from("/relocated/pi-sessions"));
+        assert_eq!(parser.agent_dir, PathBuf::from("/relocated/pi-agent"));
     }
 }

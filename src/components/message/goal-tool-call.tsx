@@ -13,6 +13,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { cn } from "@/lib/utils"
+import { unwrapWholeFence } from "@/lib/fenced-text"
 import { ChevronRightIcon, PauseIcon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useGoalControl } from "./goal-control-context"
@@ -408,7 +409,7 @@ function GoalCard({
 
             {isError && errorText && (
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-destructive/10 p-3 text-xs text-destructive">
-                {errorText}
+                {unwrapWholeFence(errorText)}
               </pre>
             )}
           </div>

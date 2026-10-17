@@ -17,7 +17,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
     relocate_orphaned_tool_results, structurize_read_tool_output, title_from_user_text,
-    truncate_str, AgentParser, ParseError,
+    truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Cap for a single tool result / tool input preview stored on a turn. Grok's
@@ -65,7 +65,12 @@ const GROK_SUBAGENT_PREVIEW_CAP: usize = 500;
 /// CLI's own `GROK_HOME` override). The transcript store lives under the
 /// `sessions/` subdirectory of this path.
 pub(crate) fn resolve_grok_home_dir() -> PathBuf {
-    resolve_grok_home_from(std::env::var_os("GROK_HOME"), dirs::home_dir())
+    resolve_grok_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The data home of the Grok launched with `env`.
+pub(crate) fn resolve_grok_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_grok_home_from(env.var_os("GROK_HOME"), dirs::home_dir())
 }
 
 fn resolve_grok_home_from(grok_home_env: Option<OsString>, home_dir: Option<PathBuf>) -> PathBuf {
@@ -196,8 +201,14 @@ pub struct GrokParser {
 
 impl GrokParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Grok launched with `env`. Its model catalog
+    /// (`models_cache.json`, `config.toml`) is read from the same home.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_grok_home_dir().join("sessions"),
+            base_dir: resolve_grok_home_dir_for_env(env).join("sessions"),
         }
     }
 
@@ -475,6 +486,8 @@ impl GrokParser {
             lines_removed: None,
             other_tool_count: None,
             tool_calls,
+            timeline: Vec::new(),
+            recovered_result: None,
             // Grok runs every sub-agent as a full session of its own, so the
             // card can offer to open the child's transcript. Only hand over an
             // id that passed the path-traversal guard — it is used to look up a
@@ -3251,5 +3264,17 @@ mod tests {
         assert_eq!(status_of(&detail, "c-empty"), Some("completed"));
         // Absent everywhere stays absent — unknown, never a guess.
         assert_eq!(status_of(&detail, "c-silent"), None);
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("GROK_HOME", "/relocated/grok")]);
+        // The model catalog is read from the sessions dir's parent.
+        assert_eq!(
+            GrokParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/grok").join("sessions")
+        );
     }
 }

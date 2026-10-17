@@ -29,7 +29,8 @@ vi.mock("@/components/automations/use-agent-options", () => ({
   }),
 }))
 
-// Codex's `$` skills: a filesystem scan in production.
+// Skills read from disk in production: Codex's under `$`, Antigravity's under
+// `/` (its server never advertises them).
 const SKILL: AgentSkillItem = {
   id: "deploy",
   name: "Deploy",
@@ -57,7 +58,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 
 vi.mock("@/hooks/use-agent-skills", () => ({
   useAgentSkills: (agentType: AgentType | null) =>
-    agentType === "codex" ? [SKILL] : [],
+    agentType === "codex" || agentType === "antigravity" ? [SKILL] : [],
 }))
 
 // The `@` panel's data sources all hit the transport; the panel itself is what
@@ -172,6 +173,28 @@ describe("TaskMessageComposer", () => {
       )
     })
     await waitFor(() => expect(editor.getText()).toContain("$deploy"))
+  })
+
+  it("offers Antigravity's skills on `/`, after its commands", async () => {
+    const { editor } = await mount({ agentType: "antigravity" })
+    act(() => {
+      editor.commands.insertContent("/")
+    })
+    await screen.findByText("Deploy", {}, { timeout: 5000 })
+    expect(screen.getByText("/review")).toBeInTheDocument()
+
+    act(() => {
+      editor.commands.setContent("")
+      editor.commands.insertContent("/dep")
+    })
+    const row = await screen.findByText("Deploy", {}, { timeout: 5000 })
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true })
+      )
+    })
+    await waitFor(() => expect(editor.getText()).toContain("/deploy"))
+    expect(editor.getText()).not.toContain("$deploy")
   })
 
   it("seeds a stored prompt back into the box, attachments included", async () => {

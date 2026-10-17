@@ -322,6 +322,25 @@ describe("ConversationDetailPanel split-group render model", () => {
     expect(source).toContain("computeRects(groupLayout)")
   })
 
+  // TileScrollContainer ignores mutations strictly inside a marked tile — that
+  // is what keeps a tiled group's streaming off its forced-layout path — which
+  // is only sound while the tile clips its content at a content-independent
+  // width. Pin the marker and that box together on the tile wrapper.
+  it("marks each tile wrapper for the tile scroller and keeps it clipping", () => {
+    const start = source.indexOf("const renderTabWrapper = (")
+    const end = source.indexOf("const renderGroupShell = (", start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const wrapper = source.slice(start, end)
+    expect(wrapper).toContain('data-tile-scroll-item=""')
+    expect(wrapper).toContain(
+      '"relative h-full min-w-[24rem] flex-1 overflow-hidden"'
+    )
+    expect(source).toMatch(
+      /<TileScrollContainer canTile=\{canTileG\}>[\s\S]*?renderTabWrapper\(tab, visualIndex, groupId, canTileG\)[\s\S]*?<\/TileScrollContainer>/
+    )
+  })
+
   it("marks the active session whenever several are visible (split or tiled)", () => {
     expect(source).toContain("showActiveFlow={(isSplit || canTileG) && active}")
   })

@@ -746,6 +746,13 @@ pub enum AcpEvent {
         /// `task_id=<id>` — so the live card can label the delegation before
         /// the ack text lands on the tool output.
         task_id: String,
+        /// The assistant the child runs as (its id, and its name when the task
+        /// started); absent for a plain agent delegation. `agent_type` is then
+        /// the assistant's agent — the one actually running.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assistant_id: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assistant_name: Option<String>,
     },
     /// The child sub-session has finished (or errored / timed out / been
     /// canceled). The MCP tool_result has been delivered to the parent agent.
@@ -761,6 +768,12 @@ pub enum AcpEvent {
         /// hardcoded default. Mirrors `DelegationStarted.agent_type`.
         agent_type: crate::models::agent::AgentType,
         result: DelegationResultSummary,
+        /// Mirrors `DelegationStarted`'s assistant identity, for the same
+        /// missed-start reason as `agent_type`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assistant_id: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assistant_name: Option<String>,
     },
     /// A human submitted a prompt from the Codeg conversation UI (desktop or
     /// web). Synthetic, notification-only event: it mutates no `SessionState`
@@ -882,6 +895,12 @@ pub struct BackgroundSettledInfo {
     /// parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    /// The notification says the task will notify again
+    /// ([`crate::parsers::claude::task_notification_is_interim`]): the task is
+    /// still alive, so it stays in the watcher's outstanding count, the card
+    /// reads its result as interim, and no "finished" notification is raised.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interim: bool,
 }
 
 /// Which settings surface drifted, so the frontend can word the
@@ -1431,6 +1450,25 @@ pub struct GrokModelCatalog {
     pub specs: std::collections::HashMap<String, GrokModelSpec>,
 }
 
+/// Kiro CLI's reasoning-effort state, from `_kiro.dev/metadata.reasoning`:
+/// `{"support": "alwaysOn" | "toggleable" | "unavailable", "effort"?: "high",
+/// "effortLevels": ["low", …, "max"]}` (verified against 2.24.1). `support`
+/// describes thinking, not effort, so only `effortLevels` is read; `effort` is
+/// absent until one is set in the session. Backend-internal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KiroReasoning {
+    /// Levels the CURRENT model accepts; empty when it takes none.
+    pub levels: Vec<String>,
+    /// The level the session runs at, when Kiro reports one.
+    pub current: Option<String>,
+    /// Whether the current model's thinking can be switched on and off
+    /// (`support: "toggleable"`; `alwaysOn` and `unavailable` models cannot).
+    pub thinking_toggleable: bool,
+    /// Whether thinking is on (`thinkingEnabled`), when Kiro reports it — only
+    /// once it has been set, in the session or as the model's saved default.
+    pub thinking: Option<bool>,
+}
+
 /// Read-only snapshot of the modes + config_options an agent advertises
 /// when it opens a new session. Used by `ConnectionManager::probe_agent_options`
 /// to give the delegation settings UI an authoritative view of what an
@@ -1462,6 +1500,16 @@ pub struct AgentOptionsSnapshot {
     /// `None` when the agent advertised nothing within the probe window.
     #[serde(default)]
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
+    /// The options the caller asked the probe to set that the probe session
+    /// did not end up holding — rejected, skipped as withdrawn, or no longer
+    /// listed. An editor that probed for a chosen model reads `model` here as
+    /// "these options are the OTHER model's": the probe still succeeds, and
+    /// the applied options' `current_value` is deliberately rewritten to the
+    /// agent's own pick (see `report_agent_chosen_values`), so nothing else in
+    /// the snapshot can tell. Always serialized, empty included, so a missing
+    /// field can only mean a backend that predates it.
+    #[serde(default)]
+    pub unapplied_config_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1531,6 +1579,16 @@ pub struct AcpAgentInfo {
     /// "the adapter isn't installed" instead of "the agent isn't", without
     /// hardcoding a second copy of the agent list frontend-side.
     pub is_acp_adapter: bool,
+    /// The vendor's install page for an agent codeg does not install itself
+    /// (`AgentDistribution::System`, i.e. `distribution_type == "system"`):
+    /// the Settings page links it where other agents get an Install button.
+    /// `None` for every agent codeg installs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_url: Option<String>,
+    /// Whether that install can be upgraded from the Settings page through the
+    /// vendor's own updater (`acp_update_system_agent`). Always `false` for
+    /// agents codeg installs itself — they upgrade through their own actions.
+    pub supports_self_update: bool,
     /// For custom agents, where the definition came from (`registry` |
     /// `manual`); `None` for built-ins. A manual definition's
     /// `registry_version` is user-typed, so the version-status display shows

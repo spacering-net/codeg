@@ -14,6 +14,7 @@ import {
   type AdaptedToolCallPart,
 } from "./ai-elements-adapter"
 import type { PageHandoffBlock } from "@/lib/browser/page-handoff-block"
+import type { ContentBlock } from "@/lib/types"
 import { CODEX_SEARCH_ACTION_META_KEY } from "@/lib/codex-command-action"
 import { buildStreamingTurnsFromLiveMessage } from "@/stores/conversation-runtime-store"
 
@@ -467,6 +468,99 @@ describe("dropEmptyInFlightToolCalls", () => {
     if (group.type !== "tool-group") throw new Error("expected a tool-group")
     expect(group.items).toHaveLength(1)
     expect(group.items[0].toolCallId).toBe("tc-real")
+  })
+})
+
+describe("adaptMessageTurn — agent timeline passthrough", () => {
+  type ToolResultBlock = Extract<ContentBlock, { type: "tool_result" }>
+  const adaptAgentTurn = (result: Partial<ToolResultBlock>) =>
+    adaptMessageTurn(
+      {
+        id: "agent-turn",
+        role: "assistant" as const,
+        timestamp: "2026-07-23T00:00:00.000Z",
+        blocks: [
+          {
+            type: "tool_use" as const,
+            tool_use_id: "tc-agent",
+            tool_name: "Agent",
+            input_preview: "{}",
+          },
+          {
+            type: "tool_result" as const,
+            tool_use_id: "tc-agent",
+            output_preview: null,
+            is_error: false,
+            ...result,
+          },
+        ],
+      },
+      {
+        attachedResources: "Attached resources",
+        toolCallFailed: "Tool failed",
+        pageHandoffName,
+      },
+      false
+    )
+
+  const timeline = [
+    { type: "thinking", text: "Reading first." },
+    { type: "tool_call", childIndex: 0 },
+    { type: "text", text: "Report" },
+  ] as const
+
+  it("falls back to agent_stats.timeline when no live transcript is attached", () => {
+    const adapted = adaptAgentTurn({
+      output_preview: "done",
+      is_error: false,
+      agent_stats: {
+        total_tokens: 42,
+        tool_calls: [{ tool_name: "Read", is_error: false }],
+        timeline: [...timeline],
+      },
+    })
+    const part = adapted.content[0]
+    expect(part.type).toBe("tool-call")
+    if (part.type !== "tool-call") throw new Error("expected a tool-call")
+    expect(part.agentTranscript).toEqual(timeline)
+  })
+
+  it("prefers the live transcript over the parsed historical timeline", () => {
+    const adapted = adaptAgentTurn({
+      output_preview: "done",
+      is_error: false,
+      agent_stats: {
+        tool_calls: [{ tool_name: "Read", is_error: false }],
+        timeline: [...timeline],
+      },
+      agent_transcript: [{ type: "text", text: "live entry" }],
+    })
+    const part = adapted.content[0]
+    if (part.type !== "tool-call") throw new Error("expected a tool-call")
+    expect(part.agentTranscript).toEqual([{ type: "text", text: "live entry" }])
+  })
+
+  it("keeps old stats without a timeline untouched", () => {
+    const adapted = adaptAgentTurn({
+      output_preview: "done",
+      is_error: false,
+      agent_stats: {
+        tool_calls: [{ tool_name: "Read", is_error: false }],
+      },
+    })
+    const part = adapted.content[0]
+    if (part.type !== "tool-call") throw new Error("expected a tool-call")
+    expect(part.agentTranscript).toBeUndefined()
+    expect(part.agentStats).toMatchObject({
+      tool_calls: [{ tool_name: "Read" }],
+    })
+  })
+
+  it("never fabricates a timeline for a result with neither transcript nor stats", () => {
+    const content = adaptAgentTurn({}).content
+    const part = content[0]
+    if (part.type !== "tool-call") throw new Error("expected a tool-call")
+    expect(part.agentTranscript).toBeUndefined()
   })
 })
 

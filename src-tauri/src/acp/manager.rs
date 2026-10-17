@@ -622,6 +622,7 @@ impl ConnectionManager {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(tokio::sync::RwLock::new(state)),
             emitter,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -665,6 +666,7 @@ impl ConnectionManager {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(tokio::sync::RwLock::new(state)),
             emitter,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -977,6 +979,7 @@ impl ConnectionManager {
         conn_id: &str,
         mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
+        internal_suffix: Vec<PromptInputBlock>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1037,6 +1040,7 @@ impl ConnectionManager {
         permit.send(ConnectionCommand::Prompt {
             blocks,
             user_message,
+            internal_suffix,
         });
         Ok(())
     }
@@ -1062,7 +1066,8 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None).await
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new())
+            .await
     }
 
     /// Send a prompt while ensuring a `Conversation` DB row is bound to this
@@ -1117,11 +1122,65 @@ impl ConnectionManager {
         &self,
         db: &AppDatabase,
         conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
+        client_message_id: Option<String>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            delegation,
+            client_message_id,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// As [`send_prompt_linked`], plus `internal_suffix`: Codeg-authored
+    /// blocks appended after `blocks` at the final agent boundary only (the
+    /// assistant brief of a delegated child's first and resume prompts). They
+    /// never reach the conversation row, a broadcast, the ledger or the title
+    /// seed — see [`ConnectionCommand::Prompt`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_linked_with_suffix(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
+        internal_suffix: Vec<PromptInputBlock>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            delegation,
+            None,
+            internal_suffix,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn send_prompt_linked_full(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
         mut blocks: Vec<PromptInputBlock>,
         folder_id: Option<i32>,
         conversation_id: Option<i32>,
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
+        internal_suffix: Vec<PromptInputBlock>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1569,7 +1628,7 @@ impl ConnectionManager {
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self
-            .send_prompt_inner(conn_id, blocks, user_message)
+            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
             .await
         {
             Ok(()) => {
@@ -2327,6 +2386,8 @@ impl ConnectionManager {
                         deleted_at: Set(None),
                         pinned_at: Set(None),
                         origin_cwd: Set(None),
+                        assistant_id: Set(None),
+                        assistant_snapshot: Set(None),
                     };
                     let inserted = sibling.insert(txn).await?;
                     // The sibling keeps the pre-fork history under the
@@ -2360,6 +2421,10 @@ impl ConnectionManager {
         };
         if let Some(conn) = removed {
             tracing::info!("[ACP] disconnect connection={}", conn_id);
+            // First: a connection still in its handshake is not reading
+            // `cmd_tx`, and a full channel would hold the send below until it
+            // did. Cancelled, it stops and drops the receiver instead.
+            conn.handshake.cancel();
             let _ = conn.cmd_tx.send(ConnectionCommand::Disconnect).await;
             Ok(())
         } else {
@@ -2463,7 +2528,7 @@ impl ConnectionManager {
                 .clone()
         };
         let _probe_guard = per_agent_lock.lock_owned().await;
-        let applied_ids: Vec<String> = preferred_config_values.keys().cloned().collect();
+        let requested = preferred_config_values.clone();
         let conn_id = self
             .spawn_agent(
                 agent_type,
@@ -2498,18 +2563,26 @@ impl ConnectionManager {
         // message over the generic ProbeTimedOut / ConnectionNotFound —
         // an agent that died on Initialize already explained why.
         let snapshot = match raw_snapshot {
-            Ok(mut s) => {
-                if !applied_ids.is_empty() {
-                    if let Some(state) = state_arc.as_ref() {
-                        let agent_chosen = state.read().await.agent_chosen_config_values.clone();
-                        report_agent_chosen_values(
-                            &mut s.config_options,
-                            &applied_ids,
-                            &agent_chosen,
-                        );
+            Ok(s) => {
+                let (pinned, asserted, agent_chosen) = match state_arc.as_ref() {
+                    Some(state) => {
+                        let guard = state.read().await;
+                        (
+                            guard.env_pinned_config_option_ids.clone(),
+                            guard.asserted_config_values.clone(),
+                            guard.agent_chosen_config_values.clone(),
+                        )
                     }
-                }
-                Ok(s)
+                    None => (Vec::new(), BTreeMap::new(), BTreeMap::new()),
+                };
+                Ok(finish_probe_snapshot(
+                    s,
+                    agent_type,
+                    &pinned,
+                    &requested,
+                    &asserted,
+                    &agent_chosen,
+                ))
             }
             Err(wait_err) => {
                 let captured = if let Some(state) = state_arc.as_ref() {
@@ -2594,6 +2667,8 @@ impl ConnectionManager {
                         config_options: config_options.unwrap_or_default(),
                         available_commands,
                         prompt_capabilities,
+                        // Filled by the probe, against this same snapshot.
+                        unapplied_config_ids: Vec::new(),
                     });
                 }
             }
@@ -2624,6 +2699,7 @@ impl ConnectionManager {
                     // Same handoff as `disconnect`: closing a window leaves
                     // the agents exiting, not exited.
                     self.park_draining(&conn).await;
+                    conn.handshake.cancel();
                     txs.push(conn.cmd_tx);
                 }
             }
@@ -2710,6 +2786,7 @@ impl ConnectionManager {
                     // immediately, so the child is parked as draining to stay
                     // visible while it exits — and, here, to be swept below.
                     self.park_draining(&conn).await;
+                    conn.handshake.cancel();
                     txs.push(conn.cmd_tx);
                 }
             }
@@ -2817,7 +2894,10 @@ impl ConnectionManager {
             let mut connections = self.connections.lock().await;
             connections
                 .drain()
-                .map(|(_, conn)| (conn.cmd_tx, conn.child_pid))
+                .map(|(_, conn)| {
+                    conn.handshake.cancel();
+                    (conn.cmd_tx, conn.child_pid)
+                })
                 .collect()
         };
         let disconnected = handles.len();
@@ -2931,6 +3011,7 @@ impl ConnectionManager {
                 // Same reason as `title`: resolving a delegation child's parent
                 // needs the DB. Filled by `pet_list_active_sessions_core`.
                 parent: None,
+                assistant_name: None,
             });
         }
         out
@@ -3837,6 +3918,13 @@ impl ConnectionManager {
 /// `data_dir` is required so `spawn` can build a runtime env that
 /// includes the git credential helper — without it, delegated subagents
 /// fail any git command that depends on the codeg-injected helper.
+/// The internal suffix carrying an assistant brief, if there is one.
+fn brief_suffix(brief: Option<String>) -> Vec<PromptInputBlock> {
+    brief
+        .map(|text| vec![PromptInputBlock::Text { text }])
+        .unwrap_or_default()
+}
+
 #[derive(Clone)]
 pub struct ConnectionManagerSpawner {
     pub manager: Arc<ConnectionManager>,
@@ -3913,6 +4001,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         conn_id: &str,
         task: String,
         link: crate::acp::delegation::spawner::DelegationLink,
+        brief: Option<String>,
     ) -> Result<i32, crate::acp::delegation::spawner::SpawnerError> {
         use crate::acp::delegation::spawner::SpawnerError;
         // The child has no caller-supplied conversation_id (it's brand new).
@@ -3948,13 +4037,14 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
 
         let result = self
             .manager
-            .send_prompt_linked(
+            .send_prompt_linked_with_suffix(
                 &self.db,
                 conn_id,
                 vec![PromptInputBlock::Text { text: task }],
                 Some(folder.id),
                 None,
                 Some(link),
+                brief_suffix(brief),
             )
             .await
             .map_err(|e| SpawnerError::Send(e.to_string()))?;
@@ -4057,6 +4147,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         prompt: String,
         folder_id: i32,
         child_conversation_id: i32,
+        brief: Option<String>,
     ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
         use crate::acp::delegation::spawner::SpawnerError;
         // Adopt the child's EXISTING row (caller-supplied path) — no delegation
@@ -4065,13 +4156,14 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         // `send_prompt_linked` rejects a link combined with an explicit
         // conversation_id precisely because adopted rows own their linkage.
         self.manager
-            .send_prompt_linked(
+            .send_prompt_linked_with_suffix(
                 &self.db,
                 conn_id,
                 vec![PromptInputBlock::Text { text: prompt }],
                 Some(folder_id),
                 Some(child_conversation_id),
                 None,
+                brief_suffix(brief),
             )
             .await
             .map(|_| ())
@@ -4217,6 +4309,86 @@ impl SessionPlanApprovalAccess for ConnectionManagerPlanApprovalLookup {
     }
 }
 
+/// Turn what the probe session holds into the snapshot an editor reads.
+///
+/// Three steps, in this order:
+///   1. drop the options no launch replays a saved value for
+///      ([`config_option_never_replayed`]) — an editor offering one would store
+///      a pick that is never applied (cline's provider, owned by the agent's
+///      settings panel; env-pinned ones never reach the snapshot at all);
+///   2. record which requested options the session did not end up holding
+///      (`unapplied_config_ids`) — off this same snapshot, so no later push
+///      can make it disagree with the options returned. `asserted` is what the
+///      establishment confirmed holding (`SessionState::asserted_config_values`):
+///      a pick it replayed under the spelling the agent lists now
+///      (`heal_retired_model_pick`) took if the session holds THAT spelling;
+///   3. only then rewrite the applied options to the agent's own pick
+///      ([`report_agent_chosen_values`]), after which a requested model the
+///      session never switched to would be indistinguishable from one it did.
+///
+/// [`config_option_never_replayed`]: crate::acp::connection::config_option_never_replayed
+fn finish_probe_snapshot(
+    mut snapshot: AgentOptionsSnapshot,
+    agent_type: AgentType,
+    env_pinned: &[String],
+    requested: &BTreeMap<String, String>,
+    asserted: &BTreeMap<String, String>,
+    agent_chosen: &BTreeMap<String, String>,
+) -> AgentOptionsSnapshot {
+    use crate::acp::connection::config_option_never_replayed;
+    let never_replayed = |id: &str| config_option_never_replayed(agent_type, env_pinned, id);
+    snapshot
+        .config_options
+        .retain(|option| !never_replayed(&option.id));
+    snapshot.unapplied_config_ids = unapplied_config_ids(
+        &snapshot.config_options,
+        requested,
+        asserted,
+        never_replayed,
+    );
+    if !requested.is_empty() {
+        let applied_ids: Vec<String> = requested.keys().cloned().collect();
+        report_agent_chosen_values(&mut snapshot.config_options, &applied_ids, agent_chosen);
+    }
+    snapshot
+}
+
+/// The requested options the probe session does not hold the requested value
+/// for: rejected, skipped as no longer offered, or not listed at all — in
+/// request order. A value counts as held under its requested spelling or the
+/// one the establishment replayed and confirmed (`asserted`, see
+/// [`finish_probe_snapshot`]). Options codeg never replays (`never_replayed`)
+/// are left out: they are not in the snapshot, and no request could have set
+/// them.
+fn unapplied_config_ids(
+    options: &[crate::acp::types::SessionConfigOptionInfo],
+    requested: &BTreeMap<String, String>,
+    asserted: &BTreeMap<String, String>,
+    never_replayed: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    use crate::acp::types::SessionConfigKindInfo;
+    let holds = |id: &str, value: &str| {
+        options
+            .iter()
+            .find(|o| o.id == id)
+            .is_some_and(|o| match &o.kind {
+                SessionConfigKindInfo::Select(select) => select.current_value == value,
+                SessionConfigKindInfo::Boolean(boolean) => {
+                    boolean.current_value == (value == "true")
+                }
+            })
+    };
+    requested
+        .iter()
+        .filter(|(id, _)| !never_replayed(id))
+        .filter(|(id, value)| {
+            let replayed_as = asserted.get(*id).filter(|healed| healed != value);
+            !(holds(id, value) || replayed_as.is_some_and(|healed| holds(id, healed)))
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 /// Make every option the probe applied a caller's selection to report the value
 /// the agent picked on its own, instead of that selection.
 ///
@@ -4257,6 +4429,226 @@ fn report_agent_chosen_values(
 mod tests {
     use super::*;
     use crate::acp::connection::AgentConnection;
+
+    /// A select option holding `current`; its value list plays no part here.
+    fn probe_option(id: &str, current: &str) -> crate::acp::types::SessionConfigOptionInfo {
+        use crate::acp::types::{SessionConfigKindInfo, SessionConfigSelectInfo};
+        crate::acp::types::SessionConfigOptionInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            category: None,
+            kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                current_value: current.to_string(),
+                options: Vec::new(),
+                groups: Vec::new(),
+            }),
+            recommended_value: None,
+        }
+    }
+
+    fn probe_snapshot(
+        options: Vec<crate::acp::types::SessionConfigOptionInfo>,
+    ) -> AgentOptionsSnapshot {
+        AgentOptionsSnapshot {
+            modes: None,
+            config_options: options,
+            available_commands: Vec::new(),
+            prompt_capabilities: None,
+            unapplied_config_ids: Vec::new(),
+        }
+    }
+
+    fn current_of(snapshot: &AgentOptionsSnapshot, id: &str) -> Option<String> {
+        use crate::acp::types::SessionConfigKindInfo;
+        snapshot
+            .config_options
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| match &o.kind {
+                SessionConfigKindInfo::Select(select) => select.current_value.clone(),
+                SessionConfigKindInfo::Boolean(boolean) => boolean.current_value.to_string(),
+            })
+    }
+
+    /// Cline advertises `provider` whenever the launch did NOT pin it (no
+    /// `CLINE_PROVIDER` — the env filter would otherwise have removed it before
+    /// this, and the test would pass for the wrong reason). No launch replays a
+    /// saved provider, so no editor may offer one. Another agent's option of
+    /// the same id is untouched.
+    #[test]
+    fn the_probe_leaves_out_what_no_launch_replays() {
+        let cline = finish_probe_snapshot(
+            probe_snapshot(vec![
+                probe_option("provider", "cline"),
+                probe_option("model", "claude-sonnet"),
+            ]),
+            AgentType::Cline,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(current_of(&cline, "provider"), None);
+        assert_eq!(
+            current_of(&cline, "model").as_deref(),
+            Some("claude-sonnet")
+        );
+
+        let codex = finish_probe_snapshot(
+            probe_snapshot(vec![probe_option("provider", "openai")]),
+            AgentType::Codex,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(current_of(&codex, "provider").as_deref(), Some("openai"));
+    }
+
+    /// The probe and the launch replay ask the SAME question.
+    #[test]
+    fn never_replayed_is_one_rule_for_the_probe_and_the_replay() {
+        use crate::acp::connection::config_option_never_replayed as never;
+        assert!(never(AgentType::Cline, &[], "provider"));
+        assert!(!never(AgentType::Cline, &[], "model"));
+        assert!(!never(AgentType::Codex, &[], "provider"));
+        let pinned = vec!["sandbox".to_string()];
+        assert!(never(AgentType::Codex, &pinned, "sandbox"));
+    }
+
+    /// The editor asked for model B. The session holding A — the switch was
+    /// rejected or skipped — lists `model`; holding B lists nothing. Decided
+    /// BEFORE the applied options are rewritten to the agent's own pick (A
+    /// here, deliberately different from the request), or B-held and
+    /// A-held would read the same.
+    #[test]
+    fn the_probe_says_whether_the_requested_model_took() {
+        let requested = BTreeMap::from([("model".to_string(), "model-b".to_string())]);
+        let agent_chosen = BTreeMap::from([("model".to_string(), "model-a".to_string())]);
+
+        let switched = finish_probe_snapshot(
+            probe_snapshot(vec![
+                probe_option("model", "model-b"),
+                probe_option("effort", "high"),
+            ]),
+            AgentType::OpenCode,
+            &[],
+            &requested,
+            &BTreeMap::new(),
+            &agent_chosen,
+        );
+        assert!(switched.unapplied_config_ids.is_empty());
+        assert_eq!(
+            current_of(&switched, "model").as_deref(),
+            Some("model-a"),
+            "the applied option still reports the agent's own pick"
+        );
+
+        let stuck = finish_probe_snapshot(
+            probe_snapshot(vec![
+                probe_option("model", "model-a"),
+                probe_option("effort", "low"),
+            ]),
+            AgentType::OpenCode,
+            &[],
+            &requested,
+            &BTreeMap::new(),
+            &agent_chosen,
+        );
+        assert_eq!(stuck.unapplied_config_ids, vec!["model".to_string()]);
+
+        // Not listed at all: not held either.
+        let gone = finish_probe_snapshot(
+            probe_snapshot(vec![probe_option("effort", "low")]),
+            AgentType::Grok,
+            &[],
+            &requested,
+            &BTreeMap::new(),
+            &agent_chosen,
+        );
+        assert_eq!(gone.unapplied_config_ids, vec!["model".to_string()]);
+    }
+
+    /// A saved Claude Code pick under a retired spelling is replayed as the
+    /// one the agent lists now (`heal_retired_model_pick`), and the
+    /// establishment records that spelling as confirmed. Holding it means the
+    /// request took; holding anything else still means it did not.
+    #[test]
+    fn a_replayed_respelling_counts_as_the_requested_model() {
+        let requested = BTreeMap::from([("model".to_string(), "opus[1m]".to_string())]);
+        let asserted = BTreeMap::from([("model".to_string(), "opus".to_string())]);
+        let probe = |held: &str| {
+            finish_probe_snapshot(
+                probe_snapshot(vec![probe_option("model", held)]),
+                AgentType::ClaudeCode,
+                &[],
+                &requested,
+                &asserted,
+                &BTreeMap::new(),
+            )
+            .unapplied_config_ids
+        };
+        assert!(probe("opus").is_empty());
+        assert!(probe("opus[1m]").is_empty());
+        assert_eq!(probe("sonnet"), vec!["model".to_string()]);
+    }
+
+    /// A switch is held when its state matches the request's wire spelling
+    /// (`"true"` / `"false"`). An option codeg never replays is not reported:
+    /// no request could have set it, so its absence says nothing.
+    #[test]
+    fn the_unapplied_list_reads_switches_and_skips_what_is_never_replayed() {
+        use crate::acp::types::{SessionConfigBooleanInfo, SessionConfigKindInfo};
+        let switch = |on: bool| crate::acp::types::SessionConfigOptionInfo {
+            kind: SessionConfigKindInfo::Boolean(SessionConfigBooleanInfo { current_value: on }),
+            ..probe_option("fast", "")
+        };
+        let requested = BTreeMap::from([
+            ("fast".to_string(), "false".to_string()),
+            ("provider".to_string(), "anthropic".to_string()),
+        ]);
+        let probe = |on: bool| {
+            finish_probe_snapshot(
+                probe_snapshot(vec![switch(on), probe_option("provider", "cline")]),
+                AgentType::Cline,
+                &[],
+                &requested,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .unapplied_config_ids
+        };
+        assert!(probe(false).is_empty());
+        assert_eq!(probe(true), vec!["fast".to_string()]);
+    }
+
+    /// A snapshot written before the field existed reads back as confirming
+    /// nothing was left unapplied, rather than failing to deserialize.
+    #[test]
+    fn a_snapshot_without_the_unapplied_list_still_reads() {
+        let snapshot: AgentOptionsSnapshot = serde_json::from_value(serde_json::json!({
+            "modes": null,
+            "config_options": [],
+            "available_commands": [],
+        }))
+        .expect("an older snapshot deserializes");
+        assert!(snapshot.unapplied_config_ids.is_empty());
+    }
+
+    #[test]
+    fn the_unapplied_list_is_always_on_the_wire() {
+        let snapshot = finish_probe_snapshot(
+            probe_snapshot(Vec::new()),
+            AgentType::Codex,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["unapplied_config_ids"], serde_json::json!([]));
+    }
 
     /// The probe applies the caller's model, so the session it reads holds that
     /// model; the delegation panel names its "Default" choice after the
@@ -4502,6 +4894,7 @@ mod tests {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -4759,6 +5152,138 @@ mod tests {
         );
     }
 
+    /// Every path that ends a connection also cancels its handshake. The
+    /// `Disconnect` each sends goes unread until the session is established, so
+    /// a path that skipped the cancel would leave a connection still starting
+    /// up to finish its handshake — and its agent running — before it noticed.
+    #[tokio::test]
+    async fn every_disconnect_path_cancels_the_handshake() {
+        let mgr = ConnectionManager::new();
+        async fn connect(
+            mgr: &ConnectionManager,
+            id: &str,
+            agent_type: AgentType,
+        ) -> tokio_util::sync::CancellationToken {
+            mgr.insert_test_connection(id, agent_type, None, EventEmitter::Noop)
+                .await;
+            mgr.connections.lock().await[id].handshake.clone()
+        }
+
+        let closed_tab = connect(&mgr, "closed-tab", AgentType::Codex).await;
+        mgr.disconnect("closed-tab").await.unwrap();
+        assert!(closed_tab.is_cancelled(), "disconnect");
+
+        let closed_window = connect(&mgr, "closed-window", AgentType::Codex).await;
+        mgr.disconnect_by_owner_window("test-window").await;
+        assert!(closed_window.is_cancelled(), "disconnect_by_owner_window");
+
+        let signed_out = connect(&mgr, "signed-out", AgentType::Antigravity).await;
+        mgr.disconnect_by_agent_type(AgentType::Antigravity).await;
+        assert!(signed_out.is_cancelled(), "disconnect_by_agent_type");
+
+        let quit = connect(&mgr, "quit", AgentType::Codex).await;
+        mgr.disconnect_all().await;
+        assert!(quit.is_cancelled(), "disconnect_all");
+    }
+
+    /// The case that made it matter: a draft switching agents disconnects the
+    /// connection it is leaving, whose agent may not have answered Initialize
+    /// yet. The `Disconnect` goes unread until the conversation loop starts,
+    /// and Initialize waits up to 60 s, so the agent process outlived the
+    /// disconnect by up to a minute.
+    ///
+    /// The agent is `sleep`, launched as a custom binary agent: it never
+    /// answers. Unix-only (relies on `sleep` / `kill(2)`).
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnect_stops_an_agent_that_has_not_answered_initialize() {
+        use crate::acp::custom_registry::{
+            hydrate, hydrate_test_guard, BinaryPlatformSpec, CustomAgentDef, CustomAgentSpec,
+            CustomDistributionKind,
+        };
+
+        // `hydrate` replaces a process-global map; hold its lock throughout.
+        let _registry = hydrate_test_guard();
+        let def = CustomAgentDef {
+            registry_id: "never-answers".into(),
+            name: "Never answers".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            distribution_kind: CustomDistributionKind::Binary,
+            spec: CustomAgentSpec {
+                binary: BTreeMap::from([(
+                    crate::acp::registry::current_platform().to_string(),
+                    BinaryPlatformSpec {
+                        archive: "https://example.invalid/never-answers.tar.gz".into(),
+                        // Nothing cached under this id, so the launch falls
+                        // back to `sleep` on PATH.
+                        cmd: "sleep".into(),
+                        args: vec!["120".into()],
+                        env: BTreeMap::new(),
+                        sha256: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        };
+        assert!(hydrate(std::slice::from_ref(&def)).is_empty());
+        let agent_type = AgentType::custom("never-answers").unwrap();
+
+        let mgr = ConnectionManager::new();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = mgr
+            .spawn_agent(
+                agent_type,
+                Some(dir.path().to_string_lossy().into_owned()),
+                None,
+                BTreeMap::new(),
+                "test-window".to_string(),
+                EventEmitter::Noop,
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("the agent launches");
+        let pid_cell = Arc::clone(&mgr.connections.lock().await[&id].child_pid);
+        let mut pid = 0;
+        for _ in 0..500 {
+            pid = pid_cell.load(std::sync::atomic::Ordering::SeqCst);
+            if pid != 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_ne!(pid, 0, "the agent process never started");
+        // Up and still waiting to be answered, so whatever ends it below is
+        // the disconnect and not the agent leaving on its own.
+        assert!(is_alive(pid as i32), "the agent exited on its own");
+
+        mgr.disconnect(&id).await.unwrap();
+
+        // Longer than `wait_until_dead` allows, for a loaded CI machine; the
+        // handshake used to hold on for up to 60 s.
+        let mut gone = false;
+        for _ in 0..500 {
+            if !is_alive(pid as i32) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        hydrate(&[]);
+        assert!(
+            gone,
+            "agent {pid} outlived its disconnect — the handshake kept it running"
+        );
+    }
+
     /// Like [`spawn_process_tree`], but both levels ignore `SIGTERM`: the shell
     /// sets it to `SIG_IGN`, which `sleep` then inherits across `exec`. Stands
     /// in for an agent that traps it and takes its time — or never leaves.
@@ -4957,6 +5482,7 @@ mod tests {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -5225,6 +5751,7 @@ mod tests {
         let ConnectionCommand::Prompt {
             blocks,
             user_message,
+            ..
         } = command
         else {
             panic!("expected prompt command");
@@ -5244,6 +5771,125 @@ mod tests {
             [crate::acp::types::UserMessageBlock::Text { text }]
                 if text == "ask [@Antigravity](codeg://agent/antigravity) to review"
         ));
+    }
+
+    /// A delegated assistant child's brief rides ITS prompt command and
+    /// nothing else: the separators it is framed with survive (ingress scrubs
+    /// only the user's blocks), and the child row's seeded title, the stored
+    /// prompt and any broadcast see the task alone.
+    #[tokio::test]
+    async fn an_internal_suffix_rides_its_own_prompt_command_only() {
+        use crate::acp::delegation::spawner::{AssistantLink, DelegationLink};
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/brief-suffix").await;
+        let parent_id = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-brief-suffix";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/brief-suffix")),
+        )
+        .await;
+
+        let brief = crate::acp::agent_mentions::render_assistant_brief("Reviewer", "Cite lines.")
+            .expect("brief");
+        let child_id = mgr
+            .send_prompt_linked_with_suffix(
+                &db,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: "Review the diff".into(),
+                }],
+                Some(folder_id),
+                None,
+                Some(DelegationLink {
+                    parent_conversation_id: parent_id,
+                    parent_tool_use_id: "pt-brief".into(),
+                    delegation_call_id: "call-brief".into(),
+                    assistant: Some(AssistantLink {
+                        id: 3,
+                        snapshot: crate::models::AssistantRunSnapshot {
+                            name: "Reviewer".into(),
+                            agent_options: Default::default(),
+                            instructions: "Cite lines.".into(),
+                        },
+                    }),
+                }),
+                vec![PromptInputBlock::Text {
+                    text: brief.clone(),
+                }],
+            )
+            .await
+            .unwrap()
+            .expect("child row bound");
+
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+            internal_suffix,
+        } = cmd_rx.try_recv().expect("one prompt command")
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(matches!(
+            blocks.as_slice(),
+            [PromptInputBlock::Text { text }] if text == "Review the diff"
+        ));
+        assert!(user_message.is_none(), "a delegation child broadcasts no user message");
+        assert!(matches!(
+            internal_suffix.as_slice(),
+            [PromptInputBlock::Text { text }] if text == &brief
+        ));
+        assert!(brief.contains('\u{1e}'), "the brief keeps its separators");
+
+        let row = crate::db::service::conversation_service::get_by_id(&db.conn, child_id)
+            .await
+            .unwrap();
+        assert_eq!(row.title.as_deref(), Some("Review the diff"));
+        assert_eq!(row.assistant_id, Some(3));
+        assert_eq!(row.assistant_name.as_deref(), Some("Reviewer"));
+        let (assistant_id, snapshot) =
+            crate::db::service::conversation_service::get_assistant_run(&db.conn, child_id)
+                .await
+                .unwrap()
+                .expect("assistant run recorded");
+        assert_eq!(assistant_id, 3);
+        assert_eq!(
+            snapshot.expect("snapshot readable").instructions,
+            "Cite lines."
+        );
+
+        // The next prompt on the same connection — a user typing into the
+        // child's tab — carries no brief.
+        mgr.get_state(conn_id)
+            .await
+            .expect("live connection")
+            .write()
+            .await
+            .turn_in_flight = false;
+        mgr.send_prompt_linked(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "and also this".into(),
+            }],
+            Some(folder_id),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let ConnectionCommand::Prompt {
+            internal_suffix, ..
+        } = cmd_rx.try_recv().expect("second prompt command")
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(internal_suffix.is_empty());
     }
 
     #[tokio::test]
@@ -5850,6 +6496,7 @@ mod tests {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -5954,6 +6601,7 @@ mod tests {
                     text: "filler".into(),
                 }],
                 user_message: None,
+                internal_suffix: Vec::new(),
             })
             .await
             .unwrap();
@@ -5966,6 +6614,7 @@ mod tests {
                 text: "blocked".into(),
             }],
             None,
+            Vec::new(),
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(
@@ -6108,6 +6757,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -7533,6 +8183,7 @@ mod tests {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -8257,6 +8908,7 @@ mod tests {
             status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),

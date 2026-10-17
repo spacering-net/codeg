@@ -360,9 +360,10 @@ async fn async_main() -> ExitCode {
         &state.computer_tools_config,
     )
     .await;
-    // And the generative-UI switch, which decides whether an agent launch
-    // links the `json-render` skill in or takes it back.
-    codeg_lib::commands::generative_ui::apply_persisted_generative_ui_config(&state.db.conn).await;
+    // The generative-UI skill's central copy, and the move from 0.35.0's
+    // `json-render`: before the server takes a request, so the move can never
+    // undo a change made on the settings page.
+    codeg_lib::commands::generative_ui::install_generative_ui_skill(&state.db.conn).await;
     // Computer use: only where whoever runs this server says so, by
     // CODEG_COMPUTER_USE — the server's web clients then share this
     // machine's windows with agents, and Stop them, from the panel. Nothing
@@ -597,6 +598,16 @@ async fn async_main() -> ExitCode {
         state.data_dir.clone(),
     ) {
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
+        // Repository-panel auto-processing (mirrors lib.rs setup): only where
+        // the task engine runs, since it mints tasks unattended.
+        if let Some(processor) = codeg_lib::forge::auto::build(
+            codeg_lib::db::AppDatabase {
+                conn: state.db.conn.clone(),
+            },
+            state.emitter.clone(),
+        ) {
+            tokio::spawn(codeg_lib::forge::auto::run(processor));
+        }
     }
 
     // Config-sync uploader (mirrors lib.rs setup): sleeps a minute, then

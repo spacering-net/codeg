@@ -2,7 +2,10 @@
 
 import { useCallback, useMemo, useSyncExternalStore } from "react"
 
-import { buildKnownInvocations } from "@/components/chat/composer/invocation-reference"
+import {
+  buildKnownInvocations,
+  diskSkillTrigger,
+} from "@/components/chat/composer/invocation-reference"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import {
   getLastAdvertisedCommands,
@@ -17,7 +20,8 @@ const nothingRemembered = () => null
  * The invocations a transcript's user bubbles may badge: what the composer's
  * `/`·`$` menu offers the same agent, so a sent message badges the tokens its
  * composer could have inserted and nothing else. That is the commands the
- * connection advertises, plus, for Codex, the on-disk skills behind its `$`
+ * connection advertises, plus, for an agent that does not advertise its skills
+ * (Codex's `$` menu, Antigravity's `/` one), the on-disk skills behind that
  * menu, read from the same folder as the composer's scan (one shared entry).
  * Every other agent advertises its skills as commands already.
  *
@@ -36,8 +40,8 @@ export function useTranscriptKnownInvocations(
   availableCommands: readonly AvailableCommandInfo[] | null | undefined,
   workspacePath: string | null
 ): KnownInvocations {
-  const isCodex = agentType === "codex"
-  const skills = useAgentSkills(isCodex ? "codex" : null, workspacePath)
+  const skillTrigger = diskSkillTrigger(agentType)
+  const skills = useAgentSkills(skillTrigger ? agentType : null, workspacePath)
   // Looked up only while the live list is unknown, so a newer record for this
   // folder cannot re-render a transcript that already has the connection's.
   const advertised = availableCommands != null
@@ -53,7 +57,7 @@ export function useTranscriptKnownInvocations(
   )
   const commands = availableCommands ?? remembered
   return useMemo(
-    () => buildKnownInvocations(commands, skills, isCodex ? "$" : "/"),
-    [commands, skills, isCodex]
+    () => buildKnownInvocations(commands, skills, skillTrigger ?? "/"),
+    [commands, skills, skillTrigger]
   )
 }

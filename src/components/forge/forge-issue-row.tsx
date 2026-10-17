@@ -22,7 +22,7 @@ import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { cn } from "@/lib/utils"
 import { labelSwatch } from "@/lib/forge-label-color"
-import { chipStateForLink } from "@/lib/forge-task-chip"
+import { chipStateForLink, isDeferredLink } from "@/lib/forge-task-chip"
 import type { ForgeIssueRow, ForgeLabel, ForgeTaskLink } from "@/lib/types"
 
 /** Render-time "now" is fine here: the list re-renders on every refresh. */
@@ -312,7 +312,9 @@ export function ForgeIssueRowItem({
                   the chip looks like the place it navigates to. Decoration:
                   the accessible name stays the status word. */}
               <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
-              {tTasks(statusLabelKey(link.status))}
+              {isDeferredLink(link)
+                ? tTasks("statusDeferred")
+                : tTasks(statusLabelKey(link.status))}
             </Button>
             {terminal ? (
               <button

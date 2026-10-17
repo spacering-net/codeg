@@ -93,6 +93,7 @@ function emptySession(conversationId: number): ConversationRuntimeSession {
     localTurns: [],
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: null,
     syncState: "idle",

@@ -58,7 +58,7 @@ const toastError = vi.fn()
 const toastSuccess = vi.fn()
 vi.mock("sonner", () => ({
   toast: {
-    success: (m: string) => toastSuccess(m),
+    success: (m: string, ...options: unknown[]) => toastSuccess(m, ...options),
     error: (m: string) => toastError(m),
     message: vi.fn(),
   },
@@ -315,6 +315,23 @@ describe("ConfigSyncSettings — file import", () => {
     await waitFor(() =>
       expect(importPickedConfig).toHaveBeenCalledWith(picked.source)
     )
+  })
+
+  it("says when assistants were renamed on the way in", async () => {
+    vi.mocked(pickConfigFileToImport).mockResolvedValue(pickedPath())
+    vi.mocked(importPickedConfig).mockResolvedValue({
+      applied: { domains: { assistants: 2 }, total: 2, renamed: 1 },
+      rollbackPath: null,
+    })
+    await renderLoaded()
+    fireEvent.click(screen.getByRole("button", { name: t.importButton }))
+    await screen.findByText(t.importConfirmTitle)
+    fireEvent.click(screen.getByRole("button", { name: t.importConfirmAction }))
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    const [, options] =
+      toastSuccess.mock.calls[toastSuccess.mock.calls.length - 1]
+    expect(options.description).toContain(t.restartHint)
+    expect(options.description).toContain("1 assistant was renamed")
   })
 
   /// The panel is deliberately blind to which runtime produced the pick: it

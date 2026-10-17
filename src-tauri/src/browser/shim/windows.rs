@@ -1693,7 +1693,8 @@ const RESIZE_HOOK_ID: usize = 0xC0DE;
 /// installs it for the webview that IS the window's content and for no other
 /// — but it removes it whenever ANY webview whose parent is that window is
 /// dropped, child webviews included: `impl Drop for InnerWebView` detaches
-/// unconditionally (wry 0.55.1, `src/webview2/mod.rs:71`, still so on `dev`).
+/// unconditionally (wry 0.55.1 through 0.57.0, `src/webview2/mod.rs:76` in
+/// the latter).
 ///
 /// A browser tab IS a child webview of the workspace window, so closing one
 /// left that window with no resize hook at all. The app's own webview then

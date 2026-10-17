@@ -1,49 +1,40 @@
-//! Generative UI: the `generative_ui.enabled` switch and the `json-render`
-//! skill it hands to agents.
+//! Generative UI: the `ui-render` skill, and the agents it is enabled for.
 //!
-//! One switch, two halves:
+//! Two halves:
 //!   * the chat renders a ```spec fence in an assistant reply as a json-render
-//!     card — frontend only, driven by this setting and its broadcast;
-//!   * an agent learns that format from a skill Codeg ships, `json-render`
-//!     (`genui/json-render/SKILL.md`, generated from the frontend's catalog).
+//!     card — frontend only, always on;
+//!   * an agent learns to write that fence from a skill Codeg ships,
+//!     `ui-render` (`genui/ui-render/SKILL.md`, generated from the frontend's
+//!     catalog), which the user enables per agent on the UI tab of Skill
+//!     Packs — the same matrix the Experts tab uses.
 //!
 //! The skill reaches an agent the way the bundled skill packs do: a central
-//! copy in the shared store (`~/.codeg/skills/json-render`), symlinked (or
-//! junctioned) into the agent's own skill directory. What differs is when:
-//!   * right before Codeg starts an agent ([`sync_skill_before_launch`]): with
-//!     the switch on, the central copy is brought up to date and linked into
-//!     that agent's preferred skill directory; with it off, a link of ours left
-//!     there is taken back. Only agents someone actually starts are touched, so
-//!     an agent that is not even installed never grows a skill directory, and
-//!     a link that went missing is restored at the next launch;
-//!   * the moment the switch goes off: our links leave every agent at once.
-//!     The central copy stays, so a link of ours never dangles.
+//! copy in the shared store (`~/.codeg/skills/ui-render`), symlinked (or
+//! junctioned) into the agent's preferred skill directory. A cell of the
+//! matrix links or unlinks at once, and what it shows is the link on disk:
+//! nothing is stored anywhere else. Startup brings the central copy up to date
+//! ([`install_generative_ui_skill`]), so every agent it is linked into reads
+//! the bundled version. It runs before Codeg serves any command, so nothing on
+//! the settings page can race it.
 //!
 //! **Ownership.** The central copy carries a marker file. A link is ours only
-//! when it resolves to the central copy AND that copy is marked; a dangling
-//! link cannot be attributed to anyone and is left alone. A `json-render`
-//! directory in the central store WITHOUT the marker is the user's own skill
-//! of that name, possibly already linked into agents. Codeg then does nothing
-//! with it — no overwrite, no link, no cleanup — and the settings page asks
-//! the user to rename theirs. Taking it over instead would leave the user's
-//! existing links pointing at Codeg's content, and the next switch-off would
-//! delete them as ours.
+//! when it resolves to the central copy AND that copy is marked. Codeg never
+//! removes its central copy, so a link of ours never dangles: a dangling link
+//! cannot be attributed to anyone and is left alone. A `ui-render` directory
+//! in the central store WITHOUT the marker is the user's own skill of that
+//! name, possibly already linked into agents. Codeg then does nothing with
+//! it — no overwrite, no link, no unlink — and the settings page asks the user
+//! to rename theirs. Taking it over instead would leave the user's existing
+//! links pointing at Codeg's content, and the next disable would delete them
+//! as ours.
 //!
-//! **One lock.** The value the launch path acts on lives behind the mutex a
-//! settings write holds across its write, cleanup and broadcast, and a launch
-//! holds it across its own filesystem work. Otherwise a launch that read "on"
-//! just before a switch-off could put a link back right after the cleanup.
-//! The filesystem half owns the lock, not the async caller: a launch or save
-//! whose caller goes away midway (an HTTP client hanging up) still holds it
-//! until its blocking work is done.
-//!
-//! **Where we linked.** The central copy also keeps a list of the links made
-//! from it, so a switch-off reaches a directory an agent no longer declares —
-//! a custom agent that moved its skill directory, a changed `CODEX_HOME`. The
-//! list only says where to look; what is removed must still be provably ours.
-//!
-//! Not a portable (config-sync) key: the switch rewrites this machine's agent
-//! skill directories.
+//! **The old name.** Codeg 0.35.0 shipped the skill as `json-render`, linked
+//! into every agent Codeg started while one switch (`generative_ui.enabled`)
+//! was on. Startup moves that over ([`migrate_legacy`]): with the switch on,
+//! an agent that had our `json-render` gets `ui-render` in its place; either
+//! way every `json-render` link of ours goes, and so does the old central copy
+//! once none is left. A choice made on the settings page for an agent takes
+//! its `json-render` away at once, so the move never undoes it.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -52,57 +43,54 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 use sea_orm::DatabaseConnection;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::acp::types::AgentSkillScope;
 use crate::app_error::AppCommandError;
 use crate::commands::acp::{remove_skill_entry, scoped_skill_dirs, skill_storage_spec};
 use crate::commands::experts::{
-    central_experts_dir, classify_link, create_link_raw, ExpertLinkState,
+    central_experts_dir, classify_link, create_link_raw, read_link_target, ExpertInstallStatus,
+    ExpertLinkState, LinkOp, LinkOpResult,
 };
 use crate::db::service::app_metadata_service;
 use crate::models::agent::AgentType;
-use crate::web::event_bridge::{emit_event, EventEmitter, GENERATIVE_UI_SETTINGS_CHANGED_EVENT};
-
-pub const KEY_GENERATIVE_UI_ENABLED: &str = "generative_ui.enabled";
 
 /// The skill's directory name everywhere, and what the user types
-/// (`/json-render`, `$json-render` in Codex).
-pub(crate) const SKILL_ID: &str = "json-render";
+/// (`/ui-render`, `$ui-render` in Codex).
+pub(crate) const SKILL_ID: &str = "ui-render";
 
 /// Generated from the frontend catalog (`src/lib/json-render/skill.ts`);
 /// `skill.test.ts` keeps the two equal.
-const SKILL_MD: &str = include_str!("../../genui/json-render/SKILL.md");
+const SKILL_MD: &str = include_str!("../../genui/ui-render/SKILL.md");
 
 /// Written into the central copy before anything else: says Codeg made it.
 pub(crate) const MARKER_FILE: &str = ".codeg-managed";
-const MARKER_TEXT: &str = "Codeg installs this skill while generative UI is on \
-(Settings > Skill Packs > UI) and rewrites it when it changes. Edits made here are lost.\n";
+const MARKER_TEXT: &str = "Codeg installs this skill (Settings > Skill Packs > UI) and \
+rewrites it when it changes. Edits made here are lost.\n";
 
-/// Also in the central copy: every link made from it that may still exist,
-/// one path per line.
-const LINKS_FILE: &str = ".codeg-links";
+/// What Codeg 0.35.0 called the skill. Its central copy carries the same
+/// marker, plus a list of every link made from it, one path per line.
+const LEGACY_SKILL_ID: &str = "json-render";
+const LEGACY_LINKS_FILE: &str = ".codeg-links";
+/// The 0.35.0 switch that linked `json-render` into every agent Codeg
+/// started. Read once more, to move its links over; nothing writes it now.
+const LEGACY_SWITCH_KEY: &str = "generative_ui.enabled";
 
-/// Off by default: turning it on puts a skill in front of every agent Codeg
-/// starts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GenerativeUiSettings {
-    pub enabled: bool,
-    /// Reported, never saved: the central store holds a `json-render` skill
-    /// Codeg did not write, so Codeg leaves the skill alone until the user
-    /// renames theirs (see the module doc).
-    #[serde(default)]
-    pub skill_conflict: bool,
-    /// Reported by a switch-off, never saved: links of ours it could not
-    /// remove, as `path: error`. Each later launch of those agents retries.
-    #[serde(default)]
-    pub unlink_failures: Vec<String>,
+/// What the settings page needs besides the link states.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GenerativeUiSkillInfo {
+    /// The skill's name: its directory, and what the user types.
+    pub id: String,
+    /// The central store holds a `ui-render` Codeg did not write, so Codeg
+    /// leaves the skill alone until the user renames theirs (see the module
+    /// doc).
+    pub conflict: bool,
 }
 
 // ─── Where things live ──────────────────────────────────────────────────
 
-/// Where the central copy goes and where each agent looks for skills. The
+/// Where the central copies go and where each agent looks for skills. The
 /// real one resolves both on every call, from the environment Codeg runs in;
 /// tests point both at temporary directories.
 #[derive(Debug, Clone)]
@@ -112,75 +100,68 @@ enum SkillHome {
     Fixed {
         central_root: PathBuf,
         agents: Vec<(AgentType, Vec<PathBuf>)>,
-        /// Holds a launch inside its filesystem half: it reports that it got
-        /// there, then waits to be let go.
-        launch_gate: Option<Arc<LaunchGate>>,
     },
 }
 
-#[cfg(test)]
-#[derive(Debug)]
-struct LaunchGate {
-    reached: std::sync::Mutex<std::sync::mpsc::Sender<()>>,
-    go: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
-}
-
 impl SkillHome {
-    fn central_copy(&self) -> PathBuf {
-        let root = match self {
+    fn central_root(&self) -> PathBuf {
+        match self {
             SkillHome::User => central_experts_dir(),
             #[cfg(test)]
             SkillHome::Fixed { central_root, .. } => central_root.clone(),
-        };
-        root.join(SKILL_ID)
-    }
-
-    /// An agent's global skill directories, the preferred one first. Empty for
-    /// an agent without a skill store.
-    fn agent_dirs(&self, agent: AgentType) -> Vec<PathBuf> {
-        match self {
-            SkillHome::User => {
-                scoped_skill_dirs(agent, AgentSkillScope::Global, None).unwrap_or_default()
-            }
-            #[cfg(test)]
-            SkillHome::Fixed {
-                agents,
-                launch_gate,
-                ..
-            } => {
-                if let Some(gate) = launch_gate {
-                    let _ = gate.reached.lock().unwrap().send(());
-                    let _ = gate.go.lock().unwrap().recv();
-                }
-                agents
-                    .iter()
-                    .find(|(a, _)| *a == agent)
-                    .map(|(_, dirs)| dirs.clone())
-                    .unwrap_or_default()
-            }
         }
     }
 
-    /// Every global skill directory of every agent that has one, each once —
-    /// several agents share `~/.agents/skills`.
-    fn every_agent_dir(&self) -> Vec<PathBuf> {
-        let dirs: Vec<PathBuf> = match self {
+    fn central_copy(&self) -> PathBuf {
+        self.central_root().join(SKILL_ID)
+    }
+
+    fn legacy_copy(&self) -> PathBuf {
+        self.central_root().join(LEGACY_SKILL_ID)
+    }
+
+    /// Every agent with a skill store — the matrix's columns — each with its
+    /// global skill directories, the preferred one first.
+    fn agents(&self) -> Vec<(AgentType, Vec<PathBuf>)> {
+        match self {
             SkillHome::User => crate::acp::registry::all_acp_agents()
                 .into_iter()
-                .filter(|a| skill_storage_spec(*a).is_some())
-                .flat_map(|agent| self.agent_dirs(agent))
+                .filter(|agent| skill_storage_spec(*agent).is_some())
+                .map(|agent| (agent, user_agent_dirs(agent)))
                 .collect(),
+            #[cfg(test)]
+            SkillHome::Fixed { agents, .. } => agents.clone(),
+        }
+    }
+
+    /// One agent's global skill directories, the preferred one first. Empty
+    /// for an agent without a skill store.
+    fn agent_dirs(&self, agent: AgentType) -> Vec<PathBuf> {
+        match self {
+            SkillHome::User => user_agent_dirs(agent),
             #[cfg(test)]
             SkillHome::Fixed { agents, .. } => agents
                 .iter()
-                .flat_map(|(_, dirs)| dirs.iter().cloned())
-                .collect(),
-        };
-        let mut seen = BTreeSet::new();
-        dirs.into_iter()
-            .filter(|dir| seen.insert(dir.clone()))
-            .collect()
+                .find(|(a, _)| *a == agent)
+                .map(|(_, dirs)| dirs.clone())
+                .unwrap_or_default(),
+        }
     }
+}
+
+fn user_agent_dirs(agent: AgentType) -> Vec<PathBuf> {
+    scoped_skill_dirs(agent, AgentSkillScope::Global, None).unwrap_or_default()
+}
+
+/// Every skill directory of these agents, each once — several agents share
+/// `~/.agents/skills`.
+fn every_dir(agents: &[(AgentType, Vec<PathBuf>)]) -> Vec<PathBuf> {
+    let mut seen = BTreeSet::new();
+    agents
+        .iter()
+        .flat_map(|(_, dirs)| dirs.iter().cloned())
+        .filter(|dir| seen.insert(dir.clone()))
+        .collect()
 }
 
 // ─── The central copy ───────────────────────────────────────────────────
@@ -194,13 +175,25 @@ enum CentralCopy {
     Foreign,
 }
 
+/// A directory whose marker cannot even be looked at is an error, never
+/// "not ours": it may well be ours, and acting as if it were not would leave
+/// our links behind.
 fn central_copy_state(dir: &Path) -> io::Result<CentralCopy> {
     match fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() && dir.join(MARKER_FILE).is_file() => Ok(CentralCopy::Ours),
+        Ok(meta) if meta.is_dir() => match fs::metadata(dir.join(MARKER_FILE)) {
+            Ok(marker) if marker.is_file() => Ok(CentralCopy::Ours),
+            Ok(_) => Ok(CentralCopy::Foreign),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(CentralCopy::Foreign),
+            Err(err) => Err(err),
+        },
         Ok(_) => Ok(CentralCopy::Foreign),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(CentralCopy::Absent),
         Err(err) => Err(err),
     }
+}
+
+fn is_ours(dir: &Path) -> bool {
+    matches!(central_copy_state(dir), Ok(CentralCopy::Ours))
 }
 
 fn is_foreign(dir: &Path) -> bool {
@@ -214,7 +207,10 @@ fn ensure_central_copy(dir: &Path) -> io::Result<()> {
         CentralCopy::Foreign => {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("{} is not Codeg's; leaving it alone", dir.display()),
+                format!(
+                    "{} is a skill of your own; rename it to use the built-in one",
+                    dir.display()
+                ),
             ))
         }
         CentralCopy::Absent => {
@@ -244,11 +240,270 @@ fn ensure_central_copy(dir: &Path) -> io::Result<()> {
 
 // ─── Links ──────────────────────────────────────────────────────────────
 
-/// The recorded links. A list that is missing is empty; one that cannot be
-/// read is an error, never an empty list — rewriting it from nothing would
-/// forget links that still exist.
-fn recorded_links(central: &Path) -> io::Result<Vec<PathBuf>> {
-    match fs::read_to_string(central.join(LINKS_FILE)) {
+/// Link the central copy into `dir`, an agent's preferred skill directory.
+/// Whatever already holds the skill's name there stays, and says so.
+fn link_into(central: &Path, dir: &Path) -> io::Result<()> {
+    let link = dir.join(SKILL_ID);
+    // Decided before creating anything, never by trying and reading the
+    // error: on Windows `create_link_raw` falls back to copying the whole
+    // directory when it cannot make a junction, which would write over a
+    // directory of the same name.
+    let taken = |what: &str| {
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "{what} already exists at {} — remove or rename it first",
+                link.display()
+            ),
+        )
+    };
+    match classify_link(&link, central) {
+        ExpertLinkState::NotLinked => {
+            fs::create_dir_all(dir)?;
+            create_link_raw(central, &link)?;
+            tracing::info!("[GenerativeUI] linked {}", link.display());
+            Ok(())
+        }
+        ExpertLinkState::LinkedToCodeg => Ok(()),
+        ExpertLinkState::BlockedByRealDirectory => Err(taken("A folder")),
+        ExpertLinkState::LinkedElsewhere => Err(taken("A link to somewhere else")),
+        ExpertLinkState::Broken => Err(taken("A broken link")),
+    }
+}
+
+/// Take our link out of every skill directory of one agent: most built-ins
+/// also read the shared `~/.agents/skills`, so it may sit in either, and a
+/// disable has to leave the agent without the skill. Anything that is not
+/// provably ours stays.
+fn unlink_from(central: &Path, dirs: &[PathBuf]) -> io::Result<()> {
+    if central_copy_state(central)? != CentralCopy::Ours {
+        // Without our marked copy there is nothing a link of ours could
+        // resolve to.
+        return Ok(());
+    }
+    for dir in dirs {
+        let link = dir.join(SKILL_ID);
+        if classify_link(&link, central) != ExpertLinkState::LinkedToCodeg {
+            continue;
+        }
+        remove_skill_entry(&link).map_err(|err| {
+            io::Error::new(err.kind(), format!("remove {}: {err}", link.display()))
+        })?;
+        tracing::info!("[GenerativeUI] unlinked {}", link.display());
+    }
+    Ok(())
+}
+
+/// One cell of the matrix: the link in the agent's preferred directory.
+fn status_of(
+    agent: AgentType,
+    preferred: &Path,
+    central: &Path,
+    ours: bool,
+) -> ExpertInstallStatus {
+    let link = preferred.join(SKILL_ID);
+    let state = match classify_link(&link, central) {
+        // It resolves to a `ui-render` Codeg did not write: the user's own
+        // link, which the matrix must neither count as ours nor remove.
+        ExpertLinkState::LinkedToCodeg if !ours => ExpertLinkState::LinkedElsewhere,
+        state => state,
+    };
+    ExpertInstallStatus {
+        expert_id: SKILL_ID.to_string(),
+        agent_type: agent,
+        state,
+        link_path: link.to_string_lossy().to_string(),
+        target_path: read_link_target(&link).map(|p| p.to_string_lossy().to_string()),
+        expected_target_path: central.to_string_lossy().to_string(),
+        copy_mode: false,
+    }
+}
+
+fn install_statuses(home: &SkillHome) -> Vec<ExpertInstallStatus> {
+    let central = home.central_copy();
+    let ours = is_ours(&central);
+    home.agents()
+        .into_iter()
+        .filter_map(|(agent, dirs)| Some(status_of(agent, dirs.first()?, &central, ours)))
+        .collect()
+}
+
+fn apply_one(home: &SkillHome, op: &LinkOp) -> io::Result<Option<ExpertInstallStatus>> {
+    if op.expert_id != SKILL_ID {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("unknown skill: {}", op.expert_id),
+        ));
+    }
+    let dirs = home.agent_dirs(op.agent_type);
+    let Some(preferred) = dirs.first() else {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("{:?} has no skill directory", op.agent_type),
+        ));
+    };
+    let central = home.central_copy();
+    if op.enable {
+        // Also recreates a central copy that went missing, which brings back
+        // every link of ours that was dangling for want of it.
+        ensure_central_copy(&central)?;
+        link_into(&central, preferred)?;
+        // Only where the new link went: an old link in a directory this
+        // agent shares belongs to the agent whose own directory that is, and
+        // waits for its own move.
+        retire_legacy_links(home, std::slice::from_ref(preferred))?;
+        Ok(Some(status_of(op.agent_type, preferred, &central, true)))
+    } else {
+        unlink_from(&central, &dirs)?;
+        // Everywhere the disable just looked: the agent is left without the
+        // skill under either name.
+        retire_legacy_links(home, &dirs)?;
+        Ok(None)
+    }
+}
+
+/// A choice made on the settings page for an agent supersedes the move from
+/// the old name: whatever `json-render` link of ours its directories still
+/// hold goes now, so no later startup acts on it.
+fn retire_legacy_links(home: &SkillHome, dirs: &[PathBuf]) -> io::Result<()> {
+    let old = home.legacy_copy();
+    if central_copy_state(&old)? != CentralCopy::Ours {
+        return Ok(());
+    }
+    for dir in dirs {
+        let link = dir.join(LEGACY_SKILL_ID);
+        if classify_link(&link, &old) != ExpertLinkState::LinkedToCodeg {
+            continue;
+        }
+        remove_skill_entry(&link).map_err(|err| {
+            io::Error::new(err.kind(), format!("remove {}: {err}", link.display()))
+        })?;
+        tracing::info!("[GenerativeUI] unlinked {}", link.display());
+    }
+    Ok(())
+}
+
+/// Each op on its own: one that fails records its error and the rest go on.
+/// The settings page reads every state back afterwards, since a disable can
+/// also take the skill from an agent sharing a directory.
+fn apply_links_blocking(home: &SkillHome, ops: Vec<LinkOp>) -> Vec<LinkOpResult> {
+    ops.into_iter()
+        .map(|op| {
+            let (ok, status, error) = match apply_one(home, &op) {
+                Ok(status) => (true, status, None),
+                Err(err) => (false, None, Some(err.to_string())),
+            };
+            LinkOpResult {
+                expert_id: op.expert_id,
+                agent_type: op.agent_type,
+                ok,
+                status,
+                error,
+            }
+        })
+        .collect()
+}
+
+// ─── Startup ────────────────────────────────────────────────────────────
+
+/// An up-to-date central copy — quietly none while the name belongs to a
+/// skill of the user's, which the settings page reports — then the move from
+/// the old name. `legacy_switch` is `None` when it could not be read. Returns
+/// what went wrong, for the log.
+fn install_blocking(home: &SkillHome, legacy_switch: Option<bool>) -> Vec<String> {
+    let central = home.central_copy();
+    let mut problems = Vec::new();
+    if is_foreign(&central) {
+        tracing::info!(
+            "[GenerativeUI] {} is a skill of the user's; leaving it alone",
+            central.display()
+        );
+    } else if let Err(err) = ensure_central_copy(&central) {
+        problems.push(format!("{}: {err}", central.display()));
+    }
+    problems.extend(migrate_legacy(home, legacy_switch));
+    problems
+}
+
+/// Move 0.35.0's `json-render` over to `ui-render`.
+///
+/// With the old switch on, every agent whose preferred skill directory holds
+/// our `json-render` link — 0.35.0 linked there, at the agent's launch — gets
+/// `ui-render` in that directory. An agent that cannot get it (something else
+/// holds the name there) keeps its `json-render`, and a later startup tries
+/// again. Every other `json-render` link of ours is removed: from the agents'
+/// directories, and from every place the old copy recorded linking (a custom
+/// agent that moved its skill directory, a changed `CODEX_HOME`); with the
+/// switch off, all of them are. The old copy goes once none is left; until
+/// then it stays, so no link of ours dangles.
+///
+/// With the switch on but our `ui-render` copy unavailable — a skill of the
+/// user's holds the name — nothing moves yet: the agents keep `json-render`
+/// rather than lose the skill until the name is free. Nothing moves either
+/// while the switch cannot be read: unknown is not off.
+///
+/// What brings `ui-render` back is only a `json-render` link that is still
+/// there, and a choice made on the settings page removes the agent's own
+/// ([`retire_legacy_links`]): a later startup never undoes that choice.
+fn migrate_legacy(home: &SkillHome, switch: Option<bool>) -> Vec<String> {
+    let old = home.legacy_copy();
+    match central_copy_state(&old) {
+        Ok(CentralCopy::Ours) => {}
+        // Moved already, or a `json-render` of the user's own: not ours.
+        Ok(_) => return Vec::new(),
+        Err(err) => return vec![format!("{}: {err}", old.display())],
+    }
+    let Some(switch_on) = switch else {
+        return vec![format!(
+            "could not read {LEGACY_SWITCH_KEY}; {LEGACY_SKILL_ID} stays for now"
+        )];
+    };
+    let mut problems = Vec::new();
+    let agents = home.agents();
+    // Old links that stay, because their agent could not get `ui-render`.
+    let mut keep: Vec<PathBuf> = Vec::new();
+    if switch_on {
+        let central = home.central_copy();
+        if !is_ours(&central) {
+            tracing::info!(
+                "[GenerativeUI] {} is not available; json-render stays for now",
+                central.display()
+            );
+            return problems;
+        }
+        for (agent, dirs) in &agents {
+            let Some(preferred) = dirs.first() else {
+                continue;
+            };
+            let old_link = preferred.join(LEGACY_SKILL_ID);
+            if classify_link(&old_link, &old) != ExpertLinkState::LinkedToCodeg {
+                continue;
+            }
+            if let Err(err) = link_into(&central, preferred) {
+                problems.push(format!("{agent:?} keeps {LEGACY_SKILL_ID} for now: {err}"));
+                if !keep.contains(&old_link) {
+                    keep.push(old_link);
+                }
+            }
+        }
+    }
+    let (failures, left) = unlink_legacy(&old, &every_dir(&agents), &keep);
+    if !failures.is_empty() || !left.is_empty() {
+        problems.extend(failures);
+        return problems;
+    }
+    match fs::remove_dir_all(&old) {
+        Ok(()) => tracing::info!("[GenerativeUI] moved {} over to {SKILL_ID}", old.display()),
+        Err(err) => problems.push(format!("{}: {err}", old.display())),
+    }
+    problems
+}
+
+/// The links the old copy recorded. A list that is missing is empty; one
+/// that cannot be read is an error, never an empty list — rewriting it from
+/// nothing would forget links that still exist.
+fn recorded_links(old: &Path) -> io::Result<Vec<PathBuf>> {
+    match fs::read_to_string(old.join(LEGACY_LINKS_FILE)) {
         Ok(list) => Ok(list
             .lines()
             .filter(|line| !line.is_empty())
@@ -260,129 +515,98 @@ fn recorded_links(central: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 /// Through a rename, so an interrupted write never loses the list.
-fn write_recorded_links(central: &Path, links: &[PathBuf]) -> io::Result<()> {
+fn write_recorded_links(old: &Path, links: &[PathBuf]) -> io::Result<()> {
     let list: String = links
         .iter()
         .map(|link| format!("{}\n", link.display()))
         .collect();
-    let partial = central.join(".codeg-links.partial");
+    let partial = old.join(".codeg-links.partial");
     fs::write(&partial, list)?;
-    fs::rename(&partial, central.join(LINKS_FILE)).inspect_err(|_| {
+    fs::rename(&partial, old.join(LEGACY_LINKS_FILE)).inspect_err(|_| {
         let _ = fs::remove_file(&partial);
     })
 }
 
-fn remember_link(central: &Path, link: &Path) -> io::Result<()> {
-    let mut links = recorded_links(central)?;
-    if links.iter().any(|known| known == link) {
-        return Ok(());
+/// Where an entry really is: its directory resolved through any link on the
+/// way, so two spellings of one place (a recorded path through a symlinked
+/// `CODEX_HOME`, say) compare equal. The path as given when that fails.
+fn entry_identity(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(dir), Some(name)) => fs::canonicalize(dir)
+            .map(|dir| dir.join(name))
+            .unwrap_or_else(|_| path.to_path_buf()),
+        _ => path.to_path_buf(),
     }
-    links.push(link.to_path_buf());
-    write_recorded_links(central, &links)
 }
 
-/// Link the central copy into `dir`, an agent's preferred skill directory.
-/// Whatever already sits there under our name stays, unless it is our link.
-fn link_into(central: &Path, dir: &Path) -> io::Result<()> {
-    let link = dir.join(SKILL_ID);
-    // Decided before creating anything, never by trying and reading the
-    // error: on Windows `create_link_raw` falls back to copying the whole
-    // directory when it cannot make a junction, which would write over a
-    // directory of the same name.
-    match classify_link(&link, central) {
-        ExpertLinkState::NotLinked => {
-            // Recorded before it exists: a link that could not be recorded
-            // is not made at all, so none can go unfound later.
-            remember_link(central, &link)?;
-            fs::create_dir_all(dir)?;
-            create_link_raw(central, &link)?;
-            tracing::info!("[GenerativeUI] linked {}", link.display());
-        }
-        ExpertLinkState::LinkedToCodeg => remember_link(central, &link)?,
-        other => tracing::info!(
-            "[GenerativeUI] {} is taken ({other:?}); the user's own wins",
-            link.display()
-        ),
-    }
-    Ok(())
-}
-
-/// Take our links out of `dirs` and out of every place a link was recorded.
-/// Only a link resolving to the central copy, while that copy is ours, counts
-/// as ours. Returns what failed; those stay recorded for the next attempt.
-fn unlink_from(central: &Path, dirs: &[PathBuf]) -> Vec<(PathBuf, io::Error)> {
+/// Take every `json-render` link of ours out of `dirs` and out of every place
+/// the old copy recorded, except those in `keep`. Only a link resolving to the
+/// old copy counts as ours. Returns what failed, and every link of ours left
+/// (failed or kept); those stay recorded for the next startup.
+fn unlink_legacy(old: &Path, dirs: &[PathBuf], keep: &[PathBuf]) -> (Vec<String>, Vec<PathBuf>) {
     let mut failures = Vec::new();
-    if !matches!(central_copy_state(central), Ok(CentralCopy::Ours)) {
-        // Nothing of ours can exist: without our marked copy there is no
-        // target a link of ours could resolve to.
-        return failures;
-    }
     // Without the list, every place an agent declares is one we may have
     // linked, and the list itself stays as it is.
-    let recorded = match recorded_links(central) {
+    let recorded = match recorded_links(old) {
         Ok(links) => Some(links),
         Err(err) => {
-            failures.push((central.join(LINKS_FILE), err));
+            failures.push(format!("{}: {err}", old.join(LEGACY_LINKS_FILE).display()));
             None
         }
     };
-    let mut candidates: Vec<PathBuf> = dirs.iter().map(|dir| dir.join(SKILL_ID)).collect();
+    let mut candidates: Vec<PathBuf> = dirs.iter().map(|dir| dir.join(LEGACY_SKILL_ID)).collect();
     for link in recorded.iter().flatten() {
         if !candidates.contains(link) {
             candidates.push(link.clone());
         }
     }
+    let kept: Vec<PathBuf> = keep.iter().map(|link| entry_identity(link)).collect();
+    let mut left = Vec::new();
     for link in candidates {
+        if kept.contains(&entry_identity(&link)) {
+            left.push(link);
+            continue;
+        }
         // A place we linked that cannot even be looked at (its directory's
         // permissions changed) may still hold our link: say so, and keep it
         // on the list. Elsewhere it only means no link of ours is there.
         if let Err(err) = fs::symlink_metadata(&link) {
             let maybe_ours = recorded.as_ref().is_none_or(|known| known.contains(&link));
             if err.kind() != io::ErrorKind::NotFound && maybe_ours {
-                failures.push((link, err));
+                failures.push(format!("{}: {err}", link.display()));
+                left.push(link);
             }
             continue;
         }
-        if classify_link(&link, central) != ExpertLinkState::LinkedToCodeg {
+        if classify_link(&link, old) != ExpertLinkState::LinkedToCodeg {
             continue;
         }
         match remove_skill_entry(&link) {
             Ok(()) => tracing::info!("[GenerativeUI] unlinked {}", link.display()),
-            Err(err) => failures.push((link, err)),
-        }
-    }
-    if let Some(recorded) = recorded {
-        let left: Vec<PathBuf> = failures.iter().map(|(link, _)| link.clone()).collect();
-        if left != recorded {
-            if let Err(err) = write_recorded_links(central, &left) {
-                tracing::warn!("[GenerativeUI] could not update the link list: {err}");
+            Err(err) => {
+                failures.push(format!("{}: {err}", link.display()));
+                left.push(link);
             }
         }
     }
-    failures
-}
-
-/// The switch on, at an agent's launch: an up-to-date central copy, linked
-/// into the agent's preferred skill directory. Quietly nothing while the name
-/// belongs to a skill of the user's — the settings page already says so.
-fn install_for(central: &Path, dirs: &[PathBuf]) -> io::Result<()> {
-    let Some(preferred) = dirs.first() else {
-        return Ok(());
-    };
-    if is_foreign(central) {
-        return Ok(());
+    if let Some(recorded) = recorded {
+        if left != recorded {
+            if let Err(err) = write_recorded_links(old, &left) {
+                tracing::warn!("[GenerativeUI] could not update the old link list: {err}");
+            }
+        }
     }
-    ensure_central_copy(central)?;
-    link_into(central, preferred)
+    (failures, left)
 }
 
-// ─── The switch ─────────────────────────────────────────────────────────
+// ─── The skill's state ──────────────────────────────────────────────────
 
 struct GenerativeUi {
-    /// The switch as the launch path sees it. `None` until the stored value
-    /// is loaded at startup: a launch before that — or in a test that never
-    /// loads it — leaves every skill directory alone.
-    switch: Arc<Mutex<Option<bool>>>,
+    /// Held across every write to skill directories — a batch from the
+    /// settings page, the startup install — by the blocking half that does
+    /// the work, so a caller that goes away midway (an HTTP client hanging
+    /// up) cannot let the next one in early.
+    lock: Arc<Mutex<()>>,
     home: SkillHome,
 }
 
@@ -391,208 +615,137 @@ static GENERATIVE_UI: LazyLock<GenerativeUi> = LazyLock::new(|| GenerativeUi::ne
 impl GenerativeUi {
     fn new(home: SkillHome) -> Self {
         Self {
-            switch: Arc::new(Mutex::new(None)),
+            lock: Arc::new(Mutex::new(())),
             home,
         }
     }
 
-    async fn load(&self, conn: &DatabaseConnection) -> GenerativeUiSettings {
-        let enabled = load_enabled(conn).await;
+    async fn install(&self, legacy_switch: Option<bool>) -> Vec<String> {
+        let guard = self.lock.clone().lock_owned().await;
         let home = self.home.clone();
-        let skill_conflict = tokio::task::spawn_blocking(move || is_foreign(&home.central_copy()))
-            .await
-            .unwrap_or(false);
-        GenerativeUiSettings {
-            enabled,
-            skill_conflict,
-            unlink_failures: Vec::new(),
-        }
-    }
-
-    async fn apply_persisted(&self, conn: &DatabaseConnection) {
-        let enabled = load_enabled(conn).await;
-        *self.switch.lock().await = Some(enabled);
-    }
-
-    async fn set(
-        &self,
-        conn: &DatabaseConnection,
-        emitter: &EventEmitter,
-        desired: GenerativeUiSettings,
-    ) -> Result<GenerativeUiSettings, AppCommandError> {
-        let mut switch = self.switch.clone().lock_owned().await;
-        app_metadata_service::upsert_value(
-            conn,
-            KEY_GENERATIVE_UI_ENABLED,
-            &desired.enabled.to_string(),
-        )
-        .await
-        .map_err(AppCommandError::from)?;
-        *switch = Some(desired.enabled);
-
-        let enabled = desired.enabled;
-        let home = self.home.clone();
-        let emitter = emitter.clone();
         tokio::task::spawn_blocking(move || {
-            let _switch = switch;
-            let central = home.central_copy();
-            let mut unlink_failures = Vec::new();
-            if enabled {
-                // Written now rather than at the first launch, so a skill of
-                // the user's in the way shows up on the settings page at once.
-                // Nothing is linked until an agent starts.
-                if !is_foreign(&central) {
-                    if let Err(err) = ensure_central_copy(&central) {
-                        tracing::warn!("[GenerativeUI] central copy: {err}");
-                    }
-                }
-            } else {
-                for (link, err) in unlink_from(&central, &home.every_agent_dir()) {
-                    tracing::warn!("[GenerativeUI] could not unlink {}: {err}", link.display());
-                    unlink_failures.push(format!("{}: {err}", link.display()));
-                }
-            }
-            let saved = GenerativeUiSettings {
-                enabled,
-                skill_conflict: is_foreign(&central),
-                unlink_failures,
-            };
-            emit_event(&emitter, GENERATIVE_UI_SETTINGS_CHANGED_EVENT, &saved);
-            saved
+            let _guard = guard;
+            install_blocking(&home, legacy_switch)
+        })
+        .await
+        .unwrap_or_else(|err| vec![format!("install panicked: {err}")])
+    }
+
+    async fn apply_links(&self, ops: Vec<LinkOp>) -> Result<Vec<LinkOpResult>, AppCommandError> {
+        let guard = self.lock.clone().lock_owned().await;
+        let home = self.home.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            apply_links_blocking(&home, ops)
         })
         .await
         .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))
     }
 
-    async fn sync_before_launch(&self, agent: AgentType) {
-        let switch = self.switch.clone().lock_owned().await;
-        let Some(enabled) = *switch else {
-            return;
-        };
+    async fn statuses(&self) -> Result<Vec<ExpertInstallStatus>, AppCommandError> {
         let home = self.home.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let _switch = switch;
-            let dirs = home.agent_dirs(agent);
-            let central = home.central_copy();
-            if enabled {
-                install_for(&central, &dirs)
-            } else {
-                match unlink_from(&central, &dirs).into_iter().next() {
-                    Some((link, err)) => Err(io::Error::new(
-                        err.kind(),
-                        format!("unlink {}: {err}", link.display()),
-                    )),
-                    None => Ok(()),
-                }
-            }
+        tokio::task::spawn_blocking(move || install_statuses(&home))
+            .await
+            .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))
+    }
+
+    async fn skill_info(&self) -> Result<GenerativeUiSkillInfo, AppCommandError> {
+        let central = self.home.central_copy();
+        let conflict = tokio::task::spawn_blocking(move || is_foreign(&central))
+            .await
+            .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))?;
+        Ok(GenerativeUiSkillInfo {
+            id: SKILL_ID.to_string(),
+            conflict,
         })
-        .await;
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => tracing::warn!("[GenerativeUI] skill sync for {agent:?}: {err}"),
-            Err(err) => tracing::warn!("[GenerativeUI] skill sync for {agent:?} panicked: {err}"),
-        }
     }
 }
 
-async fn load_enabled(conn: &DatabaseConnection) -> bool {
-    match app_metadata_service::get_value(conn, KEY_GENERATIVE_UI_ENABLED).await {
-        Ok(Some(raw)) => raw.parse::<bool>().unwrap_or(false),
-        _ => false,
+/// The 0.35.0 switch: off when it was never set, `None` when the read failed.
+async fn load_legacy_switch(conn: &DatabaseConnection) -> Option<bool> {
+    match app_metadata_service::get_value(conn, LEGACY_SWITCH_KEY).await {
+        Ok(Some(raw)) => Some(raw.parse::<bool>().unwrap_or(false)),
+        Ok(None) => Some(false),
+        Err(err) => {
+            tracing::warn!("[GenerativeUI] could not read {LEGACY_SWITCH_KEY}: {err}");
+            None
+        }
     }
 }
 
 // ─── Entry points ───────────────────────────────────────────────────────
 
-/// The stored switch, plus whether a skill of the user's blocks ours.
-pub async fn load_generative_ui_settings(conn: &DatabaseConnection) -> GenerativeUiSettings {
-    GENERATIVE_UI.load(conn).await
+/// Bring the central copy up to date and move 0.35.0's `json-render` over.
+/// Run once at startup, before any command is served: a change made on the
+/// settings page must come after the move, never be undone by it. Problems
+/// are logged, never fatal.
+pub async fn install_generative_ui_skill(conn: &DatabaseConnection) {
+    let legacy_switch = load_legacy_switch(conn).await;
+    let problems = GENERATIVE_UI.install(legacy_switch).await;
+    if problems.is_empty() {
+        tracing::info!("[GenerativeUI] {SKILL_ID} skill ready");
+    } else {
+        tracing::warn!(
+            "[GenerativeUI] install finished with {} problem(s): {problems:?}",
+            problems.len()
+        );
+    }
 }
 
-/// Load the stored switch for the launch path. Run once at startup, before
-/// any agent can start.
-pub async fn apply_persisted_generative_ui_config(conn: &DatabaseConnection) {
-    GENERATIVE_UI.apply_persisted(conn).await;
-}
-
-/// Persist + apply + broadcast, shared by the Tauri command and the HTTP
-/// handler. Switching off removes our links from every agent before the
-/// broadcast goes out; switching on links nothing until an agent starts.
-///
-/// The broadcast is what moves the chat: the settings UI runs in a separate
-/// window, so open conversations learn that cards are on or off only from it.
-pub async fn set_generative_ui_settings_core(
-    conn: &DatabaseConnection,
-    emitter: &EventEmitter,
-    desired: GenerativeUiSettings,
-) -> Result<GenerativeUiSettings, AppCommandError> {
-    GENERATIVE_UI.set(conn, emitter, desired).await
-}
-
-/// Called right before an agent process starts: link the skill in (switch
-/// on) or take our link back (switch off). Never fails the launch — a skill
-/// that could not be synced is logged, and the session starts without it.
-pub async fn sync_skill_before_launch(agent: AgentType) {
-    GENERATIVE_UI.sync_before_launch(agent).await;
-}
-
-/// The central-store id this module owns, for the custom-skills pack to keep
-/// out of its list — only while the copy there is Codeg's. A `json-render`
+/// The central-store ids this module owns, for the custom-skills pack to keep
+/// out of its list — each only while the copy there is Codeg's. A `ui-render`
 /// the user made stays a custom skill they can see, edit and rename.
 pub(crate) fn reserved_skill_ids() -> Vec<String> {
-    reserved_ids_in(&SkillHome::User.central_copy())
+    reserved_ids_in(&SkillHome::User)
 }
 
-fn reserved_ids_in(central: &Path) -> Vec<String> {
-    match central_copy_state(central) {
-        Ok(CentralCopy::Ours) => vec![SKILL_ID.to_string()],
-        _ => Vec::new(),
-    }
+fn reserved_ids_in(home: &SkillHome) -> Vec<String> {
+    [
+        (SKILL_ID, home.central_copy()),
+        (LEGACY_SKILL_ID, home.legacy_copy()),
+    ]
+    .into_iter()
+    .filter(|(_, dir)| is_ours(dir))
+    .map(|(id, _)| id.to_string())
+    .collect()
 }
 
-// -------- Tauri commands -----------------------------------------------------
+// -------- Commands (Tauri, and the web handlers call them too) ---------------
 
+/// The skill's name, and whether a skill of the user's holds it.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_generative_ui_settings(
-    #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, crate::db::AppDatabase>,
-) -> Result<GenerativeUiSettings, AppCommandError> {
-    #[cfg(feature = "tauri-runtime")]
-    {
-        Ok(load_generative_ui_settings(&db.conn).await)
-    }
-    #[cfg(not(feature = "tauri-runtime"))]
-    {
-        Err(AppCommandError::configuration_invalid("tauri-only command"))
-    }
+pub async fn generative_ui_skill_info() -> Result<GenerativeUiSkillInfo, AppCommandError> {
+    GENERATIVE_UI.skill_info().await
 }
 
+/// One state per agent with a skill store: the matrix in one round trip.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn set_generative_ui_settings(
-    #[cfg(feature = "tauri-runtime")] app: tauri::AppHandle,
-    #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, crate::db::AppDatabase>,
-    settings: GenerativeUiSettings,
-) -> Result<GenerativeUiSettings, AppCommandError> {
-    #[cfg(feature = "tauri-runtime")]
-    {
-        let emitter = EventEmitter::Tauri(app);
-        set_generative_ui_settings_core(&db.conn, &emitter, settings).await
-    }
-    #[cfg(not(feature = "tauri-runtime"))]
-    {
-        let _ = settings;
-        Err(AppCommandError::configuration_invalid("tauri-only command"))
-    }
+pub async fn generative_ui_list_all_install_statuses(
+) -> Result<Vec<ExpertInstallStatus>, AppCommandError> {
+    GENERATIVE_UI.statuses().await
+}
+
+/// Enable or disable the skill for a batch of agents; one result per op.
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn generative_ui_apply_links(
+    ops: Vec<LinkOp>,
+) -> Result<Vec<LinkOpResult>, AppCommandError> {
+    GENERATIVE_UI.apply_links(ops).await
+}
+
+/// The `SKILL.md` agents get, for the settings page's preview.
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn generative_ui_read_content() -> Result<String, AppCommandError> {
+    Ok(SKILL_MD.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::web::event_bridge::WebEventBroadcaster;
-    use std::sync::Arc;
 
     /// A home of temporary directories: the central store and one skill
     /// directory per agent (Codex's has a second, shared one, like the real
-    /// `~/.agents/skills`).
+    /// `~/.agents/skills`, which is Gemini's only one).
     struct Fixture {
         _tmp: tempfile::TempDir,
         root: PathBuf,
@@ -614,7 +767,6 @@ mod tests {
             let home = SkillHome::Fixed {
                 central_root: root.join("central"),
                 agents,
-                launch_gate: None,
             };
             Self {
                 _tmp: tmp,
@@ -623,40 +775,55 @@ mod tests {
             }
         }
 
-        /// The same home, with launches held at a gate: the first channel
-        /// hears when one is inside its filesystem half, and a send on the
-        /// second lets it go on.
-        fn with_launch_gate() -> (
-            Self,
-            std::sync::mpsc::Receiver<()>,
-            std::sync::mpsc::Sender<()>,
-        ) {
-            let (reached_tx, reached_rx) = std::sync::mpsc::channel();
-            let (go_tx, go_rx) = std::sync::mpsc::channel();
-            let mut fx = Self::new();
-            if let SkillHome::Fixed { launch_gate, .. } = &mut fx.ui.home {
-                *launch_gate = Some(Arc::new(LaunchGate {
-                    reached: std::sync::Mutex::new(reached_tx),
-                    go: std::sync::Mutex::new(go_rx),
-                }));
-            }
-            (fx, reached_rx, go_tx)
-        }
-
         fn central(&self) -> PathBuf {
             self.ui.home.central_copy()
+        }
+
+        fn legacy(&self) -> PathBuf {
+            self.ui.home.legacy_copy()
         }
 
         fn link(&self, agent_dir: &str) -> PathBuf {
             self.root.join(agent_dir).join(SKILL_ID)
         }
 
+        fn legacy_link(&self, agent_dir: &str) -> PathBuf {
+            self.root.join(agent_dir).join(LEGACY_SKILL_ID)
+        }
+
         fn is_our_link(&self, agent_dir: &str) -> bool {
             classify_link(&self.link(agent_dir), &self.central()) == ExpertLinkState::LinkedToCodeg
         }
 
-        async fn set(&self, db: &crate::db::AppDatabase, enabled: bool) -> GenerativeUiSettings {
-            set_on(&self.ui, db, enabled).await
+        async fn apply(&self, ops: &[(AgentType, bool)]) -> Vec<LinkOpResult> {
+            let ops = ops
+                .iter()
+                .map(|&(agent_type, enable)| LinkOp {
+                    expert_id: SKILL_ID.to_string(),
+                    agent_type,
+                    enable,
+                })
+                .collect();
+            self.ui.apply_links(ops).await.expect("apply")
+        }
+
+        async fn enable(&self, agent: AgentType) -> LinkOpResult {
+            self.apply(&[(agent, true)]).await.remove(0)
+        }
+
+        async fn disable(&self, agent: AgentType) -> LinkOpResult {
+            self.apply(&[(agent, false)]).await.remove(0)
+        }
+
+        async fn state_of(&self, agent: AgentType) -> ExpertLinkState {
+            self.ui
+                .statuses()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|status| status.agent_type == agent)
+                .expect("a column for every agent")
+                .state
         }
 
         /// A directory standing where the central copy goes, made by the
@@ -665,37 +832,40 @@ mod tests {
             fs::create_dir_all(self.central()).unwrap();
             fs::write(self.central().join("SKILL.md"), "mine\n").unwrap();
         }
-    }
 
-    async fn set_on(
-        ui: &GenerativeUi,
-        db: &crate::db::AppDatabase,
-        enabled: bool,
-    ) -> GenerativeUiSettings {
-        ui.set(
-            &db.conn,
-            &EventEmitter::Noop,
-            GenerativeUiSettings {
-                enabled,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("save")
+        /// What 0.35.0 left: its marked `json-render` copy, linked into the
+        /// preferred directories of `agent_dirs`, every link recorded.
+        fn plant_legacy(&self, agent_dirs: &[&str]) {
+            let old = self.legacy();
+            fs::create_dir_all(&old).unwrap();
+            fs::write(old.join(MARKER_FILE), "Codeg installs this skill\n").unwrap();
+            fs::write(old.join("SKILL.md"), "---\nname: json-render\n---\n").unwrap();
+            let mut list = String::new();
+            for dir in agent_dirs {
+                let dir = self.root.join(dir);
+                fs::create_dir_all(&dir).unwrap();
+                let link = dir.join(LEGACY_SKILL_ID);
+                create_link_raw(&old, &link).unwrap();
+                list.push_str(&format!("{}\n", link.display()));
+            }
+            fs::write(old.join(LEGACY_LINKS_FILE), list).unwrap();
+        }
+
+        fn is_our_legacy_link(&self, agent_dir: &str) -> bool {
+            classify_link(&self.legacy_link(agent_dir), &self.legacy())
+                == ExpertLinkState::LinkedToCodeg
+        }
     }
 
     fn exists(path: &Path) -> bool {
         fs::symlink_metadata(path).is_ok()
     }
 
-    #[test]
-    fn off_until_someone_turns_it_on() {
-        assert!(!GenerativeUiSettings::default().enabled);
-    }
-
+    /// An agent finds a skill by its directory, and a user calls it by its
+    /// frontmatter name: the two must agree.
     #[test]
     fn the_bundled_skill_is_named_after_its_directory() {
-        assert!(SKILL_MD.starts_with("---\nname: json-render\ndescription: "));
+        assert!(SKILL_MD.starts_with(&format!("---\nname: {SKILL_ID}\ndescription: ")));
     }
 
     /// Every platform ships the bytes `skill.ts` generates. A Windows checkout
@@ -705,71 +875,15 @@ mod tests {
     fn the_bundled_skill_has_lf_line_endings() {
         assert!(
             !SKILL_MD.contains('\r'),
-            "genui/json-render/SKILL.md was checked out with CRLF; check the \
+            "genui/ui-render/SKILL.md was checked out with CRLF; check the \
              `eol=lf` rule for it in .gitattributes"
         );
     }
 
     #[tokio::test]
-    async fn save_persists_and_broadcasts() {
+    async fn startup_writes_the_central_copy_and_links_nothing() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        let broadcaster = Arc::new(WebEventBroadcaster::new());
-        let mut rx = broadcaster.subscribe();
-        let emitter = EventEmitter::test_web_only(broadcaster.clone());
-
-        let saved = fx
-            .ui
-            .set(
-                &db.conn,
-                &emitter,
-                GenerativeUiSettings {
-                    enabled: true,
-                    // Whatever a caller sends in these is not saved.
-                    skill_conflict: true,
-                    unlink_failures: vec!["x".into()],
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            saved,
-            GenerativeUiSettings {
-                enabled: true,
-                ..Default::default()
-            }
-        );
-        assert_eq!(fx.ui.load(&db.conn).await, saved);
-
-        let evt = rx.try_recv().expect("a save broadcasts");
-        assert_eq!(evt.channel, GENERATIVE_UI_SETTINGS_CHANGED_EVENT);
-        assert_eq!(evt.payload["enabled"], true);
-        assert_eq!(evt.payload["skill_conflict"], false);
-    }
-
-    #[tokio::test]
-    async fn the_launch_path_acts_on_the_stored_value_once_loaded() {
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        app_metadata_service::upsert_value(&db.conn, KEY_GENERATIVE_UI_ENABLED, "true")
-            .await
-            .unwrap();
-
-        // Not loaded yet: nothing is touched.
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        assert!(!exists(&fx.central()));
-        assert!(!exists(&fx.link("claude/skills")));
-
-        fx.ui.apply_persisted(&db.conn).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        assert!(fx.is_our_link("claude/skills"));
-    }
-
-    #[tokio::test]
-    async fn turning_it_on_writes_the_central_copy_and_links_nothing() {
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
+        assert!(fx.ui.install(Some(false)).await.is_empty());
 
         assert_eq!(
             fs::read_to_string(fx.central().join("SKILL.md")).unwrap(),
@@ -779,35 +893,30 @@ mod tests {
         for dir in ["claude/skills", "codex/skills", "agents/skills"] {
             assert!(!exists(&fx.root.join(dir)), "{dir} must not be created");
         }
-    }
-
-    #[tokio::test]
-    async fn a_launch_links_its_own_agent_once_into_the_preferred_dir() {
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-
-        fx.ui.sync_before_launch(AgentType::Codex).await;
-        assert!(fx.is_our_link("codex/skills"));
-        assert!(!exists(&fx.link("agents/skills")), "only the preferred dir");
-        assert!(
-            !exists(&fx.link("claude/skills")),
-            "only the launching agent"
+        let statuses = fx.ui.statuses().await.unwrap();
+        // One cell per agent with a skill store, each about its preferred dir.
+        let columns: Vec<AgentType> = statuses.iter().map(|s| s.agent_type).collect();
+        assert_eq!(
+            columns,
+            vec![AgentType::ClaudeCode, AgentType::Codex, AgentType::Gemini]
         );
-
-        // Again: still the one link.
-        fx.ui.sync_before_launch(AgentType::Codex).await;
-        assert!(fx.is_our_link("codex/skills"));
+        for status in &statuses {
+            assert_eq!(status.state, ExpertLinkState::NotLinked, "{status:?}");
+            assert_eq!(status.expert_id, SKILL_ID);
+        }
+        assert_eq!(
+            statuses[1].link_path,
+            fx.link("codex/skills").to_string_lossy()
+        );
     }
 
     #[tokio::test]
-    async fn a_launch_brings_an_outdated_central_copy_up_to_date() {
+    async fn startup_brings_an_outdated_central_copy_up_to_date() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
+        fx.ui.install(Some(false)).await;
         fs::write(fx.central().join("SKILL.md"), "an older version\n").unwrap();
 
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
+        fx.ui.install(Some(false)).await;
         assert_eq!(
             fs::read_to_string(fx.central().join("SKILL.md")).unwrap(),
             SKILL_MD
@@ -817,13 +926,12 @@ mod tests {
     #[tokio::test]
     async fn a_marker_without_a_skill_is_finished_rather_than_disowned() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         // What an install cut short between the marker and SKILL.md leaves.
         fs::create_dir_all(fx.central()).unwrap();
         fs::write(fx.central().join(MARKER_FILE), MARKER_TEXT).unwrap();
 
-        let saved = fx.set(&db, true).await;
-        assert!(!saved.skill_conflict);
+        assert!(!fx.ui.skill_info().await.unwrap().conflict);
+        fx.ui.install(Some(false)).await;
         assert_eq!(
             fs::read_to_string(fx.central().join("SKILL.md")).unwrap(),
             SKILL_MD
@@ -831,112 +939,160 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn whatever_already_holds_the_name_in_an_agent_dir_stays() {
+    async fn enabling_links_the_agents_preferred_dir_and_nothing_else() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        // The user's own `json-render` in Claude's skill dir.
-        let theirs = fx.link("claude/skills");
-        fs::create_dir_all(&theirs).unwrap();
-        fs::write(theirs.join("SKILL.md"), "theirs\n").unwrap();
-
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
+        // No startup install first: enabling writes the central copy itself.
+        let result = fx.enable(AgentType::Codex).await;
+        assert!(result.ok, "{result:?}");
         assert_eq!(
-            classify_link(&theirs, &fx.central()),
-            ExpertLinkState::BlockedByRealDirectory
+            result.status.map(|status| status.state),
+            Some(ExpertLinkState::LinkedToCodeg)
         );
-        assert_eq!(
-            fs::read_to_string(theirs.join("SKILL.md")).unwrap(),
-            "theirs\n"
-        );
-    }
-
-    #[tokio::test]
-    async fn turning_it_off_takes_back_only_our_links_and_keeps_the_copy() {
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        fx.ui.sync_before_launch(AgentType::Codex).await;
-        assert!(fx.is_our_link("claude/skills"));
         assert!(fx.is_our_link("codex/skills"));
+        assert!(!exists(&fx.link("agents/skills")), "only the preferred dir");
+        assert!(!exists(&fx.link("claude/skills")), "only that agent");
 
-        // Gemini's dir (shared with Codex's second one) holds a link to
-        // somewhere else.
-        let elsewhere = fx.root.join("elsewhere");
-        fs::create_dir_all(&elsewhere).unwrap();
-        fs::create_dir_all(fx.root.join("agents/skills")).unwrap();
-        create_link_raw(&elsewhere, &fx.link("agents/skills")).unwrap();
-
-        fx.set(&db, false).await;
-        assert!(!exists(&fx.link("claude/skills")));
-        assert!(!exists(&fx.link("codex/skills")));
         assert_eq!(
-            classify_link(&fx.link("agents/skills"), &elsewhere),
-            ExpertLinkState::LinkedToCodeg,
-            "a link to somewhere else is not ours"
+            fx.state_of(AgentType::Codex).await,
+            ExpertLinkState::LinkedToCodeg
         );
         assert_eq!(
-            fs::read_to_string(fx.central().join("SKILL.md")).unwrap(),
-            SKILL_MD,
-            "the central copy stays"
+            fx.state_of(AgentType::ClaudeCode).await,
+            ExpertLinkState::NotLinked
         );
+        assert_eq!(
+            fx.state_of(AgentType::Gemini).await,
+            ExpertLinkState::NotLinked
+        );
+
+        // Again: still the one link.
+        assert!(fx.enable(AgentType::Codex).await.ok);
+        assert!(fx.is_our_link("codex/skills"));
     }
 
     #[tokio::test]
-    async fn a_dangling_link_is_nobody_we_can_name() {
+    async fn enabling_restores_a_central_copy_that_went_missing() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        let gone = fx.root.join("gone");
-        fs::create_dir_all(&gone).unwrap();
-        fs::create_dir_all(fx.root.join("claude/skills")).unwrap();
-        create_link_raw(&gone, &fx.link("claude/skills")).unwrap();
-        fs::remove_dir_all(&gone).unwrap();
+        assert!(fx.enable(AgentType::ClaudeCode).await.ok);
+        fs::remove_dir_all(fx.central()).unwrap();
         assert_eq!(
-            classify_link(&fx.link("claude/skills"), &fx.central()),
+            fx.state_of(AgentType::ClaudeCode).await,
             ExpertLinkState::Broken
         );
 
-        fx.set(&db, false).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        assert!(exists(&fx.link("claude/skills")));
+        assert!(fx.enable(AgentType::ClaudeCode).await.ok);
+        assert!(fx.is_our_link("claude/skills"));
     }
 
     #[tokio::test]
-    async fn a_launch_with_it_off_takes_back_a_link_of_ours() {
+    async fn disabling_takes_our_link_out_of_every_dir_the_agent_reads() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        // Off without the cleanup reaching Claude's dir (say it failed).
-        app_metadata_service::upsert_value(&db.conn, KEY_GENERATIVE_UI_ENABLED, "false")
-            .await
-            .unwrap();
-        fx.ui.apply_persisted(&db.conn).await;
-        assert!(fx.is_our_link("claude/skills"));
+        assert!(fx.enable(AgentType::Codex).await.ok);
+        assert!(fx.enable(AgentType::Gemini).await.ok);
+        assert!(fx.is_our_link("agents/skills"));
+        assert!(fx.enable(AgentType::ClaudeCode).await.ok);
 
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        assert!(!exists(&fx.link("claude/skills")));
+        // Codex also reads the shared dir Gemini's link is in: a disable that
+        // left it would leave Codex with the skill.
+        let result = fx.disable(AgentType::Codex).await;
+        assert!(result.ok, "{result:?}");
+        assert!(!exists(&fx.link("codex/skills")));
+        assert!(!exists(&fx.link("agents/skills")));
+        assert!(fx.is_our_link("claude/skills"), "other agents keep theirs");
+        assert!(
+            fx.central().join("SKILL.md").is_file(),
+            "the central copy stays"
+        );
+
+        // Again: nothing left to remove, and that is fine.
+        assert!(fx.disable(AgentType::Codex).await.ok);
+    }
+
+    #[tokio::test]
+    async fn whatever_else_holds_the_name_in_an_agent_dir_stays() {
+        let fx = Fixture::new();
+        fx.ui.install(Some(false)).await;
+        // The user's own `ui-render` folder in Claude's skill dir.
+        let folder = fx.link("claude/skills");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("SKILL.md"), "theirs\n").unwrap();
+        // A link to somewhere else in Codex's, and a dangling one in the
+        // shared dir.
+        let elsewhere = fx.root.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::create_dir_all(fx.root.join("codex/skills")).unwrap();
+        create_link_raw(&elsewhere, &fx.link("codex/skills")).unwrap();
+        let gone = fx.root.join("gone");
+        fs::create_dir_all(&gone).unwrap();
+        fs::create_dir_all(fx.root.join("agents/skills")).unwrap();
+        create_link_raw(&gone, &fx.link("agents/skills")).unwrap();
+        fs::remove_dir_all(&gone).unwrap();
+
+        assert_eq!(
+            fx.state_of(AgentType::ClaudeCode).await,
+            ExpertLinkState::BlockedByRealDirectory
+        );
+        assert_eq!(
+            fx.state_of(AgentType::Codex).await,
+            ExpertLinkState::LinkedElsewhere
+        );
+        assert_eq!(
+            fx.state_of(AgentType::Gemini).await,
+            ExpertLinkState::Broken
+        );
+
+        let results = fx
+            .apply(&[
+                (AgentType::ClaudeCode, true),
+                (AgentType::Codex, true),
+                (AgentType::Gemini, true),
+            ])
+            .await;
+        for result in &results {
+            assert!(!result.ok, "{result:?}");
+            assert!(result.error.as_deref().unwrap().contains("already exists"));
+        }
+        let results = fx
+            .apply(&[
+                (AgentType::ClaudeCode, false),
+                (AgentType::Codex, false),
+                (AgentType::Gemini, false),
+            ])
+            .await;
+        assert!(results.iter().all(|result| result.ok), "{results:?}");
+
+        assert_eq!(
+            fs::read_to_string(folder.join("SKILL.md")).unwrap(),
+            "theirs\n"
+        );
+        assert_eq!(
+            classify_link(&fx.link("codex/skills"), &elsewhere),
+            ExpertLinkState::LinkedToCodeg,
+            "the link to somewhere else is still there"
+        );
+        assert!(exists(&fx.link("agents/skills")), "the dangling link too");
     }
 
     #[tokio::test]
     async fn a_skill_of_the_users_under_the_name_is_never_taken_over() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         fx.plant_users_central_skill();
         // ...which the user already linked into Claude.
         fs::create_dir_all(fx.root.join("claude/skills")).unwrap();
         create_link_raw(&fx.central(), &fx.link("claude/skills")).unwrap();
 
-        let saved = fx.set(&db, true).await;
-        assert!(saved.skill_conflict);
-        assert!(fx.ui.load(&db.conn).await.skill_conflict);
-        fx.ui.sync_before_launch(AgentType::Codex).await;
-        assert!(!exists(&fx.link("codex/skills")), "not linked anywhere");
+        assert!(fx.ui.install(Some(false)).await.is_empty());
+        assert!(fx.ui.skill_info().await.unwrap().conflict);
+        assert_eq!(
+            fx.state_of(AgentType::ClaudeCode).await,
+            ExpertLinkState::LinkedElsewhere,
+            "their link is not ours to show as enabled"
+        );
 
-        fx.set(&db, false).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
+        let enable = fx.enable(AgentType::Codex).await;
+        assert!(!enable.ok, "{enable:?}");
+        assert!(!exists(&fx.link("codex/skills")), "not linked anywhere");
+        assert!(fx.disable(AgentType::ClaudeCode).await.ok);
         assert_eq!(
             classify_link(&fx.link("claude/skills"), &fx.central()),
             ExpertLinkState::LinkedToCodeg,
@@ -950,87 +1106,287 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_link_survives_a_switch_off_racing_launches() {
+    async fn an_op_for_another_skill_or_an_agent_without_skills_fails_alone() {
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-
-        let launches = async {
-            for _ in 0..8 {
-                fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-                tokio::task::yield_now().await;
-            }
-        };
-        let switch_off = async {
-            tokio::task::yield_now().await;
-            fx.set(&db, false).await;
-        };
-        tokio::join!(launches, switch_off);
-        assert!(!exists(&fx.link("claude/skills")));
-    }
-
-    /// The lock belongs to the filesystem half: a launch whose caller goes
-    /// away after it started linking still finishes before a switch-off
-    /// gets to clean up.
-    #[tokio::test]
-    async fn a_launch_abandoned_midway_cannot_outlive_a_switch_off() {
-        let (fx, reached, go) = Fixture::with_launch_gate();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-
-        // Its caller gives up once the launch is inside its filesystem half.
-        let mut launch = Box::pin(fx.ui.sync_before_launch(AgentType::ClaudeCode));
-        let inside = tokio::task::spawn_blocking(move || reached.recv());
-        tokio::select! {
-            _ = &mut launch => panic!("the launch cannot finish before it is let go"),
-            got = inside => got.unwrap().unwrap(),
+        let mut ops = vec![LinkOp {
+            expert_id: "something-else".into(),
+            agent_type: AgentType::ClaudeCode,
+            enable: true,
+        }];
+        for agent_type in [AgentType::OpenCode, AgentType::ClaudeCode] {
+            ops.push(LinkOp {
+                expert_id: SKILL_ID.into(),
+                agent_type,
+                enable: true,
+            });
         }
-        drop(launch);
-
-        // The switch-off has to wait for the abandoned launch, which links
-        // only once it is let go, after the switch-off asked for the lock.
-        let let_go = async {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            go.send(()).unwrap();
-        };
-        tokio::join!(fx.set(&db, false), let_go);
-        // Room for an abandoned launch that did NOT hold the lock to link
-        // after the switch-off; one that held it is long done.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(!exists(&fx.link("claude/skills")));
-    }
-
-    /// A custom agent that moved its skill directory, or a changed
-    /// `CODEX_HOME`: the old link is no longer under any directory an agent
-    /// declares, and the switch-off still finds it.
-    #[tokio::test]
-    async fn a_link_where_an_agent_no_longer_looks_is_still_taken_back() {
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
+        let results = fx.ui.apply_links(ops).await.unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(!results[0].ok && results[0].error.is_some(), "{results:?}");
+        assert!(!results[1].ok && results[1].error.is_some(), "{results:?}");
+        assert!(results[2].ok, "{results:?}");
+        assert!(!exists(&fx.root.join("claude/skills/something-else")));
         assert!(fx.is_our_link("claude/skills"));
+    }
 
-        let moved = GenerativeUi::new(SkillHome::Fixed {
-            central_root: fx.root.join("central"),
-            agents: vec![(AgentType::ClaudeCode, vec![fx.root.join("moved/skills")])],
-            launch_gate: None,
-        });
-        set_on(&moved, &db, false).await;
+    #[tokio::test]
+    async fn the_old_name_moves_over_while_the_old_switch_was_on() {
+        let fx = Fixture::new();
+        // 0.35.0 had linked Claude and Codex (each into its preferred dir);
+        // Gemini was never started.
+        fx.plant_legacy(&["claude/skills", "codex/skills"]);
+
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(fx.is_our_link("claude/skills"));
+        assert!(fx.is_our_link("codex/skills"));
+        assert!(!exists(&fx.link("agents/skills")), "Gemini never had it");
+        assert!(!exists(&fx.legacy_link("claude/skills")));
+        assert!(!exists(&fx.legacy_link("codex/skills")));
+        assert!(!exists(&fx.legacy()), "the old copy is gone");
+        assert_eq!(
+            fx.state_of(AgentType::ClaudeCode).await,
+            ExpertLinkState::LinkedToCodeg
+        );
+        assert_eq!(
+            fx.state_of(AgentType::Gemini).await,
+            ExpertLinkState::NotLinked
+        );
+
+        // Nothing left to move: a second startup changes nothing.
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(fx.is_our_link("claude/skills"));
+    }
+
+    #[tokio::test]
+    async fn with_the_old_switch_off_the_old_links_just_go() {
+        let fx = Fixture::new();
+        // Switched off in 0.35.0, but one link outlived the cleanup.
+        fx.plant_legacy(&["claude/skills"]);
+
+        assert!(fx.ui.install(Some(false)).await.is_empty());
+        assert!(!exists(&fx.legacy_link("claude/skills")));
+        assert!(!exists(&fx.link("claude/skills")), "off stays off");
+        assert!(!exists(&fx.legacy()));
+    }
+
+    #[tokio::test]
+    async fn a_recorded_link_where_no_agent_looks_any_more_is_removed_too() {
+        let fx = Fixture::new();
+        // Linked under a skill dir Claude no longer uses (a moved
+        // CLAUDE_CONFIG_DIR): only the old copy's list knows it.
+        fx.plant_legacy(&["moved/skills"]);
+
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(!exists(&fx.legacy_link("moved/skills")));
+        assert!(!exists(&fx.link("moved/skills")), "nobody reads that dir");
+        assert!(!exists(&fx.legacy()));
+    }
+
+    #[tokio::test]
+    async fn json_render_links_that_are_not_ours_stay() {
+        let fx = Fixture::new();
+        fx.plant_legacy(&["claude/skills"]);
+        // A `json-render` link to somewhere else, and a folder of that name.
+        let elsewhere = fx.root.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::create_dir_all(fx.root.join("agents/skills")).unwrap();
+        create_link_raw(&elsewhere, &fx.legacy_link("agents/skills")).unwrap();
+        fs::create_dir_all(fx.legacy_link("codex/skills")).unwrap();
+
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(!exists(&fx.legacy_link("claude/skills")));
+        assert_eq!(
+            classify_link(&fx.legacy_link("agents/skills"), &elsewhere),
+            ExpertLinkState::LinkedToCodeg
+        );
+        assert!(fx.legacy_link("codex/skills").is_dir());
+        assert!(!exists(&fx.link("agents/skills")), "Gemini never had ours");
+        assert!(!exists(&fx.link("codex/skills")), "nor did Codex");
+    }
+
+    #[tokio::test]
+    async fn a_json_render_of_the_users_own_is_left_alone() {
+        let fx = Fixture::new();
+        fs::create_dir_all(fx.legacy()).unwrap();
+        fs::write(fx.legacy().join("SKILL.md"), "mine\n").unwrap();
+        fs::create_dir_all(fx.root.join("claude/skills")).unwrap();
+        create_link_raw(&fx.legacy(), &fx.legacy_link("claude/skills")).unwrap();
+
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(exists(&fx.legacy_link("claude/skills")));
+        assert_eq!(
+            fs::read_to_string(fx.legacy().join("SKILL.md")).unwrap(),
+            "mine\n"
+        );
         assert!(!exists(&fx.link("claude/skills")));
     }
 
-    /// A link that cannot be removed is reported to the caller, stays on the
-    /// list, and is retried by the next launch of its agent.
+    #[tokio::test]
+    async fn the_move_waits_while_a_skill_of_the_users_holds_the_new_name() {
+        let fx = Fixture::new();
+        fx.plant_users_central_skill();
+        fx.plant_legacy(&["claude/skills"]);
+
+        fx.ui.install(Some(true)).await;
+        assert!(fx.is_our_legacy_link("claude/skills"), "keeps json-render");
+        assert!(!exists(&fx.link("claude/skills")));
+        assert!(fx.legacy().join(MARKER_FILE).is_file());
+    }
+
+    /// A switch that could not be read is not taken for "off": the agents
+    /// keep `json-render`, and the next startup reads again.
+    #[tokio::test]
+    async fn nothing_moves_while_the_old_switch_cannot_be_read() {
+        let fx = Fixture::new();
+        fx.plant_legacy(&["claude/skills"]);
+
+        let problems = fx.ui.install(None).await;
+        assert!(
+            problems.iter().any(|p| p.contains(LEGACY_SWITCH_KEY)),
+            "{problems:?}"
+        );
+        assert!(fx.is_our_legacy_link("claude/skills"), "keeps json-render");
+        assert!(!exists(&fx.link("claude/skills")));
+        assert!(fx.central().join("SKILL.md").is_file(), "still installed");
+
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(fx.is_our_link("claude/skills"));
+        assert!(!exists(&fx.legacy()));
+    }
+
+    /// An agent that cannot get `ui-render` — something else holds the name
+    /// in its directory — keeps `json-render`, and a later startup tries
+    /// again; the old copy stays for it until then.
+    #[tokio::test]
+    async fn an_agent_the_move_cannot_reach_keeps_json_render_until_it_can() {
+        let fx = Fixture::new();
+        // Gemini's preferred dir is the shared one, where a folder already
+        // holds the new name.
+        fx.plant_legacy(&["claude/skills", "agents/skills"]);
+        let blocker = fx.link("agents/skills");
+        fs::create_dir_all(&blocker).unwrap();
+
+        let problems = fx.ui.install(Some(true)).await;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(fx.is_our_link("claude/skills"));
+        assert!(!exists(&fx.legacy_link("claude/skills")));
+        assert!(fx.is_our_legacy_link("agents/skills"), "keeps json-render");
+        assert!(exists(&fx.legacy()), "the old copy stays for it");
+        assert_eq!(
+            recorded_links(&fx.legacy()).unwrap(),
+            vec![fx.legacy_link("agents/skills")]
+        );
+
+        fs::remove_dir(&blocker).unwrap();
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(fx.is_our_link("agents/skills"));
+        assert!(!exists(&fx.legacy_link("agents/skills")));
+        assert!(!exists(&fx.legacy()));
+    }
+
+    /// What the user picks on the settings page for an agent takes that
+    /// agent's `json-render` away at once, so no later startup undoes it.
+    #[tokio::test]
+    async fn a_choice_made_on_the_settings_page_outlasts_the_move() {
+        let fx = Fixture::new();
+        fx.plant_legacy(&["claude/skills", "agents/skills"]);
+        let blocker = fx.link("agents/skills");
+        fs::create_dir_all(&blocker).unwrap();
+        fx.ui.install(Some(true)).await;
+        assert!(fx.is_our_link("claude/skills"));
+        // An old link of Claude's still there (its removal failed, say).
+        create_link_raw(&fx.legacy(), &fx.legacy_link("claude/skills")).unwrap();
+
+        // Claude: turned off. Gemini: name freed, then turned on.
+        assert!(fx.disable(AgentType::ClaudeCode).await.ok);
+        assert!(
+            !exists(&fx.legacy_link("claude/skills")),
+            "the disable takes it too"
+        );
+        fs::remove_dir(&blocker).unwrap();
+        assert!(fx.enable(AgentType::Gemini).await.ok);
+        assert!(
+            !exists(&fx.legacy_link("agents/skills")),
+            "ui-render replaces it"
+        );
+
+        assert!(fx.ui.install(Some(true)).await.is_empty());
+        assert!(!exists(&fx.link("claude/skills")), "the disable stands");
+        assert!(fx.is_our_link("agents/skills"));
+        assert!(!exists(&fx.legacy()), "nothing left to move");
+    }
+
+    /// Enabling one agent takes no `json-render` from another: an old link in
+    /// a directory it shares is that other agent's, still waiting for its move.
+    #[tokio::test]
+    async fn enabling_an_agent_leaves_another_agents_old_link_alone() {
+        let fx = Fixture::new();
+        // Gemini's own (preferred) dir is the shared one Codex also reads;
+        // Gemini cannot get ui-render there yet.
+        fx.plant_legacy(&["agents/skills"]);
+        fs::create_dir_all(fx.link("agents/skills")).unwrap();
+        fx.ui.install(Some(true)).await;
+        assert!(fx.is_our_legacy_link("agents/skills"));
+
+        assert!(fx.enable(AgentType::Codex).await.ok);
+        assert!(fx.is_our_link("codex/skills"));
+        assert!(
+            fx.is_our_legacy_link("agents/skills"),
+            "Gemini keeps its json-render"
+        );
+    }
+
+    /// A link kept for its agent is kept under any spelling of its place —
+    /// here the old copy recorded it through a symlinked home.
+    #[tokio::test]
+    async fn a_kept_link_survives_an_alias_on_the_list() {
+        let fx = Fixture::new();
+        fs::create_dir_all(fx.root.join("codex")).unwrap();
+        create_link_raw(&fx.root.join("codex"), &fx.root.join("codex-alias")).unwrap();
+        // Recorded as codex-alias/skills/json-render; it is Codex's own.
+        fx.plant_legacy(&["codex-alias/skills"]);
+        fs::create_dir_all(fx.link("codex/skills")).unwrap();
+
+        let problems = fx.ui.install(Some(true)).await;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(fx.is_our_legacy_link("codex/skills"), "keeps json-render");
+        assert!(exists(&fx.legacy()));
+    }
+
+    /// An old copy that cannot be looked at may be ours: a disable that
+    /// could not check says so instead of leaving a link a later startup
+    /// would act on.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_switch_off_reports_what_it_could_not_remove() {
+    async fn a_disable_that_cannot_check_the_old_copy_says_so() {
         use std::os::unix::fs::PermissionsExt;
 
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
+        assert!(fx.enable(AgentType::ClaudeCode).await.ok);
+        fx.plant_legacy(&["claude/skills"]);
+        let old = fx.legacy();
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::metadata(old.join(MARKER_FILE)).is_ok() {
+            // Running as root: permissions do not stop anything here.
+            fs::set_permissions(&old, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let result = fx.disable(AgentType::ClaudeCode).await;
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!result.ok, "{result:?}");
+        assert!(fx.is_our_legacy_link("claude/skills"));
+    }
+
+    /// An old link that cannot be removed keeps the old copy — so it does
+    /// not dangle — and its place on the list, and the next startup retries.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_old_link_that_cannot_be_removed_is_retried_next_startup() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fx = Fixture::new();
+        fx.plant_legacy(&["claude/skills", "codex/skills"]);
         let dir = fx.root.join("claude/skills");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
         if fs::write(dir.join("probe"), "").is_ok() {
@@ -1039,87 +1395,35 @@ mod tests {
             return;
         }
 
-        let saved = fx.set(&db, false).await;
+        let problems = fx.ui.install(Some(false)).await;
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(saved.unlink_failures.len(), 1, "{saved:?}");
-        assert!(saved.unlink_failures[0].contains("claude/skills/json-render"));
-        assert_eq!(
-            recorded_links(&fx.central()).unwrap(),
-            vec![fx.link("claude/skills")]
-        );
-
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        assert!(!exists(&fx.link("claude/skills")));
-        assert!(recorded_links(&fx.central()).unwrap().is_empty());
-    }
-
-    /// A recorded link whose directory can no longer be read is not
-    /// forgotten as gone: the switch-off reports it and keeps it listed.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_place_that_cannot_be_looked_at_is_reported_not_forgotten() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        let dir = fx.root.join("claude/skills");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::symlink_metadata(fx.link("claude/skills")).is_ok() {
-            // Running as root: permissions do not stop anything here.
-            fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-            return;
-        }
-
-        let saved = fx.set(&db, false).await;
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(saved.unlink_failures.len(), 1, "{saved:?}");
-        assert_eq!(
-            recorded_links(&fx.central()).unwrap(),
-            vec![fx.link("claude/skills")]
-        );
-
-        fx.ui.sync_before_launch(AgentType::Gemini).await;
+        assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(
-            !exists(&fx.link("claude/skills")),
-            "any later launch retries"
+            problems[0].contains("claude/skills/json-render"),
+            "{problems:?}"
         );
+        assert!(fx.is_our_legacy_link("claude/skills"), "still resolves");
+        assert!(!exists(&fx.legacy_link("codex/skills")));
+        assert_eq!(
+            recorded_links(&fx.legacy()).unwrap(),
+            vec![fx.legacy_link("claude/skills")]
+        );
+
+        assert!(fx.ui.install(Some(false)).await.is_empty());
+        assert!(!exists(&fx.legacy_link("claude/skills")));
+        assert!(!exists(&fx.legacy()));
     }
 
-    /// No link is made that the list does not know about.
+    /// A list that cannot be read is never rewritten from nothing, and keeps
+    /// the old copy until a later startup can read it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_link_that_cannot_be_recorded_is_not_made() {
+    async fn an_unreadable_old_link_list_keeps_the_old_copy() {
         use std::os::unix::fs::PermissionsExt;
 
         let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        let central = fx.central();
-        fs::set_permissions(&central, fs::Permissions::from_mode(0o555)).unwrap();
-        if fs::write(central.join("probe"), "").is_ok() {
-            fs::set_permissions(&central, fs::Permissions::from_mode(0o755)).unwrap();
-            return;
-        }
-
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        fs::set_permissions(&central, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(!exists(&fx.link("claude/skills")));
-    }
-
-    /// A list that cannot be read is never rewritten from nothing: no new
-    /// link is made against it, and a switch-off reports it and leaves it.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn an_unreadable_link_list_is_kept_and_reported() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let fx = Fixture::new();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        fx.set(&db, true).await;
-        fx.ui.sync_before_launch(AgentType::ClaudeCode).await;
-        let list = fx.central().join(LINKS_FILE);
+        fx.plant_legacy(&["claude/skills"]);
+        let list = fx.legacy().join(LEGACY_LINKS_FILE);
         fs::set_permissions(&list, fs::Permissions::from_mode(0o000)).unwrap();
         if fs::read_to_string(&list).is_ok() {
             // Running as root: permissions do not stop anything here.
@@ -1127,37 +1431,64 @@ mod tests {
             return;
         }
 
-        fx.ui.sync_before_launch(AgentType::Codex).await;
-        assert!(!exists(&fx.link("codex/skills")), "not linked unrecorded");
-
-        let saved = fx.set(&db, false).await;
+        let problems = fx.ui.install(Some(false)).await;
         fs::set_permissions(&list, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
-            saved.unlink_failures.iter().any(|f| f.contains(LINKS_FILE)),
-            "{saved:?}"
+            problems.iter().any(|p| p.contains(LEGACY_LINKS_FILE)),
+            "{problems:?}"
         );
         assert!(
-            !exists(&fx.link("claude/skills")),
+            !exists(&fx.legacy_link("claude/skills")),
             "declared dirs still cleaned"
         );
+        assert!(exists(&fx.legacy()), "the old copy waits for the list");
         assert_eq!(
-            recorded_links(&fx.central()).unwrap(),
-            vec![fx.link("claude/skills")],
+            recorded_links(&fx.legacy()).unwrap(),
+            vec![fx.legacy_link("claude/skills")],
             "the list was left alone"
         );
     }
 
     #[test]
-    fn only_our_marked_copy_reserves_the_name() {
+    fn only_marked_copies_reserve_their_names() {
         let tmp = tempfile::tempdir().unwrap();
-        let central = tmp.path().join(SKILL_ID);
-        assert!(reserved_ids_in(&central).is_empty(), "absent");
+        let home = SkillHome::Fixed {
+            central_root: tmp.path().to_path_buf(),
+            agents: Vec::new(),
+        };
+        assert!(reserved_ids_in(&home).is_empty(), "absent");
 
-        fs::create_dir_all(&central).unwrap();
-        fs::write(central.join("SKILL.md"), "mine\n").unwrap();
-        assert!(reserved_ids_in(&central).is_empty(), "the user's own");
+        for dir in [home.central_copy(), home.legacy_copy()] {
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("SKILL.md"), "mine\n").unwrap();
+        }
+        assert!(reserved_ids_in(&home).is_empty(), "the user's own");
 
-        fs::write(central.join(MARKER_FILE), MARKER_TEXT).unwrap();
-        assert_eq!(reserved_ids_in(&central), vec![SKILL_ID.to_string()]);
+        fs::write(home.central_copy().join(MARKER_FILE), MARKER_TEXT).unwrap();
+        assert_eq!(reserved_ids_in(&home), vec![SKILL_ID.to_string()]);
+        fs::write(home.legacy_copy().join(MARKER_FILE), MARKER_TEXT).unwrap();
+        assert_eq!(
+            reserved_ids_in(&home),
+            vec![SKILL_ID.to_string(), LEGACY_SKILL_ID.to_string()]
+        );
+    }
+
+    /// The settings page draws one column per agent with a skill store; one
+    /// missing here would show a cell whose state never arrives. Built-ins
+    /// only: custom agents come and go with the process-wide registry, which
+    /// other tests hydrate in parallel.
+    #[test]
+    fn every_skills_capable_builtin_gets_a_column() {
+        let columns = SkillHome::User.agents();
+        for agent in crate::acp::registry::builtin_acp_agents() {
+            if skill_storage_spec(agent).is_none() {
+                continue;
+            }
+            let dirs = columns.iter().find(|(a, _)| *a == agent).map(|(_, d)| d);
+            assert!(
+                dirs.is_some_and(|dirs| !dirs.is_empty()),
+                "{agent:?} has no column"
+            );
+        }
     }
 }

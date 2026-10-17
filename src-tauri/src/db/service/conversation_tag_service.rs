@@ -936,6 +936,7 @@ mod tests {
                 parent_conversation_id: parent,
                 parent_tool_use_id: "tool-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await

@@ -25,6 +25,7 @@ vi.mock("@/contexts/acp-connections-context", async () => {
       subscribeKey: () => () => {},
       getConnection: () => undefined,
       getConnectPending: () => undefined,
+      getConnectError: () => undefined,
       getActiveKey: () => null,
       subscribeActiveKey: () => () => {},
     }),
@@ -112,6 +113,37 @@ describe("ResumedDelegationCard", () => {
     expect(screen.queryByText("Resumed")).not.toBeInTheDocument()
   })
 
+  it("moves the resumed mark to the other corner on an assistant, clear of its agent badge", () => {
+    const { unmount } = renderWithIntl(
+      <ResumedDelegationCard
+        toolCallId="tu-resume"
+        input={RESUME_INPUT}
+        output={PERSISTED_ACK}
+        state="output-available"
+      />
+    )
+    // An agent's card keeps the mark where it always was.
+    expect(screen.getByTitle("Resumed").parentElement).toHaveClass("-right-0.5")
+    unmount()
+
+    const assistantAck = JSON.stringify({
+      ...JSON.parse(PERSISTED_ACK),
+      assistant_id: 3,
+      assistant_name: "Reviewer",
+    })
+    renderWithIntl(
+      <ResumedDelegationCard
+        toolCallId="tu-resume"
+        input={RESUME_INPUT}
+        output={assistantAck}
+        state="output-available"
+      />
+    )
+    const card = screen.getByTestId("resumed-delegation-card")
+    expect(card).toHaveTextContent("Reviewer · Codex")
+    expect(screen.getByTitle("Resumed").parentElement).toHaveClass("-left-0.5")
+  })
+
   it("prefers the live binding, looked up by the task id in its arguments", () => {
     const binding: DelegationBinding = {
       parentConnectionId: "p1",
@@ -123,6 +155,8 @@ describe("ResumedDelegationCard", () => {
       status: "ok",
       task: "Build the /test4 sandbox page",
       taskId: TASK_ID,
+      assistantId: null,
+      assistantName: null,
     }
     mockedSubSession.mockReturnValue({
       binding,
@@ -295,6 +329,8 @@ describe("ResumedDelegationCard", () => {
           status: "running",
           task: "Build the /test4 sandbox page",
           taskId: TASK_ID,
+          assistantId: null,
+          assistantName: null,
         },
         detail: null,
         loading: false,
@@ -327,6 +363,8 @@ describe("ResumedDelegationCard", () => {
           status: "ok",
           task: "Somebody else's task",
           taskId: TASK_ID,
+          assistantId: null,
+          assistantName: null,
         },
         detail: null,
         loading: false,
@@ -360,6 +398,8 @@ describe("ResumedDelegationCard", () => {
         status: "ok",
         task: "Somebody else's task",
         taskId: TASK_ID,
+        assistantId: null,
+        assistantName: null,
       },
       detail: null,
       loading: false,

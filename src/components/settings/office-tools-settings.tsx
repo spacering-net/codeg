@@ -46,6 +46,7 @@ import {
   officecliUninstall,
 } from "@/lib/api"
 import { invalidateAgentSkillsCache } from "@/hooks/use-agent-skills"
+import { useLatestCall } from "@/hooks/use-latest-call"
 import { useOfficecliInstallStream } from "@/hooks/use-officecli-install-stream"
 import { pickLocalized } from "@/lib/expert-presentation"
 import type {
@@ -275,24 +276,31 @@ export function OfficeToolsBody({
     [t]
   )
 
+  // A late answer from an earlier Refresh must not overwrite a newer one.
+  const beginDetect = useLatestCall()
+  const beginSkillsLoad = useLatestCall()
+
   const detect = useCallback(async () => {
+    const current = beginDetect()
     setDetecting(true)
     try {
       const result = await officecliDetect()
-      setInfo(result)
+      if (current()) setInfo(result)
     } catch {
-      setInfo(null)
+      if (current()) setInfo(null)
     } finally {
-      setDetecting(false)
+      if (current()) setDetecting(false)
     }
-  }, [])
+  }, [beginDetect])
 
   const refreshSkills = useCallback(async () => {
+    const current = beginSkillsLoad()
     try {
       const [skillList, agentList] = await Promise.all([
         officecliListSkills(),
         acpListAgents(),
       ])
+      if (!current()) return
       setSkills(skillList)
       // A pi pointed at a custom PI_CODING_AGENT_DIR isn't managed by the
       // default-dir skill store, so it doesn't get a column here.
@@ -305,9 +313,10 @@ export function OfficeToolsBody({
       // (newly synced skills become enableable).
       setReloadKey((k) => k + 1)
     } catch (err) {
+      if (!current()) return
       toast.error(t("toasts.loadFailed"), { description: toErrorMessage(err) })
     }
-  }, [t])
+  }, [beginSkillsLoad, t])
 
   useEffect(() => {
     Promise.all([detect(), refreshSkills()]).catch((err) => {

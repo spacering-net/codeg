@@ -56,6 +56,21 @@
 //! anchor and the declarator check accept both outputs. `2026.10.01-14929f9`
 //! ships that ES2020 statement byte for byte, in all six archives.
 //!
+//! `2026.10.14-0f9edde` still ships it byte for byte, in all six archives, but
+//! changes what the options are used for. Every action `agent-session.ts` runs
+//! goes through one closure (`E=e=>this.sharedServices.agentClient.run(t,…,e,
+//! …,w)`), and the completion drain at the end of a prompt hands that closure
+//! its follow-up `backgroundTaskCompletionAction`s, with the same run options.
+//! Until this build the drain ran only for a client that negotiated
+//! `subagents`, which codeg never does. Now it also runs for every shell the
+//! model asked to watch (a shell call carrying an `outputNotification`
+//! pattern), whatever the client negotiated. A policy written into the options
+//! is evaluated once, for the user message, so each follow-up would inherit
+//! its `true`, where the TUI, which builds its options per action
+//! (`enableAgentRetries:(0,E.w5)(n)` with `n=t.action.case`), answers `false`.
+//! The closure therefore gets a second splice that re-evaluates the policy for
+//! the action it is handed ([`follow_up_policy_prefix`]).
+//!
 //! So nothing about the splice is transcribed by hand any more:
 //!
 //!   * the anchor ([`RUN_OPTIONS_ANCHOR`]) is matched structurally, with the
@@ -65,15 +80,20 @@
 //!   * the `ConversationAction` local the policy reads is looked up **in the
 //!     very bundle being patched** ([`ACTION_LOCAL_DECL`]), so it cannot
 //!     disagree with it;
-//!   * and the injected expression is written so that reading the WRONG local
-//!     still cannot throw ([`retry_policy_expression`]) — the worst case is
-//!     upstream's policy not being consulted, never a dead session.
+//!   * the closure's parameter and the options it passes are read off the
+//!     closure itself ([`RUN_CLOSURE`]), so both names are in scope where the
+//!     second splice lands, and the options must be the ones the first splice
+//!     went into;
+//!   * and the injected expressions are written so that reading the WRONG
+//!     local still cannot throw ([`retry_policy_expression`]) — the worst case
+//!     is upstream's policy not being consulted, never a dead session.
 //!
 //! [`repair_range`] additionally rewrites the earlier hand-transcribed splice
 //! wherever it is already on disk: those installs answer "already fixed" to the
 //! marker check, so without it a broken bundle would stay broken until the user
 //! cleared the agent cache.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,6 +120,7 @@ const TRIAGED_AFFECTED_VERSIONS: &[&str] = &[
     "2026.09.26-dd393fe",
     "2026.09.28-64d2043",
     "2026.10.01-14929f9",
+    "2026.10.14-0f9edde",
 ];
 
 /// Cursor agent-cli versions whose bundle was inspected and found to already
@@ -146,8 +167,26 @@ const RUN_OPTIONS_ANCHOR: &str = concat!(
 /// `M=Object.assign(Object.assign({conversationId:…` in the ES2017 output,
 /// `w={conversationId:…` in the ES2020 one. Finding it between the action's
 /// declarator and the insertion point is what says both sit in one declarator
-/// list (see [`declaration_reaches`]).
-const RUN_OPTIONS_DECL: &str = r"\w+=(?:Object\.assign\()*\{conversationId:";
+/// list (see [`declaration_reaches`]); the local it captures is the object the
+/// follow-up splice has to write to (see [`run_options_local`]).
+const RUN_OPTIONS_DECL: &str = r"(\w+)=(?:Object\.assign\()*\{conversationId:";
+
+/// The closure every action of a prompt is run through, from the builds that
+/// carry the completion drain: `E=e=>this.sharedServices.agentClient.run(t,…,
+/// e,…,w)` in `2026.10.01-14929f9` and `2026.10.14-0f9edde` (windows names it
+/// `F` and passes its tools as `M`). The drain reuses it for follow-ups, run
+/// options and all.
+///
+/// Captures the parameter, the follow-up splice when one is already there, and
+/// the argument list. Every argument in those builds is a local, a member or an
+/// argument-less call, so a list holding anything else is not matched, and the
+/// closure is then left alone rather than parsed. Requiring the call to follow
+/// `=>` directly (or through this patch's own prefix) is what keeps an earlier,
+/// unrelated arrow function from being taken for it.
+const RUN_CLOSURE: &str = concat!(
+    r"(\w+)=>(void\(\w+\.enableAgentRetries=[^;]*?\)\|\|)?",
+    r"this\.sharedServices\.agentClient\.run\(((?:[^()]|\(\))*)\)",
+);
 
 /// Declarator that binds the `ConversationAction` the run options are built
 /// for. Its local is the one thing the injected policy has to name, so it is
@@ -220,6 +259,11 @@ fn run_options_decl() -> &'static Regex {
     })
 }
 
+fn run_closure() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(RUN_CLOSURE).expect("run closure is a valid regex"))
+}
+
 fn legacy_codeg_policy() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(LEGACY_CODEG_POLICY).expect("legacy policy is a valid regex"))
@@ -232,13 +276,13 @@ fn legacy_codeg_policy() -> &'static Regex {
 ///
 /// `agent-session.ts` has a single `agentClient.run` call site, and the action
 /// these options are built for is always the turn's `userMessageAction`, so
-/// today the policy is always `true`. The call is wrapped in a closure that the
-/// subagent completion drain reuses, options and all, for
-/// `backgroundTaskCompletionAction` follow-ups that `w5` would answer `false`;
-/// that drain only runs once the client negotiates `subagents`, which codeg
-/// never advertises (see `build_client_capabilities`). The policy is written
-/// out rather than as a bare `true` so that a bundle which later builds these
-/// options for another action still gets upstream's answer.
+/// the policy written here is always `true`. In the builds that carry the
+/// completion drain, the call is wrapped in a closure that the drain reuses,
+/// options and all, for `backgroundTaskCompletionAction` follow-ups that `w5`
+/// answers `false`; those builds also get [`follow_up_policy_prefix`], which
+/// re-evaluates the policy for each action the closure is handed. The policy is
+/// written out rather than as a bare `true` so that a bundle which later builds
+/// these options for another action still gets upstream's answer.
 ///
 /// The `!(l&&l.action)||…` guard is what keeps a misread local survivable. `l`
 /// is always a declared binding — it is read off a declarator in the same
@@ -248,11 +292,38 @@ fn legacy_codeg_policy() -> &'static Regex {
 /// `undefined`. That is the difference between "the policy was not consulted"
 /// and the dead Linux sessions this guard exists to make impossible.
 fn retry_policy_expression(action_local: &str) -> String {
+    format!("enableAgentRetries:{},", retry_policy_value(action_local))
+}
+
+/// The policy itself, reading the action bound to `action`; see
+/// [`retry_policy_expression`] for why it is guarded the way it is.
+fn retry_policy_value(action: &str) -> String {
     format!(
-        "enableAgentRetries:!({action_local}&&{action_local}.action)\
-         ||\"shellCommandAction\"!=={action_local}.action.case\
-         &&\"backgroundTaskCompletionAction\"!=={action_local}.action.case\
-         &&\"goalContinuationAction\"!=={action_local}.action.case,"
+        "!({action}&&{action}.action)\
+         ||\"shellCommandAction\"!=={action}.action.case\
+         &&\"backgroundTaskCompletionAction\"!=={action}.action.case\
+         &&\"goalContinuationAction\"!=={action}.action.case"
+    )
+}
+
+/// The splice for the closure every action of a prompt is run through
+/// ([`RUN_CLOSURE`]), inserted in front of its `agentClient.run(` call: before
+/// each run it sets the flag on the shared run options from the action that run
+/// is for. The user message gets the same `true` the options splice gave it;
+/// a follow-up the completion drain hands the closure gets `w5`'s `false`, as it
+/// does in the TUI.
+///
+/// Both names come off the closure itself: `action` is its parameter and
+/// `options` the last argument it passes to `run`, so neither can be an
+/// undeclared identifier where this lands. Writing to the shared object is
+/// safe because the closure is the only thing that runs with it and its runs
+/// never overlap: the user message's run is awaited before the drain starts,
+/// and the drain awaits each follow-up before the next. `void(…)||` keeps it a
+/// single insertion in front of bytes that are left as they are.
+fn follow_up_policy_prefix(options: &str, action: &str) -> String {
+    format!(
+        "void({options}.enableAgentRetries={})||",
+        retry_policy_value(action)
     )
 }
 
@@ -262,8 +333,26 @@ fn retry_policy_expression(action_local: &str) -> String {
 struct BundleSplice {
     range: std::ops::Range<usize>,
     action_local: String,
+    /// Where the action's declarator starts; the run options are declared
+    /// between it and `range`.
+    decl_start: usize,
     /// True when `range` covers an earlier codeg splice being rewritten.
     repair: bool,
+}
+
+/// What [`plan_follow_up`] found for the closure the completion drain reuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FollowUpPlan {
+    /// No such closure: the builds before the drain call `run` directly.
+    Absent,
+    /// The closure already carries [`follow_up_policy_prefix`].
+    Present,
+    /// Insert `text` at byte `at`, in front of the `run` call.
+    Insert { at: usize, text: String },
+    /// A closure is there but not one this patch can vouch for (two of them,
+    /// different options, an action that is not passed on, someone else's
+    /// prefix): leave it as it is.
+    Unrecognised,
 }
 
 /// The local bound to the `ConversationAction`, and where it is declared.
@@ -400,6 +489,7 @@ fn plan_splice(content: &str) -> Option<BundleSplice> {
         return Some(BundleSplice {
             range,
             action_local,
+            decl_start,
             repair: true,
         });
     }
@@ -432,8 +522,108 @@ fn plan_splice(content: &str) -> Option<BundleSplice> {
     Some(BundleSplice {
         range: insert_at..insert_at,
         action_local,
+        decl_start,
         repair: false,
     })
+}
+
+/// The local the run options are bound to: the one run-options declarator
+/// between the action's declarator and the splice point, so the object the
+/// first splice went into. `None` when there is not exactly one, or when its
+/// name is the tail of something else (`.w=`, `$w=`).
+fn run_options_local(content: &str, decl_start: usize, splice_at: usize) -> Option<String> {
+    let between = content.get(decl_start..splice_at)?;
+    let mut decls = run_options_decl().captures_iter(between);
+    let first = decls.next()?;
+    if decls.next().is_some() {
+        return None;
+    }
+    let name = first.get(1)?;
+    if matches!(
+        content.as_bytes()[..decl_start + name.start()].last(),
+        Some(b'.') | Some(b'$')
+    ) {
+        return None;
+    }
+    Some(name.as_str().to_string())
+}
+
+/// The run-options local of a bundle that already carries this patch's options
+/// splice, which [`plan_splice`] declines because the flag is there. Installs
+/// patched before the follow-up splice existed are exactly that, and still need
+/// it. `None` when the flag in the bundle is not ours, or is not where ours
+/// would be.
+fn own_splice_options_local(content: &str) -> Option<String> {
+    let (decl_start, action_local) = unique_action_local(content)?;
+    let policy = retry_policy_expression(&action_local);
+    let mut found = content.match_indices(&policy);
+    let (at, _) = found.next()?;
+    if found.next().is_some() || !declaration_reaches(content, decl_start, at) {
+        return None;
+    }
+    // Ours opens a property: the splice goes in right after `),` (ES2020) or
+    // `)),{` (ES2017). Text that merely ends in the same bytes, such as an
+    // `xenableAgentRetries:` key, is not it.
+    if !matches!(content.as_bytes()[..at].last(), Some(b',') | Some(b'{')) {
+        return None;
+    }
+    run_options_local(content, decl_start, at)
+}
+
+/// Where [`follow_up_policy_prefix`] goes in the closure the completion drain
+/// reuses ([`RUN_CLOSURE`]).
+///
+/// The closure must be UNIQUE, pass its own parameter to `run` (that is the
+/// action), and pass `options_local` last (the run options the options splice
+/// went into). The prefix names only those two, both read off the closure, so
+/// both are in scope where it lands.
+fn plan_follow_up(content: &str, options_local: &str) -> FollowUpPlan {
+    let mut closures = run_closure().captures_iter(content);
+    let Some(closure) = closures.next() else {
+        return FollowUpPlan::Absent;
+    };
+    if closures.next().is_some() {
+        return FollowUpPlan::Unrecognised;
+    }
+    let Some(param) = closure.get(1) else {
+        return FollowUpPlan::Unrecognised;
+    };
+    // `$e=>` would come back as `e`, a different name (see
+    // `unique_action_local`).
+    if matches!(content.as_bytes()[..param.start()].last(), Some(b'$')) {
+        return FollowUpPlan::Unrecognised;
+    }
+    // The call has to be the arrow's whole body for the prefix to wrap exactly
+    // it. Followed by `,` `;` `)` or `}` it is; followed by anything else it is
+    // the left operand of something, and some operators (`??`) cannot even
+    // share an expression with the prefix's `||` unparenthesized, which would
+    // turn the chunk into a SyntaxError and every session into a dead one.
+    let Some(whole) = closure.get(0) else {
+        return FollowUpPlan::Unrecognised;
+    };
+    if !matches!(
+        content.as_bytes().get(whole.end()),
+        Some(b',') | Some(b';') | Some(b')') | Some(b'}')
+    ) {
+        return FollowUpPlan::Unrecognised;
+    }
+    let args: Vec<&str> = closure
+        .get(3)
+        .map_or("", |args| args.as_str())
+        .split(',')
+        .collect();
+    if args.last() != Some(&options_local) || !args.contains(&param.as_str()) {
+        return FollowUpPlan::Unrecognised;
+    }
+    let text = follow_up_policy_prefix(options_local, param.as_str());
+    match closure.get(2) {
+        None => FollowUpPlan::Insert {
+            at: param.end() + "=>".len(),
+            text,
+        },
+        Some(existing) if existing.as_str() == text => FollowUpPlan::Present,
+        Some(_) => FollowUpPlan::Unrecognised,
+    }
 }
 
 /// Apply the compatibility patch when `platform_dir` holds a managed Cursor
@@ -495,14 +685,38 @@ pub fn maybe_apply(platform_dir: &Path, version: &str) -> CompatPatchStatus {
         return CompatPatchStatus::PatternMismatch;
     }
 
-    let Some(plan) = plan_splice(&content) else {
+    // The options splice first: planned here, already ours (an install patched
+    // before the follow-up splice existed), or a flag that is not ours to touch.
+    let (base, options_local, status) = match plan_splice(&content) {
+        Some(plan) => {
+            let policy = retry_policy_expression(&plan.action_local);
+            let mut patched = String::with_capacity(content.len() + policy.len());
+            patched.push_str(&content[..plan.range.start]);
+            patched.push_str(&policy);
+            patched.push_str(&content[plan.range.end..]);
+            if patched == content {
+                log_status(
+                    CompatPatchStatus::PatternMismatch,
+                    &normalized,
+                    Some(&bundle_path),
+                );
+                return CompatPatchStatus::PatternMismatch;
+            }
+            let options_local = run_options_local(&content, plan.decl_start, plan.range.start);
+            let status = if plan.repair {
+                CompatPatchStatus::Repaired
+            } else {
+                CompatPatchStatus::Applied
+            };
+            (Cow::Owned(patched), options_local, status)
+        }
         // A flag that is already there and is not ours is upstream's: leave it.
         // Unless it IS ours and we simply could not plan the rewrite — then the
         // bundle is carrying the broken wrong-local splice, and calling that
         // "already fixed" would both log a lie and let the memo settle on it.
         // Report the mismatch instead, so it stays inside the attempt budget
         // and the log names something a maintainer can act on.
-        let status = if legacy_codeg_policy().is_match(&content) {
+        None if legacy_codeg_policy().is_match(&content) => {
             tracing::error!(
                 "Cursor ACP retry compatibility patch: bundle carries codeg's earlier \
                  wrong-local splice but no repair could be planned \
@@ -510,31 +724,68 @@ pub fn maybe_apply(platform_dir: &Path, version: &str) -> CompatPatchStatus {
                 normalized,
                 bundle_path.display()
             );
-            CompatPatchStatus::PatternMismatch
-        } else if content.contains(ENABLE_AGENT_RETRIES_MARKER) {
-            CompatPatchStatus::AlreadyFixed
-        } else {
-            CompatPatchStatus::PatternMismatch
-        };
-        log_status(status, &normalized, Some(&bundle_path));
-        return status;
+            log_status(
+                CompatPatchStatus::PatternMismatch,
+                &normalized,
+                Some(&bundle_path),
+            );
+            return CompatPatchStatus::PatternMismatch;
+        }
+        None => match own_splice_options_local(&content) {
+            Some(options_local) => (
+                Cow::Borrowed(content.as_str()),
+                Some(options_local),
+                CompatPatchStatus::AlreadyFixed,
+            ),
+            None => {
+                let status = if content.contains(ENABLE_AGENT_RETRIES_MARKER) {
+                    CompatPatchStatus::AlreadyFixed
+                } else {
+                    CompatPatchStatus::PatternMismatch
+                };
+                log_status(status, &normalized, Some(&bundle_path));
+                return status;
+            }
+        },
     };
 
-    let policy = retry_policy_expression(&plan.action_local);
-    let patched = {
-        let mut patched = String::with_capacity(content.len() + policy.len());
-        patched.push_str(&content[..plan.range.start]);
-        patched.push_str(&policy);
-        patched.push_str(&content[plan.range.end..]);
-        patched
+    // Then the closure the completion drain reuses, wherever the options splice
+    // is ours. A closure that cannot be vouched for keeps the options' answer
+    // for every action it runs, which is how every build behaved before the
+    // drain began running for codeg; it is logged, not refused, so a user
+    // message still gets its retries.
+    let follow_up = match options_local.as_deref() {
+        Some(options_local) => plan_follow_up(&base, options_local),
+        None if run_closure().is_match(&base) => FollowUpPlan::Unrecognised,
+        None => FollowUpPlan::Absent,
     };
-    if patched == content {
-        log_status(
-            CompatPatchStatus::PatternMismatch,
-            &normalized,
-            Some(&bundle_path),
-        );
-        return CompatPatchStatus::PatternMismatch;
+    let (patched, status) = match follow_up {
+        FollowUpPlan::Insert { at, text } => {
+            let mut patched = String::with_capacity(base.len() + text.len());
+            patched.push_str(&base[..at]);
+            patched.push_str(&text);
+            patched.push_str(&base[at..]);
+            let status = match status {
+                CompatPatchStatus::AlreadyFixed => CompatPatchStatus::Applied,
+                status => status,
+            };
+            (Cow::Owned(patched), status)
+        }
+        FollowUpPlan::Unrecognised => {
+            tracing::warn!(
+                "Cursor ACP retry compatibility patch: the run closure the completion \
+                 drain reuses was not recognised, so follow-up actions keep the user \
+                 message's retry policy (version={}, bundle={})",
+                normalized,
+                bundle_path.display()
+            );
+            (base, status)
+        }
+        FollowUpPlan::Absent | FollowUpPlan::Present => (base, status),
+    };
+    if status == CompatPatchStatus::AlreadyFixed {
+        log_status(status, &normalized, Some(&bundle_path));
+        return status;
     }
 
     if let Err(err) = write_atomically(&bundle_path, &patched) {
@@ -552,11 +803,6 @@ pub fn maybe_apply(platform_dir: &Path, version: &str) -> CompatPatchStatus {
         return CompatPatchStatus::PatternMismatch;
     }
 
-    let status = if plan.repair {
-        CompatPatchStatus::Repaired
-    } else {
-        CompatPatchStatus::Applied
-    };
     log_status(status, &normalized, Some(&bundle_path));
     status
 }
@@ -819,7 +1065,9 @@ mod tests {
     /// replaces the `Object.assign` chain, and the debug-log export is
     /// minified (`I.cY`). `2026.10.01-14929f9` ships the same bytes in all six
     /// of its archives (`3990` darwin/arm64, `6787` darwin/x64, `6136` both
-    /// linux, `8971` windows/arm64, `9389` windows/x64).
+    /// linux, `8971` windows/arm64, `9389` windows/x64), and so does
+    /// `2026.10.14-0f9edde` (`4909` darwin/arm64, `2397` darwin/x64, `6136`
+    /// both linux, `2669` windows/arm64, `6995` windows/x64).
     const REAL_ES2020_RUN_OPTIONS: &str = concat!(
         r#"f=new d.ConversationAction({action:{case:"userMessageAction",value:l}}),"#,
         r#"w={conversationId:this.agentStore.getId(),headers:(0,P.o)(this.agentStore),"#,
@@ -831,8 +1079,26 @@ mod tests {
         r#"(0,y.Z)({configProvider:this.sharedServices.configProvider,info:e})}}"#,
     );
 
+    /// What follows [`REAL_ES2020_RUN_OPTIONS`] up to the first run, exactly as
+    /// `2026.10.01-14929f9` and `2026.10.14-0f9edde` ship it on darwin/arm64:
+    /// the closure every action of the prompt is run through, which the
+    /// completion drain reuses for its follow-ups. The other archives name the
+    /// closure `F`, and windows names the tools local `M`.
+    const REAL_ES2020_RUN_CLOSURE: &str = concat!(
+        r#";(0,v.sx)("cli.request.create",{length:n.length,model:h?.modelId??"#,
+        r#"this.currentModel.modelId??"unknown",mode:a,conversationId:this.agentStore.getId()});"#,
+        r#"const k=await this.mcpLease.getTools(t);"#,
+        r#"E=e=>this.sharedServices.agentClient.run(t,this.agentStore.getConversationStateStructure(),"#,
+        r#"e,m.modelDetails,R,this.resources,this.agentStore.getBlobStore(),c,this.agentStore,k,w),"#,
+        r#"await E(f)"#,
+    );
+
     fn chunk(run_options: &str) -> String {
         format!("exports.modules={{{AGENT_SESSION_MODULE}(e,t,o){{placeholder {run_options} end}}}}")
+    }
+
+    fn chunk_with_closure(run_options: &str) -> String {
+        chunk(&format!("{run_options}{REAL_ES2020_RUN_CLOSURE}"))
     }
 
     fn write_bundle(dir: &Path, content: &str) -> PathBuf {
@@ -1347,6 +1613,244 @@ mod tests {
         );
     }
 
+    // From 2026.10.14 the completion drain runs for watched shells on every
+    // client, and it hands its follow-ups to the closure that ran the user
+    // message, with the same options. The options splice answers once, for the
+    // user message; the closure has to answer again for each action it runs,
+    // or every follow-up inherits the user message's retries where the TUI
+    // gives it none.
+    #[test]
+    fn the_run_closure_gets_the_policy_of_the_action_it_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = chunk_with_closure(REAL_ES2020_RUN_OPTIONS);
+        write_bundle(tmp.path(), &original);
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::Applied
+        );
+        let patched = patched_bundle(tmp.path());
+        let options_policy = retry_policy_expression("f");
+        let closure_policy = follow_up_policy_prefix("w", "e");
+        assert!(patched.contains(&format!("}}),{options_policy}onConnectionStateChange:")));
+        assert!(
+            patched.contains(&format!(
+                "E=e=>{closure_policy}this.sharedServices.agentClient.run(t,"
+            )),
+            "the closure must re-evaluate the policy for its own parameter"
+        );
+        // Two insertions; not one byte of Cursor's rewritten.
+        assert_eq!(
+            patched
+                .replacen(&options_policy, "", 1)
+                .replacen(&closure_policy, "", 1),
+            original
+        );
+
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::AlreadyFixed
+        );
+        assert_eq!(
+            patched_bundle(tmp.path()),
+            patched,
+            "a second pass wrote again"
+        );
+    }
+
+    // An install patched before the closure splice existed carries the options
+    // splice alone. That flag is ours, so it must not read as upstream's fix:
+    // the next pass brings the closure up to date and leaves the rest alone.
+    #[test]
+    fn an_install_patched_before_the_closure_splice_gets_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let options_only = chunk_with_closure(REAL_ES2020_RUN_OPTIONS).replacen(
+            "}),onConnectionStateChange",
+            &format!(
+                "}}),{}onConnectionStateChange",
+                retry_policy_expression("f")
+            ),
+            1,
+        );
+        assert_ne!(options_only, chunk_with_closure(REAL_ES2020_RUN_OPTIONS));
+        write_bundle(tmp.path(), &options_only);
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::Applied
+        );
+        let patched = patched_bundle(tmp.path());
+        assert_eq!(
+            patched.replacen(&follow_up_policy_prefix("w", "e"), "", 1),
+            options_only
+        );
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::AlreadyFixed
+        );
+    }
+
+    // A repaired install gets the closure splice in the same write.
+    #[test]
+    fn a_repaired_install_gets_the_closure_splice_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The ES2017 linux statement binds its options to `k`.
+        let closure = ";E=e=>this.sharedServices.agentClient.run(t,\
+                       this.agentStore.getConversationStateStructure(),e,m.modelDetails,k),\
+                       await E(b)";
+        let broken = REAL_LINUX_RUN_OPTIONS.replace(
+            "})),{onConnectionStateChange",
+            "})),{enableAgentRetries:\"shellCommandAction\"!==y.action.case\
+             &&\"backgroundTaskCompletionAction\"!==y.action.case\
+             &&\"goalContinuationAction\"!==y.action.case,onConnectionStateChange",
+        );
+        write_bundle(tmp.path(), &chunk(&format!("{broken}{closure}")));
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::Repaired
+        );
+        let patched = patched_bundle(tmp.path());
+        assert!(patched.contains(&retry_policy_expression("b")));
+        assert!(patched.contains(&format!(
+            "E=e=>{}this.sharedServices.agentClient.run(",
+            follow_up_policy_prefix("k", "e")
+        )));
+    }
+
+    // The closure splice names the closure's own parameter and the options it
+    // passes, so it may only land where both are what it takes them for. Any
+    // other closure is left exactly as shipped, while the options splice still
+    // goes in: a user message keeps its retries.
+    #[test]
+    fn a_closure_that_cannot_be_vouched_for_is_left_alone() {
+        let head = "E=e=>this.sharedServices.agentClient.run(t,";
+        let tail = "this.agentStore,k,w)";
+        assert!(REAL_ES2020_RUN_CLOSURE.contains(head) && REAL_ES2020_RUN_CLOSURE.contains(tail));
+        let second = REAL_ES2020_RUN_CLOSURE
+            .split_once("E=e=>")
+            .unwrap()
+            .1
+            .split_once(",await")
+            .unwrap()
+            .0;
+        for (label, closure) in [
+            (
+                "runs other options",
+                REAL_ES2020_RUN_CLOSURE.replace(tail, "this.agentStore,k,x)"),
+            ),
+            (
+                "does not pass its action on",
+                REAL_ES2020_RUN_CLOSURE.replace("Structure(),e,m.", "Structure(),f,m."),
+            ),
+            (
+                // The `e` it passes on is then some outer binding, not its
+                // parameter, and the prefix would name that.
+                "names its parameter with a `$`",
+                REAL_ES2020_RUN_CLOSURE.replace("E=e=>", "E=$e=>"),
+            ),
+            (
+                "is the left operand of `??`",
+                REAL_ES2020_RUN_CLOSURE.replace(tail, "this.agentStore,k,w)??null"),
+            ),
+            (
+                "carries someone else's prefix",
+                REAL_ES2020_RUN_CLOSURE.replace("E=e=>", "E=e=>void(w.enableAgentRetries=!0)||"),
+            ),
+            (
+                "appears twice",
+                REAL_ES2020_RUN_CLOSURE
+                    .replace(",await E(f)", &format!(",G=e=>{second},await E(f)")),
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let original = chunk(&format!("{REAL_ES2020_RUN_OPTIONS}{closure}"));
+            assert_ne!(
+                closure, REAL_ES2020_RUN_CLOSURE,
+                "{label}: fixture unchanged"
+            );
+            write_bundle(tmp.path(), &original);
+            assert_eq!(
+                maybe_apply(tmp.path(), SAMPLE_VERSION),
+                CompatPatchStatus::Applied,
+                "{label}: the options splice must still go in"
+            );
+            assert_eq!(
+                patched_bundle(tmp.path()).replacen(&retry_policy_expression("f"), "", 1),
+                original,
+                "{label}: the closure must be left as shipped"
+            );
+        }
+    }
+
+    // Upstream's own flag leaves the closure alone too: the closure splice only
+    // ever completes this patch's options splice, never someone else's.
+    #[test]
+    fn an_upstream_flag_keeps_the_closure_as_shipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = chunk_with_closure(&REAL_ES2020_RUN_OPTIONS.replace(
+            "}),onConnectionStateChange",
+            "}),enableAgentRetries:(0,v.w5)(f.action.case),onConnectionStateChange",
+        ));
+        write_bundle(tmp.path(), &content);
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::AlreadyFixed
+        );
+        assert_eq!(patched_bundle(tmp.path()), content);
+    }
+
+    // Like the options splice, the closure's must not be able to throw: it
+    // tests the action before reading it, and it is a single expression in
+    // front of the call, so the call itself is untouched.
+    // A property that merely ends in this patch's splice is not it, and must
+    // not be completed with the closure splice as if it were.
+    #[test]
+    fn a_look_alike_flag_is_not_taken_for_ours() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = chunk_with_closure(&REAL_ES2020_RUN_OPTIONS.replace(
+            "}),onConnectionStateChange",
+            &format!(
+                "}}),x{}onConnectionStateChange",
+                retry_policy_expression("f")
+            ),
+        ));
+        write_bundle(tmp.path(), &content);
+        assert_eq!(
+            maybe_apply(tmp.path(), SAMPLE_VERSION),
+            CompatPatchStatus::AlreadyFixed
+        );
+        assert_eq!(patched_bundle(tmp.path()), content);
+    }
+
+    #[test]
+    fn the_follow_up_policy_short_circuits_before_dereferencing_the_action() {
+        let prefix = follow_up_policy_prefix("w", "e");
+        assert_eq!(
+            prefix,
+            concat!(
+                r#"void(w.enableAgentRetries=!(e&&e.action)||"shellCommandAction"!==e.action.case"#,
+                r#"&&"backgroundTaskCompletionAction"!==e.action.case"#,
+                r#"&&"goalContinuationAction"!==e.action.case)||"#,
+            )
+        );
+        assert!(
+            prefix.starts_with("void(w.enableAgentRetries=!(e&&e.action)||"),
+            "{prefix}"
+        );
+        assert!(
+            prefix.ends_with("\"goalContinuationAction\"!==e.action.case)||"),
+            "{prefix}"
+        );
+        for case in [
+            "shellCommandAction",
+            "backgroundTaskCompletionAction",
+            "goalContinuationAction",
+        ] {
+            assert!(
+                prefix.contains(&format!("\"{case}\"!==e.action.case")),
+                "{case}"
+            );
+        }
+    }
+
     // The patch only runs against versions somebody has opened, so it silently
     // stops doing anything the moment the registry pin moves. Fail here
     // instead: whoever bumps Cursor has to look at the new bundle and put the
@@ -1366,8 +1870,9 @@ mod tests {
              `agentClient.run` options still lack `enableAgentRetries`, add the \
              version to TRIAGED_AFFECTED_VERSIONS (the splice itself is derived \
              from the bundle, so there is nothing to transcribe — but do check \
-             that `plan_splice` still recognises it); otherwise add it to \
-             UNAFFECTED_VERSIONS."
+             that `plan_splice` still recognises it, and that `plan_follow_up` \
+             still finds the run closure the completion drain reuses); \
+             otherwise add it to UNAFFECTED_VERSIONS."
         );
     }
 }

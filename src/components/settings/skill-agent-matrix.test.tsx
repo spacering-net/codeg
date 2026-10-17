@@ -277,6 +277,20 @@ describe("SkillAgentMatrix", () => {
     fireEvent.click(cell)
     expect(applyLinks).not.toHaveBeenCalled()
   })
+
+  it("shows the search box unless told not to", async () => {
+    renderMatrix({ searchPlaceholder: "Find a skill" })
+    expect(await screen.findByPlaceholderText("Find a skill")).toBeVisible()
+  })
+
+  it("leaves the search box out when not searchable", async () => {
+    renderMatrix({ searchPlaceholder: "Find a skill", searchable: false })
+    await screen.findByRole("switch", {
+      name: "Brainstorming, Claude Code: not_linked",
+    })
+    expect(screen.queryByPlaceholderText("Find a skill")).toBeNull()
+    expect(screen.getByRole("button", { name: /Bulk/ })).toBeVisible()
+  })
 })
 
 // The optional authoring slots the Custom pack injects. The three curated packs

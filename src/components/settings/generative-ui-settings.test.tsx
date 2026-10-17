@@ -1,67 +1,71 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { GenerativeUiSettings } from "@/lib/api"
+import type { GenerativeUiSkillInfo } from "@/lib/api"
+import type {
+  AcpAgentInfo,
+  AgentType,
+  ExpertInstallStatus,
+  ExpertLinkState,
+  LinkOp,
+  LinkOpResult,
+} from "@/lib/types"
 
-const getSettings = vi.fn<() => Promise<GenerativeUiSettings>>()
-const setSettings =
-  vi.fn<(s: { enabled: boolean }) => Promise<GenerativeUiSettings>>()
-const prime = vi.fn()
+const skillInfo = vi.fn<() => Promise<GenerativeUiSkillInfo>>()
+const listAgents = vi.fn<() => Promise<AcpAgentInfo[]>>()
+const listStatuses = vi.fn<() => Promise<ExpertInstallStatus[]>>()
+const applyLinks = vi.fn<(ops: LinkOp[]) => Promise<LinkOpResult[]>>()
+const readContent = vi.fn<() => Promise<string>>()
 const invalidateSkills = vi.fn()
-const toastError = vi.fn()
-const toastWarning = vi.fn()
-let broadcast: ((s: GenerativeUiSettings) => void) | null = null
-let reconnect: (() => void) | null = null
 
 vi.mock("@/lib/api", () => ({
-  getGenerativeUiSettings: () => getSettings(),
-  setGenerativeUiSettings: (s: { enabled: boolean }) => setSettings(s),
-}))
-vi.mock("@/lib/platform", () => ({
-  subscribe: vi.fn(
-    async (_event: string, handler: (s: GenerativeUiSettings) => void) => {
-      broadcast = handler
-      return () => {}
-    }
-  ),
-  onTransportReconnect: vi.fn((handler: () => void) => {
-    reconnect = handler
-    return () => {}
-  }),
-}))
-vi.mock("@/hooks/use-generative-ui-enabled", () => ({
-  primeGenerativeUiEnabled: (enabled: boolean) => prime(enabled),
+  generativeUiSkillInfo: () => skillInfo(),
+  acpListAgents: () => listAgents(),
+  generativeUiListAllInstallStatuses: () => listStatuses(),
+  generativeUiApplyLinks: (ops: LinkOp[]) => applyLinks(ops),
+  generativeUiReadContent: () => readContent(),
 }))
 vi.mock("@/hooks/use-agent-skills", () => ({
-  invalidateAgentSkillsCache: () => invalidateSkills(),
+  invalidateAgentSkillsCache: (agent?: AgentType) => invalidateSkills(agent),
 }))
 vi.mock("sonner", () => ({
-  toast: {
-    error: (m: string) => toastError(m),
-    warning: (m: string, o?: { description?: string }) =>
-      toastWarning(m, o?.description),
-  },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
 import { GenerativeUiBody } from "./generative-ui-settings"
 
 const t = enMessages.GenerativeUiSettings
 
-const settings = (
-  enabled: boolean,
-  more: Partial<GenerativeUiSettings> = {}
-): GenerativeUiSettings => ({
-  enabled,
-  skill_conflict: false,
-  unlink_failures: [],
-  ...more,
-})
+function agent(
+  agentType: AgentType,
+  name: string,
+  skillsCapable = true
+): AcpAgentInfo {
+  return {
+    agent_type: agentType,
+    name,
+    skills_capable: skillsCapable,
+    env: {},
+  } as unknown as AcpAgentInfo
+}
 
-/** What the backend has stored; reads return it and saves change it. */
-let stored = false
+function status(agentType: AgentType, state: ExpertLinkState) {
+  return {
+    expertId: "ui-render",
+    agentType,
+    state,
+    linkPath: "",
+    targetPath: null,
+    expectedTargetPath: "",
+    copyMode: false,
+  }
+}
+
+/** What is linked on disk: reads return it and applies change it. */
+let linked: Map<AgentType, ExpertLinkState>
 
 function renderBody(onRegisterRefresh?: (refresh: () => void) => void) {
   return render(
@@ -71,224 +75,161 @@ function renderBody(onRegisterRefresh?: (refresh: () => void) => void) {
   )
 }
 
-async function readySwitch() {
-  const toggle = await screen.findByRole("switch", { name: t.switchLabel })
-  await waitFor(() => expect(toggle).toBeEnabled())
-  return toggle
-}
+const cell = (agentName: string, state: string) =>
+  screen.findByRole("switch", {
+    name: `${t.skillName}, ${agentName}: ${state}`,
+  })
 
 beforeEach(() => {
-  stored = false
-  getSettings.mockReset()
-  setSettings.mockReset()
-  prime.mockClear()
-  invalidateSkills.mockClear()
-  toastError.mockClear()
-  toastWarning.mockClear()
-  broadcast = null
-  reconnect = null
-  getSettings.mockImplementation(async () => settings(stored))
-  setSettings.mockImplementation(async ({ enabled }) => {
-    stored = enabled
-    return settings(enabled)
-  })
+  vi.clearAllMocks()
+  linked = new Map<AgentType, ExpertLinkState>([
+    ["claude_code", "linked_to_codeg"],
+    ["codex", "not_linked"],
+  ])
+  skillInfo.mockResolvedValue({ id: "ui-render", conflict: false })
+  listAgents.mockResolvedValue([
+    agent("claude_code", "Claude Code"),
+    agent("codex", "Codex"),
+    agent("custom:no-store", "No Store", false),
+  ])
+  listStatuses.mockImplementation(async () =>
+    Array.from(linked, ([agentType, state]) => status(agentType, state))
+  )
+  applyLinks.mockImplementation(async (ops) =>
+    ops.map((op) => {
+      linked.set(op.agentType, op.enable ? "linked_to_codeg" : "not_linked")
+      return {
+        expertId: op.expertId,
+        agentType: op.agentType,
+        ok: true,
+        status: null,
+        error: null,
+      }
+    })
+  )
+  readContent.mockResolvedValue("---\nname: ui-render\n---\n# Show it as UI\n")
 })
-afterEach(() => cleanup())
 
-describe("GenerativeUiBody", () => {
-  it("shows the stored switch and how to use it", async () => {
-    stored = true
+describe("the UI tab", () => {
+  it("is one ui-render row with a column per agent that has skills", async () => {
     renderBody()
-    const toggle = await readySwitch()
-    expect(toggle).toBeChecked()
+    expect(await cell("Claude Code", "Enabled")).toHaveAttribute(
+      "aria-checked",
+      "true"
+    )
+    expect(await cell("Codex", "Not enabled")).toHaveAttribute(
+      "aria-checked",
+      "false"
+    )
+    expect(screen.queryByRole("switch", { name: /No Store/ })).toBeNull()
+    expect(screen.getByText(t.category)).toBeInTheDocument()
     expect(screen.getByText(t.usage)).toBeInTheDocument()
-    expect(screen.queryByText(t.conflict)).toBeNull()
-    // This window's chat follows what was read.
-    expect(prime).toHaveBeenLastCalledWith(true)
+    // One row: nothing to search.
+    expect(screen.queryByRole("textbox")).toBeNull()
   })
 
-  it("applies a flip at once, in this window and in its skill lists", async () => {
-    const user = userEvent.setup()
+  it("enables the skill for one agent with a click", async () => {
     renderBody()
-    const toggle = await readySwitch()
+    fireEvent.click(await cell("Codex", "Not enabled"))
 
-    await user.click(toggle)
-    expect(setSettings).toHaveBeenCalledWith({ enabled: true })
-    await waitFor(() => expect(toggle).toBeChecked())
-    await waitFor(() => expect(prime).toHaveBeenLastCalledWith(true))
-    expect(invalidateSkills).toHaveBeenCalled()
-  })
-
-  it("says so when a skill of the user's holds the name", async () => {
-    getSettings.mockResolvedValue(settings(true, { skill_conflict: true }))
-    renderBody()
-    expect(await screen.findByText(t.conflict)).toBeInTheDocument()
-  })
-
-  it("keeps the stored value when a save fails", async () => {
-    const user = userEvent.setup()
-    setSettings.mockRejectedValue(new Error("disk full"))
-    renderBody()
-    const toggle = await readySwitch()
-    const primedSoFar = prime.mock.calls.length
-
-    await user.click(toggle)
     await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(t.toasts.saveFailed)
+      expect(applyLinks).toHaveBeenCalledWith([
+        { expertId: "ui-render", agentType: "codex", enable: true },
+      ])
     )
-    expect(toggle).not.toBeChecked()
-    expect(prime).toHaveBeenCalledTimes(primedSoFar)
+    expect(await cell("Codex", "Enabled")).toHaveAttribute(
+      "aria-checked",
+      "true"
+    )
+    expect(invalidateSkills).toHaveBeenCalledWith("codex")
   })
 
-  it("warns when a switch-off leaves the skill linked somewhere", async () => {
-    const user = userEvent.setup()
-    stored = true
-    setSettings.mockImplementation(async ({ enabled }) => {
-      stored = enabled
-      return settings(enabled, {
-        unlink_failures: ["/home/u/.claude/skills/json-render: denied"],
+  it("locks every cell while a skill of the user's holds the name", async () => {
+    skillInfo.mockResolvedValue({ id: "ui-render", conflict: true })
+    linked = new Map<AgentType, ExpertLinkState>([
+      ["claude_code", "not_linked"],
+      ["codex", "not_linked"],
+    ])
+    renderBody()
+
+    await cell("Codex", "Not enabled")
+    const cells = screen.getAllByRole("switch")
+    expect(cells).toHaveLength(2)
+    for (const each of cells) {
+      expect(each).toBeDisabled()
+      fireEvent.click(each)
+    }
+    // Nor through the Bulk menu.
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: enMessages.SkillMatrix.everything.label,
       })
-    })
-    renderBody()
-    const toggle = await readySwitch()
-    expect(toggle).toBeChecked()
-
-    await user.click(toggle)
-    await waitFor(() =>
-      expect(toastWarning).toHaveBeenCalledWith(
-        t.toasts.unlinkFailed,
-        "/home/u/.claude/skills/json-render: denied"
-      )
     )
-    expect(toggle).not.toBeChecked()
+    await userEvent.click(
+      await screen.findByRole("menuitem", {
+        name: enMessages.SkillMatrix.everything.enable,
+      })
+    )
+    expect(applyLinks).not.toHaveBeenCalled()
+    expect(screen.getByText(t.conflict)).toBeInTheDocument()
+    expect(screen.getByText(t.badges.nameTaken)).toBeInTheDocument()
   })
 
-  it("a refresh that read an older value does not undo a broadcast", async () => {
-    let refresh: () => void = () => {}
-    let resolveRefresh: (s: GenerativeUiSettings) => void = () => {}
+  it("says why when it cannot load", async () => {
+    skillInfo.mockRejectedValue(new Error("backend unreachable"))
+    renderBody()
+
+    expect(await screen.findByText(/backend unreachable/)).toBeInTheDocument()
+    expect(screen.queryByRole("switch")).toBeNull()
+  })
+
+  it("reloads when the hub's Refresh asks it to", async () => {
+    let refresh: (() => void) | undefined
     renderBody((fn) => {
       refresh = fn
     })
-    const toggle = await readySwitch()
+    await cell("Codex", "Not enabled")
+    expect(skillInfo).toHaveBeenCalledTimes(1)
 
-    getSettings.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRefresh = resolve
-        })
+    linked.set("codex", "linked_to_codeg")
+    await act(async () => refresh?.())
+    expect(await cell("Codex", "Enabled")).toHaveAttribute(
+      "aria-checked",
+      "true"
     )
-    // Refresh reads the old value; another window turns it on before the
-    // read comes back.
-    act(() => refresh())
-    act(() => broadcast?.(settings(true)))
-    expect(toggle).toBeChecked()
-    await act(async () => {
-      resolveRefresh(settings(false))
-      await Promise.resolve()
-    })
-    expect(toggle).toBeChecked()
+    expect(skillInfo).toHaveBeenCalledTimes(2)
   })
 
-  it("a save's late response gives way to the stored value", async () => {
-    const user = userEvent.setup()
-    let respond: (s: GenerativeUiSettings) => void = () => {}
-    setSettings.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          respond = resolve
-        })
-    )
-    renderBody()
-    const toggle = await readySwitch()
-
-    await user.click(toggle)
-    // This save is applied, then another window's switch-off, whose
-    // broadcast reaches this window before this save's own response.
-    act(() => broadcast?.(settings(false)))
-    await act(async () => {
-      respond(settings(true))
-      await Promise.resolve()
-    })
-    await waitFor(() => expect(toggle).not.toBeChecked())
-    expect(prime).toHaveBeenLastCalledWith(false)
-  })
-
-  it("a save whose own broadcast is lost still shows once read back", async () => {
-    const user = userEvent.setup()
-    let respond: (s: GenerativeUiSettings) => void = () => {}
-    setSettings.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          respond = resolve
-        })
-    )
-    renderBody()
-    const toggle = await readySwitch()
-
-    await user.click(toggle)
-    // An EARLIER save's broadcast arrives, then the connection drops before
-    // this save's own broadcast; only its response gets here.
-    act(() => broadcast?.(settings(false)))
-    stored = true
-    await act(async () => {
-      respond(settings(true))
-      await Promise.resolve()
-    })
-    await waitFor(() => expect(prime).toHaveBeenLastCalledWith(true))
-    expect(toggle).toBeChecked()
-  })
-
-  it("reads again after the connection comes back", async () => {
-    renderBody()
-    const toggle = await readySwitch()
-    expect(toggle).not.toBeChecked()
-
-    // Saved elsewhere while this client was disconnected: no broadcast.
-    stored = true
-    act(() => reconnect?.())
-    await waitFor(() => expect(toggle).toBeChecked())
-  })
-  it("of two overlapping reads, the one that started later stands", async () => {
-    let refresh: () => void = () => {}
-    let answerRefresh: (s: GenerativeUiSettings) => void = () => {}
+  it("keeps a newer load when an earlier one fails late", async () => {
+    let refresh: (() => void) | undefined
     renderBody((fn) => {
       refresh = fn
     })
-    const toggle = await readySwitch()
+    await cell("Codex", "Not enabled")
 
-    // A refresh reads the old value and stalls; a broadcast is lost while
-    // disconnected; the reconnect's read sees the new value first.
-    getSettings.mockImplementationOnce(
+    // The first Refresh hangs, a second one answers, then the first fails.
+    let failFirst: (err: Error) => void = () => {}
+    skillInfo.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          answerRefresh = resolve
+        new Promise((_, reject) => {
+          failFirst = reject
         })
     )
-    act(() => refresh())
-    stored = true
-    act(() => reconnect?.())
-    await waitFor(() => expect(toggle).toBeChecked())
-    await act(async () => {
-      answerRefresh(settings(false))
-      await Promise.resolve()
-    })
-    expect(toggle).toBeChecked()
-    expect(prime).toHaveBeenLastCalledWith(true)
+    await act(async () => refresh?.())
+    linked.set("codex", "linked_to_codeg")
+    await act(async () => refresh?.())
+    expect(await cell("Codex", "Enabled")).toBeInTheDocument()
+
+    await act(async () => failFirst(new Error("stale failure")))
+    expect(screen.queryByText(/stale failure/)).toBeNull()
+    expect(await cell("Codex", "Enabled")).toBeInTheDocument()
   })
 
-  it("locks the switch when a save cannot be read back", async () => {
-    const user = userEvent.setup()
+  it("previews the skill the agents get", async () => {
     renderBody()
-    const toggle = await readySwitch()
+    fireEvent.click(await screen.findByRole("button", { name: t.skillName }))
 
-    getSettings.mockRejectedValueOnce(new Error("connection reset"))
-    await user.click(toggle)
-    expect(await screen.findByText("connection reset")).toBeInTheDocument()
-    expect(toggle).toBeDisabled()
-
-    // The next word of the stored value unlocks it.
-    act(() => broadcast?.(settings(true)))
-    expect(toggle).toBeEnabled()
-    expect(toggle).toBeChecked()
+    expect(await screen.findByText("Show it as UI")).toBeInTheDocument()
+    expect(readContent).toHaveBeenCalledTimes(1)
   })
 })

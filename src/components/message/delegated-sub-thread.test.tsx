@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { DelegatedSubThread } from "./delegated-sub-thread"
 import enMessages from "@/i18n/messages/en.json"
 import type { DelegationBinding } from "@/contexts/delegation-context"
+import type { AssistantInfo } from "@/lib/types"
+import {
+  resetAssistantsStore,
+  useAssistantsStore,
+} from "@/stores/assistants-store"
 
 vi.mock("@/hooks/use-delegated-sub-session", () => ({
   useDelegatedSubSession: vi.fn(),
@@ -26,6 +31,7 @@ vi.mock("@/contexts/acp-connections-context", async () => {
       subscribeKey: () => () => {},
       getConnection: () => mockChildConnection,
       getConnectPending: () => undefined,
+      getConnectError: () => undefined,
       getActiveKey: () => null,
       subscribeActiveKey: () => () => {},
     }),
@@ -75,6 +81,8 @@ function bindingOf(overrides: Partial<DelegationBinding>): DelegationBinding {
     status: "running",
     task: null,
     taskId: null,
+    assistantId: null,
+    assistantName: null,
     ...overrides,
   }
 }
@@ -519,5 +527,216 @@ describe("DelegatedSubThread (async ack semantics)", () => {
       "data-conversation-id",
       "909"
     )
+  })
+})
+
+describe("DelegatedSubThread — assistant identity", () => {
+  const reviewer = (patch: Partial<AssistantInfo> = {}): AssistantInfo => ({
+    id: 3,
+    uid: "u-3",
+    name: "Reviewer",
+    description: "",
+    avatar: { kind: "emoji", emoji: "🦉", color: "teal" },
+    agent_type: "codex",
+    agent_options: { config_values: {} },
+    label_snapshot: { agent: "Codex", mode: null, options: [] },
+    instructions: "",
+    enabled: true,
+    sort_order: 1,
+    revision: 1,
+    created_at: "2026-10-16T00:00:00Z",
+    updated_at: "2026-10-16T00:00:00Z",
+    deleted_at: null,
+    ...patch,
+  })
+
+  beforeEach(() => {
+    resetAssistantsStore()
+    mockChildConnection = undefined
+    mockedHook.mockReturnValue({
+      binding: undefined,
+      detail: null,
+      loading: false,
+      error: null,
+    })
+  })
+
+  const card = () => screen.getByTestId("delegated-sub-thread")
+
+  it("shows the assistant by its current name and avatar, then the agent it ran on", () => {
+    useAssistantsStore.getState().merge([reviewer()])
+    mockedHook.mockReturnValue({
+      binding: bindingOf({
+        assistantId: 3,
+        assistantName: "Old name",
+        agentType: "codex",
+      }),
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    renderWithIntl(<DelegatedSubThread parentToolUseId="pt-1" />)
+    expect(card()).toHaveTextContent("Reviewer · Codex")
+    expect(card()).not.toHaveTextContent("Old name")
+    expect(card()).toHaveTextContent("🦉")
+  })
+
+  it("falls back to the name the delegation carried, then to the id", () => {
+    mockedHook.mockReturnValue({
+      binding: bindingOf({ assistantId: 3, assistantName: "Planner" }),
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    const { unmount } = renderWithIntl(
+      <DelegatedSubThread parentToolUseId="pt-1" />
+    )
+    expect(card()).toHaveTextContent("Planner · Codex")
+    unmount()
+
+    mockedHook.mockReturnValue({
+      binding: undefined,
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    renderWithIntl(
+      <DelegatedSubThread
+        parentToolUseId="pt-1"
+        input="{}"
+        meta={{
+          "codeg.delegation": {
+            status: "completed",
+            agent_type: "codex",
+            assistant_id: 7,
+            child_conversation_id: 70,
+          },
+        }}
+      />
+    )
+    expect(card()).toHaveTextContent("Assistant #7 · Codex")
+  })
+
+  it("marks an assistant that has been deleted", () => {
+    useAssistantsStore
+      .getState()
+      .merge([reviewer({ deleted_at: "2026-10-16T01:00:00Z", revision: 2 })])
+    mockedHook.mockReturnValue({
+      binding: bindingOf({ assistantId: 3, assistantName: "Reviewer" }),
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    renderWithIntl(<DelegatedSubThread parentToolUseId="pt-1" />)
+    expect(card()).toHaveTextContent("Reviewer (deleted) · Codex")
+  })
+
+  it("never names the agent the call claims for an assistant", () => {
+    useAssistantsStore.getState().merge([reviewer()])
+    // The host filled in an agent_type; the backend ignores it — the
+    // assistant decides which agent runs.
+    const input = JSON.stringify({
+      assistant_id: 3,
+      agent_type: "gemini",
+      task: "review the diff",
+    })
+    const { rerender } = renderWithIntl(
+      <DelegatedSubThread parentToolUseId="pt-1" input={input} />
+    )
+    expect(card()).toHaveTextContent("Reviewer")
+    expect(card()).not.toHaveTextContent("Gemini")
+    expect(card()).not.toHaveTextContent("·")
+
+    // The broker's ack is the first evidence of the real agent.
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <DelegatedSubThread
+          parentToolUseId="pt-1"
+          input={input}
+          output={JSON.stringify({
+            task_id: "task-1",
+            status: "running",
+            agent_type: "codex",
+            assistant_id: 3,
+            assistant_name: "Reviewer",
+            child_conversation_id: 9,
+          })}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(card()).toHaveTextContent("Reviewer · Codex")
+    expect(card()).not.toHaveTextContent("Gemini")
+  })
+
+  it("shows an agent delegation exactly as before", () => {
+    mockedHook.mockReturnValue({
+      binding: bindingOf({ agentType: "codex" }),
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    renderWithIntl(<DelegatedSubThread parentToolUseId="pt-1" />)
+    expect(card()).toHaveTextContent("Codex")
+    expect(card()).not.toHaveTextContent("·")
+    expect(card().querySelector('[data-slot="assistant-avatar"]')).toBeNull()
+  })
+})
+
+describe("DelegatedSubThread — refusals and names", () => {
+  beforeEach(() => {
+    resetAssistantsStore()
+    mockChildConnection = undefined
+    mockedHook.mockReturnValue({
+      binding: undefined,
+      detail: null,
+      loading: false,
+      error: null,
+    })
+  })
+
+  it("names the refusal of a call no delegation ever started for", () => {
+    // Refused before anything ran: no binding and no meta — the report is
+    // the only place the code is.
+    renderWithIntl(
+      <DelegatedSubThread
+        parentToolUseId="pt-1"
+        input={JSON.stringify({ assistant_id: 3, task: "review" })}
+        output={JSON.stringify({
+          status: "failed",
+          error_code: "assistant_not_found",
+          message: "No assistant has id 3.",
+          assistant_id: 3,
+        })}
+        state="output-available"
+      />
+    )
+    expect(screen.getByText("assistant not found")).toBeInTheDocument()
+  })
+
+  it("keeps an agent's name untruncated, as before, and truncates an assistant's", () => {
+    mockedHook.mockReturnValue({
+      binding: bindingOf({ agentType: "codex" }),
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    const { unmount } = renderWithIntl(
+      <DelegatedSubThread parentToolUseId="pt-1" />
+    )
+    const agentName = screen
+      .getAllByText("Codex")
+      .find((el) => el.classList.contains("font-semibold"))
+    expect(agentName).toBeDefined()
+    expect(agentName).not.toHaveClass("truncate")
+    unmount()
+
+    mockedHook.mockReturnValue({
+      binding: bindingOf({ assistantId: 3, assistantName: "Reviewer" }),
+      detail: null,
+      loading: false,
+      error: null,
+    })
+    renderWithIntl(<DelegatedSubThread parentToolUseId="pt-1" />)
+    expect(screen.getByText(/^Reviewer/)).toHaveClass("truncate")
   })
 })

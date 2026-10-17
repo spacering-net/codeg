@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 import type { EventEnvelope, LiveSessionSnapshot } from "@/lib/types"
 import { RemoteDesktopTransport } from "./remote-desktop-transport"
 import type { RemoteTransportConfig } from "./types"
@@ -21,7 +29,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }))
 
 let receiveFrame: (event: { payload: unknown }) => void
-let unlisten: ReturnType<typeof vi.fn>
+let unlisten: Mock
 let transports: RemoteDesktopTransport[]
 
 beforeEach(() => {

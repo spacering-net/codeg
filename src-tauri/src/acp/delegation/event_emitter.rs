@@ -33,6 +33,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
+use crate::acp::delegation::types::AssistantRef;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, DelegationResultSummary};
 use crate::models::AgentType;
@@ -64,10 +65,12 @@ pub trait DelegationEventEmitter: Send + Sync {
         child_connection_id: &str,
         child_conversation_id: i32,
         agent_type: AgentType,
+        assistant: Option<&AssistantRef>,
         task_preview: &str,
         task_id: &str,
     );
 
+    #[allow(clippy::too_many_arguments)]
     async fn emit_completed(
         &self,
         parent_connection_id: &str,
@@ -75,6 +78,7 @@ pub trait DelegationEventEmitter: Send + Sync {
         child_connection_id: &str,
         child_conversation_id: i32,
         agent_type: AgentType,
+        assistant: Option<&AssistantRef>,
         result: DelegationResultSummary,
     );
 }
@@ -97,6 +101,7 @@ impl DelegationEventEmitter for NoopEventEmitter {
         _child_connection_id: &str,
         _child_conversation_id: i32,
         _agent_type: AgentType,
+        _assistant: Option<&AssistantRef>,
         _task_preview: &str,
         _task_id: &str,
     ) {
@@ -109,6 +114,7 @@ impl DelegationEventEmitter for NoopEventEmitter {
         _child_connection_id: &str,
         _child_conversation_id: i32,
         _agent_type: AgentType,
+        _assistant: Option<&AssistantRef>,
         _result: DelegationResultSummary,
     ) {
     }
@@ -137,6 +143,7 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
         child_connection_id: &str,
         child_conversation_id: i32,
         agent_type: AgentType,
+        assistant: Option<&AssistantRef>,
         task_preview: &str,
         task_id: &str,
     ) {
@@ -158,6 +165,8 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
                 agent_type,
                 task_preview: task_preview.to_string(),
                 task_id: task_id.to_string(),
+                assistant_id: assistant.map(|a| a.id),
+                assistant_name: assistant.map(|a| a.name.clone()),
             },
         )
         .await;
@@ -170,6 +179,7 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
         child_connection_id: &str,
         child_conversation_id: i32,
         agent_type: AgentType,
+        assistant: Option<&AssistantRef>,
         result: DelegationResultSummary,
     ) {
         let Some((state_arc, emitter)) = self
@@ -189,6 +199,8 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
                 child_conversation_id,
                 agent_type,
                 result,
+                assistant_id: assistant.map(|a| a.id),
+                assistant_name: assistant.map(|a| a.name.clone()),
             },
         )
         .await;
@@ -217,6 +229,7 @@ pub mod mock {
         pub child_connection_id: String,
         pub child_conversation_id: i32,
         pub agent_type: AgentType,
+        pub assistant: Option<AssistantRef>,
         pub result: DelegationResultSummary,
     }
 
@@ -227,6 +240,7 @@ pub mod mock {
         pub child_connection_id: String,
         pub child_conversation_id: i32,
         pub agent_type: AgentType,
+        pub assistant: Option<AssistantRef>,
         pub task_preview: String,
         pub task_id: String,
     }
@@ -263,6 +277,7 @@ pub mod mock {
             child_connection_id: &str,
             child_conversation_id: i32,
             agent_type: AgentType,
+            assistant: Option<&AssistantRef>,
             task_preview: &str,
             task_id: &str,
         ) {
@@ -272,6 +287,7 @@ pub mod mock {
                 child_connection_id: child_connection_id.to_string(),
                 child_conversation_id,
                 agent_type,
+                assistant: assistant.cloned(),
                 task_preview: task_preview.to_string(),
                 task_id: task_id.to_string(),
             });
@@ -284,6 +300,7 @@ pub mod mock {
             child_connection_id: &str,
             child_conversation_id: i32,
             agent_type: AgentType,
+            assistant: Option<&AssistantRef>,
             result: DelegationResultSummary,
         ) {
             self.calls.lock().await.push(EmitCall {
@@ -292,6 +309,7 @@ pub mod mock {
                 child_connection_id: child_connection_id.to_string(),
                 child_conversation_id,
                 agent_type,
+                assistant: assistant.cloned(),
                 result,
             });
         }

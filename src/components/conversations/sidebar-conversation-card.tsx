@@ -73,7 +73,9 @@ import {
   NewConversationTagDialog,
 } from "./conversation-tag-picker"
 import { AgentIcon } from "@/components/agent-icon"
+import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
+import { useAssistant } from "@/stores/assistants-store"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -428,10 +430,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }}
                       aria-hidden
                     >
-                      <AgentIcon
-                        agentType={conversation.agent_type}
-                        className="h-[0.75rem] w-[0.75rem]"
-                      />
+                      {conversation.assistant_id != null ? (
+                        <SubsessionAssistantAvatar
+                          id={conversation.assistant_id}
+                          name={conversation.assistant_name ?? ""}
+                        />
+                      ) : (
+                        <AgentIcon
+                          agentType={conversation.agent_type}
+                          className="h-[0.75rem] w-[0.75rem]"
+                        />
+                      )}
                       <ConversationStatusDot
                         status={status}
                         size="sm"
@@ -835,3 +844,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
     </>
   )
 })
+
+/** A sub-session run as an assistant shows the assistant's avatar where the
+ *  agent icon goes: its current look from the store, or the generic assistant
+ *  glyph for a row the store does not hold. */
+function SubsessionAssistantAvatar({ id, name }: { id: number; name: string }) {
+  const assistant = useAssistant(id)
+  return (
+    <AssistantAvatar
+      avatar={assistant?.avatar ?? null}
+      name={assistant?.name ?? name}
+      size={14}
+    />
+  )
+}

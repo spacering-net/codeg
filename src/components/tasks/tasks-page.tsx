@@ -12,12 +12,13 @@ import { createPortal } from "react-dom"
 import { Reorder, type PanInfo } from "motion/react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { Funnel, Play, Plus, ListTodo, Tag } from "lucide-react"
+import { Funnel, Play, Plus, ListTodo, Search, Tag, X } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
   workTaskArchive,
   workTaskCreate,
+  workTaskDefer,
   workTaskMergeUnqueue,
   workTaskReorder,
   workTaskStart,
@@ -41,6 +42,12 @@ import { FolderSelect } from "@/components/shared/folder-select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -62,6 +69,7 @@ import {
 } from "./board-columns"
 import {
   isAnotherTaskMerging,
+  isDeferred,
   isMergeQueued,
   mergeQueueRanks,
 } from "./task-acceptance"
@@ -72,10 +80,12 @@ import { TaskCompleteDialog } from "./task-complete-dialog"
 import { TaskDeliverPrDialog } from "./task-deliver-pr-dialog"
 import { TaskDetailSheet } from "./task-detail-sheet"
 import { TaskEditorDialog } from "./task-editor-dialog"
+import { TaskFollowUpDialog } from "./task-follow-up-dialog"
 import { TaskList } from "./task-list"
 import { TaskMergeDialog } from "./task-merge-dialog"
 import { TaskRestartDialog, type TaskRestartKind } from "./task-restart-dialog"
 import { TaskScheduleDialog } from "./task-schedule-dialog"
+import { searchTerms, taskMatchesSearch } from "./task-search"
 import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
@@ -117,8 +127,8 @@ export function TasksPageTitle() {
 }
 
 /**
- * The Tasks route page: toolbar (folder filter, filter popover, status filter,
- * new task) plus the board or the list. The page title lives in the chrome
+ * The Tasks route page: toolbar (folder filter, keyword search, filter popover,
+ * status filter, new task) plus the board or the list. The page title lives in the chrome
  * strip above (TasksPageTitle) and the view switch + settings entry in the
  * window's top-right cluster (TasksChromeActions), so the toolbar is purely
  * "narrow what you see" + "add one".
@@ -169,6 +179,12 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksStatusFilter(statusFilter)
   }, [statusFilter])
+  // Keyword search over both views. Deliberately NOT remembered across visits,
+  // unlike the toggles above: a search left behind from last time silently
+  // hides tasks on a board that otherwise looks normal.
+  const [searchInput, setSearchInput] = useState("")
+  const terms = useMemo(() => searchTerms(searchInput), [searchInput])
+  const searching = terms.length > 0
   // Dragging a pending card is always available: dropping it on In-progress
   // starts the task and needs no order at all. Only the REORDER half waits on
   // a folder — sort_order is per folder, so a mixed-folder列 has nothing it
@@ -248,6 +264,11 @@ export function TasksPage() {
   const [restartTask, setRestartTask] = useState<WorkTask | null>(null)
   const [restartKind, setRestartKind] = useState<TaskRestartKind>("retry")
   const [restartOpen, setRestartOpen] = useState(false)
+  // "继续处理" from a card (a deferred reviewed task leads with it) — the
+  // drawer unfolds its own box instead. The row is captured at the click, like
+  // the restart's: the dialog seeds from it once per open.
+  const [followUpTask, setFollowUpTask] = useState<WorkTask | null>(null)
+  const [followUpOpen, setFollowUpOpen] = useState(false)
   // Planning a to-do task's start — tracked by id so the dialog reads the live
   // row (a task claimed while it is open no longer accepts a plan).
   const [scheduleTaskId, setScheduleTaskId] = useState<number | null>(null)
@@ -269,10 +290,16 @@ export function TasksPage() {
 
   const visibleTasks = useMemo(
     () =>
-      folderFilter == null
-        ? tasks
-        : tasks.filter((task) => task.folder_id === folderFilter),
-    [tasks, folderFilter]
+      tasks.filter(
+        (task) =>
+          (folderFilter == null || task.folder_id === folderFilter) &&
+          taskMatchesSearch(
+            task,
+            terms,
+            folderNames.get(task.folder_id) ?? null
+          )
+      ),
+    [tasks, folderFilter, terms, folderNames]
   )
   const columns = useMemo(
     () =>
@@ -297,7 +324,11 @@ export function TasksPage() {
     [visibleTasks, statusFilter, boardFilter]
   )
 
-  const dragEnabled = folderFilter != null
+  // Reordering persists the order of the column's cards — and a search shows
+  // only some of them, so a drop there would save an order for a column the
+  // user is not looking at. Dragging to In-progress (start) needs no order and
+  // stays available.
+  const dragEnabled = folderFilter != null && !searching
   // Optimistic order while a drag is live; server order otherwise.
   const todoTasks = useMemo(() => {
     const base = columns.todo
@@ -396,6 +427,11 @@ export function TasksPage() {
     setRestartOpen(true)
   }, [])
 
+  const openFollowUp = useCallback((task: WorkTask) => {
+    setFollowUpTask(task)
+    setFollowUpOpen(true)
+  }, [])
+
   const openSchedule = useCallback((task: WorkTask) => {
     setScheduleTaskId(task.id)
     setScheduleOpen(true)
@@ -420,6 +456,8 @@ export function TasksPage() {
       onComplete: () => openComplete(task),
       onArchive: () =>
         void act(() => workTaskArchive(task.id, task.archived_at == null)),
+      onDefer: () => void act(() => workTaskDefer(task.id, !isDeferred(task))),
+      onFollowUp: () => openFollowUp(task),
       onEdit: () => {
         setEditorTask(task)
         setEditorOpen(true)
@@ -431,6 +469,7 @@ export function TasksPage() {
       openCancel,
       openComplete,
       openDeliver,
+      openFollowUp,
       openMerge,
       openRestart,
       openSchedule,
@@ -589,14 +628,24 @@ export function TasksPage() {
   )
 
   // Archives whatever the Done column currently shows unarchived — respects
-  // the visibility toggles by construction (it reads the grouped column).
+  // the visibility toggles by construction (it reads the grouped column). A
+  // task put aside to handle later shares the column but is the opposite of
+  // finished: archiving it would bury exactly what the user meant to come back
+  // to (and a reviewed one cannot be archived at all).
+  const archivableDone = useMemo(
+    () =>
+      columns.done.filter(
+        (task) => task.archived_at == null && !isDeferred(task)
+      ),
+    [columns.done]
+  )
   const archiveAllDone = useCallback(() => {
-    const targets = columns.done.filter((task) => task.archived_at == null)
+    const targets = archivableDone
     if (targets.length === 0) return
     void act(() =>
       Promise.all(targets.map((task) => workTaskArchive(task.id, true)))
     )
-  }, [act, columns.done])
+  }, [act, archivableDone])
 
   // The badge counts deviations from the DEFAULT view (canceled shown,
   // archived hidden), not checked boxes — a pristine board shows no badge.
@@ -637,6 +686,41 @@ export function TasksPage() {
             allLabel={t("allFolders")}
             onSelectAll={() => setFolderFilter(null)}
           />
+
+          {/* Keyword search — the same pill-shaped field the repository panel
+              uses. Filters as you type (it is local, there is no request to
+              debounce), and both views at once. A whole row to itself on a
+              phone, where sharing one would leave too little to read back. */}
+          <InputGroup className="h-8 w-full rounded-full sm:w-56">
+            <InputGroupAddon align="inline-start">
+              <Search className="size-3.5" aria-hidden />
+            </InputGroupAddon>
+            <InputGroupInput
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && searchInput !== "") {
+                  e.preventDefault()
+                  setSearchInput("")
+                }
+              }}
+              placeholder={t("searchPlaceholder")}
+              aria-label={t("searchPlaceholder")}
+              className="h-8 text-[0.8125rem]"
+            />
+            {searchInput !== "" ? (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("clearSearch")}
+                  title={t("clearSearch")}
+                  onClick={() => setSearchInput("")}
+                >
+                  <X className="size-3" />
+                </InputGroupButton>
+              </InputGroupAddon>
+            ) : null}
+          </InputGroup>
 
           {/* Same pill treatment as the folder select so the left cluster reads
               as one family of controls (the settings entry lives in the chrome
@@ -785,6 +869,8 @@ export function TasksPage() {
           mergeQueueRanks={queueRanks}
           filtered={statusFilter != null}
           onClearFilter={() => setStatusFilter(null)}
+          searchQuery={searching ? searchInput.trim() : null}
+          onClearSearch={() => setSearchInput("")}
           onOpen={setDetailTaskId}
           handlersFor={handlersFor}
         />
@@ -848,8 +934,7 @@ export function TasksPage() {
                       </span>
                     )}
                     <div className="flex-1" />
-                    {col === "done" &&
-                    columns.done.some((task) => task.archived_at == null) ? (
+                    {col === "done" && archivableDone.length > 0 ? (
                       <Button
                         type="button"
                         size="xs"
@@ -881,7 +966,11 @@ export function TasksPage() {
                       )}
                     >
                       <p className="text-xs text-muted-foreground">
-                        {t(EMPTY_LABEL_KEYS[col])}
+                        {/* An empty column under a search says nothing
+                            matched — not that the column has no tasks. */}
+                        {searching
+                          ? t("searchEmptyColumn")
+                          : t(EMPTY_LABEL_KEYS[col])}
                       </p>
                     </div>
                   ) : (
@@ -1012,6 +1101,11 @@ export function TasksPage() {
         onOpenChange={setRestartOpen}
         task={restartTask}
         kind={restartKind}
+      />
+      <TaskFollowUpDialog
+        open={followUpOpen}
+        onOpenChange={setFollowUpOpen}
+        task={followUpTask}
       />
       <TaskScheduleDialog
         open={scheduleOpen && scheduleTask != null}

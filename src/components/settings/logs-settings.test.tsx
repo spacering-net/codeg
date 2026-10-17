@@ -1,7 +1,15 @@
 import { type ReactNode, useEffect } from "react"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 
 vi.mock("@/lib/api", () => ({
   getLogSettings: vi.fn(),
@@ -44,9 +52,7 @@ const viewportState = vi.hoisted(() => {
   return {
     SCROLL_HEIGHT,
     CLIENT_HEIGHT,
-    current: null as
-      | (HTMLElement & { __scrollTopSet: ReturnType<typeof vi.fn> })
-      | null,
+    current: null as (HTMLElement & { __scrollTopSet: Mock }) | null,
     onScroll: undefined as ((e: Event) => void) | undefined,
     make() {
       const el = document.createElement("div")

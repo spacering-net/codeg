@@ -7,7 +7,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
@@ -44,9 +44,14 @@ let editorText = ""
 let editorBlocks: PromptInputBlock[] = []
 let uploading = false
 let composerProps: TaskMessageComposerProps | null = null
+/** What the box showed when it mounted — the real editor reads `defaultText`
+ *  once, at creation, and is uncontrolled after that. */
+let composerSeed: string | null = null
 vi.mock("./task-message-composer", () => ({
   TaskMessageComposer: (props: TaskMessageComposerProps) => {
     composerProps = props
+    const [seed] = useState(props.defaultText)
+    composerSeed = seed
     const ref = props.ref
     useEffect(() => {
       if (!ref || typeof ref === "function") return
@@ -89,6 +94,7 @@ beforeEach(() => {
   editorBlocks = []
   uploading = false
   composerProps = null
+  composerSeed = null
   vi.clearAllMocks()
 })
 
@@ -225,5 +231,30 @@ describe("TaskRestartDialog", () => {
       release?.()
     })
     expect(workTaskRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it("opens with an empty box every time, never the last restart's note", async () => {
+    const user = userEvent.setup()
+    const view = (open: boolean, row: WorkTask) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <TaskRestartDialog
+          open={open}
+          onOpenChange={() => {}}
+          task={row}
+          kind="retry"
+        />
+      </NextIntlClientProvider>
+    )
+    const { rerender } = render(view(true, task()))
+    editorText = "run pnpm install first"
+    act(() => composerProps?.onChange?.("run pnpm install first"))
+    await user.click(screen.getByRole("button", { name: "Retry" }))
+    await waitFor(() => expect(workTaskRetry).toHaveBeenCalledTimes(1))
+
+    // The next restart — another card — must not carry that note: the editor
+    // reads its text once, when it mounts, so a stale seed is a stale box.
+    rerender(view(false, task()))
+    rerender(view(true, task({ id: 8 })))
+    expect(composerSeed).toBe("")
   })
 })

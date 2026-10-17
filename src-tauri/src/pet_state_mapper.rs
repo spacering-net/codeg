@@ -916,6 +916,8 @@ mod tests {
                 agent_type: crate::models::agent::AgentType::Codex,
                 task_preview: "run the tests".into(),
                 task_id: "task-pet-1".into(),
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -933,6 +935,8 @@ mod tests {
                     duration_ms: 0,
                     text_preview: None,
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }

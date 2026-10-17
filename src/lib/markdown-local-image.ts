@@ -15,6 +15,14 @@ const IMAGE_MIMES: Record<string, string> = {
 
 export const LOCAL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 
+/** The MIME type of an image file, by its extension; null for any other file. */
+export function localImageMime(path: string): string | null {
+  const extension = path.split(".").pop()?.toLowerCase() ?? ""
+  return Object.prototype.hasOwnProperty.call(IMAGE_MIMES, extension)
+    ? IMAGE_MIMES[extension]
+    : null
+}
+
 /** Recognize file references before rehype-harden changes their destinations. */
 export function localImagePath(source: string): string | null {
   let path = source.trim()
@@ -54,8 +62,8 @@ export function resolveLocalImage(source: string, rootPath: string) {
   const path = localImagePath(source)
   const root = normalizeAbsPath(rootPath)
   if (!path || !isAbsoluteFilePath(root)) return null
-  const extension = path.split(".").pop()?.toLowerCase() ?? ""
-  if (!Object.prototype.hasOwnProperty.call(IMAGE_MIMES, extension)) return null
+  const mime = localImageMime(path)
+  if (!mime) return null
   const absolute = normalizeAbsPath(
     isAbsoluteFilePath(path) ? path : `${root}/${path}`
   )
@@ -66,7 +74,7 @@ export function resolveLocalImage(source: string, rootPath: string) {
     name: absolute.slice(absolute.lastIndexOf("/") + 1),
     // The extension already checked above, not a second derivation from
     // `absolute` — those agree today, but only one of them was validated.
-    mime: IMAGE_MIMES[extension],
+    mime,
   }
 }
 

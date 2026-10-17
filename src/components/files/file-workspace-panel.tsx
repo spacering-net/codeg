@@ -30,8 +30,12 @@ import { BrowserTabView } from "@/components/browser/browser-tab-view"
 import { ImagePreview } from "@/components/files/image-preview"
 import { HtmlPreview } from "@/components/files/html-preview"
 import { MarkdownDocumentPreview } from "@/components/files/markdown-document-preview"
-import { OfficePreview } from "@/components/files/office-preview"
-import { isHtmlPreviewable, isOfficePreviewable } from "@/lib/language-detect"
+import {
+  KeptOfficePreviews,
+  isOfficeFileTab,
+} from "@/components/files/kept-office-previews"
+import { PdfPreview } from "@/components/files/pdf-preview"
+import { isHtmlPreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
@@ -760,7 +764,21 @@ function DiffFileList({
   )
 }
 
+/**
+ * The file column's content: the active tab's view (the body below), plus the
+ * office previews `KeptOfficePreviews` keeps mounted over the same box so that
+ * switching tabs never restarts one.
+ */
 export function FileWorkspacePanel() {
+  return (
+    <div className="relative h-full min-h-0">
+      <FileWorkspacePanelBody />
+      <KeptOfficePreviews />
+    </div>
+  )
+}
+
+function FileWorkspacePanelBody() {
   const t = useTranslations("Folder.fileWorkspacePanel")
   const { activeFileTab, fileTabs, pendingFileReveal, previewFileTabIds } =
     useWorkspaceFileTabs()
@@ -1905,17 +1923,19 @@ export function FileWorkspacePanel() {
     return <ImagePreview key={activeFileTab.id} tab={activeFileTab} />
   }
 
-  // Office preview (.docx/.xlsx/.pptx → OfficeCLI HTML → sandboxed iframe).
+  // PDF preview (PDF.js). Preview-only like an image: the bytes are binary,
+  // there is no source view to toggle to.
+  if (isFileTab && activeFileTab && activeFileTab.language === "pdf") {
+    return <PdfPreview key={activeFileTab.id} tab={activeFileTab} />
+  }
+
+  // Office preview (.docx/.xlsx/.pptx → OfficeCLI watch → sandboxed iframe).
   // Preview-only: these are binary OpenXML files with no text editor view, so
-  // it renders unconditionally (not gated on the editor/preview toggle).
-  if (isFileTab && activeFileTab && isOfficePreviewable(activeFileTab.path)) {
-    return (
-      <OfficePreview
-        key={activeFileTab.id}
-        rootPath={activeIo?.rootPath ?? null}
-        relPath={activeIo?.ioPath ?? null}
-      />
-    )
+  // it renders unconditionally (not gated on the editor/preview toggle). It is
+  // not rendered here: `KeptOfficePreviews`, beside this body, shows it and
+  // keeps it mounted while other tabs are in front.
+  if (isOfficeFileTab(activeFileTab)) {
+    return null
   }
 
   // HTML preview (sandboxed iframe)

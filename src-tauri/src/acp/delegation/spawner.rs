@@ -28,6 +28,16 @@ pub struct DelegationLink {
     pub parent_conversation_id: i32,
     pub parent_tool_use_id: String,
     pub delegation_call_id: String,
+    /// Set when the delegation runs as an assistant: written onto the child row
+    /// (`assistant_id` + `assistant_snapshot`) with the link itself.
+    pub assistant: Option<AssistantLink>,
+}
+
+/// The assistant a delegated child runs as, and what the child row keeps of it.
+#[derive(Debug, Clone)]
+pub struct AssistantLink {
+    pub id: i32,
+    pub snapshot: crate::models::AssistantRunSnapshot,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -115,12 +125,17 @@ pub trait ConnectionSpawner: Send + Sync {
     /// `DelegationLink` is persisted onto the new conversation row so the
     /// lifecycle subscriber can later notify the broker on `TurnComplete`.
     ///
+    /// `brief` is the rendered assistant brief frame, appended after the task
+    /// at the final agent boundary only (see `ConnectionCommand::Prompt`'s
+    /// `internal_suffix`) — never stored, broadcast or used for the title.
+    ///
     /// Returns the new child conversation row id (i32).
     async fn send_prompt_linked_for_delegation(
         &self,
         conn_id: &str,
         task: String,
         link: DelegationLink,
+        brief: Option<String>,
     ) -> Result<i32, SpawnerError>;
 
     /// Re-spawn a connection for an INTERRUPTED delegation child, resuming the
@@ -148,12 +163,15 @@ pub trait ConnectionSpawner: Send + Sync {
     /// `parent_id` / `parent_tool_use_id` / `delegation_call_id` from the
     /// original delegation, which is exactly what re-arms the lifecycle's
     /// TurnComplete → `complete_call` routing for the resumed run.
+    ///
+    /// `brief` rides the continuation prompt exactly as it rides the first one.
     async fn send_resume_prompt(
         &self,
         conn_id: &str,
         prompt: String,
         folder_id: i32,
         child_conversation_id: i32,
+        brief: Option<String>,
     ) -> Result<(), SpawnerError>;
 
     /// Whether any live connection is currently bound to `conversation_id`.
@@ -192,6 +210,8 @@ pub mod mock {
         pub cancels: Mutex<Vec<String>>,
         pub disconnects: Mutex<Vec<String>>,
         pub spawn_args: Mutex<Vec<SpawnCallArgs>>,
+        /// Every `send_prompt_linked_for_delegation`, in call order.
+        pub send_args: Mutex<Vec<SendCallArgs>>,
         /// Queued results for `spawn_for_resume`; recorded calls land in
         /// `resume_spawn_args`. Separate queues from the fresh-spawn pair so a
         /// test staging both paths can't cross-consume. Stage entries with
@@ -226,6 +246,14 @@ pub mod mock {
         pub preferred_config_values: BTreeMap<String, String>,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct SendCallArgs {
+        pub conn_id: String,
+        pub task: String,
+        pub link: DelegationLink,
+        pub brief: Option<String>,
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ResumeSpawnCallArgs {
         pub parent_connection_id: String,
@@ -242,6 +270,7 @@ pub mod mock {
         pub prompt: String,
         pub folder_id: i32,
         pub child_conversation_id: i32,
+        pub brief: Option<String>,
     }
 
     impl MockSpawner {
@@ -325,10 +354,17 @@ pub mod mock {
 
         async fn send_prompt_linked_for_delegation(
             &self,
-            _conn_id: &str,
-            _task: String,
-            _link: DelegationLink,
+            conn_id: &str,
+            task: String,
+            link: DelegationLink,
+            brief: Option<String>,
         ) -> Result<i32, SpawnerError> {
+            self.send_args.lock().await.push(SendCallArgs {
+                conn_id: conn_id.to_string(),
+                task,
+                link,
+                brief,
+            });
             // Honor a test-installed gate: block here (after the broker has
             // reserved the child, before it parks the pending entry) until the
             // test releases it.
@@ -375,12 +411,14 @@ pub mod mock {
             prompt: String,
             folder_id: i32,
             child_conversation_id: i32,
+            brief: Option<String>,
         ) -> Result<(), SpawnerError> {
             self.resume_send_args.lock().await.push(ResumeSendCallArgs {
                 conn_id: conn_id.to_string(),
                 prompt,
                 folder_id,
                 child_conversation_id,
+                brief,
             });
             self.resume_send_results
                 .lock()

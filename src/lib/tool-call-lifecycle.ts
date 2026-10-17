@@ -23,6 +23,12 @@ export function toolStatusUnsettled(
   return s !== "completed" && s !== "failed"
 }
 
+/** Whether a forwarded ACP tool status is present and terminal — what a
+ *  report closing its tool call carries. */
+export function toolStatusTerminal(status: string | null | undefined): boolean {
+  return status != null && !toolStatusUnsettled(status)
+}
+
 /**
  * A tool-call part that has NOT reached a terminal outcome: either its adapted
  * lifecycle state is still running, or its forwarded ACP status is unsettled.

@@ -100,7 +100,9 @@ pub async fn config_sync_peek_remote(
 pub async fn config_sync_download_apply(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<DownloadOutcome>, AppCommandError> {
-    download_and_apply_core(&state.db.conn).await.map(Json)
+    download_and_apply_core(&state.db.conn, &state.emitter)
+        .await
+        .map(Json)
 }
 
 pub async fn config_sync_export_content(
@@ -121,9 +123,14 @@ pub async fn config_sync_import_content(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ContentParams>,
 ) -> Result<Json<ConfigImportResult>, AppCommandError> {
-    import_bytes_core(&state.db.conn, params.content.as_bytes(), &rollback_dir())
-        .await
-        .map(Json)
+    import_bytes_core(
+        &state.db.conn,
+        &state.emitter,
+        params.content.as_bytes(),
+        &rollback_dir(),
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn config_sync_list_rollbacks(
@@ -141,7 +148,7 @@ pub async fn config_sync_apply_rollback(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<RollbackParams>,
 ) -> Result<Json<ConfigImportResult>, AppCommandError> {
-    apply_rollback_core(&state.db.conn, &rollback_dir(), &params.id)
+    apply_rollback_core(&state.db.conn, &state.emitter, &rollback_dir(), &params.id)
         .await
         .map(Json)
 }

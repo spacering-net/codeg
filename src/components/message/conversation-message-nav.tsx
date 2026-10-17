@@ -1,17 +1,18 @@
 "use client"
 
-import { memo, useCallback, useState, type RefObject } from "react"
+import { memo, useCallback, useState } from "react"
 import {
   ChevronDownIcon,
   ChevronRight,
   FileIcon,
+  Loader2,
   MapPinned,
+  RotateCw,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
 import type { FileChangeStat } from "@/lib/session-files"
-import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import { CollapsedOverlayChip } from "@/components/chat/collapsed-overlay-chip"
 import {
   CommitFileAdditions,
@@ -26,15 +27,19 @@ import {
   toFolderRelativePath,
 } from "@/lib/file-path-display"
 import { cn } from "@/lib/utils"
-import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
 
 /** One navigable user message. Present for every user turn, even when it made
- *  no file edits (`hasChanges === false`) so the list is a complete index. */
+ *  no file edits (`hasChanges === false`) so the list is a complete index —
+ *  including the messages above the loaded window of a long conversation. */
 export interface MessageNavEntry {
-  /** Index into the rendered `threadItems` array — fed to `scrollToIndex`. */
-  threadIndex: number
+  /** Index into the rendered `threadItems` array — fed to `scrollToIndex`.
+   *  Null for a message above the loaded window. */
+  threadIndex: number | null
+  /** Global turn index of a message above the loaded window (what paging it
+   *  in needs); null for a loaded one. */
+  turnIndex: number | null
   turnId: string
-  /** 1-based position among shown entries. */
+  /** 1-based position among the conversation's user messages. */
   ordinal: number
   label: string
   additions: number
@@ -54,7 +59,15 @@ interface ConversationMessageNavProps {
   onToggle: (next: boolean) => void
   /** Per-message rows. Only populated while `expanded` (computed lazily). */
   entries: MessageNavEntry[]
-  scrollApiRef: RefObject<MessageScrollContextValue | null>
+  /** Jump to a message: the parent scrolls to a loaded one, or pages one
+   *  above the loaded window in first. */
+  onSelect: (entry: MessageNavEntry) => void
+  /** The message being paged in for a jump, if any. */
+  revealingTurnId?: string | null
+  /** The messages above the loaded window aren't listed yet: their outline
+   *  is loading, or failed to (offering `onRetryEarlier`). */
+  earlier?: "loading" | "error" | null
+  onRetryEarlier?: () => void
 }
 
 /**
@@ -66,30 +79,25 @@ interface ConversationMessageNavProps {
  * an expandable file-diff list (clicking a file opens it in the main editor via
  * `openSessionFileDiff`). `memo`'d so it never re-renders while collapsed during
  * streaming (its props are referentially stable then).
+ *
+ * A long conversation loads its messages a window at a time; the count and the
+ * list still cover all of them, and a message above the window is paged in
+ * when it is clicked (`onSelect`).
  */
 export const ConversationMessageNav = memo(function ConversationMessageNav({
   count,
   expanded,
   onToggle,
   entries,
-  scrollApiRef,
+  onSelect,
+  revealingTurnId = null,
+  earlier = null,
+  onRetryEarlier,
 }: ConversationMessageNavProps) {
   const t = useTranslations("Folder.chat.messageNav")
   const { openSessionFileDiff } = useWorkspaceActions()
   const { activeFolder: folder } = useActiveFolder()
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
-  // Settings → Appearance → "Chat animations" off jumps instead of gliding.
-  const chatAnimations = useChatAnimationsEnabled()
-
-  const jump = useCallback(
-    (threadIndex: number) => {
-      scrollApiRef.current?.scrollToIndex(threadIndex, {
-        align: "start",
-        smooth: chatAnimations,
-      })
-    },
-    [scrollApiRef, chatAnimations]
-  )
 
   const handleFileClick = useCallback(
     (
@@ -145,8 +153,25 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
         </div>
 
         <div className="max-h-96 space-y-1.5 overflow-y-auto p-2">
+          {earlier === "loading" && (
+            <div className="flex items-center gap-2 px-2.5 py-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              <span className="min-w-0 truncate">{t("loadingEarlier")}</span>
+            </div>
+          )}
+          {earlier === "error" && (
+            <button
+              type="button"
+              onClick={onRetryEarlier}
+              className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+            >
+              <RotateCw className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 truncate">{t("loadEarlier")}</span>
+            </button>
+          )}
           {entries.map((entry) => {
             const isOpen = openGroups[entry.turnId] ?? false
+            const isRevealing = revealingTurnId === entry.turnId
             const uniqueFileCount = new Set(
               entry.files.map((file) => normalizeSlashPath(file.path))
             ).size
@@ -159,10 +184,17 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
                 <div className="flex items-stretch">
                   <button
                     type="button"
-                    onClick={() => jump(entry.threadIndex)}
+                    onClick={() => onSelect(entry)}
+                    aria-busy={isRevealing || undefined}
                     className="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-left transition-colors hover:bg-accent/40"
                   >
-                    <span className="mt-0.5 shrink-0 rounded-md border border-border bg-muted/40 px-1 text-3xs tabular-nums text-muted-foreground">
+                    <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-muted/40 px-1 text-3xs tabular-nums text-muted-foreground">
+                      {isRevealing && (
+                        <Loader2
+                          aria-hidden="true"
+                          className="size-2.5 animate-spin"
+                        />
+                      )}
                       #{entry.ordinal}
                     </span>
                     <span className="min-w-0 flex-1">

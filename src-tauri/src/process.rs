@@ -198,6 +198,37 @@ where
     }
 }
 
+/// Test fixture: write `content` to `path` as an executable script that can be
+/// exec'd the moment this returns, however many test threads are spawning.
+///
+/// A script written with `std::fs::write` is exposed to the race described on
+/// [`spawn_retrying_exec_busy`]: a sibling test that forks while the write
+/// descriptor is open leaves a copy of it in its child, and Linux refuses to
+/// exec the script with `ETXTBSY` until that child execs. A code path that does
+/// not retry then fails for a reason unrelated to the test. Writing through a
+/// child shell means this process never holds a write descriptor on the file,
+/// so no fork here can inherit one. The mode is set by path, which opens
+/// nothing either.
+#[cfg(all(test, unix))]
+pub(crate) fn write_test_script(path: &std::path::Path, content: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let status = Command::new("/bin/sh")
+        .args(["-c", "printf '%s' \"$2\" > \"$1\"", "sh"])
+        .arg(path)
+        .arg(content)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .expect("spawn /bin/sh to write a test script");
+    assert!(
+        status.success(),
+        "writing test script {} failed: {status}",
+        path.display()
+    );
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .expect("make test script executable");
+}
+
 /// If `node` is not already in PATH, detect common Node.js version manager
 /// installations and prepend the best matching bin directory to the process
 /// PATH so that **all** downstream code (`which`, `Command`, child processes)
@@ -777,5 +808,34 @@ mod tests {
         assert!(!super::is_exec_busy(&std::io::Error::from_raw_os_error(
             libc::ENOENT
         )));
+    }
+
+    /// The fixture writes the script byte for byte, leaves it executable, and
+    /// it runs straight away. The path has a space and the content carries
+    /// quotes, `%`, `$`, a backslash and a trailing newline, all of which must
+    /// arrive verbatim.
+    #[cfg(unix)]
+    #[test]
+    fn test_script_is_written_verbatim_and_runs_at_once() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let script = dir.path().join("fixture with spaces");
+        let content = "#!/bin/sh\n# 100% literal: $HOME '\"' \\n\nprintf '%s\\n' fixture-ran\n";
+        super::write_test_script(&script, content);
+
+        assert_eq!(
+            std::fs::read_to_string(&script).expect("read script"),
+            content
+        );
+        let mode = std::fs::metadata(&script)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+        let output = std::process::Command::new(&script)
+            .output()
+            .expect("run the script");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "fixture-ran\n");
     }
 }

@@ -39,6 +39,9 @@ function BindingProbe({ parentToolUseId }: { parentToolUseId: string }) {
       <div data-testid="status">{binding.status}</div>
       <div data-testid="error-code">{binding.errorCode ?? "-"}</div>
       <div data-testid="agent">{binding.agentType}</div>
+      <div data-testid="assistant">
+        {binding.assistantId ?? "-"}:{binding.assistantName ?? "-"}
+      </div>
     </div>
   )
 }
@@ -202,6 +205,45 @@ describe("DelegationProvider", () => {
     // must take the agent_type the completion now carries — not a hardcoded
     // default — so the card shows the correct agent icon/label.
     expect(screen.getByTestId("agent")).toHaveTextContent("codex")
+  })
+
+  it("carries the assistant a delegation runs as, from either event", async () => {
+    renderProvider()
+    await awaitHandlerCaptured()
+    dispatch({
+      type: "delegation_started",
+      parent_connection_id: "p1",
+      parent_tool_use_id: "pt-1",
+      child_connection_id: "c1",
+      child_conversation_id: 99,
+      agent_type: "codex",
+      assistant_id: 3,
+      assistant_name: "Reviewer",
+    } as unknown as EventEnvelope)
+    expect(screen.getByTestId("assistant")).toHaveTextContent("3:Reviewer")
+
+    // A completion that arrives without its start still names the assistant.
+    dispatch({
+      type: "delegation_completed",
+      parent_connection_id: "p1",
+      parent_tool_use_id: "pt-2",
+      child_connection_id: "c2",
+      child_conversation_id: 100,
+      agent_type: "codex",
+      assistant_id: 4,
+      assistant_name: "Planner",
+      result: { kind: "ok" },
+    } as unknown as EventEnvelope)
+    // The probe watches pt-1; a plain agent delegation names none.
+    dispatch({
+      type: "delegation_started",
+      parent_connection_id: "p1",
+      parent_tool_use_id: "pt-1",
+      child_connection_id: "c1",
+      child_conversation_id: 99,
+      agent_type: "codex",
+    } as unknown as EventEnvelope)
+    expect(screen.getByTestId("assistant")).toHaveTextContent("-:-")
   })
 
   it("cancels a pending detach when delegation_started replays for the same parent_tool_use_id", async () => {

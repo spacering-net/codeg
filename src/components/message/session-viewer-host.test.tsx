@@ -22,14 +22,17 @@ vi.mock("./sub-agent-session-dialog", () => ({
   SubAgentSessionDialog: ({
     open,
     childConversationId,
+    identity,
   }: {
     open: boolean
     childConversationId: number
+    identity: { assistantName: string | null }
   }) =>
     open ? (
       <div
         data-testid="delegation-viewer"
         data-conversation-id={childConversationId}
+        data-assistant-name={identity.assistantName ?? ""}
       />
     ) : null,
 }))
@@ -83,6 +86,11 @@ vi.mock("@/components/files/file-viewer-drawer", () => ({
 vi.mock("@/hooks/use-delegation-card-model", () => ({
   useDelegationCardModel: (source: { parentToolUseId: string }) => ({
     agentType: "codex",
+    identity: {
+      agentType: "codex",
+      assistantId: 3,
+      assistantName: "Reviewer",
+    },
     task: "do the thing",
     taskId: null,
     status: "running",
@@ -155,6 +163,11 @@ describe("SessionViewerHost", () => {
     expect(screen.getByTestId("delegation-viewer")).toHaveAttribute(
       "data-conversation-id",
       "42"
+    )
+    // The drawer is titled with who ran the task, re-resolved here.
+    expect(screen.getByTestId("delegation-viewer")).toHaveAttribute(
+      "data-assistant-name",
+      "Reviewer"
     )
 
     // Virtualization, simulated: the row goes away.

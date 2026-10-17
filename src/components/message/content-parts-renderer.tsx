@@ -1,10 +1,5 @@
 import { memo, useMemo, useState, type ReactNode } from "react"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
-import {
-  classifyToolKind,
-  TOOL_KIND_ORDER,
-  type ToolKindLabel,
-} from "@/lib/adapters/tool-kind-classifier"
 import type { MessageRole, PlanEntryInfo } from "@/lib/types"
 import {
   aliasToolInputKeys,
@@ -18,19 +13,12 @@ import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { normalizePriority, normalizeStatus } from "@/lib/plan-parse"
 import { isDelegateToAgentToolName } from "@/lib/delegation-card"
 import { useTranslations } from "next-intl"
-import { cn } from "@/lib/utils"
 import {
   countUnifiedDiffLineChanges,
   estimateChangedLineStats,
 } from "@/lib/line-change-stats"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
-import { Shimmer } from "@/components/ai-elements/shimmer"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/instant-collapsible"
 import {
   Tool,
   ToolHeader,
@@ -49,6 +37,7 @@ import {
   ReasoningContent,
 } from "@/components/ai-elements/reasoning"
 import { AgentToolCallPart } from "./agent-tool-call"
+import { ToolGroupPart } from "./tool-group-part"
 import { AskQuestionResultCard } from "./ask-question-result-card"
 import { CodegMcpToolCard } from "./codeg-mcp-tool-card"
 import { ResumedDelegationCard } from "./resumed-delegation-card"
@@ -81,10 +70,12 @@ import {
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import { isCodegMcpWorkbenchTool } from "@/lib/codeg-mcp-tool"
 import { fsSeparator } from "@/lib/path-utils"
+import { localImageMime } from "@/lib/markdown-local-image"
 import { DelegatedSubThread } from "./delegated-sub-thread"
 import { DelegationStatusCard } from "./delegation-status-card"
 import { CodexVisualizeCard } from "./codex-visualize-card"
 import { HtmlFilePreviews } from "./html-file-previews"
+import { ReadImagePreview } from "./read-image-preview"
 import {
   findHtmlFileMentions,
   hasCodexVisualizeRef,
@@ -112,7 +103,6 @@ import {
   MinusIcon,
   PlusIcon,
   WrenchIcon,
-  ChevronRightIcon,
   BrainIcon,
   CodeIcon,
   KeyboardIcon,
@@ -1550,11 +1540,19 @@ function FileToolInput({
   const cellType = str(input, "cell_type")
   const editMode = str(input, "edit_mode")
   const isRead = name === "read" || name === "read file"
+  // Claude Code's Read takes `allow_large` (CLI 2.1.296+) to read a text file,
+  // or a line range of one, past the usual size limits; `"true"` counts too.
+  const allowLarge =
+    isRead && (input.allow_large === true || input.allow_large === "true")
+  // A Read of an image shows the picture: its result is no text to number,
+  // and often no bytes at all (codex's `view_image` returns only the path).
+  const imageMime = isRead && filePath ? localImageMime(filePath) : null
 
   const badges: string[] = []
   if (offset != null) badges.push(t("offset", { offset }))
   if (limit != null) badges.push(t("limit", { limit }))
   if (pages) badges.push(t("pages", { pages }))
+  if (allowLarge) badges.push(t("allowLarge"))
   if (editMode) badges.push(t("mode", { mode: editMode }))
   if (cellType) badges.push(t("cell", { cell: cellType }))
 
@@ -1598,6 +1596,11 @@ function FileToolInput({
           </span>
         )}
       </header>
+      {filePath && imageMime && (
+        <div className="shrink-0">
+          <ReadImagePreview path={filePath} mime={imageMime} />
+        </div>
+      )}
       {displayContent && (
         <div className="overflow-auto">
           <FileContentLines
@@ -2422,6 +2425,8 @@ const ToolCallPart = memo(function ToolCallPart({
   // both its `in_progress` status and this badge until the conversation is
   // reloaded. That is pre-existing routing, not something the marker changes,
   // and the strip above the transcript is the surface that does clear on time.
+  // (The exception is a turn the user stopped: until the next prompt, reports
+  // on the calls it left open settle the promoted cards — `cancelledTurn`.)
   const airBackgrounded = useMemo(
     () => toolCallMovedToBackground(part.meta) && isUnsettledToolCall(part),
     [part]
@@ -3104,98 +3109,6 @@ const ProposedPlanPart = memo(function ProposedPlanPart({
   )
 })
 
-const ToolGroupPart = memo(function ToolGroupPart({
-  part,
-}: {
-  part: Extract<AdaptedContentPart, { type: "tool-group" }>
-}) {
-  const t = useTranslations("Folder.chat.contentParts.toolGroup")
-  const [open, setOpen] = useState(false)
-
-  const { phrases, errorPhrase } = useMemo(() => {
-    const counts = TOOL_KIND_ORDER.reduce(
-      (acc, kind) => {
-        acc[kind] = 0
-        return acc
-      },
-      {} as Record<ToolKindLabel, number>
-    )
-    let errors = 0
-    for (const item of part.items) {
-      counts[classifyToolKind(item.toolName)] += 1
-      if (item.state === "output-error" || item.errorText) errors += 1
-    }
-    const built: string[] = []
-    for (const kind of TOOL_KIND_ORDER) {
-      const count = counts[kind]
-      if (count <= 0) continue
-      built.push(t(kind, { count }))
-    }
-    if (built.length === 0) {
-      built.push(t("other", { count: part.items.length }))
-    }
-    return {
-      phrases: built,
-      errorPhrase: errors > 0 ? t("errorSuffix", { count: errors }) : null,
-    }
-  }, [part, t])
-
-  if (part.items.length === 0) return null
-
-  const joiner = t("joiner")
-  const titleText = phrases.join(joiner)
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} className="w-full">
-      <CollapsibleTrigger
-        className={cn(
-          "group inline-flex max-w-full items-center gap-1.5 rounded-full bg-muted/60 px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ws-msg-chip"
-        )}
-      >
-        <ChevronRightIcon
-          aria-hidden="true"
-          className={cn(
-            "size-3 shrink-0 opacity-60 transition-transform",
-            open && "rotate-90"
-          )}
-        />
-        <span className="min-w-0 truncate">
-          {part.isStreaming ? (
-            <Shimmer as="span" duration={1} shineColor="var(--primary)">
-              {titleText}
-            </Shimmer>
-          ) : (
-            titleText
-          )}
-          {errorPhrase && (
-            <span className="text-destructive">
-              {joiner}
-              {errorPhrase}
-            </span>
-          )}
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent
-        className={cn(
-          "w-full outline-none",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out",
-          "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-          "data-[state=closed]:slide-out-to-top-1 data-[state=open]:slide-in-from-top-1"
-        )}
-      >
-        <div className="mt-3 w-full space-y-3">
-          {part.items.map((item, idx) => (
-            <ToolCallPart
-              key={`grouped-tc-${item.toolCallId ?? idx}-${idx}`}
-              part={item}
-            />
-          ))}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  )
-})
-
 // ── Main renderer ─────────────────────────────────────────────────────
 
 interface ContentPartsRendererProps {
@@ -3232,7 +3145,13 @@ export const ContentPartsRenderer = memo(function ContentPartsRenderer({
     }
 
     if (part.type === "tool-group") {
-      return <ToolGroupPart key={`tg-${keyId}`} part={part} />
+      return (
+        <ToolGroupPart
+          key={`tg-${keyId}`}
+          part={part}
+          renderItem={(item, key) => <ToolCallPart key={key} part={item} />}
+        />
+      )
     }
 
     if (part.type === "goal-run") {

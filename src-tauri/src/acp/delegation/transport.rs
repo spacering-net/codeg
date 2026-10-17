@@ -446,15 +446,33 @@ pub enum BrokerMessage {
     ComputerAct(BrokerComputerActRequest),
     ComputerLaunch(BrokerComputerLaunchRequest),
     ComputerClipboard(BrokerComputerClipboardRequest),
-    /// Liveness probe. Unlike every other variant this one is NOT sent by a
-    /// companion — it comes from codeg's own service-status check
-    /// (`acp::delegation::service`), which is why it carries no `token`: a
-    /// `{"ok": true}` answer reveals nothing beyond "the socket is being
-    /// served", which the connect itself already proved. Answering it end to
-    /// end (accept → decode → dispatch → encode → write) is the point: it
-    /// distinguishes a live accept loop from a stale socket file left behind
-    /// by a dead one, which a bare `connect()` cannot.
+    /// Who may be delegated to as an assistant right now, for the
+    /// companion's `tools/list` schema roster. Answered
+    /// `{"assistants": [AssistantRosterEntry, ...]}` — always answered, an
+    /// empty list when the lookup fails, so a companion never mistakes a
+    /// refusal for an old listener (see `Ping`).
+    ListAssistants(BrokerListAssistantsRequest),
+    /// Liveness and capability probe, carrying no `token`: the answer reveals
+    /// nothing beyond "the socket is being served" and what this listener
+    /// understands. Sent by codeg's own service-status check
+    /// (`acp::delegation::service`), and by the companion to learn whether
+    /// its parent understands assistant delegation. Answering it end to end
+    /// (accept → decode → dispatch → encode → write) distinguishes a live
+    /// accept loop from a stale socket file left behind by a dead one, which a
+    /// bare `connect()` cannot.
+    ///
+    /// The answer is `{"ok": true, "assistants": true}`. A listener that
+    /// predates assistants answers a bare `{"ok": true}` — and would read an
+    /// `assistant_id` call as a plain `agent_type` delegation, silently
+    /// dropping the assistant's options and instructions. That is why the
+    /// companion asks before it forwards one (`AssistantSupport`).
     Ping,
+}
+
+/// See [`BrokerMessage::ListAssistants`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListAssistantsRequest {
+    pub token: String,
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -783,12 +801,21 @@ pub async fn client_computer_act_round_trip(
 }
 
 /// Probe the listener: write a [`BrokerMessage::Ping`] and read the
-/// `{"ok": true}` answer back. Used by the codeg-mcp service-status indicator
-/// to tell "listening" from "socket file exists but nobody is accepting".
+/// `{"ok": true, ..}` answer back. Used by the codeg-mcp service-status
+/// indicator to tell "listening" from "socket file exists but nobody is
+/// accepting", and by the companion's assistant-support probe.
 /// Callers should wrap this in their own timeout — a socket whose peer accepts
 /// but never answers would otherwise park here.
 pub async fn client_ping(socket_path: &str) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::Ping).await
+}
+
+/// Fetch the assistant roster (see [`BrokerMessage::ListAssistants`]).
+pub async fn client_list_assistants_round_trip(
+    socket_path: &str,
+    req: &BrokerListAssistantsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListAssistants(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes. Has to be
@@ -1025,9 +1052,10 @@ mod tests {
         use tokio::net::UnixListener;
 
         // `/tmp`, not `$TMPDIR`: a socket path has ~104 bytes of `sun_path` to
-        // live in, and codeg exports a 72-byte per-session `TMPDIR` to the
-        // agents it launches. Under `tempdir()` this lands at 99 bytes there —
-        // green, but one directory level from an unexplainable red.
+        // live in, and `$TMPDIR` is whatever the environment hands us. Under
+        // the ~72-byte per-session `TMPDIR` codeg exported before #754 this
+        // landed at 99 bytes — green, but one directory level from an
+        // unexplainable red — and a hand-set one can be longer still.
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let path = dir.path().join("codeg-mcp.sock");
         let listener = UnixListener::bind(&path).unwrap();

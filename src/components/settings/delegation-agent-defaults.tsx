@@ -2,7 +2,9 @@
 
 /**
  * Per-agent defaults editor for delegation. Lives inside the
- * "Multi-Agent Collaboration" settings card under the "Agent defaults" tab.
+ * "Multi-Agent Collaboration" settings card under the "Agent defaults" tab,
+ * and reads like the assistant editor's agent card: the agent picked at the
+ * top, its options as rows of the same card below it.
  *
  * Isolation guarantees (critical — see the v2 plan):
  *   1. Options come from a LIVE probe (`describeAgentOptions`), not from the
@@ -16,63 +18,43 @@
  *      NOT bleed into the chat context.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { Loader2 } from "lucide-react"
-
-import { Button } from "@/components/ui/button"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  AlertCircle,
+  AlertTriangle,
+  Bot,
+  Loader2,
+  RotateCw,
+} from "lucide-react"
+
+import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { Button } from "@/components/ui/button"
 import {
   type AgentDelegationDefaults,
   type AgentOptionsSnapshot,
   type AgentType,
-  type SessionConfigOptionInfo,
 } from "@/lib/types"
-import { getAgentLabel, isCustomAgentType } from "@/lib/custom-agents"
 import { describeAgentOptions } from "@/lib/api"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
-import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  AgentSelect,
+  findModelRow,
+  OptionBlock,
+  OverrideOptionRow,
+  StatusLine,
+  useOptionRows,
+  type OptionRow,
+} from "./agent-options-editor"
+import { PanelNotice } from "./panel-notice"
 
-// Sentinel `value` slot used by the top "Default" Select item in mode +
-// config-option rows. Picking it clears the override (sets it back to
-// `null`) so the agent's own default takes effect at runtime. Must not
-// collide with any real option id any agent could emit — the codeg
-// prefix makes a collision implausible.
-const DEFAULT_SENTINEL = "__codeg_default__"
-
-// Tab-switch debounce. Without this, rapid clicks across the agent
-// buttons would each kick off a real probe (which on the backend now
-// serializes per agent_type, but every queued probe still spawns the
-// CLI). 250ms is below the threshold of feeling laggy while comfortably
-// absorbing a mid-click reconsideration.
-const TAB_SWITCH_DEBOUNCE_MS = 250
-
-const BUILTIN_AGENT_TYPES: AgentType[] = [
-  "claude_code",
-  "codex",
-  "open_code",
-  "gemini",
-  "open_claw",
-  "cline",
-  "hermes",
-  "code_buddy",
-  "kimi_code",
-  "pi",
-  "grok",
-  "cursor",
-  "deepseek",
-  "qoder",
-  "antigravity",
-]
+// Probe debounce. Without this, stepping through agents or models would kick
+// off a real probe for every step (the backend serializes them per
+// agent_type, but every queued probe still spawns the CLI). 250ms is below
+// the threshold of feeling laggy while comfortably absorbing a mid-click
+// reconsideration.
+const PROBE_DEBOUNCE_MS = 250
 
 interface CachedSnapshot {
   snapshot: AgentOptionsSnapshot
@@ -110,41 +92,59 @@ function writeCache(
   snapshotCache.set(snapshotKey(agent, model), { snapshot, ts: Date.now() })
 }
 
+/** How many values an agent's defaults override. */
+function overrideCount(defaults: AgentDelegationDefaults | undefined): number {
+  if (!defaults) return 0
+  return (
+    (defaults.mode_id ? 1 : 0) +
+    Object.keys(defaults.config_values ?? {}).length
+  )
+}
+
 export interface DelegationAgentDefaultsPanelProps {
   value: Partial<Record<AgentType, AgentDelegationDefaults>>
   onChange: (next: Partial<Record<AgentType, AgentDelegationDefaults>>) => void
   disabled?: boolean
+  /** The form's multi-agent switch: while it is off nothing here can be
+   *  edited, and the tab says so. `null` while it loads. */
+  delegationEnabled?: boolean | null
+  /** Show the General tab, where that switch is. */
+  onShowGeneral?: () => void
 }
 
 export function DelegationAgentDefaultsPanel({
   value,
   onChange,
   disabled,
+  delegationEnabled = null,
+  onShowGeneral,
 }: DelegationAgentDefaultsPanelProps) {
   const t = useTranslations("AcpAgentSettings.multiAgent")
   // Custom ACP agents are delegation targets too (codeg-mcp advertises them
-  // in `delegate_to_agent`'s enum), so they get a defaults tab after the
-  // built-ins. The list mirrors what the agent registry currently holds.
+  // in `delegate_to_agent`'s enum), so the registry's list — in the user's
+  // agent order — is the list offered. A disabled agent is left out of the
+  // enum, so it is not offered here either.
   const { agents } = useAcpAgents()
-  const agentTypes = useMemo<AgentType[]>(
-    () => [
-      ...BUILTIN_AGENT_TYPES,
-      ...agents.map((a) => a.agent_type).filter(isCustomAgentType),
-    ],
-    [agents]
-  )
-  const [selectedAgent, setSelectedAgent] = useState<AgentType>("claude_code")
-  // Snapshot and the agent it was probed from, in ONE state value: the tab
-  // switch below is debounced, so for that whole window `selectedAgent` is
-  // already the new tab while the snapshot on screen is still the old agent's.
-  // Localising the agent's own vocabulary has to key on the producer, or a
-  // switch would briefly paint one agent's options in another's wording.
+  // The agent picked here; until then the first one that can run.
+  const [picked, setPicked] = useState<AgentType | null>(null)
+  const selectedAgent =
+    picked ?? agents.find((a) => a.enabled && a.available)?.agent_type ?? null
+  // The latest snapshot and what it was probed FOR (agent + model), in ONE
+  // state value. It outlives a newer probe: the agent's list of models does
+  // not depend on the model picked, so its model row stays offered while the
+  // rest is probed again for a newly picked model.
   const [loaded, setLoaded] = useState<{
     agent: AgentType
+    model: string | null
     snapshot: AgentOptionsSnapshot
   } | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // The probe for the latest (agent, model) asked for: running, or failed.
+  const [probe, setProbe] = useState<{
+    agent: AgentType
+    model: string | null
+    loading: boolean
+    error: string | null
+  } | null>(null)
   const reqIdRef = useRef(0)
 
   const loadSnapshot = useCallback(
@@ -156,15 +156,12 @@ export function DelegationAgentDefaultsPanel({
       if (!force) {
         const cached = readCache(agent, model)
         if (cached) {
-          setLoaded({ agent, snapshot: cached })
-          setError(null)
-          setLoading(false)
+          setLoaded({ agent, model, snapshot: cached })
+          setProbe({ agent, model, loading: false, error: null })
           return
         }
       }
-      setLoading(true)
-      setError(null)
-      setLoaded(null)
+      setProbe({ agent, model, loading: true, error: null })
       try {
         const fresh = await describeAgentOptions(
           agent,
@@ -173,12 +170,11 @@ export function DelegationAgentDefaultsPanel({
         )
         if (reqIdRef.current !== reqId) return
         writeCache(agent, model, fresh)
-        setLoaded({ agent, snapshot: fresh })
+        setLoaded({ agent, model, snapshot: fresh })
+        setProbe({ agent, model, loading: false, error: null })
       } catch (err: unknown) {
         if (reqIdRef.current !== reqId) return
-        setError(toErrorMessage(err))
-      } finally {
-        if (reqIdRef.current === reqId) setLoading(false)
+        setProbe({ agent, model, loading: false, error: toErrorMessage(err) })
       }
     },
     []
@@ -187,18 +183,48 @@ export function DelegationAgentDefaultsPanel({
   // The model currently selected for this agent (its saved override). The
   // probe applies it so option lists an agent derives per model — opencode's
   // `effort` — answer for THAT model instead of the agent's own default.
-  const probeModel = value[selectedAgent]?.config_values?.model ?? null
+  const probeModel = selectedAgent
+    ? (value[selectedAgent]?.config_values?.model ?? null)
+    : null
 
   useEffect(() => {
-    // Debounce so rapid tab clicks / model changes (each would fire a real
+    if (!selectedAgent) return
+    // Debounce so rapid agent picks / model changes (each would fire a real
     // probe — even with backend serialization, each one still spawns the
     // CLI) collapse into a single load. Cancelling on cleanup means the
     // *last* (agent, model) the user lands on wins, not the first.
     const handle = window.setTimeout(() => {
       void loadSnapshot(selectedAgent, probeModel, false)
-    }, TAB_SWITCH_DEBOUNCE_MS)
+    }, PROBE_DEBOUNCE_MS)
     return () => window.clearTimeout(handle)
   }, [selectedAgent, probeModel, loadSnapshot])
+
+  // Rows of the selected agent's latest snapshot, in its producer's
+  // vocabulary — whichever model that snapshot was probed for.
+  const agentLoaded = loaded && loaded.agent === selectedAgent ? loaded : null
+  const rows = useOptionRows(
+    agentLoaded?.agent ?? null,
+    agentLoaded?.snapshot ?? null
+  )
+  const forSelection = <T extends { agent: AgentType; model: string | null }>(
+    x: T | null
+  ): x is T => x !== null && x.agent === selectedAgent && x.model === probeModel
+  const probing = forSelection(probe) && probe.loading
+  const probeError = forSelection(probe) && !probe.loading ? probe.error : null
+  // Only a snapshot probed for EXACTLY the current (agent, model) is offered
+  // whole. For the whole debounce window after a pick the selection is
+  // already the new one while the snapshot is still the previous one's; a
+  // value picked off its other rows would land in the new selection.
+  const current =
+    probeError === null && !probing && forSelection(agentLoaded) ? rows : null
+  const modelRow = rows ? findModelRow(rows) : null
+  // The probe asked for the selected model and the agent did not switch to
+  // it, so the options shown are its OTHER model's. They stay editable — any
+  // of them may be left on Default — but the user is told, right under the
+  // model.
+  const modelNotSwitched =
+    current !== null &&
+    (agentLoaded?.snapshot.unapplied_config_ids?.includes("model") ?? false)
 
   const updateAgentDefaults = useCallback(
     (agent: AgentType, next: AgentDelegationDefaults | null) => {
@@ -219,296 +245,175 @@ export function DelegationAgentDefaultsPanel({
     [value, onChange]
   )
 
-  const current = value[selectedAgent] ?? null
-  const currentModeId = current?.mode_id ?? null
-  const currentConfigValues = current?.config_values ?? {}
+  const saved = selectedAgent ? value[selectedAgent] : undefined
+  const currentModeId = saved?.mode_id ?? null
+  const currentConfigValues = saved?.config_values ?? {}
 
-  const setMode = (modeId: string | null) => {
-    const next: AgentDelegationDefaults = {
-      mode_id: modeId ?? undefined,
-      config_values: { ...currentConfigValues },
+  const setRowValue = (row: OptionRow, next: string | null) => {
+    if (!selectedAgent) return
+    if (row.kind === "mode") {
+      updateAgentDefaults(selectedAgent, {
+        mode_id: next ?? undefined,
+        config_values: { ...currentConfigValues },
+      })
+      return
     }
-    updateAgentDefaults(selectedAgent, next)
-  }
-
-  const setConfigValue = (optionId: string, valueId: string | null) => {
     const nextConfig = { ...currentConfigValues }
-    if (valueId === null) {
-      delete nextConfig[optionId]
+    if (next === null) {
+      delete nextConfig[row.id]
     } else {
-      nextConfig[optionId] = valueId
+      nextConfig[row.id] = next
     }
-    const next: AgentDelegationDefaults = {
+    updateAgentDefaults(selectedAgent, {
       mode_id: currentModeId ?? undefined,
       config_values: nextConfig,
+    })
+  }
+
+  const renderRow = (row: OptionRow) => (
+    <OptionBlock key={row.id}>
+      <OverrideOptionRow
+        row={row}
+        value={
+          row.kind === "mode"
+            ? currentModeId
+            : (currentConfigValues[row.id] ?? null)
+        }
+        onChange={(next) => setRowValue(row, next)}
+        disabled={disabled}
+      />
+    </OptionBlock>
+  )
+
+  const retry = (
+    <Button
+      type="button"
+      size="xs"
+      variant="outline"
+      className="bg-background"
+      onClick={() => {
+        if (selectedAgent) void loadSnapshot(selectedAgent, probeModel, true)
+      }}
+    >
+      <RotateCw aria-hidden />
+      {t("retry")}
+    </Button>
+  )
+
+  // The agent's options, as rows of its card — or, while they cannot be
+  // offered, the model row (still the agent's list of models) and the line
+  // saying why the rest is not there.
+  const options = (): React.ReactNode => {
+    // Nothing until the agent list says which agent to start on.
+    if (selectedAgent === null) return null
+    if (probeError !== null || current === null) {
+      return (
+        <>
+          {modelRow ? renderRow(modelRow) : null}
+          <OptionBlock>
+            {probeError !== null ? (
+              <StatusLine
+                tone="error"
+                icon={<AlertCircle className="size-3.5" aria-hidden />}
+                action={retry}
+              >
+                {t("probeFailed", { detail: probeError })}
+              </StatusLine>
+            ) : (
+              <StatusLine
+                tone="muted"
+                icon={<Loader2 className="size-3.5 animate-spin" aria-hidden />}
+              >
+                {t("probing")}
+              </StatusLine>
+            )}
+          </OptionBlock>
+        </>
+      )
     }
-    updateAgentDefaults(selectedAgent, next)
+    if (current.length === 0) {
+      return (
+        <OptionBlock>
+          <StatusLine tone="muted">{t("noConfigAvailable")}</StatusLine>
+        </OptionBlock>
+      )
+    }
+    const notSwitched = modelNotSwitched ? (
+      <OptionBlock key="model-not-switched">
+        <StatusLine
+          tone="warning"
+          icon={<AlertTriangle className="size-3.5" aria-hidden />}
+          action={retry}
+        >
+          {t("modelNotSwitched")}
+        </StatusLine>
+      </OptionBlock>
+    ) : null
+    // The model row comes first (`buildOptionRows`); the warning about it
+    // goes right under it, above the options it is about.
+    const model = findModelRow(current)
+    return (
+      <>
+        {model ? null : notSwitched}
+        {current.flatMap((row) =>
+          row === model ? [renderRow(row), notSwitched] : [renderRow(row)]
+        )}
+      </>
+    )
   }
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground leading-5">
+      <p className="text-xs leading-5 text-muted-foreground">
         {t("agentDefaultsDescription")}
       </p>
 
-      <div
-        role="tablist"
-        aria-label={t("tabAgentDefaults")}
-        className="flex flex-wrap gap-1 rounded-2xl bg-muted p-1"
-      >
-        {agentTypes.map((agent) => (
-          <button
-            key={agent}
-            type="button"
-            role="tab"
-            aria-selected={selectedAgent === agent}
-            disabled={disabled}
-            onClick={() => setSelectedAgent(agent)}
-            className={
-              "rounded-xl px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 " +
-              (selectedAgent === agent
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground")
-            }
-          >
-            {getAgentLabel(agent)}
-          </button>
-        ))}
-      </div>
-
-      <div className="min-h-[7.5rem] rounded-lg border bg-card/50 p-3">
-        {loading && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-            {t("probing")}
-          </div>
-        )}
-
-        {error && !loading && (
-          <div className="flex flex-col gap-2">
-            <p className="text-xs text-destructive">
-              {t("probeFailed", { detail: error })}
-            </p>
-            <div>
+      {delegationEnabled === false ? (
+        <PanelNotice
+          tone="warning"
+          icon={<AlertTriangle className="size-3.5" aria-hidden />}
+          action={
+            onShowGeneral ? (
               <Button
-                size="sm"
+                size="xs"
                 variant="outline"
-                onClick={() =>
-                  void loadSnapshot(selectedAgent, probeModel, true)
-                }
+                className="bg-background"
+                onClick={onShowGeneral}
               >
-                {t("retry")}
+                {t("assistants.delegationOffAction", {
+                  tab: t("tabGeneral"),
+                })}
               </Button>
-            </div>
-          </div>
-        )}
+            ) : null
+          }
+        >
+          {t("agentDefaultsDelegationOff")}
+        </PanelNotice>
+      ) : null}
 
-        {!loading && !error && loaded && (
-          <SnapshotEditor
-            agentType={loaded.agent}
-            snapshot={loaded.snapshot}
-            overrideModeId={currentModeId}
-            overrideConfigValues={currentConfigValues}
-            onModeChange={setMode}
-            onConfigChange={setConfigValue}
-            disabled={disabled}
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-interface SnapshotEditorProps {
-  /** Localises the agent's own mode / option vocabulary; see
-   *  `lib/agent-label-vocabulary`. */
-  agentType: AgentType
-  snapshot: AgentOptionsSnapshot
-  overrideModeId: string | null
-  overrideConfigValues: Record<string, string>
-  onModeChange: (modeId: string | null) => void
-  onConfigChange: (optionId: string, valueId: string | null) => void
-  disabled?: boolean
-}
-
-function SnapshotEditor({
-  agentType,
-  snapshot,
-  overrideModeId,
-  overrideConfigValues,
-  onModeChange,
-  onConfigChange,
-  disabled,
-}: SnapshotEditorProps) {
-  const t = useTranslations("AcpAgentSettings.multiAgent")
-  // Localised once here rather than inside the rows: `ModeRow` derives the
-  // "agent default" caption from the same list, so translating at the row
-  // would leave that caption in the agent's language.
-  const vocabulary = useAgentVocabulary(agentType)
-  const hasModes =
-    snapshot.modes !== null &&
-    snapshot.modes !== undefined &&
-    snapshot.modes.available_modes.length > 0
-  const hasOptions = snapshot.config_options.length > 0
-
-  if (!hasModes && !hasOptions) {
-    return (
-      <p className="text-xs text-muted-foreground">{t("noConfigAvailable")}</p>
-    )
-  }
-
-  // Match the chat input box's behavior (`src/components/chat/message-input.tsx`):
-  // when the agent advertises both modes AND config options, hide the standalone
-  // mode row — some agents (e.g. Codex) expose mode selection as one of the
-  // config options too, and showing both produces a duplicate "Mode" entry.
-  const showStandaloneMode = hasModes && !hasOptions
-  return (
-    <div className="space-y-4">
-      {showStandaloneMode && snapshot.modes && (
-        <ModeRow
-          modes={vocabulary.modes(snapshot.modes.available_modes)}
-          agentDefaultModeId={snapshot.modes.current_mode_id}
-          overrideModeId={overrideModeId}
-          onChange={onModeChange}
-          disabled={disabled}
+      <SettingCard>
+        <SettingRow
+          icon={Bot}
+          title={t("assistants.agentLabel")}
+          description={t("agentDefaultsAgentHint")}
+          control={
+            <AgentSelect
+              value={selectedAgent}
+              onChange={setPicked}
+              agents={agents.filter(
+                (a) => a.enabled || a.agent_type === selectedAgent
+              )}
+              // Which agents already carry overrides, without opening each.
+              badge={(agent) => {
+                const count = overrideCount(value[agent.agent_type])
+                return count > 0 ? t("overrideCount", { count }) : null
+              }}
+              disabled={disabled}
+            />
+          }
         />
-      )}
-      {snapshot.config_options.map((option) => (
-        <ConfigOptionRow
-          key={option.id}
-          option={vocabulary.configOption(option)}
-          overrideValue={overrideConfigValues[option.id] ?? null}
-          onChange={(valueId) => onConfigChange(option.id, valueId)}
-          disabled={disabled}
-        />
-      ))}
-    </div>
-  )
-}
-
-interface ModeRowProps {
-  modes: Array<{ id: string; name: string; description?: string | null }>
-  agentDefaultModeId: string
-  overrideModeId: string | null
-  onChange: (modeId: string | null) => void
-  disabled?: boolean
-}
-
-function ModeRow({
-  modes,
-  agentDefaultModeId,
-  overrideModeId,
-  onChange,
-  disabled,
-}: ModeRowProps) {
-  const t = useTranslations("AcpAgentSettings.multiAgent")
-  const agentDefaultName =
-    modes.find((m) => m.id === agentDefaultModeId)?.name ?? agentDefaultModeId
-  // When no override exists, show the Default sentinel so the user can
-  // see "no override is set" at a glance; selecting any real mode below
-  // applies an override, selecting the sentinel clears it.
-  const selectValue = overrideModeId ?? DEFAULT_SENTINEL
-  return (
-    <div className="flex items-start justify-between gap-3">
-      <div className="space-y-0.5 min-w-0">
-        <label className="text-sm font-medium">{t("modeLabel")}</label>
-        <p className="text-xs text-muted-foreground">
-          {t("agentDefaultHint", { value: agentDefaultName })}
-        </p>
-      </div>
-      <Select
-        value={selectValue}
-        onValueChange={(v) => onChange(v === DEFAULT_SENTINEL ? null : v)}
-        disabled={disabled}
-      >
-        <SelectTrigger size="sm" className="w-44">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={DEFAULT_SENTINEL}>
-            {t("defaultOptionLabel", { value: agentDefaultName })}
-          </SelectItem>
-          {modes.map((mode) => (
-            <SelectItem key={mode.id} value={mode.id}>
-              {mode.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  )
-}
-
-interface ConfigOptionRowProps {
-  option: SessionConfigOptionInfo
-  overrideValue: string | null
-  onChange: (valueId: string | null) => void
-  disabled?: boolean
-}
-
-function ConfigOptionRow({
-  option,
-  overrideValue,
-  onChange,
-  disabled,
-}: ConfigOptionRowProps) {
-  const t = useTranslations("AcpAgentSettings.multiAgent")
-  if (option.kind.type !== "select") return null
-
-  const allOptions =
-    option.kind.groups.length > 0
-      ? option.kind.groups.flatMap((g) => g.options)
-      : option.kind.options
-  const agentDefault = option.kind.current_value
-  const agentDefaultLabel =
-    allOptions.find((o) => o.value === agentDefault)?.name ?? agentDefault
-  // When no override exists, the trigger shows the Default sentinel item
-  // so the user can tell "I'm inheriting" apart from "I picked the
-  // agent's current default explicitly" — the latter would stick to that
-  // literal value even if the agent later changes its own default.
-  const selectValue = overrideValue ?? DEFAULT_SENTINEL
-
-  return (
-    <div className="flex items-start justify-between gap-3">
-      <div className="space-y-0.5 min-w-0">
-        <label className="text-sm font-medium">{option.name}</label>
-        <p className="text-xs text-muted-foreground">
-          {t("agentDefaultHint", { value: agentDefaultLabel })}
-        </p>
-      </div>
-      <Select
-        value={selectValue}
-        onValueChange={(v) => onChange(v === DEFAULT_SENTINEL ? null : v)}
-        disabled={disabled}
-      >
-        <SelectTrigger size="sm" className="w-56">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={DEFAULT_SENTINEL}>
-            {t("defaultOptionLabel", { value: agentDefaultLabel })}
-          </SelectItem>
-          {option.kind.groups.length > 0
-            ? option.kind.groups.map((group) => (
-                <SelectGroup key={group.group}>
-                  <SelectLabel>{group.name}</SelectLabel>
-                  {group.options.map((item) => (
-                    <SelectItem
-                      key={`${group.group}-${item.value}`}
-                      value={item.value}
-                    >
-                      {item.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))
-            : option.kind.options.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.name}
-                </SelectItem>
-              ))}
-        </SelectContent>
-      </Select>
+        {options()}
+      </SettingCard>
     </div>
   )
 }

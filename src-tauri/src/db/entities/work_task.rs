@@ -116,6 +116,17 @@ pub struct Model {
     /// exactly once — and every explicit claim clears it too, because a task
     /// that already started has no start left to plan.
     pub scheduled_at: Option<DateTimeUtc>,
+    /// The user put this settled task aside ("handle later"): the board files
+    /// it under Done instead of "needs you", and it stops counting toward the
+    /// attention badge, until they pick it back up. NULL = not put aside.
+    ///
+    /// Only ever set on a `review` / `failed` row, and NOT a status of its own:
+    /// the task stays exactly as resumable as it was (a follow-up or a retry
+    /// starts a new run from here), so its review or failure remains the truth
+    /// about it. Every transition out of those two statuses clears it, so a
+    /// task that comes back from another run always lands in "needs you"
+    /// again — and the unattended merge refuses a row carrying it.
+    pub deferred_at: Option<DateTimeUtc>,
     /// Forge provenance: 'forge_issue' | 'forge_pr'; NULL = not forge-sourced.
     /// Set once at creation by the forge trigger command, never by the public
     /// create/update DTO paths, and never mutated afterwards.

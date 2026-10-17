@@ -135,7 +135,7 @@ function DelegationViewer({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { agentType, task, childConversationId, childConnectionId } =
+  const { identity, task, childConversationId, childConnectionId } =
     useDelegationCardModel(source)
 
   if (childConversationId == null) return null
@@ -146,7 +146,7 @@ function DelegationViewer({
       onOpenChange={onOpenChange}
       childConversationId={childConversationId}
       childConnectionId={childConnectionId}
-      agentType={agentType}
+      identity={identity}
       kickoffTask={task}
     />
   )

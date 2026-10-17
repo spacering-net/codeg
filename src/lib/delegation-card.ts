@@ -34,8 +34,35 @@ export type DelegationCardStatus =
 
 export type ParsedInput = {
   agentType: AgentType | null
+  /** The assistant the call names (`assistant_id`). When set, the call's
+   *  `agent_type` is not evidence of anything: the backend ignores it. */
+  assistantId: number | null
   task: string | null
   workingDir: string | null
+}
+
+/** Largest assistant id: the backend keeps them in a 32-bit integer. */
+const MAX_ASSISTANT_ID = 2_147_483_647
+
+/**
+ * Narrow an untrusted wire value to an assistant id, or `null`: a positive
+ * integer, or a string of digits (some hosts stringify numeric arguments).
+ */
+export function coerceAssistantId(value: unknown): number | null {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[1-9]\d{0,9}$/.test(value.trim())
+        ? Number(value.trim())
+        : null
+  return n !== null && Number.isInteger(n) && n >= 1 && n <= MAX_ASSISTANT_ID
+    ? n
+    : null
+}
+
+/** A non-empty assistant name snapshot off the wire, or `null`. */
+function coerceAssistantName(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null
 }
 
 // Derived from the canonical `ALL_AGENT_TYPES` so a newly added agent is
@@ -82,6 +109,10 @@ export type ParsedMeta = {
    * `{task_id, reason}`.
    */
   agentType: AgentType | null
+  /** The assistant the task ran as, and its name when it started — on every
+   *  broker write and on the historical injection alike. */
+  assistantId: number | null
+  assistantName: string | null
 }
 
 /**
@@ -134,11 +165,14 @@ export function parseDelegationMeta(
       typeof task_preview === "string" && task_preview ? task_preview : null,
     taskId: typeof task_id === "string" && task_id ? task_id : null,
     agentType: coerceAgentType(obj["agent_type"]),
+    assistantId: coerceAssistantId(obj["assistant_id"]),
+    assistantName: coerceAssistantName(obj["assistant_name"]),
   }
 }
 
 const EMPTY_PARSED_INPUT: ParsedInput = {
   agentType: null,
+  assistantId: null,
   task: null,
   workingDir: null,
 }
@@ -182,7 +216,8 @@ function findDelegationArgs(
   if (
     typeof obj.task === "string" ||
     typeof obj.agent_type === "string" ||
-    typeof obj.working_dir === "string"
+    typeof obj.working_dir === "string" ||
+    coerceAssistantId(obj.assistant_id) !== null
   ) {
     return obj
   }
@@ -262,6 +297,7 @@ export function parseInput(raw: string | null | undefined): ParsedInput {
   }
   return {
     agentType: coerceAgentType(obj.agent_type),
+    assistantId: coerceAssistantId(obj.assistant_id),
     task: typeof obj.task === "string" ? obj.task : null,
     workingDir: typeof obj.working_dir === "string" ? obj.working_dir : null,
   }
@@ -283,20 +319,27 @@ export function parseInput(raw: string | null | undefined): ParsedInput {
  * from prematurely flipping the status badge to "ok".
  */
 export type ParsedToolOutput =
-  | {
+  | ({
       kind: "ack"
       childConversationId: number | null
       agentType?: AgentType | null
       errorCode?: string | null
-    }
-  | {
+    } & ReportedAssistant)
+  | ({
       kind: "outcome"
       text: string
       isError: boolean
       childConversationId: number | null
       agentType?: AgentType | null
       errorCode?: string | null
-    }
+    } & ReportedAssistant)
+
+/** The assistant a broker report names (`DelegationTaskReport.assistant_id` /
+ *  `assistant_name`); absent on the text fallbacks. */
+type ReportedAssistant = {
+  assistantId?: number | null
+  assistantName?: string | null
+}
 
 /**
  * `DelegationTaskReport.error_code` for a refused `resume_delegation`
@@ -446,6 +489,11 @@ function interpretReport(
   // `{task_id, reason}` — the report is the ONLY place a reloaded resume card
   // can learn which agent it revived.
   const agentType = coerceAgentType(obj.agent_type)
+  // Stamped on every report of a task run as an assistant.
+  const assistant: ReportedAssistant = {
+    assistantId: coerceAssistantId(obj.assistant_id),
+    assistantName: coerceAssistantName(obj.assistant_name),
+  }
   // Carried on EVERY variant, not just the failed ones: a refused resume pairs
   // `not_resumable` with the task's real status, so the code is the only thing
   // that distinguishes it from the report of a genuine resume. See
@@ -457,7 +505,13 @@ function interpretReport(
       case "running":
       case "unknown":
         // No terminal result to show on the card — it's an ack.
-        return { kind: "ack", childConversationId, agentType, errorCode }
+        return {
+          kind: "ack",
+          childConversationId,
+          agentType,
+          errorCode,
+          ...assistant,
+        }
       case "completed":
         return {
           kind: "outcome",
@@ -466,6 +520,7 @@ function interpretReport(
           childConversationId,
           agentType,
           errorCode,
+          ...assistant,
         }
       case "failed":
       case "canceled": {
@@ -478,10 +533,17 @@ function interpretReport(
           childConversationId,
           agentType,
           errorCode,
+          ...assistant,
         }
       }
       default:
-        return { kind: "ack", childConversationId, agentType, errorCode }
+        return {
+          kind: "ack",
+          childConversationId,
+          agentType,
+          errorCode,
+          ...assistant,
+        }
     }
   }
   // Legacy synchronous outcome shape. These branches must set `errorCode` too
@@ -499,6 +561,7 @@ function interpretReport(
       childConversationId,
       agentType,
       errorCode: null,
+      ...assistant,
     }
   }
   if (kind === "err") {
@@ -512,6 +575,7 @@ function interpretReport(
       errorCode: code || null,
       childConversationId,
       agentType,
+      ...assistant,
     }
   }
   return null

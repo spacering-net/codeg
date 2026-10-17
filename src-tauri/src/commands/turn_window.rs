@@ -14,10 +14,17 @@
 //! stamping) runs on the FULL turn list first; slicing is strictly a
 //! serialization concern, so a windowed response is byte-identical to the
 //! corresponding region of the full response.
+//!
+//! The message navigator needs one thing a window can't give it: an index of
+//! EVERY user message, including the ones above the loaded window. Its
+//! outline ([`nav_outline_turns`]) is a projection of that unloaded history,
+//! cut down to what the navigator reads.
+
+use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
-use crate::models::{MessageTurn, TurnRole};
+use crate::models::{ContentBlock, MessageTurn, TurnRole};
 
 /// Server-side clamp for `tailTurns` / page `limit`.
 pub const MAX_WINDOW_TURNS: usize = 500;
@@ -52,6 +59,9 @@ pub struct WindowMeta {
     pub offset: usize,
     pub total: usize,
     pub assistant_before: usize,
+    /// User turns in `turns[0..offset)` — the messages above the window the
+    /// navigator counts without having loaded them.
+    pub user_before: usize,
     /// Fingerprint of `turns[0..offset)` as a fixed-width 16-hex string.
     /// Serialized as a string because a raw u64 JSON number is rounded by
     /// JS `response.json()` past 2^53-1, which would systematically break
@@ -152,9 +162,113 @@ pub fn window_meta(turns: &[MessageTurn], offset: usize) -> WindowMeta {
             .iter()
             .filter(|t| matches!(t.role, TurnRole::Assistant))
             .count(),
+        user_before: prefix
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .count(),
         prefix_hash: prefix_fingerprint(prefix),
         uncovered_prefix_max_ts: prefix.iter().map(|t| t.timestamp).max(),
     }
+}
+
+/// Reduce `turns` to what the frontend message navigator reads — the outline
+/// of the history above the loaded window.
+///
+/// The navigator indexes a conversation with `extractSessionFilesGrouped`
+/// (`src/lib/session-files.ts`): one entry per user turn, labelled from the
+/// turn's first non-empty text block, with per-file line stats and diffs from
+/// the edit/write/apply_patch tool calls of the assistant turns in its round.
+/// The projection keeps exactly what that function reads and drops the rest —
+/// tool outputs, prose, thinking and images, i.e. nearly all of a transcript's
+/// weight — so the outline indexes the same as the full turns would:
+///
+/// - every turn survives with its id, role and timestamp, so `outline[i]` is
+///   global turn `i` and any prefix of the outline fingerprints the same as
+///   the transcript it came from; usage, duration, model, completion time and
+///   agent message id are dropped;
+/// - a user turn keeps its first text block whose text is non-empty, the one
+///   the label is read from;
+/// - an assistant turn keeps every tool call — which of them edit files is
+///   decided by the tool-name normalization, and that lives in the frontend —
+///   and of the tool results only the one `findToolResultOutput` picks for a
+///   call (its first result that is not an error and has a non-empty output),
+///   and only when that output has a line starting with `@@ `: the one case
+///   `buildDiffChunk` uses it (a diff the agent produced, with line numbers);
+/// - a system turn keeps nothing.
+///
+/// Reading more of a turn in `extractSessionFilesGrouped` means keeping more
+/// of it here. `tests/fixtures/nav_outline_vector.json` holds both sides to
+/// that: the Rust test checks this produces the vector's outline, the TS test
+/// that the outline indexes exactly like the full turns.
+pub fn nav_outline_turns(turns: &[MessageTurn]) -> Vec<MessageTurn> {
+    turns.iter().map(nav_outline_turn).collect()
+}
+
+fn nav_outline_turn(turn: &MessageTurn) -> MessageTurn {
+    let blocks = match turn.role {
+        TurnRole::User => turn
+            .blocks
+            .iter()
+            .find(|block| matches!(block, ContentBlock::Text { text } if !text.is_empty()))
+            .cloned()
+            .into_iter()
+            .collect(),
+        TurnRole::Assistant => nav_outline_assistant_blocks(&turn.blocks),
+        TurnRole::System => Vec::new(),
+    };
+    MessageTurn {
+        id: turn.id.clone(),
+        role: turn.role.clone(),
+        blocks,
+        timestamp: turn.timestamp,
+        usage: None,
+        duration_ms: None,
+        model: None,
+        completed_at: None,
+        agent_message_id: None,
+    }
+}
+
+fn nav_outline_assistant_blocks(blocks: &[ContentBlock]) -> Vec<ContentBlock> {
+    // `findToolResultOutput` scans the turn's blocks in order and returns the
+    // first result for the call id that is not an error and has an output;
+    // later results for that id are never read, whatever they hold.
+    // `answered` records every call whose result has been read, kept or not;
+    // the guard inserts before it checks the output, so only a call's first
+    // readable result can be kept.
+    let mut answered: HashSet<&str> = HashSet::new();
+    let mut kept = Vec::new();
+    for block in blocks {
+        match block {
+            ContentBlock::ToolUse { .. } => kept.push(block.clone()),
+            ContentBlock::ToolResult {
+                tool_use_id: Some(id),
+                output_preview: Some(output),
+                is_error: false,
+                ..
+            } if !output.is_empty()
+                && answered.insert(id.as_str())
+                && has_hunk_header_line(output) =>
+            {
+                kept.push(ContentBlock::ToolResult {
+                    tool_use_id: Some(id.clone()),
+                    output_preview: Some(output.clone()),
+                    is_error: false,
+                    agent_stats: None,
+                    images: Vec::new(),
+                });
+            }
+            _ => {}
+        }
+    }
+    kept
+}
+
+/// `/^@@ /m.test(text)` — `^` in a multiline JS regex matches at the start of
+/// the text and right after each of its four line terminators.
+fn has_hunk_header_line(text: &str) -> bool {
+    text.split(['\n', '\r', '\u{2028}', '\u{2029}'])
+        .any(|line| line.starts_with("@@ "))
 }
 
 #[cfg(test)]
@@ -243,6 +357,7 @@ mod tests {
         assert_eq!(meta.offset, 3);
         assert_eq!(meta.total, 5);
         assert_eq!(meta.assistant_before, 2);
+        assert_eq!(meta.user_before, 1);
         assert_eq!(
             meta.uncovered_prefix_max_ts,
             Some(turns[2].timestamp)
@@ -250,7 +365,11 @@ mod tests {
 
         let full = window_meta(&turns, 0);
         assert_eq!(full.assistant_before, 0);
+        assert_eq!(full.user_before, 0);
         assert_eq!(full.uncovered_prefix_max_ts, None);
+
+        let past_end = window_meta(&turns, 99);
+        assert_eq!(past_end.user_before, 2, "clamped to the whole list");
         assert_eq!(full.prefix_hash, format!("{FNV_OFFSET:016x}"));
     }
 
@@ -286,5 +405,57 @@ mod tests {
         ];
         assert_eq!(prefix_fingerprint(&turns[..1]), "7060d8542023feb2");
         assert_eq!(prefix_fingerprint(&turns), "f171a62320fc10d3");
+    }
+
+    /// The vector `src/lib/session-files.test.ts` also reads: there, the
+    /// outline is checked to index exactly like the full turns; here, that
+    /// the projection produces that outline.
+    const NAV_OUTLINE_VECTOR: &str = include_str!("../../tests/fixtures/nav_outline_vector.json");
+
+    fn nav_outline_vector() -> (Vec<MessageTurn>, serde_json::Value) {
+        let vector: serde_json::Value =
+            serde_json::from_str(NAV_OUTLINE_VECTOR).expect("vector parses");
+        let full: Vec<MessageTurn> =
+            serde_json::from_value(vector["full"].clone()).expect("full turns deserialize");
+        (full, vector["outline"].clone())
+    }
+
+    #[test]
+    fn nav_outline_matches_the_shared_vector() {
+        let (full, expected) = nav_outline_vector();
+        let outline = serde_json::to_value(nav_outline_turns(&full)).expect("outline serializes");
+        assert_eq!(outline, expected);
+    }
+
+    #[test]
+    fn nav_outline_keeps_every_turn_and_the_fingerprint() {
+        let (full, _) = nav_outline_vector();
+        let outline = nav_outline_turns(&full);
+        assert_eq!(outline.len(), full.len());
+        for (kept, original) in outline.iter().zip(&full) {
+            assert_eq!(kept.id, original.id);
+            assert_eq!(kept.timestamp, original.timestamp);
+        }
+        for end in 0..=full.len() {
+            assert_eq!(
+                prefix_fingerprint(&outline[..end]),
+                prefix_fingerprint(&full[..end]),
+                "an outline prefix must fingerprint like the transcript it came from"
+            );
+        }
+    }
+
+    #[test]
+    fn hunk_header_lines_follow_js_multiline_anchors() {
+        assert!(has_hunk_header_line("@@ -1 +1 @@"));
+        assert!(has_hunk_header_line("updated\n@@ -1 +1 @@"));
+        assert!(has_hunk_header_line("updated\r\n@@ -1 +1 @@"));
+        assert!(has_hunk_header_line("updated\r@@ -1 +1 @@"));
+        assert!(has_hunk_header_line("updated\u{2028}@@ -1 +1 @@"));
+        assert!(has_hunk_header_line("updated\u{2029}@@ -1 +1 @@"));
+        assert!(!has_hunk_header_line(" @@ -1 +1 @@"));
+        assert!(!has_hunk_header_line("@@-1 +1 @@"));
+        assert!(!has_hunk_header_line("updated @@ -1 +1 @@"));
+        assert!(!has_hunk_header_line(""));
     }
 }

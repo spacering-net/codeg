@@ -175,7 +175,10 @@ export function classifyToolKind(toolName: string): ToolKindLabel {
     name === "read" ||
     name === "read file" ||
     name === "read_file" ||
-    name === "view"
+    name === "view" ||
+    // codex's image viewer, by its raw rollout name: the live stream already
+    // counts it as a read (codex-acp sends `kind: "read"`).
+    name === "view_image"
   ) {
     return "read"
   }

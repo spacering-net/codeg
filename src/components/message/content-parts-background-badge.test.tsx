@@ -99,7 +99,8 @@ describe("command card — AIR backgrounded marker", () => {
     //
     // Reached when the settle lands inside the turn, or after a detail reload;
     // an out-of-turn settle is routed to `outOfTurnToolCalls` and never revises
-    // this part at all (pre-existing reducer behaviour, not the marker's).
+    // this part at all (pre-existing reducer behaviour, not the marker's),
+    // unless the user stopped the turn (`cancelledTurn`).
     const { container } = renderPart({
       ...codexBackgroundedExec(AIR_BACKGROUNDED),
       state: "output-available",

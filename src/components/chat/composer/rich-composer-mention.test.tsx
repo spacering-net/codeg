@@ -3,6 +3,11 @@ import type { JSONContent } from "@tiptap/core"
 import { createRef } from "react"
 import { describe, expect, it, vi } from "vitest"
 
+import {
+  resetMentionPanelPrefs,
+  saveMentionPanelPrefs,
+} from "@/lib/mention-panel-prefs"
+
 import { RichComposer, type RichComposerHandle } from "./rich-composer"
 import type { ReferenceSearch } from "./suggestion/types"
 
@@ -106,6 +111,48 @@ describe("RichComposer @ mention integration", () => {
       expect(dom.hasAttribute("aria-autocomplete")).toBe(false)
       expect(dom.hasAttribute("aria-activedescendant")).toBe(false)
     })
+  })
+
+  // Settings → General decides which tabs the panel shows and in what order;
+  // every composer reads it, and an open panel follows a change made in
+  // another window.
+  it("lays the tabs out from the saved preference, live", async () => {
+    saveMentionPanelPrefs({
+      tabs: [
+        { kind: "file", visible: true },
+        { kind: "commit", visible: true },
+        { kind: "agent", visible: false },
+        { kind: "assistant", visible: false },
+        { kind: "session", visible: true },
+      ],
+    })
+    try {
+      const { editor } = await mount()
+      act(() => {
+        editor.commands.insertContent("@app")
+      })
+      await screen.findByText("app.ts", {}, { timeout: 5000 })
+      const tabNames = () =>
+        screen
+          .getAllByRole("tab")
+          .map((tab) => tab.textContent?.replace(/\d+$/, ""))
+      expect(tabNames()).toEqual(["Files", "Commits", "Sessions"])
+
+      act(() => {
+        saveMentionPanelPrefs({
+          tabs: [
+            { kind: "agent", visible: true },
+            { kind: "assistant", visible: false },
+            { kind: "file", visible: true },
+            { kind: "session", visible: false },
+            { kind: "commit", visible: false },
+          ],
+        })
+      })
+      await waitFor(() => expect(tabNames()).toEqual(["Agents", "Files"]))
+    } finally {
+      act(() => resetMentionPanelPrefs())
+    }
   })
 
   it("does not submit on Enter while the panel is open", async () => {

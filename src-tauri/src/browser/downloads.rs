@@ -95,29 +95,42 @@ impl BrowserDownloads {
         }
     }
 
-    /// Finish the oldest in-flight download of `url` (the only identity the
-    /// completion callback carries) and return the updated record.
+    /// Finish an in-flight download of `url` and return the updated record:
+    /// the one written to `path` when the engine names the file (Windows
+    /// reports where it landed, Linux the destination it was given), else the
+    /// oldest one still running. The address is all macOS's completion
+    /// carries, and two transfers of one address can end in either order.
     fn finish(&self, url: &str, success: bool, path: Option<PathBuf>) -> Option<BrowserDownload> {
         let mut entries = self.lock();
-        let entry = entries
-            .iter_mut()
-            .find(|d| d.url == url && d.state == DownloadState::Started)?;
+        let running = |d: &BrowserDownload| d.url == url && d.state == DownloadState::Started;
+        let path = path.filter(|path| !path.as_os_str().is_empty());
+        let index = path
+            .as_deref()
+            .and_then(|path| {
+                entries
+                    .iter()
+                    .position(|d| running(d) && Path::new(&d.path) == path)
+            })
+            .or_else(|| entries.iter().position(running))?;
+        let entry = &mut entries[index];
         entry.state = if success {
             DownloadState::Completed
         } else {
             DownloadState::Failed
         };
-        // Windows / Linux report where the file actually landed; macOS does
-        // not, and keeps the path chosen when the download was requested.
+        // What this transfer was holding, whatever the record says next.
+        let reserved = PathBuf::from(&entry.path);
+        // A file that landed somewhere else than it was told is followed
+        // there; macOS reports no path and keeps the one chosen at request.
         if let Some(path) = path {
-            if success && !path.as_os_str().is_empty() {
+            if success {
                 entry.file_name = file_name_of(&path);
                 entry.path = path.to_string_lossy().to_string();
             }
         }
         let done = entry.clone();
         drop(entries);
-        self.reserved().remove(Path::new(&done.path));
+        self.reserved().remove(&reserved);
         Some(done)
     }
 
@@ -309,6 +322,23 @@ pub fn requested(app: &AppHandle, tab_id: &str, url: &str, destination: &mut Pat
     true
 }
 
+/// One source binding per native view. The context resolves the source at
+/// download start, then retains these callbacks only for that transfer.
+#[cfg(target_os = "linux")]
+pub fn linux_handlers(app: &AppHandle, tab_id: &str) -> super::shim::linux::DownloadHandlers {
+    let started_app = app.clone();
+    let tab_id = tab_id.to_string();
+    let finished_app = app.clone();
+    super::shim::linux::DownloadHandlers {
+        started: std::sync::Arc::new(move |url, path| {
+            requested(&started_app, &tab_id, url, path)
+        }),
+        finished: std::sync::Arc::new(move |url, destination, success| {
+            finished(&finished_app, url, Some(destination.to_path_buf()), success)
+        }),
+    }
+}
+
 /// The engine finished (or gave up on) a download.
 pub fn finished(app: &AppHandle, url: &str, path: Option<PathBuf>, success: bool) {
     let Some(downloads) = app.try_state::<BrowserDownloads>() else {
@@ -492,6 +522,71 @@ mod tests {
         assert_eq!(downloads.list().len(), HISTORY_LIMIT);
         downloads.clear();
         assert!(downloads.list().is_empty());
+    }
+
+    /// Two transfers of one address end in either order. Where the engine
+    /// says which file it was writing (Windows reports the path, Linux knows
+    /// the destination it was given), that picks the record — and the
+    /// reservation released is that transfer's own. Only an address alone
+    /// (macOS) falls back to the oldest one still running.
+    #[test]
+    fn a_reported_path_finishes_its_own_download() {
+        const URL: &str = "https://example.com/report.pdf";
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = BrowserDownloads::default();
+        let first = downloads.reserve(dir.path(), "report.pdf");
+        let second = downloads.reserve(dir.path(), "report.pdf");
+        for (id, path) in [("dl-1", &first), ("dl-2", &second)] {
+            downloads.push(BrowserDownload {
+                id: id.into(),
+                tab_id: "t1".into(),
+                url: URL.into(),
+                file_name: file_name_of(path),
+                path: path.to_string_lossy().to_string(),
+                state: DownloadState::Started,
+            });
+        }
+
+        // The second one fails while the first is still running.
+        let done = downloads.finish(URL, false, Some(second.clone())).unwrap();
+        assert_eq!(done.id, "dl-2");
+        assert_eq!(done.state, DownloadState::Failed);
+        let first_record = downloads
+            .list()
+            .into_iter()
+            .find(|d| d.id == "dl-1")
+            .unwrap();
+        assert_eq!(first_record.state, DownloadState::Started);
+        // `report.pdf` is still being written; only `report (1).pdf` is free.
+        assert_eq!(downloads.reserve(dir.path(), "report.pdf"), second);
+
+        let done = downloads.finish(URL, true, Some(first.clone())).unwrap();
+        assert_eq!(done.id, "dl-1");
+        assert_eq!(done.state, DownloadState::Completed);
+    }
+
+    /// A file the engine wrote somewhere else than it was told: the record
+    /// follows it, and the name it had reserved is free again rather than
+    /// held for the rest of the session.
+    #[test]
+    fn a_file_that_landed_elsewhere_releases_its_reservation() {
+        const URL: &str = "https://example.com/report.pdf";
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = BrowserDownloads::default();
+        let reserved = downloads.reserve(dir.path(), "report.pdf");
+        downloads.push(BrowserDownload {
+            id: "dl-1".into(),
+            tab_id: "t1".into(),
+            url: URL.into(),
+            file_name: file_name_of(&reserved),
+            path: reserved.to_string_lossy().to_string(),
+            state: DownloadState::Started,
+        });
+        let landed = dir.path().join("report-final.pdf");
+        let done = downloads.finish(URL, true, Some(landed.clone())).unwrap();
+        assert_eq!(done.path, landed.to_string_lossy());
+        assert_eq!(done.file_name, "report-final.pdf");
+        assert_eq!(downloads.reserve(dir.path(), "report.pdf"), reserved);
     }
 
     #[test]

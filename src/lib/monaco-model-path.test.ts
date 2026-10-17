@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { URI } from "monaco-editor/esm/vs/base/common/uri.js"
+import { URI } from "monaco-editor/base/common/uri.js"
 import {
   buildMonacoModelPath,
   collectLiveModelPaths,

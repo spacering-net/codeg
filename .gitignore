@@ -21,6 +21,10 @@ next-env.d.ts
 # Monaco editor local files (copied from node_modules)
 public/vs
 
+# PDF.js runtime files: worker, CMaps, standard fonts, wasm decoders, ICC
+# profiles (copied from node_modules by postinstall; see src/lib/pdfjs.ts)
+public/pdfjs
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
