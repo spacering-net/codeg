@@ -91,10 +91,10 @@ function isRestorableTab(tab: unknown): tab is StoredTerminalTab {
   )
 }
 
+/** Any safe integer: folder commands have positive ids, global ones (see
+ *  `global-commands`) negative. */
 function storedCommandId(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && (value as number) >= 0
-    ? (value as number)
-    : undefined
+  return Number.isSafeInteger(value) ? (value as number) : undefined
 }
 
 /**

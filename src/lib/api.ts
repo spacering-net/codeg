@@ -3390,6 +3390,24 @@ export async function openInCode(path: string): Promise<void> {
 }
 
 /**
+ * Run a shell command detached on THIS desktop machine, even from a
+ * remote-desktop window — hence the shell transport. `folderPath` (the folder's
+ * path on its own host) and `remoteHost` reach the command as
+ * `$CODEG_FOLDER_PATH` / `$CODEG_REMOTE_HOST`. Desktop only.
+ */
+export async function runLocalCommand(
+  command: string,
+  folderPath: string,
+  remoteHost: string | null
+): Promise<void> {
+  return getShellTransport().call("run_local_command", {
+    command,
+    folderPath,
+    remoteHost,
+  })
+}
+
+/**
  * Open a freshly created git worktree directory as a folder, recording the root
  * folder it descends from (`sourceFolderId` is the folder the worktree was
  * created from; the backend flattens to the root). Lets the worktree folder be

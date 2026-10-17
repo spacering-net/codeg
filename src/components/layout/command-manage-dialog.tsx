@@ -9,7 +9,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react"
-import { GripVertical, Loader2, Plus, Save, Trash2 } from "lucide-react"
+import { GripVertical, Globe, Loader2, Plus, Save, Trash2 } from "lucide-react"
 import { Reorder, useDragControls } from "motion/react"
 import { useTranslations } from "next-intl"
 import {
@@ -20,6 +20,14 @@ import {
   updateFolderCommand,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  createGlobalCommand,
+  deleteGlobalCommand,
+  isGlobalCommandId,
+  listGlobalCommands,
+  reorderGlobalCommands,
+  updateGlobalCommand,
+} from "@/lib/global-commands"
 import type { FolderCommand } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import {
@@ -45,6 +53,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
 const LEFT_MIN_WIDTH = 260
@@ -61,6 +70,8 @@ interface Draft {
   id: number | null
   name: string
   command: string
+  /** Shown in every folder (stored on this client) rather than this one. */
+  global: boolean
 }
 
 interface CommandReorderItemProps {
@@ -78,6 +89,7 @@ const EMPTY_DRAFT: Draft = {
   id: null,
   name: "",
   command: "",
+  global: false,
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -87,6 +99,15 @@ function clamp(value: number, min: number, max: number): number {
 function toPercent(pixels: number, totalPixels: number): number {
   if (totalPixels <= 0) return 0
   return (pixels / totalPixels) * 100
+}
+
+/** Folder commands first, then global ones, each group keeping its order —
+ *  the order the launcher lists them in. */
+function groupByScope(commands: FolderCommand[]): FolderCommand[] {
+  return [
+    ...commands.filter((command) => !isGlobalCommandId(command.id)),
+    ...commands.filter((command) => isGlobalCommandId(command.id)),
+  ]
 }
 
 function CommandReorderItem({
@@ -177,7 +198,10 @@ export function CommandManageDialog({
     setLoading(true)
     setLoadError(null)
     try {
-      const list = await listFolderCommands(folderId)
+      const list = [
+        ...(await listFolderCommands(folderId)),
+        ...listGlobalCommands(),
+      ]
       if (seq !== loadSeqRef.current) return
       setCommands(list)
       setSelectedId((prev) => {
@@ -251,6 +275,7 @@ export function CommandManageDialog({
       id: selected.id,
       name: selected.name,
       command: selected.command,
+      global: isGlobalCommandId(selected.id),
     })
   }, [selected])
 
@@ -295,7 +320,11 @@ export function CommandManageDialog({
       setReordering(true)
       setFormError(null)
       try {
-        await reorderFolderCommands(folderId, ids)
+        reorderGlobalCommands(ids.filter(isGlobalCommandId))
+        const folderIds = ids.filter((id) => !isGlobalCommandId(id))
+        if (folderIds.length > 0) {
+          await reorderFolderCommands(folderId, folderIds)
+        }
         onChanged()
       } catch (err) {
         setFormError(`${t("orderFailed")}: ${toErrorMessage(err)}`)
@@ -310,7 +339,9 @@ export function CommandManageDialog({
   const handleReorder = useCallback(
     (next: FolderCommand[]) => {
       if (searchActive) return
-      const reordered = next.map((command, index) => ({
+      // The two kinds live in different stores and always list folder-first,
+      // so a drag only reorders within its own group.
+      const reordered = groupByScope(next).map((command, index) => ({
         ...command,
         sort_order: index,
       }))
@@ -323,33 +354,57 @@ export function CommandManageDialog({
   const handleSave = useCallback(async () => {
     setSaving(true)
     setFormError(null)
+    const previousId = draft.id
+    const scopeChanged =
+      previousId !== null && isGlobalCommandId(previousId) !== draft.global
     try {
       const name = draft.name.trim()
       const command = draft.command.trim()
-      const saved =
-        draft.id === null
-          ? await createFolderCommand(folderId, name, command)
-          : await updateFolderCommand(draft.id, name, command)
+      let saved: FolderCommand
+      if (previousId !== null && !scopeChanged) {
+        saved = isGlobalCommandId(previousId)
+          ? updateGlobalCommand(previousId, name, command)
+          : await updateFolderCommand(previousId, name, command)
+      } else {
+        // New, or moving between this folder and every folder: create it in
+        // its new home first, so a failure there loses nothing.
+        saved = draft.global
+          ? createGlobalCommand(name, command)
+          : await createFolderCommand(folderId, name, command)
+        if (previousId !== null) {
+          if (isGlobalCommandId(previousId)) deleteGlobalCommand(previousId)
+          else await deleteFolderCommand(previousId)
+        }
+      }
       setCommands((prev) => {
         const exists = prev.some((item) => item.id === saved.id)
         if (exists) {
           return prev.map((item) => (item.id === saved.id ? saved : item))
         }
-        return [...prev, saved]
+        return groupByScope([
+          ...prev.filter((item) => item.id !== previousId),
+          saved,
+        ])
       })
       setSelectedId(saved.id)
       setDraft({
         id: saved.id,
         name: saved.name,
         command: saved.command,
+        global: isGlobalCommandId(saved.id),
       })
       onChanged()
     } catch (err) {
       setFormError(`${t("saveFailed")}: ${toErrorMessage(err)}`)
+      // A move can fail after its copy was made; show what is really stored.
+      if (scopeChanged) {
+        void refresh()
+        onChanged()
+      }
     } finally {
       setSaving(false)
     }
-  }, [draft, folderId, onChanged, t])
+  }, [draft, folderId, onChanged, refresh, t])
 
   const handleDelete = useCallback(async () => {
     if (deleteTargetId === null) return
@@ -357,7 +412,8 @@ export function CommandManageDialog({
     setDeleting(true)
     setFormError(null)
     try {
-      await deleteFolderCommand(target)
+      if (isGlobalCommandId(target)) deleteGlobalCommand(target)
+      else await deleteFolderCommand(target)
       setCommands((prev) => {
         const next = prev.filter((item) => item.id !== target)
         setSelectedId((current) =>
@@ -473,8 +529,16 @@ export function CommandManageDialog({
                                   <GripVertical className="h-3.5 w-3.5" />
                                 </button>
                                 <div className="min-w-0 flex-1">
-                                  <div className="truncate text-sm font-medium">
-                                    {command.name}
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="truncate text-sm font-medium">
+                                      {command.name}
+                                    </span>
+                                    {isGlobalCommandId(command.id) ? (
+                                      <Globe
+                                        className="h-3 w-3 shrink-0 text-muted-foreground"
+                                        aria-label={t("globalLabel")}
+                                      />
+                                    ) : null}
                                   </div>
                                   <div className="mt-0.5 truncate font-mono text-2xs text-muted-foreground">
                                     {command.command}
@@ -521,6 +585,29 @@ export function CommandManageDialog({
                         placeholder="pnpm dev"
                         onChange={(event) =>
                           updateDraft({ command: event.target.value })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t("localCommandHint")}
+                      </p>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <Label
+                          htmlFor="folder-command-global"
+                          className="text-xs"
+                        >
+                          {t("globalLabel")}
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          {t("globalHint")}
+                        </p>
+                      </div>
+                      <Switch
+                        id="folder-command-global"
+                        checked={draft.global}
+                        onCheckedChange={(checked) =>
+                          updateDraft({ global: checked })
                         }
                       />
                     </div>

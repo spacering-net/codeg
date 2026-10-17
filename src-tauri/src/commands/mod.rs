@@ -42,6 +42,10 @@ pub mod folders;
 pub mod forge;
 /// The `ui-render` skill and the agents it is enabled for (Skill Packs > UI).
 pub mod generative_ui;
+/// Folder commands run on the desktop's own machine (`local:` commands), even
+/// from a remote-desktop window. Desktop-only by design.
+#[cfg(feature = "tauri-runtime")]
+pub mod local_command;
 pub mod logging;
 pub mod mcp;
 pub mod mcp_service;
