@@ -5,6 +5,7 @@ import {
   Monitor,
   Moon,
   MoveHorizontal,
+  Orbit,
   Sparkles,
   Sun,
   Type,
@@ -29,6 +30,7 @@ import {
   useWelcomeQuickActions,
   useChatAnimationsSetting,
   useChatContentWidth,
+  useFloatingBall,
 } from "@/hooks/use-appearance"
 import {
   CHAT_CONTENT_DEFAULT,
@@ -68,6 +70,12 @@ export function AppearanceSettings() {
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
   const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
+  const {
+    floatingBallEnabled,
+    setFloatingBallEnabled,
+    floatingBallPosition,
+    setFloatingBallPosition,
+  } = useFloatingBall()
   const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
   const [screenWidth] = useState(readScreenWidth)
   // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
@@ -295,7 +303,102 @@ export function AppearanceSettings() {
           </label>
         </section>
 
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("floatingBall.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={floatingBallEnabled}
+              onCheckedChange={setFloatingBallEnabled}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("floatingBall.enable")}
+            </span>
+          </label>
+
+          <div className="space-y-2">
+            <p className="text-2xs text-muted-foreground leading-4">
+              {t("floatingBall.hint")}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!floatingBallEnabled || !floatingBallPosition}
+              onClick={() => setFloatingBallPosition(null)}
+            >
+              {t("floatingBall.resetPosition")}
+            </Button>
+          </div>
+        </section>
         {/* ===== Chat content width ===== */}
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("messageNav.sectionDescription")}
+          </p>
+
+          <div className="space-y-2">
+            <Select
+              value={messageNavPosition}
+              onValueChange={(value) =>
+                setMessageNavPosition(value as "start" | "bottom-end")
+              }
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder={t("placeholder")} />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectItem value="start">
+                  {t("messageNav.positionStart")}
+                </SelectItem>
+                <SelectItem value="bottom-end">
+                  {t("messageNav.positionBottomEnd")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-2xs text-muted-foreground leading-4">
+              {t("messageNav.hint")}
+            </p>
+          </div>
+        </section>
+        {/* ===== Floating ball ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Orbit className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("floatingBall.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("floatingBall.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={floatingBallEnabled}
+              onCheckedChange={setFloatingBallEnabled}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("floatingBall.enable")}
+            </span>
+          </label>
+
+          <div className="space-y-2">
+            <p className="text-2xs text-muted-foreground leading-4">
+              {t("floatingBall.hint")}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!floatingBallEnabled || !floatingBallPosition}
+              onClick={() => setFloatingBallPosition(null)}
+            >
+              {t("floatingBall.resetPosition")}
+            </Button>
+          </div>
+        </section>
+        {/* ===== Chat content width ===== */}{" "}
+>>>>>>> aebc706f (feat(layout): native floating ball with swipe gestures)
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
             <MoveHorizontal className="h-4 w-4 text-muted-foreground" />

@@ -239,6 +239,13 @@
         "appliedToast": "배경화면이 적용되었습니다",
         "credit": "이미지 제공 wallhaven.cc · SFW만 표시"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "플로팅 볼",
+      "sectionDescription": "작업 공간 위의 드래그 가능한 볼로, 스와이프를 단축키로 바꿉니다. 키보드가 없는 휴대폰을 위한 기능입니다.",
+      "enable": "플로팅 볼 표시",
+      "hint": "드래그로 이동, 빠른 스와이프로 제스처, 길게 눌러 패널과 제스처 목록을 엽니다.",
+      "resetPosition": "위치 초기화"
     }
   },
   "SystemSettings": {
@@ -7327,6 +7334,47 @@
         "bypassed": "이 컴퓨터의 브라우저 엔진이 일부 주소를 터널을 거치지 않고 보내므로, 이 컴퓨터에서 불러오지 않도록 원격 호스트의 페이지는 열리지 않습니다.",
         "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "플로팅 볼",
+    "panelTitle": "빠른 작업",
+    "settingsTitle": "플로팅 볼",
+    "close": "닫기",
+    "resetPosition": "위치 초기화",
+    "cheatSheetTitle": "제스처",
+    "hint": "볼을 드래그해 이동하세요. 빠르게 스와이프하면 제스처, 길게 누르면 이 패널이 열립니다.",
+    "actions": {
+      "newConversation": "새 대화",
+      "toggleSidebar": "사이드바 전환",
+      "toggleSearch": "검색",
+      "toggleTerminal": "터미널 전환",
+      "nextTab": "다음 탭",
+      "prevTab": "이전 탭",
+      "reopenClosedTab": "닫은 탭 다시 열기",
+      "openFolder": "폴더 열기",
+      "zoomIn": "확대",
+      "zoomOut": "축소",
+      "zoomReset": "확대/축소 초기화",
+      "stopGenerating": "생성 중지",
+      "openSettings": "설정"
+    },
+    "gestures": {
+      "tap": "탭",
+      "doubleTap": "더블 탭",
+      "longPress": "길게 누르기",
+      "left": "왼쪽 스와이프",
+      "right": "오른쪽 스와이프",
+      "up": "위로 스와이프",
+      "upLeft": "왼쪽 위",
+      "upRight": "오른쪽 위",
+      "upThenLeft": "위 → 왼쪽",
+      "upThenRight": "위 → 오른쪽",
+      "upDown": "위 → 아래",
+      "leftThenRight": "왼쪽 → 오른쪽",
+      "rightThenLeft": "오른쪽 → 왼쪽",
+      "upLeftThenDown": "왼쪽 위 → 아래",
+      "upRightThenDown": "오른쪽 위 → 아래"
     }
   }
 }

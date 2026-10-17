@@ -239,6 +239,13 @@
         "appliedToast": "桌布已套用",
         "credit": "圖片來源 wallhaven.cc · 僅 SFW 內容"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "懸浮球",
+      "sectionDescription": "工作區上的可拖動懸浮球，把滑動手勢變成快捷鍵——為沒有鍵盤的手機而設。",
+      "enable": "顯示懸浮球",
+      "hint": "拖動可移動；快速滑動觸發手勢；長按打開面板與手勢表。",
+      "resetPosition": "重設位置"
     }
   },
   "SystemSettings": {
@@ -7327,6 +7334,47 @@
         "bypassed": "這台電腦的瀏覽器引擎會讓部分位址繞過通道，為避免從這台電腦載入，遠端主機的頁面不會開啟。",
         "probeFailed": "內建瀏覽器無法確認它能透過通道連到遠端主機。請稍後再試。"
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "懸浮球",
+    "panelTitle": "快捷操作",
+    "settingsTitle": "懸浮球",
+    "close": "關閉",
+    "resetPosition": "重設位置",
+    "cheatSheetTitle": "手勢",
+    "hint": "拖動懸浮球可移動位置。快速滑動觸發手勢，長按打開此面板。",
+    "actions": {
+      "newConversation": "新增對話",
+      "toggleSidebar": "切換側欄",
+      "toggleSearch": "搜尋",
+      "toggleTerminal": "切換終端機",
+      "nextTab": "下一個分頁",
+      "prevTab": "上一個分頁",
+      "reopenClosedTab": "恢復關閉的分頁",
+      "openFolder": "開啟資料夾",
+      "zoomIn": "放大",
+      "zoomOut": "縮小",
+      "zoomReset": "重設縮放",
+      "stopGenerating": "停止生成",
+      "openSettings": "設定"
+    },
+    "gestures": {
+      "tap": "單擊",
+      "doubleTap": "雙擊",
+      "longPress": "長按",
+      "left": "左滑",
+      "right": "右滑",
+      "up": "上滑",
+      "upLeft": "左上滑",
+      "upRight": "右上滑",
+      "upThenLeft": "上滑後左滑",
+      "upThenRight": "上滑後右滑",
+      "upDown": "上滑後下滑",
+      "leftThenRight": "左滑後右滑",
+      "rightThenLeft": "右滑後左滑",
+      "upLeftThenDown": "左上滑後下滑",
+      "upRightThenDown": "右上滑後下滑"
     }
   }
 }

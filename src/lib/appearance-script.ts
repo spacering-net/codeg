@@ -29,6 +29,12 @@ export const STORAGE_KEY_CHAT_ANIMATIONS = "codeg-chat-animations"
 // （48rem）。需预水合，避免会话首屏先按默认宽度排版再跳变。
 export const STORAGE_KEY_CHAT_CONTENT_WIDTH = "codeg-chat-content-width"
 
+// 悬浮球（手势入口）开关与位置。默认关闭：它是常驻在会话之上的控件，没有显式
+// 开启就不该出现。位置存相对视口左上角的 px，缺省表示停在右下角。两者都无需
+// 预水合——水合前根本不渲染球。
+export const STORAGE_KEY_FLOATING_BALL_ENABLED = "codeg-floating-ball-enabled"
+export const STORAGE_KEY_FLOATING_BALL_POSITION = "codeg-floating-ball-position"
+
 // 字体偏好（界面 / 编辑器 / 终端）。
 // 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地
 // 预水合写入 --font-sans；编辑器/终端字体只走各自的 Monaco/xterm 选项，水合后才挂载，

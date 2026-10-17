@@ -239,6 +239,13 @@
         "appliedToast": "壁紙を適用しました",
         "credit": "画像提供 wallhaven.cc · SFW のみ"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "フローティングボール",
+      "sectionDescription": "ワークスペース上に置くドラッグ可能なボール。スワイプをショートカットに変えます。キーボードのないスマートフォン向けです。",
+      "enable": "フローティングボールを表示",
+      "hint": "ドラッグで移動、素早いスワイプでジェスチャー、長押しでパネルとジェスチャー一覧を開きます。",
+      "resetPosition": "位置をリセット"
     }
   },
   "SystemSettings": {
@@ -7327,6 +7334,47 @@
         "bypassed": "このコンピューターのブラウザーエンジンは一部のアドレスをトンネルを通さずに送るため、このコンピューターから読み込まないよう、リモートホストのページは開きません。",
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "フローティングボール",
+    "panelTitle": "クイック操作",
+    "settingsTitle": "フローティングボール",
+    "close": "閉じる",
+    "resetPosition": "位置をリセット",
+    "cheatSheetTitle": "ジェスチャー",
+    "hint": "ボールをドラッグして移動します。素早くスワイプするとジェスチャー、長押しでこのパネルが開きます。",
+    "actions": {
+      "newConversation": "新しい会話",
+      "toggleSidebar": "サイドバーの切り替え",
+      "toggleSearch": "検索",
+      "toggleTerminal": "ターミナルの切り替え",
+      "nextTab": "次のタブ",
+      "prevTab": "前のタブ",
+      "reopenClosedTab": "閉じたタブを開き直す",
+      "openFolder": "フォルダーを開く",
+      "zoomIn": "拡大",
+      "zoomOut": "縮小",
+      "zoomReset": "ズームをリセット",
+      "stopGenerating": "生成を停止",
+      "openSettings": "設定"
+    },
+    "gestures": {
+      "tap": "タップ",
+      "doubleTap": "ダブルタップ",
+      "longPress": "長押し",
+      "left": "左スワイプ",
+      "right": "右スワイプ",
+      "up": "上スワイプ",
+      "upLeft": "左上スワイプ",
+      "upRight": "右上スワイプ",
+      "upThenLeft": "上→左",
+      "upThenRight": "上→右",
+      "upDown": "上→下",
+      "leftThenRight": "左→右",
+      "rightThenLeft": "右→左",
+      "upLeftThenDown": "左上→下",
+      "upRightThenDown": "右上→下"
     }
   }
 }

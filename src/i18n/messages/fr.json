@@ -239,6 +239,13 @@
         "appliedToast": "Fond d'écran appliqué",
         "credit": "Images de wallhaven.cc · SFW uniquement"
       }
+    },
+    "floatingBall": {
+      "sectionTitle": "Boule flottante",
+      "sectionDescription": "Une boule déplaçable au-dessus de l’espace de travail qui transforme les balayages en raccourcis — pensée pour le téléphone, où il n’y a pas de clavier.",
+      "enable": "Afficher la boule flottante",
+      "hint": "Faites glisser pour déplacer, balayez rapidement pour un geste, appuyez longuement pour le panneau et la liste des gestes.",
+      "resetPosition": "Réinitialiser la position"
     }
   },
   "SystemSettings": {
@@ -7327,6 +7334,47 @@
         "bypassed": "Le moteur du navigateur de cet ordinateur envoie certaines adresses en dehors du tunnel ; les pages de l'hôte distant restent donc fermées plutôt que d'être chargées depuis cet ordinateur.",
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
+    }
+  },
+  "FloatingBall": {
+    "label": "Boule flottante",
+    "panelTitle": "Actions rapides",
+    "settingsTitle": "Boule flottante",
+    "close": "Fermer",
+    "resetPosition": "Réinitialiser la position",
+    "cheatSheetTitle": "Gestes",
+    "hint": "Faites glisser la boule pour la déplacer. Un balayage rapide déclenche un geste, un appui long ouvre ce panneau.",
+    "actions": {
+      "newConversation": "Nouvelle conversation",
+      "toggleSidebar": "Afficher ou masquer la barre latérale",
+      "toggleSearch": "Rechercher",
+      "toggleTerminal": "Afficher ou masquer le terminal",
+      "nextTab": "Onglet suivant",
+      "prevTab": "Onglet précédent",
+      "reopenClosedTab": "Rouvrir l’onglet fermé",
+      "openFolder": "Ouvrir un dossier",
+      "zoomIn": "Zoom avant",
+      "zoomOut": "Zoom arrière",
+      "zoomReset": "Réinitialiser le zoom",
+      "stopGenerating": "Arrêter la génération",
+      "openSettings": "Paramètres"
+    },
+    "gestures": {
+      "tap": "Appui",
+      "doubleTap": "Double appui",
+      "longPress": "Appui long",
+      "left": "Balayage à gauche",
+      "right": "Balayage à droite",
+      "up": "Balayage vers le haut",
+      "upLeft": "Haut-gauche",
+      "upRight": "Haut-droite",
+      "upThenLeft": "Haut, puis gauche",
+      "upThenRight": "Haut, puis droite",
+      "upDown": "Haut, puis bas",
+      "leftThenRight": "Gauche, puis droite",
+      "rightThenLeft": "Droite, puis gauche",
+      "upLeftThenDown": "Haut-gauche, puis bas",
+      "upRightThenDown": "Haut-droite, puis bas"
     }
   }
 }
