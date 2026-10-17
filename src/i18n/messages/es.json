@@ -3477,6 +3477,17 @@
         "notInstalled": "No instalado",
         "moreAgents": "Más agentes ({count})"
       },
+      "subsessions": {
+        "title": "Subconversaciones",
+        "trigger": "Subconversaciones ({count})",
+        "loading": "Cargando subconversaciones…",
+        "loadError": "No se pudieron cargar las subconversaciones.",
+        "retry": "Reintentar",
+        "empty": "Todavía no hay subconversaciones.",
+        "untitled": "Tarea sin título",
+        "view": "Ver",
+        "viewSession": "Ver conversación de {agent}: {title}"
+      },
       "subAgentOverlay": {
         "title": "Subagentes",
         "collapsedSummary": "Subagentes {count}",

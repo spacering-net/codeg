@@ -3477,6 +3477,17 @@
         "notInstalled": "未安装",
         "moreAgents": "更多 Agent（{count}）"
       },
+      "subsessions": {
+        "title": "子会话",
+        "trigger": "子会话（{count}）",
+        "loading": "正在加载子会话…",
+        "loadError": "无法加载子会话。",
+        "retry": "重试",
+        "empty": "目前没有子会话。",
+        "untitled": "未命名任务",
+        "view": "查看",
+        "viewSession": "查看 {agent} 会话：{title}"
+      },
       "subAgentOverlay": {
         "title": "子智能体",
         "collapsedSummary": "子智能体 {count}",

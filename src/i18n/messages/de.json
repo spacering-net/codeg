@@ -3477,6 +3477,17 @@
         "notInstalled": "Nicht installiert",
         "moreAgents": "Weitere Agenten ({count})"
       },
+      "subsessions": {
+        "title": "Unterhaltungen der Unteragenten",
+        "trigger": "Unteragenten ({count})",
+        "loading": "Unterhaltungen werden geladen…",
+        "loadError": "Unterhaltungen konnten nicht geladen werden.",
+        "retry": "Erneut versuchen",
+        "empty": "Noch keine Unterhaltungen der Unteragenten.",
+        "untitled": "Unbenannte Aufgabe",
+        "view": "Ansehen",
+        "viewSession": "Unterhaltung von {agent} ansehen: {title}"
+      },
       "subAgentOverlay": {
         "title": "Subagenten",
         "collapsedSummary": "Subagenten {count}",

@@ -12,6 +12,10 @@ import {
   type SidebarSectionKey,
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
+export {
+  compareByChildCreatedAtDesc,
+  mergeChildrenById,
+} from "@/lib/conversation-children"
 
 // How many conversations the "Recent" section shows before its "show more" row,
 // and how many each click adds. Recent deliberately re-lists what the Folders /
@@ -53,29 +57,6 @@ export function compareByCreatedAtDesc(
     parseTimestamp(right.updated_at) - parseTimestamp(left.updated_at)
   if (updatedDiff !== 0) return updatedDiff
 
-  return right.id - left.id
-}
-
-/**
- * Newest-created first, id as a stable tie-break — matching the backend
- * `list_children` ORDER BY created_at DESC, id DESC so a merged/inserted child
- * lands where a refetch would put it. Sub-sessions render newest-on-top like the
- * root list, so a freshly-spawned sub-agent surfaces right under its parent.
- * Deliberately created_at + id only (no `updated_at` middle key like
- * {@link compareByCreatedAtDesc}) to mirror the SQL order the raw fetch snapshot
- * is trusted to already be in. Parity holds at millisecond + id resolution:
- * `parseTimestamp` (Date.parse) truncates to ms, so two children created in the
- * same millisecond fall to the id tie-break here while the backend orders them
- * by full-precision `created_at` — harmless because ids increase with creation
- * time, so both still agree on newest-first.
- */
-export function compareByChildCreatedAtDesc(
-  left: DbConversationSummary,
-  right: DbConversationSummary
-): number {
-  const createdDiff =
-    parseTimestamp(right.created_at) - parseTimestamp(left.created_at)
-  if (createdDiff !== 0) return createdDiff
   return right.id - left.id
 }
 
@@ -1080,24 +1061,6 @@ const EMPTY_CONVERSATIONS: readonly DbConversationSummary[] = []
 // No group is collapsed by default (absent key = expanded), matching
 // `folderExpanded`. Shared so the group-free path allocates nothing.
 const EMPTY_GROUP_EXPANDED: Record<number, boolean> = {}
-
-/**
- * Merge a freshly-fetched children snapshot with child summaries already applied
- * from live events (buffered into the lazy-load placeholder while the fetch was
- * in flight). Keyed by id with the live event winning, so a child created or
- * updated after the fetch's DB query is never lost — closing the lazy-load
- * lost-update race. Sorted created_at-descending (newest first) to match
- * `list_children`.
- */
-export function mergeChildrenById(
-  snapshot: readonly DbConversationSummary[],
-  buffered: readonly DbConversationSummary[]
-): DbConversationSummary[] {
-  const byId = new Map<number, DbConversationSummary>()
-  for (const c of snapshot) byId.set(c.id, c)
-  for (const b of buffered) byId.set(b.id, b)
-  return [...byId.values()].sort(compareByChildCreatedAtDesc)
-}
 
 /**
  * Push a conversation row and — when it is expanded and its delegation children
