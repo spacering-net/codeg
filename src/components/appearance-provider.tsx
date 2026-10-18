@@ -38,7 +38,6 @@ import {
   STORAGE_KEY_ZOOM_LEVEL,
   STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
-  STORAGE_KEY_MESSAGE_NAV_POSITION,
   STORAGE_KEY_FLOATING_BALL_ENABLED,
   STORAGE_KEY_FLOATING_BALL_POSITION,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
@@ -119,12 +118,6 @@ function syncAppearanceMode(mode: string) {
 
 export type FontSelection = { id: string; custom: string }
 
-/** 消息导航卡位置。`start` = 逻辑起始边（LTR 左上，历史行为）；
- *  `bottom-end` = 右下角紧凑卡片。 */
-export type MessageNavPosition = "start" | "bottom-end"
-
-export const DEFAULT_MESSAGE_NAV_POSITION: MessageNavPosition = "start"
-
 /** 悬浮球停靠位置（视口坐标 px，左上角原点）。 */
 export type FloatingBallPosition = { x: number; y: number }
 
@@ -142,9 +135,6 @@ type AppearanceContextValue = {
   /** 聊天区域动画总开关，默认开启；关闭时 <html> 带 data-chat-animations="off" */
   chatAnimations: boolean
   setChatAnimations: (on: boolean) => void
-  /** 消息导航卡位置：起始边（默认，左上）或右下角紧凑卡片。 */
-  messageNavPosition: MessageNavPosition
-  setMessageNavPosition: (position: MessageNavPosition) => void
   /** 悬浮球（手势入口）是否显示，默认关闭。 */
   floatingBallEnabled: boolean
   setFloatingBallEnabled: (on: boolean) => void
@@ -298,18 +288,6 @@ function readBool(key: string, def: boolean): boolean {
     return v === null ? def : v === "1"
   } catch {
     return def
-  }
-}
-
-function readMessageNavPosition(): MessageNavPosition {
-  if (typeof document === "undefined") return DEFAULT_MESSAGE_NAV_POSITION
-  try {
-    return localStorage.getItem(STORAGE_KEY_MESSAGE_NAV_POSITION) ===
-      "bottom-end"
-      ? "bottom-end"
-      : DEFAULT_MESSAGE_NAV_POSITION
-  } catch {
-    return DEFAULT_MESSAGE_NAV_POSITION
   }
 }
 
@@ -475,10 +453,6 @@ export function AppearanceProvider({
       document.documentElement.setAttribute("data-chat-animations", "off")
     }
   }, [chatAnimations])
-
-  // 消息导航卡位置。默认起始边（历史行为），仅在用户显式选右下角时才变。
-  const [messageNavPosition, setMessageNavPositionState] =
-    useState<MessageNavPosition>(() => readMessageNavPosition())
 
   // 悬浮球：默认不显示，显式开启后才挂载；位置缺省为右下角。
   const [floatingBallEnabled, setFloatingBallEnabledState] = useState<boolean>(
@@ -649,14 +623,6 @@ export function AppearanceProvider({
   const setChatAnimations = useCallback((on: boolean) => {
     setChatAnimationsState(on)
     persist(STORAGE_KEY_CHAT_ANIMATIONS, on ? "1" : "0")
-  }, [])
-
-  const setMessageNavPosition = useCallback((position: MessageNavPosition) => {
-    setMessageNavPositionState(position)
-    persist(
-      STORAGE_KEY_MESSAGE_NAV_POSITION,
-      position === "bottom-end" ? "bottom-end" : "start"
-    )
   }, [])
 
   const setFloatingBallEnabled = useCallback((on: boolean) => {
@@ -1134,10 +1100,6 @@ export function AppearanceProvider({
       if (e.key === STORAGE_KEY_CHAT_ANIMATIONS) {
         setChatAnimationsState(readBool(STORAGE_KEY_CHAT_ANIMATIONS, true))
       }
-      // 外观设置是独立窗口：那边改了导航卡位置，工作区窗口要跟着搬。
-      if (e.key === STORAGE_KEY_MESSAGE_NAV_POSITION) {
-        setMessageNavPositionState(readMessageNavPosition())
-      }
       // 悬浮球同样在外观设置里开关，那边的改动要立刻反映到工作区窗口。
       if (e.key === STORAGE_KEY_FLOATING_BALL_ENABLED) {
         setFloatingBallEnabledState(
@@ -1253,8 +1215,6 @@ export function AppearanceProvider({
         setShowWelcomeQuickActions,
         chatAnimations,
         setChatAnimations,
-        messageNavPosition,
-        setMessageNavPosition,
         floatingBallEnabled,
         setFloatingBallEnabled,
         floatingBallPosition,
