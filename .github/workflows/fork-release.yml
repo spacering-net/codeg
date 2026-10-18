@@ -1,0 +1,176 @@
+name: Fork release (auto-sync upstream)
+
+# 当上游 spacering-net/codeg 发布新 release 时自动：
+#   1. 把上游 tag 合并进本分支（deploy/fork-updater，含 fork 更新源补丁）
+#   2. 构建 linux-x64 服务端包（codeg-server + sidecars + web 静态资产）
+#   3. 用 fork 自己的 minisign 密钥签名（--app-version 绑定版本）
+#   4. 生成 latest.json 并连同 tarball/.sig/.sha256 发到 fork 的同名 release
+# tx/dell 上的 codeg 检查的是 fork 的 releases/latest，于是走它自带的一键更新。
+#
+# 冲突时合并会失败 → job 标红 + 开 issue 通知，需人工解决。
+
+on:
+  # 上游发版触发（repository_dispatch 由 personal token 定时调用，
+  # 因为 fork 不能直接监听上游的 release 事件）
+  repository_dispatch:
+    types: [upstream-release]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  sync-and-release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out deploy branch
+        uses: actions/checkout@v4
+        with:
+          ref: deploy/fork-updater
+          fetch-depth: 0
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
+
+      - name: Resolve upstream latest release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          info=$(gh api repos/spacering-net/codeg/releases/latest --jq '{tag: .tag_name, ver: (.tag_name | ltrimstr("v")), notes: .body}')
+          echo "tag=$(echo "$info" | jq -r .tag)" >> "$GITHUB_OUTPUT"
+          echo "ver=$(echo "$info" | jq -r .ver)" >> "$GITHUB_OUTPUT"
+          echo "$info" | jq -r .notes > /tmp/upstream-notes.md
+          echo "Upstream: $(echo "$info" | jq -r .tag)"
+
+      - name: Skip if fork already has this release
+        id: skip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.upstream.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ steps.upstream.outputs.tag }} already exists on fork — nothing to do."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream tag into deploy branch
+        if: steps.skip.outputs.already == 'false'
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "fork-sync-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git remote add upstream https://github.com/spacering-net/codeg.git
+          git fetch upstream "${{ steps.upstream.outputs.tag }}"
+          if git merge --no-edit FETCH_HEAD; then
+            git push origin deploy/fork-updater
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue on merge conflict
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "上游 ${{ steps.upstream.outputs.tag }} 合并冲突，需人工介入" \
+            --body "spacering-net/codeg 发布了 ${{ steps.upstream.outputs.tag }}，合并进 deploy/fork-updater 时有冲突。请本地执行：git fetch upstream && git merge ${{ steps.upstream.outputs.tag }}，解决冲突（保留悬浮球与 fork 补丁）后 push。"
+
+      - name: Install pnpm deps
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        run: pnpm build
+
+      - name: Set up Rust
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build server + sidecars
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        run: |
+          set -euo pipefail
+          cd src-tauri
+          cargo build --release --bin codeg-server --no-default-features --features server-bin
+          cargo build --release --no-default-features --features mcp-bin,computer-helper --bins
+          cd ..
+          mkdir -p dist/codeg-server-linux-x64
+          cp src-tauri/target/release/codeg-server dist/codeg-server-linux-x64/
+          cp src-tauri/target/release/codeg-mcp dist/codeg-server-linux-x64/
+          cp src-tauri/target/release/codeg-computer-helper dist/codeg-server-linux-x64/
+          chmod +x dist/codeg-server-linux-x64/*
+          cp -r out dist/codeg-server-linux-x64/web
+          cd dist && tar czf codeg-server-linux-x64.tar.gz codeg-server-linux-x64
+
+      - name: Sign bundle with fork key
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          set -euo pipefail
+          pnpm tauri signer sign --app-version "${{ steps.upstream.outputs.ver }}" "dist/codeg-server-linux-x64.tar.gz"
+          test -f dist/codeg-server-linux-x64.tar.gz.sig
+          ( cd dist && sha256sum codeg-server-linux-x64.tar.gz > codeg-server-linux-x64.tar.gz.sha256 )
+
+      - name: Build latest.json
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        env:
+          VER: ${{ steps.upstream.outputs.ver }}
+        run: |
+          set -euo pipefail
+          SIG=$(base64 -w0 dist/codeg-server-linux-x64.tar.gz.sig)
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.upstream.outputs.tag }}/codeg-server-linux-x64.tar.gz"
+          jq -n --arg v "$VER" --arg s "$SIG" --arg u "$URL" --rawfile n /tmp/upstream-notes.md \
+            '{version: $v, notes: $n, pub_date: (now | todateiso8601),
+              platforms: {"linux-x86_64": {signature: $s, url: $u}}}' > dist/latest.json
+          cat dist/latest.json | jq -r '.version, .platforms["linux-x86_64"].url'
+
+      - name: Create fork release and upload
+        if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.upstream.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "codeg ${{ steps.upstream.outputs.ver }} + floating-ball (fork)" \
+            --notes "基于上游 ${{ steps.upstream.outputs.tag }}，含悬浮球功能与 fork 更新源补丁。
+
+          $(cat /tmp/upstream-notes.md)" \
+            dist/codeg-server-linux-x64.tar.gz \
+            dist/codeg-server-linux-x64.tar.gz.sig \
+            dist/codeg-server-linux-x64.tar.gz.sha256 \
+            dist/latest.json

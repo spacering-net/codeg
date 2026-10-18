@@ -53,7 +53,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OEM3NkMyMTVENjdBODgKUldTSWV0WVZ3bmFNU0NnSzhpdFg2bXFmMHFidWd1eWpuZ2Y2WmU5QmVXdWVrU0ZpOCt2dnd6WW4K",
       "endpoints": [
-        "https://github.com/spacering-net/codeg/releases/latest/download/latest.json"
+        "https://github.com/unixcs/codeg/releases/latest/download/latest.json"
       ],
       "requireSignedVersion": true,
       "windows": {
