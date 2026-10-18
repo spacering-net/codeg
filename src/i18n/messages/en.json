@@ -181,13 +181,6 @@
       "sectionDescription": "Entrance, expand/collapse, tool-call and working-status animations in the conversation area, plus smooth scrolling. Turn off for instant, motion-free updates. Spinners keep rotating.",
       "enable": "Enable chat animations"
     },
-    "messageNav": {
-      "sectionTitle": "Message navigator",
-      "sectionDescription": "Where the per-conversation message navigator sits. Bottom-right keeps it as a compact one-row-per-turn card above the composer, out of the reading column.",
-      "positionStart": "Top-left (default)",
-      "positionBottomEnd": "Bottom-right (compact)",
-      "hint": "Plan and sub-agent panels stay top-left either way."
-    },
     "chatWidth": {
       "sectionTitle": "Chat width",
       "sectionDescription": "Maximum width of the conversation column and the composer. You can also drag the edges of the chat column to adjust it.",
@@ -247,54 +240,6 @@
         "credit": "Images from wallhaven.cc · SFW only"
       }
     },
-    "floatingBall": {
-      "sectionTitle": "Floating Ball",
-      "sectionDescription": "A draggable ball over the workspace that turns swipes into shortcuts — built for the phone, where there is no keyboard.",
-      "enable": "Show floating ball",
-      "hint": "Drag to move; swipe quickly for a gesture; long press for the panel and cheat sheet.",
-      "resetPosition": "Reset position",
-      "ballSize": "Ball size",
-      "sizeSmall": "Small",
-      "sizeMedium": "Medium",
-      "sizeLarge": "Large",
-      "gestureBindings": "Gesture bindings",
-      "bindingCleared": "Unbound",
-      "favoriteAgents": "Favorite agents",
-      "favoriteAgentsHint": "Pick 2-3 agents to cycle through with the favorite-agents gesture.",
-      "favoriteAgentsEmpty": "No available agents",
-      "panelTitle": "Quick actions"
-    },
-    "gestures": {
-      "tap": "Tap",
-      "doubleTap": "Double tap",
-      "longPress": "Long press",
-      "left": "←",
-      "right": "→",
-      "up": "↑",
-      "upLeft": "↖",
-      "upRight": "↗",
-      "upThenLeft": "↑ then ←",
-      "upThenRight": "↑ then →",
-      "upDown": "↑ then ↓",
-      "leftThenRight": "← then →",
-      "rightThenLeft": "→ then ←",
-      "upLeftThenDown": "↖ then ↓",
-      "upRightThenDown": "↗ then ↓",
-      "down": "↓",
-      "downLeft": "↙",
-      "downRight": "↘",
-      "downUp": "↓ then ↑",
-      "upThenDownRight": "↑ then ↘",
-      "downThenUpRight": "↓ then ↗",
-      "rightThenUp": "→ then ↑",
-      "rightThenDown": "→ then ↓",
-      "downThenRight": "↓ then →",
-      "downThenLeft": "↓ then ←",
-      "downRightThenUp": "↘ then ↑",
-      "downLeftThenUp": "↙ then ↑",
-      "upLeftThenRight": "↖ then →",
-      "upRightThenLeft": "↗ then ←"
-    },
     "actions": {
       "newConversation": "New conversation",
       "toggleSidebar": "Toggle sidebar",
@@ -328,6 +273,54 @@
       "focusModeSelector": "Mode selector",
       "togglePlanFullAccess": "Plan / full access",
       "openCollaboration": "Collaboration"
+    },
+    "gestures": {
+      "tap": "Tap",
+      "doubleTap": "Double tap",
+      "longPress": "Long press",
+      "left": "←",
+      "right": "→",
+      "up": "↑",
+      "upLeft": "↖",
+      "upRight": "↗",
+      "upThenLeft": "↑ then ←",
+      "upThenRight": "↑ then →",
+      "upDown": "↑ then ↓",
+      "leftThenRight": "← then →",
+      "rightThenLeft": "→ then ←",
+      "upLeftThenDown": "↖ then ↓",
+      "upRightThenDown": "↗ then ↓",
+      "down": "↓",
+      "downLeft": "↙",
+      "downRight": "↘",
+      "downUp": "↓ then ↑",
+      "upThenDownRight": "↑ then ↘",
+      "downThenUpRight": "↓ then ↗",
+      "rightThenUp": "→ then ↑",
+      "rightThenDown": "→ then ↓",
+      "downThenRight": "↓ then →",
+      "downThenLeft": "↓ then ←",
+      "downRightThenUp": "↘ then ↑",
+      "downLeftThenUp": "↙ then ↑",
+      "upLeftThenRight": "↖ then →",
+      "upRightThenLeft": "↗ then ←"
+    },
+    "floatingBall": {
+      "sectionTitle": "Floating Ball",
+      "sectionDescription": "A draggable ball over the workspace that turns swipes into shortcuts — built for the phone, where there is no keyboard.",
+      "enable": "Show floating ball",
+      "hint": "Drag to move; swipe quickly for a gesture; long press for the panel and cheat sheet.",
+      "resetPosition": "Reset position",
+      "ballSize": "Ball size",
+      "sizeSmall": "Small",
+      "sizeMedium": "Medium",
+      "sizeLarge": "Large",
+      "gestureBindings": "Gesture bindings",
+      "bindingCleared": "Unbound",
+      "favoriteAgents": "Favorite agents",
+      "favoriteAgentsHint": "Pick 2-3 agents to cycle through with the favorite-agents gesture.",
+      "favoriteAgentsEmpty": "No available agents",
+      "panelTitle": "Quick actions"
     }
   },
   "SystemSettings": {
@@ -1201,6 +1194,30 @@
       "apiKeyHint": "Passed to the CLI as KIRO_API_KEY. Leave empty to use the account you signed in with via kiro-cli login; an API key is only needed where no browser sign-in is possible (servers, Docker).",
       "saveConfig": "Save Kiro Config"
     },
+    "trae": {
+      "configManagement": "Configuration",
+      "configDescription": "TRAE CLI 2.0 is available to customers on the flagship TRAE Enterprise plan. Codeg runs the traecli you installed, which keeps its sign-in, skills and MCP servers in ~/.trae. Model, mode and reasoning effort are not here: TRAE CLI reports them over ACP, so the composer's own selectors own them per session.",
+      "signInTitle": "Sign in",
+      "signInHint": "Run this once in a terminal to sign in with your enterprise SSO. Sessions in Codeg reuse that login.",
+      "copyCommand": "Copy command",
+      "commandCopied": "Command copied",
+      "patLabel": "Personal access token (optional)",
+      "patHint": "For a machine where browser sign-in is not possible, such as a server or Docker install. Codeg passes it to TRAE CLI as TRAECLI_PERSONAL_ACCESS_TOKEN and signs in with it whenever a session starts. Leave empty to use the login from traecli login.",
+      "hostLabel": "Enterprise API URL (optional)",
+      "hostHint": "Only if your organization runs TRAE on its own domain. Passed as TRAECLI_HOST; leave empty for TRAE's own service.",
+      "saveConfig": "Save TRAE CLI Config"
+    },
+    "commandCode": {
+      "configManagement": "Configuration",
+      "configDescription": "Codeg runs the Command Code CLI from the command-code npm package, which keeps its sign-in, skills and MCP servers in ~/.commandcode. Model, mode and reasoning effort are not here: Command Code reports them over ACP, so the composer's own selectors own them per session.",
+      "signInTitle": "Sign in",
+      "signInHint": "Run this once in a terminal to sign in with your Command Code account. Sessions in Codeg reuse that login.",
+      "copyCommand": "Copy command",
+      "commandCopied": "Command copied",
+      "apiKeyLabel": "API key (optional)",
+      "apiKeyHint": "For a machine where browser sign-in is not possible, such as a server or Docker install. Passed to Command Code as COMMAND_CODE_API_KEY, which takes precedence over the login from command-code login. Leave empty to use that login.",
+      "saveConfig": "Save Command Code Config"
+    },
     "deepseek": {
       "configManagement": "DeepSeek Harness Configuration",
       "configDescription": "The endpoint and key are environment variables deepseek-acp reads at launch. Model and reasoning effort are per-session selectors — pick them in the composer.",
@@ -1696,6 +1713,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro config saved",
       "saveKiroFailed": "Failed to save Kiro config",
+      "traeSaved": "TRAE CLI config saved",
+      "saveTraeFailed": "Failed to save TRAE CLI config",
+      "commandCodeSaved": "Command Code config saved",
+      "saveCommandCodeFailed": "Failed to save Command Code config",
       "systemAgentAlreadyLatest": "{name} is already up to date ({version})"
     },
     "distribution": {
@@ -2467,7 +2488,10 @@
         "commits": "Commits"
       },
       "noFolderTitle": "No folder open",
-      "noFolderHint": "Open a folder to see its contents here"
+      "noFolderHint": "Open a folder to see its contents here",
+      "openFullPage": "Open full page",
+      "back": "Back",
+      "noAutomations": "No automations for this project yet"
     },
     "windowControls": {
       "minimizeWindow": "Minimize window",
@@ -3366,6 +3390,7 @@
       },
       "messageInput": {
         "askAnything": "Ask anything...",
+        "promptSuggestion": "{suggestion} (Tab to use)",
         "removeAttachmentAria": "Remove {name}",
         "attachFiles": "Attach files",
         "attachLocalUpload": "Upload local file",
@@ -3397,6 +3422,10 @@
         "searchModelAria": "Search models",
         "modelListLabel": "Models",
         "recommendedBadge": "Recommended",
+        "recommendedValue": "Recommended: {value}",
+        "searchOptions": "Search options...",
+        "searchOptionsAria": "Search options",
+        "noOptions": "No options found",
         "noModels": "No models found",
         "cancel": "Cancel",
         "send": "Send",
@@ -4007,13 +4036,16 @@
       },
       "messageNav": {
         "title": "Message navigation",
-        "collapse": "Collapse message navigation",
         "loadingEarlier": "Loading earlier messages…",
         "loadEarlier": "Load earlier messages",
-        "collapsedSummary": "Messages {count}",
         "fileCount": "{count, plural, one {# file} other {# files}}",
-        "remove": "Remove",
-        "noDiffDataAvailable": "No diff data available for {filePath}"
+        "subAgentCount": "{count, plural, one {# sub-agent} other {# sub-agents}}",
+        "showDiff": "Show the changes to {filePath}",
+        "hideDiff": "Hide the changes to {filePath}",
+        "openFile": "Open {filePath}",
+        "collapse": "Collapse",
+        "currentMessage": "Current message",
+        "scrollToCurrent": "Scroll to the current message (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "Files changed",
@@ -4071,6 +4103,9 @@
         "resumeDelegation": "Resuming task {task}",
         "resumeDelegationNoId": "Resuming a delegated task",
         "promptLabel": "Prompt",
+        "ackRecorded": "Recorded on the work task",
+        "ackNotRecorded": "Not recorded on the work task",
+        "ackNotRecordedWithReason": "Not recorded on the work task: {reason}",
         "verdict": {
           "success": "success",
           "needs_review": "needs review",
@@ -4187,6 +4222,18 @@
         "tokens": "{count} tokens",
         "stopDeclined": "That task could not be stopped — it may have already finished.",
         "stopFailed": "Failed to stop the task: {error}"
+      },
+      "remoteControl": {
+        "title": "Remote Control is on",
+        "open": "Open in browser",
+        "copy": "Copy link",
+        "copied": "Copied",
+        "qr": "QR code",
+        "qrLabel": "QR code for this session's Remote Control link",
+        "qrHint": "Scan with your phone to continue this session in the Claude app or on claude.ai/code.",
+        "noUrl": "Claude Code returned no link for this session",
+        "turnOff": "Turn off",
+        "turnOffBusy": "Available once Claude has finished"
       },
       "proposedPlan": {
         "title": "Proposed plan",
@@ -7365,13 +7412,6 @@
     }
   },
   "FloatingBall": {
-    "label": "Floating ball",
-    "panelTitle": "Quick actions",
-    "settingsTitle": "Floating ball",
-    "close": "Close",
-    "resetPosition": "Reset position",
-    "cheatSheetTitle": "Gestures",
-    "hint": "Drag the ball to move it. Swipe quickly for a gesture; press and hold to open this panel.",
     "actions": {
       "newConversation": "New conversation",
       "toggleSidebar": "Toggle sidebar",
@@ -7437,7 +7477,6 @@
       "upLeftThenRight": "↖ then →",
       "upRightThenLeft": "↗ then ←"
     },
-    "favoriteAgentsEmpty": "No available agents",
     "toasts": {
       "renameNeedsSavedSession": "Rename works on a saved session — send a message first.",
       "sessionFolderNeedsWorkspace": "Open a workspace folder first.",
@@ -7450,6 +7489,14 @@
       "noModesAvailable": "This agent does not expose any modes.",
       "noSwitchTarget": "No mode to switch to (Plan or full-access mode not found)."
     },
+    "label": "Floating ball",
+    "panelTitle": "Quick actions",
+    "settingsTitle": "Floating ball",
+    "close": "Close",
+    "resetPosition": "Reset position",
+    "cheatSheetTitle": "Gestures",
+    "hint": "Drag the ball to move it. Swipe quickly for a gesture; press and hold to open this panel.",
+    "favoriteAgentsEmpty": "No available agents",
     "recentSessionDepth": "Recent-session switch depth",
     "bindingCleared": "Unbound"
   }

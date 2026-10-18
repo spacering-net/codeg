@@ -181,13 +181,6 @@
       "sectionDescription": "Animations de pliage/dépliage, d'appels d'outils et d'état de travail dans la zone de conversation, ainsi que le défilement fluide. Désactivez-les pour des mises à jour instantanées. Les indicateurs de chargement continuent de tourner.",
       "enable": "Activer les animations du chat"
     },
-    "messageNav": {
-      "sectionTitle": "Navigateur de messages",
-      "sectionDescription": "Position du navigateur de messages. En bas à droite, il devient une carte compacte avec une ligne par message utilisateur, au-dessus de la zone de saisie.",
-      "positionStart": "En haut à gauche (par défaut)",
-      "positionBottomEnd": "En bas à droite (compact)",
-      "hint": "Les panneaux de plan et de sous-agents restent en haut à gauche."
-    },
     "chatWidth": {
       "sectionTitle": "Largeur du chat",
       "sectionDescription": "Largeur maximale de la colonne de conversation et de la zone de saisie. Vous pouvez aussi faire glisser les bords du chat pour l'ajuster.",
@@ -247,54 +240,6 @@
         "credit": "Images de wallhaven.cc · SFW uniquement"
       }
     },
-    "floatingBall": {
-      "sectionTitle": "Boule flottante",
-      "sectionDescription": "Une boule déplaçable au-dessus de l’espace de travail qui transforme les balayages en raccourcis — pensée pour le téléphone, où il n’y a pas de clavier.",
-      "enable": "Afficher la boule flottante",
-      "hint": "Faites glisser pour déplacer, balayez rapidement pour un geste, appuyez longuement pour le panneau et la liste des gestes.",
-      "resetPosition": "Réinitialiser la position",
-      "ballSize": "Taille de la bille",
-      "sizeSmall": "Petite",
-      "sizeMedium": "Moyenne",
-      "sizeLarge": "Grande",
-      "gestureBindings": "Affectation des gestes",
-      "bindingCleared": "Non attribué",
-      "favoriteAgents": "Agents favoris",
-      "favoriteAgentsHint": "Choisissez 2-3 agents à parcourir avec le geste des favoris.",
-      "favoriteAgentsEmpty": "Aucun agent disponible",
-      "panelTitle": "Actions rapides"
-    },
-    "gestures": {
-      "tap": "Touche",
-      "doubleTap": "Double touche",
-      "longPress": "Appui long",
-      "left": "←",
-      "right": "→",
-      "up": "↑",
-      "upLeft": "↖",
-      "upRight": "↗",
-      "upThenLeft": "↑ puis ←",
-      "upThenRight": "↑ puis →",
-      "upDown": "↑ puis ↓",
-      "leftThenRight": "← puis →",
-      "rightThenLeft": "→ puis ←",
-      "upLeftThenDown": "↖ puis ↓",
-      "upRightThenDown": "↗ puis ↓",
-      "down": "↓",
-      "downLeft": "↙",
-      "downRight": "↘",
-      "downUp": "↓ puis ↑",
-      "upThenDownRight": "↑ puis ↘",
-      "downThenUpRight": "↓ puis ↗",
-      "rightThenUp": "→ puis ↑",
-      "rightThenDown": "→ puis ↓",
-      "downThenRight": "↓ puis →",
-      "downThenLeft": "↓ puis ←",
-      "downRightThenUp": "↘ puis ↑",
-      "downLeftThenUp": "↙ puis ↑",
-      "upLeftThenRight": "↖ puis →",
-      "upRightThenLeft": "↗ puis ←"
-    },
     "actions": {
       "newConversation": "Nouvelle conversation",
       "toggleSidebar": "Afficher ou masquer la barre latérale",
@@ -328,6 +273,54 @@
       "focusModeSelector": "Sélecteur de mode",
       "togglePlanFullAccess": "Plan / accès complet",
       "openCollaboration": "Collaboration"
+    },
+    "gestures": {
+      "tap": "Touche",
+      "doubleTap": "Double touche",
+      "longPress": "Appui long",
+      "left": "←",
+      "right": "→",
+      "up": "↑",
+      "upLeft": "↖",
+      "upRight": "↗",
+      "upThenLeft": "↑ puis ←",
+      "upThenRight": "↑ puis →",
+      "upDown": "↑ puis ↓",
+      "leftThenRight": "← puis →",
+      "rightThenLeft": "→ puis ←",
+      "upLeftThenDown": "↖ puis ↓",
+      "upRightThenDown": "↗ puis ↓",
+      "down": "↓",
+      "downLeft": "↙",
+      "downRight": "↘",
+      "downUp": "↓ puis ↑",
+      "upThenDownRight": "↑ puis ↘",
+      "downThenUpRight": "↓ puis ↗",
+      "rightThenUp": "→ puis ↑",
+      "rightThenDown": "→ puis ↓",
+      "downThenRight": "↓ puis →",
+      "downThenLeft": "↓ puis ←",
+      "downRightThenUp": "↘ puis ↑",
+      "downLeftThenUp": "↙ puis ↑",
+      "upLeftThenRight": "↖ puis →",
+      "upRightThenLeft": "↗ puis ←"
+    },
+    "floatingBall": {
+      "sectionTitle": "Boule flottante",
+      "sectionDescription": "Une boule déplaçable au-dessus de l’espace de travail qui transforme les balayages en raccourcis — pensée pour le téléphone, où il n’y a pas de clavier.",
+      "enable": "Afficher la boule flottante",
+      "hint": "Faites glisser pour déplacer, balayez rapidement pour un geste, appuyez longuement pour le panneau et la liste des gestes.",
+      "resetPosition": "Réinitialiser la position",
+      "ballSize": "Taille de la bille",
+      "sizeSmall": "Petite",
+      "sizeMedium": "Moyenne",
+      "sizeLarge": "Grande",
+      "gestureBindings": "Affectation des gestes",
+      "bindingCleared": "Non attribué",
+      "favoriteAgents": "Agents favoris",
+      "favoriteAgentsHint": "Choisissez 2-3 agents à parcourir avec le geste des favoris.",
+      "favoriteAgentsEmpty": "Aucun agent disponible",
+      "panelTitle": "Actions rapides"
     }
   },
   "SystemSettings": {
@@ -1201,6 +1194,30 @@
       "apiKeyHint": "Transmise à la CLI en tant que KIRO_API_KEY. Laissez vide pour utiliser le compte connecté via kiro-cli login ; nécessaire seulement là où la connexion par navigateur est impossible (serveurs, Docker).",
       "saveConfig": "Enregistrer la configuration Kiro"
     },
+    "trae": {
+      "configManagement": "Configuration",
+      "configDescription": "TRAE CLI 2.0 est réservé aux clients de l'offre phare de TRAE Enterprise. Codeg lance le traecli que vous avez installé, qui conserve sa connexion, ses compétences et ses serveurs MCP dans ~/.trae. Le modèle, le mode et l'effort de raisonnement ne sont pas ici : TRAE CLI les communique via ACP, donc les sélecteurs du compositeur les gèrent pour chaque session.",
+      "signInTitle": "Connexion",
+      "signInHint": "Exécutez cette commande une fois dans un terminal pour vous connecter avec le SSO de votre entreprise. Les sessions de Codeg réutilisent cette connexion.",
+      "copyCommand": "Copier la commande",
+      "commandCopied": "Commande copiée",
+      "patLabel": "Jeton d'accès personnel (facultatif)",
+      "patHint": "Pour une machine où la connexion par navigateur est impossible, comme un serveur ou une installation Docker. Codeg le transmet à TRAE CLI en tant que TRAECLI_PERSONAL_ACCESS_TOKEN et se connecte avec lui au démarrage de chaque session. Laissez vide pour utiliser la connexion de traecli login.",
+      "hostLabel": "URL de l'API d'entreprise (facultative)",
+      "hostHint": "Uniquement si votre organisation exploite TRAE sur son propre domaine. Transmise en tant que TRAECLI_HOST ; laissez vide pour le service de TRAE.",
+      "saveConfig": "Enregistrer la configuration TRAE CLI"
+    },
+    "commandCode": {
+      "configManagement": "Configuration",
+      "configDescription": "Codeg lance la CLI Command Code du paquet npm command-code, qui conserve sa connexion, ses compétences et ses serveurs MCP dans ~/.commandcode. Le modèle, le mode et l'effort de raisonnement ne sont pas ici : Command Code les communique via ACP, donc les sélecteurs du compositeur les gèrent pour chaque session.",
+      "signInTitle": "Connexion",
+      "signInHint": "Exécutez cette commande une fois dans un terminal pour vous connecter avec votre compte Command Code. Les sessions de Codeg réutilisent cette connexion.",
+      "copyCommand": "Copier la commande",
+      "commandCopied": "Commande copiée",
+      "apiKeyLabel": "Clé d'API (facultative)",
+      "apiKeyHint": "Pour une machine où la connexion par navigateur est impossible, comme un serveur ou une installation Docker. Transmise à Command Code en tant que COMMAND_CODE_API_KEY, prioritaire sur la connexion de command-code login. Laissez vide pour utiliser cette connexion.",
+      "saveConfig": "Enregistrer la configuration Command Code"
+    },
     "deepseek": {
       "configManagement": "Configuration de DeepSeek Harness",
       "configDescription": "Le point de terminaison et la clé sont des variables d'environnement que deepseek-acp lit au démarrage. Le modèle et le niveau de raisonnement sont des sélecteurs par session : ils se choisissent dans le champ de saisie.",
@@ -1696,6 +1713,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Configuration Kiro enregistrée",
       "saveKiroFailed": "Impossible d'enregistrer la configuration Kiro",
+      "traeSaved": "Configuration TRAE CLI enregistrée",
+      "saveTraeFailed": "Impossible d'enregistrer la configuration TRAE CLI",
+      "commandCodeSaved": "Configuration Command Code enregistrée",
+      "saveCommandCodeFailed": "Impossible d'enregistrer la configuration Command Code",
       "systemAgentAlreadyLatest": "{name} est déjà à jour ({version})"
     },
     "distribution": {
@@ -2467,7 +2488,10 @@
         "commits": "Validations"
       },
       "noFolderTitle": "Aucun dossier ouvert",
-      "noFolderHint": "Ouvrez un dossier pour voir son contenu ici"
+      "noFolderHint": "Ouvrez un dossier pour voir son contenu ici",
+      "openFullPage": "Ouvrir en pleine page",
+      "back": "Retour",
+      "noAutomations": "Aucune automatisation pour ce projet pour l’instant"
     },
     "windowControls": {
       "minimizeWindow": "Minimiser la fenêtre",
@@ -3366,6 +3390,7 @@
       },
       "messageInput": {
         "askAnything": "Posez n'importe quelle question...",
+        "promptSuggestion": "{suggestion} (Tab pour l’utiliser)",
         "removeAttachmentAria": "Retirer {name}",
         "attachFiles": "Joindre des fichiers",
         "addActions": "Ajouter",
@@ -3395,6 +3420,10 @@
         "searchModelAria": "Rechercher des modèles",
         "modelListLabel": "Modèles",
         "recommendedBadge": "Recommandé",
+        "recommendedValue": "Recommandé : {value}",
+        "searchOptions": "Rechercher des options...",
+        "searchOptionsAria": "Rechercher des options",
+        "noOptions": "Aucune option trouvée",
         "noModels": "Aucun modèle trouvé",
         "cancel": "Annuler",
         "send": "Envoyer",
@@ -4007,13 +4036,16 @@
       },
       "messageNav": {
         "title": "Navigation des messages",
-        "collapse": "Réduire la navigation des messages",
         "loadingEarlier": "Chargement des messages précédents…",
         "loadEarlier": "Charger les messages précédents",
-        "collapsedSummary": "Messages {count}",
         "fileCount": "{count, plural, one {# fichier} other {# fichiers}}",
-        "remove": "Retirer",
-        "noDiffDataAvailable": "Aucune donnée de diff disponible pour {filePath}"
+        "subAgentCount": "{count, plural, one {# sous-agent} other {# sous-agents}}",
+        "showDiff": "Afficher les modifications de {filePath}",
+        "hideDiff": "Masquer les modifications de {filePath}",
+        "openFile": "Ouvrir {filePath}",
+        "collapse": "Réduire",
+        "currentMessage": "Message actuel",
+        "scrollToCurrent": "Faire défiler jusqu’au message actuel (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "Fichiers modifiés",
@@ -4071,6 +4103,9 @@
         "resumeDelegation": "Reprise de la tâche {task}",
         "resumeDelegationNoId": "Reprise d'une tâche déléguée",
         "promptLabel": "Instruction",
+        "ackRecorded": "Enregistré dans la tâche",
+        "ackNotRecorded": "Non enregistré dans la tâche",
+        "ackNotRecordedWithReason": "Non enregistré dans la tâche : {reason}",
         "verdict": {
           "success": "réussie",
           "needs_review": "à relire",
@@ -4187,6 +4222,18 @@
         "tokens": "{count} jetons",
         "stopDeclined": "Impossible d'arrêter cette tâche : elle est peut-être déjà terminée.",
         "stopFailed": "Échec de l'arrêt de la tâche : {error}"
+      },
+      "remoteControl": {
+        "title": "Contrôle à distance activé",
+        "open": "Ouvrir dans le navigateur",
+        "copy": "Copier le lien",
+        "copied": "Copié",
+        "qr": "Code QR",
+        "qrLabel": "Code QR du lien de contrôle à distance de cette session",
+        "qrHint": "Scannez-le avec votre téléphone pour poursuivre cette session dans l'app Claude ou sur claude.ai/code.",
+        "noUrl": "Claude Code n'a renvoyé aucun lien pour cette session",
+        "turnOff": "Désactiver",
+        "turnOffBusy": "Disponible une fois que Claude a terminé"
       },
       "proposedPlan": {
         "title": "Plan proposé",
@@ -7365,13 +7412,6 @@
     }
   },
   "FloatingBall": {
-    "label": "Boule flottante",
-    "panelTitle": "Actions rapides",
-    "settingsTitle": "Boule flottante",
-    "close": "Fermer",
-    "resetPosition": "Réinitialiser la position",
-    "cheatSheetTitle": "Gestes",
-    "hint": "Faites glisser la boule pour la déplacer. Un balayage rapide déclenche un geste, un appui long ouvre ce panneau.",
     "actions": {
       "newConversation": "Nouvelle conversation",
       "toggleSidebar": "Afficher ou masquer la barre latérale",
@@ -7437,7 +7477,6 @@
       "upLeftThenRight": "↖ puis →",
       "upRightThenLeft": "↗ puis ←"
     },
-    "favoriteAgentsEmpty": "Aucun agent disponible",
     "toasts": {
       "renameNeedsSavedSession": "Renommer ne s'applique qu'aux sessions enregistrées — envoyez d'abord un message.",
       "sessionFolderNeedsWorkspace": "Ouvrez d'abord un dossier d'espace de travail.",
@@ -7450,6 +7489,14 @@
       "noModesAvailable": "Cet agent n'expose aucun mode.",
       "noSwitchTarget": "Aucun mode vers lequel basculer (mode Plan ou accès complet introuvable)."
     },
+    "label": "Boule flottante",
+    "panelTitle": "Actions rapides",
+    "settingsTitle": "Boule flottante",
+    "close": "Fermer",
+    "resetPosition": "Réinitialiser la position",
+    "cheatSheetTitle": "Gestes",
+    "hint": "Faites glisser la boule pour la déplacer. Un balayage rapide déclenche un geste, un appui long ouvre ce panneau.",
+    "favoriteAgentsEmpty": "Aucun agent disponible",
     "recentSessionDepth": "Profondeur des sessions récentes",
     "bindingCleared": "Non attribué"
   }

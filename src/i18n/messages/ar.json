@@ -181,13 +181,6 @@
       "sectionDescription": "حركات الطي/التوسيع واستدعاءات الأدوات وحالة العمل داخل منطقة المحادثة، إضافةً إلى التمرير السلس. عند الإيقاف تتحدّث الواجهة فورًا. تستمر مؤشرات التحميل في الدوران.",
       "enable": "تفعيل حركات المحادثة"
     },
-    "messageNav": {
-      "sectionTitle": "مستكشف الرسائل",
-      "sectionDescription": "موضع مستكشف رسائل المحادثة. عند اختيار أسفل اليمين يصبح بطاقة مُدمجة بسطر واحد لكل رسالة مستخدم فوق حقل الإدخال.",
-      "positionStart": "أعلى اليسار (افتراضي)",
-      "positionBottomEnd": "أسفل اليمين (مُدمج)",
-      "hint": "تبقى لوحتا الخطة والوكلاء الفرعيين في أعلى اليسار في كل الأحوال."
-    },
     "chatWidth": {
       "sectionTitle": "عرض المحادثة",
       "sectionDescription": "أقصى عرض لعمود المحادثة ومربع الإدخال. يمكنك أيضًا سحب حافتي منطقة المحادثة لضبطه.",
@@ -247,54 +240,6 @@
         "credit": "الصور من wallhaven.cc · محتوى آمن فقط"
       }
     },
-    "floatingBall": {
-      "sectionTitle": "الكرة العائمة",
-      "sectionDescription": "كرة قابلة للسحب فوق مساحة العمل تحوّل السحب إلى اختصارات، مصممة للهاتف حيث لا توجد لوحة مفاتيح.",
-      "enable": "إظهار الكرة العائمة",
-      "hint": "اسحب للتحريك، اسحب بسرعة لإيماءة، اضغط مطوّلاً للوحة وقائمة الإيماءات.",
-      "resetPosition": "إعادة تعيين الموضع",
-      "ballSize": "حجم الكرة",
-      "sizeSmall": "صغير",
-      "sizeMedium": "متوسط",
-      "sizeLarge": "كبير",
-      "gestureBindings": "ربط الإيماءات",
-      "bindingCleared": "غير مربوط",
-      "favoriteAgents": "الوكلاء المفضلون",
-      "favoriteAgentsHint": "اختر 2-3 وكلاء للتنقل بينهم بإيماءة المفضلين.",
-      "favoriteAgentsEmpty": "لا يوجد وكلاء متاحون",
-      "panelTitle": "إجراءات سريعة"
-    },
-    "gestures": {
-      "tap": "نقرة",
-      "doubleTap": "نقرة مزدوجة",
-      "longPress": "ضغط مطول",
-      "left": "←",
-      "right": "→",
-      "up": "↑",
-      "upLeft": "↖",
-      "upRight": "↗",
-      "upThenLeft": "↑ ثم ←",
-      "upThenRight": "↑ ثم →",
-      "upDown": "↑ ثم ↓",
-      "leftThenRight": "← ثم →",
-      "rightThenLeft": "→ ثم ←",
-      "upLeftThenDown": "↖ ثم ↓",
-      "upRightThenDown": "↗ ثم ↓",
-      "down": "↓",
-      "downLeft": "↙",
-      "downRight": "↘",
-      "downUp": "↓ ثم ↑",
-      "upThenDownRight": "↑ ثم ↘",
-      "downThenUpRight": "↓ ثم ↗",
-      "rightThenUp": "→ ثم ↑",
-      "rightThenDown": "→ ثم ↓",
-      "downThenRight": "↓ ثم →",
-      "downThenLeft": "↓ ثم ←",
-      "downRightThenUp": "↘ ثم ↑",
-      "downLeftThenUp": "↙ ثم ↑",
-      "upLeftThenRight": "↖ ثم →",
-      "upRightThenLeft": "↗ ثم ←"
-    },
     "actions": {
       "newConversation": "محادثة جديدة",
       "toggleSidebar": "تبديل الشريط الجانبي",
@@ -328,6 +273,54 @@
       "focusModeSelector": "محدد الوضع",
       "togglePlanFullAccess": "خطة / وصول كامل",
       "openCollaboration": "التعاون"
+    },
+    "gestures": {
+      "tap": "نقرة",
+      "doubleTap": "نقرة مزدوجة",
+      "longPress": "ضغط مطول",
+      "left": "←",
+      "right": "→",
+      "up": "↑",
+      "upLeft": "↖",
+      "upRight": "↗",
+      "upThenLeft": "↑ ثم ←",
+      "upThenRight": "↑ ثم →",
+      "upDown": "↑ ثم ↓",
+      "leftThenRight": "← ثم →",
+      "rightThenLeft": "→ ثم ←",
+      "upLeftThenDown": "↖ ثم ↓",
+      "upRightThenDown": "↗ ثم ↓",
+      "down": "↓",
+      "downLeft": "↙",
+      "downRight": "↘",
+      "downUp": "↓ ثم ↑",
+      "upThenDownRight": "↑ ثم ↘",
+      "downThenUpRight": "↓ ثم ↗",
+      "rightThenUp": "→ ثم ↑",
+      "rightThenDown": "→ ثم ↓",
+      "downThenRight": "↓ ثم →",
+      "downThenLeft": "↓ ثم ←",
+      "downRightThenUp": "↘ ثم ↑",
+      "downLeftThenUp": "↙ ثم ↑",
+      "upLeftThenRight": "↖ ثم →",
+      "upRightThenLeft": "↗ ثم ←"
+    },
+    "floatingBall": {
+      "sectionTitle": "الكرة العائمة",
+      "sectionDescription": "كرة قابلة للسحب فوق مساحة العمل تحوّل السحب إلى اختصارات، مصممة للهاتف حيث لا توجد لوحة مفاتيح.",
+      "enable": "إظهار الكرة العائمة",
+      "hint": "اسحب للتحريك، اسحب بسرعة لإيماءة، اضغط مطوّلاً للوحة وقائمة الإيماءات.",
+      "resetPosition": "إعادة تعيين الموضع",
+      "ballSize": "حجم الكرة",
+      "sizeSmall": "صغير",
+      "sizeMedium": "متوسط",
+      "sizeLarge": "كبير",
+      "gestureBindings": "ربط الإيماءات",
+      "bindingCleared": "غير مربوط",
+      "favoriteAgents": "الوكلاء المفضلون",
+      "favoriteAgentsHint": "اختر 2-3 وكلاء للتنقل بينهم بإيماءة المفضلين.",
+      "favoriteAgentsEmpty": "لا يوجد وكلاء متاحون",
+      "panelTitle": "إجراءات سريعة"
     }
   },
   "SystemSettings": {
@@ -1201,6 +1194,30 @@
       "apiKeyHint": "يُمرَّر إلى CLI باسم KIRO_API_KEY. اتركه فارغاً لاستخدام الحساب الذي سجلت الدخول به عبر kiro-cli login؛ لا يلزم إلا حيث يتعذر تسجيل الدخول بالمتصفح (الخوادم، Docker).",
       "saveConfig": "حفظ إعدادات Kiro"
     },
+    "trae": {
+      "configManagement": "إدارة الإعدادات",
+      "configDescription": "يتوفر TRAE CLI 2.0 لعملاء الخطة الرئيسية من TRAE Enterprise فقط. يشغّل Codeg أداة traecli التي ثبّتّها، وهي تحفظ تسجيل الدخول والمهارات وخوادم MCP في ~/.trae. النموذج والوضع ومستوى الاستدلال ليست هنا: يُبلغ عنها TRAE CLI عبر ACP، لذا تديرها محددات المحرّر لكل جلسة.",
+      "signInTitle": "تسجيل الدخول",
+      "signInHint": "شغّل هذا الأمر مرة واحدة في الطرفية لتسجيل الدخول عبر SSO الخاص بمؤسستك. تعيد جلسات Codeg استخدام تسجيل الدخول هذا.",
+      "copyCommand": "نسخ الأمر",
+      "commandCopied": "تم نسخ الأمر",
+      "patLabel": "رمز الوصول الشخصي (اختياري)",
+      "patHint": "للأجهزة التي يتعذر فيها تسجيل الدخول بالمتصفح، مثل الخوادم أو تثبيتات Docker. يمرّره Codeg إلى TRAE CLI باسم TRAECLI_PERSONAL_ACCESS_TOKEN ويسجّل الدخول به عند بدء كل جلسة. اتركه فارغاً لاستخدام تسجيل الدخول من traecli login.",
+      "hostLabel": "عنوان API الخاص بالمؤسسة (اختياري)",
+      "hostHint": "فقط إذا كانت مؤسستك تشغّل TRAE على نطاقها الخاص. يُمرَّر باسم TRAECLI_HOST؛ اتركه فارغاً لاستخدام خدمة TRAE نفسها.",
+      "saveConfig": "حفظ إعدادات TRAE CLI"
+    },
+    "commandCode": {
+      "configManagement": "إدارة الإعدادات",
+      "configDescription": "يشغّل Codeg واجهة Command Code CLI من حزمة npm المسماة command-code، وهي تحفظ تسجيل الدخول والمهارات وخوادم MCP في ~/.commandcode. النموذج والوضع ومستوى الاستدلال ليست هنا: يُبلغ عنها Command Code عبر ACP، لذا تديرها محددات المحرّر لكل جلسة.",
+      "signInTitle": "تسجيل الدخول",
+      "signInHint": "شغّل هذا الأمر مرة واحدة في الطرفية لتسجيل الدخول بحساب Command Code الخاص بك. تعيد جلسات Codeg استخدام تسجيل الدخول هذا.",
+      "copyCommand": "نسخ الأمر",
+      "commandCopied": "تم نسخ الأمر",
+      "apiKeyLabel": "مفتاح API (اختياري)",
+      "apiKeyHint": "للأجهزة التي يتعذر فيها تسجيل الدخول بالمتصفح، مثل الخوادم أو تثبيتات Docker. يُمرَّر إلى Command Code باسم COMMAND_CODE_API_KEY ويتقدّم على تسجيل الدخول من command-code login. اتركه فارغاً لاستخدام تسجيل الدخول ذاك.",
+      "saveConfig": "حفظ إعدادات Command Code"
+    },
     "deepseek": {
       "configManagement": "إعدادات DeepSeek Harness",
       "configDescription": "نقطة النهاية والمفتاح متغيّرا بيئة يقرأهما deepseek-acp عند الإقلاع. أما النموذج ومستوى الاستدلال فمحدِّدان على مستوى الجلسة، ويُختاران من حقل الإدخال.",
@@ -1696,6 +1713,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "تم حفظ إعدادات Kiro",
       "saveKiroFailed": "تعذّر حفظ إعدادات Kiro",
+      "traeSaved": "تم حفظ إعدادات TRAE CLI",
+      "saveTraeFailed": "تعذّر حفظ إعدادات TRAE CLI",
+      "commandCodeSaved": "تم حفظ إعدادات Command Code",
+      "saveCommandCodeFailed": "تعذّر حفظ إعدادات Command Code",
       "systemAgentAlreadyLatest": "{name} محدَّث بالفعل ({version})"
     },
     "distribution": {
@@ -2467,7 +2488,10 @@
         "commits": "الالتزامات"
       },
       "noFolderTitle": "لا يوجد مجلد مفتوح",
-      "noFolderHint": "افتح مجلدا لعرض محتواه هنا"
+      "noFolderHint": "افتح مجلدا لعرض محتواه هنا",
+      "openFullPage": "فتح في صفحة كاملة",
+      "back": "رجوع",
+      "noAutomations": "لا توجد أتمتة لهذا المشروع بعد"
     },
     "windowControls": {
       "minimizeWindow": "تصغير النافذة",
@@ -3366,6 +3390,7 @@
       },
       "messageInput": {
         "askAnything": "اسأل أي شيء...",
+        "promptSuggestion": "{suggestion} (اضغط Tab للاستخدام)",
         "removeAttachmentAria": "إزالة {name}",
         "attachFiles": "إرفاق ملفات",
         "addActions": "إضافة",
@@ -3395,6 +3420,10 @@
         "searchModelAria": "البحث عن النماذج",
         "modelListLabel": "النماذج",
         "recommendedBadge": "موصى به",
+        "recommendedValue": "موصى به: {value}",
+        "searchOptions": "البحث في الخيارات...",
+        "searchOptionsAria": "البحث في الخيارات",
+        "noOptions": "لم يتم العثور على خيارات",
         "noModels": "لم يتم العثور على نماذج",
         "cancel": "إلغاء",
         "send": "إرسال",
@@ -4007,13 +4036,16 @@
       },
       "messageNav": {
         "title": "تنقل الرسائل",
-        "collapse": "طي تنقل الرسائل",
         "loadingEarlier": "جارٍ تحميل الرسائل السابقة…",
         "loadEarlier": "تحميل الرسائل السابقة",
-        "collapsedSummary": "الرسائل {count}",
         "fileCount": "{count, plural, one {# ملف} other {# ملفات}}",
-        "remove": "إزالة",
-        "noDiffDataAvailable": "لا توجد بيانات diff متاحة لـ {filePath}"
+        "subAgentCount": "{count, plural, one {# وكيل فرعي} other {# وكلاء فرعيين}}",
+        "showDiff": "إظهار تغييرات {filePath}",
+        "hideDiff": "إخفاء تغييرات {filePath}",
+        "openFile": "فتح {filePath}",
+        "collapse": "طي",
+        "currentMessage": "الرسالة الحالية",
+        "scrollToCurrent": "التمرير إلى الرسالة الحالية (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "الملفات المتغيرة",
@@ -4071,6 +4103,9 @@
         "resumeDelegation": "استئناف المهمة {task}",
         "resumeDelegationNoId": "استئناف مهمة مفوضة",
         "promptLabel": "التعليمات",
+        "ackRecorded": "سُجِّل في مهمة العمل",
+        "ackNotRecorded": "لم يُسجَّل في مهمة العمل",
+        "ackNotRecordedWithReason": "لم يُسجَّل في مهمة العمل: {reason}",
         "verdict": {
           "success": "ناجحة",
           "needs_review": "بحاجة إلى مراجعة",
@@ -4187,6 +4222,18 @@
         "tokens": "{count} رمز",
         "stopDeclined": "تعذّر إيقاف هذه المهمة، ربما تكون قد انتهت بالفعل.",
         "stopFailed": "فشل إيقاف المهمة: {error}"
+      },
+      "remoteControl": {
+        "title": "التحكم عن بُعد مُفعّل",
+        "open": "فتح في المتصفح",
+        "copy": "نسخ الرابط",
+        "copied": "تم النسخ",
+        "qr": "رمز QR",
+        "qrLabel": "رمز QR لرابط التحكم عن بُعد لهذه الجلسة",
+        "qrHint": "امسحه بهاتفك لمتابعة هذه الجلسة في تطبيق Claude أو على claude.ai/code.",
+        "noUrl": "لم يُرجع Claude Code رابطًا لهذه الجلسة",
+        "turnOff": "إيقاف",
+        "turnOffBusy": "متاح بعد أن ينتهي Claude"
       },
       "proposedPlan": {
         "title": "الخطة المقترحة",
@@ -7365,13 +7412,6 @@
     }
   },
   "FloatingBall": {
-    "label": "الكرة العائمة",
-    "panelTitle": "إجراءات سريعة",
-    "settingsTitle": "الكرة العائمة",
-    "close": "إغلاق",
-    "resetPosition": "إعادة تعيين الموضع",
-    "cheatSheetTitle": "الإيماءات",
-    "hint": "اسحب الكرة لتحريكها. السحب السريع يشغّل إيماءة، والضغط المطوّل يفتح هذه اللوحة.",
     "actions": {
       "newConversation": "محادثة جديدة",
       "toggleSidebar": "تبديل الشريط الجانبي",
@@ -7437,7 +7477,6 @@
       "upLeftThenRight": "↖ ثم →",
       "upRightThenLeft": "↗ ثم ←"
     },
-    "favoriteAgentsEmpty": "لا يوجد وكلاء متاحون",
     "toasts": {
       "renameNeedsSavedSession": "إعادة التسمية تعمل على الجلسات المحفوظة فقط — أرسل رسالة أولاً.",
       "sessionFolderNeedsWorkspace": "افتح مجلد مساحة العمل أولاً.",
@@ -7450,6 +7489,14 @@
       "noModesAvailable": "لا يوفر هذا الوكيل أي أوضاع.",
       "noSwitchTarget": "لا يوجد وضع للتبديل إليه (لم يتم العثور على وضع Plan أو الوصول الكامل)."
     },
+    "label": "الكرة العائمة",
+    "panelTitle": "إجراءات سريعة",
+    "settingsTitle": "الكرة العائمة",
+    "close": "إغلاق",
+    "resetPosition": "إعادة تعيين الموضع",
+    "cheatSheetTitle": "الإيماءات",
+    "hint": "اسحب الكرة لتحريكها. السحب السريع يشغّل إيماءة، والضغط المطوّل يفتح هذه اللوحة.",
+    "favoriteAgentsEmpty": "لا يوجد وكلاء متاحون",
     "recentSessionDepth": "عمق تبديل الجلسات الأخيرة",
     "bindingCleared": "غير مربوط"
   }

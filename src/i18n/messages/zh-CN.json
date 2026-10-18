@@ -181,13 +181,6 @@
       "sectionDescription": "会话区域内的折叠/展开、工具调用、工作状态等动画，以及平滑滚动。关闭后界面立即更新、不再有过渡动画；加载转圈图标仍会旋转。",
       "enable": "启用聊天区域动画"
     },
-    "messageNav": {
-      "sectionTitle": "消息导航",
-      "sectionDescription": "会话消息导航卡的位置。右下角会变成紧凑卡片：每次用户回话一行，贴在输入框上方，不挡阅读区。",
-      "positionStart": "左上（默认）",
-      "positionBottomEnd": "右下（紧凑）",
-      "hint": "计划面板与子智能体面板始终留在左上。"
-    },
     "chatWidth": {
       "sectionTitle": "聊天区域宽度",
       "sectionDescription": "会话列与输入框的最大宽度。也可以直接拖动聊天区域左右两侧的边缘来调整。",
@@ -247,54 +240,6 @@
         "credit": "图片来源 wallhaven.cc · 仅 SFW 内容"
       }
     },
-    "floatingBall": {
-      "sectionTitle": "悬浮球",
-      "sectionDescription": "工作区上的可拖动悬浮球，把滑动手势变成快捷键——为没有键盘的手机而设。",
-      "enable": "显示悬浮球",
-      "hint": "拖动可移动；快速滑动触发手势；长按打开面板与手势表。",
-      "resetPosition": "重置位置",
-      "ballSize": "球体大小",
-      "sizeSmall": "小",
-      "sizeMedium": "中",
-      "sizeLarge": "大",
-      "gestureBindings": "手势绑定",
-      "bindingCleared": "未绑定",
-      "favoriteAgents": "常用智能体",
-      "favoriteAgentsHint": "选择 2-3 个智能体，供「常用智能体」手势循环快切。",
-      "favoriteAgentsEmpty": "暂无可用智能体",
-      "panelTitle": "快捷操作"
-    },
-    "gestures": {
-      "tap": "单击",
-      "doubleTap": "双击",
-      "longPress": "长按",
-      "left": "←",
-      "right": "→",
-      "up": "↑",
-      "upLeft": "↖",
-      "upRight": "↗",
-      "upThenLeft": "↑ 然后 ←",
-      "upThenRight": "↑ 然后 →",
-      "upDown": "↑ 然后 ↓",
-      "leftThenRight": "← 然后 →",
-      "rightThenLeft": "→ 然后 ←",
-      "upLeftThenDown": "↖ 然后 ↓",
-      "upRightThenDown": "↗ 然后 ↓",
-      "down": "↓",
-      "downLeft": "↙",
-      "downRight": "↘",
-      "downUp": "↓ 然后 ↑",
-      "upThenDownRight": "↑ 然后 ↘",
-      "downThenUpRight": "↓ 然后 ↗",
-      "rightThenUp": "→ 然后 ↑",
-      "rightThenDown": "→ 然后 ↓",
-      "downThenRight": "↓ 然后 →",
-      "downThenLeft": "↓ 然后 ←",
-      "downRightThenUp": "↘ 然后 ↑",
-      "downLeftThenUp": "↙ 然后 ↑",
-      "upLeftThenRight": "↖ 然后 →",
-      "upRightThenLeft": "↗ 然后 ←"
-    },
     "actions": {
       "newConversation": "新建会话",
       "toggleSidebar": "切换侧栏",
@@ -328,6 +273,54 @@
       "focusModeSelector": "模式选择",
       "togglePlanFullAccess": "Plan/全权限切换",
       "openCollaboration": "协作"
+    },
+    "gestures": {
+      "tap": "单击",
+      "doubleTap": "双击",
+      "longPress": "长按",
+      "left": "←",
+      "right": "→",
+      "up": "↑",
+      "upLeft": "↖",
+      "upRight": "↗",
+      "upThenLeft": "↑ 然后 ←",
+      "upThenRight": "↑ 然后 →",
+      "upDown": "↑ 然后 ↓",
+      "leftThenRight": "← 然后 →",
+      "rightThenLeft": "→ 然后 ←",
+      "upLeftThenDown": "↖ 然后 ↓",
+      "upRightThenDown": "↗ 然后 ↓",
+      "down": "↓",
+      "downLeft": "↙",
+      "downRight": "↘",
+      "downUp": "↓ 然后 ↑",
+      "upThenDownRight": "↑ 然后 ↘",
+      "downThenUpRight": "↓ 然后 ↗",
+      "rightThenUp": "→ 然后 ↑",
+      "rightThenDown": "→ 然后 ↓",
+      "downThenRight": "↓ 然后 →",
+      "downThenLeft": "↓ 然后 ←",
+      "downRightThenUp": "↘ 然后 ↑",
+      "downLeftThenUp": "↙ 然后 ↑",
+      "upLeftThenRight": "↖ 然后 →",
+      "upRightThenLeft": "↗ 然后 ←"
+    },
+    "floatingBall": {
+      "sectionTitle": "悬浮球",
+      "sectionDescription": "工作区上的可拖动悬浮球，把滑动手势变成快捷键——为没有键盘的手机而设。",
+      "enable": "显示悬浮球",
+      "hint": "拖动可移动；快速滑动触发手势；长按打开面板与手势表。",
+      "resetPosition": "重置位置",
+      "ballSize": "球体大小",
+      "sizeSmall": "小",
+      "sizeMedium": "中",
+      "sizeLarge": "大",
+      "gestureBindings": "手势绑定",
+      "bindingCleared": "未绑定",
+      "favoriteAgents": "常用智能体",
+      "favoriteAgentsHint": "选择 2-3 个智能体，供「常用智能体」手势循环快切。",
+      "favoriteAgentsEmpty": "暂无可用智能体",
+      "panelTitle": "快捷操作"
     }
   },
   "SystemSettings": {
@@ -1201,6 +1194,30 @@
       "apiKeyHint": "以 KIRO_API_KEY 传给 CLI。留空则使用 kiro-cli login 登录的账号；只有无法用浏览器登录的环境（服务器、Docker）才需要 API Key。",
       "saveConfig": "保存 Kiro 配置"
     },
+    "trae": {
+      "configManagement": "配置管理",
+      "configDescription": "TRAE CLI 2.0 仅向 TRAE 企业版旗舰版套餐客户开放。Codeg 运行你安装的 traecli，它把登录状态、技能和 MCP 服务器保存在 ~/.trae 中。模型、模式和推理强度不在这里设置：TRAE CLI 会通过 ACP 上报它们，由输入框自带的选择器按会话管理。",
+      "signInTitle": "登录",
+      "signInHint": "在终端中运行一次下面的命令，用企业 SSO 登录。Codeg 里的会话会复用这次登录。",
+      "copyCommand": "复制命令",
+      "commandCopied": "命令已复制",
+      "patLabel": "个人访问令牌（可选）",
+      "patHint": "适用于无法用浏览器登录的机器，例如服务器或 Docker 部署。Codeg 会以 TRAECLI_PERSONAL_ACCESS_TOKEN 传给 TRAE CLI，并在每次启动会话时用它登录。留空则使用 traecli login 的登录。",
+      "hostLabel": "企业 API 地址（可选）",
+      "hostHint": "仅当你的组织在自有域名上部署 TRAE 时填写。以 TRAECLI_HOST 传入；留空则使用 TRAE 官方服务。",
+      "saveConfig": "保存 TRAE CLI 配置"
+    },
+    "commandCode": {
+      "configManagement": "配置管理",
+      "configDescription": "Codeg 运行 command-code npm 包提供的 Command Code CLI，它把登录状态、技能和 MCP 服务器保存在 ~/.commandcode 中。模型、模式和推理强度不在这里设置：Command Code 会通过 ACP 上报它们，由输入框自带的选择器按会话管理。",
+      "signInTitle": "登录",
+      "signInHint": "在终端中运行一次下面的命令，登录你的 Command Code 账号。Codeg 里的会话会复用这次登录。",
+      "copyCommand": "复制命令",
+      "commandCopied": "命令已复制",
+      "apiKeyLabel": "API 密钥（可选）",
+      "apiKeyHint": "适用于无法用浏览器登录的机器，例如服务器或 Docker 部署。以 COMMAND_CODE_API_KEY 传给 Command Code，优先于 command-code login 的登录。留空则使用那次登录。",
+      "saveConfig": "保存 Command Code 配置"
+    },
     "deepseek": {
       "configManagement": "DeepSeek Harness 配置",
       "configDescription": "端点与密钥是 deepseek-acp 启动时读取的环境变量。模型和推理档位是会话级选择器，在输入框里切换。",
@@ -1696,6 +1713,10 @@
       "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
       "kiroSaved": "Kiro 配置已保存",
       "saveKiroFailed": "保存 Kiro 配置失败",
+      "traeSaved": "TRAE CLI 配置已保存",
+      "saveTraeFailed": "保存 TRAE CLI 配置失败",
+      "commandCodeSaved": "Command Code 配置已保存",
+      "saveCommandCodeFailed": "保存 Command Code 配置失败",
       "systemAgentAlreadyLatest": "{name} 已是最新版本（{version}）"
     },
     "distribution": {
@@ -2467,7 +2488,10 @@
         "commits": "提交"
       },
       "noFolderTitle": "暂无打开的文件夹",
-      "noFolderHint": "打开一个文件夹后在这里查看"
+      "noFolderHint": "打开一个文件夹后在这里查看",
+      "openFullPage": "在完整页面中打开",
+      "back": "返回",
+      "noAutomations": "此项目还没有自动化"
     },
     "windowControls": {
       "minimizeWindow": "最小化窗口",
@@ -3366,6 +3390,7 @@
       },
       "messageInput": {
         "askAnything": "请开始输入...",
+        "promptSuggestion": "{suggestion}（按 Tab 填入）",
         "removeAttachmentAria": "移除 {name}",
         "attachFiles": "附加文件",
         "attachLocalUpload": "附加本地文件",
@@ -3397,6 +3422,10 @@
         "searchModelAria": "搜索模型",
         "modelListLabel": "模型",
         "recommendedBadge": "推荐",
+        "recommendedValue": "推荐：{value}",
+        "searchOptions": "搜索选项...",
+        "searchOptionsAria": "搜索选项",
+        "noOptions": "未找到选项",
         "noModels": "未找到模型",
         "cancel": "取消",
         "send": "发送",
@@ -4007,13 +4036,16 @@
       },
       "messageNav": {
         "title": "消息导航",
-        "collapse": "收起消息导航",
         "loadingEarlier": "正在加载更早的消息…",
         "loadEarlier": "加载更早的消息",
-        "collapsedSummary": "消息 {count}",
         "fileCount": "{count} 个文件",
-        "remove": "移除",
-        "noDiffDataAvailable": "未找到 {filePath} 的差异数据"
+        "subAgentCount": "{count} 个子智能体",
+        "showDiff": "展开 {filePath} 的改动",
+        "hideDiff": "收起 {filePath} 的改动",
+        "openFile": "打开 {filePath}",
+        "collapse": "收起",
+        "currentMessage": "当前消息",
+        "scrollToCurrent": "滚动到当前消息（#{ordinal}）"
       },
       "replyArtifacts": {
         "title": "改动文件",
@@ -4071,6 +4103,9 @@
         "resumeDelegation": "恢复任务 {task}",
         "resumeDelegationNoId": "恢复委派任务",
         "promptLabel": "指令",
+        "ackRecorded": "已记录到待办任务",
+        "ackNotRecorded": "未记录到待办任务",
+        "ackNotRecordedWithReason": "未记录到待办任务：{reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "待复核",
@@ -4187,6 +4222,18 @@
         "tokens": "{count} tokens",
         "stopDeclined": "无法停止该任务，它可能已经结束。",
         "stopFailed": "停止任务失败：{error}"
+      },
+      "remoteControl": {
+        "title": "远程控制已开启",
+        "open": "在浏览器中打开",
+        "copy": "复制链接",
+        "copied": "已复制",
+        "qr": "二维码",
+        "qrLabel": "本会话远程控制链接的二维码",
+        "qrHint": "用手机扫码，在 Claude App 或 claude.ai/code 上继续本会话。",
+        "noUrl": "Claude Code 没有返回本会话的链接",
+        "turnOff": "关闭",
+        "turnOffBusy": "Claude 完成当前工作后可用"
       },
       "proposedPlan": {
         "title": "计划提案",
@@ -7365,13 +7412,6 @@
     }
   },
   "FloatingBall": {
-    "label": "悬浮球",
-    "panelTitle": "快捷操作",
-    "settingsTitle": "悬浮球",
-    "close": "关闭",
-    "resetPosition": "重置位置",
-    "cheatSheetTitle": "手势",
-    "hint": "拖动悬浮球可移动位置。快速滑动触发手势，长按打开此面板。",
     "actions": {
       "newConversation": "新建会话",
       "toggleSidebar": "切换侧栏",
@@ -7437,7 +7477,6 @@
       "upLeftThenRight": "↖ 然后 →",
       "upRightThenLeft": "↗ 然后 ←"
     },
-    "favoriteAgentsEmpty": "暂无可用智能体",
     "toasts": {
       "renameNeedsSavedSession": "重命名只对已保存的会话生效——先发一条消息。",
       "sessionFolderNeedsWorkspace": "请先打开一个工作区文件夹。",
@@ -7450,6 +7489,14 @@
       "noModesAvailable": "该智能体没有可用模式。",
       "noSwitchTarget": "没有可切换的模式（未找到 Plan 或完整访问模式）。"
     },
+    "label": "悬浮球",
+    "panelTitle": "快捷操作",
+    "settingsTitle": "悬浮球",
+    "close": "关闭",
+    "resetPosition": "重置位置",
+    "cheatSheetTitle": "手势",
+    "hint": "拖动悬浮球可移动位置。快速滑动触发手势，长按打开此面板。",
+    "favoriteAgentsEmpty": "暂无可用智能体",
     "recentSessionDepth": "最近会话切换深度",
     "bindingCleared": "未绑定"
   }

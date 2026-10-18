@@ -181,13 +181,6 @@
       "sectionDescription": "Animações de recolher/expandir, chamadas de ferramentas e estado de trabalho na área de conversa, além da rolagem suave. Desative para atualizações instantâneas. Os indicadores de carregamento continuam girando.",
       "enable": "Ativar as animações do chat"
     },
-    "messageNav": {
-      "sectionTitle": "Navegador de mensagens",
-      "sectionDescription": "Posição do navegador de mensagens. No canto inferior direito vira um cartão compacto com uma linha por mensagem do usuário, acima do campo de entrada.",
-      "positionStart": "Canto superior esquerdo (padrão)",
-      "positionBottomEnd": "Canto inferior direito (compacto)",
-      "hint": "Os painéis de plano e de subagentes permanecem no canto superior esquerdo."
-    },
     "chatWidth": {
       "sectionTitle": "Largura do chat",
       "sectionDescription": "Largura máxima da coluna de conversa e da caixa de entrada. Você também pode arrastar as bordas do chat para ajustá-la.",
@@ -247,54 +240,6 @@
         "credit": "Imagens de wallhaven.cc · apenas SFW"
       }
     },
-    "floatingBall": {
-      "sectionTitle": "Bola flutuante",
-      "sectionDescription": "Uma bola arrastável sobre o espaço de trabalho que transforma deslizes em atalhos — feita para o telefone, onde não há teclado.",
-      "enable": "Mostrar bola flutuante",
-      "hint": "Arraste para mover, deslize rápido para um gesto, toque e segure para o painel e a lista de gestos.",
-      "resetPosition": "Redefinir posição",
-      "ballSize": "Tamanho da bola",
-      "sizeSmall": "Pequeno",
-      "sizeMedium": "Médio",
-      "sizeLarge": "Grande",
-      "gestureBindings": "Atribuição de gestos",
-      "bindingCleared": "Sem atribuição",
-      "favoriteAgents": "Agentes favoritos",
-      "favoriteAgentsHint": "Escolha 2-3 agentes para alternar com o gesto de favoritos.",
-      "favoriteAgentsEmpty": "Nenhum agente disponível",
-      "panelTitle": "Ações rápidas"
-    },
-    "gestures": {
-      "tap": "Toque",
-      "doubleTap": "Toque duplo",
-      "longPress": "Pressão longa",
-      "left": "←",
-      "right": "→",
-      "up": "↑",
-      "upLeft": "↖",
-      "upRight": "↗",
-      "upThenLeft": "↑ depois ←",
-      "upThenRight": "↑ depois →",
-      "upDown": "↑ depois ↓",
-      "leftThenRight": "← depois →",
-      "rightThenLeft": "→ depois ←",
-      "upLeftThenDown": "↖ depois ↓",
-      "upRightThenDown": "↗ depois ↓",
-      "down": "↓",
-      "downLeft": "↙",
-      "downRight": "↘",
-      "downUp": "↓ depois ↑",
-      "upThenDownRight": "↑ depois ↘",
-      "downThenUpRight": "↓ depois ↗",
-      "rightThenUp": "→ depois ↑",
-      "rightThenDown": "→ depois ↓",
-      "downThenRight": "↓ depois →",
-      "downThenLeft": "↓ depois ←",
-      "downRightThenUp": "↘ depois ↑",
-      "downLeftThenUp": "↙ depois ↑",
-      "upLeftThenRight": "↖ depois →",
-      "upRightThenLeft": "↗ depois ←"
-    },
     "actions": {
       "newConversation": "Nova conversa",
       "toggleSidebar": "Alternar barra lateral",
@@ -328,6 +273,54 @@
       "focusModeSelector": "Seletor de modo",
       "togglePlanFullAccess": "Plano / acesso total",
       "openCollaboration": "Colaboração"
+    },
+    "gestures": {
+      "tap": "Toque",
+      "doubleTap": "Toque duplo",
+      "longPress": "Pressão longa",
+      "left": "←",
+      "right": "→",
+      "up": "↑",
+      "upLeft": "↖",
+      "upRight": "↗",
+      "upThenLeft": "↑ depois ←",
+      "upThenRight": "↑ depois →",
+      "upDown": "↑ depois ↓",
+      "leftThenRight": "← depois →",
+      "rightThenLeft": "→ depois ←",
+      "upLeftThenDown": "↖ depois ↓",
+      "upRightThenDown": "↗ depois ↓",
+      "down": "↓",
+      "downLeft": "↙",
+      "downRight": "↘",
+      "downUp": "↓ depois ↑",
+      "upThenDownRight": "↑ depois ↘",
+      "downThenUpRight": "↓ depois ↗",
+      "rightThenUp": "→ depois ↑",
+      "rightThenDown": "→ depois ↓",
+      "downThenRight": "↓ depois →",
+      "downThenLeft": "↓ depois ←",
+      "downRightThenUp": "↘ depois ↑",
+      "downLeftThenUp": "↙ depois ↑",
+      "upLeftThenRight": "↖ depois →",
+      "upRightThenLeft": "↗ depois ←"
+    },
+    "floatingBall": {
+      "sectionTitle": "Bola flutuante",
+      "sectionDescription": "Uma bola arrastável sobre o espaço de trabalho que transforma deslizes em atalhos — feita para o telefone, onde não há teclado.",
+      "enable": "Mostrar bola flutuante",
+      "hint": "Arraste para mover, deslize rápido para um gesto, toque e segure para o painel e a lista de gestos.",
+      "resetPosition": "Redefinir posição",
+      "ballSize": "Tamanho da bola",
+      "sizeSmall": "Pequeno",
+      "sizeMedium": "Médio",
+      "sizeLarge": "Grande",
+      "gestureBindings": "Atribuição de gestos",
+      "bindingCleared": "Sem atribuição",
+      "favoriteAgents": "Agentes favoritos",
+      "favoriteAgentsHint": "Escolha 2-3 agentes para alternar com o gesto de favoritos.",
+      "favoriteAgentsEmpty": "Nenhum agente disponível",
+      "panelTitle": "Ações rápidas"
     }
   },
   "SystemSettings": {
@@ -1201,6 +1194,30 @@
       "apiKeyHint": "Passada à CLI como KIRO_API_KEY. Deixe vazia para usar a conta conectada via kiro-cli login; só é necessária onde não há login pelo navegador (servidores, Docker).",
       "saveConfig": "Salvar configuração do Kiro"
     },
+    "trae": {
+      "configManagement": "Configuração",
+      "configDescription": "O TRAE CLI 2.0 está disponível apenas para clientes do plano principal do TRAE Enterprise. O Codeg executa o traecli que você instalou, que guarda o login, as skills e os servidores MCP em ~/.trae. Modelo, modo e esforço de raciocínio não ficam aqui: o TRAE CLI os informa via ACP, então os seletores do compositor os gerenciam em cada sessão.",
+      "signInTitle": "Entrar",
+      "signInHint": "Execute isto uma vez em um terminal para entrar com o SSO da sua empresa. As sessões do Codeg reutilizam esse login.",
+      "copyCommand": "Copiar comando",
+      "commandCopied": "Comando copiado",
+      "patLabel": "Token de acesso pessoal (opcional)",
+      "patHint": "Para uma máquina em que não é possível entrar pelo navegador, como um servidor ou uma instalação Docker. O Codeg o passa ao TRAE CLI como TRAECLI_PERSONAL_ACCESS_TOKEN e entra com ele sempre que uma sessão começa. Deixe vazio para usar o login do traecli login.",
+      "hostLabel": "URL da API corporativa (opcional)",
+      "hostHint": "Somente se a sua organização executa o TRAE em um domínio próprio. É passada como TRAECLI_HOST; deixe vazia para usar o serviço do TRAE.",
+      "saveConfig": "Salvar configuração do TRAE CLI"
+    },
+    "commandCode": {
+      "configManagement": "Configuração",
+      "configDescription": "O Codeg executa a CLI do Command Code do pacote npm command-code, que guarda o login, as skills e os servidores MCP em ~/.commandcode. Modelo, modo e esforço de raciocínio não ficam aqui: o Command Code os informa via ACP, então os seletores do compositor os gerenciam em cada sessão.",
+      "signInTitle": "Entrar",
+      "signInHint": "Execute isto uma vez em um terminal para entrar com sua conta do Command Code. As sessões do Codeg reutilizam esse login.",
+      "copyCommand": "Copiar comando",
+      "commandCopied": "Comando copiado",
+      "apiKeyLabel": "Chave de API (opcional)",
+      "apiKeyHint": "Para uma máquina em que não é possível entrar pelo navegador, como um servidor ou uma instalação Docker. Passada ao Command Code como COMMAND_CODE_API_KEY, que tem prioridade sobre o login do command-code login. Deixe vazia para usar esse login.",
+      "saveConfig": "Salvar configuração do Command Code"
+    },
     "deepseek": {
       "configManagement": "Configuração do DeepSeek Harness",
       "configDescription": "O endpoint e a chave são variáveis de ambiente que o deepseek-acp lê ao iniciar. O modelo e o nível de raciocínio são seletores por sessão — escolha-os no campo de mensagem.",
@@ -1696,6 +1713,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Configuração do Kiro salva",
       "saveKiroFailed": "Falha ao salvar a configuração do Kiro",
+      "traeSaved": "Configuração do TRAE CLI salva",
+      "saveTraeFailed": "Falha ao salvar a configuração do TRAE CLI",
+      "commandCodeSaved": "Configuração do Command Code salva",
+      "saveCommandCodeFailed": "Falha ao salvar a configuração do Command Code",
       "systemAgentAlreadyLatest": "{name} já está atualizado ({version})"
     },
     "distribution": {
@@ -2467,7 +2488,10 @@
         "commits": "Confirmações"
       },
       "noFolderTitle": "Nenhuma pasta aberta",
-      "noFolderHint": "Abra uma pasta para ver seu conteúdo aqui"
+      "noFolderHint": "Abra uma pasta para ver seu conteúdo aqui",
+      "openFullPage": "Abrir em página inteira",
+      "back": "Voltar",
+      "noAutomations": "Este projeto ainda não tem automações"
     },
     "windowControls": {
       "minimizeWindow": "Minimizar janela",
@@ -3366,6 +3390,7 @@
       },
       "messageInput": {
         "askAnything": "Pergunte qualquer coisa...",
+        "promptSuggestion": "{suggestion} (Tab para usar)",
         "removeAttachmentAria": "Remover {name}",
         "attachFiles": "Anexar arquivos",
         "addActions": "Adicionar",
@@ -3395,6 +3420,10 @@
         "searchModelAria": "Buscar modelos",
         "modelListLabel": "Modelos",
         "recommendedBadge": "Recomendado",
+        "recommendedValue": "Recomendado: {value}",
+        "searchOptions": "Buscar opções...",
+        "searchOptionsAria": "Buscar opções",
+        "noOptions": "Nenhuma opção encontrada",
         "noModels": "Nenhum modelo encontrado",
         "cancel": "Cancelar",
         "send": "Enviar",
@@ -4007,13 +4036,16 @@
       },
       "messageNav": {
         "title": "Navegação de mensagens",
-        "collapse": "Recolher navegação de mensagens",
         "loadingEarlier": "Carregando mensagens anteriores…",
         "loadEarlier": "Carregar mensagens anteriores",
-        "collapsedSummary": "Mensagens {count}",
         "fileCount": "{count, plural, one {# arquivo} other {# arquivos}}",
-        "remove": "Remover",
-        "noDiffDataAvailable": "Nenhum dado de diff disponível para {filePath}"
+        "subAgentCount": "{count, plural, one {# subagente} other {# subagentes}}",
+        "showDiff": "Mostrar as alterações de {filePath}",
+        "hideDiff": "Ocultar as alterações de {filePath}",
+        "openFile": "Abrir {filePath}",
+        "collapse": "Recolher",
+        "currentMessage": "Mensagem atual",
+        "scrollToCurrent": "Rolar até a mensagem atual (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "Arquivos alterados",
@@ -4071,6 +4103,9 @@
         "resumeDelegation": "Retomando a tarefa {task}",
         "resumeDelegationNoId": "Retomando uma tarefa delegada",
         "promptLabel": "Instrução",
+        "ackRecorded": "Registrado na tarefa de trabalho",
+        "ackNotRecorded": "Não registrado na tarefa de trabalho",
+        "ackNotRecordedWithReason": "Não registrado na tarefa de trabalho: {reason}",
         "verdict": {
           "success": "sucesso",
           "needs_review": "requer revisão",
@@ -4187,6 +4222,18 @@
         "tokens": "{count} tokens",
         "stopDeclined": "Não foi possível parar essa tarefa — ela pode já ter terminado.",
         "stopFailed": "Falha ao parar a tarefa: {error}"
+      },
+      "remoteControl": {
+        "title": "Controle remoto ativado",
+        "open": "Abrir no navegador",
+        "copy": "Copiar link",
+        "copied": "Copiado",
+        "qr": "Código QR",
+        "qrLabel": "Código QR do link de controle remoto desta sessão",
+        "qrHint": "Escaneie com o celular para continuar esta sessão no app do Claude ou em claude.ai/code.",
+        "noUrl": "O Claude Code não retornou nenhum link para esta sessão",
+        "turnOff": "Desativar",
+        "turnOffBusy": "Disponível quando o Claude terminar"
       },
       "proposedPlan": {
         "title": "Plano proposto",
@@ -7365,13 +7412,6 @@
     }
   },
   "FloatingBall": {
-    "label": "Bola flutuante",
-    "panelTitle": "Ações rápidas",
-    "settingsTitle": "Bola flutuante",
-    "close": "Fechar",
-    "resetPosition": "Redefinir posição",
-    "cheatSheetTitle": "Gestos",
-    "hint": "Arraste a bola para movê-la. Um deslize rápido dispara um gesto; um toque longo abre este painel.",
     "actions": {
       "newConversation": "Nova conversa",
       "toggleSidebar": "Alternar barra lateral",
@@ -7437,7 +7477,6 @@
       "upLeftThenRight": "↖ depois →",
       "upRightThenLeft": "↗ depois ←"
     },
-    "favoriteAgentsEmpty": "Nenhum agente disponível",
     "toasts": {
       "renameNeedsSavedSession": "Renomear só funciona em sessões salvas — envie uma mensagem primeiro.",
       "sessionFolderNeedsWorkspace": "Abra antes uma pasta de espaço de trabalho.",
@@ -7450,6 +7489,14 @@
       "noModesAvailable": "Este agente não expõe nenhum modo.",
       "noSwitchTarget": "Nenhum modo para alternar (modo Plan ou de acesso completo não encontrado)."
     },
+    "label": "Bola flutuante",
+    "panelTitle": "Ações rápidas",
+    "settingsTitle": "Bola flutuante",
+    "close": "Fechar",
+    "resetPosition": "Redefinir posição",
+    "cheatSheetTitle": "Gestos",
+    "hint": "Arraste a bola para movê-la. Um deslize rápido dispara um gesto; um toque longo abre este painel.",
+    "favoriteAgentsEmpty": "Nenhum agente disponível",
     "recentSessionDepth": "Profundidade de sessões recentes",
     "bindingCleared": "Sem atribuição"
   }

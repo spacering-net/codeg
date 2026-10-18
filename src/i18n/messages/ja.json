@@ -181,13 +181,6 @@
       "sectionDescription": "会話エリア内の折りたたみ/展開、ツール呼び出し、作業状態などのアニメーションとスムーズスクロールを制御します。オフにすると即時に更新されます。スピナーは回転し続けます。",
       "enable": "チャットのアニメーションを有効にする"
     },
-    "messageNav": {
-      "sectionTitle": "メッセージナビ",
-      "sectionDescription": "会話のメッセージナビの位置。右下を選ぶと、ユーザーの発話ごとに 1 行のコンパクトなカードになり、入力欄の上に表示されます。",
-      "positionStart": "左上（既定）",
-      "positionBottomEnd": "右下（コンパクト）",
-      "hint": "プランパネルとサブエージェントパネルは常に左上に残ります。"
-    },
     "chatWidth": {
       "sectionTitle": "チャット幅",
       "sectionDescription": "会話列と入力欄の最大幅です。チャット領域の左右の端をドラッグして調整することもできます。",
@@ -247,54 +240,6 @@
         "credit": "画像提供 wallhaven.cc · SFW のみ"
       }
     },
-    "floatingBall": {
-      "sectionTitle": "フローティングボール",
-      "sectionDescription": "ワークスペース上に置くドラッグ可能なボール。スワイプをショートカットに変えます。キーボードのないスマートフォン向けです。",
-      "enable": "フローティングボールを表示",
-      "hint": "ドラッグで移動、素早いスワイプでジェスチャー、長押しでパネルとジェスチャー一覧を開きます。",
-      "resetPosition": "位置をリセット",
-      "ballSize": "ボールサイズ",
-      "sizeSmall": "小",
-      "sizeMedium": "中",
-      "sizeLarge": "大",
-      "gestureBindings": "ジェスチャー割り当て",
-      "bindingCleared": "未割り当て",
-      "favoriteAgents": "お気に入りエージェント",
-      "favoriteAgentsHint": "2〜3個のエージェントを選ぶと、お気に入りジェスチャーで切り替えられます。",
-      "favoriteAgentsEmpty": "利用可能なエージェントがありません",
-      "panelTitle": "クイック操作"
-    },
-    "gestures": {
-      "tap": "タップ",
-      "doubleTap": "ダブルタップ",
-      "longPress": "長押し",
-      "left": "←",
-      "right": "→",
-      "up": "↑",
-      "upLeft": "↖",
-      "upRight": "↗",
-      "upThenLeft": "↑ その後 ←",
-      "upThenRight": "↑ その後 →",
-      "upDown": "↑ その後 ↓",
-      "leftThenRight": "← その後 →",
-      "rightThenLeft": "→ その後 ←",
-      "upLeftThenDown": "↖ その後 ↓",
-      "upRightThenDown": "↗ その後 ↓",
-      "down": "↓",
-      "downLeft": "↙",
-      "downRight": "↘",
-      "downUp": "↓ その後 ↑",
-      "upThenDownRight": "↑ その後 ↘",
-      "downThenUpRight": "↓ その後 ↗",
-      "rightThenUp": "→ その後 ↑",
-      "rightThenDown": "→ その後 ↓",
-      "downThenRight": "↓ その後 →",
-      "downThenLeft": "↓ その後 ←",
-      "downRightThenUp": "↘ その後 ↑",
-      "downLeftThenUp": "↙ その後 ↑",
-      "upLeftThenRight": "↖ その後 →",
-      "upRightThenLeft": "↗ その後 ←"
-    },
     "actions": {
       "newConversation": "新しい会話",
       "toggleSidebar": "サイドバーの切り替え",
@@ -328,6 +273,54 @@
       "focusModeSelector": "モード選択",
       "togglePlanFullAccess": "Plan/フルアクセス切替",
       "openCollaboration": "コラボレーション"
+    },
+    "gestures": {
+      "tap": "タップ",
+      "doubleTap": "ダブルタップ",
+      "longPress": "長押し",
+      "left": "←",
+      "right": "→",
+      "up": "↑",
+      "upLeft": "↖",
+      "upRight": "↗",
+      "upThenLeft": "↑ その後 ←",
+      "upThenRight": "↑ その後 →",
+      "upDown": "↑ その後 ↓",
+      "leftThenRight": "← その後 →",
+      "rightThenLeft": "→ その後 ←",
+      "upLeftThenDown": "↖ その後 ↓",
+      "upRightThenDown": "↗ その後 ↓",
+      "down": "↓",
+      "downLeft": "↙",
+      "downRight": "↘",
+      "downUp": "↓ その後 ↑",
+      "upThenDownRight": "↑ その後 ↘",
+      "downThenUpRight": "↓ その後 ↗",
+      "rightThenUp": "→ その後 ↑",
+      "rightThenDown": "→ その後 ↓",
+      "downThenRight": "↓ その後 →",
+      "downThenLeft": "↓ その後 ←",
+      "downRightThenUp": "↘ その後 ↑",
+      "downLeftThenUp": "↙ その後 ↑",
+      "upLeftThenRight": "↖ その後 →",
+      "upRightThenLeft": "↗ その後 ←"
+    },
+    "floatingBall": {
+      "sectionTitle": "フローティングボール",
+      "sectionDescription": "ワークスペース上に置くドラッグ可能なボール。スワイプをショートカットに変えます。キーボードのないスマートフォン向けです。",
+      "enable": "フローティングボールを表示",
+      "hint": "ドラッグで移動、素早いスワイプでジェスチャー、長押しでパネルとジェスチャー一覧を開きます。",
+      "resetPosition": "位置をリセット",
+      "ballSize": "ボールサイズ",
+      "sizeSmall": "小",
+      "sizeMedium": "中",
+      "sizeLarge": "大",
+      "gestureBindings": "ジェスチャー割り当て",
+      "bindingCleared": "未割り当て",
+      "favoriteAgents": "お気に入りエージェント",
+      "favoriteAgentsHint": "2〜3個のエージェントを選ぶと、お気に入りジェスチャーで切り替えられます。",
+      "favoriteAgentsEmpty": "利用可能なエージェントがありません",
+      "panelTitle": "クイック操作"
     }
   },
   "SystemSettings": {
@@ -1201,6 +1194,30 @@
       "apiKeyHint": "KIRO_API_KEY として CLI に渡されます。空欄なら kiro-cli login でサインインしたアカウントを使います。ブラウザでサインインできない環境（サーバー、Docker）でのみ必要です。",
       "saveConfig": "Kiro 設定を保存"
     },
+    "trae": {
+      "configManagement": "設定管理",
+      "configDescription": "TRAE CLI 2.0 は TRAE エンタープライズ版のフラッグシッププランのお客様のみ利用できます。Codeg はインストール済みの traecli を実行し、サインイン情報・スキル・MCP サーバーは ~/.trae に保存されます。モデル、モード、推論レベルはここにはありません。TRAE CLI が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "signInTitle": "サインイン",
+      "signInHint": "ターミナルでこのコマンドを一度実行し、エンタープライズ SSO でサインインしてください。Codeg のセッションはそのサインインを再利用します。",
+      "copyCommand": "コマンドをコピー",
+      "commandCopied": "コマンドをコピーしました",
+      "patLabel": "個人アクセストークン（任意）",
+      "patHint": "サーバーや Docker など、ブラウザでサインインできないマシン向けです。Codeg は TRAECLI_PERSONAL_ACCESS_TOKEN として TRAE CLI に渡し、セッション開始時にこのトークンでサインインします。空欄なら traecli login のサインインを使います。",
+      "hostLabel": "エンタープライズ API URL（任意）",
+      "hostHint": "組織が独自ドメインで TRAE を運用している場合のみ入力します。TRAECLI_HOST として渡されます。空欄なら TRAE の公式サービスを使います。",
+      "saveConfig": "TRAE CLI 設定を保存"
+    },
+    "commandCode": {
+      "configManagement": "設定管理",
+      "configDescription": "Codeg は command-code npm パッケージの Command Code CLI を実行し、サインイン情報・スキル・MCP サーバーは ~/.commandcode に保存されます。モデル、モード、推論レベルはここにはありません。Command Code が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "signInTitle": "サインイン",
+      "signInHint": "ターミナルでこのコマンドを一度実行し、Command Code アカウントでサインインしてください。Codeg のセッションはそのサインインを再利用します。",
+      "copyCommand": "コマンドをコピー",
+      "commandCopied": "コマンドをコピーしました",
+      "apiKeyLabel": "API キー（任意）",
+      "apiKeyHint": "サーバーや Docker など、ブラウザでサインインできないマシン向けです。COMMAND_CODE_API_KEY として Command Code に渡され、command-code login のサインインより優先されます。空欄ならそのサインインを使います。",
+      "saveConfig": "Command Code 設定を保存"
+    },
     "deepseek": {
       "configManagement": "DeepSeek Harness の設定",
       "configDescription": "エンドポイントと API キーは deepseek-acp が起動時に読み込む環境変数です。モデルと推論レベルはセッションごとのセレクターなので、入力欄で切り替えます。",
@@ -1696,6 +1713,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro 設定を保存しました",
       "saveKiroFailed": "Kiro 設定の保存に失敗しました",
+      "traeSaved": "TRAE CLI 設定を保存しました",
+      "saveTraeFailed": "TRAE CLI 設定の保存に失敗しました",
+      "commandCodeSaved": "Command Code 設定を保存しました",
+      "saveCommandCodeFailed": "Command Code 設定の保存に失敗しました",
       "systemAgentAlreadyLatest": "{name} は最新です（{version}）"
     },
     "distribution": {
@@ -2467,7 +2488,10 @@
         "commits": "コミット"
       },
       "noFolderTitle": "開いているフォルダがありません",
-      "noFolderHint": "フォルダを開くとここに表示されます"
+      "noFolderHint": "フォルダを開くとここに表示されます",
+      "openFullPage": "フルページで開く",
+      "back": "戻る",
+      "noAutomations": "このプロジェクトにはまだオートメーションがありません"
     },
     "windowControls": {
       "minimizeWindow": "ウィンドウを最小化",
@@ -3366,6 +3390,7 @@
       },
       "messageInput": {
         "askAnything": "何でも質問してください...",
+        "promptSuggestion": "{suggestion}（Tab で入力）",
         "removeAttachmentAria": "{name} を削除",
         "attachFiles": "ファイルを添付",
         "addActions": "追加",
@@ -3395,6 +3420,10 @@
         "searchModelAria": "モデルを検索",
         "modelListLabel": "モデル",
         "recommendedBadge": "推奨",
+        "recommendedValue": "推奨: {value}",
+        "searchOptions": "オプションを検索...",
+        "searchOptionsAria": "オプションを検索",
+        "noOptions": "オプションが見つかりません",
         "noModels": "モデルが見つかりません",
         "cancel": "キャンセル",
         "send": "送信",
@@ -4007,13 +4036,16 @@
       },
       "messageNav": {
         "title": "メッセージナビ",
-        "collapse": "メッセージナビを閉じる",
         "loadingEarlier": "以前のメッセージを読み込み中…",
         "loadEarlier": "以前のメッセージを読み込む",
-        "collapsedSummary": "メッセージ {count}",
         "fileCount": "{count, plural, one {# 個のファイル} other {# 個のファイル}}",
-        "remove": "削除",
-        "noDiffDataAvailable": "{filePath} の差分データがありません"
+        "subAgentCount": "{count, plural, one {# 個のサブエージェント} other {# 個のサブエージェント}}",
+        "showDiff": "{filePath} の変更を表示",
+        "hideDiff": "{filePath} の変更を隠す",
+        "openFile": "{filePath} を開く",
+        "collapse": "折りたたむ",
+        "currentMessage": "現在のメッセージ",
+        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール"
       },
       "replyArtifacts": {
         "title": "変更されたファイル",
@@ -4071,6 +4103,9 @@
         "resumeDelegation": "タスク {task} を再開中",
         "resumeDelegationNoId": "委任タスクを再開中",
         "promptLabel": "プロンプト",
+        "ackRecorded": "作業タスクに記録しました",
+        "ackNotRecorded": "作業タスクに記録されていません",
+        "ackNotRecordedWithReason": "作業タスクに記録されていません: {reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "要確認",
@@ -4187,6 +4222,18 @@
         "tokens": "{count} トークン",
         "stopDeclined": "このタスクは停止できませんでした。すでに終了している可能性があります。",
         "stopFailed": "タスクの停止に失敗しました: {error}"
+      },
+      "remoteControl": {
+        "title": "リモートコントロール有効",
+        "open": "ブラウザで開く",
+        "copy": "リンクをコピー",
+        "copied": "コピーしました",
+        "qr": "QR コード",
+        "qrLabel": "このセッションのリモートコントロール用リンクの QR コード",
+        "qrHint": "スマートフォンでスキャンすると、Claude アプリまたは claude.ai/code でこのセッションを続けられます。",
+        "noUrl": "Claude Code はこのセッションのリンクを返しませんでした",
+        "turnOff": "オフにする",
+        "turnOffBusy": "Claude の作業が終わると使えます"
       },
       "proposedPlan": {
         "title": "提案された計画",
@@ -7365,13 +7412,6 @@
     }
   },
   "FloatingBall": {
-    "label": "フローティングボール",
-    "panelTitle": "クイック操作",
-    "settingsTitle": "フローティングボール",
-    "close": "閉じる",
-    "resetPosition": "位置をリセット",
-    "cheatSheetTitle": "ジェスチャー",
-    "hint": "ボールをドラッグして移動します。素早くスワイプするとジェスチャー、長押しでこのパネルが開きます。",
     "actions": {
       "newConversation": "新しい会話",
       "toggleSidebar": "サイドバーの切り替え",
@@ -7437,7 +7477,6 @@
       "upLeftThenRight": "↖ その後 →",
       "upRightThenLeft": "↗ その後 ←"
     },
-    "favoriteAgentsEmpty": "利用可能なエージェントがありません",
     "toasts": {
       "renameNeedsSavedSession": "名前の変更は保存済みセッションのみ有効です。まずメッセージを送信してください。",
       "sessionFolderNeedsWorkspace": "先にワークスペースフォルダを開いてください。",
@@ -7450,6 +7489,14 @@
       "noModesAvailable": "このエージェントには利用可能なモードがありません。",
       "noSwitchTarget": "切り替え先のモードがありません（Plan または完全アクセスモードが見つかりません）。"
     },
+    "label": "フローティングボール",
+    "panelTitle": "クイック操作",
+    "settingsTitle": "フローティングボール",
+    "close": "閉じる",
+    "resetPosition": "位置をリセット",
+    "cheatSheetTitle": "ジェスチャー",
+    "hint": "ボールをドラッグして移動します。素早くスワイプするとジェスチャー、長押しでこのパネルが開きます。",
+    "favoriteAgentsEmpty": "利用可能なエージェントがありません",
     "recentSessionDepth": "最近セッション切替数",
     "bindingCleared": "未割り当て"
   }
