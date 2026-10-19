@@ -95,8 +95,6 @@ jobs:
       - name: Install pnpm deps
         if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - name: Set up Node
         if: steps.skip.outputs.already == 'false' && steps.merge.outputs.merged == 'true'
