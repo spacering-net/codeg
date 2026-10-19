@@ -34,7 +34,7 @@ jobs:
         with:
           ref: deploy/fork-updater
           fetch-depth: 0
-          token: ${{ secrets.FORK_SYNC_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN || secrets.FORK_SYNC_TOKEN }}
 
       - name: Resolve upstream latest release
         id: upstream
