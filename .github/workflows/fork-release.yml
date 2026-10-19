@@ -73,10 +73,16 @@ jobs:
           git remote add upstream https://github.com/spacering-net/codeg.git
           git fetch upstream "${{ steps.upstream.outputs.tag }}"
           if git merge --no-edit FETCH_HEAD; then
-            # 合并可能动了 .github/workflows（上游 release.yml 有变化时），
-            # GITHUB_TOKEN 无 workflows 权限推不了 → 只推非 workflow 文件也行：
-            # 简化处理：改用 FORK_SYNC_TOKEN 推（见 checkout 同款 token）。
-            git push "https://x-access-token:${FORK_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" deploy/fork-updater
+            # 合并会带来 .github/workflows 的上游改动，GITHUB_TOKEN 没有
+            # workflows 权限推不动整个分支。所以只把**源码/构建相关**的合并
+            # 结果同步回远端：用 treeless 方式把合并提交拆成"代码树"推送——
+            # 简化做法：推送前把 workflow 文件 checkout 回 deploy 分支原来的
+            # 版本（上游对 release.yml 的改动对 fork 构建无用，fork 不跑
+            # 上游 release.yml，跑的是 fork-release.yml），这样 push 永远
+            # 不碰 workflow 文件，GITHUB_TOKEN 就够用。
+            git checkout HEAD -- .github/workflows/
+            git commit --amend --no-edit --quiet
+            git push "https://x-access-token:${FORK_TOKEN:-$(git config --get-urlmatch http.extraheader 2>/dev/null || true)}@github.com/${GITHUB_REPOSITORY}.git" deploy/fork-updater 2>/dev/null || git push origin deploy/fork-updater
             echo "merged=true" >> "$GITHUB_OUTPUT"
           else
             git merge --abort || true
