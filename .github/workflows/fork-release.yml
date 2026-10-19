@@ -64,6 +64,8 @@ jobs:
       - name: Merge upstream tag into deploy branch
         if: steps.skip.outputs.already == 'false'
         id: merge
+        env:
+          FORK_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name "fork-sync-bot"
@@ -71,7 +73,10 @@ jobs:
           git remote add upstream https://github.com/spacering-net/codeg.git
           git fetch upstream "${{ steps.upstream.outputs.tag }}"
           if git merge --no-edit FETCH_HEAD; then
-            git push origin deploy/fork-updater
+            # 合并可能动了 .github/workflows（上游 release.yml 有变化时），
+            # GITHUB_TOKEN 无 workflows 权限推不了 → 只推非 workflow 文件也行：
+            # 简化处理：改用 FORK_SYNC_TOKEN 推（见 checkout 同款 token）。
+            git push "https://x-access-token:${FORK_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" deploy/fork-updater
             echo "merged=true" >> "$GITHUB_OUTPUT"
           else
             git merge --abort || true
