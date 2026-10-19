@@ -21,6 +21,8 @@ import type {
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
+  CliAccessStatus,
+  CliToolStatus,
   AgentDelegationDefaults,
   AgentOptionsSnapshot,
   AssistantDraft,
@@ -5106,6 +5108,30 @@ export interface WebServiceConfig {
 
 export async function getWebServiceConfig(): Promise<WebServiceConfig> {
   return getTransport().call("get_web_service_config")
+}
+
+/** Whether `codeg-cli` on this machine can reach this runtime. */
+export async function getCliAccessStatus(): Promise<CliAccessStatus> {
+  return getTransport().call("cli_access_status")
+}
+
+/** Turn command-line access on or off; applied at once. */
+export async function setCliAccessEnabled(
+  enabled: boolean
+): Promise<CliAccessStatus> {
+  return getTransport().call("cli_access_set_enabled", { enabled })
+}
+
+/** Desktop only: whether this app's `codeg-cli` is on the user's PATH. Asked
+ *  of this window's own app, even one bound to a remote server. */
+export async function getCliToolStatus(): Promise<CliToolStatus> {
+  return getShellTransport().call("cli_tool_status")
+}
+
+/** Desktop only: put this app's `codeg-cli` on the user's PATH. On macOS
+ *  this may ask for an administrator's password. */
+export async function installCliTool(): Promise<CliToolStatus> {
+  return getShellTransport().call("cli_tool_install")
 }
 
 export async function updateWebServiceConfig(

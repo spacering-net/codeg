@@ -255,6 +255,45 @@ describe("inline local images in real chat Markdown", () => {
     expect(mocks.read).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ["/tmp/login.png", "/tmp/login.png"],
+    ["file:///tmp/login.png", "/tmp/login.png"],
+    ["C:\\Users\\me\\login.png", "C:/Users/me/login.png"],
+  ])(
+    "still shows %s when the transcript's folder is unknown",
+    async (source, path) => {
+      render(preview(`![qrcode](${source})`, null))
+      await waitFor(() =>
+        expect(screen.getByRole("img", { name: "qrcode" })).toHaveAttribute(
+          "src",
+          `data:image/png;base64,${PNG}`
+        )
+      )
+      expect(mocks.readFile).toHaveBeenCalledWith(path, LOCAL_IMAGE_MAX_BYTES)
+      expect(mocks.read).not.toHaveBeenCalled()
+    }
+  )
+
+  it("refuses a network share when the transcript's folder is unknown", async () => {
+    const { container } = render(
+      preview("![qrcode](file://attacker.example/share/qr.png)", null)
+    )
+    await waitFor(() => expect(container.textContent).toContain("qrcode"))
+    expect(mocks.readFile).not.toHaveBeenCalled()
+    expect(container.querySelector("img")).toBeNull()
+  })
+
+  it("loads no local file for Markdown outside any transcript", async () => {
+    // An issue body, say: nothing this machine's agent wrote.
+    const { container } = render(
+      <MessageResponse>{"![qrcode](/tmp/login.png)"}</MessageResponse>
+    )
+    await waitFor(() => expect(container.textContent).toContain("qrcode"))
+    expect(mocks.readFile).not.toHaveBeenCalled()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(container.querySelector("img")).toBeNull()
+  })
+
   it("replaces a refused or undecodable image with its accessible alt text", async () => {
     mocks.read.mockRejectedValueOnce(new Error("symlink outside workspace"))
     const { rerender } = render(preview("![Missing](./missing.png)"))

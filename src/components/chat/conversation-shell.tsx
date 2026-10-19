@@ -35,6 +35,7 @@ import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { QuestionDialog } from "@/components/chat/question-dialog"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 
 interface ConversationShellProps {
   status: ConnectionStatus | null
@@ -265,11 +266,16 @@ export function ConversationShell({
         {resizableWidth && <ChatWidthHandles />}
       </div>
 
-      <PermissionDialog
-        permission={pendingPermission}
-        onRespond={onRespondPermission}
-        agentType={agentType}
-      />
+      {/* Below the transcript, so outside its image scope: a request or a
+          plan names local images the way a reply does, against the same
+          folder. */}
+      <MarkdownImageProvider rootPath={defaultPath ?? null}>
+        <PermissionDialog
+          permission={pendingPermission}
+          onRespond={onRespondPermission}
+          agentType={agentType}
+        />
+      </MarkdownImageProvider>
 
       <QuestionDialog question={pendingQuestion} onAnswer={onAnswerQuestion} />
 
@@ -290,11 +296,13 @@ export function ConversationShell({
           <div className="mx-auto w-full chat-content-w px-4">
             {/* key on approval_id so the card always remounts (fresh in-flight /
                 feedback state) if the slot is ever reused for a new approval. */}
-            <PlanApprovalCard
-              key={pendingPlanApproval.approval_id}
-              approval={pendingPlanApproval}
-              onAnswer={onAnswerPlanApproval}
-            />
+            <MarkdownImageProvider rootPath={defaultPath ?? null}>
+              <PlanApprovalCard
+                key={pendingPlanApproval.approval_id}
+                approval={pendingPlanApproval}
+                onAnswer={onAnswerPlanApproval}
+              />
+            </MarkdownImageProvider>
           </div>
         )}
 

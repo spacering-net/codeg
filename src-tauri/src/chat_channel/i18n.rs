@@ -1323,18 +1323,33 @@ pub fn no_pending_permission(lang: Lang) -> &'static str {
     }
 }
 
-pub fn no_valid_permission_option(lang: Lang) -> &'static str {
+pub fn no_allow_once_option(lang: Lang) -> &'static str {
     match lang {
-        Lang::ZhCn => "未找到有效的权限选项。",
-        Lang::ZhTw => "未找到有效的權限選項。",
-        Lang::Ja => "有効な権限オプションが見つかりません。",
-        Lang::Ko => "유효한 권한 옵션을 찾을 수 없습니다.",
-        Lang::Es => "No se encontró una opción de permiso válida.",
-        Lang::De => "Keine gültige Berechtigungsoption gefunden.",
-        Lang::Fr => "Aucune option d'autorisation valide trouvée.",
-        Lang::Pt => "Nenhuma opção de permissão válida encontrada.",
-        Lang::Ar => "لم يتم العثور على خيار أذونات صالح.",
-        Lang::En => "No valid permission option found.",
+        Lang::ZhCn => "这个请求没有「只允许这一次」的选项，聊天里不会替你永久放行。请在 Codeg 中处理。",
+        Lang::ZhTw => "這個請求沒有「只允許這一次」的選項，聊天裡不會替你永久放行。請在 Codeg 中處理。",
+        Lang::Ja => "このリクエストには「今回のみ許可」の選択肢がなく、チャットから恒久的に許可することはしません。Codeg で応答してください。",
+        Lang::Ko => "이 요청에는 '이번만 허용' 옵션이 없으며, 채팅에서는 영구 허용을 하지 않습니다. Codeg에서 처리하세요.",
+        Lang::Es => "Esta solicitud no ofrece permitir solo esta vez, y desde el chat no se concede un permiso permanente. Respóndela en Codeg.",
+        Lang::De => "Diese Anfrage bietet kein einmaliges Erlauben, und aus dem Chat wird keine dauerhafte Erlaubnis erteilt. Bitte in Codeg beantworten.",
+        Lang::Fr => "Cette demande ne propose pas d'autoriser une seule fois, et le chat n'accorde pas d'autorisation permanente. Répondez-y dans Codeg.",
+        Lang::Pt => "Esta solicitação não oferece permitir só desta vez, e pelo chat não se concede permissão permanente. Responda no Codeg.",
+        Lang::Ar => "لا يتضمن هذا الطلب خيار السماح لمرة واحدة، ولا تمنح الدردشة إذنًا دائمًا. يرجى الرد عليه في Codeg.",
+        Lang::En => "This request has no allow-once option, and chat won't grant a standing permission. Answer it in Codeg.",
+    }
+}
+
+pub fn no_reject_once_option(lang: Lang) -> &'static str {
+    match lang {
+        Lang::ZhCn => "这个请求没有「只拒绝这一次」的选项，聊天里不会替你设永久规则。请在 Codeg 中处理。",
+        Lang::ZhTw => "這個請求沒有「只拒絕這一次」的選項，聊天裡不會替你設永久規則。請在 Codeg 中處理。",
+        Lang::Ja => "このリクエストには「今回のみ拒否」の選択肢がなく、チャットから恒久的なルールは設定しません。Codeg で応答してください。",
+        Lang::Ko => "이 요청에는 '이번만 거부' 옵션이 없으며, 채팅에서는 영구 규칙을 만들지 않습니다. Codeg에서 처리하세요.",
+        Lang::Es => "Esta solicitud no ofrece rechazar solo esta vez, y desde el chat no se crea una regla permanente. Respóndela en Codeg.",
+        Lang::De => "Diese Anfrage bietet kein einmaliges Ablehnen, und aus dem Chat wird keine dauerhafte Regel angelegt. Bitte in Codeg beantworten.",
+        Lang::Fr => "Cette demande ne propose pas de refuser une seule fois, et le chat ne crée pas de règle permanente. Répondez-y dans Codeg.",
+        Lang::Pt => "Esta solicitação não oferece recusar só desta vez, e pelo chat não se cria regra permanente. Responda no Codeg.",
+        Lang::Ar => "لا يتضمن هذا الطلب خيار الرفض لمرة واحدة، ولا تنشئ الدردشة قاعدة دائمة. يرجى الرد عليه في Codeg.",
+        Lang::En => "This request has no reject-once option, and chat won't set a standing rule. Answer it in Codeg.",
     }
 }
 

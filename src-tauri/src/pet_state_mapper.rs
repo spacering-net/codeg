@@ -145,7 +145,7 @@ impl PetGlobalState {
                     self.pending_permissions
                         .insert(request_id.clone(), conn.clone());
                 }
-                AcpEvent::PermissionResolved { request_id } => {
+                AcpEvent::PermissionResolved { request_id, .. } => {
                     self.pending_permissions.remove(request_id);
                 }
                 // Same bound as the root-session arms below: a permission can't
@@ -193,7 +193,7 @@ impl PetGlobalState {
                 self.pending_permissions
                     .insert(request_id.clone(), conn.clone());
             }
-            AcpEvent::PermissionResolved { request_id } => {
+            AcpEvent::PermissionResolved { request_id, .. } => {
                 // User answered (allow/reject) or chat-channel auto-approve
                 // ran. responder.respond() is RPC-only with no follow-up
                 // event of its own, so the connection emits this synthetic
@@ -827,6 +827,8 @@ mod tests {
             "c1",
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert!(s.pending_permissions.is_empty());
@@ -855,6 +857,8 @@ mod tests {
             "c1",
             AcpEvent::PermissionResolved {
                 request_id: "r-stale".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert_eq!(s.pending_permissions.len(), 1);
@@ -1137,6 +1141,8 @@ mod tests {
             "child",
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert_eq!(compute_pet_state(&s), PetState::Idle);
@@ -1167,6 +1173,8 @@ mod tests {
             "child",
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert_eq!(compute_pet_state(&s), PetState::Idle);
@@ -1222,6 +1230,8 @@ mod tests {
             },
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
             AcpEvent::TurnComplete {
                 session_id: "s".into(),

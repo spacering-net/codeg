@@ -67,6 +67,7 @@ import { formatTokenCount } from "@/lib/token-format"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
 import { MessageResponse } from "@/components/ai-elements/message"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 import { AgentIcon } from "@/components/agent-icon"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
@@ -855,7 +856,13 @@ export function TaskDetailSheet({
                         RESULT_MARKDOWN
                       )}
                     >
-                      <MessageResponse>{task.result_summary}</MessageResponse>
+                      {/* Its images resolve where the agent worked, the way
+                          they would in the conversation. */}
+                      <MarkdownImageProvider
+                        rootPath={composerTarget.folderPath}
+                      >
+                        <MessageResponse>{task.result_summary}</MessageResponse>
+                      </MarkdownImageProvider>
                     </div>
                   </CollapsibleBlock>
                 </section>

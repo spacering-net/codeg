@@ -540,6 +540,12 @@ pub struct SessionState {
     /// (possibly later-toggled) global setting.
     pub feedback_tool_available: bool,
 
+    /// Whether `submit_result` was exposed to THIS agent at launch: the
+    /// connection had a `cli_output_schema`, and its codeg-mcp was injected.
+    /// Fixed for the connection's lifetime. Decides how the run's prompt says
+    /// to hand the result in. Backend-only.
+    pub result_tool_available: bool,
+
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
     /// pull tool. Synthesized ONCE at initialize from three gates (extension
@@ -749,9 +755,58 @@ pub struct SessionState {
     /// Woken whenever `held_wire_title` is set, so the transcript watcher
     /// settles it on an immediate poll rather than its next scheduled one.
     pub wire_title_wake: Arc<tokio::sync::Notify>,
+
+    /// The headless `codeg-cli` run this connection belongs to — its root
+    /// connection, or a delegation child that inherited the tag when it was
+    /// spawned. `None` for every other connection. Never on the snapshot.
+    pub cli_run: Option<crate::cli_run::CliRunTag>,
+
+    /// The `--output-schema` of the run whose ROOT connection this is: what
+    /// codeg-mcp's `submit_result` takes, and what the agent handed in. In
+    /// place from the moment the connection exists (`RootSeed`), so the
+    /// companion it is given carries the tool; a delegated child never has
+    /// one. Never on the snapshot.
+    pub cli_output_schema: Option<Arc<crate::cli_run::OutputSchema>>,
+
+    /// Which writer owns the conversation-status write of a `TurnComplete`,
+    /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
+    pub turn_status_claim: Option<(u64, TurnStatusWriter)>,
+}
+
+/// The two writers of a `TurnComplete`'s conversation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStatusWriter {
+    /// The lifecycle worker, which writes it for every connection.
+    Lifecycle,
+    /// A CLI run's fallback, for a turn the worker never got (bus lag).
+    CliFallback,
 }
 
 impl SessionState {
+    /// Claim the conversation-status write of the `TurnComplete` at `seq` for
+    /// `writer`. `true` when `writer` owns it — newly, or already (a retry of
+    /// its own write runs again with the same envelope); `false` when the other
+    /// writer claimed it first, which then skips the write entirely. So a
+    /// fallback write can never be overwritten by a lifecycle write that
+    /// arrives late, and neither writer is ever stopped from retrying its own.
+    pub fn claim_turn_status(&mut self, seq: u64, writer: TurnStatusWriter) -> bool {
+        match self.turn_status_claim {
+            Some((claimed, owner)) if claimed == seq => owner == writer,
+            _ => {
+                self.turn_status_claim = Some((seq, writer));
+                true
+            }
+        }
+    }
+
+    /// Give up `writer`'s claim on the `TurnComplete` at `seq`, its write
+    /// having failed for good: the other writer may still make it.
+    pub fn release_turn_status(&mut self, seq: u64, writer: TurnStatusWriter) {
+        if self.turn_status_claim == Some((seq, writer)) {
+            self.turn_status_claim = None;
+        }
+    }
+
     pub fn new(
         connection_id: String,
         agent_type: AgentType,
@@ -808,6 +863,7 @@ impl SessionState {
             delegation_token: None,
             delegation_enabled: false,
             feedback_tool_available: false,
+            result_tool_available: false,
             native_steering_available: false,
             codex_user_input_shape: None,
             neutral_goal_channel: false,
@@ -829,6 +885,9 @@ impl SessionState {
             last_native_title: None,
             held_wire_title: None,
             wire_title_wake: Arc::new(tokio::sync::Notify::new()),
+            cli_run: None,
+            cli_output_schema: None,
+            turn_status_claim: None,
         }
     }
 
@@ -843,6 +902,11 @@ impl SessionState {
     /// snapshot). See `RecentEventsBuffer::range_after`.
     pub fn recent_events_after(&self, since_seq: u64) -> Option<Vec<Arc<EventEnvelope>>> {
         self.recent_events.range_after(since_seq)
+    }
+
+    /// What is still buffered after `since_seq`, even across a gap.
+    pub fn recent_events_retained_after(&self, since_seq: u64) -> Vec<Arc<EventEnvelope>> {
+        self.recent_events.retained_after(since_seq)
     }
 
     /// Push an envelope into the ring buffer. Must be called under the
@@ -1112,7 +1176,7 @@ impl SessionState {
                     pending.queued = *depth;
                 }
             }
-            AcpEvent::PermissionResolved { request_id } => {
+            AcpEvent::PermissionResolved { request_id, .. } => {
                 // Drop the snapshot's pending_permission iff the resolved
                 // request matches the current one. Without the id check, a
                 // late-arriving resolved event for an already-replaced
@@ -2263,16 +2327,21 @@ impl SessionState {
 /// Whether someone types the prompts of a connection with this owner label, so
 /// that a predicted follow-up prompt has a composer to appear in.
 ///
-/// Not for the two owners codeg drives without one: an automation run (owner
-/// `"automation"`, see `automation::engine`) and a chat-channel bot (owners
+/// Not for the owners codeg drives without one: an automation run (owner
+/// `"automation"`, see `automation::engine`), a chat-channel bot (owners
 /// `"chat_channel:<channel>:<sender>…"`, see
-/// `chat_channel::session_commands::owner_label_for`), whose prompts arrive from
-/// a schedule or a messaging app. For them a prediction would only be paid for.
+/// `chat_channel::session_commands::owner_label_for`) and a `codeg-cli` run
+/// (owner [`CLI_OWNER_LABEL`](crate::cli_run::service::CLI_OWNER_LABEL)), whose
+/// prompts arrive from a schedule, a messaging app or a command line — and a
+/// `codeg-cli` run lets its connection go as soon as its one turn has ended.
+/// For them a prediction would only be paid for.
 /// Everything else is a person's window, a work task (its session takes
 /// follow-ups once the task stops), or a delegated child (which inherits its
 /// parent's label, and whose session the user can open and continue).
 pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
-    owner_window_label != "automation" && !owner_window_label.starts_with("chat_channel:")
+    owner_window_label != "automation"
+        && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
+        && !owner_window_label.starts_with("chat_channel:")
 }
 
 /// Max age of the background keep-alive: how long a connection with
@@ -3499,6 +3568,7 @@ mod tests {
         }
         for owner in [
             "automation",
+            crate::cli_run::service::CLI_OWNER_LABEL,
             "chat_channel:4:wx-user",
             "chat_channel:4:tg-user:thread:9",
         ] {
@@ -3513,6 +3583,14 @@ mod tests {
             None,
         );
         assert!(!automation.wants_prompt_suggestions);
+        let cli_run = SessionState::new(
+            "conn-cli".to_string(),
+            AgentType::ClaudeCode,
+            None,
+            crate::cli_run::service::CLI_OWNER_LABEL.to_string(),
+            None,
+        );
+        assert!(!cli_run.wants_prompt_suggestions);
     }
 
     #[test]
@@ -4866,6 +4944,8 @@ mod tests {
 
         s.apply_event(&AcpEvent::PermissionResolved {
             request_id: "p-1".into(),
+            option_id: None,
+            origin: None,
         });
         assert!(
             s.pending_permission.is_none(),
@@ -4916,6 +4996,8 @@ mod tests {
 
         s.apply_event(&AcpEvent::PermissionResolved {
             request_id: "p-stale".into(),
+            option_id: None,
+            origin: None,
         });
         let p = s
             .pending_permission

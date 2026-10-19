@@ -218,6 +218,35 @@ describe("SidebarConversationCard pin action", () => {
   })
 })
 
+describe("SidebarConversationCard command-line badge", () => {
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("marks a conversation codeg-cli started, and only that one", () => {
+    const fromCli = renderCard({ ...conv(1), source: "cli" })
+    expect(fromCli.getByTitle("Started from the command line")).toBeTruthy()
+    fromCli.unmount()
+    const fromWindow = renderCard(conv(2))
+    expect(fromWindow.queryByTitle("Started from the command line")).toBeNull()
+    fromWindow.unmount()
+    // A source this build does not know is shown as nothing.
+    const unknown = renderCard({ ...conv(3), source: "future" })
+    expect(unknown.queryByTitle("Started from the command line")).toBeNull()
+  })
+})
+
 // The hover-reveal icon buttons live in the row's right slot as siblings of the
 // clickable row button (never nested). They carry only an aria-label (icon, no
 // text), so getByLabelText addresses them unambiguously — distinct from the

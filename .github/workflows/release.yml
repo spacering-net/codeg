@@ -326,8 +326,9 @@ jobs:
           echo "CODEG_COMPUTER_HELPER_REQUIREMENT=identifier \"app.codeg.computer-helper\" and ${anchor}" >> "$GITHUB_ENV"
           echo "CODEG_COMPUTER_TEAM_ID=${APPLE_TEAM_ID}" >> "$GITHUB_ENV"
 
-      # Build the sidecars — the `codeg-mcp` companion and the
-      # `codeg-computer-helper` computer-use executor — for the matrix target
+      # Build the sidecars — the `codeg-mcp` companion, the
+      # `codeg-computer-helper` computer-use executor and the `codeg-cli`
+      # command-line client — for the matrix target
       # and stage them at `src-tauri/binaries/<bin>-<triple>{.exe}`.
       # `tauri-action` (below) then bundles them via the `bundle.externalBin`
       # entries in `tauri.conf.json` — Tauri installs them next to the main
@@ -350,7 +351,7 @@ jobs:
           case "${{ matrix.target }}" in
             *windows*) ext=".exe" ;;
           esac
-          for bin in codeg-mcp codeg-computer-helper; do
+          for bin in codeg-mcp codeg-computer-helper codeg-cli; do
             file="src-tauri/binaries/${bin}-${{ matrix.target }}${ext}"
             if [ ! -s "$file" ]; then
               echo "FATAL: sidecar $file missing or empty after prepare-sidecars"
@@ -596,7 +597,8 @@ jobs:
       #     codeg-computer-helper.app`, and no bare copy of it is in
       #     `Contents/MacOS/`: macOS charges an executable's permissions to the
       #     app bundle it sits in, so a helper there would hold codeg's;
-      #   * codeg, codeg-mcp and codeg-computer-helper carry NO entitlements —
+      #   * codeg, codeg-mcp, codeg-cli and codeg-computer-helper carry NO
+      #     entitlements —
       #     in particular none that let another process load code into them
       #     (library-validation / dyld / get-task-allow exemptions), and codeg
       #     never Apple Events: every agent's shell runs as codeg for TCC.
@@ -604,7 +606,8 @@ jobs:
       #   * codeg satisfies the requirement compiled into the helper, and the
       #     helper the one compiled into codeg — otherwise the two refuse each
       #     other and computer use cannot start;
-      #   * codeg and codeg-mcp reference no Accessibility / event-posting /
+      #   * codeg, codeg-mcp and codeg-cli reference no Accessibility /
+      #     event-posting /
       #     screen-capture API: holding or using those is the helper's job
       #     alone. `AXIsProcessTrusted` is the one allowed read-only query.
       #     codeg alone may also import `CGEventTapCreate`: global-hotkey,
@@ -612,9 +615,10 @@ jobs:
       #     never asks it to — `StopShortcut` names no media key and no webview
       #     is given the shortcut plugin, both held by tests. Nothing else is
       #     let through.
-      #   * the bundle carries no `codeg-server`, and its `codeg-mcp` is the
-      #     sidecar built without the desktop features (no WebKit): the copies
-      #     `tauri build` compiles itself stay out (`server-bin` / `mcp-bin`).
+      #   * the bundle carries no `codeg-server`, and its `codeg-mcp` and
+      #     `codeg-cli` are the sidecars built without the desktop features (no
+      #     WebKit): the copies `tauri build` compiles itself stay out
+      #     (`server-bin` / `mcp-bin` / `cli-bin`).
       - name: Verify computer-use signing and symbols (macOS)
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
@@ -639,11 +643,13 @@ jobs:
             echo "FATAL: codeg-server is in the desktop bundle; its binary target must need server-bin"
             exit 1
           fi
-          if otool -L "$app/Contents/MacOS/codeg-mcp" | grep -q 'WebKit'; then
-            echo "FATAL: codeg-mcp links WebKit: tauri build's own copy replaced the sidecar"
-            exit 1
-          fi
-          for path in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$helper_app"; do
+          for sidecar in codeg-mcp codeg-cli; do
+            if otool -L "$app/Contents/MacOS/$sidecar" | grep -q 'WebKit'; then
+              echo "FATAL: $sidecar links WebKit: tauri build's own copy replaced the sidecar"
+              exit 1
+            fi
+          done
+          for path in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$app/Contents/MacOS/codeg-cli" "$helper_app"; do
             name="$(basename "$path")"
             if ! codesign -dv "$path" 2>&1 | grep -q 'flags=0x[0-9a-f]*(runtime)'; then
               echo "FATAL: $name is not signed with the hardened runtime"
@@ -658,7 +664,7 @@ jobs:
           codesign --verify --strict -R="${CODEG_COMPUTER_PEER_REQUIREMENT}" "$app/Contents/MacOS/codeg"
           codesign --verify --strict -R="${CODEG_COMPUTER_HELPER_REQUIREMENT}" "$helper_app"
           deny='^_(CGEventPost|CGEventPostToPid|CGEventPostToPSN|CGEventTapCreate|CGEventTapCreateForPid|CGEventTapCreateForPSN|CGWindowListCreateImage|CGWindowListCreateImageFromArray|CGDisplayCreateImage|CGDisplayCreateImageForRect|CGDisplayStreamCreate|CGDisplayStreamCreateWithDispatchQueue|CGRequestScreenCaptureAccess|CGRequestPostEventAccess|AXIsProcessTrustedWithOptions|AXUIElement[A-Za-z]*|AXObserver[A-Za-z]*)$|^_OBJC_CLASS_\$_SC(ShareableContent|Stream|ScreenshotManager|ContentFilter|ContentSharingPicker)$'
-          for bin in codeg codeg-mcp; do
+          for bin in codeg codeg-mcp codeg-cli; do
             hits="$(nm -u "$app/Contents/MacOS/$bin" | grep -E "$deny" || true)"
             if [ "$bin" = codeg ]; then
               hits="$(printf '%s\n' "$hits" | grep -vx '_CGEventTapCreate' || true)"
@@ -802,7 +808,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: Build server + codeg-mcp companion + computer-use helper
+      - name: Build server + codeg-mcp companion + computer-use helper + codeg-cli
         working-directory: src-tauri
         # `codeg-mcp` is the stdio MCP companion the runtime injects per
         # session (see acp/delegation/companion.rs). Built with the same
@@ -812,10 +818,13 @@ jobs:
         # `codeg-computer-helper` serves computer use, which the server
         # offers only when started with CODEG_COMPUTER_USE=1 in a desktop
         # session; it ships beside the server, where the server looks for it.
+        # `codeg-cli` is the command-line client (`codeg-cli run …`), for CI
+        # jobs and scripts on the server's machine or reaching it with --url.
         run: |
           cargo build --release --bin codeg-server --no-default-features --features server-bin --target ${{ matrix.target }}
           cargo build --release --bin codeg-mcp --no-default-features --features mcp-bin --target ${{ matrix.target }}
           cargo build --release --bin codeg-computer-helper --no-default-features --features computer-helper --target ${{ matrix.target }}
+          cargo build --release --bin codeg-cli --no-default-features --features cli-bin --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -824,7 +833,8 @@ jobs:
           cp src-tauri/target/${{ matrix.target }}/release/codeg-server dist/${{ matrix.artifact }}/
           cp src-tauri/target/${{ matrix.target }}/release/codeg-mcp dist/${{ matrix.artifact }}/
           cp src-tauri/target/${{ matrix.target }}/release/codeg-computer-helper dist/${{ matrix.artifact }}/
-          chmod +x dist/${{ matrix.artifact }}/codeg-server dist/${{ matrix.artifact }}/codeg-mcp dist/${{ matrix.artifact }}/codeg-computer-helper
+          cp src-tauri/target/${{ matrix.target }}/release/codeg-cli dist/${{ matrix.artifact }}/
+          chmod +x dist/${{ matrix.artifact }}/codeg-server dist/${{ matrix.artifact }}/codeg-mcp dist/${{ matrix.artifact }}/codeg-computer-helper dist/${{ matrix.artifact }}/codeg-cli
           cp -r out dist/${{ matrix.artifact }}/web
           cd dist && tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 
@@ -836,6 +846,7 @@ jobs:
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-server.exe dist/${{ matrix.artifact }}/
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-mcp.exe dist/${{ matrix.artifact }}/
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-computer-helper.exe dist/${{ matrix.artifact }}/
+          Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-cli.exe dist/${{ matrix.artifact }}/
           Copy-Item -Recurse out dist/${{ matrix.artifact }}/web
           Compress-Archive -Path dist/${{ matrix.artifact }} -DestinationPath dist/${{ matrix.artifact }}.zip
 
@@ -846,6 +857,7 @@ jobs:
           test -x "dist/${{ matrix.artifact }}/codeg-server"
           test -x "dist/${{ matrix.artifact }}/codeg-mcp"
           test -x "dist/${{ matrix.artifact }}/codeg-computer-helper"
+          test -x "dist/${{ matrix.artifact }}/codeg-cli"
           # `codeg-mcp --help` exits 0 without flags and prints the usage
           # line. Only run it for native targets; cross-compiled arm64
           # binaries on x64 runners can't execute.
@@ -853,8 +865,10 @@ jobs:
              [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] || \
              [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
             "dist/${{ matrix.artifact }}/codeg-mcp" --help | grep -F 'codeg-mcp --parent-connection-id'
+            "dist/${{ matrix.artifact }}/codeg-cli" --version | grep -F 'codeg-cli '
+            "dist/${{ matrix.artifact }}/codeg-cli" --help | grep -F 'Usage: codeg-cli'
           else
-            echo "skipping codeg-mcp --help on cross-target ${{ matrix.target }}"
+            echo "skipping codeg-mcp --help and codeg-cli --version on cross-target ${{ matrix.target }}"
           fi
 
       - name: Smoke test packaged artifact (Windows)
@@ -870,9 +884,18 @@ jobs:
           if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-computer-helper.exe")) {
             throw "codeg-computer-helper.exe missing from packaged artifact"
           }
+          if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-cli.exe")) {
+            throw "codeg-cli.exe missing from packaged artifact"
+          }
           $help = & "dist/${{ matrix.artifact }}/codeg-mcp.exe" --help
           if ($help -notlike "*codeg-mcp --parent-connection-id*") {
             throw "codeg-mcp --help output unexpected: $help"
+          }
+          # A console program: its help comes back on stdout, named as the
+          # docs name it (no `.exe`).
+          $cliHelp = (& "dist/${{ matrix.artifact }}/codeg-cli.exe" --help) -join "`n"
+          if ($cliHelp -notlike "*Usage: codeg-cli*") {
+            throw "codeg-cli --help output unexpected: $cliHelp"
           }
 
       - name: Upload artifact for Docker build (Linux only)
@@ -964,14 +987,17 @@ jobs:
           mkdir -p dist/amd64 dist/arm64
           cp artifacts/linux-x64/codeg-server dist/amd64/codeg-server
           cp artifacts/linux-x64/codeg-mcp dist/amd64/codeg-mcp
+          cp artifacts/linux-x64/codeg-cli dist/amd64/codeg-cli
           cp artifacts/linux-arm64/codeg-server dist/arm64/codeg-server
           cp artifacts/linux-arm64/codeg-mcp dist/arm64/codeg-mcp
+          cp artifacts/linux-arm64/codeg-cli dist/arm64/codeg-cli
           cp -r artifacts/linux-x64/web dist/web
-          chmod +x dist/amd64/codeg-server dist/amd64/codeg-mcp \
-                   dist/arm64/codeg-server dist/arm64/codeg-mcp
+          chmod +x dist/amd64/codeg-server dist/amd64/codeg-mcp dist/amd64/codeg-cli \
+                   dist/arm64/codeg-server dist/arm64/codeg-mcp dist/arm64/codeg-cli
           # Fail fast if any companion went missing — Docker would otherwise
-          # produce an image where delegation silently degrades.
-          for f in dist/amd64/codeg-mcp dist/arm64/codeg-mcp; do
+          # produce an image where delegation silently degrades, or without
+          # the codeg-cli its docs promise.
+          for f in dist/amd64/codeg-mcp dist/arm64/codeg-mcp dist/amd64/codeg-cli dist/arm64/codeg-cli; do
             test -x "$f" || { echo "FATAL: $f missing or non-exec"; exit 1; }
           done
 
@@ -993,6 +1019,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The image runs its codeg-cli before it is pushed: an amd64 build loaded
+      # into the runner's daemon, `codeg-cli --version` inside it.
+      - name: Smoke test the image's codeg-cli (amd64)
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --load -t codeg-smoke:local -f Dockerfile.ci .
+          docker run --rm codeg-smoke:local codeg-cli --version | grep -F 'codeg-cli '
+          docker run --rm codeg-smoke:local codeg-cli --help | grep -F 'Usage: codeg-cli'
 
       - name: Extract version from tag
         id: version

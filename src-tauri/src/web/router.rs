@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{DefaultBodyLimit, Extension},
-    http::{StatusCode, Uri},
+    http::{header, HeaderValue, StatusCode, Uri},
     middleware::{self, Next},
     response::IntoResponse,
     routing::{any, get, post},
@@ -30,6 +30,7 @@ pub fn build_router(
         .allow_headers(Any);
 
     let token_for_ws = token.clone();
+    let token_for_cli_hello = token.clone();
 
     let api = Router::new()
         .route("/health", post(health_check))
@@ -1968,6 +1969,17 @@ pub fn build_router(
         )
         .route("/terminal_kill", post(handlers::terminal::terminal_kill))
         .route("/terminal_list", post(handlers::terminal::terminal_list))
+        .route(
+            "/cli_access_status",
+            post(handlers::cli_access::cli_access_status),
+        )
+        .route(
+            "/cli_access_set_enabled",
+            post(handlers::cli_access::cli_access_set_enabled),
+        )
+        // `codeg-cli` against this runtime with the main token (how CI reaches
+        // a remote server); the loopback listener serves the same handlers.
+        .merge(crate::cli_run::http::routes(state.cli_runs.clone()))
         // Catch-all
         .fallback(api_not_found)
         .layer(middleware::from_fn(move |req, next| {
@@ -1982,6 +1994,15 @@ pub fn build_router(
             "/get_system_language_settings",
             post(handlers::system_settings::get_system_language_settings),
         )
+        // The CLI's challenge, answered before any token is sent; signed with
+        // the main token here (no port: a proxy may hide it).
+        .merge(crate::cli_run::http::public_routes(
+            state.cli_runs.clone(),
+            crate::cli_run::http::HelloKey {
+                token: token_for_cli_hello,
+                port: None,
+            },
+        ))
         // Forge webhooks for the repository panel's auto-processing. No forge
         // can send codeg's bearer token, so the delivery authenticates itself:
         // its HMAC signature (GitHub / Gitea) or secret token (GitLab) is
@@ -2055,6 +2076,9 @@ pub fn build_router(
     // We use a middleware to rewrite "/folder" → "/folder.html" before ServeDir.
     let fallback =
         ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
+    let static_files: Router = Router::new()
+        .fallback_service(fallback)
+        .layer(middleware::from_fn(static_cache_control));
 
     let static_dir_for_mw = static_dir.clone();
     let html_rewrite = middleware::from_fn(move |req: axum::extract::Request, next: Next| {
@@ -2091,7 +2115,7 @@ pub fn build_router(
     Router::new()
         .nest("/api", api)
         .merge(ws_route)
-        .fallback_service(fallback)
+        .fallback_service(static_files)
         .layer(html_rewrite)
         .layer(cors)
         .layer(Extension(state))
@@ -2110,6 +2134,34 @@ pub fn build_router(
         .layer(middleware::from_fn(
             crate::web::browser_bridge::route_by_host,
         ))
+}
+
+/// Only `/_next/static/` is fingerprinted: a new build puts its scripts and
+/// styles there under new names. Everything else keeps its name from one
+/// release to the next, the HTML documents above all, and ServeDir sends no
+/// freshness of its own, so a browser would apply heuristic freshness (a tenth
+/// of the file's age) and could open the previous release for hours after the
+/// server was upgraded. `no-cache` still lets it keep its copy, revalidated on
+/// every use.
+async fn static_cache_control(
+    req: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let fingerprinted = req.uri().path().starts_with("/_next/static/");
+    let mut response = next.run(req).await;
+    // An asset that is not there is answered with index.html, which must not
+    // be kept under the asset's name either.
+    let html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if !fingerprinted || html {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+    response
 }
 
 async fn health_check() -> impl IntoResponse {

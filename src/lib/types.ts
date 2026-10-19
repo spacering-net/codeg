@@ -605,6 +605,10 @@ export interface DbConversationSummary {
    *  row. Prefer the assistant store's current name when it knows the id. */
   assistant_id?: number
   assistant_name?: string
+  /** Where the conversation was started from, when not the window: `"cli"`
+   *  for a `codeg-cli` run. Absent on every other row; another value (from a
+   *  newer build) is shown as nothing. */
+  source?: string | null
   /**
    * Ids of the {@link ConversationTagDetail tags} on this conversation,
    * ascending. Absent when it has none (the backend omits an empty list). May
@@ -1545,6 +1549,37 @@ export interface PermissionOptionInfo {
    */
   meta?: Record<string, unknown> | null
 }
+
+/** Command-line access on this runtime (Rust `cli_run::CliAccessStatus`). */
+export interface CliAccessStatus {
+  enabled: boolean
+  /** Listening, with the endpoint file published. */
+  running: boolean
+  /** The endpoint file this runtime publishes, whether or not it exists. */
+  endpointFile: string
+  /** Why access is on but not running. */
+  error?: string | null
+}
+
+/** Rust `CommandToolStatus`: the desktop app's `codeg-cli` on the user's
+ *  PATH (Settings → "Install command-line tool"). */
+export interface CliToolStatus {
+  /** `link`, `path`, `package` (on PATH already), or `none`. */
+  method: "link" | "path" | "package" | "none"
+  /** `codeg-cli`, or `codeg-cli-dev` for a development build. */
+  command: string
+  installed: boolean
+  location?: string
+  /** Another `codeg-cli` in the way, left as it is. */
+  conflict?: string
+  note?: string
+}
+
+// Who answered a permission request (Rust `PermissionAnswerOrigin`).
+export type PermissionAnswerOrigin =
+  | { kind: "user" }
+  | { kind: "chat_channel" }
+  | { kind: "cli_policy"; run_id: string }
 
 // --- ask_user_question (mirror of Rust `crate::acp::question`) ---
 
@@ -2923,6 +2958,10 @@ export type AcpEvent =
   | {
       type: "permission_resolved"
       request_id: string
+      /** The option that took effect; absent when the request was withdrawn or drained. */
+      option_id?: string
+      /** Who gave the answer that took effect; absent exactly when `option_id` is. */
+      origin?: PermissionAnswerOrigin
     }
   | {
       /**

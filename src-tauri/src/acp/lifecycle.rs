@@ -22,7 +22,7 @@ use crate::acp::delegation::broker::{DelegationBroker, DelegationMatchKey};
 use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
 use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
-use crate::acp::session_state::SessionState;
+use crate::acp::session_state::{SessionState, TurnStatusWriter};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
 use crate::db::entities::conversation::ConversationStatus;
 use crate::db::error::DbError;
@@ -184,6 +184,68 @@ async fn handle_event_with_retry(
             }
         }
     }
+    // Given up. A turn's status write is released, so a CLI run's fallback —
+    // the one other writer — may still make it.
+    if matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+        if let Some(state) = manager.get_state(&envelope.connection_id).await {
+            state
+                .write()
+                .await
+                .release_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
+        }
+    }
+}
+
+/// The conversation status a `TurnComplete` with `stop_reason` leaves the row
+/// in. `end_turn` is the only success case and goes to `PendingReview`.
+/// `refusal`, `max_tokens`, `max_turn_requests`, `unknown`, `empty`,
+/// `auth_required` and `rejected` indicate the turn failed (often a
+/// backend/gateway error masquerading as `Refusal` per the ACP spec gap, or —
+/// common with OpenCode — a silent EndTurn that produced no output), so they go
+/// to `Cancelled`, paired with an `AcpEvent::Error` toast emitted upstream by
+/// `connection.rs`. `auth_required` and `rejected` are the ones whose
+/// CONNECTION survives (the agent rejected the prompt — with ACP's -32000 when
+/// it wants the user to sign in, with anything else when it simply would not
+/// run this one), but their turn is just as dead as the others — leaving those
+/// rows out would strand them at InProgress for good. `cancelled` is already
+/// written by `manager.cancel()` (eager CAS InProgress → Cancelled at the
+/// user-cancel entry point), so it — and any future reason — writes nothing.
+pub(crate) fn turn_complete_status(stop_reason: &str) -> Option<ConversationStatus> {
+    match stop_reason {
+        "end_turn" => Some(ConversationStatus::PendingReview),
+        "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" | "auth_required"
+        | "rejected" => Some(ConversationStatus::Cancelled),
+        _ => None,
+    }
+}
+
+/// The conversation-status write a `TurnComplete` makes: the row first, then
+/// `ConversationStatusChanged`, so any subscriber that observes the event can
+/// assume the row is already at the target status. Shared by the lifecycle
+/// worker and a CLI run's fallback for a turn the worker never got; whichever
+/// claimed the turn (`SessionState::claim_turn_status`) is the one that calls
+/// it.
+pub(crate) async fn write_turn_status(
+    db_conn: &DatabaseConnection,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    conversation_id: i32,
+    stop_reason: &str,
+) -> Result<(), DbError> {
+    let Some(status) = turn_complete_status(stop_reason) else {
+        return Ok(());
+    };
+    conversation_service::update_status(db_conn, conversation_id, status.clone()).await?;
+    emit_with_state(
+        state,
+        emitter,
+        AcpEvent::ConversationStatusChanged {
+            conversation_id,
+            status,
+        },
+    )
+    .await;
+    Ok(())
 }
 
 pub(crate) async fn handle_event(
@@ -264,21 +326,22 @@ pub(crate) async fn handle_event(
             // CAS InProgress → Cancelled at the user-cancel entry point), so
             // we leave it alone here. `completed` transitions remain
             // frontend-driven.
-            let target_status = match stop_reason.as_str() {
-                "end_turn" => Some(ConversationStatus::PendingReview),
-                "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty"
-                | "auth_required" | "rejected" => Some(ConversationStatus::Cancelled),
-                // `cancelled` and any future reason: don't write here.
-                _ => None,
-            };
             let Some((state_arc, emitter)) =
                 manager.get_state_and_emitter(&envelope.connection_id).await
             else {
                 return Ok(());
             };
-            let (conversation_id, last_text) = {
-                let snap = state_arc.read().await;
-                (snap.conversation_id, snap.last_assistant_text.clone())
+            let (conversation_id, last_text, claimed) = {
+                let mut snap = state_arc.write().await;
+                // Re-entrant for this worker: a retry of this same envelope
+                // claims again and goes on. Only a CLI run's fallback that
+                // already wrote this turn's status makes it skip.
+                let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
+                (
+                    snap.conversation_id,
+                    snap.last_assistant_text.clone(),
+                    claimed,
+                )
             };
             // No conversation row bound (defensive — should never happen in
             // practice since `send_prompt_linked` runs before TurnComplete can
@@ -286,20 +349,8 @@ pub(crate) async fn handle_event(
             let Some(cid) = conversation_id else {
                 return Ok(());
             };
-            if let Some(ts) = target_status.clone() {
-                // DB write before emit so any downstream subscriber that observes
-                // the ConversationStatusChanged event can assume the row is
-                // already at the target status.
-                conversation_service::update_status(db_conn, cid, ts.clone()).await?;
-                emit_with_state(
-                    &state_arc,
-                    &emitter,
-                    AcpEvent::ConversationStatusChanged {
-                        conversation_id: cid,
-                        status: ts,
-                    },
-                )
-                .await;
+            if claimed {
+                write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
             }
 
             // If this conversation was spawned by a delegation, resolve the
@@ -2238,6 +2289,117 @@ mod tests {
             read_row_status(&db, conv.id).await,
             ConversationStatus::PendingReview
         );
+    }
+
+    /// A turn whose status a CLI run's fallback already wrote is skipped
+    /// whole — a late lifecycle write must not overwrite what the user did to
+    /// the row after the fallback — while the worker's own retries of the same
+    /// envelope keep their claim.
+    #[tokio::test]
+    async fn handle_event_skips_a_turn_the_cli_fallback_claimed() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/turn-claimed").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn = fake_connection_with_state("c1", Some(conv.id));
+        let state = conn.state.clone();
+        mgr.connections.lock().await.insert("c1".to_string(), conn);
+        let turn = |seq| EventEnvelope {
+            seq,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "ext-1".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "claude_code".into(),
+            },
+        };
+
+        assert!(state
+            .write()
+            .await
+            .claim_turn_status(7, TurnStatusWriter::CliFallback));
+        // The fallback wrote, then the user marked the conversation done.
+        conversation_service::update_status(&db.conn, conv.id, ConversationStatus::Completed)
+            .await
+            .unwrap();
+        handle_event(&db.conn, &mgr, &turn(7), None).await.unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::Completed,
+            "the late lifecycle write was skipped"
+        );
+
+        // The next turn is the worker's again, retries included.
+        handle_event(&db.conn, &mgr, &turn(9), None).await.unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::PendingReview
+        );
+        conversation_service::update_status(&db.conn, conv.id, ConversationStatus::InProgress)
+            .await
+            .unwrap();
+        handle_event(&db.conn, &mgr, &turn(9), None).await.unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::PendingReview,
+            "a retry of its own envelope still writes"
+        );
+        assert!(!state
+            .write()
+            .await
+            .claim_turn_status(9, TurnStatusWriter::CliFallback));
+    }
+
+    #[tokio::test]
+    async fn a_turn_status_the_worker_gives_up_on_is_left_to_the_fallback() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/turn-given-up").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn = fake_connection_with_state("c1", Some(conv.id));
+        let state = conn.state.clone();
+        mgr.connections.lock().await.insert("c1".to_string(), conn);
+        let turn = EventEnvelope {
+            seq: 4,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "ext-1".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "claude_code".into(),
+            },
+        };
+        // Every attempt fails.
+        db.conn.clone().close().await.unwrap();
+
+        handle_event_with_retry(&db.conn, &mgr, &turn, None).await;
+
+        assert!(
+            state
+                .write()
+                .await
+                .claim_turn_status(4, TurnStatusWriter::CliFallback),
+            "the worker let go of the turn it could not write"
+        );
+    }
+
+    #[test]
+    fn only_the_holder_of_a_turn_can_let_it_go() {
+        let mut s = SessionState::new("c".into(), AgentType::ClaudeCode, None, "w".into(), None);
+        assert!(s.claim_turn_status(3, TurnStatusWriter::Lifecycle));
+        s.release_turn_status(3, TurnStatusWriter::CliFallback);
+        s.release_turn_status(2, TurnStatusWriter::Lifecycle);
+        assert!(
+            !s.claim_turn_status(3, TurnStatusWriter::CliFallback),
+            "still held"
+        );
+        s.release_turn_status(3, TurnStatusWriter::Lifecycle);
+        assert!(s.claim_turn_status(3, TurnStatusWriter::CliFallback));
     }
 
     #[tokio::test]

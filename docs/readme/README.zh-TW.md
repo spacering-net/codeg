@@ -101,7 +101,7 @@
 
 ### 一個介面，容納所有智慧體
 
-內建十九個智慧體，任何其他相容 ACP 的智慧體也能從公開註冊表或它的 distribution JSON 加入。Codeg 透過 Agent Client Protocol 與每一個智慧體溝通，所以它們拿到的都是同一套豐富的對話介面——工具卡片、即時 diff、計畫與權限請求——而不是一個得瞇著眼看的終端機。為智慧體啟用「介面渲染」後，它還能用可互動的卡片、表格與圖表來回覆。
+十九個內建智慧體，相容任意 ACP 智慧體。工具卡片、即時 diff 與互動式回覆，盡在同一介面。
 
 [文件 →](https://docs.codeg.app/zh/guide/supported-agents) · [自訂智慧體 →](https://docs.codeg.app/zh/guide/custom-agents) · [介面渲染 →](https://docs.codeg.app/zh/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -118,7 +118,7 @@
 
 ### 每個工作階段，都搜得到
 
-Codeg 會讀取每個智慧體 CLI 留在磁碟上的歷史：一鍵匯入，全部可搜尋，任何工作階段都能從停下的地方繼續。`@` 提及一個舊工作階段，你正在對話的智慧體就能讀到它——哪怕那是另一個智慧體留下的。還能為工作階段加上彩色標籤，可全域通用，也可只屬於某個資料夾，並依標籤篩選側邊欄。
+一鍵匯入、搜尋並繼續歷史對話。用 `@` 跨智慧體分享工作階段，用標籤整理對話。
 
 [文件 →](https://docs.codeg.app/zh/guide/aggregation) · [標籤 →](https://docs.codeg.app/zh/guide/workspace#tag-conversations)
 
@@ -135,7 +135,7 @@ Codeg 會讀取每個智慧體 CLI 留在磁碟上的歷史：一鍵匯入，全
 
 ### 多智慧體協作
 
-輸入 `@`，選取智慧體，送出。每個被提及的智慧體都以獨立工作階段並肩開工，工作即時匯流回你的對話——Claude Code 起草，Codex 同步審查——子智慧體則以卡片呈現，邊跑邊填。
+用 `@` 委派任務，讓多個智慧體平行協作，進度即時匯入目前的對話。
 
 [文件 →](https://docs.codeg.app/zh/guide/multi-agent)
 
@@ -152,7 +152,7 @@ Codeg 會讀取每個智慧體 CLI 留在磁碟上的歷史：一鍵匯入，全
 
 ### 無人看管也能跑的待辦任務
 
-把要做的事寫下來，就可以走開了。每個待辦任務都有自己的 git 工作樹與分支，可以立即開始或排程啟動，然後停在「待驗收」等你；你接受 diff 後，智慧體就會把它落地，而 Codeg 會先核對 git 才宣告完成。儲存庫面板還能替你新增：依標籤與作者挑選議題與拉取請求，定時掃描，或由 Webhook 觸發。
+任務擁有獨立工作樹，可立即執行或排程啟動。智慧體完成工作，由你驗收變更。
 
 [文件 →](https://docs.codeg.app/zh/guide/tasks) · [自動處理 →](https://docs.codeg.app/zh/guide/repository#let-it-pick-items-up-by-itself)
 
@@ -169,7 +169,7 @@ Codeg 會讀取每個智慧體 CLI 留在磁碟上的歷史：一鍵匯入，全
 
 ### 無限畫布
 
-在空間中鋪排你的工作：對話、檔案、終端機與便籤都成為畫板上的卡片，依資料夾與智慧體分組，讓多個智慧體並排執行、一目了然。
+在無限畫布上擺放對話、檔案、終端機與便箋，讓多個智慧體的工作一目了然。
 
 [文件 →](https://docs.codeg.app/zh/guide/canvas)
 
@@ -186,7 +186,7 @@ Codeg 會讀取每個智慧體 CLI 留在磁碟上的歷史：一鍵匯入，全
 
 ### 桌面、伺服器、行動裝置與聊天軟體
 
-Codeg 可以作為桌面應用、可用任何瀏覽器開啟的自架伺服器，或單一 Docker 容器來執行；桌面應用還能連上遠端伺服器，在獨立視窗中開啟遠端工作區。原生 iPhone、iPad 與 Android 用戶端——再加上 Telegram、飛書與微信頻道——讓智慧體觸手可及，而檔案與工作階段始終留在你自己掌控的機器上。
+支援桌面、伺服器、Docker 與行動裝置，也能透過 Telegram、飛書和微信與智慧體對話。
 
 [文件 →](https://docs.codeg.app/zh/getting-started/deployment) · [遠端工作區 →](https://docs.codeg.app/zh/guide/workspace#desktop-and-browser) · [行動應用 →](https://docs.codeg.app/zh/getting-started/installation#mobile-apps) · [訊息頻道 →](https://docs.codeg.app/zh/guide/chat-channels)
 
@@ -203,7 +203,7 @@ Codeg 可以作為桌面應用、可用任何瀏覽器開啟的自架伺服器�
 
 ### Office 文件與科學研究
 
-讓智慧體做一份簡報、一份報告或一張試算表，就能看著真正的 `.pptx`、`.docx` 或 `.xlsx` 在對話旁即時算繪，PDF 也能在內建閱讀器裡直接開啟。內建的科研技能——假設生成、實驗設計、統計、文獻檢索——可搭配任何智慧體使用。
+產生 Office 文件並即時預覽，直接檢視 PDF。內建科研技能，任意智慧體都能使用。
 
 [文件 →](https://docs.codeg.app/zh/guide/office) · [科學研究 →](https://docs.codeg.app/zh/guide/research)
 
@@ -220,7 +220,7 @@ Codeg 可以作為桌面應用、可用任何瀏覽器開啟的自架伺服器�
 
 ### 瀏覽器與電腦操作
 
-在桌面應用中，連結會在檔案旁的內建瀏覽器裡開啟，還能切換成平板或手機尺寸：把頁面、元素、截圖或主控台錯誤交給智慧體，或讓它直接操作你分享的頁面。處於預覽階段的電腦操作，還能讓智慧體看見並操作你分享的視窗——而且一鍵就能停止。
+從桌面內建瀏覽器分享頁面與錯誤，用電腦操作（預覽版）讓智慧體操作共享視窗。
 
 [文件 →](https://docs.codeg.app/zh/guide/browser) · [電腦操作 →](https://docs.codeg.app/zh/guide/computer-use)
 
@@ -235,24 +235,30 @@ Codeg 可以作為桌面應用、可用任何瀏覽器開啟的自架伺服器�
 <tr>
 <td width="50%" valign="middle">
 
-### 完整的工程閉環
+### 命令列與 CI
 
-編輯器、即時與並排 diff、附三欄合併編輯器的完整 Git 用戶端、一鍵工作樹、內建終端機與分割檢視——全都在智慧體旁邊，直接作用於你儲存庫裡的真實檔案。
+`codeg-cli` 將腳本與 CI 接入執行中的 Codeg，輸出智慧體回覆或 JSON 事件。
 
-[文件 →](https://docs.codeg.app/zh/guide/workspace) · [Git 與工作樹 →](https://docs.codeg.app/zh/guide/git)
+[文件 →](https://docs.codeg.app/zh/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="完整的工程閉環" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **還有這些：**
 
+- **[完整的工程閉環](https://docs.codeg.app/zh/guide/workspace)** — 程式碼編輯器、即時 diff、[Git 與工作樹](https://docs.codeg.app/zh/guide/git)、三欄合併編輯器、終端機與分割檢視
 - **[儲存庫面板](https://docs.codeg.app/zh/guide/repository)** — GitHub、GitLab、Gitea 與 Forgejo 的議題、拉取請求、檢查項與合併；任何議題或 PR 都能轉成待辦任務
 - **[自動化](https://docs.codeg.app/zh/guide/automations)** — 把設定好的輸入框存下來，依 cron 排程或手動觸發，以無介面方式執行
 - **[Token 用量](https://docs.codeg.app/zh/guide/token-usage)** — 趨勢、快取命中率、活躍熱力圖、依資料夾、智慧體、模型與工作階段劃分的用量，以及按 API 標價估算的費用

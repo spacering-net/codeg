@@ -2804,7 +2804,7 @@ impl TaskEngine {
                 self.track_request(&env.connection_id, format!("p:{request_id}"), true)
                     .await;
             }
-            AcpEvent::PermissionResolved { request_id } => {
+            AcpEvent::PermissionResolved { request_id, .. } => {
                 self.track_request(&env.connection_id, format!("p:{request_id}"), false)
                     .await;
             }
@@ -10580,6 +10580,8 @@ mod tests {
                 CHILD_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -10622,6 +10624,8 @@ mod tests {
                 CHILD_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -10636,6 +10640,8 @@ mod tests {
                 PARENT_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -10691,6 +10697,8 @@ mod tests {
                 CHILD_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;

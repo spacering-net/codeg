@@ -39,6 +39,7 @@ pub mod prompt_hydration;
 pub mod question;
 pub mod registry;
 pub mod remote_registry;
+pub mod result_tool;
 pub mod scratch_dir;
 pub mod service_error;
 pub mod session_info;

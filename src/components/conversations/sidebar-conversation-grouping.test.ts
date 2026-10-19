@@ -1341,6 +1341,23 @@ describe("selectRecentConversationsWithReuse", () => {
     expect(pick("folders")).toEqual([1])
   })
 
+  it("narrows to what codeg-cli started under the cli filter", () => {
+    const fromCli = conv(1, 10, { source: "cli" })
+    const fromWindow = conv(2, 10)
+    const chat = conv(3, 99, { kind: "chat" })
+    const closedCli = conv(4, 20, { source: "cli" })
+    expect(
+      selectRecentConversationsWithReuse(
+        [fromCli, fromWindow, chat, closedCli],
+        true,
+        "created",
+        open,
+        [],
+        "cli"
+      ).map((c) => c.id)
+    ).toEqual([1])
+  })
+
   it("still drops closed-folder sessions under the folders filter", () => {
     const out = selectRecentConversationsWithReuse(
       [conv(2, 77)],

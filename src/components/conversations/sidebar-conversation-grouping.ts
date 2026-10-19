@@ -297,8 +297,9 @@ export function selectChatConversationsWithReuse(
  *   by `kind` instead.
  * - Sorted by `sortMode` (not always `updated_at`) so the row order agrees with
  *   the timestamp each card actually shows.
- * - `filter` optionally narrows the mix to chats only or folder sessions only;
- *   the default (`"all"`) is the section's whole point.
+ * - `filter` optionally narrows the mix to chats only, folder sessions only,
+ *   or the conversations `codeg-cli` started; the default (`"all"`) is the
+ *   section's whole point.
  *
  * `prev` is the array returned last call (threaded via a ref by the caller).
  */
@@ -320,6 +321,7 @@ export function selectRecentConversationsWithReuse(
     // the Chat and Folders sections use, so the two views always agree.
     if (filter === "chats" && !isChat) continue
     if (filter === "folders" && isChat) continue
+    if (filter === "cli" && conv.source !== "cli") continue
     next.push(conv)
   }
   next.sort(

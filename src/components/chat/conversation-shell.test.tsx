@@ -31,18 +31,32 @@ vi.mock("@/components/chat/remote-control-strip", () => ({
     />
   ),
 }))
-vi.mock("@/components/chat/permission-dialog", () => ({
-  PermissionDialog: () => null,
-}))
+vi.mock("@/components/chat/permission-dialog", async () => {
+  const { useTranscriptRoot } =
+    await import("@/components/ai-elements/markdown-local-image")
+  return {
+    PermissionDialog: function PermissionDialog() {
+      const root = useTranscriptRoot()
+      return <div data-testid="permission" data-root={String(root)} />
+    },
+  }
+})
 vi.mock("@/components/chat/question-dialog", () => ({
   QuestionDialog: () => null,
 }))
 vi.mock("@/components/chat/ask-question-card", () => ({
   AskQuestionCard: () => null,
 }))
-vi.mock("@/components/chat/plan-approval-card", () => ({
-  PlanApprovalCard: () => null,
-}))
+vi.mock("@/components/chat/plan-approval-card", async () => {
+  const { useTranscriptRoot } =
+    await import("@/components/ai-elements/markdown-local-image")
+  return {
+    PlanApprovalCard: function PlanApprovalCard() {
+      const root = useTranscriptRoot()
+      return <div data-testid="plan-approval" data-root={String(root)} />
+    },
+  }
+})
 
 import { ConversationShell } from "./conversation-shell"
 
@@ -142,6 +156,25 @@ describe("ConversationShell Remote Control strip", () => {
     expect(screen.getByTestId("remote-control-strip")).toHaveAttribute(
       "data-can-turn-off",
       "false"
+    )
+  })
+})
+
+describe("ConversationShell cards below the transcript", () => {
+  it("resolve local images against the conversation's folder", () => {
+    // Outside the transcript's own image scope, but the same agent wrote
+    // them: a plan or a permission request names images as a reply does.
+    renderShell({
+      defaultPath: "/repo",
+      pendingPlanApproval: { approval_id: "a1" } as never,
+    })
+    expect(screen.getByTestId("permission")).toHaveAttribute(
+      "data-root",
+      "/repo"
+    )
+    expect(screen.getByTestId("plan-approval")).toHaveAttribute(
+      "data-root",
+      "/repo"
     )
   })
 })

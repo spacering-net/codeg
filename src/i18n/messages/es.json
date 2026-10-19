@@ -331,6 +331,21 @@
     "autostartDescription": "Se abre automáticamente después de que inicies sesión en este equipo.",
     "autostartSaveFailed": "No se pudo guardar la configuración de inicio automático: {message}",
     "autostartUnavailable": "No se pudo leer el registro de inicio de este equipo: {message}",
+    "cliAccessTitle": "Acceso por línea de comandos",
+    "cliAccessDescription": "Permite que el comando codeg-cli de este equipo ejecute indicaciones a través de Codeg: desde scripts, trabajos de CI o los terminales del propio Codeg. Solo este equipo puede conectarse, con una clave guardada en un archivo privado.",
+    "cliAccessEndpointFile": "Archivo de conexión:",
+    "cliAccessExample": "Prueba:",
+    "cliAccessOff": "Desactivado: codeg-cli en este equipo no puede conectarse a Codeg.",
+    "cliAccessUnavailable": "No se pudo iniciar el acceso por línea de comandos: {message}",
+    "cliAccessSaveFailed": "No se pudo cambiar el acceso por línea de comandos: {message}",
+    "cliToolInstall": "Instalar la herramienta de línea de comandos",
+    "cliToolInstalled": "{command} está en tu PATH:",
+    "cliToolPackage": "{command} vino con el paquete y está en tu PATH:",
+    "cliToolNotInstalled": "Pon {command} en tu PATH para que una terminal fuera de Codeg lo encuentre.",
+    "cliToolConflict": "Se dejó como estaba: {message}",
+    "cliToolNote": "Nota: {message}",
+    "cliToolInstalledToast": "{command} está en tu PATH. Abre una terminal nueva para usarlo.",
+    "cliToolInstallFailed": "No se pudo instalar la herramienta de línea de comandos: {message}",
     "proxyTitle": "Proxy de red",
     "proxyDescription": "Cuando está activado, las solicitudes de red posteriores usarán este proxy preferentemente (incluyendo chat ACP, instalación de agentes y operaciones remotas de Git).",
     "loadFailed": "Error al cargar: {message}",
@@ -2189,6 +2204,7 @@
       "runningCountBadge": "{count, plural, one {# sesión en ejecución} other {# sesiones en ejecución}}",
       "statusCancelledBadge": "Cancelado",
       "worktreeRemovedBadge": "Worktree de origen eliminado",
+      "cliBadge": "Iniciada desde la línea de comandos",
       "conversationCountUnit": "{count, plural, one {# conversación} other {# conversaciones}}",
       "emptyFolderHint": "Sin conversaciones",
       "noMatchingConversations": "No hay conversaciones coincidentes",
@@ -2269,9 +2285,11 @@
         "dropToUngroup": "Suelta aquí para quitar del grupo"
       },
       "recentFilterAll": "Todo",
+      "recentFilterCli": "Línea de comandos",
       "recentFilterTitle": "Mostrar en Recientes: {filter}",
       "noRecentChats": "No hay chats recientes",
       "noRecentFolders": "No hay conversaciones de carpeta recientes",
+      "noRecentCli": "No hay conversaciones recientes desde la línea de comandos",
       "recentFilterMenuLabel": "Mostrar en Recientes"
     },
     "conversation": {
@@ -5406,7 +5424,10 @@
     "reconnectNow": "Volver a conectar ahora",
     "sessionExpiredTitle": "Sesión caducada",
     "sessionExpiredDescription": "Tu sesión ya no es válida. Inicia sesión de nuevo para continuar.",
-    "goToLogin": "Ir al inicio de sesión"
+    "goToLogin": "Ir al inicio de sesión",
+    "versionChangedTitle": "El servidor ahora ejecuta Codeg {version}",
+    "versionChangedDescription": "Esta página sigue en la versión {version}. Recárgala para usar la versión del servidor.",
+    "reloadPage": "Recargar"
   },
   "LiveFeedback": {
     "placeholder": "Envía una nota a {agent} mientras trabaja…",

@@ -739,7 +739,7 @@ pub async fn open_worktree_folder_core(
 /// - The write only lands when no alias is set yet (see
 ///   [`folder_service::seed_folder_alias`]), so re-registering a worktree — a
 ///   task retry, a re-created checkout — never overwrites a name the user chose.
-async fn seed_worktree_alias(db: &AppDatabase, folder_id: i32, path: &str) {
+pub(crate) async fn seed_worktree_alias(db: &AppDatabase, folder_id: i32, path: &str) {
     let Some(branch) = resolve_git_head(path).await.ok().and_then(|h| h.branch) else {
         return;
     };
@@ -7369,6 +7369,23 @@ mod tests {
         );
         let all = list_all_folder_details_core(&db).await.expect("all list");
         assert!(all.iter().any(|f| f.id == entry.id));
+    }
+
+    /// Two callers making the row of one new path at once — the runs of a
+    /// `codeg-cli -a x -a y` in a new workspace, delegations into a new cwd —
+    /// both get it: the one that lost the insert reads the winner's.
+    #[tokio::test]
+    async fn ensure_folder_for_path_made_twice_at_once_is_one_row() {
+        let db = fresh_in_memory_db().await;
+        let path = "/tmp/codeg-ensure-race";
+        let (a, b) = tokio::join!(
+            folder_service::ensure_folder_for_path(&db.conn, path),
+            folder_service::ensure_folder_for_path(&db.conn, path),
+        );
+        let (a, b) = (a.expect("first"), b.expect("second"));
+        assert_eq!(a.id, b.id);
+        let all = list_all_folder_details_core(&db).await.expect("all list");
+        assert_eq!(all.iter().filter(|f| f.path == path).count(), 1);
     }
 
     /// The overwhelmingly common case: the child runs in the same folder as its

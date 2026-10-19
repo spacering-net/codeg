@@ -168,11 +168,13 @@ pub async fn restart_app(
         ));
     }
     // Off the main thread on purpose: from here `restart()` goes through
-    // `RunEvent::Exit`, where the single-instance plugin removes its socket
-    // before tauri relaunches. On the main thread it relaunches straight away,
-    // and on macOS (tauri 2.12.2+ relaunches through LaunchServices and waits
-    // for the launch) the new instance finds the old one still listening,
-    // hands it its arguments and quits — nothing is left running.
+    // `RunEvent::ExitRequested` and `RunEvent::Exit`. At `Exit` the
+    // single-instance plugin removes its socket, and on macOS
+    // `crate::relaunch` takes the restart over. On the main thread tauri
+    // relaunches straight away, without either event, and on macOS (tauri
+    // 2.12.2+ relaunches through LaunchServices and waits for the launch) the
+    // new instance finds the old one still listening, hands it its arguments
+    // and quits — nothing is left running.
     //
     // On macOS the new instance must also not be a plain child of this one.
     // A codeg started at login runs as the job of
@@ -182,9 +184,10 @@ pub async fn restart_app(
     // still in `exec` while Gatekeeper checked the bundle the update had just
     // put in place: the kernel logged "ASP: Sleep interrupted" and "Security
     // policy would not allow process", nothing came back, and the macOS 27
-    // Dock showed codeg as running in the background. LaunchServices
-    // (`open -n`) makes the new instance a job of its own, and tauri's
-    // fallback when `open` fails spawns into a new process group.
+    // Dock showed codeg as running in the background. `crate::relaunch`
+    // launches it through LaunchServices (`open -n`), which makes it a job of
+    // its own, from a relauncher in a process group of its own, and only once
+    // this process is gone — earlier, the Dock gives it a second icon.
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         tracing::info!("[update] relaunching into the installed update");

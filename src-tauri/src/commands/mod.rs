@@ -13,6 +13,9 @@ pub mod browser_tools;
 pub mod canvas;
 pub mod chat_authoring;
 pub mod chat_channel;
+/// The `codeg-cli` access switch (desktop; the server's is a web handler).
+#[cfg(feature = "tauri-runtime")]
+pub mod cli_access;
 /// Files-onto-the-OS-clipboard. Only the command itself is desktop-gated; the
 /// path validation and URI encoding stay compiled in every mode so their tests
 /// run without the tauri stack.

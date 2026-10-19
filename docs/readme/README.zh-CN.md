@@ -101,7 +101,7 @@
 
 ### 一个界面，容纳所有智能体
 
-内置十九个智能体，其它兼容 ACP 的智能体也能从公开注册表或它的 distribution JSON 加入。Codeg 与每一个智能体都用 Agent Client Protocol 对话，所以它们拿到的是同一套丰富的对话界面——工具卡片、实时 diff、计划与权限确认——而不是一个得眯着眼看的终端。为智能体启用「界面渲染」后，它还能用可交互的卡片、表格和图表来回复。
+十九个内置智能体，兼容任意 ACP 智能体。工具卡片、实时 diff 与交互式回复，尽在同一界面。
 
 [文档 →](https://docs.codeg.app/zh/guide/supported-agents) · [自定义智能体 →](https://docs.codeg.app/zh/guide/custom-agents) · [界面渲染 →](https://docs.codeg.app/zh/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -118,7 +118,7 @@
 
 ### 每个会话，都搜得到
 
-Codeg 读取每个智能体 CLI 留在磁盘上的历史：一键导入，全部可搜，任意会话都能从中断处继续。`@` 提及一个旧会话，你正在对话的智能体就能读到它——哪怕那是另一个智能体留下的。还能给会话打上彩色标签，可全局通用，也可只属于某个文件夹，并按标签筛选侧边栏。
+一键导入、搜索和续聊历史会话。用 `@` 跨智能体分享上下文，用标签整理对话。
 
 [文档 →](https://docs.codeg.app/zh/guide/aggregation) · [标签 →](https://docs.codeg.app/zh/guide/workspace#tag-conversations)
 
@@ -135,7 +135,7 @@ Codeg 读取每个智能体 CLI 留在磁盘上的历史：一键导入，全部
 
 ### 多智能体协作
 
-输入 `@`，选中智能体，发送。每个被提及的智能体都作为独立会话并肩开工，工作实时汇流回你的对话——Claude Code 起草，Codex 同步评审——子智能体则以卡片呈现，边跑边填。
+用 `@` 委派任务，让多个智能体并行协作，进度实时汇入当前对话。
 
 [文档 →](https://docs.codeg.app/zh/guide/multi-agent)
 
@@ -152,7 +152,7 @@ Codeg 读取每个智能体 CLI 留在磁盘上的历史：一键导入，全部
 
 ### 无人值守的待办任务
 
-把活写下来就可以走开。每个待办任务都有自己的 git 工作树与分支，可以马上开始，也可以定时启动，做完后在待验收里等你；你通过 diff，智能体就把它落地，而 Codeg 会先核对 git 再确认完成。仓库面板还能替你添加：按标签和作者挑选议题与拉取请求，定时扫描，或由 Webhook 触发。
+任务独享工作树，可立即执行或定时启动。智能体完成工作，你来验收改动。
 
 [文档 →](https://docs.codeg.app/zh/guide/tasks) · [自动处理 →](https://docs.codeg.app/zh/guide/repository#let-it-pick-items-up-by-itself)
 
@@ -169,7 +169,7 @@ Codeg 读取每个智能体 CLI 留在磁盘上的历史：一键导入，全部
 
 ### 无限画布
 
-把工作在空间里铺开：对话、文件、终端与便签都成了画板上的卡片，按文件夹与智能体分组，几个智能体并排运行，一目了然。
+在无限画布上摆放对话、文件、终端与便签，让多个智能体的工作一目了然。
 
 [文档 →](https://docs.codeg.app/zh/guide/canvas)
 
@@ -186,7 +186,7 @@ Codeg 读取每个智能体 CLI 留在磁盘上的历史：一键导入，全部
 
 ### 桌面、服务器、手机与聊天
 
-Codeg 可以作为桌面应用运行，也可以作为用任意浏览器访问的自托管服务器，或者一个 Docker 容器；桌面应用还能连接远端服务器，在独立窗口中打开远端工作区。原生 iPhone、iPad 与 Android 客户端——再加上 Telegram、飞书与微信渠道——让智能体随时触手可及，而你的文件与会话始终留在你自己掌控的机器上。
+支持桌面、服务器、Docker 与移动端，也能通过 Telegram、飞书和微信与智能体对话。
 
 [文档 →](https://docs.codeg.app/zh/getting-started/deployment) · [远端工作区 →](https://docs.codeg.app/zh/guide/workspace#desktop-and-browser) · [移动应用 →](https://docs.codeg.app/zh/getting-started/installation#mobile-apps) · [消息渠道 →](https://docs.codeg.app/zh/guide/chat-channels)
 
@@ -203,7 +203,7 @@ Codeg 可以作为桌面应用运行，也可以作为用任意浏览器访问�
 
 ### Office 文档与科学研究
 
-让智能体做一份演示、一份报告或一张表，看着真正的 `.pptx`、`.docx` 或 `.xlsx` 在对话旁实时渲染，PDF 也能在内置阅读器里直接打开。内置的科研技能——假设生成、实验设计、统计分析、文献检索——任意智能体都能调用。
+生成 Office 文档并实时预览，直接查看 PDF。内置科研技能，任意智能体都能调用。
 
 [文档 →](https://docs.codeg.app/zh/guide/office) · [科学研究 →](https://docs.codeg.app/zh/guide/research)
 
@@ -220,7 +220,7 @@ Codeg 可以作为桌面应用运行，也可以作为用任意浏览器访问�
 
 ### 浏览器与电脑操作
 
-在桌面应用里，链接会在文件旁的内置浏览器中打开，还能切换成平板或手机尺寸：把页面、元素、截图或控制台报错直接交给智能体，或者让它驱动你共享的页面。处于预览阶段的电脑操作还能让智能体看到并操作你共享的窗口——停止只需一键。
+从桌面内置浏览器分享页面与报错，用电脑操作（预览版）让智能体操作共享窗口。
 
 [文档 →](https://docs.codeg.app/zh/guide/browser) · [电脑操作 →](https://docs.codeg.app/zh/guide/computer-use)
 
@@ -235,24 +235,30 @@ Codeg 可以作为桌面应用运行，也可以作为用任意浏览器访问�
 <tr>
 <td width="50%" valign="middle">
 
-### 完整的工程闭环
+### 命令行与 CI
 
-编辑器、实时 diff 与左右对比 diff、带三栏合并编辑器的完整 Git 客户端、一键工作树、内置终端与分屏——全都在智能体旁边，作用于你仓库里的真实文件。
+`codeg-cli` 将脚本与 CI 接入正在运行的 Codeg，输出智能体回复或 JSON 事件。
 
-[文档 →](https://docs.codeg.app/zh/guide/workspace) · [Git 与工作树 →](https://docs.codeg.app/zh/guide/git)
+[文档 →](https://docs.codeg.app/zh/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="完整的工程闭环" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **还有这些：**
 
+- **[完整的工程闭环](https://docs.codeg.app/zh/guide/workspace)** — 代码编辑器、实时 diff、[Git 与工作树](https://docs.codeg.app/zh/guide/git)、三栏合并编辑器、终端与分屏
 - **[仓库面板](https://docs.codeg.app/zh/guide/repository)** — GitHub、GitLab、Gitea 与 Forgejo 的议题、拉取请求、检查与合并；任意议题或 PR 都能变成待办任务
 - **[自动化](https://docs.codeg.app/zh/guide/automations)** — 把配置好的输入框存成自动化，按 cron 计划或手动触发、无界面运行
 - **[Token 用量](https://docs.codeg.app/zh/guide/token-usage)** — 趋势与缓存命中率、活跃热力图、按文件夹、智能体、模型与会话的分项统计，以及按 API 标价估算的花费

@@ -1228,7 +1228,8 @@
 
 /* 会话表格（Streamdown 内部渲染）：表格整体做成圆角半透明卡片——圆角/边框挂在滚动容器上（见
    下方 table-wrapper 区块，不磨砂），thead/tbody 只上半透明中性染色。表头比表体略深保层级；关图
-   回落各自 bg-muted/80·bg-muted/40（属性选择器 unlayered 压过 streamdown 的 layered 值）。 */
+   回落表头自带的 bg-muted/80、表体下方补的 muted 40%（属性选择器 unlayered 压过 streamdown 的
+   layered 值）。 */
 [data-workspace-bg="on"] [data-streamdown="table-header"] {
   background-color: color-mix(in oklch, var(--muted) 65%, transparent);
 }
@@ -1240,9 +1241,10 @@
   );
 }
 
-/* 围栏代码块标题栏（Streamdown 的 code-block-header，元素自带 bg-muted/80）：转半透明中性染色
-   （不磨砂），与其它 muted 标题栏统一。代码块根自带 rounded-xl border 作边界。代码正文
-   （code-block-body）有 shiki 底色、保持不透明（护可读性），不在此列。 */
+/* 围栏代码块标题栏（Streamdown 的 code-block-header，关图时是下方「Streamdown code blocks」
+   区块给的 muted 80%）：转半透明中性染色（不磨砂），与其它 muted 标题栏统一。代码块根自带
+   rounded-xl border 作边界。代码正文（code-block-body）保持 Streamdown 自带的不透明
+   bg-background（护可读性），不在此列。 */
 [data-workspace-bg="on"] [data-streamdown="code-block-header"] {
   background-color: color-mix(
     in oklch,
@@ -1489,10 +1491,64 @@
   animation: forge-progress 1.1s linear infinite;
 }
 
-/* Streamdown code blocks: dark mode via shiki dual-theme CSS variables */
-.dark [data-streamdown="code-block-body"] {
-  background-color: var(--shiki-dark-bg, var(--sdm-bg, transparent)) !important;
-  color: var(--shiki-dark, var(--sdm-fg, inherit)) !important;
+/* Streamdown code blocks: one card.
+   Streamdown 2.7 renders the block as a padded `bg-sidebar` card (`rounded-xl
+   border p-2 gap-2`) holding a header row, a floating actions chip with a
+   frame of its own, and a body that is a second bordered card (`rounded-md
+   border bg-background p-4`). Lay it back to a single card: the root keeps
+   its rounded border and clips the corners, the header is a muted title bar
+   with the language on the left and the actions centred on its right, and
+   the body sits flush beneath it. */
+[data-streamdown="code-block"] {
+  --sd-code-header-height: 2.5rem;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: transparent;
+}
+
+[data-streamdown="code-block-header"] {
+  height: var(--sd-code-header-height);
+  padding-inline: 0.75rem;
+  background-color: color-mix(in oklch, var(--muted) 80%, transparent);
+}
+
+/* The actions chip hangs off an `absolute top-2 right-2` positioner. Stretch
+   that over the title bar so the chip centres on it, inset like the language
+   label, and drop the chip's frame: it sits on the bar now. */
+[data-streamdown="code-block"]
+  > div:has(> [data-streamdown="code-block-actions"]) {
+  top: 0;
+  right: 0.75rem;
+  height: var(--sd-code-header-height);
+}
+
+[data-streamdown="code-block-actions"] {
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The body keeps Streamdown's own `bg-background p-4`, in both themes: there
+   is no shiki background to paint. With two themes shiki reports the block
+   background as one compound string (`#fff;--shiki-dark-bg:#24292e`), which
+   Streamdown writes into `--sdm-bg` whole; a custom property cannot hold a
+   top-level `;`, so the browser drops it and `--shiki-dark-bg` never exists.
+   The rule that used to read it here only ever resolved to `transparent`. */
+[data-streamdown="code-block-body"] {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Token colours. Shiki sets each token's colours as separate properties, so
+   these do arrive: `--sdm-c` (light) and `--shiki-dark`. 2.7 paints the light
+   one with its own `text-[var(--sdm-c,inherit)]`, a class from node_modules
+   our Tailwind scan never generates, so without this rule every token drew in
+   the plain text colour. */
+[data-streamdown="code-block-body"] code > span > span {
+  color: var(--sdm-c, inherit);
 }
 
 .dark [data-streamdown="code-block-body"] code > span > span {
@@ -1500,14 +1556,6 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) [data-streamdown="code-block-body"] {
-    background-color: var(
-      --shiki-dark-bg,
-      var(--sdm-bg, transparent)
-    ) !important;
-    color: var(--shiki-dark, var(--sdm-fg, inherit)) !important;
-  }
-
   :root:not(.light) [data-streamdown="code-block-body"] code > span > span {
     color: var(--shiki-dark, var(--sdm-c, inherit)) !important;
   }
@@ -1525,13 +1573,28 @@
   display: inline;
 }
 
-/* Streamdown table overrides */
+/* Streamdown table overrides.
+   Streamdown 2.7 makes the wrapper a card of its own (`rounded-lg border
+   bg-sidebar p-2 gap-2`) around a scroll container it frames again
+   (`rounded-md border bg-background`), which draws two nested borders. Only
+   the scroll container is the card here (below), so the wrapper goes back to a
+   plain box. The wrapper inside the fullscreen view carries none of this, so
+   the reset is a no-op there. */
 [data-streamdown="table-wrapper"] {
   position: relative;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
 }
 
-/* Toolbar: float over table top-right, no vertical space */
-[data-streamdown="table-wrapper"] > div:first-child:has(button) {
+/* Toolbar: float over table top-right, no vertical space. Inline tables only:
+   the fullscreen view (`table-fullscreen`, portaled to <body>) reuses the
+   wrapper attribute, and floating its toolbar there lifts the exit button
+   above the top of the screen. */
+[data-streamdown="table-wrapper"]:not([data-streamdown="table-fullscreen"] > *)
+  > div:first-child:has(button) {
   position: absolute;
   top: -2rem;
   right: 0;
@@ -1540,10 +1603,34 @@
 
 /* 表格圆角卡片化（与背景图无关，始终生效·点③·参考委派卡）：把圆角 + 边框挂在滚动容器
    （直接包着 <table> 的 overflow-x-auto div）——它已有 overflow(auto)，border-radius 会把表格裁到
-   圆角；复制工具条是 table-wrapper 的兄弟、不在此容器内，故不被裁（无需搬动）。 */
+   圆角；复制工具条是 table-wrapper 的兄弟、不在此容器内，故不被裁（无需搬动）。底色透明：
+   2.7 给它加了不透明的 bg-background，会把开图时 thead/tbody 的半透明染色垫成实底。 */
 [data-streamdown="table-wrapper"] > div:has(> [data-streamdown="table"]) {
   border-radius: 0.5rem;
   border: 1px solid var(--border);
+  background-color: transparent;
+}
+/* 表体浅染色：2.7 去掉了 tbody 自带的 bg-muted/40，补回来让表体仍比表头浅一级（关图时的
+   底色；开图走上方 [data-workspace-bg="on"] 的半透明规则，选择器更具体，照样压过这条）。 */
+[data-streamdown="table-body"] {
+  background-color: color-mix(in oklch, var(--muted) 40%, transparent);
+}
+/* 表头/表体分隔线：行内表格靠 2.7 给 <table> 的 divide-y 画出，全屏视图的 <table> 没有这个类、
+   只剩底色区分。这里统一补上（与 divide-y 同样跳过末尾子元素：只有表头的表格不画，免得和卡片
+   底边叠成双线）。 */
+[data-streamdown="table-header"]:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+/* 全屏表格（2.7 的 table-fullscreen）：滚动容器是 flex-1 + p-4 pt-0，上面那条卡片边框会沿着
+   整块屏幕画框、表格缩在框里。改成贴着表格：去掉内边距换成外边距，按内容高度收缩、超出
+   屏幕时在卡片内滚动。 */
+[data-streamdown="table-fullscreen"]
+  > [data-streamdown="table-wrapper"]
+  > div:has(> [data-streamdown="table"]) {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0 1rem 1rem;
+  padding: 0;
 }
 /* 表格自带外边框归 0，避免与容器边框双线；内部行线（tr border-b / tbody divide-y）保留。 */
 [data-streamdown="table"] {

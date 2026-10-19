@@ -101,7 +101,7 @@
 
 ### 모든 에이전트를 하나의 인터페이스로
 
-열아홉 개의 에이전트가 기본 내장되어 있고, 그 밖의 ACP 에이전트도 공개 레지스트리나 자체 distribution JSON으로 합류할 수 있습니다. Codeg는 이들 모두와 Agent Client Protocol로 통신하므로, 눈을 가늘게 뜨고 들여다봐야 하는 터미널 대신 모두 같은 풍부한 대화 화면을 갖게 됩니다 — 도구 카드, 실시간 diff, 계획, 권한 요청까지. 에이전트에 UI 렌더링을 켜면 대화형 카드, 표, 차트로도 답할 수 있습니다.
+내장 에이전트 19개와 모든 ACP 에이전트를 한 화면에서. 도구 카드, 실시간 diff, 대화형 응답을 제공합니다.
 
 [문서 →](https://docs.codeg.app/guide/supported-agents) · [커스텀 에이전트 →](https://docs.codeg.app/guide/custom-agents) · [UI 렌더링 →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -118,7 +118,7 @@
 
 ### 모든 세션을 검색할 수 있게
 
-Codeg는 에이전트 CLI마다 디스크에 남겨 두는 기록을 읽습니다. 클릭 한 번으로 가져오고, 전부 검색하고, 어떤 세션이든 멈춘 지점부터 이어가세요. 예전 세션을 `@`로 언급하면 지금 대화 중인 에이전트가 그 세션을 읽을 수 있습니다 — 다른 에이전트가 남긴 세션이라도요. 대화에는 전체 공용이나 폴더 전용 색깔 태그를 붙일 수 있고, 사이드바를 태그로 걸러 볼 수 있습니다.
+기록을 가져오고 검색하고 이어서 대화하세요. `@`로 다른 에이전트와 세션을 공유하고 태그로 정리하세요.
 
 [문서 →](https://docs.codeg.app/guide/aggregation) · [태그 →](https://docs.codeg.app/guide/workspace#tag-conversations)
 
@@ -135,7 +135,7 @@ Codeg는 에이전트 CLI마다 디스크에 남겨 두는 기록을 읽습니�
 
 ### 멀티 에이전트 협업
 
-`@`를 입력하고, 에이전트를 고르고, 보내세요. 언급된 에이전트는 저마다 독립 세션으로 나란히 실행되고, 그 출력은 지금 보고 있는 스레드로 실시간으로 흘러듭니다. Claude Code가 초안을 쓰는 동안 Codex가 검토하는 식으로요. 서브 에이전트는 일하는 동안 내용이 채워지는 카드로 나타납니다.
+`@`로 작업을 위임하세요. 여러 에이전트가 나란히 작업하고 진행 상황을 대화에 실시간으로 전합니다.
 
 [문서 →](https://docs.codeg.app/guide/multi-agent)
 
@@ -152,7 +152,7 @@ Codeg는 에이전트 CLI마다 디스크에 남겨 두는 기록을 읽습니�
 
 ### 무인으로 실행되는 할 일
 
-작업을 적어 두고 자리를 떠나세요. 할 일마다 전용 git 워크트리와 브랜치가 생기고, 지금 바로 또는 예약한 시간에 시작해 내 검토를 기다립니다. diff를 수락하면 에이전트가 반영하고, Codeg는 git을 확인한 뒤에야 완료로 처리합니다. 리포지토리 패널이 라벨과 작성자 기준으로 이슈와 풀 리퀘스트를 골라, 예약된 시간이나 웹훅이 올 때 할 일로 추가해 주기도 합니다.
+독립된 워크트리에서 작업을 즉시 실행하거나 예약하세요. 에이전트가 작업하면 변경 사항을 검토하고 승인하세요.
 
 [문서 →](https://docs.codeg.app/guide/tasks) · [자동 처리 →](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
@@ -169,7 +169,7 @@ Codeg는 에이전트 CLI마다 디스크에 남겨 두는 기록을 읽습니�
 
 ### 무한 캔버스
 
-작업을 공간 위에 펼쳐 놓으세요. 대화, 파일, 터미널, 메모가 보드 위의 카드가 되어 폴더와 에이전트별로 묶이므로, 여러 에이전트가 나란히 실행되는 모습을 한눈에 볼 수 있습니다.
+대화, 파일, 터미널, 메모를 무한한 보드에 배치하세요. 모든 에이전트의 작업을 한눈에 볼 수 있습니다.
 
 [문서 →](https://docs.codeg.app/guide/canvas)
 
@@ -186,7 +186,7 @@ Codeg는 에이전트 CLI마다 디스크에 남겨 두는 기록을 읽습니�
 
 ### 데스크톱·서버·모바일·채팅
 
-Codeg를 데스크톱 앱으로, 어떤 브라우저에서든 여는 자체 호스팅 서버로, 또는 Docker 컨테이너 하나로 실행하세요. 데스크톱 앱에서는 원격 서버를 별도의 워크스페이스 창으로 열 수도 있습니다. 네이티브 iPhone, iPad, Android 클라이언트, 그리고 Telegram, Lark, WeChat 채널이 에이전트를 늘 손 닿는 곳에 두는 동안, 파일과 세션은 내가 관리하는 컴퓨터에 그대로 남습니다.
+데스크톱, 서버, Docker, 모바일에서 사용하세요. Telegram, Lark, WeChat으로도 에이전트와 대화하세요.
 
 [문서 →](https://docs.codeg.app/getting-started/deployment) · [원격 워크스페이스 →](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [모바일 앱 →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [채팅 채널 →](https://docs.codeg.app/guide/chat-channels)
 
@@ -203,7 +203,7 @@ Codeg를 데스크톱 앱으로, 어떤 브라우저에서든 여는 자체 호�
 
 ### Office 문서와 과학 연구
 
-덱, 보고서, 워크북을 요청하고 진짜 `.pptx`, `.docx`, `.xlsx` 파일이 대화 옆에서 실시간으로 렌더링되는 것을 지켜보세요. PDF는 전용 뷰어로 열립니다. 가설 생성, 실험 설계, 통계, 문헌 검색 같은 내장 연구 스킬은 어떤 에이전트와도 함께 작동합니다.
+Office 파일을 만들고 실시간으로 미리 보며 PDF도 열어 보세요. 연구 스킬은 모든 에이전트가 사용합니다.
 
 [문서 →](https://docs.codeg.app/guide/office) · [과학 연구 →](https://docs.codeg.app/guide/research)
 
@@ -220,7 +220,7 @@ Codeg를 데스크톱 앱으로, 어떤 브라우저에서든 여는 자체 호�
 
 ### 브라우저와 컴퓨터 사용
 
-데스크톱 앱에서는 링크가 파일 옆의 내장 브라우저에서 열리고, 태블릿이나 휴대폰 크기로도 볼 수 있습니다. 페이지, 요소, 스크린샷, 콘솔 오류를 에이전트에게 넘기거나, 공유한 페이지를 에이전트가 직접 조작하게 하세요. 미리 보기 단계의 기능으로, 공유한 창을 에이전트가 보고 조작하게 할 수도 있습니다 — 중지는 클릭 한 번이면 됩니다.
+데스크톱 브라우저에서 페이지와 오류를 공유하세요. 컴퓨터 사용(미리보기)으로 공유 창도 조작할 수 있습니다.
 
 [문서 →](https://docs.codeg.app/guide/browser) · [컴퓨터 사용 →](https://docs.codeg.app/guide/computer-use)
 
@@ -235,24 +235,30 @@ Codeg를 데스크톱 앱으로, 어떤 브라우저에서든 여는 자체 호�
 <tr>
 <td width="50%" valign="middle">
 
-### 엔지니어링의 전 과정
+### 명령줄과 CI
 
-에디터, 실시간 diff와 나란히 보기 diff, 3분할 머지 에디터를 갖춘 완전한 git 클라이언트, 클릭 한 번으로 만드는 워크트리, 내장 터미널, 화면 분할 — 모두 에이전트 바로 옆에서, 저장소 안의 진짜 파일을 다룹니다.
+`codeg-cli`로 스크립트나 CI에서 실행 중인 Codeg에 요청하세요. 응답이나 JSON 이벤트를 출력합니다.
 
-[문서 →](https://docs.codeg.app/guide/workspace) · [Git과 워크트리 →](https://docs.codeg.app/guide/git)
+[문서 →](https://docs.codeg.app/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="엔지니어링의 전 과정" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **함께 들어 있는 기능:**
 
+- **[엔지니어링의 전 과정](https://docs.codeg.app/guide/workspace)** — 코드 편집기, 실시간 diff, [Git과 워크트리](https://docs.codeg.app/guide/git), 3패널 병합 편집기, 터미널, 분할 보기
 - **[리포지토리 패널](https://docs.codeg.app/guide/repository)** — GitHub, GitLab, Gitea, Forgejo의 이슈, 풀 리퀘스트, 검사 항목, 병합을 다루고, 어떤 이슈나 PR이든 할 일로 만들 수 있습니다
 - **[자동화](https://docs.codeg.app/guide/automations)** — 설정을 마친 입력창을 저장해 cron 일정에 따라 또는 필요할 때 헤드리스로 실행합니다
 - **[토큰 사용량](https://docs.codeg.app/guide/token-usage)** — 추이, 캐시 적중률, 활동 히트맵, 폴더·에이전트·모델·세션별 사용량, 그리고 API 정가 기준 예상 비용

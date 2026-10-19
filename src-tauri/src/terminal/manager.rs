@@ -496,6 +496,24 @@ impl TerminalManager {
                 cmd.env(key, value);
             }
         }
+        // codeg's own codeg-cli first (`cli_run::shim`). Said here because
+        // on Windows portable-pty rebuilds PATH from the registry, dropping
+        // what this process put on its own.
+        if let Some(dir) = crate::cli_run::shim::path_dir() {
+            let current = cmd.get_env("PATH").map(|p| p.to_os_string());
+            let first = current
+                .as_deref()
+                .and_then(|p| std::env::split_paths(p).next());
+            if first.as_deref() != Some(dir) {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                let mut path = dir.as_os_str().to_os_string();
+                if let Some(current) = current.filter(|p| !p.is_empty()) {
+                    path.push(sep);
+                    path.push(current);
+                }
+                cmd.env("PATH", path);
+            }
+        }
 
         let child = pair
             .slave

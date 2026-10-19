@@ -11,7 +11,8 @@ use sea_orm::{
 };
 
 use crate::acp::connection::{
-    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SteerOutcome,
+    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SetterOutcome,
+    SteerOutcome,
 };
 use crate::acp::agent_mentions::strip_route_separator_from_prompt;
 use crate::acp::error::AcpError;
@@ -29,7 +30,7 @@ use crate::acp::question::{
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
-    ForkResultInfo, PromptCapabilitiesInfo, PromptInputBlock,
+    ForkResultInfo, PermissionAnswerOrigin, PromptCapabilitiesInfo, PromptInputBlock,
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
@@ -495,6 +496,14 @@ struct PendingPlanApprovalEntry {
     sender: tokio::sync::oneshot::Sender<PlanApprovalAnswer>,
 }
 
+/// What [`ConnectionManager::spawn_agent_with_outcome`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnOutcome {
+    pub connection_id: String,
+    /// The connection already existed and was handed back by the dedup.
+    pub reused: bool,
+}
+
 impl Default for ConnectionManager {
     fn default() -> Self {
         Self::new()
@@ -690,6 +699,95 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, AcpError> {
+        self.spawn_agent_with_outcome(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+        )
+        .await
+        .map(|outcome| outcome.connection_id)
+    }
+
+    /// [`Self::spawn_agent`], also saying whether the connection was REUSED:
+    /// for a resumed session (`session_id` given), the dedup below hands back a
+    /// live connection that already represents it — one a user may be driving
+    /// in an open tab — instead of spawning. The answer is the dedup's own,
+    /// decided under its lock, so it cannot be fooled by a connection that
+    /// appears between a caller's look-up and this call.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_agent_with_outcome(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<SpawnOutcome, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            None,
+        )
+        .await
+    }
+
+    /// A fresh connection for the root of a `codeg-cli` run, marked as the
+    /// run's from the moment it exists — before its agent starts, so the
+    /// codeg-mcp it is given knows the run ([`crate::cli_run::RootSeed`]).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_cli_root(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        seed: crate::cli_run::RootSeed,
+    ) -> Result<String, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            None,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            Some(seed),
+        )
+        .await
+        .map(|outcome| outcome.connection_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_agent_seeded(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        mut runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        cli_root: Option<crate::cli_run::RootSeed>,
+    ) -> Result<SpawnOutcome, AcpError> {
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
         // empty connection list and then have one appear underneath it. Not
@@ -741,13 +839,24 @@ impl ConnectionManager {
                 existing,
                 session_id.as_deref().unwrap_or("")
             );
-            return Ok(existing);
+            return Ok(SpawnOutcome {
+                connection_id: existing,
+                reused: true,
+            });
         }
 
         let connection_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
             "[ACP] spawning connection id={} owner_window={} agent={:?}",
             connection_id, owner_window_label, agent_type
+        );
+        // Every connection's processes know which connection they belong to,
+        // whoever started it (UI, automation, delegation, CLI), so a nested
+        // `codeg-cli` call can be traced back to it. Kept out of the config
+        // fingerprint (`is_volatile_fingerprint_key`).
+        runtime_env.insert(
+            crate::cli_run::CLI_CALLER_ENV.to_string(),
+            connection_id.clone(),
         );
 
         // `spawn_agent_connection` inserts the entry into `self.connections`,
@@ -767,6 +876,7 @@ impl ConnectionManager {
             preferred_config_values,
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
+            cli_root,
         )
         .await?;
 
@@ -794,7 +904,60 @@ impl ConnectionManager {
 
         drop(dedup_lock);
 
-        Ok(connection_id)
+        Ok(SpawnOutcome {
+            connection_id,
+            reused: false,
+        })
+    }
+
+    /// Every live connection that belongs to the CLI run `run_id`: its root and
+    /// the delegation children that inherited its tag.
+    pub async fn connections_of_cli_run(
+        &self,
+        run_id: &str,
+    ) -> Vec<(String, Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> {
+        let all: Vec<_> = {
+            let conns = self.connections.lock().await;
+            conns
+                .iter()
+                .map(|(id, conn)| (id.clone(), conn.state.clone()))
+                .collect()
+        };
+        let mut tagged = Vec::new();
+        for (id, state) in all {
+            let belongs = state
+                .read()
+                .await
+                .cli_run
+                .as_ref()
+                .is_some_and(|tag| tag.run_id == run_id);
+            if belongs {
+                tagged.push((id, state));
+            }
+        }
+        tagged
+    }
+
+    /// Carry a CLI run's tag from `parent` to `child`, a connection the
+    /// delegation spawner has just created for it — before the child's first
+    /// prompt, so it is in place before the child can ask for anything. A
+    /// no-op when the parent belongs to no run. Never call it for a REUSED
+    /// connection: that one belongs to whoever already drives it.
+    async fn inherit_cli_run_tag(&self, parent_connection_id: &str, child_connection_id: &str) {
+        let (parent, child) = {
+            let conns = self.connections.lock().await;
+            (
+                conns.get(parent_connection_id).map(|c| c.state.clone()),
+                conns.get(child_connection_id).map(|c| c.state.clone()),
+            )
+        };
+        let (Some(parent), Some(child)) = (parent, child) else {
+            return;
+        };
+        let tag = parent.read().await.cli_run.clone();
+        if let Some(tag) = tag {
+            child.write().await.cli_run = Some(tag);
+        }
     }
 
     /// Bump `last_activity_at` for a live connection so the idle sweep
@@ -1724,9 +1887,34 @@ impl ConnectionManager {
             conn.cmd_tx.clone()
         };
         cmd_tx
-            .send(ConnectionCommand::SetMode { mode_id })
+            .send(ConnectionCommand::SetMode {
+                mode_id,
+                reply: None,
+            })
             .await
             .map_err(|_| AcpError::ProcessExited)
+    }
+
+    /// [`Self::set_mode`], then wait for the agent's answer to this request —
+    /// see [`SetterOutcome`] for why the broadcasts cannot stand in for it.
+    /// Unbounded: the caller sets the deadline. A connection that ends before
+    /// answering drops the reply and reads as `ProcessExited`; an agent error
+    /// is `Protocol`.
+    pub async fn set_mode_and_wait(
+        &self,
+        conn_id: &str,
+        mode_id: String,
+    ) -> Result<SetterOutcome, AcpError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_sender(conn_id)
+            .await?
+            .send(ConnectionCommand::SetMode {
+                mode_id,
+                reply: Some(tx),
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        Self::await_setter_reply(rx).await
     }
 
     pub async fn set_config_option(
@@ -1746,9 +1934,53 @@ impl ConnectionManager {
             .send(ConnectionCommand::SetConfigOption {
                 config_id,
                 value_id,
+                reply: None,
             })
             .await
             .map_err(|_| AcpError::ProcessExited)
+    }
+
+    /// [`Self::set_config_option`], then wait for the agent's answer, as
+    /// [`Self::set_mode_and_wait`].
+    pub async fn set_config_option_and_wait(
+        &self,
+        conn_id: &str,
+        config_id: String,
+        value_id: String,
+    ) -> Result<SetterOutcome, AcpError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_sender(conn_id)
+            .await?
+            .send(ConnectionCommand::SetConfigOption {
+                config_id,
+                value_id,
+                reply: Some(tx),
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        Self::await_setter_reply(rx).await
+    }
+
+    async fn cmd_sender(
+        &self,
+        conn_id: &str,
+    ) -> Result<tokio::sync::mpsc::Sender<ConnectionCommand>, AcpError> {
+        let connections = self.connections.lock().await;
+        connections
+            .get(conn_id)
+            .map(|conn| conn.cmd_tx.clone())
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))
+    }
+
+    async fn await_setter_reply(
+        rx: tokio::sync::oneshot::Receiver<Result<SetterOutcome, String>>,
+    ) -> Result<SetterOutcome, AcpError> {
+        match rx.await {
+            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Err(message)) => Err(AcpError::Protocol(message)),
+            // The loop dropped the reply unanswered: the connection ended.
+            Err(_) => Err(AcpError::ProcessExited),
+        }
     }
 
     /// Pause or clear the session's active goal via the connection loop
@@ -1936,11 +2168,26 @@ impl ConnectionManager {
         Ok(())
     }
 
+    /// Answer a permission card as the person looking at it.
     pub async fn respond_permission(
         &self,
         conn_id: &str,
         request_id: &str,
         option_id: &str,
+    ) -> Result<(), AcpError> {
+        self.respond_permission_from(conn_id, request_id, option_id, PermissionAnswerOrigin::User)
+            .await
+    }
+
+    /// Answer a permission card on behalf of `origin`. Queued, like every
+    /// command: success means the connection has it, not that it took effect —
+    /// the first answer wins, and `PermissionResolved` names whose that was.
+    pub async fn respond_permission_from(
+        &self,
+        conn_id: &str,
+        request_id: &str,
+        option_id: &str,
+        origin: PermissionAnswerOrigin,
     ) -> Result<(), AcpError> {
         let cmd_tx = {
             let connections = self.connections.lock().await;
@@ -1953,6 +2200,7 @@ impl ConnectionManager {
             .send(ConnectionCommand::RespondPermission {
                 request_id: request_id.into(),
                 option_id: option_id.into(),
+                origin,
             })
             .await
             .map_err(|_| AcpError::ProcessExited)
@@ -2318,6 +2566,8 @@ impl ConnectionManager {
                         ConversationKind::Delegate => ConversationKind::Regular,
                         ref kind => kind.clone(),
                     };
+                    // The pre-fork history was started where the original was.
+                    let source = current.source.clone();
 
                     // UPDATE current row → S2. Writing external_id explicitly
                     // here closes the race against `refreshConversations()`
@@ -2396,6 +2646,7 @@ impl ConnectionManager {
                         origin_cwd: Set(None),
                         assistant_id: Set(None),
                         assistant_snapshot: Set(None),
+                        source: Set(source),
                     };
                     let inserted = sibling.insert(txn).await?;
                     // The sibling keeps the pre-fork history under the
@@ -3989,7 +4240,8 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         .await
         .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
 
-        self.manager
+        let connection_id = self
+            .manager
             .spawn_agent(
                 agent_type,
                 effective_working_dir,
@@ -4001,7 +4253,13 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 preferred_config_values,
             )
             .await
-            .map_err(|e| SpawnerError::Spawn(e.to_string()))
+            .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        // A fresh session is always a new connection. The broker sends the
+        // child's prompt only after this returns, so the tag is in place first.
+        self.manager
+            .inherit_cli_run_tag(parent_connection_id, &connection_id)
+            .await;
+        Ok(connection_id)
     }
 
     async fn send_prompt_linked_for_delegation(
@@ -4106,31 +4364,20 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         .await
         .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
 
-        // Detect dedup reuse BEFORE spawning, with the SAME lookup
-        // `spawn_agent` runs at its own entry: a live connection for this
-        // (agent, working_dir, session_id) — e.g. the user has the canceled
-        // child session open in a tab — makes `spawn_agent` return that
-        // connection instead of creating one. The broker must know, because
-        // its failure teardown may only disconnect a connection this call
-        // actually created. A connection appearing in the pre-check→spawn
-        // window is missed, but that window is milliseconds and a misfire
-        // additionally requires the send itself to fail.
-        let working_dir_path = effective_working_dir.as_ref().map(std::path::PathBuf::from);
-        let pre_existing = self
-            .manager
-            .find_connection_for_reuse(
-                agent_type,
-                working_dir_path.as_ref(),
-                Some(external_session_id),
-            )
-            .await;
-
         // `session_id = Some(..)` is the whole difference vs `spawn`: the
         // connection loads the child's prior agent session (and its context)
-        // instead of minting a fresh one.
-        let connection_id = self
+        // instead of minting a fresh one — unless a live connection already
+        // represents that session (e.g. the user has the canceled child open
+        // in a tab), which the dedup hands back instead. The broker must know
+        // which, because its failure teardown may only disconnect a connection
+        // this call actually created; and a reused connection must not take
+        // the parent's CLI run tag, or the run's policy would answer the cards
+        // of a session a person is driving. `reused` is the dedup's own
+        // verdict, so a connection appearing just before the spawn cannot slip
+        // past it.
+        let outcome = self
             .manager
-            .spawn_agent(
+            .spawn_agent_with_outcome(
                 agent_type,
                 effective_working_dir,
                 Some(external_session_id.to_string()),
@@ -4142,10 +4389,14 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             )
             .await
             .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
-        let reused = pre_existing.as_deref() == Some(connection_id.as_str());
+        if !outcome.reused {
+            self.manager
+                .inherit_cli_run_tag(parent_connection_id, &outcome.connection_id)
+                .await;
+        }
         Ok(ResumedSpawn {
-            connection_id,
-            reused,
+            connection_id: outcome.connection_id,
+            reused: outcome.reused,
         })
     }
 
@@ -5541,6 +5792,163 @@ mod tests {
             }
             rx
         })
+    }
+
+    fn cli_tag(run_id: &str) -> crate::cli_run::CliRunTag {
+        crate::cli_run::CliRunTag {
+            run_id: run_id.to_string(),
+            policy: crate::cli_run::PermissionPolicy::Deny,
+            depth: 0,
+        }
+    }
+
+    async fn state_of(mgr: &ConnectionManager, id: &str) -> Arc<tokio::sync::RwLock<SessionState>> {
+        let conns = mgr.connections.lock().await;
+        conns.get(id).expect("connection").state.clone()
+    }
+
+    async fn cli_run_of(mgr: &ConnectionManager, id: &str) -> Option<crate::cli_run::CliRunTag> {
+        state_of(mgr, id).await.read().await.cli_run.clone()
+    }
+
+    /// A resume the dedup answers with a connection someone is already
+    /// driving says so, and that connection does NOT take the parent's CLI
+    /// run tag — the run's policy must not answer a person's cards. The
+    /// verdict is the dedup's own: there is no look-up before the spawn for a
+    /// newly opened tab to slip past.
+    #[tokio::test]
+    async fn a_resume_onto_a_live_connection_is_reused_and_keeps_no_cli_tag() {
+        use crate::acp::delegation::spawner::{ConnectionSpawner, ResumedSpawn};
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let mgr = Arc::new(ConnectionManager::new());
+        let wd = PathBuf::from("/tmp/cli-tag-resume");
+        for id in ["parent", "users-child"] {
+            let wd = Some(wd.clone());
+            mgr.insert_test_connection(id, AgentType::ClaudeCode, wd, EventEmitter::Noop)
+                .await;
+        }
+        state_of(&mgr, "parent").await.write().await.cli_run = Some(cli_tag("run-1"));
+        let child = state_of(&mgr, "users-child").await;
+        child.write().await.external_id = Some("child-session".to_string());
+
+        let spawner = ConnectionManagerSpawner {
+            manager: Arc::clone(&mgr),
+            db: Arc::new(db),
+            data_dir: Arc::new(data_dir.path().to_path_buf()),
+        };
+        let resumed = spawner
+            .spawn_for_resume(
+                "parent",
+                AgentType::ClaudeCode,
+                Some(wd.to_string_lossy().into_owned()),
+                "child-session",
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("the live connection is reused");
+        assert_eq!(
+            resumed,
+            ResumedSpawn {
+                connection_id: "users-child".to_string(),
+                reused: true,
+            }
+        );
+        assert_eq!(cli_run_of(&mgr, "users-child").await, None);
+    }
+
+    #[tokio::test]
+    async fn a_new_child_inherits_its_parents_cli_tag() {
+        let mgr = ConnectionManager::new();
+        for id in ["parent", "child", "plain-parent", "plain-child"] {
+            mgr.insert_test_connection(id, AgentType::ClaudeCode, None, EventEmitter::Noop)
+                .await;
+        }
+        {
+            let parent = state_of(&mgr, "parent").await;
+            let mut parent = parent.write().await;
+            parent.cli_run = Some(cli_tag("run-2"));
+            parent.cli_output_schema = Some(Arc::new(
+                crate::cli_run::OutputSchema::compile(serde_json::json!({"type": "object"}))
+                    .unwrap(),
+            ));
+        }
+
+        mgr.inherit_cli_run_tag("parent", "child").await;
+        mgr.inherit_cli_run_tag("plain-parent", "plain-child").await;
+        mgr.inherit_cli_run_tag("gone", "plain-child").await;
+
+        assert_eq!(cli_run_of(&mgr, "child").await, Some(cli_tag("run-2")));
+        assert_eq!(cli_run_of(&mgr, "plain-child").await, None);
+        // The run's result is its root's to hand in: never a child's.
+        assert!(state_of(&mgr, "child")
+            .await
+            .read()
+            .await
+            .cli_output_schema
+            .is_none());
+    }
+
+    /// The waiting setters hand back whatever the connection loop answered,
+    /// and read a loop that went away without answering as the process gone.
+    #[tokio::test]
+    async fn waiting_setters_return_the_loops_answer() {
+        use crate::acp::connection::SetterOutcome;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(&mgr, "c-setter", AgentType::Codex, None).await;
+        let loop_stub = tokio::spawn(async move {
+            match rx.recv().await.expect("set mode enqueued") {
+                ConnectionCommand::SetMode { mode_id, reply } => {
+                    assert_eq!(mode_id, "plan");
+                    let _ = reply.expect("a waiting caller attaches a reply").send(Ok(
+                        SetterOutcome::Confirmed {
+                            current: "plan".to_string(),
+                        },
+                    ));
+                }
+                _ => panic!("expected SetMode"),
+            }
+            match rx.recv().await.expect("set config option enqueued") {
+                ConnectionCommand::SetConfigOption { reply, .. } => {
+                    let _ = reply
+                        .expect("a waiting caller attaches a reply")
+                        .send(Err("agent says no".to_string()));
+                }
+                _ => panic!("expected SetConfigOption"),
+            }
+            match rx.recv().await.expect("set config option enqueued") {
+                // Dropped unanswered, as a loop that ends mid-request does.
+                ConnectionCommand::SetConfigOption { reply, .. } => drop(reply),
+                _ => panic!("expected SetConfigOption"),
+            }
+            rx
+        });
+
+        assert_eq!(
+            mgr.set_mode_and_wait("c-setter", "plan".to_string())
+                .await
+                .unwrap(),
+            SetterOutcome::Confirmed {
+                current: "plan".to_string()
+            }
+        );
+        assert!(matches!(
+            mgr.set_config_option_and_wait("c-setter", "model".into(), "x".into())
+                .await,
+            Err(AcpError::Protocol(message)) if message == "agent says no"
+        ));
+        assert!(matches!(
+            mgr.set_config_option_and_wait("c-setter", "model".into(), "x".into())
+                .await,
+            Err(AcpError::ProcessExited)
+        ));
+        loop_stub.await.unwrap();
+        assert!(matches!(
+            mgr.set_mode_and_wait("missing", "plan".to_string()).await,
+            Err(AcpError::ConnectionNotFound(_))
+        ));
     }
 
     #[tokio::test]

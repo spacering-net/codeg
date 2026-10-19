@@ -120,6 +120,35 @@ describe("local Markdown image paths", () => {
   )
 })
 
+describe("local Markdown image paths without a root", () => {
+  it.each([
+    ["/tmp/login.png", "/tmp/login.png"],
+    ["/tmp/a/../login.png", "/tmp/login.png"],
+    ["file:///tmp/login.png", "/tmp/login.png"],
+    ["c:\\Users\\me\\login.png", "C:/Users/me/login.png"],
+  ])("resolves %s to its absolute path", (source, path) => {
+    expect(resolveLocalImage(source, null)).toEqual({
+      path,
+      name: "login.png",
+      mime: "image/png",
+    })
+  })
+
+  it.each([
+    // Nothing to resolve a relative path against.
+    "login.png",
+    "./login.png",
+    "../login.png",
+    "/tmp/notes.txt",
+    // A network share: opening it would make this machine contact the host.
+    "file://attacker.example/share/qr.png",
+    "\\\\attacker.example\\share\\qr.png",
+    "%2F%2Fattacker.example%2Fshare%2Fqr.png",
+  ])("refuses %s", (source) => {
+    expect(resolveLocalImage(source, null)).toBeNull()
+  })
+})
+
 describe("localImageMime", () => {
   it.each([
     ["/tmp/login-qr-new.png", "image/png"],
@@ -193,6 +222,17 @@ describe("local image reads", () => {
       "C:/Users/me/qr.png",
       LOCAL_IMAGE_MAX_BYTES
     )
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it("reads only absolute paths when there is no root", async () => {
+    const read = vi.fn()
+    const readFile = vi.fn().mockResolvedValue("cXI=")
+    const load = createLocalImageLoader(null, read, readFile)
+    expect(await load("/tmp/qr.png")).toBe("cXI=")
+    expect(await load("qr.png")).toBeNull()
+    expect(readFile).toHaveBeenCalledTimes(1)
+    expect(readFile).toHaveBeenCalledWith("/tmp/qr.png", LOCAL_IMAGE_MAX_BYTES)
     expect(read).not.toHaveBeenCalled()
   })
 

@@ -38,6 +38,12 @@ function webTransport(): WebTransport | null {
   return transport as WebTransport
 }
 
+/** Whether this page was served by the server it talks to — false on desktop
+ *  and in remote-desktop windows, whose pages ship with the app. */
+export function usesWebTransport(): boolean {
+  return webTransport() !== null
+}
+
 export function subscribeWebConnection(callback: () => void): () => void {
   const transport = webTransport()
   if (!transport) return noop

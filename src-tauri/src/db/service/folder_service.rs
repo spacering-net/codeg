@@ -215,6 +215,35 @@ pub async fn ensure_folder_for_path(
     conn: &DatabaseConnection,
     path: &str,
 ) -> Result<FolderHistoryEntry, DbError> {
+    ensure_folder_inner(conn, path, None).await
+}
+
+/// [`ensure_folder_for_path`] for a worktree a background producer made under
+/// the root folder `root_id` (a `codeg-cli --worktree` run): a new row is
+/// recorded under that root — closed, as every row this family makes — and an
+/// existing live one is left as it is.
+pub async fn ensure_worktree_folder_closed(
+    conn: &DatabaseConnection,
+    path: &str,
+    root_id: i32,
+) -> Result<FolderHistoryEntry, DbError> {
+    ensure_folder_inner(conn, path, Some(root_id)).await
+}
+
+/// Whether the live folder `folder_id` is open in the workspace.
+pub async fn is_open(conn: &DatabaseConnection, folder_id: i32) -> Result<bool, DbError> {
+    Ok(folder::Entity::find_by_id(folder_id)
+        .filter(folder::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?
+        .is_some_and(|row| row.is_open))
+}
+
+async fn ensure_folder_inner(
+    conn: &DatabaseConnection,
+    path: &str,
+    parent_on_insert: Option<i32>,
+) -> Result<FolderHistoryEntry, DbError> {
     let now = Utc::now();
 
     let existing = folder::Entity::find()
@@ -250,12 +279,25 @@ pub async fn ensure_folder_for_path(
             is_open: Set(false),
             sort_order: Set(next_order),
             color: Set(DEFAULT_FOLDER_COLOR.to_string()),
-            parent_id: Set(None),
+            parent_id: Set(parent_on_insert),
             kind: Set(FolderKind::Regular),
             alias: Set(None),
             group_id: Set(None),
         };
-        active.insert(conn).await?
+        match active.insert(conn).await {
+            Ok(model) => model,
+            // Another caller made the row meanwhile — the runs of one
+            // `codeg-cli -a x -a y` in a new workspace, started together, say
+            // (`UNIQUE(path)`): the row it made is this caller's too.
+            Err(err) => match folder::Entity::find()
+                .filter(folder::Column::Path.eq(path))
+                .one(conn)
+                .await?
+            {
+                Some(row) if row.deleted_at.is_none() => row,
+                _ => return Err(err.into()),
+            },
+        }
     };
 
     Ok(to_entry(model))

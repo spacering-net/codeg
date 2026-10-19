@@ -101,7 +101,7 @@
 
 ### すべてのエージェントを、ひとつのインターフェースで
 
-19 種のエージェントを内蔵し、ほかの ACP エージェントも公開レジストリまたはその distribution JSON から加えられます。Codeg はそのすべてと Agent Client Protocol で通信するので、どれも目を凝らして読むターミナルではなく、同じリッチな会話 — ツールカード、ライブ diff、計画、権限の確認 — として表示されます。エージェントで UI レンダリングを有効にすると、インタラクティブなカードや表、グラフで答えられるようになります。
+19 の内蔵エージェントと任意の ACP エージェントに対応。ツールカードや差分、対話型の返答を同じ画面で。
 
 [ドキュメント →](https://docs.codeg.app/guide/supported-agents) · [カスタムエージェント →](https://docs.codeg.app/guide/custom-agents) · [UI レンダリング →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -118,7 +118,7 @@
 
 ### すべてのセッションを、検索可能に
 
-Codeg は各エージェント CLI がディスクに残す履歴を読み取ります：ワンクリックでインポートし、すべてを検索し、どのセッションも止まったところから再開できます。古いセッションを `@` で指名すれば、いま話しているエージェントがそれを読めます — 別のエージェントが書いたものでも構いません。会話には色付きのタグを付けられます。全体共通にもフォルダー専用にもでき、サイドバーをタグで絞り込めます。
+履歴を取り込み、検索して再開。`@` で別のエージェントにセッションを共有し、タグで整理できます。
 
 [ドキュメント →](https://docs.codeg.app/guide/aggregation) · [タグ →](https://docs.codeg.app/guide/workspace#tag-conversations)
 
@@ -135,7 +135,7 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### マルチエージェント協調
 
-`@` を打ち、エージェントを選び、送信するだけ。指名したエージェントはそれぞれ独立したセッションとして並走し、その出力があなたのスレッドへストリーミングで流れ込みます — Claude Code が下書きする間に Codex がレビューする、という具合に。サブエージェントは、動いている間に中身が埋まっていくカードとして現れます。
+`@` でエージェントに依頼。複数のエージェントが並行して働き、進捗が会話に届きます。
 
 [ドキュメント →](https://docs.codeg.app/guide/multi-agent)
 
@@ -152,7 +152,7 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### 無人で進む ToDo タスク
 
-仕事を書き留めたら、あとは席を外すだけ。ToDo タスクはそれぞれ専用の git ワークツリーとブランチを持ち、すぐに、または予約した時刻に始まり、そのあとあなたのレビューを待ちます。diff を受け入れるとエージェントが取り込み、Codeg は git を確かめてから完了とします。リポジトリパネルに任せれば、ラベルや作成者で選んだイシューとプルリクエストを、定期的に、または Webhook が届いたときに ToDo として追加してくれます。
+タスク専用のワークツリーで、今すぐ、または指定時刻に実行。変更はあなたが確認して承認します。
 
 [ドキュメント →](https://docs.codeg.app/guide/tasks) · [自動処理 →](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
@@ -169,7 +169,7 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### 無限キャンバス
 
-作業を空間に広げましょう：会話、ファイル、ターミナル、メモがボード上のカードになり、フォルダーとエージェントごとにまとまるので、複数のエージェントが並んで動く様子をひと目で見渡せます。
+会話、ファイル、ターミナル、メモを無限のボードに配置。各エージェントの作業をひと目で把握できます。
 
 [ドキュメント →](https://docs.codeg.app/guide/canvas)
 
@@ -186,7 +186,7 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### デスクトップ・サーバー・モバイル・チャット
 
-Codeg はデスクトップアプリとしても、任意のブラウザで開けるセルフホストのサーバーとしても、ひとつの Docker コンテナとしても動かせます。デスクトップアプリからは、リモートのサーバーを専用のワークスペースウィンドウで開くこともできます。ネイティブの iPhone・iPad・Android クライアント — さらに Telegram、Lark、WeChat のチャットチャンネル — でエージェントにいつでも手が届き、その間もファイルとセッションはあなたが管理するマシンにとどまります。
+デスクトップ、サーバー、Docker、モバイルに対応。Telegram、Lark、WeChat からもエージェントと会話できます。
 
 [ドキュメント →](https://docs.codeg.app/getting-started/deployment) · [リモートワークスペース →](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [モバイルアプリ →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [チャットチャンネル →](https://docs.codeg.app/guide/chat-channels)
 
@@ -203,7 +203,7 @@ Codeg はデスクトップアプリとしても、任意のブラウザで開�
 
 ### Office ドキュメントと科学研究
 
-スライドでも、レポートでも、表計算でも、頼めば本物の `.pptx`、`.docx`、`.xlsx` が会話の隣でリアルタイムに描画されていく様子を見られます。PDF も専用のビューアーで開けます。同梱の研究スキル — 仮説生成、実験計画、統計、文献検索 — はどのエージェントでも使えます。
+Office ファイルを作成してライブプレビュー、PDF も閲覧。研究スキルはどのエージェントでも使えます。
 
 [ドキュメント →](https://docs.codeg.app/guide/office) · [科学研究 →](https://docs.codeg.app/guide/research)
 
@@ -220,7 +220,7 @@ Codeg はデスクトップアプリとしても、任意のブラウザで開�
 
 ### ブラウザとコンピューター操作
 
-デスクトップアプリでは、リンクはファイルの隣の内蔵ブラウザで開き、タブレットやスマートフォンのサイズでも表示できます：ページ、要素、スクリーンショット、コンソールエラーをエージェントに渡すことも、共有したページをエージェントに操作させることもできます。プレビュー版の機能として、共有したウィンドウをエージェントが見て操作することもできます — 停止はいつでもワンクリックです。
+デスクトップの内蔵ブラウザからページやエラーを共有。コンピューター操作（プレビュー）で共有ウィンドウも操作できます。
 
 [ドキュメント →](https://docs.codeg.app/guide/browser) · [コンピューター操作 →](https://docs.codeg.app/guide/computer-use)
 
@@ -235,24 +235,30 @@ Codeg はデスクトップアプリとしても、任意のブラウザで開�
 <tr>
 <td width="50%" valign="middle">
 
-### 開発の一連の流れをまるごと
+### コマンドラインと CI
 
-エディタ、ライブ diff と左右分割の diff、三ペインのマージエディタを備えた完全な Git クライアント、ワンクリックのワークツリー、内蔵ターミナル、画面分割 — そのすべてがエージェントの隣にあり、リポジトリの本物のファイルを扱います。
+`codeg-cli` でスクリプトや CI から起動中の Codeg に依頼。返答や JSON イベントを出力します。
 
-[ドキュメント →](https://docs.codeg.app/guide/workspace) · [Git とワークツリー →](https://docs.codeg.app/guide/git)
+[ドキュメント →](https://docs.codeg.app/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="開発の一連の流れをまるごと" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **このほかにも：**
 
+- **[開発の一連の流れをまるごと](https://docs.codeg.app/guide/workspace)** — コードエディター、ライブ差分、[Git とワークツリー](https://docs.codeg.app/guide/git)、3 ペインのマージエディター、ターミナル、分割表示
 - **[リポジトリパネル](https://docs.codeg.app/guide/repository)** — GitHub、GitLab、Gitea、Forgejo のイシュー、プルリクエスト、チェック、マージ。どのイシューや PR も ToDo タスクにできます
 - **[オートメーション](https://docs.codeg.app/guide/automations)** — 設定済みの入力欄を保存し、cron スケジュールまたは任意のタイミングでヘッドレス実行
 - **[トークン使用量](https://docs.codeg.app/guide/token-usage)** — 推移、キャッシュヒット率、アクティビティのヒートマップ、フォルダー・エージェント・モデル・セッション別の使用量、API の定価で見積もったコスト

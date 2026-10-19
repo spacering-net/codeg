@@ -101,7 +101,7 @@
 
 ### Una interfaz para todos los agentes
 
-Diecinueve agentes vienen integrados, y cualquier otro agente compatible con ACP puede sumarse desde el registro público o con su JSON de distribución. Codeg se comunica con cada uno de ellos mediante el Agent Client Protocol, así que todos reciben la misma conversación enriquecida —tarjetas de herramientas, diffs en vivo, planes y solicitudes de permiso— en lugar de una terminal en la que dejarse la vista. Activa Renderizado de UI para un agente y podrá responder con tarjetas, tablas y gráficos interactivos.
+19 agentes y cualquier agente ACP, con tarjetas de herramientas, diffs y respuestas interactivas.
 
 [Documentación →](https://docs.codeg.app/guide/supported-agents) · [Agentes personalizados →](https://docs.codeg.app/guide/custom-agents) · [Renderizado de UI →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -118,7 +118,7 @@ Diecinueve agentes vienen integrados, y cualquier otro agente compatible con ACP
 
 ### Cada sesión, al alcance de una búsqueda
 
-Codeg lee el historial que cada CLI de agente guarda en disco: impórtalo con un clic, haz búsquedas en todo él y retoma cualquier sesión donde se quedó. Menciona una sesión antigua con `@` y el agente con el que hablas puede leerla, aunque la haya escrito otro agente. Ponles a las conversaciones etiquetas de colores, globales o de una sola carpeta, y filtra la barra lateral por ellas.
+Importa, busca y retoma sesiones. Compártelas con otros agentes usando `@` y organízalas con etiquetas.
 
 [Documentación →](https://docs.codeg.app/guide/aggregation) · [Etiquetas →](https://docs.codeg.app/guide/workspace#tag-conversations)
 
@@ -135,7 +135,7 @@ Codeg lee el historial que cada CLI de agente guarda en disco: impórtalo con un
 
 ### Colaboración multiagente
 
-Escribe `@`, elige un agente y envía. Cada agente mencionado se ejecuta como su propia sesión, en paralelo, y su trabajo llega en directo a tu hilo —Claude Code redacta mientras Codex revisa—. Los subagentes aparecen como tarjetas que se van llenando mientras trabajan.
+Delega con `@`. Los agentes trabajan en paralelo y muestran su progreso en tu conversación.
 
 [Documentación →](https://docs.codeg.app/guide/multi-agent)
 
@@ -152,7 +152,7 @@ Escribe `@`, elige un agente y envía. Cada agente mencionado se ejecuta como su
 
 ### Tareas pendientes que se ejecutan sin supervisión
 
-Anota un trabajo y olvídate. Cada tarea pendiente recibe su propio worktree de git y su propia rama, empieza ahora o a una hora programada, y luego espera tu revisión; acepta el diff y el agente la aterriza, y Codeg comprueba git antes de darla por terminada. El panel del repositorio también puede añadirlas por ti: recoge incidencias y pull requests por etiqueta y autor, de forma programada o cuando llega un webhook.
+Programa tareas en worktrees propios. Los agentes hacen el trabajo; tú revisas y apruebas los cambios.
 
 [Documentación →](https://docs.codeg.app/guide/tasks) · [Procesamiento automático →](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
@@ -169,7 +169,7 @@ Anota un trabajo y olvídate. Cada tarea pendiente recibe su propio worktree de 
 
 ### Lienzo infinito
 
-Distribuye tu trabajo en el espacio: conversaciones, archivos, terminales y notas se convierten en tarjetas sobre un tablero, agrupadas por carpeta y agente, para que varios agentes se ejecuten en paralelo, todos a la vista.
+Organiza chats, archivos, terminales y notas en un lienzo infinito. Todos tus agentes a la vista.
 
 [Documentación →](https://docs.codeg.app/guide/canvas)
 
@@ -186,7 +186,7 @@ Distribuye tu trabajo en el espacio: conversaciones, archivos, terminales y nota
 
 ### Escritorio, servidor, móvil y chat
 
-Ejecuta Codeg como app de escritorio, como servidor autoalojado al que accedes desde cualquier navegador o como un único contenedor Docker, y abre un servidor remoto desde la app de escritorio en su propia ventana de espacio de trabajo. Los clientes nativos para iPhone, iPad y Android —además de los canales de Telegram, Lark y WeChat— mantienen a tus agentes al alcance de la mano, mientras tus archivos y sesiones se quedan en máquinas que tú controlas.
+Escritorio, servidor, Docker o móvil. Habla con tus agentes también por Telegram, Lark y WeChat.
 
 [Documentación →](https://docs.codeg.app/getting-started/deployment) · [Espacios de trabajo remotos →](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [Apps móviles →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [Canales de chat →](https://docs.codeg.app/guide/chat-channels)
 
@@ -203,7 +203,7 @@ Ejecuta Codeg como app de escritorio, como servidor autoalojado al que accedes d
 
 ### Documentos de Office e investigación
 
-Pide una presentación, un informe o un libro de cálculo y mira cómo el `.pptx`, `.docx` o `.xlsx` de verdad se renderiza en vivo junto a la conversación; los PDF se abren en un visor propio. Las habilidades de investigación incluidas —hipótesis, diseño experimental, estadística, búsqueda bibliográfica— funcionan con cualquier agente.
+Crea archivos Office con vista previa y abre PDF. Las skills de investigación funcionan con cualquier agente.
 
 [Documentación →](https://docs.codeg.app/guide/office) · [Investigación →](https://docs.codeg.app/guide/research)
 
@@ -220,7 +220,7 @@ Pide una presentación, un informe o un libro de cálculo y mira cómo el `.pptx
 
 ### Navegador y Uso del ordenador
 
-En la app de escritorio, los enlaces se abren en un navegador integrado junto a tus archivos, a tamaño de escritorio, tableta o teléfono: pásale al agente una página, un elemento, una captura de pantalla o un error de la consola, o deja que maneje una página que compartas. En versión preliminar, los agentes también pueden ver las ventanas que compartas y actuar en ellas, con Detener a un solo clic.
+Comparte páginas y errores del navegador de escritorio. Uso del ordenador (preliminar) opera ventanas compartidas.
 
 [Documentación →](https://docs.codeg.app/guide/browser) · [Uso del ordenador →](https://docs.codeg.app/guide/computer-use)
 
@@ -235,24 +235,30 @@ En la app de escritorio, los enlaces se abren en un navegador integrado junto a 
 <tr>
 <td width="50%" valign="middle">
 
-### El ciclo de ingeniería completo
+### Línea de comandos y CI
 
-Un editor, diffs en vivo y lado a lado, un cliente de git completo con un editor de fusión de tres paneles, worktrees con un clic, una terminal integrada y vistas divididas: todo junto al agente, sobre los archivos reales de tu repositorio.
+`codeg-cli` conecta scripts y CI con un Codeg en marcha y emite respuestas o eventos JSON.
 
-[Documentación →](https://docs.codeg.app/guide/workspace) · [Git y worktrees →](https://docs.codeg.app/guide/git)
+[Documentación →](https://docs.codeg.app/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="El ciclo de ingeniería completo" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **También incluye:**
 
+- **[El ciclo de ingeniería completo](https://docs.codeg.app/guide/workspace)** — editor de código, diffs en vivo, [Git y worktrees](https://docs.codeg.app/guide/git), editor de fusión de tres paneles, terminales y vistas divididas
 - **[Panel del repositorio](https://docs.codeg.app/guide/repository)** — incidencias, pull requests, comprobaciones y fusiones de GitHub, GitLab, Gitea y Forgejo; cualquier incidencia o PR puede convertirse en una tarea pendiente
 - **[Automatizaciones](https://docs.codeg.app/guide/automations)** — guarda un compositor ya configurado y ejecútalo sin interfaz, con una programación cron o bajo demanda
 - **[Uso de tokens](https://docs.codeg.app/guide/token-usage)** — tendencias, tasa de aciertos de caché, un mapa de calor de actividad, el uso por carpeta, agente, modelo y sesión, y lo que costaría a precios de lista de la API

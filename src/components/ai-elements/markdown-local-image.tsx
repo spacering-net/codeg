@@ -24,12 +24,17 @@ import {
 import { ImagePreviewDialog } from "@/components/ui/image-preview-dialog"
 
 type ImageScope = {
-  root: string
+  /** Null for a transcript whose folder is unknown. */
+  root: string | null
   load: ReturnType<typeof createLocalImageLoader>
 }
 const LocalImageContext = createContext<ImageScope | null>(null)
 
-/** Scope belongs to this transcript, never the globally active folder. */
+/**
+ * Scope belongs to this transcript, never the globally active folder. Without
+ * a folder, an absolute path still names its file. Markdown from outside any
+ * transcript, an issue body for one, has no scope and loads no local file.
+ */
 export function MarkdownImageProvider({
   rootPath,
   children,
@@ -37,21 +42,19 @@ export function MarkdownImageProvider({
   rootPath: string | null
   children: ReactNode
 }) {
+  const root = rootPath || null
   const scope = useMemo(
-    () =>
-      rootPath
-        ? {
-            root: rootPath,
-            // Outside the root: the file panel's own reader, as for a path
-            // the user clicks.
-            load: createLocalImageLoader(
-              rootPath,
-              readWorkspaceFileBase64,
-              readFileBase64
-            ),
-          }
-        : null,
-    [rootPath]
+    () => ({
+      root,
+      // Outside the root: the file panel's own reader, as for a path the
+      // user clicks.
+      load: createLocalImageLoader(
+        root,
+        readWorkspaceFileBase64,
+        readFileBase64
+      ),
+    }),
+    [root]
   )
   return (
     <LocalImageContext.Provider value={scope}>

@@ -331,6 +331,21 @@
     "autostartDescription": "登录这台电脑后自动启动，无需每次手动打开。",
     "autostartSaveFailed": "开机自启设置保存失败：{message}",
     "autostartUnavailable": "无法读取本机的开机自启状态：{message}",
+    "cliAccessTitle": "命令行访问",
+    "cliAccessDescription": "允许本机的 codeg-cli 命令通过 Codeg 运行提示词，用于脚本、CI 任务或 Codeg 自带的终端。只有本机能连接，密钥保存在私有文件里。",
+    "cliAccessEndpointFile": "发现文件：",
+    "cliAccessExample": "示例：",
+    "cliAccessOff": "已关闭：本机的 codeg-cli 连不上 Codeg。",
+    "cliAccessUnavailable": "命令行访问未能启动：{message}",
+    "cliAccessSaveFailed": "无法更改命令行访问：{message}",
+    "cliToolInstall": "安装命令行工具",
+    "cliToolInstalled": "{command} 已在 PATH 上：",
+    "cliToolPackage": "{command} 随安装包提供，已在 PATH 上：",
+    "cliToolNotInstalled": "把 {command} 放到 PATH 上，Codeg 之外的终端也能找到它。",
+    "cliToolConflict": "保持不变：{message}",
+    "cliToolNote": "注意：{message}",
+    "cliToolInstalledToast": "{command} 已在 PATH 上。打开新终端即可使用。",
+    "cliToolInstallFailed": "无法安装命令行工具：{message}",
     "proxyTitle": "网络代理",
     "proxyDescription": "开启后，后续网络请求将优先走该代理（包括 ACP 对话、Agent 安装、Git 远程操作等）。",
     "loadFailed": "加载失败：{message}",
@@ -2189,6 +2204,7 @@
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
       "worktreeRemovedBadge": "源 worktree 已删除",
+      "cliBadge": "从命令行启动",
       "conversationCountUnit": "{count} 条",
       "emptyFolderHint": "暂无会话",
       "noMatchingConversations": "未找到匹配的会话",
@@ -2269,9 +2285,11 @@
         "dropToUngroup": "拖到这里可移出分组"
       },
       "recentFilterAll": "全部",
+      "recentFilterCli": "命令行",
       "recentFilterTitle": "最近显示：{filter}",
       "noRecentChats": "没有最近的聊天",
       "noRecentFolders": "没有最近的文件夹会话",
+      "noRecentCli": "没有最近从命令行启动的会话",
       "recentFilterMenuLabel": "最近显示"
     },
     "conversation": {
@@ -5406,7 +5424,10 @@
     "reconnectNow": "立即重连",
     "sessionExpiredTitle": "会话已过期",
     "sessionExpiredDescription": "登录状态已失效，请重新登录以继续。",
-    "goToLogin": "前往登录"
+    "goToLogin": "前往登录",
+    "versionChangedTitle": "服务器已运行 Codeg {version}",
+    "versionChangedDescription": "此页面仍是 {version}，刷新后即可使用服务器上的版本。",
+    "reloadPage": "刷新"
   },
   "LiveFeedback": {
     "placeholder": "在 {agent} 工作时给它留言…",

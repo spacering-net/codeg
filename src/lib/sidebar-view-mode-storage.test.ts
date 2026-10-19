@@ -150,7 +150,7 @@ describe("loadRecentFilter", () => {
   it("round-trips every filter", () => {
     // Spelled out rather than read from SIDEBAR_RECENT_FILTERS, so dropping a
     // filter from that list fails here instead of quietly testing fewer.
-    const filters: SidebarRecentFilter[] = ["all", "chats", "folders"]
+    const filters: SidebarRecentFilter[] = ["all", "chats", "folders", "cli"]
     expect([...SIDEBAR_RECENT_FILTERS]).toEqual(filters)
     for (const filter of filters) {
       saveRecentFilter(filter)

@@ -83,6 +83,24 @@ fn main() -> ExitCode {
         .unwrap_or_else(|_| default_data_dir());
     let resolved_data_dir = codeg_lib::git_credential::absolutize(&resolved_data_dir);
     std::env::set_var("CODEG_DATA_DIR", &resolved_data_dir);
+    // This process's `codeg-cli` discovery file, for everything it starts: a
+    // CLI run from one of its terminals or agents connects back to THIS
+    // runtime, not to whichever else shares the data directory. Overrides a
+    // value inherited from a runtime this one was started from.
+    std::env::set_var(
+        codeg_lib::cli_run::discovery::ENDPOINT_FILE_ENV,
+        codeg_lib::cli_run::discovery::file_for(&resolved_data_dir, std::process::id()),
+    );
+
+    // The codeg-cli installed beside this server, for everything it starts
+    // (`cli_run::shim`): the matching one, whatever else is on their PATH.
+    if let Some(cli) = codeg_lib::update::runtime::self_exe()
+        .parent()
+        .map(|dir| dir.join(if cfg!(windows) { "codeg-cli.exe" } else { "codeg-cli" }))
+        .filter(|p| p.metadata().is_ok_and(|m| m.is_file() && m.len() > 0))
+    {
+        std::env::set_var(codeg_lib::cli_run::shim::CLI_ENV, cli);
+    }
 
     // Install the logging subscriber now that CODEG_DATA_DIR is pinned (the logs
     // dir resolves from it). Doing it here — before the first server diagnostic
@@ -120,6 +138,65 @@ fn main() -> ExitCode {
         // Return (don't process::exit) so `_log_guard` drops on the way out and
         // flushes the non-blocking file appender before the process ends.
         return ExitCode::from(2);
+    }
+
+    // Before anything opens the database (see `runtime_lock`): every server
+    // shares the data directory, and waits while a `codeg-cli --standalone`
+    // server has it — which itself takes it alone, or leaves untouched.
+    let exclusive = std::env::var(codeg_lib::runtime_lock::EXCLUSIVE_ENV).is_ok_and(|v| v == "1");
+    let _runtime_lock = match codeg_lib::runtime_lock::hold_for_server(&resolved_data_dir) {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            tracing::error!(
+                "[SERVER] {} is in use by another codeg; a --standalone server needs it alone",
+                resolved_data_dir.display()
+            );
+            return ExitCode::from(codeg_lib::runtime_lock::BUSY_EXIT_CODE);
+        }
+        Err(e) if exclusive => {
+            tracing::error!(
+                "[SERVER][FATAL] cannot take {} alone: {e}",
+                resolved_data_dir.display()
+            );
+            return ExitCode::from(1);
+        }
+        Err(e) if codeg_lib::runtime_lock::locking_unsupported(&e) => {
+            tracing::warn!(
+                "[SERVER][WARN] {} cannot lock files ({e}); going on without, so a \
+                 `codeg-cli --standalone` there would not see this server",
+                resolved_data_dir.display()
+            );
+            None
+        }
+        Err(e) => {
+            // Not run unlocked: a private server could be using the database.
+            tracing::error!(
+                "[SERVER][FATAL] cannot lock {} for this runtime: {e}",
+                resolved_data_dir.display()
+            );
+            return ExitCode::from(1);
+        }
+    };
+
+    // A `codeg-cli --standalone` server ends with the codeg-cli that started
+    // it: its stdin closes when that process is gone, a crash included.
+    if std::env::var(codeg_lib::runtime_lock::EXIT_ON_STDIN_EOF_ENV).is_ok_and(|v| v == "1") {
+        let endpoint =
+            codeg_lib::cli_run::discovery::file_for(&resolved_data_dir, std::process::id());
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut stdin = std::io::stdin();
+            let mut sink = [0u8; 256];
+            while matches!(stdin.read(&mut sink), Ok(n) if n > 0) {}
+            // No CLI may find this process once it is gone, and its broker
+            // socket goes with it: `exit` runs no destructor to remove either.
+            let _ = std::fs::remove_file(&endpoint);
+            #[cfg(unix)]
+            let _ = std::fs::remove_file(
+                codeg_lib::acp::delegation::listener::default_socket_path(&std::env::temp_dir()),
+            );
+            std::process::exit(0);
+        });
     }
 
     // `main` returns the worker's exit code so `_log_guard` drops here — after
@@ -259,6 +336,15 @@ async fn async_main() -> ExitCode {
     // Build AppState
     let pet_state_handle = codeg_lib::pet_state_mapper::new_pet_state_handle();
     let connection_manager = codeg_lib::app_state::default_connection_manager();
+    let cli_runs = codeg_lib::cli_run::CliRunService::new(
+        &db,
+        &connection_manager,
+        emitter.clone(),
+        acp_event_bus.clone(),
+        data_dir.clone(),
+        codeg_lib::cli_run::wire::RuntimeKind::Server,
+    );
+    let cli_access = codeg_lib::cli_run::CliAccess::new(cli_runs.clone(), data_dir.clone());
     let (
         delegation_broker,
         delegation_tokens,
@@ -300,6 +386,8 @@ async fn async_main() -> ExitCode {
         computer_service: std::sync::OnceLock::new(),
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
+        cli_runs,
+        cli_access,
     });
     state
         .connection_manager
@@ -452,6 +540,9 @@ async fn async_main() -> ExitCode {
                     as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
                 None => Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop),
             },
+            Arc::new(codeg_lib::acp::result_tool::ConnectionManagerResultLookup {
+                manager: Arc::new(state.connection_manager.clone_ref()),
+            }),
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
@@ -586,6 +677,11 @@ async fn async_main() -> ExitCode {
         tokio::spawn(codeg_lib::automation::run_automation_engine(engine));
     }
 
+    // Headless `codeg-cli` runs (mirrors lib.rs setup): the policy backstop
+    // here; the loopback listener and its discovery file once the server has
+    // its own socket (below), so a server that fails to start publishes none.
+    state.cli_runs.spawn_background();
+
     // Work-task engine (mirrors lib.rs setup): manual pipeline, event-bus
     // settlement, merging git-truth recovery. One per process.
     if let Some(engine) = codeg_lib::work_task::build_task_engine(
@@ -676,6 +772,10 @@ async fn async_main() -> ExitCode {
         );
     }
 
+    // Command-line access, unless the setting is off. Every return after this
+    // point stops it again (the serve error path and the end of `main`).
+    state.cli_access.start_if_enabled(&state.db.conn).await;
+
     let local_addr = listener.local_addr().ok();
     let actual_port = local_addr.map(|a| a.port()).unwrap_or(port);
     // `CODEG_HOST` may be `localhost` or a bracketed IPv6 (`[::1]`); advertise
@@ -719,8 +819,11 @@ async fn async_main() -> ExitCode {
     // Start serving
     if let Err(e) = axum::serve(listener, router).await {
         tracing::error!("[SERVER] Server error: {}", e);
+        state.cli_access.stop().await;
         return ExitCode::from(1);
     }
+    // No CLI may find this process once it is gone.
+    state.cli_access.stop().await;
     // Graceful shutdown: release any live office watch preview servers
     // (kill_on_drop is the backstop, but this frees their ports promptly).
     codeg_lib::office_watch::stop_all_office_watches();

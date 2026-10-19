@@ -101,7 +101,7 @@
 
 ### Uma interface para todos os agentes
 
-Dezenove agentes já vêm integrados, e qualquer outro agente compatível com ACP pode se juntar a eles pelo registro público ou pelo JSON de distribuição dele. O Codeg fala com cada um deles pelo Agent Client Protocol, então todos ganham a mesma conversa rica — cartões de ferramentas, diffs ao vivo, planos e pedidos de permissão — em vez de um terminal para você forçar a vista. Ative a Renderização de UI para um agente e ele poderá responder com cartões, tabelas e gráficos interativos.
+19 agentes integrados e qualquer agente ACP, num chat com cartões de ferramentas, diffs e respostas interativas.
 
 [Documentação →](https://docs.codeg.app/guide/supported-agents) · [Agentes personalizados →](https://docs.codeg.app/guide/custom-agents) · [Renderização de UI →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -118,7 +118,7 @@ Dezenove agentes já vêm integrados, e qualquer outro agente compatível com AC
 
 ### Todas as sessões, pesquisáveis
 
-O Codeg lê o histórico que a CLI de cada agente guarda em disco: importe-o com um clique, pesquise tudo e retome qualquer sessão de onde ela parou. Mencione uma sessão antiga com `@` e o agente com quem você está falando consegue lê-la — mesmo que outro agente a tenha escrito. Dê às conversas etiquetas coloridas, globais ou de uma só pasta, e filtre a barra lateral por elas.
+Importe, pesquise e retome sessões. Compartilhe com `@` e organize com tags.
 
 [Documentação →](https://docs.codeg.app/guide/aggregation) · [Etiquetas →](https://docs.codeg.app/guide/workspace#tag-conversations)
 
@@ -135,7 +135,7 @@ O Codeg lê o histórico que a CLI de cada agente guarda em disco: importe-o com
 
 ### Colaboração multiagente
 
-Digite `@`, escolha um agente e envie. Cada agente mencionado roda como uma sessão própria, lado a lado, transmitindo de volta para a sua conversa — o Claude Code redigindo enquanto o Codex revisa — e os subagentes aparecem como cartões que vão se preenchendo enquanto trabalham.
+Delegue com `@`. Os agentes trabalham em paralelo e mostram o progresso na sua conversa.
 
 [Documentação →](https://docs.codeg.app/guide/multi-agent)
 
@@ -152,7 +152,7 @@ Digite `@`, escolha um agente e envie. Cada agente mencionado roda como uma sess
 
 ### Tarefas a fazer que rodam sem supervisão
 
-Anote o trabalho e vá cuidar de outra coisa. Cada tarefa ganha a própria worktree e o próprio branch do git, começa na hora ou em um horário agendado e depois espera a sua revisão; aceite o diff e o agente faz o merge, e o Codeg confere o git antes de dar a tarefa como concluída. O painel do repositório também pode criá-las para você: ele pega issues e pull requests por etiqueta e autor, em horários agendados ou quando chega um webhook.
+Agende tarefas em worktrees próprios. Os agentes fazem o trabalho; você revisa e aprova as alterações.
 
 [Documentação →](https://docs.codeg.app/guide/tasks) · [Processamento automático →](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
@@ -169,7 +169,7 @@ Anote o trabalho e vá cuidar de outra coisa. Cada tarefa ganha a própria workt
 
 ### Canvas infinito
 
-Organize seu trabalho no espaço: conversas, arquivos, terminais e notas viram cartões em um quadro, agrupados por pasta e por agente, para que vários agentes possam rodar lado a lado, bem à vista.
+Organize chats, arquivos, terminais e notas num canvas infinito. Todos os seus agentes à vista.
 
 [Documentação →](https://docs.codeg.app/guide/canvas)
 
@@ -186,7 +186,7 @@ Organize seu trabalho no espaço: conversas, arquivos, terminais e notas viram c
 
 ### Desktop, servidor, celular e chat
 
-Rode o Codeg como aplicativo de desktop, como servidor auto-hospedado que você abre em qualquer navegador ou como um único contêiner Docker, e abra um servidor remoto pelo aplicativo de desktop em uma janela de espaço de trabalho própria. Clientes nativos para iPhone, iPad e Android — além de canais no Telegram, Lark e WeChat — mantêm seus agentes ao alcance, enquanto seus arquivos e sessões ficam em máquinas que você controla.
+Desktop, servidor, Docker ou celular. Fale com seus agentes também pelo Telegram, Lark e WeChat.
 
 [Documentação →](https://docs.codeg.app/getting-started/deployment) · [Espaços de trabalho remotos →](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [Aplicativos móveis →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [Canais de chat →](https://docs.codeg.app/guide/chat-channels)
 
@@ -203,7 +203,7 @@ Rode o Codeg como aplicativo de desktop, como servidor auto-hospedado que você 
 
 ### Documentos do Office e pesquisa
 
-Peça uma apresentação, um relatório ou uma planilha e veja o `.pptx`, o `.docx` ou o `.xlsx` de verdade sendo renderizado ao vivo ao lado da conversa; PDFs abrem em um visualizador próprio. As habilidades de pesquisa embutidas — hipóteses, desenho experimental, estatística, busca bibliográfica — funcionam com qualquer agente.
+Crie arquivos Office com prévia ao vivo e abra PDFs. Skills de pesquisa para qualquer agente.
 
 [Documentação →](https://docs.codeg.app/guide/office) · [Pesquisa →](https://docs.codeg.app/guide/research)
 
@@ -220,7 +220,7 @@ Peça uma apresentação, um relatório ou uma planilha e veja o `.pptx`, o `.do
 
 ### Uso do navegador e do computador
 
-No aplicativo de desktop, os links abrem em um navegador integrado ao lado dos seus arquivos, em tamanho de desktop, tablet ou celular: entregue ao agente uma página, um elemento, uma captura de tela ou um erro do console, ou deixe-o conduzir uma página que você compartilhar. Em versão prévia, os agentes também podem ver e operar as janelas que você compartilhar — e o botão Parar fica a um clique.
+Compartilhe páginas e erros do navegador desktop. Uso do computador (prévia) opera janelas compartilhadas.
 
 [Documentação →](https://docs.codeg.app/guide/browser) · [Uso do computador →](https://docs.codeg.app/guide/computer-use)
 
@@ -235,24 +235,30 @@ No aplicativo de desktop, os links abrem em um navegador integrado ao lado dos s
 <tr>
 <td width="50%" valign="middle">
 
-### O ciclo completo de engenharia
+### Linha de comando e CI
 
-Um editor, diffs ao vivo e lado a lado, um cliente git completo com um editor de merge de três painéis, worktrees com um clique, um terminal integrado e visualizações divididas — tudo ao lado do agente, nos arquivos reais do seu repositório.
+`codeg-cli` conecta scripts e CI a um Codeg em execução e exibe respostas ou eventos JSON.
 
-[Documentação →](https://docs.codeg.app/guide/workspace) · [Git e worktrees →](https://docs.codeg.app/guide/git)
+[Documentação →](https://docs.codeg.app/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="O ciclo completo de engenharia" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **Também vem com:**
 
+- **[O ciclo completo de engenharia](https://docs.codeg.app/guide/workspace)** — editor de código, diffs ao vivo, [Git e worktrees](https://docs.codeg.app/guide/git), editor de merge com três painéis, terminais e telas divididas
 - **[Painel do repositório](https://docs.codeg.app/guide/repository)** — issues, pull requests, verificações e merges para GitHub, GitLab, Gitea e Forgejo; qualquer issue ou PR pode virar uma tarefa a fazer
 - **[Automações](https://docs.codeg.app/guide/automations)** — salve um compositor configurado e rode-o sem interface, por agendamento cron ou sob demanda
 - **[Uso de tokens](https://docs.codeg.app/guide/token-usage)** — tendências, taxa de acerto de cache, um mapa de calor de atividade, uso por pasta, agente, modelo e sessão, e quanto isso custaria pelos preços de tabela da API

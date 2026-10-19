@@ -61,14 +61,24 @@ export function localImagePath(source: string): string | null {
 /**
  * The image file a Markdown destination names. `path` is relative to the root
  * for an image inside it, and absolute for one outside it: an agent's QR code
- * or screenshot is often in /tmp, not in the workspace.
+ * or screenshot is often in /tmp, not in the workspace. Without a root, only an
+ * absolute path names a file.
  */
-export function resolveLocalImage(source: string, rootPath: string) {
+export function resolveLocalImage(source: string, rootPath: string | null) {
   const path = localImagePath(source)
-  const root = normalizeAbsPath(rootPath)
-  if (!path || !isAbsoluteFilePath(root)) return null
+  if (!path) return null
   const mime = localImageMime(path)
   if (!mime) return null
+  if (rootPath === null) {
+    if (!isAbsoluteFilePath(path)) return null
+    const absolute = normalizeAbsPath(path)
+    // A network share: see below.
+    if (absolute.startsWith("//")) return null
+    const name = absolute.slice(absolute.lastIndexOf("/") + 1)
+    return { path: absolute, name, mime }
+  }
+  const root = normalizeAbsPath(rootPath)
+  if (!isAbsoluteFilePath(root)) return null
   // Not `${root}/…`: under the POSIX root that reads `//…`, a network share.
   const prefix = root.endsWith("/") ? root : `${root}/`
   const absolute = normalizeAbsPath(
@@ -112,7 +122,7 @@ export type AbsoluteFileReader = (
  * retaining historical image bytes or serving stale screenshots after edits.
  * A relative path is read inside the root, an absolute one where it is. */
 export function createLocalImageLoader(
-  root: string,
+  root: string | null,
   read: LocalImageReader,
   readAbsolute: AbsoluteFileReader
 ) {
@@ -129,10 +139,12 @@ export function createLocalImageLoader(
       else active += 1
       try {
         // Inside the root, the backend canonicalizes the path and checks
-        // symlink confinement.
-        const data = await (isAbsoluteFilePath(path)
-          ? readAbsolute(path, LOCAL_IMAGE_MAX_BYTES)
-          : read(root, path, LOCAL_IMAGE_MAX_BYTES))
+        // symlink confinement. Without a root, a relative path names nothing.
+        const data = isAbsoluteFilePath(path)
+          ? await readAbsolute(path, LOCAL_IMAGE_MAX_BYTES)
+          : root === null
+            ? null
+            : await read(root, path, LOCAL_IMAGE_MAX_BYTES)
         return data && data.length <= Math.ceil(LOCAL_IMAGE_MAX_BYTES / 3) * 4
           ? data
           : null

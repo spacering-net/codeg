@@ -499,6 +499,7 @@ mod tests {
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(crate::acp::computer_tools::NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         );
         DelegationService::new(listener, socket_path)
     }

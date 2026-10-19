@@ -45,6 +45,9 @@ vi.mock("@/lib/api", () => ({
   getFolderConversation: vi.fn(),
   getFolderConversationTurns: vi.fn(),
   getFolderConversationOutline: vi.fn(() => new Promise(() => {})),
+  // The transcript's image scope holds them even without a folder.
+  readFileBase64: vi.fn(),
+  readWorkspaceFileBase64: vi.fn(),
 }))
 vi.mock("@/components/message/virtualized-message-thread", () => ({
   VirtualizedMessageThread: ({

@@ -1,6 +1,6 @@
 [package]
 name = "codeg"
-version = "0.37.0"
+version = "0.38.0"
 description = "Agent Code Generation App"
 authors = ["feitao"]
 edition = "2021"
@@ -43,9 +43,9 @@ tauri-runtime = [
 # `ConnectionManager::insert_test_connection`, parser `with_base_dir`, the
 # `db::test_helpers` module) for integration tests in `tests/*.rs`. Without
 # this feature the items are physically uncompiled in release builds. It
-# also builds the three standalone binaries below, so the test and lint runs
+# also builds the four standalone binaries below, so the test and lint runs
 # cover them.
-test-utils = ["computer-helper", "server-bin", "mcp-bin"]
+test-utils = ["computer-helper", "server-bin", "mcp-bin", "cli-bin"]
 # The `codeg-computer-helper` binary. Off unless asked for: the Tauri CLI puts
 # every binary target whose features are on into a bundle, and the copy
 # `tauri build` would compile is not the helper that ships. That is the one
@@ -56,6 +56,10 @@ computer-helper = ["dep:x11rb"]
 # desktop app serves its web interface from its own process and has no use
 # for a second server, so it must not ship one (70–90 MB) in its bundle.
 server-bin = []
+# The `codeg-cli` binary: the headless client of a running codeg (`codeg-cli
+# run …`). Off unless asked for, like the other sidecars: the copy that ships
+# in the desktop bundle is the one `prepare-sidecars` builds.
+cli-bin = ["dep:clap"]
 # The `codeg-mcp` binary, likewise: the companion that ships is the sidecar
 # `prepare-sidecars` builds without the desktop features, and the copy `tauri
 # build` would compile — with them, WebKit and all — would replace it in the
@@ -94,6 +98,14 @@ required-features = ["server-bin"]
 name = "codeg-mcp"
 path = "src/bin/codeg_mcp.rs"
 required-features = ["mcp-bin"]
+
+# The command-line client: a thin HTTP client of a running desktop app or
+# codeg-server. Built only with `cli-bin` (and, for the real thing, without the
+# default features).
+[[bin]]
+name = "codeg-cli"
+path = "src/bin/codeg_cli.rs"
+required-features = ["cli-bin"]
 
 # The computer-use executor: holds the OS permissions (macOS TCC) in place of
 # codeg, and runs the pinned cua-driver as its child. No Tauri: it is launched
@@ -137,8 +149,16 @@ tauri-runtime-wry = { version = "2.12", optional = true, default-features = fals
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 async-trait = "0.1"
+# `codeg-cli`'s argument parser (feature `cli-bin`).
+clap = { version = "4.5", features = ["derive", "env"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The JSON Schema a `codeg-cli --output-schema` run's result is checked against
+# (drafts 4 to 2020-12). Rather than `jsonschema`: it brings three small crates
+# this tree lacks, where `jsonschema` brings a dozen and turns on serde_json's
+# `float_roundtrip` for everything; and its patterns run on the `regex` crate,
+# in linear time.
+boon = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 # Host IANA zone name (e.g. `Asia/Shanghai`) — chrono only exposes the offset.
@@ -279,7 +299,7 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Console", "Win32_System_Registry"] }
 junction = "1"
 # Built-in browser Windows shim (isolated world over CDP, world-scoped eval,
 # snapshots, find, history, the sign-in identity, the subframe fence, and the
