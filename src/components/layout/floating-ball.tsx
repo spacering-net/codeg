@@ -44,6 +44,7 @@ const ICON_CLASS: Record<FloatingBallSize, string> = {
 const PANEL_ACTIONS: readonly Exclude<FloatingBallAction, "panel">[] = [
   "newConversation",
   "toggleSidebar",
+  "toggleAuxPanel",
   "toggleSearch",
   "toggleTerminal",
   "nextTab",
@@ -56,6 +57,9 @@ const PANEL_ACTIONS: readonly Exclude<FloatingBallAction, "panel">[] = [
   "openCanvas",
   "openAgents",
   "openSystemAdmin",
+  "openSessionDetails",
+  "openChanges",
+  "openGitLog",
   "renameConversation",
   "openSessionFolder",
   "cycleAgent",

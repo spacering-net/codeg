@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "新建会话",
       "toggleSidebar": "切换侧栏",
+      "toggleAuxPanel": "开关右侧面板",
       "toggleSearch": "搜索",
       "toggleTerminal": "切换终端",
       "nextTab": "下一个标签",
@@ -7453,6 +7454,9 @@
       "openCanvas": "无限画布",
       "openAgents": "智能体",
       "openSystemAdmin": "系统管理",
+      "openSessionDetails": "会话详情",
+      "openChanges": "Git 改动",
+      "openGitLog": "提交记录",
       "renameConversation": "重命名会话",
       "openSessionFolder": "会话文件",
       "cycleAgent": "下一个智能体",

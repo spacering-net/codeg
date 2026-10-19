@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "محادثة جديدة",
       "toggleSidebar": "تبديل الشريط الجانبي",
+      "toggleAuxPanel": "تبديل اللوحة اليمنى",
       "toggleSearch": "بحث",
       "toggleTerminal": "تبديل الطرفية",
       "nextTab": "التبويب التالي",
@@ -7453,6 +7454,9 @@
       "openCanvas": "اللوحة",
       "openAgents": "الوكلاء",
       "openSystemAdmin": "إدارة النظام",
+      "openSessionDetails": "تفاصيل الجلسة",
+      "openChanges": "تغييرات Git",
+      "openGitLog": "الالتزامات",
       "renameConversation": "إعادة تسمية المحادثة",
       "openSessionFolder": "ملفات الجلسة",
       "cycleAgent": "الوكيل التالي",

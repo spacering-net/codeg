@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "Nueva conversación",
       "toggleSidebar": "Mostrar u ocultar la barra lateral",
+      "toggleAuxPanel": "Alternar panel derecho",
       "toggleSearch": "Buscar",
       "toggleTerminal": "Mostrar u ocultar la terminal",
       "nextTab": "Pestaña siguiente",
@@ -7453,6 +7454,9 @@
       "openCanvas": "Lienzo",
       "openAgents": "Agentes",
       "openSystemAdmin": "Administración",
+      "openSessionDetails": "Detalles de sesión",
+      "openChanges": "Cambios de Git",
+      "openGitLog": "Commits",
       "renameConversation": "Renombrar conversación",
       "openSessionFolder": "Archivos de sesión",
       "cycleAgent": "Siguiente agente",

@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "새 대화",
       "toggleSidebar": "사이드바 전환",
+      "toggleAuxPanel": "오른쪽 패널 전환",
       "toggleSearch": "검색",
       "toggleTerminal": "터미널 전환",
       "nextTab": "다음 탭",
@@ -7453,6 +7454,9 @@
       "openCanvas": "캔버스",
       "openAgents": "에이전트",
       "openSystemAdmin": "시스템 관리",
+      "openSessionDetails": "세션 세부정보",
+      "openChanges": "Git 변경 사항",
+      "openGitLog": "커밋",
       "renameConversation": "대화 이름 바꾸기",
       "openSessionFolder": "세션 파일",
       "cycleAgent": "다음 에이전트",

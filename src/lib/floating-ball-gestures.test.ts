@@ -206,16 +206,11 @@ describe("default bindings", () => {
       (gesture) => DEFAULT_FLOATING_BALL_BINDINGS[gesture] === null
     )
     // The long corner continuations are the only intentional gaps: a trail
-    // passing through a two-stage binding would otherwise fire twice. The
-    // straight down family stays recognisable but unbound by default — the
-    // settings UI lets owners bind them.
-    expect(unbound.sort()).toEqual([
-      "down",
-      "downLeft",
-      "downRight",
-      "upLeftThenRight",
-      "upRightThenLeft",
-    ])
+    // passing through a two-stage binding would otherwise fire twice. Batch
+    // v86 gave the straight down family the aux-panel bindings, so nothing
+    // recognisable is left idle except the corner continuations that must
+    // stay unreachable.
+    expect(unbound.sort()).toEqual(["upLeftThenRight", "upRightThenLeft"])
   })
 
   it("keeps the MindFS muscle memory for the headline gestures", () => {
@@ -225,5 +220,17 @@ describe("default bindings", () => {
     expect(DEFAULT_FLOATING_BALL_BINDINGS.upRightThenDown).toBe(
       "stopGenerating"
     )
+  })
+
+  it("gives the right sidebar the down family and double tap", () => {
+    // Batch v86: the aux panel is the phone's newest high-traffic surface.
+    // Double tap moves off the terminal onto the panel toggle, and the two
+    // downward diagonals open its most-read tabs (↓ itself is the toggle;
+    // openGitLog stays unbound — three bindings on one family leave no
+    // unambiguous stroke for it, and the panel rail reaches it in one tap).
+    expect(DEFAULT_FLOATING_BALL_BINDINGS.down).toBe("toggleAuxPanel")
+    expect(DEFAULT_FLOATING_BALL_BINDINGS.doubleTap).toBe("toggleAuxPanel")
+    expect(DEFAULT_FLOATING_BALL_BINDINGS.downLeft).toBe("openChanges")
+    expect(DEFAULT_FLOATING_BALL_BINDINGS.downRight).toBe("openSessionDetails")
   })
 })

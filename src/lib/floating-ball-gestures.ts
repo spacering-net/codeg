@@ -54,6 +54,7 @@ export type FloatingBallAction =
   | "panel"
   | "newConversation"
   | "toggleSidebar"
+  | "toggleAuxPanel"
   | "toggleSearch"
   | "toggleTerminal"
   | "nextTab"
@@ -71,6 +72,9 @@ export type FloatingBallAction =
   | "openCanvas"
   | "openAgents"
   | "openSystemAdmin"
+  | "openSessionDetails"
+  | "openChanges"
+  | "openGitLog"
   | "renameConversation"
   | "openSessionFolder"
   | "cycleAgent"
@@ -128,21 +132,28 @@ export const FLOATING_BALL_GESTURES: readonly FloatingBallGesture[] = [
  * `stopGenerating` stays on an inconspicuous compound on purpose — a gesture
  * that aborts a running answer must not live next to the ones fingers find
  * first.
+ *
+ * Batch v86 adds the right sidebar (aux panel) family: `toggleAuxPanel` takes
+ * the one unbound single stroke (↓), and the panel's three high-frequency tabs
+ * take the downward diagonals. Double tap moves from the terminal to the aux
+ * panel — the terminal keeps a bound gesture (↑), while before v0.38.0 the
+ * right panel had no ball action at all and is the newer, higher-traffic
+ * surface on the phone.
  */
 export const DEFAULT_FLOATING_BALL_BINDINGS: Readonly<
   Record<FloatingBallGesture, FloatingBallAction | null>
 > = {
   tap: "panel",
-  doubleTap: "toggleTerminal",
+  doubleTap: "toggleAuxPanel",
   longPress: "openSettings",
   left: "newConversation",
   right: "toggleSidebar",
   up: "panel",
-  down: null,
+  down: "toggleAuxPanel",
   upLeft: "toggleSearch",
   upRight: "nextTab",
-  downLeft: null,
-  downRight: null,
+  downLeft: "openChanges",
+  downRight: "openSessionDetails",
   upThenLeft: "prevTab",
   upThenRight: "reopenClosedTab",
   upLeftThenRight: null,

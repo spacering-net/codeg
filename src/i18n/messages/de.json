@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "Neue Unterhaltung",
       "toggleSidebar": "Seitenleiste umschalten",
+      "toggleAuxPanel": "Rechtes Panel umschalten",
       "toggleSearch": "Suchen",
       "toggleTerminal": "Terminal umschalten",
       "nextTab": "Nächster Tab",
@@ -7453,6 +7454,9 @@
       "openCanvas": "Canvas",
       "openAgents": "Agenten",
       "openSystemAdmin": "Systemverwaltung",
+      "openSessionDetails": "Sitzungsdetails",
+      "openChanges": "Git-Änderungen",
+      "openGitLog": "Commits",
       "renameConversation": "Unterhaltung umbenennen",
       "openSessionFolder": "Sitzungsdateien",
       "cycleAgent": "Nächster Agent",

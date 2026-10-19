@@ -509,6 +509,9 @@ export function WorkspaceChromeController() {
         case "toggleSidebar":
           toggle()
           return
+        case "toggleAuxPanel":
+          toggleAuxPanel()
+          return
         case "toggleSearch":
           setSearchOpen((prev) => !prev)
           return
@@ -594,6 +597,23 @@ export function WorkspaceChromeController() {
             return
           }
           auxPanel.openTab("file_tree")
+          return
+        case "openSessionDetails":
+          auxPanel.openTab("session_details")
+          return
+        case "openChanges":
+          if (!activeFolder) {
+            toast.info(tBall("toasts.sessionFolderNeedsWorkspace"))
+            return
+          }
+          auxPanel.openTab("changes")
+          return
+        case "openGitLog":
+          if (!activeFolder) {
+            toast.info(tBall("toasts.sessionFolderNeedsWorkspace"))
+            return
+          }
+          auxPanel.openTab("git_log")
           return
         case "cycleAgent":
         case "cycleFavoriteAgent": {
@@ -740,6 +760,7 @@ export function WorkspaceChromeController() {
       tBall,
       tabs,
       toggle,
+      toggleAuxPanel,
       toggleTerminal,
       zoomLevel,
     ]

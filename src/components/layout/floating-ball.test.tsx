@@ -149,7 +149,8 @@ describe("FloatingBall", () => {
       vi.advanceTimersByTime(100)
     })
     tap()
-    expect(onAction).toHaveBeenCalledWith("toggleTerminal")
+    // Batch v86: the double tap moved from the terminal to the right panel.
+    expect(onAction).toHaveBeenCalledWith("toggleAuxPanel")
     // The pending single tap must not fire as well.
     act(() => {
       vi.advanceTimersByTime(500)

@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "新しい会話",
       "toggleSidebar": "サイドバーの切り替え",
+      "toggleAuxPanel": "右パネルの切り替え",
       "toggleSearch": "検索",
       "toggleTerminal": "ターミナルの切り替え",
       "nextTab": "次のタブ",
@@ -7453,6 +7454,9 @@
       "openCanvas": "キャンバス",
       "openAgents": "エージェント",
       "openSystemAdmin": "システム管理",
+      "openSessionDetails": "セッション詳細",
+      "openChanges": "Git 変更",
+      "openGitLog": "コミット",
       "renameConversation": "会話名を変更",
       "openSessionFolder": "セッションファイル",
       "cycleAgent": "次のエージェント",

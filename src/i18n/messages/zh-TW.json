@@ -7436,6 +7436,7 @@
     "actions": {
       "newConversation": "新增對話",
       "toggleSidebar": "切換側欄",
+      "toggleAuxPanel": "開關右側面板",
       "toggleSearch": "搜尋",
       "toggleTerminal": "切換終端機",
       "nextTab": "下一個分頁",
@@ -7453,6 +7454,9 @@
       "openCanvas": "無限畫布",
       "openAgents": "智慧代理人",
       "openSystemAdmin": "系統管理",
+      "openSessionDetails": "會話詳情",
+      "openChanges": "Git 變更",
+      "openGitLog": "提交記錄",
       "renameConversation": "重新命名會話",
       "openSessionFolder": "會話檔案",
       "cycleAgent": "下一個代理人",
