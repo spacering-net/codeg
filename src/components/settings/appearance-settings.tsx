@@ -505,9 +505,7 @@ export function AppearanceSettings() {
               {t("floatingBall.gestureBindings")}
             </p>
             <div className="space-y-1">
-              {FLOATING_BALL_GESTURES.filter(
-                (g) => g !== "tap" && g !== "doubleTap" && g !== "longPress"
-              ).map((gesture) => {
+              {FLOATING_BALL_GESTURES.map((gesture) => {
                 const override = floatingBallBindings[gesture]
                 const value = override ?? ""
                 return (
