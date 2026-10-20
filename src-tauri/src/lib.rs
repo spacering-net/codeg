@@ -22,6 +22,7 @@ mod app_error;
 #[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
 mod app_menu;
 pub mod app_state;
+pub mod appimage_env;
 pub mod automation;
 pub mod backgrounds;
 /// Built-in browser. Only its wire types and its grant rules compile in server
@@ -33,6 +34,7 @@ pub mod chat_channel;
 pub mod cli;
 pub mod cli_run;
 pub mod commands;
+pub mod commit_message;
 pub mod computer;
 pub mod db;
 pub mod deep_link;
@@ -102,6 +104,7 @@ mod tauri_app {
         canvas as canvas_commands,
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
         clipboard as clipboard_commands,
+        commit_message as commit_message_commands,
         config_sync,
         conversation_tags,
         conversations,
@@ -1929,6 +1932,11 @@ mod tauri_app {
                 folders::git_show_file,
                 folders::git_show_file_base64,
                 folders::git_commit,
+                commit_message_commands::git_generate_commit_message,
+                commit_message_commands::git_generate_commit_message_cancel,
+                commit_message_commands::get_commit_message_settings,
+                commit_message_commands::set_commit_message_settings,
+                commit_message_commands::delete_commit_message_settings,
                 folders::git_rollback_file,
                 folders::git_add_files,
                 folders::git_list_all_branches,

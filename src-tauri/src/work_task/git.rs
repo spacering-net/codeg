@@ -23,7 +23,7 @@ async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppC
 /// with splitting on, writing it deposits a fresh `sharedindex.*` beside it in
 /// the git directory, which outlives the scratch (git only prunes those on a
 /// later `gc`).
-async fn run_git_with_index(
+pub(crate) async fn run_git_with_index(
     path: &str,
     index: &std::path::Path,
     args: &[&str],
@@ -341,8 +341,12 @@ fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
 /// The worktree's REAL index is never touched — `git add -N` on it would leave
 /// the agent's next round, and any `git stash` / `git commit -a` the user runs,
 /// looking at an index this feature quietly edited.
-struct ScratchIndex {
-    path: std::path::PathBuf,
+///
+/// [`ScratchIndex::copy_of`] is the same throwaway copy without the
+/// intent-to-add pass, for a caller that stages into it what it wants to look
+/// at (the commit message generator's "what would this commit contain").
+pub(crate) struct ScratchIndex {
+    pub(crate) path: std::path::PathBuf,
 }
 
 impl Drop for ScratchIndex {
@@ -364,6 +368,25 @@ impl ScratchIndex {
     /// to prevent. `anchor` is only the fallback seed for a checkout that has
     /// no index to copy at all.
     async fn build(wt_path: &str, anchor: &str) -> Result<Self, AppCommandError> {
+        let scratch = Self::copy_of(wt_path, Some(anchor)).await?;
+        // git runs with the worktree root as its cwd, so a bare `-A` covers the
+        // whole tree; `-N` records names only — nothing is staged, and the
+        // content the diff reports is read from the working tree either way.
+        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
+        if !add.status.success() {
+            return Err(git_command_error("add -A -N", &add.stderr));
+        }
+        Ok(scratch)
+    }
+
+    /// A copy of the worktree's own index and nothing more (see the type docs
+    /// for why a copy). With no index to copy, `anchor` seeds it with
+    /// `read-tree`; without an anchor either it is left EMPTY, which is what a
+    /// repository nothing was ever staged in has.
+    pub(crate) async fn copy_of(
+        wt_path: &str,
+        anchor: Option<&str>,
+    ) -> Result<Self, AppCommandError> {
         // Inside the worktree's own git directory: never visible to
         // `git status`, never committable, and on the same filesystem as the
         // index it copies. The name carries the process id and a counter
@@ -388,18 +411,22 @@ impl ScratchIndex {
         // Git replaces the index by renaming `index.lock` over it, so a copy
         // racing an agent's own `git add` reads one whole version or the
         // other — never a half-written file.
-        if std::fs::copy(git_dir.join("index"), &scratch.path).is_err() {
-            let read = run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
-            if !read.status.success() {
-                return Err(git_command_error("read-tree", &read.stderr));
+        let index = git_dir.join("index");
+        if let Err(e) = std::fs::copy(&index, &scratch.path) {
+            match anchor {
+                Some(anchor) => {
+                    let read =
+                        run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
+                    if !read.status.success() {
+                        return Err(git_command_error("read-tree", &read.stderr));
+                    }
+                }
+                // An index that is there but could not be copied is not an
+                // empty one: left empty, the copy would read as every tracked
+                // file deleted.
+                None if index.exists() => return Err(AppCommandError::io(e)),
+                None => {}
             }
-        }
-        // git runs with the worktree root as its cwd, so a bare `-A` covers the
-        // whole tree; `-N` records names only — nothing is staged, and the
-        // content the diff reports is read from the working tree either way.
-        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
-        if !add.status.success() {
-            return Err(git_command_error("add -A -N", &add.stderr));
         }
         Ok(scratch)
     }

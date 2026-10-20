@@ -37,8 +37,8 @@
  * `CodegMcpToolCard`, which states the refusal reason.
  */
 
-import { useId, useMemo, useState, type ReactNode } from "react"
-import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react"
+import { useMemo, useState, type ReactNode } from "react"
+import { RotateCcw } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { parseCodegMcpToolCall } from "@/lib/codeg-mcp-tool"
@@ -74,8 +74,6 @@ export function ResumedDelegationCard({
   const t = useTranslations("Folder.chat.delegation")
   const viewerHost = useSessionViewerHost()
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [expanded, setExpanded] = useState(false)
-  const panelId = useId()
 
   // The resume call's own arguments + result text. `detail` is the `task_id`
   // argument — the key everything else is resolved by.
@@ -127,79 +125,62 @@ export function ResumedDelegationCard({
     return <>{fallback}</>
   }
 
-  // The interruption context is the ONLY thing worth expanding to. The
-  // report's own text is deliberately dropped: it is an instruction addressed
-  // to the LLM ("Delegation resumed. task_id=… Call get_delegation_status with
-  // this id …") whose every fact — which agent, which task, which id, what
-  // state — the collapsed row already states, in the reader's language.
+  // The row's panel holds the task in full (as on every delegation card), and
+  // a resume adds the one thing of its own worth expanding to: the
+  // interruption context. The report's own text is deliberately dropped: it is
+  // an instruction addressed to the LLM ("Delegation resumed. task_id=… Call
+  // get_delegation_status with this id …") whose every fact — which agent,
+  // which task, which id, what state — the collapsed row already states, in
+  // the reader's language.
   const reason = call.reason?.trim() ?? ""
-  const expandable = reason !== ""
 
   return (
     <div
       data-testid="resumed-delegation-card"
       className="@container/delegcard overflow-hidden rounded-lg border border-border bg-card ws-msg-card"
     >
-      <div className="flex w-full items-stretch">
-        <div className="min-w-0 flex-1">
-          <DelegationCardRow
-            identity={identity}
-            taskId={taskId}
-            status={status}
-            errorCode={errorCode}
-            task={task}
-            avatarBadge={
-              <span
-                className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background"
-                title={t("resumed")}
+      <DelegationCardRow
+        identity={identity}
+        taskId={taskId}
+        status={status}
+        errorCode={errorCode}
+        task={task}
+        detail={
+          reason !== "" ? (
+            // The interruption context the LLM passed into the child's
+            // continuation prompt. Plain pre-wrapped text, NOT Markdown: it is
+            // an argument being audited, so it must read exactly as sent.
+            <div className="px-3 py-2">
+              <div className="mb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t("resumeReasonLabel")}
+              </div>
+              {/* In its own direction, like the task above it. */}
+              <div
+                dir="auto"
+                className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2 py-1.5 text-xs text-foreground/90"
               >
-                <RotateCcw className="h-2.5 w-2.5 text-muted-foreground" />
-              </span>
-            }
-            onOpenSession={
-              childConversationId != null
-                ? () =>
-                    viewerHost
-                      ? viewerHost.open({ kind: "delegation", source })
-                      : setDialogOpen(true)
-                : undefined
-            }
-          />
-        </div>
-        {expandable && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-            // Only reference the panel while it is mounted — it is kept out of
-            // the collapsed tree so the Markdown renderer isn't paid for
-            // unopened rows.
-            aria-controls={expanded ? panelId : undefined}
-            title={t("resumeDetail")}
-            aria-label={t("resumeDetail")}
-            className="shrink-0 flex items-center border-l border-border px-2 text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                {reason}
+              </div>
+            </div>
+          ) : undefined
+        }
+        avatarBadge={
+          <span
+            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background"
+            title={t("resumed")}
           >
-            {expanded ? (
-              <ChevronDown className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
-            )}
-          </button>
-        )}
-      </div>
-      {expandable && expanded && (
-        // The interruption context the LLM passed into the child's
-        // continuation prompt. Plain pre-wrapped text, NOT Markdown: it is an
-        // argument being audited, so it must read exactly as sent.
-        <div id={panelId} className="border-t border-border px-3 py-2">
-          <div className="mb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
-            {t("resumeReasonLabel")}
-          </div>
-          <div className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2 py-1.5 text-xs text-foreground/90">
-            {reason}
-          </div>
-        </div>
-      )}
+            <RotateCcw className="h-2.5 w-2.5 text-muted-foreground" />
+          </span>
+        }
+        onOpenSession={
+          childConversationId != null
+            ? () =>
+                viewerHost
+                  ? viewerHost.open({ kind: "delegation", source })
+                  : setDialogOpen(true)
+            : undefined
+        }
+      />
       {viewerHost == null && childConversationId != null && (
         <SubAgentSessionDialog
           open={dialogOpen}

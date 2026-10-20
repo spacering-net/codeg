@@ -22,6 +22,7 @@ const LOGS_DIR_NAME: &str = "logs";
 const TURN_TIMINGS_DIR_NAME: &str = "turn-timings";
 const ACP_TRANSCRIPTS_DIR_NAME: &str = "acp-transcripts";
 const BACKGROUNDS_DIR_NAME: &str = "backgrounds";
+const TEXT_GENERATION_DIR_NAME: &str = "text-generation";
 
 /// `$CODEG_HOME` if set (and non-empty), else `~/.codeg/`.
 ///
@@ -193,6 +194,28 @@ pub fn codeg_acp_transcripts_root() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(CODEG_DIR_NAME).join(ACP_TRANSCRIPTS_DIR_NAME))
         .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(ACP_TRANSCRIPTS_DIR_NAME))
+}
+
+/// Working directory of the throwaway sessions codeg starts to have an agent
+/// write a piece of text for it (see `crate::acp::one_shot`). Kept empty: the
+/// agent gets everything it needs in the prompt, and running here rather than
+/// in the user's repository keeps those sessions out of the repository's own
+/// resume lists, its project instructions and its project MCP servers.
+///
+/// Resolution mirrors [`codeg_acp_transcripts_root`]:
+/// 1. `$CODEG_HOME/text-generation`
+/// 2. `$CODEG_DATA_DIR/text-generation` (the data directory, see the module docs)
+/// 3. `~/.codeg/text-generation` (neither set)
+pub fn codeg_text_generation_root() -> PathBuf {
+    if let Some(custom) = std::env::var_os("CODEG_HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(custom).join(TEXT_GENERATION_DIR_NAME);
+    }
+    if let Some(data) = std::env::var_os("CODEG_DATA_DIR").filter(|s| !s.is_empty()) {
+        return PathBuf::from(data).join(TEXT_GENERATION_DIR_NAME);
+    }
+    dirs::home_dir()
+        .map(|h| h.join(CODEG_DIR_NAME).join(TEXT_GENERATION_DIR_NAME))
+        .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(TEXT_GENERATION_DIR_NAME))
 }
 
 /// The data directory the desktop app exports as `CODEG_DATA_DIR` at the top

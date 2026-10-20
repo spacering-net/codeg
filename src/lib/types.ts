@@ -2356,6 +2356,12 @@ export interface ForgeRemote {
   server_host: string
   owner_repo: string
   remote_url: string
+  /** The instance's web root — scheme, host, port and mount path — as the
+   *  account the backend reads this host with spells it (`https://{host}`
+   *  when there is none). What an SSH remote's repository link is built on.
+   *  Absent from a server that predates the field — a remote codeg-server can
+   *  be older than the app connected to it. */
+  web_origin?: string
   /** Which forge this host is — decided by the backend from the configured
    *  accounts and the hostname, never chosen here. */
   provider: ForgeProviderId
@@ -3966,6 +3972,11 @@ export interface GrokSettings {
   custom_api_backend: string | null
   /** [model.<id>].context_window — context size in tokens. */
   custom_context_window: number | null
+  /** [model.<id>].reasoning_efforts — the levels the custom model declares,
+   * each the lowercased `value` Grok sends to the provider, in file order.
+   * Empty when absent: Grok then only has its own model catalog's levels for
+   * this id (never the custom base_url's model list). */
+  custom_reasoning_efforts: string[]
   /** [session].auto_compact_threshold_percent — 0–100 (Grok default 85). */
   auto_compact_threshold_percent: number | null
 }
@@ -3983,6 +3994,11 @@ export interface GrokStructuredConfig {
   customApiKey: string | null
   customApiBackend: string | null
   customContextWindow: number | null
+  /** The custom model's reasoning_efforts levels. Unlike the fields above,
+   * null leaves the key as it is (the panel sends levels only once its chips
+   * moved, so a list typed into the raw editor survives); an empty list
+   * removes it. */
+  customReasoningEfforts: string[] | null
   autoCompactThresholdPercent: number | null
 }
 
@@ -4765,6 +4781,27 @@ export interface GitConflictFileVersions {
 
 export interface GitCommitResult {
   committed_files: number
+}
+
+/** How the commit message generator runs (`commit_message` on the backend).
+ *  With no agent it follows the active session, then the folder's default. */
+/** How commit messages are written: globally, or for one project folder,
+ *  whose own settings replace the global ones whole. */
+export interface CommitMessageSettings {
+  /** The agent that writes them with every option it offers picked — an
+   *  assistant's kind of selection. `null` follows the active session. */
+  agent: AssistantAgentConfig | null
+  /** Standing instructions, e.g. "write in Chinese". */
+  instructions: string
+  /** Commit as soon as the message is written. */
+  auto_commit: boolean
+}
+
+export interface GeneratedCommitMessage {
+  message: string
+  agent_type: AgentType
+  /** The settings the run used want the message committed right away. */
+  auto_commit: boolean
 }
 
 export interface GitRemote {

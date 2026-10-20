@@ -511,7 +511,10 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --bundles deb,rpm
+          # RPM takes no "-" in a version and the bundler stops at "invalid
+          # version", so a release candidate (x.y.z-rc.N) ships no .rpm. The
+          # tag is "v" + the version: create-draft-release makes sure of it.
+          args: --target ${{ matrix.target }} --bundles ${{ contains(github.ref_name, '-') && 'deb' || 'deb,rpm' }}
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -558,7 +561,9 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }}
+          # Every Linux bundle (deb, rpm, AppImage), less the .rpm for a
+          # release candidate: see the arm64 step.
+          args: --target ${{ matrix.target }}${{ contains(github.ref_name, '-') && ' --bundles deb,appimage' || '' }}
           includeUpdaterJson: true
           retryAttempts: 2
 

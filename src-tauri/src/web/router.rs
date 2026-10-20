@@ -18,9 +18,23 @@ use super::{auth, handlers, ws};
 use crate::app_state::AppState;
 use tracing::Instrument;
 
+/// Token-only authentication: the desktop app's web service and the tests.
 pub fn build_router(
     state: Arc<AppState>,
     token: String,
+    static_dir: std::path::PathBuf,
+    shutdown_signal: Arc<ShutdownSignal>,
+) -> Router {
+    build_router_with_proxy_auth(state, token, None, static_dir, shutdown_signal)
+}
+
+/// `proxy_auth` turns on the opt-in proxy-JWT authentication beside the
+/// token (`CODEG_AUTH=proxy-jwt`, standalone `codeg-server` only); `None` is
+/// the same as `build_router`.
+pub fn build_router_with_proxy_auth(
+    state: Arc<AppState>,
+    token: String,
+    proxy_auth: Option<Arc<super::proxy_auth::ProxyJwtAuth>>,
     static_dir: std::path::PathBuf,
     shutdown_signal: Arc<ShutdownSignal>,
 ) -> Router {
@@ -29,7 +43,11 @@ pub fn build_router(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let token_for_ws = token.clone();
+    let web_auth = auth::WebAuth {
+        token: token.clone(),
+        proxy: proxy_auth,
+    };
+    let web_auth_for_ws = web_auth.clone();
     let token_for_cli_hello = token.clone();
 
     let api = Router::new()
@@ -639,6 +657,26 @@ pub fn build_router(
             post(handlers::git::git_update_branch),
         )
         .route("/git_commit", post(handlers::git::git_commit))
+        .route(
+            "/git_generate_commit_message",
+            post(handlers::commit_message::git_generate_commit_message),
+        )
+        .route(
+            "/git_generate_commit_message_cancel",
+            post(handlers::commit_message::git_generate_commit_message_cancel),
+        )
+        .route(
+            "/get_commit_message_settings",
+            post(handlers::commit_message::get_commit_message_settings),
+        )
+        .route(
+            "/set_commit_message_settings",
+            post(handlers::commit_message::set_commit_message_settings),
+        )
+        .route(
+            "/delete_commit_message_settings",
+            post(handlers::commit_message::delete_commit_message_settings),
+        )
         .route("/git_fetch_remote", post(handlers::git::git_fetch_remote))
         .route("/git_delete_branch", post(handlers::git::git_delete_branch))
         .route(
@@ -1995,7 +2033,7 @@ pub fn build_router(
         // Catch-all
         .fallback(api_not_found)
         .layer(middleware::from_fn(move |req, next| {
-            auth::require_token(req, next, token.clone())
+            auth::require_auth(req, next, web_auth.clone())
         }));
 
     // Public endpoints — no token required.
@@ -2057,7 +2095,7 @@ pub fn build_router(
     // the viewer. `.instrument()` the downstream future; never `.enter()` across
     // an await, which corrupts the span stack.
     //
-    // Layer order: the protected router's `auth::require_token` layer was added
+    // Layer order: the protected router's `auth::require_auth` layer was added
     // (above) BEFORE this `.layer()`, and this layer is applied to the MERGED
     // router, so it is the OUTERMOST layer. The instrumented `next.run(req)`
     // future therefore wraps routing + auth + handler — auth-reject logs land
@@ -2080,7 +2118,7 @@ pub fn build_router(
             get(crate::web::browser_tunnel::ws_handler),
         )
         .layer(middleware::from_fn(move |req, next| {
-            auth::require_token(req, next, token_for_ws.clone())
+            auth::require_auth(req, next, web_auth_for_ws.clone())
         }));
 
     // Static file serving.

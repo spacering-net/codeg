@@ -239,7 +239,7 @@ async fn probe_adapter(meta: &AcpAgentMeta) -> Option<AdapterInfo> {
         _ => return None,
     };
     let (adapter_installed, native_path) = tokio::join!(
-        crate::commands::acp::is_cmd_available(adapter_cmd),
+        crate::commands::acp::is_cmd_available(meta.agent_type, adapter_cmd),
         crate::commands::acp::resolve_vendor_cli(relation.native_cmd, relation.extra_dirs),
     );
 
@@ -929,7 +929,7 @@ mod adapter_tests {
         );
         assert_eq!(
             info.adapter_package,
-            "@agentclientprotocol/claude-agent-acp@0.93.0"
+            "@agentclientprotocol/claude-agent-acp@0.94.0"
         );
         assert_eq!(info.adapter_cmd, "claude-agent-acp");
         assert!(!info.adapter_installed);

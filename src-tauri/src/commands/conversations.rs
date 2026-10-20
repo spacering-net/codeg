@@ -242,6 +242,9 @@ fn list_conversations_sync(
         parsers.push((custom, build_agent_parser(custom, &envs.get(custom))));
     }
 
+    // The sessions codeg ran itself to generate text (`acp::one_shot`) were
+    // never conversations: left out, recognised by where they ran.
+    let generated = crate::acp::one_shot::GenerationPaths::current();
     for (at, parser) in &parsers {
         if let Some(ref filter) = agent_type {
             if filter != at {
@@ -252,6 +255,13 @@ fn list_conversations_sync(
             Ok(conversations) => {
                 // Deduplicate conversations based on (agent_type, id) combination
                 for conversation in conversations {
+                    if conversation
+                        .folder_path
+                        .as_deref()
+                        .is_some_and(|p| generated.contains(p))
+                    {
+                        continue;
+                    }
                     let key = format!("{:?}-{}", conversation.agent_type, conversation.id);
                     if seen_keys.insert(key) {
                         all_conversations.push(conversation);

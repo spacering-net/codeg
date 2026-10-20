@@ -247,6 +247,7 @@ fn an_automatic_task_is_drafted_like_a_clicked_one() {
         server_host: "github.com".into(),
         owner_repo: "acme/app".into(),
         remote_url: "https://github.com/acme/app.git".into(),
+        web_origin: "https://github.com".into(),
         provider: ForgeProvider::GitHub,
         supported: true,
     };

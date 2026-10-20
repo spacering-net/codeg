@@ -514,6 +514,9 @@ impl TerminalManager {
                 cmd.env("PATH", path);
             }
         }
+        // The session's environment, not the one an AppImage's launcher set
+        // up for codeg itself.
+        crate::appimage_env::restore_pty(&mut cmd);
 
         let child = pair
             .slave

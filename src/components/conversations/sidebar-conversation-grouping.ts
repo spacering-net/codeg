@@ -19,7 +19,7 @@ import {
 // off the screen — a page keeps it a glance-able "where was I" list. Lives here
 // (not in the list component) because `buildRows` needs it to tell an untouched
 // first page from an expanded one.
-export const RECENT_PAGE_SIZE = 15
+export const RECENT_PAGE_SIZE = 10
 
 export function parseTimestamp(value: string): number {
   const timestamp = Date.parse(value)

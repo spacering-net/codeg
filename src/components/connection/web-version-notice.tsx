@@ -8,7 +8,7 @@ import {
   isOwnServerRestartRunning,
   subscribeOwnServerRestart,
 } from "@/lib/updater"
-import { getCodegToken } from "@/lib/transport/web-auth"
+import { hasCodegCredentials } from "@/lib/transport/web-auth"
 import {
   getWebConnectionServerSnapshot,
   getWebConnectionSnapshot,
@@ -51,9 +51,9 @@ export function WebVersionNotice() {
     // development build is not one, whatever its version says.
     const pageVersion = process.env.CODEG_APP_VERSION
     if (!pageVersion || process.env.NODE_ENV !== "production") return
-    // Without a token the request would be refused, and a refusal reads as an
-    // expired session.
-    if (!usesWebTransport() || !getCodegToken()) return
+    // Without credentials the request would be refused, and a refusal reads
+    // as an expired session.
+    if (!usesWebTransport() || !hasCodegCredentials()) return
     let cancelled = false
     void getRunningServerVersion().then((serverVersion) => {
       // An older server does not report its version.

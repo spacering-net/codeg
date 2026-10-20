@@ -186,10 +186,16 @@ async function openMenu({
   return screen.getByRole("menuitem", { name: "Filter by tags" })
 }
 
-/** Open the submenu by pointer and return its panel. */
+/**
+ * Open the submenu by pointer and return its panel. Only the press, not the
+ * hover `click` starts with: a pointer arriving on the row arms Radix's
+ * hover-open timer (100 ms), and with no pointer ever leaving the row again
+ * it is still pending if a test closes the submenu that soon. It then opens it
+ * again, before or after the test looks, depending on machine speed.
+ */
 async function openPanel(options?: Parameters<typeof openMenu>[0]) {
   const row = await openMenu(options)
-  await userEvent.click(row)
+  await userEvent.click(row, { skipHover: true })
   return screen.findByRole("dialog", { name: "Filter by tags" })
 }
 

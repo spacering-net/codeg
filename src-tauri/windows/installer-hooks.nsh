@@ -30,14 +30,24 @@
 ;
 ; In an update, the codeg that started this installer is still on its way
 ; out: Tauri's updater starts the installer first and exits after. Right
-; after this hook, Tauri's own check has Restart Manager close whatever
-; still runs codeg.exe, once, and the update stops with "Failed to kill
-; codeg" if that fails, which a codeg in the middle of exiting can make it
-; do (tauri-apps/tauri#16277). PowerShell's start-up used to give that codeg
-; a second or so to finish; the Windows API gives it none. So an update
-; first waits, for about 15 seconds at most, until codeg.exe can be written
-; to, which it cannot while a codeg runs it. A codeg that takes longer is
-; left to that check.
+; after this hook, Tauri's own check asks Restart Manager, once, which
+; processes use codeg.exe, has it close all of them, and stops the update
+; with "Failed to kill codeg" if any cannot be closed (tauri-apps/tauri#16277).
+; A codeg in the middle of exiting can be one. So can a process that only has
+; the file open at that moment, which Restart Manager counts as using it just
+; the same: Windows verifying the file's signature, or an antivirus scanning
+; it, runs in another session with rights this installer does not have.
+; So an update deals with codeg.exe first. It waits for each codeg running
+; from $INSTDIR in this session to end, 15 seconds at most in all, and ends
+; the ones still running then. A codeg in another user's session is not this
+; installer's to end. Then it waits, 10 seconds at most, until Restart
+; Manager finds nothing using codeg.exe, and moves codeg.exe aside like a
+; sidecar below, whether something still uses it or not: a process can open
+; the file again between the last look and the check, and a check that finds
+; no codeg.exe finds nothing to close. Whatever holds the old file keeps it,
+; and the install writes codeg.exe anew. If it does not — the write fails and
+; is skipped, or the install stops first — the old one is put back: when the
+; install carries on to its end, or when a stopped one is closed.
 ;
 ; Stopping them is not always enough: whatever starts a companion — an agent,
 ; or a codeg still running — can start one again before the installer
@@ -189,43 +199,173 @@
 !macroend
 
 !macro CODEG_DELETE_ASIDE
+  ; Not while codeg.exe is missing: then the one moved aside can be the only
+  ; copy left (see CODEG_RESTORE_APP).
+  ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    Delete "$INSTDIR\${MAINBINARYNAME}.exe.*.old"
+  ${EndIf}
   Delete "$INSTDIR\codeg-mcp.exe.*.old"
   Delete "$INSTDIR\codeg-computer-helper.exe.*.old"
   Delete "$INSTDIR\codeg-cli.exe.*.old"
   Delete "$INSTDIR\bin\codeg-cli.exe.*.old"
 !macroend
 
-; In an update, until codeg.exe can be written to: 150 retries, 100 ms apart.
-!macro CODEG_WAIT_FOR_UPDATED_APP
-  ${If} $UpdateMode = 1
-    !insertmacro CODEG_CAN_WRITE "$INSTDIR\${MAINBINARYNAME}.exe"
-    ${If} $R9 = 0
-      DetailPrint "Waiting for ${MAINBINARYNAME} to exit..."
-      ${For} $R7 1 150
-        Sleep 100
-        !insertmacro CODEG_CAN_WRITE "$INSTDIR\${MAINBINARYNAME}.exe"
-        ${IfThen} $R9 = 1 ${|} ${ExitFor} ${|}
-      ${Next}
+; In an update: waits for each process running $INSTDIR\codeg.exe in this
+; installer's session to end, 15 seconds at most in all, and ends the ones
+; still running then. The codeg that started this installer is usually gone
+; within a second.
+!macro CODEG_STOP_UPDATED_APP
+  System::Call 'kernel32::GetCurrentProcessId() i .r4'
+  System::Call 'kernel32::ProcessIdToSessionId(i r4, *i .r5)'
+  System::Call 'kernel32::GetTickCount() i .r9'
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i ${CODEG_TH32CS_SNAPPROCESS}, i 0) p .r0'
+  ${If} $0 P<> -1
+    System::Call '*(${CODEG_PROCESSENTRY32W}) p .r1'
+    ${If} $1 P<> 0
+      System::Call 'kernel32::Process32FirstW(p r0, p r1) i .r2'
+      ${DoWhile} $2 <> 0
+        System::Call '*$1(i, i, i .r3, p, i, i, i, i, i, &w260 .r6)'
+        ${If} $6 == "${MAINBINARYNAME}.exe"
+          System::Call 'kernel32::ProcessIdToSessionId(i r3, *i .r7) i .r8'
+          ${If} $8 <> 0
+          ${AndIf} $7 = $5
+            System::Call 'kernel32::OpenProcess(i ${CODEG_PROCESS_STOP_ACCESS}, i 0, i r3) p .r6'
+            ${If} $6 P<> 0
+              System::Call 'kernel32::QueryFullProcessImageNameW(p r6, i 0, w .r7, *i ${NSIS_MAX_STRLEN}) i .r8'
+              ${If} $8 <> 0
+              ${AndIf} $7 == "$INSTDIR\${MAINBINARYNAME}.exe"
+                ; What is left of the 15 seconds.
+                System::Call 'kernel32::GetTickCount() i .r8'
+                IntOp $8 $8 - $9
+                IntOp $8 15000 - $8
+                ${IfThen} $8 < 0 ${|} StrCpy $8 0 ${|}
+                DetailPrint "Waiting for $7 (process $3) to exit..."
+                System::Call 'kernel32::WaitForSingleObject(p r6, i r8) i .r8'
+                ${If} $8 <> 0
+                  DetailPrint "Stopping $7 (process $3)"
+                  System::Call 'kernel32::TerminateProcess(p r6, i 1)'
+                  System::Call 'kernel32::WaitForSingleObject(p r6, i 5000)'
+                ${EndIf}
+              ${EndIf}
+              System::Call 'kernel32::CloseHandle(p r6)'
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        System::Call 'kernel32::Process32NextW(p r0, p r1) i .r2'
+      ${Loop}
+      System::Free $1
     ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r0)'
   ${EndIf}
 !macroend
 
+; $R9 = 1 when Restart Manager finds a process using `path`, as Tauri's check
+; will ask it, else 0 — also when it cannot tell, which that check passes too.
+!macro CODEG_RM_FINDS_USE path
+  StrCpy $R9 0
+  System::Call 'rstrtmgr::RmStartSession(*i .R0, i 0, w) i .R2'
+  ${If} $R2 = 0
+    System::Call 'rstrtmgr::RmRegisterResources(i R0, i 1, *ws, i 0, p 0, i 0, p 0) i .R2' "${path}"
+    ${If} $R2 = 0
+      System::Call 'rstrtmgr::RmGetList(i R0, *i .R3, *i .R4, p 0, *i .R5) i .R2'
+      ; ERROR_MORE_DATA: there are processes to list.
+      ${IfThen} $R2 = 234 ${|} StrCpy $R9 1 ${|}
+    ${EndIf}
+    System::Call 'rstrtmgr::RmEndSession(i R0)'
+  ${EndIf}
+!macroend
+
+; codeg.exe, and where CODEG_CLEAR_APP_FOR_CHECK moved it, if it did.
+Var CodegApp
+Var CodegAppAside
+
+; In an update, right before Tauri's check: until Restart Manager finds
+; nothing using codeg.exe, 100 retries, 100 ms apart. Then codeg.exe is
+; moved aside, retried the same way while that fails: a process can hold the
+; file without letting it be renamed, for a while.
+!macro CODEG_CLEAR_APP_FOR_CHECK
+  !insertmacro CODEG_RM_FINDS_USE "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${If} $R9 = 1
+    DetailPrint "Waiting for $INSTDIR\${MAINBINARYNAME}.exe to be released..."
+    ${For} $R7 1 100
+      Sleep 100
+      !insertmacro CODEG_RM_FINDS_USE "$INSTDIR\${MAINBINARYNAME}.exe"
+      ${IfThen} $R9 = 0 ${|} ${ExitFor} ${|}
+    ${Next}
+  ${EndIf}
+  StrCpy $CodegApp "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${If} ${FileExists} "$CodegApp"
+    System::Call 'kernel32::GetTickCount() i .R8'
+    DetailPrint "Moving $CodegApp aside..."
+    ${For} $R7 1 100
+      ClearErrors
+      Rename "$CodegApp" "$CodegApp.$R8.old"
+      ${IfNot} ${Errors}
+        StrCpy $CodegAppAside "$CodegApp.$R8.old"
+        ${ExitFor}
+      ${EndIf}
+      Sleep 100
+    ${Next}
+    ${IfThen} $CodegAppAside == "" ${|} DetailPrint "Could not move $CodegApp aside" ${|}
+  ${EndIf}
+!macroend
+
+; Puts codeg.exe back if CODEG_CLEAR_APP_FOR_CHECK moved it and the install
+; wrote no new one: an older codeg beats none. Retried like the move, for the
+; same reason; one that still fails leaves the moved file to the user, which
+; CODEG_DELETE_ASIDE keeps while codeg.exe is missing.
+!macro CODEG_RESTORE_APP
+  ${If} $CodegAppAside != ""
+  ${AndIfNot} ${FileExists} "$CodegApp"
+  ${AndIf} ${FileExists} "$CodegAppAside"
+    ${For} $R7 1 100
+      ClearErrors
+      Rename "$CodegAppAside" "$CodegApp"
+      ${IfNot} ${Errors}
+        ${ExitFor}
+      ${EndIf}
+      Sleep 100
+    ${Next}
+  ${EndIf}
+!macroend
+
+; An install stopped after codeg.exe was moved aside, before it was written
+; anew. NSIS calls this as the stopped install is closed (a silent one, at
+; once). Tauri's template has none of its own, and includes this file before
+; it defines MAINBINARYNAME or $UpdateMode: a function here, unlike the macros,
+; can use neither, hence $CodegApp.
+Function .onInstFailed
+  !insertmacro CODEG_RESTORE_APP
+FunctionEnd
+
 !macro NSIS_HOOK_PREINSTALL
-  !insertmacro CODEG_WAIT_FOR_UPDATED_APP
+  ${If} $UpdateMode = 1
+    !insertmacro CODEG_STOP_UPDATED_APP
+  ${EndIf}
   !insertmacro CODEG_STOP_SIDECARS
   !insertmacro CODEG_DELETE_ASIDE
-  ; codeg.exe's file is in use while codeg runs.
-  !insertmacro CODEG_CAN_WRITE "$INSTDIR\${MAINBINARYNAME}.exe"
-  ${If} $R9 = 1
-  ${OrIf} ${Silent}
+  ; Silent and passive installs close a running codeg without asking. An
+  ; interactive one asks only if codeg runs, and codeg.exe's file is in use
+  ; while it does.
+  ${If} ${Silent}
   ${OrIf} $PassiveMode = 1
+    StrCpy $R9 1
+  ${Else}
+    !insertmacro CODEG_CAN_WRITE "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${EndIf}
+  ${If} $R9 = 1
     !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "codeg-mcp.exe"
     !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "codeg-computer-helper.exe"
     !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "codeg-cli.exe"
   ${EndIf}
+  ${If} $UpdateMode = 1
+    !insertmacro CODEG_CLEAR_APP_FOR_CHECK
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; codeg.exe's own write can fail and be skipped.
+  !insertmacro CODEG_RESTORE_APP
   CreateDirectory "$INSTDIR\bin"
   !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "bin\codeg-cli.exe"
   ClearErrors

@@ -12,7 +12,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { openUrl } from "@/lib/platform"
-import { describeAppUpdateError } from "@/lib/updater"
+import { describeAppUpdateError, usesTauriUpdater } from "@/lib/updater"
 import { cn } from "@/lib/utils"
 
 // The markdown stack is a settings-side dependency; keep it out of the
@@ -312,7 +312,11 @@ export function StatusBarUpdate() {
                 <Spinner className="h-3 w-3" />
                 {restartCountdown !== null && restartCountdown > 0
                   ? t("restartingIn", { seconds: restartCountdown })
-                  : t("waitingForServer")}
+                  : // The desktop app has no server to wait for: it relaunches
+                    // itself, on Windows through the installer.
+                    usesTauriUpdater()
+                    ? t("restarting")
+                    : t("waitingForServer")}
               </div>
             )}
             {ready && (

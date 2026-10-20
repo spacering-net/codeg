@@ -11,6 +11,15 @@ env:
   # Refuse to silently regenerate snapshots in CI — any drift must be
   # accepted locally with `cargo insta review` and committed.
   INSTA_UPDATE: "no"
+  # Debuginfo as line tables only (`test` inherits `dev`): backtraces keep
+  # their file:line, and the type and variable records no CI step reads are
+  # not built (on macOS they are most of codeg_lib's ~1 GB debug rlib). With
+  # them the desktop cell ran the 16 GB Windows runner out of commit ("The
+  # paging file is too small for this operation to complete. (os error
+  # 1455)"): rustc maps every upstream rlib copy-on-write, Windows charges
+  # such a view in full against RAM + pagefile, and the tests and bins that
+  # link codeg_lib each map their own view, in parallel.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 concurrency:
   group: test-${{ github.ref }}

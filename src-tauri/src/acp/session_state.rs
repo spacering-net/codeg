@@ -446,6 +446,12 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub trae_pat_sign_in: bool,
+    /// Pi's native `enabledModels` scope for this launch. The ACP adapter
+    /// advertises every authenticated model, so the connection layer applies
+    /// this Pi-only preference before publishing the model selector.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub pi_enabled_model_patterns: Option<Vec<String>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
@@ -846,6 +852,7 @@ impl SessionState {
             agent_chosen_config_values: BTreeMap::new(),
             env_pinned_config_option_ids: Vec::new(),
             trae_pat_sign_in: false,
+            pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),
@@ -2334,6 +2341,9 @@ impl SessionState {
 /// (owner [`CLI_OWNER_LABEL`](crate::cli_run::service::CLI_OWNER_LABEL)), whose
 /// prompts arrive from a schedule, a messaging app or a command line — and a
 /// `codeg-cli` run lets its connection go as soon as its one turn has ended.
+/// Nor a one-shot generation (owner
+/// [`OWNER_LABEL`](crate::acp::one_shot::OWNER_LABEL)), which has no
+/// conversation to continue at all.
 /// For them a prediction would only be paid for.
 /// Everything else is a person's window, a work task (its session takes
 /// follow-ups once the task stops), or a delegated child (which inherits its
@@ -2341,6 +2351,7 @@ impl SessionState {
 pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
     owner_window_label != "automation"
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
+        && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
 }
 
@@ -3569,6 +3580,7 @@ mod tests {
         for owner in [
             "automation",
             crate::cli_run::service::CLI_OWNER_LABEL,
+            crate::acp::one_shot::OWNER_LABEL,
             "chat_channel:4:wx-user",
             "chat_channel:4:tg-user:thread:9",
         ] {

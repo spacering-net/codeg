@@ -127,6 +127,14 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   made a Qoder session's model its LAST one instead of its first, which
 ///   is what a turn naming no model falls back to. See
 ///   `parsers::qoder::attribute_subagent_usage`.
+/// * `6` — Claude fork sub-agents counted from their own work on. A
+///   `subagent_type: "fork"` transcript opens with a copy of the context it
+///   inherited — the parent's launching record, or a launching subagent's
+///   whole history — with the original `message.id`s and usage, which were
+///   already counted where they were spent; reading the file whole counted
+///   them again. Forks are on by default in the terminal since CLI 2.1.232
+///   and in every Agent SDK session since 2.1.302, so unchanged transcripts
+///   read differently now. See `parsers::claude::is_fork_directive_record`.
 ///
 /// Only the accounting stored in `token_usage_turn` counts: the four token
 /// counters, the duration and the timestamp. A conversation's context WINDOW is
@@ -141,7 +149,7 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-const FACT_SCHEMA_VERSION: &str = "5";
+const FACT_SCHEMA_VERSION: &str = "6";
 
 const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 

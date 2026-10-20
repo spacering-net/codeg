@@ -1201,7 +1201,11 @@ describe("SidebarConversationList — Recent section", () => {
     // `recentLimit` starts at RECENT_PAGE_SIZE and only ever grew, so a list
     // expanded a few pages deep stayed that way for the rest of the session.
     // These cover the way back out.
-    const PAGE = 15
+    //
+    // A literal rather than the constant: ten rows a page is the product
+    // decision these assertions pin, so a changed page size has to be a
+    // deliberate edit here too.
+    const PAGE = 10
     const TOTAL = PAGE + 4
 
     // Recent duplicates every canonical row, so total cards = canonical + recent

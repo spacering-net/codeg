@@ -3587,6 +3587,20 @@ export function useAcpEvent(handler: EventSubscriberHandler): void {
   }, [ctx])
 }
 
+/**
+ * The turn `conn` was streaming ended without this client receiving its end —
+ * a re-attach after a disconnect found it over. The part of the reply that
+ * came before the gap is all this client has, so the conversations showing
+ * this session read the reply from the transcript when they settle the turn
+ * (`markTurnEndUnseen`), instead of keeping that part as the whole reply.
+ */
+function noteTurnEndedUnseen(conn: ConnectionState): void {
+  if (!conn.sessionId) return
+  useConversationRuntimeStore
+    .getState()
+    .actions.markTurnEndUnseen(conn.sessionId)
+}
+
 // ── Helper: extract affected key from action ──
 
 function getAffectedKey(action: Action): string | null {
@@ -4216,6 +4230,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       } else {
         const key = getAffectedKey(action)
         if (key) {
+          // A snapshot that takes the connection out of a turn ended a turn
+          // this client did not see end: the gap was too long to replay, and
+          // the events in it — the rest of the reply among them — are skipped.
+          // Marked BEFORE the listeners hear of it, so the turn-end edge that
+          // their re-render fires finds the mark.
+          if (action.type === "HYDRATE_FROM_SNAPSHOT") {
+            const before = prev.get(key)
+            const after = next.get(key)
+            if (before?.status === "prompting" && after?.status !== "prompting")
+              noteTurnEndedUnseen(before)
+          }
           mirrorLiveMessage(key)
           notifyKeyListeners(key)
           rememberCommands(key)
@@ -6380,6 +6405,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // so the user sees the conversation tab go away rather than
           // staring at stale state forever.
           attachSubscriptionsRef.current.delete(contextKey)
+          // Still in a turn here: the turn ended without this client — a
+          // connection that ends while attached reports its status first, so
+          // this is a re-attach that found nothing left (the idle sweep takes
+          // a connection nobody touches once its turn is over).
+          const gone = storeRef.current.connections.get(contextKey)
+          if (gone?.status === "prompting") noteTurnEndedUnseen(gone)
           // The composer that survives this is exactly the one whose Reconnect
           // button has to resume the session rather than start a new one.
           captureIdentityBeforeRemoval(contextKey)

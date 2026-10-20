@@ -140,6 +140,17 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // The opt-in proxy-JWT authentication is all-or-nothing: a half-set or
+    // misspelled configuration aborts here rather than serving with an
+    // authentication the operator did not mean (see `web::proxy_auth`).
+    let proxy_auth_config = match codeg_lib::web::proxy_auth::ProxyAuthConfig::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            tracing::error!("[AUTH][FATAL] {err}; aborting startup.");
+            return ExitCode::from(2);
+        }
+    };
+
     // Before anything opens the database (see `runtime_lock`): every server
     // shares the data directory, and waits while a `codeg-cli --standalone`
     // server has it — which itself takes it alone, or leaves untouched.
@@ -205,10 +216,12 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime")
-        .block_on(async_main())
+        .block_on(async_main(proxy_auth_config))
 }
 
-async fn async_main() -> ExitCode {
+async fn async_main(
+    proxy_auth_config: Option<codeg_lib::web::proxy_auth::ProxyAuthConfig>,
+) -> ExitCode {
     // Sweep stale ACP binary cache trash (rename-aside fallback artifacts).
     // Detached OS thread: cannot block startup, panics are caught and dropped,
     // errors are silenced, no subprocesses spawned.
@@ -747,10 +760,33 @@ async fn async_main() -> ExitCode {
     codeg_lib::web::handlers::files::purge_upload_staging().await;
 
     // Build router
+    let proxy_auth = match proxy_auth_config {
+        None => None,
+        Some(config) => match codeg_lib::web::proxy_auth::ProxyJwtAuth::new(config) {
+            Ok(auth) => {
+                let config = auth.config();
+                tracing::info!(
+                    "[AUTH] proxy-jwt on: header {}, issuer {}, audience {}, keys from {}",
+                    config.header,
+                    config.issuer,
+                    config.audience,
+                    config.jwks_url
+                );
+                auth.prime().await;
+                Some(Arc::new(auth))
+            }
+            Err(err) => {
+                tracing::error!("[AUTH][FATAL] proxy-jwt key client: {err}; aborting startup.");
+                return ExitCode::from(1);
+            }
+        },
+    };
+
     let shutdown_signal = state.web_server_state.shutdown_signal();
-    let router = codeg_lib::web::router::build_router(
+    let router = codeg_lib::web::router::build_router_with_proxy_auth(
         state.clone(),
         token.clone(),
+        proxy_auth,
         static_dir,
         shutdown_signal,
     );

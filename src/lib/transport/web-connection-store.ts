@@ -13,6 +13,7 @@
 
 import { detectEnvironment } from "./detect"
 import { getShellTransport, isRemoteDesktopMode } from "./index"
+import type { UnauthorizedSource } from "./web-auth"
 import type { WebConnState, WebTransport } from "./web-transport"
 
 // Module-level constant so `getServerSnapshot` returns a STABLE reference on
@@ -68,6 +69,6 @@ export function reconnectWebNow(): void {
  * `lib/api.ts` that bypasses `WebTransport.call`) into the same unauthorized
  * dialog state, rather than an abrupt redirect. No-op off the web shell.
  */
-export function notifyWebUnauthorized(): void {
-  webTransport()?.markUnauthorized()
+export function notifyWebUnauthorized(source: UnauthorizedSource): void {
+  webTransport()?.markUnauthorized(source)
 }

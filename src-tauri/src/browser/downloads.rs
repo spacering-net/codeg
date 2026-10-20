@@ -421,6 +421,7 @@ fn reveal_command(path: &Path) -> std::process::Command {
     {
         let mut command = std::process::Command::new("xdg-open");
         command.arg(path.parent().unwrap_or(path));
+        crate::appimage_env::restore(&mut command);
         command
     }
 }

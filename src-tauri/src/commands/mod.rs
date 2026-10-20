@@ -20,6 +20,8 @@ pub mod cli_access;
 /// path validation and URI encoding stay compiled in every mode so their tests
 /// run without the tauri stack.
 pub mod clipboard;
+/// The ✨ commit message generator (both runtimes).
+pub mod commit_message;
 /// Computer use: sharing windows, the helper, the agent reads — the desktop
 /// app's, and codeg-server's where it is let share the screen it runs on.
 pub mod computer;

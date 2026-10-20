@@ -431,6 +431,9 @@ pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation>
 ///
 /// Probed after PATH and `~/.local/bin`, so a codeg-managed copy and anything
 /// genuinely on PATH still win.
+///
+/// Npx agents are not listed here: their native-installer fallback (Grok's
+/// `~/.grok/bin`) is `npx_native_install` in `commands/acp.rs`.
 pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
     match agent_type {
         AgentType::OpenCode => &[".opencode/bin"],
@@ -452,7 +455,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
-/// `packageJson.name` (read from the 0.58.1 to 0.93.0 sources). A custom agent
+/// `packageJson.name` (read from the 0.58.1 to 0.94.0 sources). A custom agent
 /// whose running adapter reports exactly this name follows the Claude Code
 /// steering policy (`connection.rs::steering_policy_agent`).
 pub const CLAUDE_AGENT_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
@@ -2431,9 +2434,105 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `session/fork` response is out, and codeg sends neither. Its own
             // import is a scan the user starts, so no list of codeg's can show
             // a fork before the fork's response binds it.
+            //
+            // 0.94.0 moves the Claude SDK 0.3.300 → 0.3.303 (CLI 2.1.300 →
+            // 2.1.303) and the ACP SDK 1.9.0 → 2.0.0, and keeps `engines.node`
+            // at ">=22". Each tag's scenario harness (they differ only in the
+            // SDK import paths) is byte-identical in all 40 scenarios with
+            // codeg's exact `clientCapabilities`, and a live `initialize`
+            // differs from 0.93.0's in the version only, so the 0.92.0 parse
+            // test in connection.rs covers it. (cccc) was measured live against
+            // the local fake Anthropic API (no model call), 0.93.0 and 0.94.0
+            // side by side.
+            //
+            // (cccc) **Fork subagents.** CLI 2.1.302 offers
+            // `subagent_type: "fork"` in every Agent SDK session, as the
+            // terminal has since 2.1.232 (`CLAUDE_CODE_FORK_SUBAGENT=0` turns it
+            // off); 0.93.0's CLI answered such a call "Agent type 'fork' not
+            // found". A fork inherits the conversation and ignores the call's
+            // `model` and `effort` (the tool's schema says so; measured: the
+            // fork's requests name the parent's model). One the main thread
+            // launches runs in the background (an `async_launched` result, then
+            // a task notification, like any background agent) unless the call
+            // passes `run_in_background: false`, which 2.1.303 honours with a
+            // foreground result (`agentType: "fork"`); one a subagent launches
+            // runs in the foreground (measured on 2.1.303, and on 0.93.0's
+            // 2.1.300 with forks turned on). The fork's transcript opens with
+            // what it inherited — a `fork-context-ref` record and a copy of the
+            // launching record (the parent's `message.id` and usage), or a copy
+            // of the launching subagent's whole history, original timestamps
+            // included — then the `<fork-boilerplate>` directive. What codeg
+            // does:
+            //   * `parse_subagent_tool_calls` reads a fork from its directive on
+            //     (`is_fork_directive_record`). Read whole, the parent's own
+            //     `Agent` call showed in the fork's card with "Fork started —
+            //     processing in background" as its result, the copied usage was
+            //     counted again in the session's spend (11,000 input tokens for
+            //     the 10,000 the probe's gateway served), and the clock started
+            //     at the copied history. The token-usage facts are rebuilt once
+            //     (`FACT_SCHEMA_VERSION` 6): the terminal has written such
+            //     transcripts since 2.1.232.
+            //   * A fork in the foreground: the adapter streams the copied
+            //     directive as the fork's own output and reports its "Fork
+            //     started" result as the launching call's, so the card completed
+            //     when the fork began, and the real result then found the call
+            //     settled and was never sent (#1384 fixes the same copy for the
+            //     `session/load` replay only; the live frame is reported as
+            //     agentclientprotocol/claude-agent-acp#1389). codeg drops that
+            //     update (`claude_fork_inherited_result`: a call is never its own
+            //     child) and completes the card from the raw SDK message that
+            //     carries the real result (`take_claude_fork_results`), while
+            //     the turn is live. Replayed from both recordings, the card now
+            //     completes with the fork's report.
+            //   * The Agent card shows neither `model` nor `effort` for a fork.
+            //
+            // (dddd) **`loadReplayEnd`** (#1361) stays undeclared. A client that
+            // lists it in `_meta.jetbrains.air.capabilities` gets one more
+            // `session_info_update` (`_meta.jetbrains.air.loadReplayEnd: true`)
+            // after the whole `session/load` replay, before the response (the
+            // harness with it declared differs by that update alone). codeg
+            // opens a Claude session with `session/resume`, which replays
+            // nothing, and loads only when the resume fails; the adapter starts
+            // the CLI the same way for both, so they fail together. And codeg
+            // drains a replay only once the load has answered, when the whole
+            // replay has already arrived, so its 100 ms quiet window cannot cut
+            // one short.
+            //
+            // (eeee) **ACP SDK 2.0.0 and the draft ACP v2** (#1386). The SDK's
+            // default exports are now its stable v1 schema; the adapter imports
+            // `@agentclientprotocol/sdk/unstable`, keeping every v1 method codeg
+            // calls, and the v1 wire is unchanged (above). Its draft v2 surface
+            // (since 0.85.1, #1217) still needs `CLAUDE_AGENT_ACP_EXPERIMENTAL_V2=1`
+            // on the adapter AND a client that asks for protocol 2 in
+            // `initialize`. Measured: without the variable a protocol-2 request
+            // is answered in v1; with it the v2 answer drops `_meta.steering`
+            // (the v2 surface does not serve `_session/steering` yet), which
+            // codeg's live-feedback channel needs, and the session model changes
+            // (no client file system or terminals, subagents as child
+            // sessions). codeg sets neither; not adopted while the protocol is a
+            // draft.
+            //
+            // (ffff) Nothing to change in codeg, each checked:
+            //   * #1365 matches OpenRouter's model ids
+            //     (`anthropic/claude-opus-5.5:batch[1m]`) in the gateway model
+            //     listing, so the model selector behind OpenRouter is no longer
+            //     empty. codeg shows the list the adapter sends.
+            //   * #1372 finds a skill's SKILL.md by its declared `name`, so more
+            //     skills carry a SKILL.md path. codeg reads only a Skill call's
+            //     name and still does not mark skills in the slash menu (see
+            //     (ccc)): built-in skills carry no path.
+            //   * CLI 2.1.301–2.1.303 otherwise: a full disk's login error no
+            //     longer says "Please run /login" (the adapter answers it as a
+            //     plain error, not `auth_required`), an omitted permission mode
+            //     starts in `default` on third-party providers (the adapter
+            //     always names one), and switching to a model with a smaller
+            //     context window summarizes first. Both CLIs write the same
+            //     record types (2.1.300 with forks turned on); a fork's own
+            //     transcript adds a `fork-context-ref` record, and 2.1.303 adds
+            //     `finished` to its `.meta.json`, both of which codeg ignores.
             distribution: AgentDistribution::Npx {
-                version: "0.93.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.93.0",
+                version: "0.94.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.94.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5734,8 +5833,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.93.0",
-            "@agentclientprotocol/claude-agent-acp@0.93.0",
+            "0.94.0",
+            "@agentclientprotocol/claude-agent-acp@0.94.0",
             Some("22.0.0"),
         );
         assert_npx_version(

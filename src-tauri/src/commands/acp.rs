@@ -195,12 +195,12 @@ pub(crate) fn apply_custom_version_to_url(
     url.replace(registry_version, custom_version)
 }
 
-/// Check whether an NPX agent command is spawnable, by the same lookup as
-/// [`resolve_npx_command`]: PATH, then `~/.local/bin`, then the current npm
-/// global prefix. The fallbacks handle GUI environments that don't inherit the
-/// user's shell PATH.
-pub(crate) async fn is_cmd_available(cmd: &str) -> bool {
-    resolve_npx_command(cmd).await.is_some()
+/// Check whether an NPX agent's command is spawnable, by the same lookup as
+/// [`resolve_npx_command_for`]: PATH, then `~/.local/bin`, then the current npm
+/// global prefix, then the agent vendor's own native install. The fallbacks
+/// handle GUI environments that don't inherit the user's shell PATH.
+pub(crate) async fn is_cmd_available(agent_type: AgentType, cmd: &str) -> bool {
+    resolve_npx_command_for(agent_type, cmd).await.is_some()
 }
 
 pub(crate) fn resolve_command_on_path(cmd: &str) -> Option<PathBuf> {
@@ -399,22 +399,86 @@ async fn prewarm_uvx_agent(
     Ok(())
 }
 
-/// Resolve an npx agent's command the way connect, launch, status and
-/// diagnostics all see it: PATH, then `~/.local/bin` (both via
-/// [`resolve_system_agent_binary`]), then the current npm global prefix.
+/// Resolve a command the way an npx agent's command resolves, short of the
+/// agent-specific last step [`resolve_npx_command_for`] adds: PATH, then
+/// `~/.local/bin` (both via [`resolve_system_agent_binary`]), then the current
+/// npm global prefix.
 ///
 /// Both fallbacks cover an app PATH that lacks the user's shell PATH.
 /// `~/.local/bin` goes first on purpose: when neither copy is on the app's
 /// PATH, a vendor's official installer copy (which targets `~/.local/bin`)
 /// beats an npm copy, as it typically does in a terminal where the installer
 /// put `~/.local/bin` first on PATH. See the Hermes "Launch preference" note
-/// in `acp/registry.rs`. [`NpxCommandResolver::resolve_for_list`] must keep
-/// the same order.
+/// in `acp/registry.rs`. [`NpxCommandResolver::resolve_cmd`] must keep the
+/// same order.
 pub(crate) async fn resolve_npx_command(cmd: &str) -> Option<PathBuf> {
     if let Some(path) = resolve_system_agent_binary(cmd) {
         return Some(path);
     }
     resolve_npx_command_from_current_npm_prefix(cmd).await
+}
+
+/// [`resolve_npx_command`] plus the copy the agent vendor's own native
+/// installer keeps in a directory of its own (see [`npx_native_install`]).
+///
+/// Connect, launch, status, list, diagnostics and version detection all take
+/// an npx agent's command from here, so they agree on whether it is installed.
+/// Ordered last, so anything on PATH, an official-installer copy in
+/// `~/.local/bin` and the npm copy codeg manages all still win.
+pub(crate) async fn resolve_npx_command_for(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
+    if let Some(path) = resolve_npx_command(cmd).await {
+        return Some(path);
+    }
+    npx_native_install(agent_type, cmd)
+}
+
+/// The native-installer copy of an npx agent's command, for the agents whose
+/// vendor also ships an installer of its own that puts the command where no
+/// other probe looks.
+fn npx_native_install(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
+    match agent_type {
+        AgentType::Grok => grok_native_install(&home_dir_or_default(), cmd),
+        _ => None,
+    }
+}
+
+/// `grok` as Grok's own installers leave it: `x.ai/cli/install.sh` and
+/// `install.ps1` put it in `~/.grok/bin`, then only add that directory to the
+/// shell rc or the Windows user PATH. An app that was already running, or that
+/// a launcher started with the environment from before the install, never sees
+/// that PATH, and on Windows nothing lands in `~/.local/bin` either, so without
+/// this a working native install reads as not installed.
+///
+/// `@xai-official/grok`'s npm postinstall writes its binary to the same place,
+/// and `npm uninstall -g` leaves that copy behind. Grok records which installer
+/// owns `~/.grok/bin` as `[cli].installer` in the `config.toml` beside it:
+/// `"internal"` from its own installers, `"npm"` from the npm package. A copy
+/// recorded as npm's does not count here. An npm-installed Grok resolves
+/// through the npm prefix like every other npx agent, and counting its copy
+/// would keep Grok installed after codeg uninstalls it.
+///
+/// Only the default location is probed. A `GROK_BIN_DIR` or `GROK_HOME`
+/// relocation is not followed.
+fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
+    let grok_dir = home.join(".grok");
+    let cand = grok_dir
+        .join("bin")
+        .join(binary_cache::executable_file_name(cmd));
+    if !cand.is_file() {
+        return None;
+    }
+    let installer = fs::read_to_string(grok_dir.join("config.toml"))
+        .ok()
+        .and_then(|raw| raw.parse::<toml::Table>().ok())
+        .and_then(|table| {
+            table
+                .get("cli")?
+                .as_table()?
+                .get("installer")?
+                .as_str()
+                .map(str::to_string)
+        });
+    (installer.as_deref() != Some("npm")).then_some(cand)
 }
 
 #[derive(Default)]
@@ -424,7 +488,18 @@ struct NpxCommandResolver {
 }
 
 impl NpxCommandResolver {
-    async fn resolve_for_list(&mut self, cmd: &str) -> Option<PathBuf> {
+    /// [`resolve_npx_command_for`] for the list path, which asks about every
+    /// npx agent at once: the npm prefix is probed at most once per request,
+    /// and each command is resolved at most once.
+    async fn resolve_for_list(&mut self, agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
+        // Outside the per-command cache, which is keyed by the command alone:
+        // whether a native-installer copy counts depends on the agent asking.
+        self.resolve_cmd(cmd)
+            .await
+            .or_else(|| npx_native_install(agent_type, cmd))
+    }
+
+    async fn resolve_cmd(&mut self, cmd: &str) -> Option<PathBuf> {
         if let Some(cached) = self.per_cmd_cache.get(cmd) {
             return cached.clone();
         }
@@ -566,7 +641,7 @@ pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), 
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, .. } => {
-            if !is_cmd_available(cmd).await {
+            if !is_cmd_available(agent_type, cmd).await {
                 // INVARIANT: the substring "is not installed" is matched
                 // verbatim by the frontend catch block in
                 // `src/contexts/acp-connections-context.tsx` to surface a
@@ -695,7 +770,7 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, package, .. } => {
-            let resolved = resolve_npx_command(cmd).await?;
+            let resolved = resolve_npx_command_for(agent_type, cmd).await?;
             // Try `npm list -g <package_name> --json` to get the real installed version.
             let pkg_name = package_name_from_spec(package);
             let mut version = detect_npm_global_version(&pkg_name).await;
@@ -1033,7 +1108,7 @@ async fn collect_agent_diag(
             diag.package = Some(package.to_string());
             diag.node_required = node_required.map(str::to_string);
 
-            let resolve_npx = resolve_npx_command(cmd)
+            let resolve_npx = resolve_npx_command_for(agent_type, cmd)
                 .await
                 .map(|p| p.to_string_lossy().to_string());
             diag.launchable = resolve_npx.clone();
@@ -4465,6 +4540,29 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
             ),
             None => (None, None, None, None),
         };
+    let custom_reasoning_efforts = custom_model_id
+        .as_deref()
+        .and_then(|id| {
+            table
+                .as_ref()?
+                .get("model")?
+                .as_table()?
+                .get(id)?
+                .as_table()?
+                .get(GROK_REASONING_EFFORTS_KEY)?
+                .as_array()
+        })
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    toml::Value::String(level) => grok_effort_level(level),
+                    toml::Value::Table(t) => grok_effort_level(t.get("value")?.as_str()?),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let auto_compact_threshold_percent = table
         .as_ref()
@@ -4482,8 +4580,25 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
         custom_api_key,
         custom_api_backend,
         custom_context_window,
+        custom_reasoning_efforts,
         auto_compact_threshold_percent,
     }
+}
+
+/// `[model.<id>].reasoning_efforts` — the per-model reasoning-effort levels
+/// (Grok's config reference: "Allowed reasoning-effort values for this model.
+/// When omitted, the menu comes from the endpoint's `/v1/models` row"). That
+/// endpoint is Grok's model catalog (xAI's, or `[endpoints].models_base_url`),
+/// matched by model id: grok 1.0.62 never fetches the list of a model's own
+/// `base_url`, so a custom model the catalog lacks has levels only from here.
+const GROK_REASONING_EFFORTS_KEY: &str = "reasoning_efforts";
+
+/// One `reasoning_efforts` level as the panel compares it: trimmed and
+/// lowercased, since Grok parses levels case-insensitively. `None` for an empty
+/// string, which no level can be.
+fn grok_effort_level(raw: &str) -> Option<String> {
+    let level = raw.trim().to_ascii_lowercase();
+    (!level.is_empty()).then_some(level)
 }
 
 /// grok's real `--permission-mode` enum (docs.x.ai / verified against the
@@ -4749,7 +4864,9 @@ fn apply_grok_structured_config(
 ///
 /// Within an active block `model = "<id>"` is always set and each empty sub-field
 /// OMITS its key (empty `base_url` ⇒ Grok's official endpoint). Unmanaged keys the
-/// user hand-added to the block are preserved; a rename starts a fresh block.
+/// user hand-added to the block are preserved; a rename starts a fresh block,
+/// into which a `reasoning_efforts` the panel left alone (`None`) moves along.
+/// How the levels are written otherwise: [`grok_tbl_set_reasoning_efforts`].
 fn apply_grok_custom_model(
     doc: &mut toml_edit::Document,
     settings: &GrokStructuredConfig,
@@ -4773,9 +4890,16 @@ fn apply_grok_custom_model(
 
     match target_id {
         Some(id) => {
-            // A rename removes the stale block before writing the new one.
+            // A rename removes the stale block before writing the new one. Levels
+            // the panel left alone (`None`) move to the new block instead of
+            // going with the old one.
+            let mut carried_efforts = None;
             if let Some(prev) = prev_id.as_deref() {
                 if prev != id {
+                    if settings.custom_reasoning_efforts.is_none() {
+                        carried_efforts =
+                            grok_model_block_value(doc, prev, GROK_REASONING_EFFORTS_KEY);
+                    }
                     remove_grok_model_block(doc, prev);
                 }
             }
@@ -4795,6 +4919,13 @@ fn apply_grok_custom_model(
                     "context_window",
                     settings.custom_context_window.filter(|n| *n > 0),
                 );
+                grok_tbl_set_reasoning_efforts(tbl, settings.custom_reasoning_efforts.as_deref());
+                // A block renamed onto keeps a list of its own.
+                if let Some(levels) = carried_efforts {
+                    if tbl.get(GROK_REASONING_EFFORTS_KEY).is_none() {
+                        tbl.insert(GROK_REASONING_EFFORTS_KEY, levels);
+                    }
+                }
             }
             // Make the managed model the default for new sessions.
             set_or_remove_grok_key(doc, "models", "default", Some(id))?;
@@ -4816,6 +4947,23 @@ fn apply_grok_custom_model(
         }
     }
     Ok(())
+}
+
+/// `[model.<id>].<key>` as a plain value item (an array of tables becomes an
+/// inline array), so it can move into another block whatever its layout.
+fn grok_model_block_value(
+    doc: &toml_edit::Document,
+    id: &str,
+    key: &str,
+) -> Option<toml_edit::Item> {
+    let item = doc
+        .get("model")?
+        .as_table_like()?
+        .get(id)?
+        .as_table_like()?
+        .get(key)?
+        .clone();
+    item.into_value().ok().map(toml_edit::Item::Value)
 }
 
 /// True when `[model.<id>]` exists as a table (standard or inline).
@@ -4891,6 +5039,86 @@ fn grok_tbl_set_int(tbl: &mut dyn toml_edit::TableLike, key: &str, value: Option
             tbl.remove(key);
         }
     }
+}
+
+/// Write the custom model's `reasoning_efforts` from the panel's level list.
+/// Without it a model Grok's catalog doesn't describe advertises no effort
+/// support over ACP, so the composer offers no effort selector for it.
+///
+///  - `None` leaves the key as it is (see `GrokStructuredConfig`; a rename
+///    carries it over in [`apply_grok_custom_model`]);
+///  - an empty list removes it, handing the levels back to Grok's catalog (see
+///    [`GROK_REASONING_EFFORTS_KEY`]);
+///  - a list that already matches the file level for level is left exactly as
+///    written, so a save that never touched the levels cannot reformat a
+///    hand-written `reasoning_efforts`;
+///  - otherwise the key becomes one inline array in which each level still
+///    listed keeps its existing entry verbatim (a table with its own `id` /
+///    `label` / `description` / `default` stays that table), and each new level
+///    is a bare string, which Grok gives its own id and label.
+///
+/// No per-entry `default` is written: `[models].default_reasoning_effort`, which
+/// the panel already sets, outranks it for the default model, and this managed
+/// model always is the default. Left unset, Grok starts on the first level.
+fn grok_tbl_set_reasoning_efforts(tbl: &mut dyn toml_edit::TableLike, levels: Option<&[String]>) {
+    let Some(levels) = levels else {
+        return;
+    };
+    let wanted: Vec<String> = levels
+        .iter()
+        .filter_map(|level| grok_effort_level(level))
+        .collect();
+    if wanted.is_empty() {
+        tbl.remove(GROK_REASONING_EFFORTS_KEY);
+        return;
+    }
+    // The current entries, each paired with the level it declares (`None` when
+    // unreadable — such an entry is never kept by a rewrite).
+    let mut existing: Vec<(Option<String>, Option<toml_edit::Value>)> =
+        match tbl.get(GROK_REASONING_EFFORTS_KEY) {
+            Some(toml_edit::Item::Value(toml_edit::Value::Array(entries))) => entries
+                .iter()
+                .map(|entry| (grok_edit_effort_level(entry), Some(entry.clone())))
+                .collect(),
+            Some(toml_edit::Item::ArrayOfTables(entries)) => entries
+                .iter()
+                .map(|entry| {
+                    let entry = toml_edit::Value::InlineTable(entry.clone().into_inline_table());
+                    (grok_edit_effort_level(&entry), Some(entry))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+    if existing
+        .iter()
+        .filter_map(|(level, _)| level.as_deref())
+        .eq(wanted.iter().map(String::as_str))
+    {
+        return;
+    }
+    let mut entries = toml_edit::Array::new();
+    for level in &wanted {
+        let kept = existing
+            .iter_mut()
+            .find(|(existing_level, entry)| {
+                entry.is_some() && existing_level.as_deref() == Some(level.as_str())
+            })
+            .and_then(|(_, entry)| entry.take());
+        match kept {
+            Some(entry) => entries.push(entry),
+            None => entries.push(level.as_str()),
+        }
+    }
+    tbl.insert(GROK_REASONING_EFFORTS_KEY, toml_edit::value(entries));
+}
+
+/// The level one `reasoning_efforts` entry declares, read the way Grok does: a
+/// bare string is its own level, a table declares its `value`.
+fn grok_edit_effort_level(entry: &toml_edit::Value) -> Option<String> {
+    if let Some(level) = entry.as_str() {
+        return grok_effort_level(level);
+    }
+    grok_effort_level(entry.as_inline_table()?.get("value")?.as_str()?)
 }
 
 /// `Some(trimmed)` only when non-empty after trimming, else `None` (so an empty
@@ -6018,6 +6246,45 @@ fn account_home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
+/// Read the launch's agent-directory `enabledModels` preference. Missing,
+/// malformed or empty settings leave the model selector unrestricted.
+///
+/// So does a workspace that sets its own: a trusted project's
+/// `.pi/settings.json` replaces the agent dir's list outright, and whether pi
+/// trusts the project is settled inside pi at startup (`trust.json`, an
+/// extension, `defaultProjectTrust` or a prompt). codeg cannot tell which list
+/// that pi runs with, and the wrong one would hide models it offers. A project
+/// file pi loads nothing from — unreadable, or JSON other than an object —
+/// leaves the agent dir's list in force, as in pi; one codeg cannot parse
+/// counts as setting its own, since pi's parser may still read it.
+pub(crate) fn pi_enabled_model_patterns_for_env(
+    runtime_env: &BTreeMap<String, String>,
+    workspace: &Path,
+) -> Option<Vec<String>> {
+    if let Ok(raw) = fs::read_to_string(workspace.join(".pi").join("settings.json")) {
+        match serde_json::from_str::<serde_json::Value>(without_bom(&raw)) {
+            Ok(serde_json::Value::Object(project)) if project.contains_key("enabledModels") => {
+                return None
+            }
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+    }
+    let settings = read_json_object_or_empty(
+        &pi_agent_dir_in_workspace(runtime_env, workspace).join("settings.json"),
+    );
+    let patterns = settings
+        .get("enabledModels")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    (!patterns.is_empty()).then_some(patterns)
+}
+
 /// Pi's agent dir as the pi CHILD of a launch with `runtime_env` resolves it —
 /// before a relative value is anchored (see [`pi_agent_dir_in_workspace`]).
 ///
@@ -6068,15 +6335,17 @@ fn pi_agent_dir_in_workspace(runtime_env: &BTreeMap<String, String>, workspace: 
 
 /// The `<cwd>/.pi/` entries whose mere presence makes a project "trust-requiring"
 /// for pi. Mirrors pi's own `TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES`
-/// (`core/trust-manager.js`, verified against pi 0.80.2).
+/// (`core/trust-manager.js`, verified against pi 1.3.0, whose native MCP added
+/// `mcp.json`).
 ///
 /// This list is a mirror of another project's constant, so it can drift if pi
-/// adds a resource kind. It fails safe in both directions: under-detecting only
-/// means codeg stays quiet about resources pi would ignore anyway (pi's own
-/// non-interactive default is "don't load"), and over-detecting only costs one
-/// extra prompt. Neither direction can load a resource without the user's word.
-const PI_TRUST_REQUIRING_CONFIG_RESOURCES: [&str; 7] = [
+/// adds a resource kind, and the drift is not harmless. Over-detecting only
+/// costs one extra prompt, but a kind missing here lets a repository that ships
+/// only that kind past the launch gate under a grant nobody confirmed — and pi
+/// loads it, since the grant is in force.
+const PI_TRUST_REQUIRING_CONFIG_RESOURCES: [&str; 8] = [
     "settings.json",
+    "mcp.json",
     "extensions",
     "skills",
     "prompts",
@@ -6095,9 +6364,10 @@ pub struct PiProjectResource {
     pub kind: String,
     /// Whether loading this resource means executing repo-controlled code at pi
     /// startup, as opposed to feeding it repo-controlled text. `.pi/extensions`
-    /// are JS/TS modules whose top level runs immediately, and `.pi/settings.json`
-    /// can make pi install project packages — the approval UI must say so plainly
-    /// rather than describing all of these as "config".
+    /// are JS/TS modules whose top level runs immediately, `.pi/settings.json`
+    /// can make pi install project packages, and `.pi/mcp.json` names commands
+    /// pi starts as MCP servers — the approval UI must say so plainly rather
+    /// than describing all of these as "config".
     pub executes_code: bool,
 }
 
@@ -6139,8 +6409,9 @@ fn pi_project_trust_resources_with_home(cwd: &Path, home: &Path) -> Vec<PiProjec
                 path: path.to_string_lossy().to_string(),
                 kind: format!(".pi/{entry}"),
                 // Extensions are modules pi imports (top-level code runs); project
-                // settings can pull in and install project packages.
-                executes_code: matches!(entry, "extensions" | "settings.json"),
+                // settings can pull in and install project packages; a project
+                // MCP server is a command pi starts.
+                executes_code: matches!(entry, "extensions" | "settings.json" | "mcp.json"),
             });
         }
     }
@@ -6700,7 +6971,7 @@ fn pi_write_trust_decision_at(
     // and doesn't parse as a JSON object must NOT be rewritten from scratch.
     // Surface that rather than silently doing nothing, so the user can go fix it.
     let mut obj = match fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(without_bom(&text)) {
             Ok(serde_json::Value::Object(map)) => map,
             _ => {
                 return Err(AcpError::protocol(format!(
@@ -6808,14 +7079,21 @@ pub struct PiModelReasoningSpec {
 /// no picker will ever offer.
 const PI_THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/// `raw` past a leading UTF-8 byte-order mark, which pi strips from its files
+/// before parsing them and serde_json rejects.
+fn without_bom(raw: &str) -> &str {
+    raw.strip_prefix('\u{feff}').unwrap_or(raw)
+}
+
 /// Read a JSON file into an owned object map, returning an empty map when the
 /// file is absent, unreadable, or does not parse to a JSON object. Pi's native
 /// files are small and codeg-owned; corruption shouldn't abort a save (we
-/// re-author the managed keys and preserve whatever else parses).
+/// re-author the managed keys and preserve whatever else parses). A leading
+/// byte-order mark is not corruption: pi reads past it, and so does this.
 fn read_json_object_or_empty(path: &Path) -> serde_json::Map<String, serde_json::Value> {
     fs::read_to_string(path)
         .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(without_bom(&raw)).ok())
         .and_then(|value| match value {
             serde_json::Value::Object(map) => Some(map),
             _ => None,
@@ -7540,10 +7818,10 @@ pub(crate) fn acp_validate_pi_command_core(command: String) -> PiCommandValidati
 /// and never blocks indefinitely (`Command::output` waits for the short-lived
 /// `--version` child to exit on its own).
 fn probe_pi_version(resolved: &Path) -> Option<String> {
-    let output = std::process::Command::new(resolved)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut probe = std::process::Command::new(resolved);
+    probe.arg("--version");
+    crate::appimage_env::restore(&mut probe);
+    let output = probe.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -11810,7 +12088,7 @@ pub(crate) async fn acp_get_agent_status_core(
 
     let (available, installed_version) = match &meta.distribution {
         registry::AgentDistribution::Npx { cmd, package, .. } => {
-            let resolved = resolve_npx_command(cmd).await;
+            let resolved = resolve_npx_command_for(agent_type, cmd).await;
             let mut version = resolved
                 .as_ref()
                 .and_then(|_| setting.as_ref().and_then(|m| m.installed_version.clone()));
@@ -11922,7 +12200,7 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
                 // Keep the list path bounded: each list request probes npm
                 // global prefix at most once, then reuses the result across
                 // all NPX agents in the loop.
-                let resolved = npx_resolver.resolve_for_list(cmd).await;
+                let resolved = npx_resolver.resolve_for_list(agent_type, cmd).await;
                 let mut version = resolved
                     .as_ref()
                     .and_then(|_| setting.and_then(|m| m.installed_version.clone()));
@@ -13200,10 +13478,10 @@ fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), A
         ];
         for (term, args) in candidates {
             if resolve_command_on_path(term).is_some() {
-                return Command::new(term)
-                    .args(args)
-                    .arg(&keep_open)
-                    .current_dir(&dir)
+                let mut terminal = Command::new(term);
+                terminal.args(args).arg(&keep_open).current_dir(&dir);
+                crate::appimage_env::restore(&mut terminal);
+                return terminal
                     .spawn()
                     .map(|_| ())
                     .map_err(|e| AcpError::protocol(format!("open {term} failed: {e}")));
@@ -13642,22 +13920,37 @@ pub(crate) async fn acp_detect_agent_local_version_core(
         return Ok(Some(version));
     }
 
-    // Binary agents detect their version purely from the on-disk cache, so a
-    // `None` here means the binary is genuinely absent (cleared cache, or a
-    // failed custom/upgrade install). Return `None` authoritatively rather than
-    // falling back to the DB, which would resurrect a removed version as a
-    // phantom that can no longer be launched. The returned value does NOT depend
-    // on the mirror write below, so a swallowed write cannot reintroduce the
-    // phantom. (NPX detection runs `npm list`, which can fail transiently, so
-    // for npx we keep the DB value as a best-effort fallback.) A system agent
-    // is the same case: its one install either resolves or does not exist.
-    if matches!(
-        registry::get_agent_meta(agent_type).distribution,
-        registry::AgentDistribution::Binary { .. } | registry::AgentDistribution::System { .. }
-    ) {
+    // Nothing detected. When that means the agent is not installed, return
+    // `None` authoritatively rather than falling back to the DB, which would
+    // resurrect a removed version as a phantom that can no longer be launched.
+    // The returned value does NOT depend on the mirror write below, so a
+    // swallowed write cannot reintroduce the phantom.
+    let not_installed = match registry::get_agent_meta(agent_type).distribution {
+        // Binary agents detect their version purely from the on-disk cache, so
+        // a `None` means the binary is genuinely absent (cleared cache, or a
+        // failed custom/upgrade install). A system agent is the same case: its
+        // one install either resolves or does not exist.
+        registry::AgentDistribution::Binary { .. } | registry::AgentDistribution::System { .. } => {
+            true
+        }
+        // An npx agent whose command does not resolve cannot be launched: it is
+        // the very check `verify_agent_installed` refuses a connect on. The
+        // package was removed outside codeg, or the npm global prefix moved (a
+        // switch to another Node version, an npm `prefix` change) and left the
+        // install behind. Only a command that still resolves keeps the stored
+        // version as a best-effort fallback, since then it is `npm list` and
+        // `--version` that failed to read the version, which can be transient.
+        // `detect_local_version` already resolved the command once; with no
+        // stored version there is nothing to clear, so skip resolving again.
+        registry::AgentDistribution::Npx { cmd, .. } => {
+            previous.is_some() && !is_cmd_available(agent_type, cmd).await
+        }
+        registry::AgentDistribution::Uvx { .. } => false,
+    };
+    if not_installed {
         let _ = agent_setting_service::set_installed_version(conn, agent_type, None).await;
-        // Mirror the heal in the clearing direction: a binary that vanished from
-        // disk must flip the composer back to "not installed".
+        // Mirror the heal in the clearing direction: an agent that can no
+        // longer be launched must flip the composer back to "not installed".
         if previous.is_some() {
             emit_acp_agents_updated(emitter, "local_version_cleared", Some(agent_type));
         }
@@ -13780,7 +14073,7 @@ pub(crate) async fn acp_prepare_npx_agent_core(
                     AgentInstallEventKind::Log,
                     format!("Verifying the {} runtime...", meta.name),
                 );
-                let runtime_ok = match resolve_npx_command(cmd).await {
+                let runtime_ok = match resolve_npx_command_for(agent_type, cmd).await {
                     Some(bin) => system_probed_version(agent_type, &bin, None)
                         .await
                         .is_some(),
@@ -14812,6 +15105,141 @@ mod tests {
         )
         .await;
         assert_eq!(version.as_deref(), Some("3.2.1"));
+    }
+
+    /// Register an npx agent for the detection tests below. The caller holds
+    /// the registry lock. Its command and package are unique to the test, so
+    /// whether the command resolves is up to the test's own HOME
+    /// (`~/.local/bin`), never to what this machine has installed.
+    fn register_npx_detection_agent(id: &str) -> AgentType {
+        use crate::acp::custom_registry::{
+            CustomAgentDef, CustomAgentSpec, CustomDistributionKind, NpxSpec,
+        };
+        let def = CustomAgentDef {
+            registry_id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            version: "0.0.34".into(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: format!("{id}@0.0.34"),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                    cmd: Some(id.to_string()),
+                    node_required: None,
+                }),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        };
+        assert!(
+            custom_registry::hydrate(&[def]).is_empty(),
+            "the definition registers"
+        );
+        AgentType::custom(id).expect("a valid custom id")
+    }
+
+    /// A settings row for `agent` that records `version` as installed.
+    async fn db_recording_installed_version(agent: AgentType, version: &str) -> AppDatabase {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        agent_setting_service::ensure_defaults(
+            &db.conn,
+            &[agent_setting_service::AgentDefaultInput {
+                agent_type: agent,
+                registry_id: registry::registry_id_for(agent).to_string(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .expect("settings row");
+        agent_setting_service::set_installed_version(&db.conn, agent, Some(version.to_string()))
+            .await
+            .expect("installed version");
+        db
+    }
+
+    async fn stored_installed_version(db: &AppDatabase, agent: AgentType) -> Option<String> {
+        agent_setting_service::get_by_agent_type(&db.conn, agent)
+            .await
+            .expect("settings row")
+            .and_then(|m| m.installed_version)
+    }
+
+    // An npx agent recorded as installed whose command no longer resolves (the
+    // package was removed outside codeg, or the npm global prefix moved on a
+    // Node version switch) cannot be launched, so detection must say so. It
+    // used to hand the stored version back, and Settings showed the agent as
+    // installed and up to date while every connect refused it as not installed.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn detection_clears_a_stored_npx_version_whose_command_no_longer_resolves() {
+        let _registry = custom_registry::hydrate_test_guard();
+        let agent = register_npx_detection_agent("detect-gone-npx-agent");
+        let db = db_recording_installed_version(agent, "0.0.34").await;
+        let broadcaster = std::sync::Arc::new(crate::web::event_bridge::WebEventBroadcaster::new());
+        let mut events = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        let home = tempfile::tempdir().expect("tempdir");
+
+        let (gate, detected) = temp_env::async_with_vars([("HOME", Some(home.path()))], async {
+            let gate = verify_agent_installed(agent).await;
+            let detected = acp_detect_agent_local_version_core(agent, &db.conn, &emitter)
+                .await
+                .expect("detection runs");
+            (gate, detected)
+        })
+        .await;
+        custom_registry::hydrate(&[]);
+
+        assert!(gate.is_err(), "the connect gate refuses the agent");
+        assert_eq!(detected, None, "detection agrees with the connect gate");
+        assert_eq!(stored_installed_version(&db, agent).await, None);
+        let event = events.try_recv().expect("the composer is told to reload");
+        assert_eq!(event.channel, ACP_AGENTS_UPDATED_EVENT);
+        assert_eq!(event.payload["reason"], "local_version_cleared");
+    }
+
+    // The stored version still stands in when the command resolves and only
+    // its version could not be read this time (`npm list` failing, a
+    // `--version` that prints nothing): the agent is launchable.
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn detection_keeps_a_stored_npx_version_whose_command_resolves_without_a_version() {
+        let _registry = custom_registry::hydrate_test_guard();
+        let agent = register_npx_detection_agent("detect-quiet-npx-agent");
+        let db = db_recording_installed_version(agent, "0.0.34").await;
+        let home = tempfile::tempdir().expect("tempdir");
+        let bin_dir = home.path().join(".local").join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("bin dir");
+        crate::process::write_test_script(&bin_dir.join("detect-quiet-npx-agent"), "#!/bin/sh\n");
+
+        let (gate, detected) = temp_env::async_with_vars([("HOME", Some(home.path()))], async {
+            let gate = verify_agent_installed(agent).await;
+            let detected =
+                acp_detect_agent_local_version_core(agent, &db.conn, &EventEmitter::Noop)
+                    .await
+                    .expect("detection runs");
+            (gate, detected)
+        })
+        .await;
+        custom_registry::hydrate(&[]);
+
+        assert!(
+            gate.is_ok(),
+            "the command resolves in ~/.local/bin: {gate:?}"
+        );
+        assert_eq!(detected.as_deref(), Some("0.0.34"));
+        assert_eq!(
+            stored_installed_version(&db, agent).await.as_deref(),
+            Some("0.0.34")
+        );
     }
 
     #[test]
@@ -15895,6 +16323,257 @@ base_url = \"https://example.test/v1\"
         assert!(back.custom_model_id.is_none());
     }
 
+    /// The `reasoning_efforts` value of `[model.<id>]` in `merged`, as TOML text.
+    fn grok_efforts_text(merged: &str, id: &str) -> Option<String> {
+        let doc = merged.parse::<toml_edit::Document>().unwrap();
+        doc.get("model")?
+            .as_table_like()?
+            .get(id)?
+            .as_table_like()?
+            .get("reasoning_efforts")
+            .map(|item| item.to_string().trim().to_string())
+    }
+
+    #[test]
+    fn parse_grok_settings_reads_reasoning_efforts_in_every_form() {
+        // Bare strings, inline tables (their `value`, not their `id`) and mixed
+        // case all read as the lowercased level Grok sends; an entry with no
+        // readable level is skipped.
+        let inline = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\
+                      reasoning_efforts = [\"Low\", { id = \"deep\", value = \"high\", label = \"Deep\" }, \
+                      { id = \"broken\" }, 7]\n";
+        assert_eq!(
+            parse_grok_settings(inline).custom_reasoning_efforts,
+            vec!["low", "high"]
+        );
+        // An array of tables reads the same.
+        let aot = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\n\
+                   [[model.foo.reasoning_efforts]]\nvalue = \"medium\"\n\n\
+                   [[model.foo.reasoning_efforts]]\nvalue = \"xhigh\"\ndefault = true\n";
+        assert_eq!(
+            parse_grok_settings(aot).custom_reasoning_efforts,
+            vec!["medium", "xhigh"]
+        );
+        // Absent key, or a block that is not the managed model ⇒ nothing declared.
+        for body in [
+            "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n",
+            "[models]\ndefault = \"grok-4.5\"\n\n[model.foo]\nreasoning_efforts = [\"low\"]\n",
+        ] {
+            let levels = parse_grok_settings(body).custom_reasoning_efforts;
+            assert!(levels.is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_writes_bare_levels_and_round_trips() {
+        let merged = apply_grok_structured_config(
+            "",
+            &GrokStructuredConfig {
+                custom_model_id: Some("grok-4.7".into()),
+                custom_reasoning_efforts: Some(vec![
+                    "low".into(),
+                    "medium".into(),
+                    " High ".into(),
+                    "xhigh".into(),
+                    "".into(),
+                ]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // The shape verified against grok 1.0.62: bare levels make it advertise
+        // `supportsReasoningEffort` with exactly these `reasoningEfforts`.
+        assert_eq!(
+            grok_efforts_text(&merged, "grok-4.7").as_deref(),
+            Some("[\"low\", \"medium\", \"high\", \"xhigh\"]")
+        );
+        assert_eq!(
+            parse_grok_settings(&merged).custom_reasoning_efforts,
+            vec!["low", "medium", "high", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_none_leaves_a_hand_written_list() {
+        // No levels sent — the panel's chips were untouched, or the client
+        // predates the field: the hand-written list must survive, even though
+        // every other field is managed.
+        let base = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\
+                    reasoning_efforts = [{ id = \"deep\", value = \"high\", label = \"Deep\" }]\n";
+        let merged = apply_grok_structured_config(
+            base,
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(merged.contains(
+            "reasoning_efforts = [{ id = \"deep\", value = \"high\", label = \"Deep\" }]"
+        ));
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_unchanged_list_is_left_as_written() {
+        // Saving other fields sends the levels the panel read back. Matching the
+        // file (case-insensitively, skipping unreadable entries) leaves the
+        // user's layout, comments and extra fields alone — in both TOML forms.
+        let inline = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\
+                      reasoning_efforts = [\n  \"Low\", # cheap\n  { value = \"high\", default = true },\n  { id = \"broken\" },\n]\n";
+        let aot = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\n\
+                   [[model.foo.reasoning_efforts]]\nvalue = \"low\" # cheap\n\n\
+                   [[model.foo.reasoning_efforts]]\nvalue = \"high\"\ndefault = true\n";
+        for base in [inline, aot] {
+            let merged = apply_grok_structured_config(
+                base,
+                &GrokStructuredConfig {
+                    custom_model_id: Some("foo".into()),
+                    custom_base_url: Some("https://gw/v1".into()),
+                    custom_reasoning_efforts: Some(vec!["low".into(), "high".into()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            // Untouched: the comment and the per-entry default are still there.
+            assert!(merged.contains("# cheap"), "{merged}");
+            assert!(merged.contains("default = true"), "{merged}");
+            assert_eq!(
+                parse_grok_settings(&merged).custom_base_url.as_deref(),
+                Some("https://gw/v1")
+            );
+        }
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_change_keeps_the_entries_still_listed() {
+        // A changed list keeps each surviving level's own entry (its id, label
+        // and default stay), adds new levels as bare strings, drops the removed
+        // ones — including an AoT, which becomes one inline array.
+        let inline = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\
+                      reasoning_efforts = [\"low\", { id = \"deep\", value = \"high\", label = \"Deep\" }, \"xhigh\"]\n";
+        let aot = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\n\
+                   [[model.foo.reasoning_efforts]]\nvalue = \"low\"\n\n\
+                   [[model.foo.reasoning_efforts]]\nid = \"deep\"\nvalue = \"high\"\nlabel = \"Deep\"\n\n\
+                   [[model.foo.reasoning_efforts]]\nvalue = \"xhigh\"\n";
+        for (base, kept_low) in [(inline, "\"low\""), (aot, "{ value = \"low\" }")] {
+            let merged = apply_grok_structured_config(
+                base,
+                &GrokStructuredConfig {
+                    custom_model_id: Some("foo".into()),
+                    custom_reasoning_efforts: Some(vec![
+                        "low".into(),
+                        "medium".into(),
+                        "high".into(),
+                    ]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                grok_efforts_text(&merged, "foo"),
+                Some(format!(
+                    "[{kept_low}, \"medium\", {{ id = \"deep\", value = \"high\", label = \"Deep\" }}]"
+                )),
+                "{merged}"
+            );
+            assert!(!merged.contains("[[model.foo.reasoning_efforts]]"));
+            assert_eq!(
+                parse_grok_settings(&merged).custom_reasoning_efforts,
+                vec!["low", "medium", "high"]
+            );
+        }
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_empty_hands_levels_back_to_the_endpoint() {
+        let base = "[models]\ndefault = \"foo\"\n\n[model.foo]\nmodel = \"foo\"\n\
+                    reasoning_efforts = [\"low\", \"high\"]\n";
+        let merged = apply_grok_structured_config(
+            base,
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                custom_reasoning_efforts: Some(vec!["  ".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!merged.contains("reasoning_efforts"), "{merged}");
+        assert_eq!(
+            parse_grok_settings(&merged).custom_model_id.as_deref(),
+            Some("foo")
+        );
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_follow_a_rename() {
+        // A rename starts a fresh block; the levels the panel holds land in it.
+        let base = "[models]\ndefault = \"old\"\n\n[model.old]\nmodel = \"old\"\n\
+                    reasoning_efforts = [\"low\", \"high\"]\n";
+        let merged = apply_grok_structured_config(
+            base,
+            &GrokStructuredConfig {
+                custom_model_id: Some("new".into()),
+                custom_reasoning_efforts: Some(vec!["low".into(), "high".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!merged.contains("old"), "{merged}");
+        let back = parse_grok_settings(&merged);
+        assert_eq!(back.custom_model_id.as_deref(), Some("new"));
+        assert_eq!(back.custom_reasoning_efforts, vec!["low", "high"]);
+    }
+
+    #[test]
+    fn apply_grok_reasoning_efforts_left_alone_move_with_a_rename() {
+        // The panel sends no levels while its chips are untouched; a rename must
+        // not drop the list with the old block. An array of tables arrives as
+        // one inline array, and a block renamed onto keeps a list of its own.
+        let rename = |base: &str| {
+            apply_grok_structured_config(
+                base,
+                &GrokStructuredConfig {
+                    custom_model_id: Some("new".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let inline = rename(
+            "[models]\ndefault = \"old\"\n\n[model.old]\nmodel = \"old\"\n\
+             reasoning_efforts = [\"low\", { id = \"deep\", value = \"high\" }]\n",
+        );
+        assert!(!inline.contains("old"), "{inline}");
+        assert_eq!(
+            grok_efforts_text(&inline, "new").as_deref(),
+            Some("[\"low\", { id = \"deep\", value = \"high\" }]")
+        );
+
+        let aot = rename(
+            "[models]\ndefault = \"old\"\n\n[model.old]\nmodel = \"old\"\n\n\
+             [[model.old.reasoning_efforts]]\nvalue = \"low\"\n\n\
+             [[model.old.reasoning_efforts]]\nvalue = \"xhigh\"\ndefault = true\n",
+        );
+        assert!(!aot.contains("[[model."), "{aot}");
+        assert_eq!(
+            grok_efforts_text(&aot, "new").as_deref(),
+            Some("[{ value = \"low\" }, { value = \"xhigh\", default = true }]")
+        );
+        assert_eq!(
+            parse_grok_settings(&aot).custom_reasoning_efforts,
+            vec!["low", "xhigh"]
+        );
+
+        let onto = rename(
+            "[models]\ndefault = \"old\"\n\n[model.old]\nreasoning_efforts = [\"low\"]\n\n\
+             [model.new]\nreasoning_efforts = [\"max\"]\n",
+        );
+        assert_eq!(
+            parse_grok_settings(&onto).custom_reasoning_efforts,
+            vec!["max"]
+        );
+    }
+
     #[test]
     fn apply_grok_custom_model_clear_leaves_handset_stock_default() {
         // Clearing the (empty) custom form must NOT delete a hand-set stock
@@ -16021,6 +16700,26 @@ base_url = \"https://example.test/v1\"
         assert_eq!(by_kind.get(".pi/extensions"), Some(&true));
         assert_eq!(by_kind.get(".pi/settings.json"), Some(&true));
         assert_eq!(by_kind.get(".pi/prompts"), Some(&false));
+    }
+
+    /// pi 1.x starts a trusted project's `.pi/mcp.json` servers, and a stdio
+    /// server is a command it runs: a repo shipping only that file is gated.
+    #[test]
+    fn pi_trust_gates_a_project_mcp_config_that_runs_commands() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("ws");
+        touch(&ws.join(".pi").join("mcp.json"));
+
+        let resources = pi_project_trust_resources(&ws);
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].kind, ".pi/mcp.json");
+        assert!(resources[0].executes_code);
+
+        let agent_dir = tmp.path().join("agent");
+        let mut map = serde_json::Map::new();
+        map.insert(canonical_key(&ws), serde_json::Value::Bool(true));
+        write_json_object_pretty(&agent_dir.join("trust.json"), &map).unwrap();
+        assert!(launch_block_for(&agent_dir, &tmp.path().join("codeg-home"), &ws).is_some());
     }
 
     /// A bare `.pi/` directory is not a project resource for pi, so codeg must not
@@ -16437,6 +17136,34 @@ base_url = \"https://example.test/v1\"
 
     /// `trust.json` holds decisions the user made inside pi. If codeg can't parse
     /// it, it must refuse loudly rather than rewrite the file from scratch.
+    /// pi reads `trust.json` past a byte-order mark, so a grant behind one is in
+    /// force for pi and must stop the launch here too.
+    #[test]
+    fn pi_launch_is_blocked_by_a_grant_behind_a_byte_order_mark() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (ws, agent_dir, home) = gated_workspace(tmp.path(), Some(true));
+        let trust = agent_dir.join("trust.json");
+        let text = fs::read_to_string(&trust).unwrap();
+        fs::write(&trust, format!("\u{feff}{text}")).unwrap();
+
+        assert!(launch_block_for(&agent_dir, &home, &ws).is_some());
+    }
+
+    #[test]
+    fn pi_set_project_trust_reads_past_a_byte_order_mark() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        let trust = tmp.path().join("trust.json");
+        fs::write(&trust, "\u{feff}{\"/elsewhere\":false}").unwrap();
+
+        pi_write_trust_decision_at(&trust, &ws, Some(true)).unwrap();
+
+        let map = read_json_object_or_empty(&trust);
+        assert_eq!(map.get("/elsewhere"), Some(&serde_json::json!(false)));
+        assert_eq!(map.get(&canonical_key(&ws)), Some(&serde_json::json!(true)));
+    }
+
     #[test]
     fn pi_set_project_trust_never_clobbers_an_unparseable_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -17173,6 +17900,132 @@ echo {"id":"codeg-models","type":"response","command":"get_available_models","su
                 Some("xhigh".to_string())
             );
         });
+    }
+
+    #[test]
+    fn pi_enabled_model_patterns_read_from_the_launch_agent_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("settings.json"),
+            r#"{"enabledModels":["openai/*"," anthropic/claude-opus:high ",42,"  "]}"#,
+        )
+        .unwrap();
+        let env = BTreeMap::from([(
+            String::from("PI_CODING_AGENT_DIR"),
+            tmp.path().to_string_lossy().into_owned(),
+        )]);
+
+        assert_eq!(
+            pi_enabled_model_patterns_for_env(&env, tmp.path()),
+            Some(vec![
+                "openai/*".to_string(),
+                "anthropic/claude-opus:high".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn pi_enabled_model_patterns_treat_missing_or_empty_as_unscoped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = BTreeMap::from([(
+            String::from("PI_CODING_AGENT_DIR"),
+            tmp.path().to_string_lossy().into_owned(),
+        )]);
+
+        assert_eq!(pi_enabled_model_patterns_for_env(&env, tmp.path()), None);
+
+        fs::write(tmp.path().join("settings.json"), r#"{"enabledModels":[]}"#).unwrap();
+        assert_eq!(pi_enabled_model_patterns_for_env(&env, tmp.path()), None);
+        fs::write(tmp.path().join("settings.json"), "invalid json").unwrap();
+        assert_eq!(pi_enabled_model_patterns_for_env(&env, tmp.path()), None);
+    }
+
+    #[test]
+    fn pi_enabled_model_patterns_resolve_relative_agent_dir_in_workspace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let agent_dir = tmp.path().join("agent");
+        fs::create_dir(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("settings.json"),
+            r#"{"enabledModels":["openai/*"]}"#,
+        )
+        .unwrap();
+        let env = BTreeMap::from([("PI_CODING_AGENT_DIR".into(), "agent".into())]);
+
+        assert_eq!(
+            pi_enabled_model_patterns_for_env(&env, tmp.path()),
+            Some(vec!["openai/*".into()])
+        );
+    }
+
+    #[test]
+    fn pi_files_are_read_past_a_byte_order_mark() {
+        // pi strips a UTF-8 byte-order mark before parsing its files. Read as
+        // corrupt instead, the settings merge-write would replace every key
+        // the user had with codeg's three.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let settings = tmp.path().join("settings.json");
+        fs::write(
+            &settings,
+            "\u{feff}{\"enabledModels\":[\"openai/*\"],\"sessionDir\":\"/s\"}",
+        )
+        .unwrap();
+
+        let map = read_json_object_or_empty(&settings);
+        assert_eq!(map.get("sessionDir"), Some(&serde_json::json!("/s")));
+        let env = BTreeMap::from([(
+            String::from("PI_CODING_AGENT_DIR"),
+            tmp.path().to_string_lossy().into_owned(),
+        )]);
+        assert_eq!(
+            pi_enabled_model_patterns_for_env(&env, tmp.path()),
+            Some(vec!["openai/*".to_string()])
+        );
+    }
+
+    #[test]
+    fn pi_enabled_model_patterns_yield_to_a_project_that_sets_its_own() {
+        let agent_dir = tempfile::tempdir().expect("agent dir");
+        fs::write(
+            agent_dir.path().join("settings.json"),
+            r#"{"enabledModels":["openai/*"]}"#,
+        )
+        .unwrap();
+        let env = BTreeMap::from([(
+            String::from("PI_CODING_AGENT_DIR"),
+            agent_dir.path().to_string_lossy().into_owned(),
+        )]);
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join(".pi");
+        fs::create_dir(&project).unwrap();
+        let global = Some(vec!["openai/*".to_string()]);
+
+        // A trusted project's list replaces the agent dir's — and an empty one
+        // unscopes pi — so whether pi trusts the project decides; codeg can't.
+        // A file codeg cannot parse might be one of those for pi's parser.
+        for own in [
+            r#"{"enabledModels":["anthropic/*"]}"#,
+            r#"{"enabledModels":[]}"#,
+            "\u{feff}{\"enabledModels\":[\"anthropic/*\"]}",
+            "not json",
+        ] {
+            fs::write(project.join("settings.json"), own).unwrap();
+            assert_eq!(
+                pi_enabled_model_patterns_for_env(&env, workspace.path()),
+                None,
+                "{own}"
+            );
+        }
+        // A project file without the key, or JSON pi loads nothing from,
+        // leaves the agent dir's list in force.
+        for other in [r#"{"theme":"dark"}"#, "[]", "null"] {
+            fs::write(project.join("settings.json"), other).unwrap();
+            assert_eq!(
+                pi_enabled_model_patterns_for_env(&env, workspace.path()),
+                global,
+                "{other}"
+            );
+        }
     }
 
     #[test]
@@ -18697,8 +19550,10 @@ wire_api = "chat"
                     request_npm_prefix: Some(Some(prefix.clone())),
                     ..Default::default()
                 };
-                let listed = resolver.resolve_for_list(cmd).await;
-                let listed_prefix_only = resolver.resolve_for_list(prefix_only_cmd).await;
+                let listed = resolver.resolve_for_list(AgentType::Hermes, cmd).await;
+                let listed_prefix_only = resolver
+                    .resolve_for_list(AgentType::Hermes, prefix_only_cmd)
+                    .await;
                 (direct, listed, listed_prefix_only)
             })
             .await;
@@ -18708,6 +19563,122 @@ wire_api = "chat"
         assert_eq!(
             listed_prefix_only.as_deref(),
             Some(prefix_only_path.as_path())
+        );
+    }
+
+    /// A `grok` in `~/.grok/bin` (`grok.exe` on Windows) counts as Grok's
+    /// native install unless Grok recorded it as the npm package's copy, the
+    /// one `npm uninstall -g` leaves behind.
+    #[test]
+    fn grok_native_install_counts_any_copy_but_the_npm_packages() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin = grok_dir
+            .join("bin")
+            .join(binary_cache::executable_file_name("grok"));
+        let config = grok_dir.join("config.toml");
+        let found = || grok_native_install(home.path(), "grok");
+
+        std::fs::create_dir_all(&grok_dir).expect("create grok dir");
+        std::fs::write(&config, "[cli]\r\ninstaller = \"internal\"\r\n").expect("write config");
+        assert_eq!(found(), None, "an installer record alone is not an install");
+
+        std::fs::create_dir_all(bin.parent().expect("bin dir")).expect("create bin dir");
+        std::fs::write(&bin, "").expect("write grok");
+        // The record as `install.ps1` writes it, with CRLF line endings.
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+
+        // Only an explicit npm record excludes the copy.
+        for other in ["", "[cli]\nauto_update = false\n", "not = [toml"] {
+            std::fs::write(&config, other).expect("write config");
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "config: {other:?}");
+        }
+        std::fs::remove_file(&config).expect("remove config");
+        assert_eq!(found().as_deref(), Some(bin.as_path()), "no config");
+
+        // What `@xai-official/grok`'s postinstall writes; its copy outlives
+        // `npm uninstall -g`.
+        std::fs::write(&config, "[cli]\ninstaller = \"npm\"\nauto_update = true\n")
+            .expect("write config");
+        assert_eq!(found(), None);
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn grok_native_install_is_the_last_npx_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let native_bin = grok_dir.join("bin");
+        let local_bin = home.path().join(".local").join("bin");
+        let prefix = home.path().join("npm-prefix");
+        let prefix_bin = npm_prefix_bin_dir(&prefix);
+        // Names nothing on the real PATH or npm prefix can answer.
+        let native_only = "codeg-test-grok-native-only";
+        let with_local_bin = "codeg-test-grok-native-and-local-bin";
+        let with_npm = "codeg-test-grok-native-and-npm-prefix";
+        for path in [
+            native_bin.join(native_only),
+            native_bin.join(with_local_bin),
+            local_bin.join(with_local_bin),
+            native_bin.join(with_npm),
+            prefix_bin.join(with_npm),
+        ] {
+            std::fs::create_dir_all(path.parent().expect("bin directory"))
+                .expect("create bin directory");
+            std::fs::write(&path, "").expect("write command");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("mark command executable");
+        }
+        std::fs::write(
+            grok_dir.join("config.toml"),
+            "[cli]\ninstaller = \"internal\"\n",
+        )
+        .expect("write config");
+
+        let got = temp_env::async_with_vars([("HOME", Some(home.path()))], async {
+            let mut resolver = NpxCommandResolver {
+                request_npm_prefix: Some(Some(prefix.clone())),
+                ..Default::default()
+            };
+            (
+                resolve_npx_command(native_only).await,
+                resolve_npx_command_for(AgentType::Grok, native_only).await,
+                resolve_npx_command_for(AgentType::Hermes, native_only).await,
+                is_cmd_available(AgentType::Grok, native_only).await,
+                resolver
+                    .resolve_for_list(AgentType::Grok, native_only)
+                    .await,
+                // Asked after Grok's lookup cached the command.
+                resolver
+                    .resolve_for_list(AgentType::Hermes, native_only)
+                    .await,
+                resolve_npx_command_for(AgentType::Grok, with_local_bin).await,
+                resolver.resolve_for_list(AgentType::Grok, with_npm).await,
+            )
+        })
+        .await;
+
+        let native = native_bin.join(native_only);
+        assert_eq!(got.0, None);
+        assert_eq!(got.1.as_deref(), Some(native.as_path()));
+        assert_eq!(got.2, None, "only Grok looks in ~/.grok/bin");
+        assert!(got.3, "the connect guard agrees");
+        assert_eq!(got.4.as_deref(), Some(native.as_path()), "the list agrees");
+        assert_eq!(
+            got.5, None,
+            "the list cache does not leak it to another agent"
+        );
+        assert_eq!(
+            got.6.as_deref(),
+            Some(local_bin.join(with_local_bin).as_path()),
+            "~/.local/bin still wins"
+        );
+        assert_eq!(
+            got.7.as_deref(),
+            Some(prefix_bin.join(with_npm).as_path()),
+            "the npm copy still wins"
         );
     }
 

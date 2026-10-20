@@ -499,13 +499,16 @@ type TabCounts = Partial<Record<ForgeTab, TabCount>>
  * An HTTPS remote already IS the web URL (bar the `.git`), and using it keeps
  * whatever scheme, port and mount path a self-hosted instance runs under. An
  * SSH remote (`git@host:owner/repo.git`, `ssh://…`) is not something a browser
- * can open at all, so those fall back to the canonical https page built from
- * the coordinates the backend derived.
+ * can open at all and carries none of those parts, so its page is built under
+ * the web origin the backend took from the host's account — an instance served
+ * over plain http is not there at `https://`. Only a server too old to send
+ * that origin leaves the https guess.
  */
 export function repoWebUrl(remote: ForgeRemote): string {
   const url = remote.remote_url.trim()
   if (/^https?:\/\//i.test(url)) return url.replace(/\.git$/i, "")
-  return `https://${remote.server_host}/${remote.owner_repo}`
+  const origin = remote.web_origin ?? `https://${remote.server_host}`
+  return `${origin.replace(/\/+$/, "")}/${remote.owner_repo}`
 }
 
 export function ForgePageTitle() {

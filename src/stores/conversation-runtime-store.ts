@@ -3120,6 +3120,14 @@ export interface RuntimeActions {
     conversationId: number,
     liveMessage?: LiveMessage | null
   ) => void
+  /**
+   * Record that the turn running in the conversations bound to agent session
+   * `externalId` ended while this client was not receiving its events (a
+   * reconnect's snapshot, or the connection gone). Their next `completeTurn`
+   * then reads the reply from the transcript instead of settling on the part
+   * that arrived before the gap. See `unseenTurnEnds`.
+   */
+  markTurnEndUnseen: (externalId: string) => void
   appendOptimisticTurn: (
     conversationId: number,
     turn: MessageTurn,
@@ -3318,6 +3326,91 @@ const viewerDetailSyncCancels = new Map<number, () => void>()
 function cancelViewerDetailSync(conversationId: number): void {
   const cancel = viewerDetailSyncCancels.get(conversationId)
   if (cancel) cancel()
+}
+
+// ─── A turn that ended while this client was away ────────────────────────
+// `completeTurn` promotes the live copy of a reply and never reads the
+// transcript (see the note there): a client that applied every delta of the
+// turn already holds the whole reply. One that was not listening when the turn
+// ended does not — a phone that put the page in the background mid-reply, a
+// laptop that slept (#386). Its re-attach learns that the turn is over from a
+// SNAPSHOT (a gap too long to replay), and a finished turn's snapshot carries no
+// live message, because the backend drops it at TurnComplete; or the connection
+// is gone altogether, idle-swept while nobody watched. The prompting → idle edge
+// fires all the same, and what it promotes is only the part of the reply that
+// arrived before the socket dropped, settled as if it were the whole reply. No
+// later read ever brought in the rest: only reloading the page did.
+//
+// The connections layer is what can tell such an ending from a watched one, so
+// it marks the session (`markTurnEndUnseen`). Its next `completeTurn` still
+// promotes what it has, so the head of the reply stays on screen, and then
+// reads the reply from the transcript, polled: a reconnect can land just as the
+// turn ends, before the agent has written it.
+//
+// Keyed by runtime conversation id, consumed by `completeTurn`.
+const unseenTurnEnds = new Set<number>()
+const UNSEEN_TURN_RESYNC_DELAYS_MS = [0, 500, 1500, 3000, 6000, 10000] as const
+const unseenTurnResyncCancels = new Map<number, () => void>()
+
+function cancelUnseenTurnResync(conversationId: number): void {
+  unseenTurnResyncCancels.get(conversationId)?.()
+}
+
+/**
+ * Whether a fresh read of the transcript holds everything `promoted` (what the
+ * promotion left in `localTurns`, all of which the read replaces) stood for,
+ * down to the reply of the turn that ended while this client was away.
+ *
+ * That reply is the last turn before any prompt the backend reports as still
+ * running — a queued follow-up can start one the moment the turn is promoted —
+ * and a user turn there means the agent has not written it yet. A reply there
+ * is not enough on its own: a transcript that has not recorded the ended round
+ * at all ends on an EARLIER round's reply, and loading it would take this
+ * round's prompt and partial reply off the screen. So every prompt the batch
+ * holds must be on disk too: counted from the batch's start where this window
+ * contains it; otherwise (start unknown, or the window was reset past it) the
+ * last prompt on disk must be the ended round's own. A batch holding no prompt
+ * is a reply whose prompt was already history — a viewer that attached
+ * mid-turn — and the reply follows it.
+ */
+function holdsUnseenTurnReply(
+  detail: DbConversationDetail,
+  batchBoundaryIndex: number | null,
+  promoted: MessageTurn[]
+): boolean {
+  const turns = detail.turns
+  const inFlightId = detail.in_flight_user_turn_id ?? null
+  const end =
+    inFlightId === null
+      ? turns.length
+      : turns.findIndex((t) => t.role === "user" && t.id === inFlightId)
+  if (end <= 0 || turns[end - 1].role === "user") return false
+  const prompts = promoted.filter((t) => t.role === "user")
+  const endedPrompt = prompts[prompts.length - 1]
+  if (!endedPrompt) return true
+  const start =
+    batchBoundaryIndex === null
+      ? -1
+      : batchBoundaryIndex - turnsOffsetOf(detail)
+  if (start >= 0) {
+    let onDisk = 0
+    for (let i = start; i < end; i++) {
+      if (turns[i].role === "user") onDisk++
+    }
+    return onDisk >= prompts.length
+  }
+  for (let i = end - 1; i >= 0; i--) {
+    if (turns[i].role !== "user") continue
+    return userTurnContentKey(turns[i]) === userTurnContentKey(endedPrompt)
+  }
+  return false
+}
+
+function holdsExactlyTurns(
+  turns: MessageTurn[],
+  ids: ReadonlySet<string>
+): boolean {
+  return turns.length === ids.size && turns.every((t) => ids.has(t.id))
 }
 
 // Resolve the RUNTIME-session key for a `conversation://changed` nudge, which
@@ -4487,6 +4580,113 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
     attempt(0)
   }
 
+  // Replace what `completeTurn` just promoted for a turn that ended while this
+  // client was away (see `unseenTurnEnds`) with the reply read from the
+  // transcript. Commits only a read that holds every round the promotion left,
+  // down to that reply (`holdsUnseenTurnReply`); gives up, keeping the head as
+  // before, when the transcript never gets there. Never sets `detailLoading`:
+  // the head of the reply stays on screen while this reads.
+  const resyncUnseenTurnEnd = (conversationId: number): void => {
+    cancelUnseenTurnResync(conversationId)
+    const session = get().byConversationId.get(conversationId)
+    if (!session) return
+
+    // Everything the promotion left in `localTurns` — this reply's head and the
+    // earlier rounds of the batch — is on disk once the read holds them all, and
+    // the read replaces all of it, so all of it goes. A turn of a NEW prompt (a
+    // queued follow-up sent the moment this one settled) is in
+    // `optimisticTurns` / `liveMessage`, and the commit keeps those.
+    const promoted = session.localTurns
+    const staleIds = new Set(promoted.map((t) => t.id))
+    const batchBoundaryIndex = session.batchBoundaryIndex
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const cancel = (): void => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      if (unseenTurnResyncCancels.get(conversationId) === cancel) {
+        unseenTurnResyncCancels.delete(conversationId)
+      }
+    }
+    unseenTurnResyncCancels.set(conversationId, cancel)
+
+    const retry = (n: number): void => {
+      if (n + 1 >= UNSEEN_TURN_RESYNC_DELAYS_MS.length) {
+        cancel()
+        return
+      }
+      timer = setTimeout(
+        () => attempt(n + 1),
+        UNSEEN_TURN_RESYNC_DELAYS_MS[n + 1]
+      )
+    }
+
+    let loadWaitedMs = 0
+    const attempt = (n: number): void => {
+      if (cancelled) return
+      const cur = get().byConversationId.get(conversationId)
+      // Gone (tab closed), or `localTurns` no longer what the promotion left: a
+      // load already replaced it (a reload), or a later turn was promoted on top
+      // of it, which a read taken now would show twice.
+      if (!cur || !holdsExactlyTurns(cur.localTurns, staleIds)) {
+        cancel()
+        return
+      }
+      // A load the view started is in flight; only its own result clears
+      // `detailLoading`, and reading now would void it. Wait for it, as
+      // `syncViewerDetail` does.
+      if (cur.detailLoading) {
+        if (loadWaitedMs >= VIEWER_DETAIL_SYNC_LOAD_WAIT_CAP_MS) {
+          cancel()
+          return
+        }
+        loadWaitedMs += VIEWER_DETAIL_SYNC_LOAD_WAIT_STEP_MS
+        timer = setTimeout(
+          () => attempt(n),
+          VIEWER_DETAIL_SYNC_LOAD_WAIT_STEP_MS
+        )
+        return
+      }
+      const fetchId = cur.dbConversationId ?? conversationId
+      if (fetchId <= 0) {
+        cancel()
+        return
+      }
+      const generation = bumpFetchGeneration(conversationId)
+      fetchDetailWindowed(fetchId, cur.detail)
+        .then((detail) => {
+          if (cancelled) return
+          const now = get().byConversationId.get(conversationId)
+          if (!now || !holdsExactlyTurns(now.localTurns, staleIds)) {
+            cancel()
+            return
+          }
+          // A later read owns the detail; this one may predate it.
+          if (
+            !isLatestGeneration(conversationId, generation) ||
+            !holdsUnseenTurnReply(detail, batchBoundaryIndex, promoted)
+          ) {
+            retry(n)
+            return
+          }
+          dispatch({
+            type: "FETCH_DETAIL_SUCCESS",
+            conversationId,
+            detail,
+            preserveLive: true,
+            dropLiveTurnIds: [...staleIds],
+          })
+          cancel()
+        })
+        .catch(() => {
+          if (!cancelled) retry(n)
+        })
+    }
+
+    attempt(0)
+  }
+
   const syncTurnMetadata = (
     dbConversationId: number,
     runtimeConversationId?: number
@@ -4742,7 +4942,27 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
       // the complete, correct render; a later cold detail fetch (opening the tab
       // again, etc.) reconciles it against the DB whenever that naturally
       // happens.
+      //
+      // Except for a turn that ended while this client was away: what it
+      // promotes then is only the head of the reply, so the reply is read from
+      // the transcript after all — polled until the read holds it, which is
+      // what the race above needs (see `unseenTurnEnds`).
+      const unseen = unseenTurnEnds.delete(conversationId)
       dispatch({ type: "COMPLETE_TURN", conversationId, liveMessage })
+      if (unseen) resyncUnseenTurnEnd(conversationId)
+    },
+    markTurnEndUnseen: (externalId) => {
+      for (const [conversationId, session] of get().byConversationId) {
+        if (session.externalId !== externalId) continue
+        // Only a session the coming promotion drains; one with no turn in its
+        // live buffers did not stream this one.
+        if (
+          session.liveMessage === null &&
+          session.optimisticTurns.length === 0
+        )
+          continue
+        unseenTurnEnds.add(conversationId)
+      }
     },
     appendOptimisticTurn: (conversationId, turn, turnToken) =>
       dispatch({
@@ -4791,12 +5011,20 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
       }),
     setSyncState: (conversationId, syncState) =>
       dispatch({ type: "SET_SYNC_STATE", conversationId, syncState }),
-    migrateConversation: (fromConversationId, toConversationId) =>
+    migrateConversation: (fromConversationId, toConversationId) => {
+      // The mark follows the session it was made for (see `unseenTurnEnds`).
+      if (
+        fromConversationId !== toConversationId &&
+        unseenTurnEnds.delete(fromConversationId)
+      ) {
+        unseenTurnEnds.add(toConversationId)
+      }
       dispatch({
         type: "MIGRATE_CONVERSATION",
         fromConversationId,
         toConversationId,
-      }),
+      })
+    },
     setPendingCleanup: (conversationId, pendingCleanup) =>
       dispatch({ type: "SET_PENDING_CLEANUP", conversationId, pendingCleanup }),
     setAcpLoadError: (conversationId, error) =>
@@ -4817,9 +5045,15 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
       // also stop it on the next fire, but cancelling now drops the pending
       // timer immediately).
       cancelViewerDetailSync(conversationId)
+      unseenTurnEnds.delete(conversationId)
+      cancelUnseenTurnResync(conversationId)
       dispatch({ type: "REMOVE_CONVERSATION", conversationId })
     },
-    reset: () => dispatch({ type: "RESET" }),
+    reset: () => {
+      unseenTurnEnds.clear()
+      for (const cancel of [...unseenTurnResyncCancels.values()]) cancel()
+      dispatch({ type: "RESET" })
+    },
   }
 
   return {
@@ -4936,6 +5170,9 @@ export function resetConversationRuntimeStore(): void {
   olderPageRequests.clear()
   for (const cancel of viewerDetailSyncCancels.values()) cancel()
   viewerDetailSyncCancels.clear()
+  unseenTurnEnds.clear()
+  for (const cancel of [...unseenTurnResyncCancels.values()]) cancel()
+  unseenTurnResyncCancels.clear()
   for (const pending of pendingSessionReleases.values()) clearTimeout(pending)
   pendingSessionReleases.clear()
   timelineCache = new WeakMap()

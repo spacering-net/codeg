@@ -6,14 +6,16 @@
  * never falls through the generic tool-call shell — so users see "Agent
  * delegating: task" instead of "mcp__codeg-delegate__delegate_to_agent: codex".
  *
- * The card is intentionally a status + navigation affordance ONLY: it does not
- * render the child's output inline and does not expand. The child's result is
- * delivered to the LLM via `get_delegation_status` and to the user by opening
- * the child session ("查看会话" → SubAgentSessionDialog, which also hosts the
- * child's blocking prompts). When the child is awaiting a decision the status
- * badge reflects it, cueing the user to open the session — or to answer it in
- * the `get_delegation_status` row that is waiting on the task, which carries
- * the same prompt.
+ * The card is intentionally a status + navigation affordance: it never renders
+ * the child's output inline. The child's result is delivered to the LLM via
+ * `get_delegation_status` and to the user by opening the child session
+ * ("查看会话" → SubAgentSessionDialog, which also hosts the child's blocking
+ * prompts). The one thing it expands to — from the row's left part — is the
+ * task it handed over, in full: the child's kickoff user message, of which the
+ * collapsed row shows only the first line. When the child is awaiting a
+ * decision the status badge reflects it, cueing the user to open the session —
+ * or to answer it in the `get_delegation_status` row that is waiting on the
+ * task, which carries the same prompt.
  *
  * All agent-type / task / status / child-id resolution lives in
  * `useDelegationCardModel` (shared with the top-right `SubAgentOverlay`), so the

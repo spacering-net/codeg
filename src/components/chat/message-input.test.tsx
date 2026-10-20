@@ -810,6 +810,299 @@ describe("MessageInput injectContent", () => {
       expect(serializeDocToText(editor.state.doc)).toBe("quick action prompt")
     )
   })
+
+  // A send handed back undelivered (a canvas card's prompt that bounced off a
+  // turn already in flight). The composer had cleared itself for it, and the
+  // user may have started writing again before it came back.
+  const imageHi = {
+    type: "image" as const,
+    data: "aGk=",
+    mime_type: "image/png",
+  }
+  const imageYo = {
+    type: "image" as const,
+    data: "eW8=",
+    mime_type: "image/png",
+  }
+  const notesFile = {
+    type: "resource" as const,
+    uri: "clipboard://notes.md-1",
+    mime_type: "text/markdown",
+    text: "# Notes",
+    blob: null,
+  }
+
+  function pressEnter(editor: Editor) {
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  }
+
+  it("puts a handed-back message back whole into the empty composer", async () => {
+    const onSend = vi.fn()
+    const onInjectConsumed = vi.fn()
+    const { view, editor } = await mount({ onSend, onInjectConsumed })
+    const prose = "check [app.ts](file:///repo/app.ts) against the mock"
+
+    view.rerender(
+      tree({
+        onSend,
+        onInjectConsumed,
+        injectContent: {
+          handBack: [{ type: "text", text: prose }, imageHi],
+        },
+      })
+    )
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc)).toBe(prose)
+    )
+    // The file mention is a badge again, not its link text...
+    expect(JSON.stringify(editor.getJSON())).toContain('"type":"reference"')
+    // ...and the image is back in the strip.
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+    expect(onInjectConsumed).toHaveBeenCalled()
+
+    // Sending it again ships the very message the bounce took away.
+    pressEnter(editor)
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: prose },
+      expect.objectContaining(imageHi),
+    ])
+  })
+
+  it("adds a hand-back after what was written since, losing neither", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mount({ onSend })
+    act(() => {
+      editor.commands.setContent("and another thing")
+    })
+
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          handBack: [{ type: "text", text: "12" }, notesFile, imageHi],
+        },
+      })
+    )
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe(
+        "and another thing\n\n12"
+      )
+    )
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+
+    // The user's newer text, the handed-back prose, its file and its image.
+    pressEnter(editor)
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: "and another thing\n\n12" },
+      notesFile,
+      expect.objectContaining(imageHi),
+    ])
+  })
+
+  it("adds a handed-back image beside what was written since", async () => {
+    const onInjectConsumed = vi.fn()
+    const { view, editor } = await mount({ onInjectConsumed })
+    act(() => {
+      editor.commands.setContent("and another thing")
+    })
+
+    view.rerender(
+      tree({ onInjectConsumed, injectContent: { handBack: [imageHi] } })
+    )
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+    expect(onInjectConsumed).toHaveBeenCalled()
+    // Nothing to add to the text, so not even a blank line.
+    expect(serializeDocToText(editor.state.doc)).toBe("and another thing")
+  })
+
+  it("puts a handed-back file on a line of its own after what was written since", async () => {
+    const { view, editor } = await mount({})
+    act(() => {
+      editor.commands.setContent("and another thing")
+    })
+
+    view.rerender(tree({ injectContent: { handBack: [notesFile] } }))
+    await waitFor(() =>
+      expect(serializeDocToDisplayText(editor.state.doc)).toMatch(
+        /^and another thing\n\n\[notes\.md-1]\(codeg:\/\/embedded\//
+      )
+    )
+  })
+
+  it("takes a second hand-back after the first, files and images and all", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mount({ onSend })
+
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          handBack: [{ type: "text", text: "first" }, notesFile, imageHi],
+        },
+      })
+    )
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe("first")
+    )
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          handBack: [{ type: "text", text: "second" }, imageYo],
+        },
+      })
+    )
+    // (The space is the one a restored file badge always gets after it.)
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe(
+        "first \n\nsecond"
+      )
+    )
+    await waitFor(() =>
+      expect(screen.getAllByAltText("image.png")).toHaveLength(2)
+    )
+
+    // The first's file is still backed by its bytes after the second landed.
+    pressEnter(editor)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: "first \n\nsecond" },
+      notesFile,
+      expect.objectContaining(imageHi),
+      expect.objectContaining(imageYo),
+    ])
+  })
+})
+
+// A surface with no message queue (a canvas card) still renders this composer
+// while the agent answers. The backend runs one prompt per turn, so a message
+// sent then could only bounce — and it used to be cleared out of the composer
+// on its way to that bounce, vanishing without a trace (#991).
+describe("MessageInput mid-turn send with no queue", () => {
+  const MI = enMessages.Folder.chat.messageInput
+  const DRAFT_KEY = "canvas-draft:canvas-node-1"
+
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    clearMessageInputDraftV2(DRAFT_KEY)
+    vi.clearAllMocks()
+  })
+
+  function pressEnter(editor: Editor) {
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  }
+
+  function tree(props: Partial<React.ComponentProps<typeof MessageInput>>) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput
+          onSend={vi.fn()}
+          promptCapabilities={CAPS}
+          onCancel={vi.fn()}
+          draftStorageKey={DRAFT_KEY}
+          {...props}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  async function mountWithDraft(
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    // The draft as the composer itself would have stored it while typing.
+    saveMessageInputDraftV2(DRAFT_KEY, {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "12" }] }],
+    })
+    const view = render(tree(props))
+    await waitFor(() => expect(composerHandle.current?.getText()).toBe("12"), {
+      timeout: 5000,
+    })
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    return { view, editor }
+  }
+
+  it("holds the message in the composer and says why, instead of sending it", async () => {
+    const onSend = vi.fn()
+    const { editor } = await mountWithDraft({ onSend, isPrompting: true })
+
+    pressEnter(editor)
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(composerHandle.current?.getText()).toBe("12")
+    // Nor is the stored draft dropped, as a send drops it.
+    expect(loadMessageInputDraftV2(DRAFT_KEY)).not.toBeNull()
+    expect(toast.info).toHaveBeenCalledWith(MI.heldWhileResponding, {
+      id: expect.any(String),
+    })
+  })
+
+  it("sends the held message once the turn is over", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mountWithDraft({ onSend, isPrompting: true })
+    pressEnter(editor)
+    expect(onSend).not.toHaveBeenCalled()
+
+    view.rerender(tree({ onSend, isPrompting: false }))
+    pressEnter(editor)
+
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0]).toEqual({
+      blocks: [{ type: "text", text: "12" }],
+      displayText: "12",
+    })
+    expect(composerHandle.current?.getText()).toBe("")
+  })
+
+  it("says nothing for an empty composer", async () => {
+    const onSend = vi.fn()
+    render(tree({ onSend, isPrompting: true }))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+
+    pressEnter(composerHandle.current!.getEditor()!)
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it("still queues it where the surface has a queue", async () => {
+    const onSend = vi.fn()
+    const onEnqueue = vi.fn()
+    const { editor } = await mountWithDraft({
+      onSend,
+      onEnqueue,
+      isPrompting: true,
+    })
+
+    pressEnter(editor)
+
+    expect(onEnqueue).toHaveBeenCalledTimes(1)
+    expect(onSend).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(composerHandle.current?.getText()).toBe("")
+  })
 })
 
 // The sidebar's "add to session" drops a session mention — the same reference the

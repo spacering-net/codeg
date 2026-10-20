@@ -173,12 +173,15 @@ walkdir = "2"
 ignore = "0.4"
 # The official ACP runtime (the `sacp` crate was upstreamed into it and renamed).
 # Stable protocol v1 only: `unstable_protocol_v2` is deliberately left off, so
-# the builder's protocol-compat layer is a pass-through and `initialize` goes
-# out exactly as codeg writes it. The unstable features are exactly the surfaces
-# codeg consumes: `session/fork` and the Session Notices / Session Compaction
-# RFDs. (`unstable_end_turn_token_usage` stays off: codeg's token accounting
-# reads the agents' own transcripts, not the prompt response's `usage`.)
-agent-client-protocol = { version = "2.2.0", features = ["unstable_session_fork", "unstable_session_notices", "unstable_session_compaction"] }
+# `initialize` goes out as codeg writes it, at protocol version 1, and the
+# runtime refuses an answer that names any other version. The one unstable
+# feature is the surface codeg consumes beyond the stable schema:
+# `session/fork` (the Session Notices and Session Compaction RFDs are stable
+# since schema 1.11). (`unstable_end_turn_token_usage` stays off: codeg's token
+# accounting reads the agents' own transcripts, not the prompt response's
+# `usage`.) No default features: codeg runs an agent through its own transport
+# (`acp/agent_process.rs`), not the crate's `process`/`stdio` ones.
+agent-client-protocol = { version = "3.4.0", features = ["unstable_session_fork"] }
 tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt", "net", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 # Version-5 UUIDs (browser profile data-store identifiers) by hand: uuid's
@@ -252,6 +255,9 @@ sha2 = "0.10"
 # HMAC-SHA256 over a forge webhook's body (GitHub / Gitea signatures) with a
 # constant-time check. Already in the lock tree as a transitive dependency.
 hmac = "0.12"
+# RS256 / ES256 signature checks for the opt-in proxy-JWT authentication
+# (`web/proxy_auth.rs`). Already in the lock tree through rustls.
+ring = "0.17"
 aes-gcm = { version = "0.10", features = ["stream"] }
 argon2 = "0.5"
 tempfile = "3"

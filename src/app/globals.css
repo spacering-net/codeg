@@ -1403,6 +1403,55 @@
   scrollbar-color: var(--border) transparent;
 }
 
+/* A text field that scrolls inside its own box (a commit message): the
+   OverlayScrollbars look — a 6px rounded thumb on a clear track, 8px under the
+   pointer — instead of the platform's boxy bar, which squares off a rounded
+   field's corners. Drawn the same in both webview engines (WebKit, Chromium)
+   through their scrollbar pseudo-elements, which Chromium only honours while
+   the standard properties are unset; engines without them get those. The
+   gutter is kept, so the text does not re-wrap when the bar appears. */
+.field-scrollbar {
+  scrollbar-gutter: stable;
+}
+.field-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.field-scrollbar::-webkit-scrollbar-track,
+.field-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.field-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--border);
+  background-clip: padding-box;
+}
+.field-scrollbar::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: var(--muted-foreground);
+}
+@supports not selector(::-webkit-scrollbar) {
+  .field-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+/* A borderless scrolling field (the Changes tab's commit box): text scrolled
+   under its 0.5rem padding fades out instead of being cut at the box's edge.
+   At rest only padding is under the fade. Not for bordered fields: the mask
+   would take their border and focus ring with it. */
+.field-fade-y {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 0.5rem,
+    #000 calc(100% - 0.5rem),
+    transparent
+  );
+}
+
 /* OverlayScrollbars custom theme — 6px track, grows to 8px on hover.
    Use compound selector to beat the base `.os-scrollbar` defaults
    (--os-size:0, --os-handle-bg:none) regardless of CSS load order. */

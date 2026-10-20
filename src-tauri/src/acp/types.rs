@@ -1903,6 +1903,16 @@ pub struct GrokSettings {
     pub custom_api_backend: Option<String>,
     /// `[model.<id>].context_window` — context size in tokens.
     pub custom_context_window: Option<i64>,
+    /// `[model.<id>].reasoning_efforts` — the reasoning-effort levels the custom
+    /// model declares, each as the `value` Grok sends to the provider (a bare
+    /// string entry is its own value), lowercased since Grok matches them
+    /// case-insensitively, in file order. Empty when the key is absent: Grok
+    /// then inherits levels only from its model catalog's row for the same id
+    /// (xAI's list, or `[endpoints].models_base_url`'s) — never from the model's
+    /// own `base_url` — and a model with neither advertises no effort support,
+    /// so the composer offers no effort selector for it.
+    #[serde(default)]
+    pub custom_reasoning_efforts: Vec<String>,
     /// `[session].auto_compact_threshold_percent` — auto-compact trigger, 0–100
     /// (Grok's default is 85).
     pub auto_compact_threshold_percent: Option<i64>,
@@ -1929,6 +1939,14 @@ pub struct GrokStructuredConfig {
     pub custom_api_key: Option<String>,
     pub custom_api_backend: Option<String>,
     pub custom_context_window: Option<i64>,
+    /// The custom model's `reasoning_efforts` levels. Unlike every other field
+    /// here, `None` leaves the key as it is, following the model through a
+    /// rename: the panel sends levels only once its chips moved, because the
+    /// list may be hand-written — in the panel's own raw config.toml editor, or
+    /// before the panel managed the key — and neither an untouched control nor a
+    /// client that predates the field may undo that. `Some(empty)` removes the
+    /// key; a non-empty list writes it.
+    pub custom_reasoning_efforts: Option<Vec<String>>,
     pub auto_compact_threshold_percent: Option<i64>,
 }
 

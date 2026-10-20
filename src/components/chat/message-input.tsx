@@ -103,6 +103,7 @@ import { textToInlineContent } from "@/components/chat/composer/plain-text-conte
 import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
+  blankLineAfter,
   isComposerEmpty,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
@@ -143,20 +144,32 @@ import { useComposerShortcuts } from "@/components/chat/composer/use-composer-sh
  * as the leading invocation badge (serializes to `${prefix}${id}` as the first
  * token).
  */
-export interface ComposerInjectContent {
-  text: string
-  skill?: { id: string; label: string }
-  /**
-   * How `text` lands in the composer.
-   *
-   * - `"replace"` (default) swaps the whole document — the welcome quick-action
-   *   behaviour, where the card's prompt IS the message.
-   * - `"append"` keeps whatever the user has already drafted and adds `text` as
-   *   a trailing block, caret after it. Used for quoting a message selection,
-   *   which is only ever the *start* of what the user is about to write.
-   */
-  mode?: "replace" | "append"
-}
+export type ComposerInjectContent =
+  | {
+      text: string
+      skill?: { id: string; label: string }
+      /**
+       * How `text` lands in the composer.
+       *
+       * - `"replace"` (default) swaps the whole document — the welcome
+       *   quick-action behaviour, where the card's prompt IS the message.
+       * - `"append"` keeps whatever the user has already drafted and adds
+       *   `text` as a trailing block, caret after it. Used for quoting a
+       *   message selection, which is only ever the *start* of what the user
+       *   is about to write.
+       */
+      mode?: "replace" | "append"
+    }
+  | {
+      /**
+       * A message this composer already let go of — a send the backend turned
+       * away after the composer had cleared itself for it — as the blocks it
+       * was sent as. It comes back whole, badges and images included, and
+       * AFTER whatever the composer holds by then: usually nothing, but what
+       * the user has started writing since is never replaced.
+       */
+      handBack: PromptInputBlock[]
+    }
 
 interface MessageInputProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
@@ -299,6 +312,11 @@ function stripEmbeddedReferences(doc: JSONContent): JSONContent {
   }
   return { ...doc, content }
 }
+
+/** The notice for a send held while the agent is still responding (see
+ *  `handleSend`), under one id: pressing Enter into the hold again updates the
+ *  toast on screen instead of stacking another copy of it. */
+const HELD_WHILE_RESPONDING_TOAST = "composer-held-while-responding"
 
 function SelectorLoadingChip({ label }: { label: string }) {
   return (
@@ -714,7 +732,21 @@ export function MessageInput({
     // and lets the cleanup cancel our own rAF before it runs.
     const raf = requestAnimationFrame(() => {
       const handle = editorRef.current
-      if (handle) {
+      if ("handBack" in payload) {
+        // Added after whatever the composer holds, never in its place. The
+        // restore's edits reach `handleComposerChange` like typing does, so
+        // the stored draft the send cleared is written again too.
+        const editor = handle?.getEditor()
+        if (editor) {
+          hydrateFromBlocks(
+            editor,
+            payload.handBack,
+            knownInvocationsRef.current,
+            { append: true }
+          )
+          setComposerEmpty(isComposerEmpty(editor))
+        }
+      } else if (handle) {
         if (payload.mode === "append") {
           // Land at the end of whatever is already drafted, separated by a blank
           // line so a Markdown block (the quote) is never glued onto the tail of
@@ -723,15 +755,10 @@ export function MessageInput({
           // remembered selection is stale and could be anywhere.
           const editor = handle.getEditor()
           const existing = editor ? serializeDocToText(editor.state.doc) : ""
-          const gap = !existing.trim()
-            ? ""
-            : existing.endsWith("\n\n")
-              ? ""
-              : existing.endsWith("\n")
-                ? "\n"
-                : "\n\n"
           handle.focus()
-          handle.insertTextAtCursor(`${gap}${payload.text}\n\n`)
+          handle.insertTextAtCursor(
+            `${blankLineAfter(existing)}${payload.text}\n\n`
+          )
         } else {
           handle.setText(payload.text)
           // Prepend the skill as the leading invocation badge, so the sent
@@ -755,7 +782,13 @@ export function MessageInput({
       onInjectConsumed?.()
     })
     return () => cancelAnimationFrame(raf)
-  }, [injectContent, composerReady, skillPrefix, onInjectConsumed])
+  }, [
+    injectContent,
+    composerReady,
+    skillPrefix,
+    onInjectConsumed,
+    hydrateFromBlocks,
+  ])
 
   // A skill / expert badge freezes its invocation prefix (`$` for Codex, `/`
   // elsewhere) at insert time. On the welcome page users routinely click a
@@ -1553,6 +1586,16 @@ export function MessageInput({
       return
     }
 
+    // Prompting with no queue to park the draft in (a canvas card). The backend
+    // runs one prompt per turn and turns a second one away, so sending here
+    // only ever bounced — after this composer had cleared itself for it, which
+    // is how the message used to vanish. Keep it where it is instead: like the
+    // upload gate above, a "wait a moment", not a loss.
+    if (isPrompting) {
+      toast.info(t("heldWhileResponding"), { id: HELD_WHILE_RESPONDING_TOAST })
+      return
+    }
+
     onSend(draft, showModeSelector ? effectiveModeId : null)
     if (effectiveDraftStorageKey) {
       clearMessageInputDraftV2(effectiveDraftStorageKey)
@@ -1562,6 +1605,7 @@ export function MessageInput({
     disabled,
     hasUploadingImage,
     tAttach,
+    t,
     buildDraft,
     isEditingQueueItem,
     isPrompting,

@@ -369,20 +369,36 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
     [parsed, part.input]
   )
 
+  // A Claude Code fork (`subagent_type: "fork"`) inherits the parent's
+  // conversation, model and effort: the Agent tool's schema says a `model` or
+  // `effort` argument is ignored for a fork. claude-agent-acp 0.94.0 (CLI
+  // 2.1.303) offers forks in every session, so the card must not present either
+  // argument as a setting the sub-agent ran with. Read from Claude's own field
+  // only: another agent's type field (Codex's `agent_type`, Cursor's
+  // `subagentType`) may name a role "fork" that does honour both.
+  const isClaudeFork =
+    (asText(parsed?.subagent_type) ??
+      (part.input ? extractJsonField(part.input, "subagent_type") : null)) ===
+    "fork"
+
   const model = useMemo(
     () =>
-      asText(parsed?.model) ??
-      (part.input ? extractJsonField(part.input, "model") : null),
-    [parsed, part.input]
+      isClaudeFork
+        ? null
+        : (asText(parsed?.model) ??
+          (part.input ? extractJsonField(part.input, "model") : null)),
+    [isClaudeFork, parsed, part.input]
   )
 
   // Claude Code's Agent tool takes an `effort` (CLI 2.1.292+): the level the
   // sub-agent runs at, set only when the user asked for one.
   const effort = useMemo(
     () =>
-      asText(parsed?.effort) ??
-      (part.input ? extractJsonField(part.input, "effort") : null),
-    [parsed, part.input]
+      isClaudeFork
+        ? null
+        : (asText(parsed?.effort) ??
+          (part.input ? extractJsonField(part.input, "effort") : null)),
+    [isClaudeFork, parsed, part.input]
   )
 
   // codex 0.147's native team-of-agents marks its capsules as LAUNCH-only

@@ -9,7 +9,14 @@ import type {
 } from "./types"
 import { buildCodegWebSocketProtocols } from "./ws-auth"
 import { parseJsonOrThrow } from "../json-parse-error"
-import { getCodegToken } from "./web-auth"
+import {
+  codegAuthHeaders,
+  getCodegToken,
+  hasCodegCredentials,
+  probeProxyAuthentication,
+  unauthorizedSource,
+  type UnauthorizedSource,
+} from "./web-auth"
 
 // 60s covers the worst-case ACP probe path: some agents (Gemini in
 // particular) burn 8–10s on the Initialize handshake before session/new
@@ -46,7 +53,13 @@ const HEALTH_PROBE_TIMEOUT_MS = 8_000
 // `subscribeConnection`/`getConnectionSnapshot` so a single global dialog can
 // reflect it. Distinct from the per-ACP-agent `ConnectionStatus` — this is
 // the browser↔server transport link, not an agent session.
-export type WebConnState = "connected" | "reconnecting" | "unauthorized"
+// "proxyUnauthorized" is a 401 that did not come from Codeg: the session of a
+// proxy in front of it expired while the Codeg token is still good.
+export type WebConnState =
+  | "connected"
+  | "reconnecting"
+  | "unauthorized"
+  | "proxyUnauthorized"
 
 interface WebEvent {
   channel: string
@@ -99,6 +112,14 @@ export class WebTransport implements Transport {
   // a late 200 can't reopen the socket behind the session-expired dialog.
   private probeEpoch = 0
   private probeController: AbortController | null = null
+  // Asking the server whether a proxy in front of it admits this browser
+  // without a token (see `discoverProxyAuth`): the request in flight, the retry
+  // while the server cannot be reached, how many tries that took, and whether
+  // the server already said no.
+  private proxyDiscovery: Promise<void> | null = null
+  private proxyDiscoveryTimer: ReturnType<typeof setTimeout> | null = null
+  private proxyDiscoveryAttempts = 0
+  private proxyDiscoveryRefused = false
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl
@@ -162,7 +183,7 @@ export class WebTransport implements Transport {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          ...codegAuthHeaders(token),
         },
         body: JSON.stringify(args ?? {}),
         signal: controller.signal,
@@ -179,8 +200,11 @@ export class WebTransport implements Transport {
       // Definitive auth failure. Surface the unified unauthorized dialog
       // rather than an abrupt redirect — a hard `location.href` here would
       // fight a reconnect dialog that may already be on screen. The user
-      // re-authenticates from the dialog's "Go to login" action.
-      this.markUnauthorized()
+      // re-authenticates from the dialog's "Go to login" action, or reloads
+      // when the 401 came from a proxy in front of Codeg.
+      this.markUnauthorized(
+        unauthorizedSource(res.headers.get("www-authenticate"))
+      )
       throw new Error("Unauthorized")
     }
     if (!res.ok) {
@@ -210,9 +234,11 @@ export class WebTransport implements Transport {
     const wrappedHandler = handler as (payload: unknown) => void
     this.handlers.get(event)!.add(wrappedHandler)
 
-    // If WS is not connected but we now have a token, connect
-    if (!this.ws && getToken()) {
-      this.connectWs()
+    // If WS is not connected but we now have credentials, connect. With none,
+    // ask the server whether a proxy in front of it admits this browser.
+    if (!this.ws) {
+      if (hasCodegCredentials()) this.connectWs()
+      else await this.discoverProxyAuth()
     }
 
     // Gate on the server-side broadcaster receiver actually being subscribed.
@@ -222,7 +248,7 @@ export class WebTransport implements Transport {
     // ACP `Connected` event after a fast Initialize) are silently dropped
     // because the broadcaster skips `send` when receiver_count == 0, leaving
     // the UI permanently stuck on "正在连接".
-    if (getToken()) {
+    if (hasCodegCredentials()) {
       await this.waitForReady()
     }
 
@@ -283,11 +309,12 @@ export class WebTransport implements Transport {
 
   /**
    * Enter the unauthorized state: a definitive 401 was observed (token
-   * rejected). Stop reconnecting and let the dialog prompt re-login. Does NOT
-   * clear the token — that happens when the user acts on "Go to login" — so a
-   * spuriously-cached 401 can't silently wipe a still-valid session.
+   * rejected, or a proxy's session expired). Stop reconnecting and let the
+   * dialog prompt re-login. Does NOT clear the token — that happens when the
+   * user acts on "Go to login" — so a spuriously-cached 401 can't silently
+   * wipe a still-valid session.
    */
-  markUnauthorized(): void {
+  markUnauthorized(source: UnauthorizedSource = "codeg"): void {
     if (this.destroyed) return
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
@@ -297,7 +324,7 @@ export class WebTransport implements Transport {
     // the socket or re-arm the backoff behind the session-expired dialog.
     this.invalidateProbe()
     this.teardownWs()
-    this.setConnState("unauthorized")
+    this.setConnState(source === "proxy" ? "proxyUnauthorized" : "unauthorized")
   }
 
   // Bump the epoch (so a pending probe's post-await guard bails) and abort its
@@ -333,14 +360,58 @@ export class WebTransport implements Transport {
         },
       }
       this.eventStreamInstance = new WebEventStream(host)
-      // If a token is present but the WS hasn't been opened yet (no legacy
+      // If credentials are present but the WS hasn't been opened yet (no legacy
       // subscribe has run), trigger the connect now so attach frames sent
-      // by the consumer have a place to land.
-      if (!this.ws && getToken()) {
-        this.connectWs()
+      // by the consumer have a place to land. With none, ask the server
+      // whether a proxy in front of it admits this browser.
+      if (!this.ws) {
+        if (hasCodegCredentials()) this.connectWs()
+        else void this.discoverProxyAuth()
       }
     }
     return this.eventStreamInstance
+  }
+
+  // Signed in through a proxy, a browser that opens the workspace directly (a
+  // bookmark, a restored tab, or the root page could not reach the server)
+  // holds neither a token nor the proxy mark, and its HTTP calls succeed
+  // without either, so nothing else would ever open the event socket. Only the
+  // server can tell, so it is asked when a consumer needs the socket. A refusal
+  // ends the matter without touching the connection state: the token flow
+  // surfaces its own 401s, and on the login page there is nothing to reconnect.
+  // An unreachable server is asked again on the reconnect backoff, quietly for
+  // the same reason.
+  private discoverProxyAuth(): Promise<void> {
+    if (
+      this.destroyed ||
+      this.proxyDiscoveryRefused ||
+      this.proxyDiscoveryTimer
+    ) {
+      return this.proxyDiscovery ?? Promise.resolve()
+    }
+    this.proxyDiscovery ??= probeProxyAuthentication().then((result) => {
+      this.proxyDiscovery = null
+      if (this.destroyed) return
+      if (result === "proxy") {
+        if (!this.ws) this.connectWs()
+        return
+      }
+      if (result === "unauthorized") {
+        this.proxyDiscoveryRefused = true
+        return
+      }
+      const shift = Math.min(this.proxyDiscoveryAttempts++, 8)
+      this.proxyDiscoveryTimer = setTimeout(
+        () => {
+          this.proxyDiscoveryTimer = null
+          if (this.ws) return
+          if (hasCodegCredentials()) this.connectWs()
+          else void this.discoverProxyAuth()
+        },
+        Math.min(WS_BACKOFF_INITIAL_MS << shift, WS_BACKOFF_MAX_MS)
+      )
+    })
+    return this.proxyDiscovery
   }
 
   private sendWsFrame(frame: object): boolean {
@@ -354,12 +425,14 @@ export class WebTransport implements Transport {
     }
   }
 
-  // Returns false when there's no token to connect with (caller decides how to
+  // Returns false when there are no credentials to connect with (caller decides how to
   // surface that — probeHealth treats it as unauthorized rather than a silent
   // dead-end). Returns true once a socket has been created.
   private connectWs(): boolean {
+    if (!hasCodegCredentials()) return false
+    // Empty when a proxy signed this browser in: the socket then carries only
+    // the event protocol, and the proxy's assertion rides on the upgrade.
     const token = getToken()
-    if (!token) return false
 
     // Drop any lingering socket before opening a new one. teardownWs detaches
     // handlers first, so the old socket's async onclose can't fire after we've
@@ -497,8 +570,8 @@ export class WebTransport implements Transport {
   private async probeHealth(): Promise<void> {
     if (this.destroyed || this.healthProbeInFlight) return
     const token = getToken()
-    if (!token) {
-      // No token to validate — treat as unauthorized rather than spin.
+    if (!hasCodegCredentials()) {
+      // No credentials to validate — treat as unauthorized rather than spin.
       this.markUnauthorized()
       return
     }
@@ -515,7 +588,7 @@ export class WebTransport implements Transport {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          ...codegAuthHeaders(token),
         },
         body: "{}",
         signal: controller.signal,
@@ -524,13 +597,16 @@ export class WebTransport implements Transport {
       // a stale completion must not reopen the socket or re-arm the backoff.
       if (this.destroyed || epoch !== this.probeEpoch) return
       if (res.status === 401) {
-        // Server is up and rejected the token → session genuinely expired.
-        this.markUnauthorized()
+        // Server (or the proxy in front of it) rejected the request → the
+        // session genuinely expired.
+        this.markUnauthorized(
+          unauthorizedSource(res.headers.get("www-authenticate"))
+        )
         return
       }
       if (res.ok) {
         // Server up + token valid → rebuild the WS. onopen and the `__ready__`
-        // frame will flip the dialog back to "connected". If the token vanished
+        // frame will flip the dialog back to "connected". If the credentials vanished
         // between probe start and now (e.g. logout in another tab), connectWs
         // reports false → surface unauthorized rather than a stuck "reconnecting".
         if (!this.connectWs()) this.markUnauthorized()
@@ -577,6 +653,10 @@ export class WebTransport implements Transport {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+    if (this.proxyDiscoveryTimer) {
+      clearTimeout(this.proxyDiscoveryTimer)
+      this.proxyDiscoveryTimer = null
     }
     // Abort any in-flight health probe; the `destroyed` guard already blocks
     // its post-await branches, but this frees the request promptly.
