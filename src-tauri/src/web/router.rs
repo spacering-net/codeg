@@ -1959,6 +1959,18 @@ pub fn build_router(
         // ─── Terminal ───
         .route("/terminal_spawn", post(handlers::terminal::terminal_spawn))
         .route("/terminal_write", post(handlers::terminal::terminal_write))
+        // ─── Client preferences (batch v91) ───
+        // Server-side memory for browser-local settings (floating-ball
+        // bindings et al.): seeded on hydration, dual-written on change. See
+        // `handlers::client_prefs`.
+        .route(
+            "/get_client_preferences",
+            post(handlers::client_prefs::get_client_preferences),
+        )
+        .route(
+            "/update_client_preferences",
+            post(handlers::client_prefs::update_client_preferences),
+        )
         .route(
             "/terminal_resize",
             post(handlers::terminal::terminal_resize),
@@ -2081,6 +2093,12 @@ pub fn build_router(
         .layer(middleware::from_fn(static_cache_control));
 
     let static_dir_for_mw = static_dir.clone();
+    let instance_name = super::instance_name::instance_name_from_env();
+    let instance_rewrite = middleware::from_fn(
+        move |req: axum::extract::Request, next: Next| {
+            super::instance_name::rewrite_instance_name(instance_name.clone(), req, next)
+        },
+    );
     let html_rewrite = middleware::from_fn(move |req: axum::extract::Request, next: Next| {
         let dir = static_dir_for_mw.clone();
         async move {
@@ -2117,6 +2135,7 @@ pub fn build_router(
         .merge(ws_route)
         .fallback_service(static_files)
         .layer(html_rewrite)
+        .layer(instance_rewrite)
         .layer(cors)
         .layer(Extension(state))
         .layer(Extension(shutdown_signal))
