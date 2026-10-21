@@ -50,3 +50,4 @@ pub mod web_server;
 pub mod work_task;
 pub mod workspace_files;
 pub mod workspace_state;
+pub mod agent_accounts;

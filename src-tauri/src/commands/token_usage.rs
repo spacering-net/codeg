@@ -1364,6 +1364,7 @@ mod tests {
     fn detail(turns: Vec<MessageTurn>, stats: Option<SessionStats>) -> DbConversationDetail {
         DbConversationDetail {
             summary: DbConversationSummary {
+                agent_account_id: None,
                 id: 1,
                 folder_id: 1,
                 title: None,

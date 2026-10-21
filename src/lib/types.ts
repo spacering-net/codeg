@@ -569,6 +569,7 @@ export interface OpenedTab {
 }
 
 export interface DbConversationSummary {
+  agent_account_id?: string | null
   id: number
   folder_id: number
   title: string | null
@@ -737,6 +738,8 @@ export type ScanSessionStatus = "new" | "imported" | "deleted"
 /** Mirrors Rust `ScanSession`: one locally-discovered agent session in the
  *  import-picker scan. */
 export interface ScanSession {
+  agent_account_id?: string | null
+  agent_account_name?: string | null
   external_id: string
   agent_type: AgentType
   title: string | null
@@ -772,6 +775,7 @@ export interface ScanResult {
 /** Mirrors Rust `SelectedSessionKey` (camelCase over the wire): identifies one
  *  scanned session for `import_selected_sessions`. */
 export interface SelectedSessionKey {
+  agentAccountId?: string | null
   agentType: AgentType
   externalId: string
 }
