@@ -1245,9 +1245,8 @@ impl ClaudeParser {
         }
     }
 
-    /// Test-only constructor that lets callers point the parser at a fixture
+    /// Explicit-root constructor for an account or fixture
     /// directory instead of `~/.claude/projects`.
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }
@@ -1668,7 +1667,7 @@ pub(crate) fn resolve_claude_projects_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_claude_config_dir_for_env(env).join("projects")
 }
 
-fn resolve_claude_config_dir_from(
+pub(crate) fn resolve_claude_config_dir_from(
     claude_config_dir_env: Option<std::ffi::OsString>,
     home_dir: Option<PathBuf>,
 ) -> PathBuf {

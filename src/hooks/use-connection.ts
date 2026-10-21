@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react"
+import { agentAccountKey } from "@/lib/agent-accounts"
 import {
   useAcpActions,
   useConnectionStore,
@@ -126,7 +127,8 @@ export interface UseConnectionReturn {
     agentType: AgentType,
     workingDir?: string,
     sessionId?: string,
-    conversationId?: number
+    conversationId?: number,
+    agentAccountId?: string | null
   ) => Promise<void>
   disconnect: () => Promise<void>
   /** Restart the session (disconnect + resume same sessionId) so it picks up
@@ -277,7 +279,9 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const selectorsReady = connection?.selectorsReady ?? false
   const sessionId = connection?.sessionId ?? null
   const cached = connection?.agentType
-    ? getCachedSelectors(connection.agentType)
+    ? getCachedSelectors(
+        agentAccountKey(connection.agentType, connection.agentAccountId)
+      )
     : null
   const hasCachedSelectors = cached !== null
   const connectedWorkingDir = connection?.workingDir ?? null
@@ -311,14 +315,16 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       agentType: AgentType,
       workingDir?: string,
       sessionId?: string,
-      conversationId?: number
+      conversationId?: number,
+      agentAccountId?: string | null
     ) =>
       actions.connect(
         contextKey,
         agentType,
         workingDir,
         sessionId,
-        conversationId
+        conversationId,
+        agentAccountId
       ),
     [actions, contextKey]
   )

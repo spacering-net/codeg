@@ -251,6 +251,14 @@ pub struct PendingUserMessage {
 /// 已完成的 turn 不存在这里——它们由 parser 从 agent JSONL 读。
 #[derive(Debug)]
 pub struct SessionState {
+    pub storage_identity: Option<(AgentType, PathBuf)>,
+    pub requested_session_id: Option<String>,
+    /// Set only after an initial session/load or session/resume succeeds.
+    /// SessionStarted alone is not proof: a load-to-new fallback emits it too.
+    /// Backend-only, used to validate account transfers before changing a row.
+    pub restored_session_id: Option<String>,
+    pub agent_account_id: Option<String>,
+    pub account_home: Option<PathBuf>,
     // 身份
     pub connection_id: String,
     pub conversation_id: Option<i32>,
@@ -481,6 +489,9 @@ pub struct SessionState {
     /// on the snapshot so a frontend that reconnects after refresh can see
     /// "init complete" without waiting for an event that already fired.
     pub selectors_ready: bool,
+    /// Selected portable history, exposed only through a read-only MCP server.
+    /// Internal launch metadata, never copied into the agent's environment.
+    pub handoff_context_id: Option<String>,
 
     /// Most recent unresolved `AcpEvent::Error` payload. Cleared when a new
     /// prompt starts, matching the frontend reducer's live-event behavior. The
@@ -789,6 +800,12 @@ pub enum TurnStatusWriter {
 }
 
 impl SessionState {
+    pub(crate) fn has_restored_session(&self, session_id: &str) -> bool {
+        self.restored_session_id.as_deref() == Some(session_id)
+            && self.external_id.as_deref() == Some(session_id)
+            && self.status == ConnectionStatus::Connected
+    }
+
     /// Claim the conversation-status write of the `TurnComplete` at `seq` for
     /// `writer`. `true` when `writer` owns it — newly, or already (a retry of
     /// its own write runs again with the same envelope); `false` when the other
@@ -823,6 +840,11 @@ impl SessionState {
         let wants_prompt_suggestions = owner_composes_prompts(&owner_window_label);
         Self {
             connection_id,
+            agent_account_id: None,
+            storage_identity: None,
+            requested_session_id: None,
+            restored_session_id: None,
+            account_home: None,
             conversation_id: None,
             external_id: None,
             external_id_changed_at: None,
@@ -861,6 +883,7 @@ impl SessionState {
             wants_prompt_suggestions,
             remote_control: None,
             selectors_ready: false,
+            handoff_context_id: None,
             last_error: None,
             session_started_tx: None,
             event_seq: 0,
@@ -2975,6 +2998,22 @@ mod tests {
         });
         assert!(s.async_tasks.is_empty());
         assert!(!s.has_active_background_work(Utc::now()));
+    }
+
+    #[test]
+    fn account_switch_does_not_treat_session_started_as_restore_proof() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::StatusChanged { status: ConnectionStatus::Connected });
+        s.apply_event(&AcpEvent::SessionStarted { session_id: "same-id".into() });
+        // A failed load can fall through to session/new. Even an adapter that
+        // reuses the requested id has not acknowledged restoring the history.
+        assert!(!s.has_restored_session("same-id"));
+        s.restored_session_id = Some("same-id".into());
+        assert!(s.has_restored_session("same-id"));
+        s.apply_event(&AcpEvent::SessionStarted { session_id: "another-id".into() });
+        assert!(!s.has_restored_session("another-id"));
+        s.apply_event(&AcpEvent::StatusChanged { status: ConnectionStatus::Error });
+        assert!(!s.has_restored_session("same-id"));
     }
 
     /// A turn the agent started itself (Grok's follow-up to a background

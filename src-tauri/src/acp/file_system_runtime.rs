@@ -270,7 +270,7 @@ fn temp_roots() -> Vec<PathBuf> {
 /// `runtime_env` wins over codeg's process env — a per-agent `GROK_HOME` in
 /// `env_json` moves the agent's state, so it must move the allowed root too.
 /// Same shape as `commands::acp::pi_agent_dir_for_env`.
-fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
+pub(crate) fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
     agent_root_slots(agent_type)
         .iter()
         .filter_map(|slot| resolve_root_slot(slot, runtime_env))

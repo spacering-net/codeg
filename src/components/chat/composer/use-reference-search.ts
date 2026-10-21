@@ -43,6 +43,8 @@ const EMPTY_COMMITS: Promise<GitLogEntry[]> = Promise.resolve([])
 
 /** Display headings for each group; injected so the host can localize them. */
 export interface ReferenceGroupLabels {
+  /** Account label for an explicit Default target in the agents group. */
+  defaultAccount?: string
   file: string
   agent: string
   assistant: string
@@ -132,7 +134,18 @@ export function buildReferenceGroups(
   // tab count and `truncated` flag follow from this filtered set too).
   const agentMatches = sources.agents
     .filter((agent) => agent.enabled)
-    .map(agentToSuggestion)
+    .flatMap((agent) => {
+      const accounts = agent.named_accounts ?? []
+      return accounts.length
+        ? [
+            agentToSuggestion(agent, {
+              id: "default",
+              name: labels.defaultAccount ?? "Default",
+            }),
+            ...accounts.map((account) => agentToSuggestion(agent, account)),
+          ]
+        : [agentToSuggestion(agent)]
+    })
     .filter((item) => suggestionMatches(item, q))
   const agentItems = agentMatches.slice(0, MAX_PER_GROUP)
 

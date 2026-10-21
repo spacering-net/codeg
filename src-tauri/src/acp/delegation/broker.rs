@@ -141,6 +141,8 @@ pub struct ChildResumeContext {
     pub child_conversation_id: i32,
     pub status: TaskStatus,
     pub agent_type: AgentType,
+    /// Persisted child binding; None explicitly means Default, never inheritance.
+    pub agent_account_id: Option<String>,
     /// Parent conversation scope — same ownership rule as
     /// [`ChildStatusRecord::parent_id`].
     pub parent_id: Option<i32>,
@@ -1378,6 +1380,8 @@ struct ToolCallTracker {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DelegationMatchKey {
     pub target: crate::acp::delegation::types::DelegationTarget,
+    /// Raw MCP argument, before resolving inheritance or the Default sentinel.
+    pub agent_account_id: Option<String>,
     pub task: String,
     pub working_dir: Option<String>,
 }
@@ -2466,6 +2470,7 @@ impl DelegationBroker {
                 if req.parent_tool_use_id.is_empty() {
                     let key = DelegationMatchKey {
                         target: req.target(),
+                        agent_account_id: req.agent_account_id.clone(),
                         task: req.task.clone(),
                         working_dir: req.requested_working_dir.clone(),
                     };
@@ -2498,6 +2503,7 @@ impl DelegationBroker {
         if req.parent_tool_use_id.is_empty() {
             let match_key = DelegationMatchKey {
                 target: req.target(),
+                agent_account_id: req.agent_account_id.clone(),
                 task: req.task.clone(),
                 working_dir: req.requested_working_dir.clone(),
             };
@@ -2536,6 +2542,9 @@ impl DelegationBroker {
                 }
                 if let Some(dir) = req.requested_working_dir.as_deref() {
                     raw_input.insert("working_dir".into(), serde_json::Value::String(dir.into()));
+                }
+                if let Some(id) = req.agent_account_id.as_deref() {
+                    raw_input.insert("agent_account_id".into(), serde_json::Value::String(id.into()));
                 }
                 self.meta_writer
                     .write_tool_call_identity(
@@ -2631,6 +2640,7 @@ impl DelegationBroker {
             .spawn(
                 &req.parent_connection_id,
                 req.agent_type,
+                req.agent_account_id.clone(),
                 req.working_dir.clone(),
                 preferred_mode_id,
                 preferred_config_values,
@@ -4313,6 +4323,7 @@ impl DelegationBroker {
             .spawn_for_resume(
                 &req.parent_connection_id,
                 ctx.agent_type,
+                ctx.agent_account_id.clone(),
                 Some(working_dir),
                 &external_id,
                 preferred_mode_id,
@@ -4924,6 +4935,7 @@ impl ChildStatusLookup for DbChildStatusLookup {
             child_conversation_id: summary.id,
             status: task_status_from_row(&summary.status),
             agent_type: summary.agent_type,
+            agent_account_id: summary.agent_account_id,
             parent_id: summary.parent_id,
             parent_tool_use_id: summary.parent_tool_use_id,
             external_id: summary.external_id,
@@ -4965,6 +4977,7 @@ mod tests {
             parent_conversation_id: parent_conv,
             parent_tool_use_id: tool_use.into(),
             agent_type: AgentType::ClaudeCode,
+            agent_account_id: None,
             task: "do x".into(),
             working_dir: None,
             requested_working_dir: None,
@@ -6195,6 +6208,7 @@ mod tests {
     fn key_for(agent_type: AgentType, task: &str) -> DelegationMatchKey {
         DelegationMatchKey {
             target: crate::acp::delegation::types::DelegationTarget::Agent(agent_type),
+            agent_account_id: None,
             task: task.to_string(),
             working_dir: None,
         }
@@ -6203,6 +6217,7 @@ mod tests {
     fn key_with_dir(task: &str, working_dir: &str) -> DelegationMatchKey {
         DelegationMatchKey {
             target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex),
+            agent_account_id: None,
             task: task.to_string(),
             working_dir: Some(working_dir.to_string()),
         }
@@ -6245,6 +6260,19 @@ mod tests {
             .take_matching_tool_call("p1", &task_key("task A"))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn parallel_same_agent_and_task_different_accounts_do_not_swap() {
+        let broker = DelegationBroker::new(Arc::new(MockSpawner::new()), shallow_lookup());
+        let mut work = task_key("review this");
+        work.agent_account_id = Some("work".into());
+        let mut personal = work.clone();
+        personal.agent_account_id = Some("personal".into());
+        broker.register_pending_tool_call_with_key("p", "tc-work".into(), Some(work.clone())).await;
+        broker.register_pending_tool_call_with_key("p", "tc-personal".into(), Some(personal.clone())).await;
+        assert_eq!(broker.take_matching_tool_call("p", &personal).await.as_deref(), Some("tc-personal"));
+        assert_eq!(broker.take_matching_tool_call("p", &work).await.as_deref(), Some("tc-work"));
     }
 
     #[tokio::test]
@@ -7507,6 +7535,7 @@ mod tests {
                 "tc-keyed".into(),
                 Some(DelegationMatchKey {
                     target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::ClaudeCode),
+                    agent_account_id: None,
                     task: "do x".into(),
                     working_dir: None,
                 }),
@@ -9487,6 +9516,7 @@ mod tests {
         enable_delegation(&broker).await;
         let key = DelegationMatchKey {
             target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::ClaudeCode),
+            agent_account_id: None,
             task: "do x".into(),
             working_dir: None,
         };
@@ -9727,6 +9757,7 @@ mod tests {
             child_conversation_id: 42,
             status,
             agent_type: AgentType::ClaudeCode,
+            agent_account_id: None,
             parent_id: Some(1),
             parent_tool_use_id: Some("pt-orig".into()),
             external_id: Some("ext-session-1".into()),
@@ -9786,7 +9817,9 @@ mod tests {
     /// on the unchanged id finishes it normally.
     #[tokio::test]
     async fn resume_after_interruption_runs_under_same_id_then_completes() {
-        let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
+        let mut context = resume_ctx(TaskStatus::Canceled);
+        context.agent_account_id = Some("child-work-account".into());
+        let (mock, _lookup, broker) = resume_harness(Some(context)).await;
         mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
 
@@ -9803,6 +9836,7 @@ mod tests {
         assert_eq!(spawns.len(), 1);
         assert_eq!(spawns[0].external_session_id, "ext-session-1");
         assert_eq!(spawns[0].working_dir.as_deref(), Some("/work"));
+        assert_eq!(spawns[0].agent_account_id.as_deref(), Some("child-work-account"));
         drop(spawns);
         // The continuation prompt targeted the SAME child row and carried the
         // reason as bounded context.
@@ -10254,7 +10288,9 @@ mod tests {
             })
             .await;
 
-        let ack = broker.start_delegation(assistant_request(1, "pt-a")).await;
+        let mut request = assistant_request(1, "pt-a");
+        request.agent_account_id = Some("work-account".into());
+        let ack = broker.start_delegation(request).await;
         assert_eq!(ack.status, TaskStatus::Running);
         assert_eq!(ack.assistant_id, Some(3));
         assert_eq!(ack.assistant_name.as_deref(), Some("Reviewer"));
@@ -10262,6 +10298,7 @@ mod tests {
 
         let spawn = mock.spawn_args.lock().await[0].clone();
         assert_eq!(spawn.agent_type, AgentType::Codex);
+        assert_eq!(spawn.agent_account_id.as_deref(), Some("work-account"));
         assert_eq!(spawn.preferred_mode_id.as_deref(), Some("read-only"));
         assert_eq!(
             spawn.preferred_config_values,
@@ -10387,6 +10424,7 @@ mod tests {
     async fn resuming_an_assistant_child_replays_its_snapshot() {
         let ctx = ChildResumeContext {
             agent_type: AgentType::Codex,
+            agent_account_id: Some("saved-work-account".into()),
             assistant: ResumeAssistant::Snapshot(reviewer()),
             ..resume_ctx(TaskStatus::Canceled)
         };
@@ -10408,6 +10446,7 @@ mod tests {
 
         let spawn = mock.resume_spawn_args.lock().await[0].clone();
         assert_eq!(spawn.agent_type, AgentType::Codex);
+        assert_eq!(spawn.agent_account_id.as_deref(), Some("saved-work-account"));
         assert_eq!(spawn.preferred_mode_id.as_deref(), Some("read-only"));
         assert_eq!(
             spawn.preferred_config_values,

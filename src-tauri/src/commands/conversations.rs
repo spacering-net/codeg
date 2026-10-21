@@ -3,11 +3,12 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
+use crate::acp::handoff::{self, HandoffLink};
 use crate::app_error::AppCommandError;
 use crate::db::entities::conversation;
 use crate::db::entities::folder::FolderKind;
 use crate::db::service::{
-    agent_setting_service, conversation_service, folder_service, import_service, tab_service,
+    agent_setting_service, conversation_service, folder_service, handoff_service, import_service, tab_service,
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
@@ -42,6 +43,16 @@ pub(crate) async fn list_all_conversations_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     options: ListAllConversationsOptions,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    // Account indexes are independent even when two homes contain the same
+    // native session id. Refresh only the rows bound to the index being read.
+    let mut updated_accounts = Vec::new();
+    for account in crate::db::service::agent_account_service::list(conn, AgentType::Codex).await.map_err(AppCommandError::from)? {
+        let base = std::path::PathBuf::from(&account.home_dir).join("sessions");
+        if let Ok(titles) = tokio::task::spawn_blocking(move || CodexParser::with_base_dir(base).load_thread_name_index()).await {
+            updated_accounts.extend(conversation_service::refresh_codex_account_titles(conn, &titles, Some(&account.id)).await);
+        }
+    }
+    drop(notify_conversation_title_updates(conn, emitter, chat_channel_manager, updated_accounts).await);
     let codex_env = agent_setting_service::load_agent_env(conn, AgentType::Codex).await;
     let codex_titles = match tokio::task::spawn_blocking(move || {
         CodexParser::for_env(&codex_env).load_thread_name_index()
@@ -325,11 +336,31 @@ fn list_conversations_sync(
 
 pub async fn list_conversations_core(
     conn: &sea_orm::DatabaseConnection,
+    agent_account_id: Option<String>,
     agent_type: Option<AgentType>,
     search: Option<String>,
     sort_by: Option<String>,
     folder_path: Option<String>,
 ) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    if let Some(id) = agent_account_id {
+        let account = crate::db::service::agent_account_service::get(conn, &id).await.map_err(AppCommandError::from)?;
+        let agent = AgentType::from_wire(&account.agent_type).ok_or_else(|| AppCommandError::invalid_input("Unknown account agent"))?;
+        if agent_type.is_some_and(|selected| selected != agent) { return Err(AppCommandError::invalid_input("The account belongs to a different agent.")); }
+        let home = std::path::PathBuf::from(account.home_dir);
+        return tokio::task::spawn_blocking(move || {
+            let mut sessions = crate::parsers::build_account_parser(agent, Some(&home), &crate::parsers::AgentEnv::inherited()).and_then(|p| p.list_conversations()).map_err(parse_error_to_app_error)?;
+            if let Some(query) = search.as_ref().map(|s| s.to_lowercase()) {
+                sessions.retain(|s| [&s.title, &s.folder_name, &s.folder_path, &s.git_branch, &s.model].iter().any(|v| v.as_ref().is_some_and(|v| v.to_lowercase().contains(&query))));
+            }
+            if let Some(path) = folder_path { sessions.retain(|s| s.folder_path.as_deref().is_some_and(|p| path_eq_for_matching(p, &path))); }
+            match sort_by.as_deref() {
+                Some("oldest") => sessions.sort_by_key(|s| s.started_at),
+                Some("messages") => sessions.sort_by_key(|s| std::cmp::Reverse(s.message_count)),
+                _ => sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at)),
+            }
+            Ok(sessions)
+        }).await.map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    }
     let envs = agent_setting_service::load_agent_envs(conn).await;
     tokio::task::spawn_blocking(move || {
         list_conversations_sync(&envs, agent_type, search, sort_by, folder_path)
@@ -341,28 +372,20 @@ pub async fn list_conversations_core(
     })
 }
 
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-pub async fn list_conversations(
-    db: tauri::State<'_, AppDatabase>,
-    agent_type: Option<AgentType>,
-    search: Option<String>,
-    sort_by: Option<String>,
-    folder_path: Option<String>,
-) -> Result<Vec<ConversationSummary>, AppCommandError> {
-    list_conversations_core(&db.conn, agent_type, search, sort_by, folder_path).await
-}
-
-/// One agent session read straight from the agent's own store by its session
-/// id — the sub-agent transcript viewer's source.
 pub async fn get_conversation_core(
     conn: &sea_orm::DatabaseConnection,
+    agent_account_id: Option<String>,
     agent_type: AgentType,
     conversation_id: String,
 ) -> Result<ConversationDetail, AppCommandError> {
     let env = agent_setting_service::load_agent_env(conn, agent_type).await;
+    let home = if let Some(id) = agent_account_id {
+        let account = crate::db::service::agent_account_service::get(conn, &id).await.map_err(AppCommandError::from)?;
+        if account.agent_type != agent_type.as_wire() { return Err(AppCommandError::invalid_input("The account belongs to a different agent.")); }
+        Some(std::path::PathBuf::from(account.home_dir))
+    } else { None };
     tokio::task::spawn_blocking(move || -> Result<ConversationDetail, AppCommandError> {
-        build_agent_parser(agent_type, &env)
+        crate::parsers::build_account_parser(agent_type, home.as_deref(), &env).map_err(parse_error_to_app_error)?
             .get_conversation(&conversation_id)
             .map_err(parse_error_to_app_error)
     })
@@ -375,12 +398,27 @@ pub async fn get_conversation_core(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn list_conversations(
+    db: tauri::State<'_, AppDatabase>,
+    agent_account_id: Option<String>,
+    agent_type: Option<AgentType>,
+    search: Option<String>,
+    sort_by: Option<String>,
+    folder_path: Option<String>,
+) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    list_conversations_core(&db.conn, agent_account_id, agent_type, search, sort_by, folder_path).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn get_conversation(
     db: tauri::State<'_, AppDatabase>,
+    agent_account_id: Option<String>,
     agent_type: AgentType,
     conversation_id: String,
 ) -> Result<ConversationDetail, AppCommandError> {
-    get_conversation_core(&db.conn, agent_type, conversation_id).await
+    get_conversation_core(&db.conn, agent_account_id, agent_type, conversation_id).await
+
 }
 
 /// Every parsable session on this machine, read in one blocking pass with
@@ -694,6 +732,8 @@ fn build_scan_result(
             Some(false) => ScanSessionStatus::Deleted,
         };
         entry.sessions.push(ScanSession {
+            agent_account_id: None,
+            agent_account_name: None,
             external_id: summary.id,
             agent_type: at,
             title: summary.title,
@@ -783,7 +823,37 @@ pub async fn scan_importable_sessions_core(
     )
     .await;
 
-    scan_importable_sessions_from_summaries(conn, emitter, chat_channel_manager, summaries).await
+    let mut result = scan_importable_sessions_from_summaries(conn, emitter, chat_channel_manager, summaries).await?;
+    for account in crate::db::service::agent_account_service::list_all(conn).await.map_err(AppCommandError::from)? {
+        // One unavailable account folder must not hide every other account's
+        // sessions, the Default ones included. Importing from that account
+        // still fails explicitly until the folder is restored.
+        let summaries = match import_service::collect_account_summaries(conn, &account.id).await {
+            Ok(summaries) => summaries,
+            Err(e) => {
+                tracing::warn!("[import] skipping account {} ({}): {e}", account.name, account.id);
+                continue;
+            }
+        };
+        let mut additional = scan_importable_account_summaries(conn, emitter, chat_channel_manager, summaries, Some(&account.id)).await?;
+        result.no_folder_count += additional.no_folder_count;
+        result.total_sessions += additional.total_sessions;
+        result.importable_count += additional.importable_count;
+        for folder in &mut additional.folders {
+            for session in &mut folder.sessions {
+                session.agent_account_id = Some(account.id.clone());
+                session.agent_account_name = Some(account.name.clone());
+            }
+        }
+        for folder in additional.folders {
+            if let Some(existing) = result.folders.iter_mut().find(|f| path_eq_for_matching(&f.path, &folder.path)) {
+                existing.sessions.extend(folder.sessions);
+                existing.sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
+                for agent in folder.agent_types { if !existing.agent_types.contains(&agent) { existing.agent_types.push(agent); } }
+            } else { result.folders.push(folder); }
+        }
+    }
+    Ok(result)
 }
 
 /// Reconcile summaries already collected by the filesystem scan. Keeping this
@@ -795,9 +865,20 @@ async fn scan_importable_sessions_from_summaries(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     summaries: Vec<(AgentType, ConversationSummary)>,
 ) -> Result<ScanResult, AppCommandError> {
+    scan_importable_account_summaries(conn, emitter, chat_channel_manager, summaries, None).await
+}
+
+async fn scan_importable_account_summaries(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    summaries: Vec<(AgentType, ConversationSummary)>,
+    account_id: Option<&str>,
+) -> Result<ScanResult, AppCommandError> {
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     let conv_rows = conversation::Entity::find()
+        .filter(conversation_service::account_condition(account_id))
         .filter(conversation::Column::ExternalId.is_not_null())
         .all(conn)
         .await
@@ -814,10 +895,31 @@ async fn scan_importable_sessions_from_summaries(
             .or_insert(live);
         *entry = *entry || live;
     }
+    // What a switch left behind in the account it moved a conversation out of
+    // is that conversation, already in codeg under its new account.
+    match import_service::superseded_claude_copies(
+        conn,
+        account_id,
+        &summaries,
+        &import_service::default_claude_projects(conn).await,
+    )
+    .await
+    {
+        Ok(superseded) => {
+            let claude = agent_type_db_str(&AgentType::ClaudeCode);
+            for sid in superseded {
+                imported_index.entry((claude.clone(), sid)).or_insert(true);
+            }
+        }
+        Err(e) => tracing::warn!("[import] could not check for switched-away session copies: {e}"),
+    }
 
     // Refresh the already-imported rows in place before answering, then
     // broadcast each one so open sidebars re-sort without a refetch. The
     // chat-channel half runs detached so the scan never waits on Telegram.
+    for (agent, sid) in handoff_service::archived_sources(conn, account_id, &summaries).await.map_err(AppCommandError::from)? {
+        imported_index.entry((agent.as_wire().into_owned(), sid)).or_insert(true);
+    }
     drop(
         notify_conversation_title_updates(
             conn,
@@ -845,13 +947,36 @@ pub async fn scan_importable_sessions(
 /// Batch-import the selected sessions, creating (or reopening) each target
 /// folder as needed. Test seam for [`import_selected_sessions_core`]: takes the
 /// scanned summaries as input instead of walking the filesystem.
+#[cfg(test)]
 pub(crate) async fn import_selected_from_summaries(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     summaries: Vec<(AgentType, ConversationSummary)>,
     selections: Vec<SelectedSessionKey>,
 ) -> Result<ImportSelectedResult, AppCommandError> {
+    import_selected_from_account_summaries(conn, emitter, summaries, selections, None).await
+}
+
+async fn import_selected_from_account_summaries(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    summaries: Vec<(AgentType, ConversationSummary)>,
+    selections: Vec<SelectedSessionKey>,
+    account_id: Option<&str>,
+) -> Result<ImportSelectedResult, AppCommandError> {
     const MAX_ERRORS: usize = 10;
+
+    // A switch's leftover copy is a conversation codeg already has under
+    // another account (the picker shows it as imported). Skip it rather than
+    // add a duplicate that would also block switching the conversation back.
+    let superseded = import_service::superseded_claude_copies(
+        conn,
+        account_id,
+        &summaries,
+        &import_service::default_claude_projects(conn).await,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
 
     // Defense-in-depth mirror of collect_local_summaries' child filter: a
     // delegation child must never import as a root row, so a selection key
@@ -867,6 +992,7 @@ pub(crate) async fn import_selected_from_summaries(
     // resolves — vanished from disk since the scan, cwd-less, or bogus — counts
     // as not_found.
     let mut not_found = 0u32;
+    let mut superseded_skipped = 0u32;
     let mut groups: HashMap<String, Vec<(AgentType, ConversationSummary)>> = HashMap::new();
     let mut seen_keys: HashSet<(AgentType, String)> = HashSet::new();
     for key in selections {
@@ -877,6 +1003,10 @@ pub(crate) async fn import_selected_from_summaries(
             not_found += 1;
             continue;
         };
+        if at == AgentType::ClaudeCode && superseded.contains(&summary.id) {
+            superseded_skipped += 1;
+            continue;
+        }
         let raw_path = match summary.folder_path.as_deref().map(str::trim) {
             Some(p) if !p.is_empty() => p.to_string(),
             _ => {
@@ -896,7 +1026,7 @@ pub(crate) async fn import_selected_from_summaries(
     let mut result = ImportSelectedResult {
         imported: 0,
         updated: 0,
-        skipped: 0,
+        skipped: superseded_skipped,
         restored: 0,
         not_found,
         failed: 0,
@@ -1063,11 +1193,12 @@ pub(crate) async fn import_selected_from_summaries(
                 // deliberate "bring it back", not a sweep. (The whole-folder
                 // import and the scan's drive-by refresh both stay on `Skip`.)
                 let (tally, _updated_ids, failed_in_group) =
-                    import_service::import_summaries_resilient(
+                    import_service::import_summaries_resilient_for_account(
                         conn,
                         folder_id,
                         &items,
                         import_service::DeletedPolicy::Restore,
+                        account_id,
                     )
                     .await;
                 result.imported += tally.imported;
@@ -1150,8 +1281,43 @@ pub async fn import_selected_sessions_core(
         .map_err(|_| AppCommandError::invalid_input("An import is already in progress"))?;
 
     let envs = agent_setting_service::load_agent_envs(conn).await;
-    let summaries = import_service::collect_local_summaries(&envs, |_, _, _, _| {}).await;
-    import_selected_from_summaries(conn, emitter, summaries, selections).await
+    let mut groups: std::collections::BTreeMap<Option<String>, Vec<SelectedSessionKey>> = std::collections::BTreeMap::new();
+    for selection in selections {
+        groups.entry(selection.agent_account_id.clone()).or_default().push(selection);
+    }
+    let mut result = ImportSelectedResult::default();
+    for (account_id, selections) in groups {
+        let summaries = match account_id.as_deref() {
+            Some(id) => {
+                let account = crate::db::service::agent_account_service::get(conn, id).await.map_err(AppCommandError::from)?;
+                if selections.iter().any(|s| s.agent_type.as_wire() != account.agent_type) {
+                    return Err(AppCommandError::invalid_input("Choose sessions from the selected agent account."));
+                }
+                import_service::collect_account_summaries(conn, id).await.map_err(AppCommandError::from)?
+            }
+            None => import_service::collect_local_summaries(&envs, |_, _, _, _| {}).await,
+        };
+        let part = import_selected_from_account_summaries(conn, emitter, summaries, selections, account_id.as_deref()).await?;
+        result.imported += part.imported;
+        result.updated += part.updated;
+        result.skipped += part.skipped;
+        result.restored += part.restored;
+        result.not_found += part.not_found;
+        result.failed += part.failed;
+        result.created_folders += part.created_folders;
+        result.errors.extend(part.errors);
+        result.errors.truncate(10);
+        for folder in part.folders {
+            if let Some(existing) = result.folders.iter_mut().find(|f| f.folder_id == folder.folder_id) {
+                existing.imported += folder.imported;
+                existing.updated += folder.updated;
+                existing.skipped += folder.skipped;
+                existing.restored += folder.restored;
+                existing.created |= folder.created;
+            } else { result.folders.push(folder); }
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1439,6 +1605,13 @@ pub async fn get_folder_conversation_core(
         .await
         .map_err(AppCommandError::from)?;
 
+    let account_home = match summary.agent_account_id.as_deref() {
+        Some(id) => Some(std::path::PathBuf::from(
+            crate::db::service::agent_account_service::get(conn, id).await.map_err(AppCommandError::from)?.home_dir
+        )),
+        None => None,
+    };
+
     let (mut turns, session_stats, resolved_ext_id, parsed_title, parsed_model, transcript_watermark) =
         if let Some(ref ext_id) = summary.external_id {
         let at = summary.agent_type;
@@ -1461,7 +1634,7 @@ pub async fn get_folder_conversation_core(
         // the default directory codeg's own environment names.
         let agent_env = agent_setting_service::load_agent_env(conn, at).await;
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
-            let parser = build_agent_parser(at, &agent_env);
+            let parser = crate::parsers::build_account_parser(at, account_home.as_deref(), &agent_env).map_err(parse_error_to_app_error)?;
             match parser.get_conversation(&eid) {
                 Ok(d) => {
                     // Claude `/clear` (and similar on-disk id changes) make
@@ -1587,6 +1760,17 @@ pub async fn get_folder_conversation_core(
             .await;
             summary.external_id = Some(new_ext_id);
         }
+    }
+    let handoffs = handoff_service::list_for_conversation(conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    if !handoffs.is_empty() {
+        let links: Vec<HandoffLink> = handoffs.iter().filter_map(HandoffLink::from_row).collect();
+        let mut segments = Vec::with_capacity(handoffs.len());
+        for row in &handoffs {
+            segments.push(handoff_service::read_segment(conn, row).await.map_err(AppCommandError::from)?);
+        }
+        turns = handoff::splice_handoffs(&links, segments, turns);
     }
     summary.message_count = crate::parsers::message_turn_count(&turns);
     // The transcript is the richer source for the session's model. Codex is
@@ -2358,6 +2542,16 @@ pub async fn create_conversation_core(
     agent_type: AgentType,
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
+    create_conversation_for_account_core(conn, folder_id, agent_type, title, None).await
+}
+
+pub async fn create_conversation_for_account_core(
+    conn: &sea_orm::DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    account_id: Option<String>,
+) -> Result<i32, AppCommandError> {
     let git_branch = if let Some(folder) = folder_service::get_folder_by_id(conn, folder_id)
         .await
         .map_err(AppCommandError::from)?
@@ -2367,7 +2561,7 @@ pub async fn create_conversation_core(
         None
     };
 
-    let model = conversation_service::create(conn, folder_id, agent_type, title, git_branch)
+    let model = conversation_service::create_inner(conn, folder_id, agent_type, title, git_branch, None, conversation::ConversationKind::Regular, account_id)
         .await
         .map_err(AppCommandError::from)?;
     Ok(model.id)
@@ -2381,8 +2575,9 @@ pub async fn create_conversation(
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
+    agent_account_id: Option<String>,
 ) -> Result<i32, AppCommandError> {
-    let id = create_conversation_core(&db.conn, folder_id, agent_type, title).await?;
+    let id = create_conversation_for_account_core(&db.conn, folder_id, agent_type, title, agent_account_id).await?;
     emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, id).await;
     Ok(id)
 }
@@ -2585,6 +2780,17 @@ pub async fn create_chat_conversation_core(
     title: Option<String>,
     existing_dir: Option<&str>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
+    create_chat_conversation_for_account_core(conn, data_dir, agent_type, title, existing_dir, None).await
+}
+
+pub async fn create_chat_conversation_for_account_core(
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    agent_type: AgentType,
+    title: Option<String>,
+    existing_dir: Option<&str>,
+    account_id: Option<String>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
     let path = match existing_dir {
         Some(dir) => {
             std::fs::create_dir_all(dir).map_err(AppCommandError::io)?;
@@ -2605,7 +2811,7 @@ pub async fn create_chat_conversation_core(
     // an orphan (active, conversation-less, never reached by the delete path) and
     // pollute the active-folder scope.
     let model =
-        match conversation_service::create_chat(conn, folder.id, agent_type, title, None).await {
+        match conversation_service::create_inner(conn, folder.id, agent_type, title, None, None, conversation::ConversationKind::Chat, account_id).await {
             Ok(model) => model,
             Err(create_err) => {
                 if let Err(cleanup_err) = folder_service::remove_folder(conn, &folder.path).await {
@@ -2633,6 +2839,7 @@ pub async fn create_chat_conversation(
     agent_type: AgentType,
     title: Option<String>,
     existing_dir: Option<String>,
+    agent_account_id: Option<String>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
     use tauri::Manager;
     let data_dir = app
@@ -2640,12 +2847,13 @@ pub async fn create_chat_conversation(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let result = create_chat_conversation_core(
+    let result = create_chat_conversation_for_account_core(
         &db.conn,
         &data_dir,
         agent_type,
         title,
         existing_dir.as_deref(),
+        agent_account_id,
     )
     .await?;
     emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, result.conversation_id).await;
@@ -2952,6 +3160,7 @@ mod tests {
         let now = chrono::Utc::now();
         DbConversationSummary {
             id,
+            agent_account_id: None,
             folder_id: 1,
             title: None,
             title_locked: false,
@@ -4400,7 +4609,7 @@ mod tests {
         assert_eq!(detail.turns.len(), 2, "turns: {:?}", detail.turns);
 
         // The sub-agent transcript viewer reads by session id the same way.
-        let by_id = get_conversation_core(&db.conn, AgentType::ClaudeCode, session_id.to_string())
+        let by_id = get_conversation_core(&db.conn, None, AgentType::ClaudeCode, session_id.to_string())
             .await
             .expect("read by session id");
         assert_eq!(by_id.turns.len(), 2);
@@ -5827,9 +6036,107 @@ mod tests {
 
     fn key_of(agent: AgentType, id: &str) -> SelectedSessionKey {
         SelectedSessionKey {
+            agent_account_id: None,
             agent_type: agent,
             external_id: id.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn native_account_import_keeps_identical_session_ids_separate() {
+        use crate::db::service::agent_account_service;
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let cwd = data.path().display().to_string();
+        let a = agent_account_service::create(&db.conn, data.path(), AgentType::Codex, "A", None).await.unwrap();
+        let b = agent_account_service::create(&db.conn, data.path(), AgentType::Codex, "B", None).await.unwrap();
+        for (account, title) in [(None, "Default"), (Some(a.id.as_str()), "A"), (Some(b.id.as_str()), "B")] {
+            let mut item = scan_summary("same-native-id", AgentType::Codex, Some(&cwd), at(0));
+            item.1.title = Some(title.into());
+            let mut key = key_of(AgentType::Codex, "same-native-id");
+            key.agent_account_id = account.map(String::from);
+            let result = import_selected_from_account_summaries(&db.conn, &EventEmitter::Noop, vec![item], vec![key], account).await.unwrap();
+            assert_eq!(result.imported, 1, "{title}");
+        }
+        let rows = conversation::Entity::find().all(&db.conn).await.unwrap();
+        assert_eq!(rows.len(), 3);
+        for (account, title) in [(None, "Default"), (Some(a.id.as_str()), "A"), (Some(b.id.as_str()), "B")] {
+            let row = rows.iter().find(|row| row.agent_account_id.as_deref() == account).unwrap();
+            assert_eq!(row.title.as_deref(), Some(title));
+            assert_eq!(row.external_id.as_deref(), Some("same-native-id"));
+        }
+    }
+
+    /// A Claude switch copies the transcript into the target account and
+    /// leaves the source's copy behind. That copy is the switched
+    /// conversation, older: the source account's scan must not offer it, and
+    /// importing it must not add a duplicate, whose row would also block
+    /// switching the conversation back.
+    #[tokio::test]
+    async fn a_switched_conversation_is_not_offered_again_from_the_account_it_left() {
+        use crate::db::entities::conversation::ConversationKind;
+        use crate::db::service::agent_account_service;
+        use sea_orm::EntityTrait;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let cwd = data.path().display().to_string();
+        let folder = seed_folder(&db, &cwd).await;
+        let a = agent_account_service::create(&db.conn, data.path(), AgentType::ClaudeCode, "A", None)
+            .await
+            .unwrap();
+        let b = agent_account_service::create(&db.conn, data.path(), AgentType::ClaudeCode, "B", None)
+            .await
+            .unwrap();
+        let row = conversation_service::create_inner(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            None,
+            None,
+            None,
+            ConversationKind::Regular,
+            Some(b.id.clone()),
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, row.id, "switched", &[])
+            .await
+            .unwrap();
+        let transcript = |home: &str, text: &str| {
+            let dir = std::path::Path::new(home).join("projects/project");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("switched.jsonl"), text).unwrap();
+        };
+        // Switched from A to B, then continued on B.
+        transcript(&a.home_dir, "first\n");
+        transcript(&b.home_dir, "first\nsecond\n");
+        let found = || vec![scan_summary("switched", AgentType::ClaudeCode, Some(&cwd), at(0))];
+        let manager = crate::chat_channel::manager::ChatChannelManager::new();
+        let mut key = key_of(AgentType::ClaudeCode, "switched");
+        key.agent_account_id = Some(a.id.clone());
+
+        let scan = scan_importable_account_summaries(&db.conn, &EventEmitter::Noop, &manager, found(), Some(&a.id))
+            .await
+            .unwrap();
+        assert_eq!(scan.importable_count, 0);
+        assert_eq!(scan.folders[0].sessions[0].status, ScanSessionStatus::Imported);
+        let result = import_selected_from_account_summaries(&db.conn, &EventEmitter::Noop, found(), vec![key.clone()], Some(&a.id))
+            .await
+            .unwrap();
+        assert_eq!((result.imported, result.skipped), (0, 1));
+        assert_eq!(conversation::Entity::find().all(&db.conn).await.unwrap().len(), 1);
+
+        // Continued in A's own CLI, the copy holds turns codeg does not have.
+        transcript(&a.home_dir, "first\nmine\n");
+        let scan = scan_importable_account_summaries(&db.conn, &EventEmitter::Noop, &manager, found(), Some(&a.id))
+            .await
+            .unwrap();
+        assert_eq!(scan.folders[0].sessions[0].status, ScanSessionStatus::New);
+        let result = import_selected_from_account_summaries(&db.conn, &EventEmitter::Noop, found(), vec![key], Some(&a.id))
+            .await
+            .unwrap();
+        assert_eq!(result.imported, 1);
     }
 
     #[test]
@@ -6874,6 +7181,7 @@ mod tests {
     fn windowless_detail(turns: Vec<MessageTurn>) -> DbConversationDetail {
         DbConversationDetail {
             summary: DbConversationSummary {
+                agent_account_id: None,
                 id: 1,
                 folder_id: 1,
                 title: None,

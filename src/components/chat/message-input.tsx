@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { Button } from "@/components/ui/button"
 import {
+  ArrowRightLeft,
   BookOpenText,
   Check,
   ChevronUp,
@@ -255,6 +256,9 @@ interface MessageInputProps {
   /** Grey out the live-feedback "+" entry when a note can't be sent right now
    *  (no active turn / agent lacks the tool). */
   feedbackAddDisabled?: boolean
+  /** Open the "hand off to another agent" dialog from the composer's agent
+   *  control. Present only for a persisted conversation. */
+  onHandoff?: () => void
   /**
    * The current session's user prompts, oldest first — the ArrowUp/ArrowDown
    * recall history. A GETTER rather than an array on purpose: prompts are
@@ -365,12 +369,14 @@ export function MessageInput({
   steerChannel = "pull",
   onAddFeedback,
   feedbackAddDisabled,
+  onHandoff,
   injectContent,
   onInjectConsumed,
   getSentHistory,
   tall = false,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
+  const tHandoff = useTranslations("Folder.chat.agentHandoff")
   const tQueue = useTranslations("Folder.chat.messageQueue")
   // Kept as a separate binding from `t` so its call sites — exclusively
   // upload / attachment toasts — read as a single coherent group when
@@ -2138,6 +2144,18 @@ export function MessageInput({
                       }
                       onChange={handleSessionSettingChange}
                     />
+                  )}
+                  {onHandoff && (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={onHandoff}
+                      disabled={disabled || isPrompting}
+                      title={tHandoff("menuLabel")}
+                      aria-label={tHandoff("menuLabel")}
+                    >
+                      <ArrowRightLeft className="size-3.5" />
+                    </Button>
                   )}
                 </div>
                 <div className="shrink-0">{actionButtons}</div>

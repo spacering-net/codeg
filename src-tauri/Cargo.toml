@@ -187,7 +187,8 @@ ignore = "0.4"
 # `usage`.) No default features: codeg runs an agent through its own transport
 # (`acp/agent_process.rs`), not the crate's `process`/`stdio` ones.
 agent-client-protocol = { version = "3.4.0", features = ["unstable_session_fork"] }
-tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt", "net", "rt-multi-thread"] }
+# Handoff context MCP reads stdin and writes stdout through Tokio.
+tokio = { version = "1", features = ["process", "io-util", "io-std", "sync", "macros", "rt", "net", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 # Version-5 UUIDs (browser profile data-store identifiers) by hand: uuid's
 # own `v5` feature would pull a second SHA-1 crate next to this one.
@@ -357,4 +358,3 @@ temp-env = { version = "0.3", features = ["async_closure"] }
 tokio = { version = "1", features = ["test-util", "macros", "rt", "sync", "time"] }
 insta = { version = "1", features = ["json", "redactions"] }
 axum-test = { version = "17", features = ["ws"] }
-

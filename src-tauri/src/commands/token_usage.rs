@@ -275,13 +275,34 @@ pub(crate) fn facts_from_detail(
     detail: &DbConversationDetail,
     fallback_at: DateTime<Utc>,
 ) -> Vec<UsageFact> {
-    let session_model = detail.summary.model.as_deref();
-    let per_turn = facts_from_turns(&detail.turns, session_model);
+    let mut facts = Vec::new();
+    let mut start = 0;
+    for (index, turn) in detail.turns.iter().enumerate() {
+        let marker = turn.blocks.iter().find_map(|block| match block {
+            crate::models::ContentBlock::ToolUse { meta: Some(meta), .. } => meta.get(crate::acp::handoff::HANDOFF_META_KEY),
+            _ => None,
+        });
+        let Some(marker) = marker.filter(|m| m.get("carried").and_then(|v| v.as_bool()) == Some(false)) else { continue; };
+        let stats = marker.get("sourceStats").cloned().and_then(|v| serde_json::from_value::<crate::models::SessionStats>(v).ok());
+        let model = marker.get("sourceModel").and_then(|v| v.as_str());
+        let mut segment = facts_from_segment(&detail.turns[start..index], model, stats.as_ref(), turn.timestamp);
+        for fact in &mut segment {
+            if fact.turn_key == SESSION_TOTAL_TURN_KEY { fact.turn_key = format!("handoff-usage-{index}:{}", fact.turn_key); }
+        }
+        facts.extend(segment);
+        start = index + 1;
+    }
+    facts.extend(facts_from_segment(&detail.turns[start..], detail.summary.model.as_deref(), detail.session_stats.as_ref(), fallback_at));
+    facts
+}
+
+fn facts_from_segment(turns: &[MessageTurn], session_model: Option<&str>, stats: Option<&crate::models::SessionStats>, fallback_at: DateTime<Utc>) -> Vec<UsageFact> {
+    let per_turn = facts_from_turns(turns, session_model);
     if !per_turn.is_empty() {
         return per_turn;
     }
 
-    let Some(stats) = detail.session_stats.as_ref() else {
+    let Some(stats) = stats else {
         return Vec::new();
     };
     let Some(usage) = stats.total_usage.as_ref() else {
@@ -298,8 +319,7 @@ pub(crate) fn facts_from_detail(
     // The end of the conversation is the least-wrong single instant for a
     // session-wide total; `fallback_at` (the row's `updated_at`) covers a
     // conversation whose transcript has stats but no turns at all.
-    let occurred_at = detail
-        .turns
+    let occurred_at = turns
         .last()
         .map(|t| t.completed_at.unwrap_or(t.timestamp))
         .unwrap_or(fallback_at);
@@ -307,10 +327,7 @@ pub(crate) fn facts_from_detail(
     vec![UsageFact {
         turn_key: SESSION_TOTAL_TURN_KEY.to_string(),
         occurred_at,
-        model: detail
-            .summary
-            .model
-            .as_ref()
+        model: session_model
             .map(|m| m.trim().to_string())
             .filter(|m| !m.is_empty()),
         input_tokens: input,
@@ -1364,6 +1381,7 @@ mod tests {
     fn detail(turns: Vec<MessageTurn>, stats: Option<SessionStats>) -> DbConversationDetail {
         DbConversationDetail {
             summary: DbConversationSummary {
+                agent_account_id: None,
                 id: 1,
                 folder_id: 1,
                 title: None,
@@ -1410,6 +1428,28 @@ mod tests {
             context_window_max_tokens: None,
             context_window_usage_percent: None,
         }
+    }
+
+    #[test]
+    fn handoff_keeps_source_session_totals_and_each_segments_model() {
+        use crate::acp::handoff::{divider_turn, HandoffLink, HandoffPath};
+        use crate::models::AgentType;
+        let boundary = divider_turn(&HandoffLink {
+            from_agent_type: AgentType::Hermes, from_external_id: Some("old".into()),
+            to_agent_type: AgentType::ClaudeCode, to_external_id: "new".into(),
+            path: HandoffPath::Context, carried: false, user_turns_before: 1,
+            note: None, briefing: None, truncated: false, at: ts("2026-08-01T10:30:00Z"),
+            context_id: None, source_stats: Some(serde_json::to_value(session_stats(500,100)).unwrap()),
+            source_model: Some("original-model".into()),
+        },0);
+        let old = turn("old", None, "2026-08-01T10:00:00Z");
+        let new = turn("new", Some(usage(10,5,0,0)), "2026-08-01T11:00:00Z");
+        let facts = facts_from_detail(&detail(vec![old,boundary,new],Some(session_stats(999,999))),ts("2026-08-01T12:00:00Z"));
+        assert_eq!(facts.len(),2);
+        assert_eq!(facts.iter().map(UsageFact::total_tokens).sum::<i64>(),615);
+        assert_eq!(facts[0].model.as_deref(),Some("original-model"));
+        assert_eq!(facts[1].model.as_deref(),Some("claude-opus-5"));
+        assert_ne!(facts[0].turn_key,facts[1].turn_key);
     }
 
     #[test]

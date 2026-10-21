@@ -1497,20 +1497,76 @@ fn tag_mcp_suspect(
 struct ConnectionCleanupGuard {
     connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
     connection_id: String,
+    /// The manager's list of children that may still be running. An entry
+    /// still mapped here means the connection ended on its own (every explicit
+    /// teardown removes it first and parks the child itself), so it is parked
+    /// the same way: the process is only signalled as the task ends and can
+    /// keep writing its transcript until it is reaped.
+    draining: Arc<tokio::sync::Mutex<crate::acp::manager::DrainingChildren>>,
+    /// The runtime the connection was spawned on. The guard drops on the
+    /// connection's own thread after `block_on` has returned — outside any
+    /// runtime context, where `tokio::spawn` would panic — so the deferred
+    /// cleanup is spawned through this handle.
+    runtime: tokio::runtime::Handle,
 }
 
 impl Drop for ConnectionCleanupGuard {
     fn drop(&mut self) {
+        // The map lock is held across the handoff into `draining`, as every
+        // other teardown does, so no observer can find the child in neither.
         if let Ok(mut guard) = self.connections.try_lock() {
-            guard.remove(&self.connection_id);
-            return;
+            let parked = match guard.get(&self.connection_id) {
+                None => return,
+                Some(connection) => {
+                    match (self.draining.try_lock(), connection.state.try_read()) {
+                        (Ok(mut draining), Ok(state)) => {
+                            crate::acp::manager::park_ended_child(
+                                &mut draining,
+                                connection,
+                                &state,
+                            );
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+            };
+            if parked {
+                guard.remove(&self.connection_id);
+                return;
+            }
         }
         let connections = self.connections.clone();
+        let draining = self.draining.clone();
         let connection_id = std::mem::take(&mut self.connection_id);
-        tokio::spawn(async move {
-            connections.lock().await.remove(&connection_id);
+        self.runtime.spawn(async move {
+            let mut guard = connections.lock().await;
+            let Some(connection) = guard.get(&connection_id) else {
+                return;
+            };
+            let mut draining = draining.lock().await;
+            let state = connection.state.read().await;
+            crate::acp::manager::park_ended_child(&mut draining, connection, &state);
+            drop(state);
+            guard.remove(&connection_id);
         });
     }
+}
+
+/// Drop the cleanup guard a connection task holds, as its end does.
+#[cfg(test)]
+pub(crate) fn end_connection_task_for_test(
+    connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
+    connection_id: &str,
+    draining: Arc<tokio::sync::Mutex<crate::acp::manager::DrainingChildren>>,
+    runtime: tokio::runtime::Handle,
+) {
+    drop(ConnectionCleanupGuard {
+        connections,
+        connection_id: connection_id.to_string(),
+        draining,
+        runtime,
+    });
 }
 
 /// Represents a single active ACP agent connection.
@@ -2016,6 +2072,7 @@ async fn build_agent(
     cwd: &Path,
     stderr_tail: &Arc<StderrTail>,
     scratch: Option<&Path>,
+    account_home: Option<&Path>,
 ) -> Result<AcpAgent, AcpError> {
     // A conversation can outlive the custom-agent definition it was started
     // with (the user deleted it in settings). `get_agent_meta` cannot report
@@ -2071,7 +2128,7 @@ async fn build_agent(
                 // a notice shown once the connection is up comes after the code it
                 // warns about has already run.
                 if let Some(message) =
-                    crate::commands::acp::pi_project_trust_launch_block(cwd, runtime_env)
+                    crate::commands::acp::pi_project_trust_launch_block(cwd, runtime_env, account_home)
                 {
                     return Err(AcpError::PiProjectTrustRequired(message));
                 }
@@ -2080,7 +2137,7 @@ async fn build_agent(
             // `grok_launch_permission_mode` below) so the policy helper stays a
             // pure function over the env list.
             let codex_initial_mode = if agent_type == AgentType::Codex {
-                crate::commands::acp::codex_launch_initial_agent_mode()
+                crate::commands::acp::codex_launch_initial_agent_mode(runtime_env)
             } else {
                 None
             };
@@ -2138,7 +2195,7 @@ async fn build_agent(
             //    launch flag, not a live `session/set_mode`, is the control point.)
             if agent_type == AgentType::Grok {
                 parts.push("--no-auto-update".into());
-                if let Some(mode) = crate::commands::acp::grok_launch_permission_mode() {
+                if let Some(mode) = crate::commands::acp::grok_launch_permission_mode(runtime_env) {
                     parts.push("--permission-mode".into());
                     parts.push(mode);
                 }
@@ -2553,15 +2610,16 @@ const ACP_CONNECTION_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// exits (timeout, error, or clean disconnect), so the manager never
 /// leaks stale entries after a connection tears down.
 #[allow(clippy::too_many_arguments)]
-pub async fn spawn_agent_connection(
+pub(crate) async fn spawn_agent_connection(
     connection_id: String,
     agent_type: AgentType,
     working_dir: Option<String>,
     session_id: Option<String>,
-    runtime_env: BTreeMap<String, String>,
+    mut runtime_env: BTreeMap<String, String>,
     owner_window_label: String,
     emitter: EventEmitter,
     connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
+    draining: Arc<tokio::sync::Mutex<crate::acp::manager::DrainingChildren>>,
     preferred_mode_id: Option<String>,
     preferred_config_values: BTreeMap<String, String>,
     delegation_injection: Option<DelegationInjection>,
@@ -2580,6 +2638,12 @@ pub async fn spawn_agent_connection(
         owner_window_label.clone(),
         None, // folder_id 由后续 prompt handler 在首次 send 时绑定 (Phase 2)
     );
+    initial_state.storage_identity = crate::acp::agent_accounts::storage_identity(agent_type, &runtime_env);
+    initial_state.requested_session_id = session_id.clone();
+    initial_state.agent_account_id = runtime_env.remove(crate::acp::agent_accounts::ACCOUNT_ENV);
+    let account_home = runtime_env.remove(crate::acp::agent_accounts::ACCOUNT_HOME_ENV).map(PathBuf::from);
+    initial_state.account_home = account_home.clone();
+    initial_state.handoff_context_id = runtime_env.remove(crate::acp::handoff_context::CONTEXT_ENV);
 
     // Install the SessionStarted dedup signal BEFORE wrapping into Arc so the
     // first event (StatusChanged{Connecting} below) doesn't race with the
@@ -2646,6 +2710,7 @@ pub async fn spawn_agent_connection(
         &launch_cwd,
         &stderr_tail,
         scratch.as_ref().map(|s| s.path()),
+        account_home.as_deref(),
     )
     .await
     {
@@ -2738,7 +2803,7 @@ pub async fn spawn_agent_connection(
     // volatile keys) plus the agent's native config file content, so a later
     // settings save can be compared against it to detect a stale running session.
     let config_fingerprint =
-        crate::commands::acp::fingerprint_config(agent_type, &runtime_env);
+        crate::commands::acp::fingerprint_account_config(agent_type, &runtime_env, account_home.as_deref());
 
     // Insert the entry BEFORE spawning the background task so that a
     // fast-failing `run_connection` can never remove it before it was
@@ -2778,6 +2843,8 @@ pub async fn spawn_agent_connection(
     let cleanup_guard = ConnectionCleanupGuard {
         connections: cleanup_connections,
         connection_id: cleanup_connection_id,
+        draining,
+        runtime: connection_rt.clone(),
     };
     let connection_thread = std::thread::Builder::new()
         .name(format!("acp-conn-{conn_id}"))
@@ -5669,7 +5736,7 @@ async fn current_grok_model_id(state: &Arc<RwLock<SessionState>>) -> Option<Stri
 /// and every heuristic family at once. [`grok_window_change_usage`] is what
 /// keeps that from stranding a previous model's window on screen.
 async fn grok_current_model_context_window(state: &Arc<RwLock<SessionState>>) -> Option<u64> {
-    let (model, reported) = {
+    let (model, reported, account_home) = {
         let st = state.read().await;
         let model = current_grok_model_id_from_opts(st.config_options.as_deref()?)?;
         let reported = st
@@ -5677,11 +5744,11 @@ async fn grok_current_model_context_window(state: &Arc<RwLock<SessionState>>) ->
             .as_ref()
             .and_then(|specs| specs.get(&model))
             .and_then(|spec| spec.context_window);
-        (model, reported)
+        (model, reported, st.account_home.clone())
     };
     // Lock released: the catalog lookup below touches the filesystem.
     reported.or_else(|| {
-        grok_offline_context_window(&model, &crate::parsers::grok::resolve_grok_home_dir())
+        grok_offline_context_window(&model, &account_home.unwrap_or_else(crate::parsers::grok::resolve_grok_home_dir))
     })
 }
 
@@ -8390,6 +8457,16 @@ async fn run_connection(
                 }
             }
 
+            if let Some(context_id) = state.read().await.handoff_context_id.clone() {
+                if agent_supports_mcp && agent_delivers_wire_mcp(agent_type) {
+                    let binary = locate_codeg_mcp_binary().ok_or_else(|| agent_client_protocol::util::internal_error("The conversation context tool is not installed. Reinstall Codeg before switching agents."))?;
+                    let directory = crate::acp::handoff_context::context_directory(&context_id).map_err(agent_client_protocol::util::internal_error)?;
+                    mcp_servers.push(McpServer::Stdio(McpServerStdio::new("codeg-context", binary).args(vec![
+                        "--conversation-context".into(), directory.to_string_lossy().into_owned(), std::process::id().to_string(),
+                    ])));
+                }
+            }
+
             // Emit fork support capability
             emit_with_state(
                 &state,
@@ -8435,6 +8512,7 @@ async fn run_connection(
                     );
                     match unless_cancelled(&handshake, send_resume_session(&cx, resume_req)).await? {
                         Ok((resume_resp, models_raw)) => {
+                            state.write().await.restored_session_id = Some(sid.clone());
                             let initial_config_options = resume_resp.config_options.clone();
                             let new_resp = NewSessionResponse::new(SessionId::new(sid.clone()))
                                 .modes(resume_resp.modes)
@@ -8603,6 +8681,7 @@ async fn run_connection(
 
                 match load_result {
                     Ok(load_resp) => {
+                        state.write().await.restored_session_id = Some(sid.clone());
                         let initial_config_options = load_resp.config_options.clone();
                         let new_resp = NewSessionResponse::new(SessionId::new(sid.clone()))
                             .modes(load_resp.modes)
@@ -30176,10 +30255,13 @@ mod tests {
                     )
                     .connect_with(agent_end, async move |cx: ConnectionTo<Client>| {
                         cx.incoming_closed().await;
-                        let _ = closed_tx.send(());
                         Ok(())
                     })
                     .await;
+                // Transport shutdown can finish connect_with before its main
+                // callback observes incoming_closed. Report completion outside
+                // that callback so either shutdown path wakes the test.
+                let _ = closed_tx.send(());
             });
             Self {
                 seen,

@@ -46,6 +46,8 @@ import {
   ContextCompactionCard,
   isContextCompactionMeta,
 } from "./context-compaction-card"
+import { AgentHandoffCard } from "./agent-handoff-card"
+import { isAgentHandoffMeta } from "@/lib/agent-handoff"
 import { contextCompactionSummary } from "@/lib/context-compaction"
 import { FeedbackCheckResultCard } from "./feedback-check-result-card"
 import { TurnErrorPart } from "./turn-error-part"
@@ -2748,6 +2750,11 @@ const ToolCallPart = memo(function ToolCallPart({
         summary={contextCompactionSummary(part.meta, part.output)}
       />
     )
+  }
+  // The other between-turns marker: a conversation handed to a different
+  // agent (`_meta["codeg.handoff"]`, see `acp::handoff`).
+  if (isAgentHandoffMeta(part.meta)) {
+    return <AgentHandoffCard meta={part.meta} />
   }
 
   // Agent/subagent tools get a dedicated container rendering
