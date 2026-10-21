@@ -2472,6 +2472,7 @@
       "toggleTerminal": "Basculer le terminal",
       "toggleAuxPanel": "Basculer le panneau auxiliaire",
       "search": "Rechercher",
+      "openTabs": "Onglets ouverts",
       "openSettings": "Ouvrir les paramètres",
       "backToConversations": "Retour aux conversations",
       "withShortcut": "{label} (raccourci : {shortcut})"
