@@ -18,13 +18,49 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { acpQoderAuthStatus, acpUpdateAgentConfig } from "@/lib/api"
-import type { AcpAgentInfo, QoderAuthStatus } from "@/lib/types"
+import {
+  acpQoderAuthStatus,
+  acpQoderQuota,
+  acpUpdateAgentConfig,
+} from "@/lib/api"
+import type { AcpAgentInfo, QoderAuthStatus, QoderQuota } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /** Qoder's non-interactive credential, for machines where the browser login
  * flow can't run. Mirrors the backend's `agent_env_keys(Qoder)`. */
 const QODER_PAT_ENV = "QODER_PERSONAL_ACCESS_TOKEN"
+
+/** Credits read as whole numbers while they are whole (`3000`, not `3000.00`),
+ * which is how Qoder's own surfaces show them. */
+export function formatQoderCredits(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return ""
+  return Number.isInteger(value)
+    ? String(value)
+    : String(Number(value.toFixed(2)))
+}
+
+/**
+ * The account's credits for the auth card: one number beside the account name -
+ * what is left across every package the account has, which is the allowance a
+ * request actually draws on. The packages it is summed from (the personal plan,
+ * the organization's shared package, any add-on) are deliberately not itemised
+ * here; the backend sums them and reports the total.
+ *
+ * `remaining` receives the number and returns the whole line, so the unit is
+ * spelled by the locale ("788 credits left" / "剩余 788") rather than pasted
+ * from the raw token the service happens to send.
+ */
+export function qoderQuotaSummary(
+  quota: QoderQuota,
+  labels: { remaining: (credits: string) => string; exceeded: string }
+): { line: string; title: string } {
+  const credits = formatQoderCredits(quota.total_remaining)
+  const line = labels.remaining(credits || "—")
+  const title = [line, quota.is_quota_exceeded ? labels.exceeded : ""]
+    .filter(Boolean)
+    .join("\n")
+  return { line, title }
+}
 
 /** Build the env map to persist: the PAT, or its removal when the field is
  * cleared (an empty value would be an empty credential, not "use the browser
@@ -110,6 +146,9 @@ export function QoderConfigPanel({
 
   // --- auth card ---
   const [auth, setAuth] = useState<QoderAuthStatus | null>(null)
+  // The account's credits, from their own probe: the CLI's usage lookup takes
+  // seconds even when it succeeds, so it must not hold the account line back.
+  const [quota, setQuota] = useState<QoderQuota | null>(null)
   const [authLoading, setAuthLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const [token, setToken] = useState(() => agent.env[QODER_PAT_ENV] ?? "")
@@ -127,10 +166,15 @@ export function QoderConfigPanel({
   )
 
   const mountedRef = useRef(true)
+  // Every refresh owns a generation. Two probes answer it at their own pace, so
+  // a slow reply for a credential that is no longer on screen would otherwise
+  // land on the current row; a reply from an older generation is dropped.
+  const refreshGeneration = useRef(0)
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      refreshGeneration.current += 1
     }
   }, [])
 
@@ -172,17 +216,49 @@ export function QoderConfigPanel({
     rawConfigRef.current = rawConfig
   }, [rawConfig, token])
 
+  // A balance belongs to one account: typing (or re-seeding) a token drops it
+  // until a refresh answers for the new credential, so a name never sits beside
+  // the previous account's credits.
+  useEffect(() => {
+    setQuota(null)
+  }, [token])
+
   const refreshAuth = useCallback(async () => {
+    const generation = ++refreshGeneration.current
+    // Read the token ONCE for both calls: they must answer about the same
+    // credential, or the row could mix one account's name with another's
+    // credits.
+    const liveToken = tokenRef.current
+    /** Is this still the refresh the row is showing? */
+    const current = () =>
+      mountedRef.current && refreshGeneration.current === generation
+    setQuota(null)
     setAuthLoading(true)
-    try {
-      const status = await acpQoderAuthStatus(tokenRef.current)
-      if (mountedRef.current) setAuth(status)
-    } catch {
-      // Probe failures surface through `auth.error`; a transport-level failure
-      // just leaves the card in its unknown state.
-    } finally {
-      if (mountedRef.current) setAuthLoading(false)
-    }
+    // Both probes run at once and land on their own: the account line must not
+    // wait for the slower usage lookup, and one failing must not hide the other.
+    const status = acpQoderAuthStatus(liveToken).then(
+      (answer) => {
+        if (current()) setAuth(answer)
+      },
+      () => {
+        // Probe failures surface through `auth.error`; a transport failure just
+        // leaves the card in its unknown state.
+      }
+    )
+    const credits = acpQoderQuota(liveToken).then(
+      (answer) => {
+        if (current()) setQuota(answer)
+      },
+      () => {
+        // A failed lookup is the same "no numbers" as a null answer: the row
+        // simply carries no credits.
+      }
+    )
+    // The spinner describes the account line; the credits may still be in
+    // flight behind it.
+    await status
+    if (current()) setAuthLoading(false)
+    await credits
   }, [])
 
   useEffect(() => {
@@ -271,6 +347,20 @@ export function QoderConfigPanel({
 
   const busy = saving || savingToken
 
+  // The account's credits for the row above; absent until the usage probe
+  // answers, and absent for good when the CLI holds no credential the lookup
+  // can use.
+  const quotaSummary = useMemo(
+    () =>
+      quota
+        ? qoderQuotaSummary(quota, {
+            remaining: (credits) => t("qoder.quotaRemaining", { credits }),
+            exceeded: t("qoder.quotaExceeded"),
+          })
+        : { line: "", title: "" },
+    [quota, t]
+  )
+
   return (
     <div className="space-y-3 rounded-md border bg-muted/10 p-3">
       <div>
@@ -314,6 +404,20 @@ export function QoderConfigPanel({
                 {auth.user_type}
               </span>
             ) : null}
+            {authState === "ok" && quota ? (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-3xs tabular-nums",
+                  quota.is_quota_exceeded
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted text-muted-foreground"
+                )}
+                data-testid="qoder-quota"
+                title={quotaSummary.title}
+              >
+                {quotaSummary.line}
+              </span>
+            ) : null}
             {auth?.version ? (
               <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
                 {auth.version}
@@ -321,6 +425,7 @@ export function QoderConfigPanel({
             ) : null}
             <Button
               className="h-6 w-6"
+              data-testid="qoder-auth-refresh"
               disabled={authLoading}
               onClick={() => void refreshAuth()}
               size="icon"
