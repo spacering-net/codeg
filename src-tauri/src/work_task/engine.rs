@@ -32,9 +32,9 @@ use crate::acp::types::{
 };
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::acp::InternalEventBus;
-use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
+use crate::commands::acp::{build_account_session_runtime_env, verify_agent_installed};
 use crate::commands::conversations::{
-    create_conversation_core, emit_conversation_upsert, get_folder_conversation_core,
+    create_conversation_for_account_core, emit_conversation_upsert, get_folder_conversation_core,
 };
 use crate::commands::folders::{
     emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add,
@@ -1315,8 +1315,12 @@ impl TaskEngine {
         }
 
         // Resume the previous session for retry/return/merge when we have one.
-        let resume_session_id = match mode {
-            LaunchMode::Fresh => None,
+        // Its conversation may since have been moved to another account (the
+        // chat's account switch): the session now lives in that account's
+        // folder, so the relaunch, and a fresh row should the resume fail, use
+        // the conversation's saved account, never the Default one.
+        let (resume_session_id, resume_account_id) = match mode {
+            LaunchMode::Fresh => (None, None),
             LaunchMode::Retry | LaunchMode::Return { .. } | LaunchMode::Merge { .. } => {
                 match task.conversation_id {
                     Some(conv_id) => conversation::Entity::find_by_id(conv_id)
@@ -1324,16 +1328,22 @@ impl TaskEngine {
                         .await
                         .ok()
                         .flatten()
-                        .and_then(|c| c.external_id),
-                    None => None,
+                        .map(|c| (c.external_id, c.agent_account_id))
+                        .unwrap_or_default(),
+                    None => (None, None),
                 }
             }
         };
 
-        let runtime_env =
-            build_session_runtime_env(&self.db, agent_type, resume_session_id.as_deref(), &self.data_dir)
-                .await
-                .map_err(|e| e.to_string())?;
+        let runtime_env = build_account_session_runtime_env(
+            &self.db,
+            agent_type,
+            resume_session_id.as_deref(),
+            &self.data_dir,
+            resume_account_id.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         verify_agent_installed(agent_type)
             .await
             .map_err(|e| e.to_string())?;
@@ -1396,11 +1406,12 @@ impl TaskEngine {
             task.conversation_id.expect("resumed implies conversation")
         } else {
             let title = conversation_title_for_task(&task.title);
-            let id = match create_conversation_core(
+            let id = match create_conversation_for_account_core(
                 &self.db.conn,
                 wt.folder_id,
                 agent_type,
                 Some(title),
+                resume_account_id.clone(),
             )
             .await
             {

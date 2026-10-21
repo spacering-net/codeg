@@ -494,6 +494,7 @@ async fn run_watch(
     let wire_title_wake = Arc::clone(&state.read().await.wire_title_wake);
     loop {
         wait_for_poll(ws.poll_delay(), &wire_title_wake).await;
+        ws.account_projects_dir = state.read().await.account_home.as_ref().map(|home| home.join("projects"));
 
         let (session_id, session_changed_at, is_prompting, turn_ended_abnormally) = {
             let s = state.read().await;
@@ -647,6 +648,7 @@ enum Mode {
 }
 
 pub(crate) struct WatchState {
+    account_projects_dir: Option<PathBuf>,
     session_id: Option<String>,
     file: Option<PathBuf>,
     /// Bytes consumed through the last complete line — the emitted watermark.
@@ -775,6 +777,7 @@ pub(crate) struct WatchState {
 impl WatchState {
     pub(crate) fn new() -> Self {
         Self {
+            account_projects_dir: None,
             session_id: None,
             file: None,
             committed: 0,
@@ -999,7 +1002,11 @@ impl WatchState {
         // this watch rolled onto instead.
         if self.file.is_none() {
             let lookup_id = self.rolled_over_id.clone().unwrap_or_else(|| session_id.clone());
-            if let Some(f) = find_session_file_in(projects_dir, &lookup_id) {
+            let located = match &self.account_projects_dir {
+                Some(base) => find_session_file_in(base, &lookup_id),
+                None => find_session_file_in(projects_dir, &lookup_id),
+            };
+            if let Some(f) = located {
                 self.adopt_file(f);
             }
             if let Some(f) = &self.file {

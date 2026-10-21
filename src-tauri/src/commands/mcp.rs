@@ -12,6 +12,7 @@ use crate::app_error::AppCommandError;
 
 const MARKETPLACE_OFFICIAL: &str = "official_registry";
 const MARKETPLACE_SMITHERY: &str = "smithery";
+static MCP_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static MARKETPLACE_HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(8))
@@ -383,8 +384,10 @@ pub async fn mcp_get_marketplace_server_detail(
     }
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_install_from_marketplace(
+
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_install_from_marketplace_core(
+    db: &crate::db::AppDatabase,
     provider_id: String,
     server_id: String,
     apps: Vec<McpAppType>,
@@ -393,6 +396,7 @@ pub async fn mcp_install_from_marketplace(
     protocol: Option<String>,
     parameter_values: Option<Value>,
 ) -> Result<LocalMcpServer, AppCommandError> {
+    let native_accounts = native_account_homes(db).await?;
     let normalized_apps = normalize_apps(apps);
     if normalized_apps.is_empty() {
         return Err(mcp_invalid_input("at least one target app is required")
@@ -435,15 +439,21 @@ pub async fn mcp_install_from_marketplace(
     }
     // A selected-but-excluded app can't host this transport; remove any stale entry
     // for this id there so it can't win scan precedence and reclassify the spec.
+    with_upsert_preflight(&hostable.iter().copied().collect(), || {
+    preflight_native_account_homes(&native_accounts)?;
     for app in excluded {
         tracing::warn!(
             "[MCP] {app:?} cannot host server '{server_id}' (transport unsupported); removing any stale entry"
         );
         let _ = remove_server_for_app(app, &server_id)?;
+        fanout_native_account_homes(&native_accounts, app, &server_id, None)?;
     }
     for app in hostable {
         upsert_server_for_app(app, &server_id, &canonical_spec)?;
+        fanout_native_account_homes(&native_accounts, app, &server_id, Some(&canonical_spec))?;
     }
+    Ok(())
+    })?;
 
     find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
@@ -462,13 +472,15 @@ pub async fn mcp_install_from_marketplace(
 /// which fields the user touched. A client that sends none (a new server, or
 /// an older build) gets the scan's spec for the id as the closest stand-in,
 /// and a new server has none.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_upsert_local_server(
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_upsert_local_server_core(
+    db: &crate::db::AppDatabase,
     server_id: String,
     spec: Value,
     apps: Vec<McpAppType>,
     shown_spec: Option<Value>,
 ) -> Result<LocalMcpServer, AppCommandError> {
+    let native_accounts = native_account_homes(db).await?;
     let canonical_spec = canonicalize_spec(&spec, "local MCP save")?;
     let target_apps = normalize_apps(apps);
     if target_apps.is_empty() {
@@ -508,6 +520,7 @@ pub async fn mcp_upsert_local_server(
             .map(|server| server.spec.clone()),
     };
     with_upsert_preflight(&target_set, || {
+        preflight_native_account_homes(&native_accounts)?;
         for app in ALL_MCP_APPS {
             if target_set.contains(&app) {
                 match (app, shown.as_ref()) {
@@ -519,8 +532,10 @@ pub async fn mcp_upsert_local_server(
                     }
                     _ => upsert_server_for_app(app, &server_id, &canonical_spec)?,
                 }
+                fanout_native_account_homes(&native_accounts, app, &server_id, Some(&canonical_spec))?;
             } else {
                 let _ = remove_server_for_app(app, &server_id)?;
+                fanout_native_account_homes(&native_accounts, app, &server_id, None)?;
             }
         }
         Ok(())
@@ -533,11 +548,14 @@ pub async fn mcp_upsert_local_server(
     })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_set_server_apps(
+
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_set_server_apps_core(
+    db: &crate::db::AppDatabase,
     server_id: String,
     apps: Vec<McpAppType>,
 ) -> Result<Option<LocalMcpServer>, AppCommandError> {
+    let native_accounts = native_account_homes(db).await?;
     let target_apps = normalize_apps(apps);
     let scan = scan_local_servers();
     require_complete_scan(&scan)?;
@@ -571,11 +589,14 @@ pub async fn mcp_set_server_apps(
     // otherwise it is dropped from its old agents and added to none.
     let added: BTreeSet<McpAppType> = target_set.difference(&current_set).copied().collect();
     with_upsert_preflight(&added, || {
+        preflight_native_account_homes(&native_accounts)?;
         for app in current_set.difference(&target_set) {
             remove_server_for_app(*app, &server_id)?;
+            fanout_native_account_homes(&native_accounts, *app, &server_id, None)?;
         }
         for app in &added {
             upsert_server_for_app(*app, &server_id, &current.spec)?;
+            fanout_native_account_homes(&native_accounts, *app, &server_id, Some(&current.spec))?;
         }
         Ok(())
     })?;
@@ -583,11 +604,14 @@ pub async fn mcp_set_server_apps(
     Ok(find_local_server(&server_id))
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_remove_server(
+
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_remove_server_core(
+    db: &crate::db::AppDatabase,
     server_id: String,
     apps: Option<Vec<McpAppType>>,
 ) -> Result<bool, AppCommandError> {
+    let native_accounts = native_account_homes(db).await?;
     let target_apps = match apps {
         Some(selected) => normalize_apps(selected),
         None => ALL_MCP_APPS.to_vec(),
@@ -597,9 +621,13 @@ pub async fn mcp_remove_server(
         return Ok(false);
     }
 
+    let _guard = MCP_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    preflight_native_account_homes(&native_accounts)?;
     let mut removed = false;
     for app in target_apps {
         removed |= remove_server_for_app(app, &server_id)?;
+        fanout_native_account_homes(&native_accounts, app, &server_id, None)?;
     }
     Ok(removed)
 }
@@ -887,7 +915,30 @@ fn read_json_file(path: &Path) -> Result<Value, AppCommandError> {
         .map_err(|e| mcp_configuration_invalid(format!("invalid JSON at {}: {e}", path.display())))
 }
 
+/// Whether `path` already parses to exactly `value`.
+fn json_file_holds(path: &Path, value: &Value) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .is_some_and(|current| current == *value)
+}
+
+/// Whether `path` already parses to exactly `value`.
+fn toml_file_holds(path: &Path, value: &toml::Value) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| raw.parse::<toml::Value>().ok())
+        .is_some_and(|current| current == *value)
+}
+
 fn write_json_file(path: &Path, value: &Value) -> Result<(), AppCommandError> {
+    // A rewrite that changes nothing leaves the file alone. Named accounts
+    // re-apply the shared servers on every launch, into config files their
+    // own running CLIs rewrite too (`.claude.json` constantly); rewriting an
+    // unchanged file would only race those writers and risk their updates.
+    if json_file_holds(path, value) {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(AppCommandError::io)?;
     }
@@ -901,8 +952,11 @@ fn write_json_file(path: &Path, value: &Value) -> Result<(), AppCommandError> {
 }
 
 fn read_codex_root_toml() -> Result<toml::Value, AppCommandError> {
-    let path = codex_config_toml_path();
-    let Some(raw) = read_config_to_string(&path)? else {
+    read_codex_root_toml_at(&codex_config_toml_path())
+}
+
+fn read_codex_root_toml_at(path: &Path) -> Result<toml::Value, AppCommandError> {
+    let Some(raw) = read_config_to_string(path)? else {
         return Ok(toml::Value::Table(toml::map::Map::new()));
     };
     let parsed = raw.parse::<toml::Value>().map_err(|e| {
@@ -919,8 +973,11 @@ fn read_codex_root_toml() -> Result<toml::Value, AppCommandError> {
     Ok(parsed)
 }
 
-fn write_codex_root_toml(root: &toml::Value) -> Result<(), AppCommandError> {
-    let path = codex_config_toml_path();
+fn write_codex_root_toml_at(path: &Path, root: &toml::Value) -> Result<(), AppCommandError> {
+    // See `write_json_file`: an unchanged config is not rewritten.
+    if toml_file_holds(path, root) {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(AppCommandError::io)?;
     }
@@ -931,7 +988,7 @@ fn write_codex_root_toml(root: &toml::Value) -> Result<(), AppCommandError> {
             path.display()
         ))
     })?;
-    fs::write(&path, format!("{serialized}\n")).map_err(AppCommandError::io)
+    fs::write(path, format!("{serialized}\n")).map_err(AppCommandError::io)
 }
 
 fn obj_as_string_map(value: Option<&Value>) -> Option<Map<String, Value>> {
@@ -1728,8 +1785,11 @@ fn read_claude_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
 }
 
 fn upsert_claude_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let path = claude_config_path();
-    let mut root = read_json_file(&path)?;
+    upsert_claude_server_at(&claude_config_path(), &claude_settings_path(), id, spec)
+}
+
+fn upsert_claude_server_at(path: &Path, settings: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
@@ -1751,35 +1811,38 @@ fn upsert_claude_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
         })?;
     map.insert(id.to_string(), canonical);
 
-    write_json_file(&path, &root)?;
-    enable_claude_local_plugin(id)
+    write_json_file(path, &root)?;
+    enable_claude_local_plugin_at(settings, id)
 }
 
 fn remove_claude_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = claude_config_path();
+    remove_claude_server_at(&claude_config_path(), &claude_settings_path(), id)
+}
+
+fn remove_claude_server_at(path: &Path, settings: &Path, id: &str) -> Result<bool, AppCommandError> {
     if !path.exists() {
         // Even if `~/.claude.json` is missing, `enabledPlugins` could still
         // have a stale entry from a prior session — clean it up regardless
         // so the user doesn't end up with dangling activation markers.
-        disable_claude_local_plugin(id)?;
+        disable_claude_local_plugin_at(settings, id)?;
         return Ok(false);
     }
 
-    let mut root = read_json_file(&path)?;
+    let mut root = read_json_file(path)?;
     let Some(obj) = root.as_object_mut() else {
-        disable_claude_local_plugin(id)?;
+        disable_claude_local_plugin_at(settings, id)?;
         return Ok(false);
     };
     let Some(servers) = obj.get_mut("mcpServers").and_then(Value::as_object_mut) else {
-        disable_claude_local_plugin(id)?;
+        disable_claude_local_plugin_at(settings, id)?;
         return Ok(false);
     };
 
     let removed = servers.remove(id).is_some();
     if removed {
-        write_json_file(&path, &root)?;
+        write_json_file(path, &root)?;
     }
-    disable_claude_local_plugin(id)?;
+    disable_claude_local_plugin_at(settings, id)?;
     Ok(removed)
 }
 
@@ -1788,9 +1851,8 @@ fn remove_claude_server(id: &str) -> Result<bool, AppCommandError> {
 /// servers from `~/.claude.json.mcpServers` (a server can be defined but
 /// will not load until it appears in this list). Existing fields in the
 /// settings file (env, model, other plugin entries) are preserved.
-fn enable_claude_local_plugin(id: &str) -> Result<(), AppCommandError> {
-    let path = claude_settings_path();
-    let mut root = read_json_file(&path)?;
+fn enable_claude_local_plugin_at(path: &Path, id: &str) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
@@ -1818,18 +1880,17 @@ fn enable_claude_local_plugin(id: &str) -> Result<(), AppCommandError> {
         return Ok(());
     }
     plugins.insert(key, Value::Bool(true));
-    write_json_file(&path, &root)
+    write_json_file(path, &root)
 }
 
 /// Remove `<id>@local` from `~/.claude/settings.json.enabledPlugins` if
 /// present. Other entries (including any `<id>@<other-marketplace>` that
 /// the user manages manually) are intentionally left untouched.
-fn disable_claude_local_plugin(id: &str) -> Result<(), AppCommandError> {
-    let path = claude_settings_path();
+fn disable_claude_local_plugin_at(path: &Path, id: &str) -> Result<(), AppCommandError> {
     if !path.exists() {
         return Ok(());
     }
-    let mut root = read_json_file(&path)?;
+    let mut root = read_json_file(path)?;
     let Some(obj) = root.as_object_mut() else {
         return Ok(());
     };
@@ -1838,7 +1899,7 @@ fn disable_claude_local_plugin(id: &str) -> Result<(), AppCommandError> {
     };
     let key = claude_local_plugin_key(id);
     if plugins.remove(&key).is_some() {
-        write_json_file(&path, &root)?;
+        write_json_file(path, &root)?;
     }
     Ok(())
 }
@@ -2033,7 +2094,11 @@ fn read_codex_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
 }
 
 fn upsert_codex_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let mut root = read_codex_root_toml()?;
+    upsert_codex_server_at(&codex_config_toml_path(), id, spec)
+}
+
+fn upsert_codex_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_codex_root_toml_at(path)?;
     let table = root
         .as_table_mut()
         .ok_or_else(|| mcp_configuration_invalid("Codex root TOML must be a table"))?;
@@ -2072,16 +2137,19 @@ fn upsert_codex_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
         }
     }
 
-    write_codex_root_toml(&root)
+    write_codex_root_toml_at(path, &root)
 }
 
 fn remove_codex_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = codex_config_toml_path();
+    remove_codex_server_at(&codex_config_toml_path(), id)
+}
+
+fn remove_codex_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
     if !path.exists() {
         return Ok(false);
     }
 
-    let mut root = read_codex_root_toml()?;
+    let mut root = read_codex_root_toml_at(path)?;
     let Some(table) = root.as_table_mut() else {
         return Ok(false);
     };
@@ -2114,7 +2182,7 @@ fn remove_codex_server(id: &str) -> Result<bool, AppCommandError> {
     }
 
     if removed {
-        write_codex_root_toml(&root)?;
+        write_codex_root_toml_at(path, &root)?;
     }
 
     Ok(removed)
@@ -2159,8 +2227,11 @@ fn read_opencode_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
 }
 
 fn upsert_opencode_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let path = opencode_config_path();
-    let mut root = read_json_file(&path)?;
+    upsert_opencode_server_at(&opencode_config_path(), id, spec)
+}
+
+fn upsert_opencode_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
@@ -2192,16 +2263,19 @@ fn upsert_opencode_server(id: &str, spec: &Value) -> Result<(), AppCommandError>
         map.insert(id.to_string(), converted);
     }
 
-    write_json_file(&path, &root)
+    write_json_file(path, &root)
 }
 
 fn remove_opencode_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = opencode_config_path();
+    remove_opencode_server_at(&opencode_config_path(), id)
+}
+
+fn remove_opencode_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
     if !path.exists() {
         return Ok(false);
     }
 
-    let mut root = read_json_file(&path)?;
+    let mut root = read_json_file(path)?;
     let Some(obj) = root.as_object_mut() else {
         return Ok(false);
     };
@@ -2217,7 +2291,7 @@ fn remove_opencode_server(id: &str) -> Result<bool, AppCommandError> {
     }
 
     if removed {
-        write_json_file(&path, &root)?;
+        write_json_file(path, &root)?;
     }
 
     Ok(removed)
@@ -2251,8 +2325,11 @@ fn read_gemini_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
 }
 
 fn upsert_gemini_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let path = gemini_config_path();
-    let mut root = read_json_file(&path)?;
+    upsert_gemini_server_at(&gemini_config_path(), id, spec)
+}
+
+fn upsert_gemini_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
@@ -2274,16 +2351,19 @@ fn upsert_gemini_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
         })?;
     map.insert(id.to_string(), canonical);
 
-    write_json_file(&path, &root)
+    write_json_file(path, &root)
 }
 
 fn remove_gemini_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = gemini_config_path();
+    remove_gemini_server_at(&gemini_config_path(), id)
+}
+
+fn remove_gemini_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
     if !path.exists() {
         return Ok(false);
     }
 
-    let mut root = read_json_file(&path)?;
+    let mut root = read_json_file(path)?;
     let Some(obj) = root.as_object_mut() else {
         return Ok(false);
     };
@@ -2293,7 +2373,7 @@ fn remove_gemini_server(id: &str) -> Result<bool, AppCommandError> {
 
     let removed = servers.remove(id).is_some();
     if removed {
-        write_json_file(&path, &root)?;
+        write_json_file(path, &root)?;
     }
     Ok(removed)
 }
@@ -2443,8 +2523,11 @@ fn canonical_to_cline_entry(spec: &Value) -> Result<Value, AppCommandError> {
 }
 
 fn upsert_cline_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let path = cline_config_path();
-    let mut root = read_json_file(&path)?;
+    upsert_cline_server_at(&cline_config_path(), id, spec)
+}
+
+fn upsert_cline_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
@@ -2466,16 +2549,19 @@ fn upsert_cline_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
         })?;
     map.insert(id.to_string(), canonical);
 
-    write_json_file(&path, &root)
+    write_json_file(path, &root)
 }
 
 fn remove_cline_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = cline_config_path();
+    remove_cline_server_at(&cline_config_path(), id)
+}
+
+fn remove_cline_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
     if !path.exists() {
         return Ok(false);
     }
 
-    let mut root = read_json_file(&path)?;
+    let mut root = read_json_file(path)?;
     let Some(obj) = root.as_object_mut() else {
         return Ok(false);
     };
@@ -2485,7 +2571,7 @@ fn remove_cline_server(id: &str) -> Result<bool, AppCommandError> {
 
     let removed = servers.remove(id).is_some();
     if removed {
-        write_json_file(&path, &root)?;
+        write_json_file(path, &root)?;
     }
     Ok(removed)
 }
@@ -2546,6 +2632,10 @@ fn deepseek_mcp_json_path() -> PathBuf {
 /// The parent is created `0700` when it does not exist yet, matching what the
 /// harness itself does with `$DSH_HOME`.
 fn write_deepseek_json_file(path: &Path, value: &Value) -> Result<(), AppCommandError> {
+    // See `write_json_file`: an unchanged config is not rewritten.
+    if json_file_holds(path, value) {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             #[cfg(unix)]
@@ -2980,6 +3070,7 @@ fn with_upsert_preflight<T>(
     upsert_targets: &BTreeSet<McpAppType>,
     mutate: impl FnOnce() -> Result<T, AppCommandError>,
 ) -> Result<T, AppCommandError> {
+    let _guard = MCP_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_preflight(|| preflight_antigravity_upsert(upsert_targets), mutate)
 }
 
@@ -3314,6 +3405,241 @@ fn require_complete_scan(scan: &LocalMcpScan) -> Result<(), AppCommandError> {
     )))
 }
 
+fn isolator_family_for_app(
+    app: McpAppType,
+) -> Option<crate::acp::family_isolator::IsolatorFamily> {
+    use crate::acp::family_isolator::IsolatorFamily;
+    match app {
+        McpAppType::ClaudeCode => Some(IsolatorFamily::Claude),
+        McpAppType::Codex => Some(IsolatorFamily::Codex),
+        McpAppType::Grok => Some(IsolatorFamily::Grok),
+        McpAppType::Gemini => Some(IsolatorFamily::Gemini),
+        McpAppType::OpenCode => Some(IsolatorFamily::OpenCode),
+        _ => None,
+    }
+}
+
+/// After a default-home write/remove, keep extra isolated family homes in
+/// lock-step. Auth files are never touched. `spec = None` means remove.
+fn fanout_server_for_extra_homes(
+    app: McpAppType,
+    id: &str,
+    spec: Option<&Value>,
+    extra_homes: &[PathBuf],
+) -> Result<(), AppCommandError> {
+    let Some(family) = isolator_family_for_app(app) else {
+        return Ok(());
+    };
+    for home in extra_homes {
+        match family {
+            crate::acp::family_isolator::IsolatorFamily::Claude => {
+                // CLAUDE_CONFIG_DIR relocates both files. This account does
+                // not read server definitions from the default home.
+                let config = home.join(".claude.json");
+                let settings = home.join("settings.json");
+                if let Some(spec) = spec {
+                    upsert_claude_server_at(&config, &settings, id, spec)?;
+                } else {
+                    let _ = remove_claude_server_at(&config, &settings, id)?;
+                }
+            }
+            crate::acp::family_isolator::IsolatorFamily::Codex => {
+                let path = home.join("config.toml");
+                if let Some(spec) = spec {
+                    upsert_codex_server_at(&path, id, spec)?;
+                } else {
+                    let _ = remove_codex_server_at(&path, id)?;
+                }
+            }
+            crate::acp::family_isolator::IsolatorFamily::Grok => {
+                let path = home.join("config.toml");
+                if let Some(spec) = spec {
+                    upsert_grok_server_at(&path, id, spec)?;
+                } else {
+                    let _ = remove_grok_server_at(&path, id)?;
+                }
+            }
+            crate::acp::family_isolator::IsolatorFamily::Gemini => {
+                let path = home.join("settings.json");
+                if let Some(spec) = spec {
+                    upsert_gemini_server_at(&path, id, spec)?;
+                } else {
+                    let _ = remove_gemini_server_at(&path, id)?;
+                }
+            }
+            crate::acp::family_isolator::IsolatorFamily::OpenCode => {
+                let path = home.join("opencode.json");
+                if let Some(spec) = spec {
+                    upsert_opencode_server_at(&path, id, spec)?;
+                } else {
+                    let _ = remove_opencode_server_at(&path, id)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fanout_live_extra_homes(
+    app: McpAppType,
+    id: &str,
+    spec: Option<&Value>,
+) -> Result<(), AppCommandError> {
+    let Some(family) = isolator_family_for_app(app) else {
+        return Ok(());
+    };
+    let homes = crate::acp::family_isolator::extra_homes_from_live_registry(family);
+    fanout_server_for_extra_homes(app, id, spec, &homes)
+}
+
+/// Update only the managed server in a native account's own config. Never
+/// copy a complete settings or authentication file from another account.
+fn write_native_account_mcp(
+    agent: crate::models::AgentType,
+    home: &Path,
+    id: &str,
+    spec: Option<&Value>,
+) -> Result<(), AppCommandError> {
+    use crate::models::AgentType;
+    let layout = crate::acp::agent_accounts::layout(agent)
+        .ok_or_else(|| mcp_invalid_input("Unsupported agent account"))?;
+    let config = layout.config_dir(home);
+    let app: McpAppType = serde_json::from_value(serde_json::json!(agent))
+        .map_err(|e| mcp_invalid_input(e.to_string()))?;
+    if isolator_family_for_app(app).is_some() {
+        return fanout_server_for_extra_homes(app, id, spec, &[config]);
+    }
+    if agent == AgentType::CodeBuddy {
+        let path = home.join(".codebuddy.json");
+        let settings = home.join("settings.json");
+        return match spec {
+            Some(spec) => upsert_claude_server_at(&path, &settings, id, spec),
+            None => remove_claude_server_at(&path, &settings, id).map(|_| ()),
+        };
+    }
+    type Write = fn(&Path, &str, &Value) -> Result<(), AppCommandError>;
+    type Remove = fn(&Path, &str) -> Result<bool, AppCommandError>;
+    let (path, write, remove): (PathBuf, Write, Remove) = match agent {
+        AgentType::Cline => (home.join("settings/cline_mcp_settings.json"), upsert_cline_server_at, remove_cline_server_at),
+        AgentType::Hermes => (home.join("config.yaml"), upsert_hermes_server_at, remove_hermes_server_at),
+        AgentType::KimiCode => (home.join("mcp.json"), upsert_kimi_code_server_at, remove_kimi_code_server_at),
+        AgentType::Pi => (home.join("mcp.json"), upsert_pi_server_at, remove_pi_server_at),
+        AgentType::DeepSeek => (home.join("mcp.json"), upsert_deepseek_server_at, remove_deepseek_server_at),
+        AgentType::Qoder => (home.join("settings.json"), upsert_qoder_server_at, remove_qoder_server_at),
+        AgentType::Antigravity => (home.join("config/mcp_config.json"), upsert_antigravity_server_at, remove_antigravity_server_at),
+        // Cursor hardcodes HOME/.cursor/mcp.json, independently of its config
+        // directory. Only macOS needs a relocated HOME for credential isolation.
+        AgentType::Cursor if cfg!(target_os = "macos") => (home.join(".cursor/mcp.json"), |path, id, spec| upsert_cursor_server_at(path, id, spec, None), remove_cursor_server_at),
+        AgentType::Cursor => return Ok(()),
+        _ => return Err(mcp_invalid_input("Unsupported account MCP configuration")),
+    };
+    match spec { Some(spec) => write(&path, id, spec), None => remove(&path, id).map(|_| ()) }
+}
+
+pub(crate) fn sync_native_account_mcp(agent: crate::models::AgentType, home: &Path) -> Result<(), AppCommandError> {
+    let _guard = MCP_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let servers = shared_servers_for_account(agent)?;
+    sync_native_account_mcp_from(agent, home, &servers)
+}
+
+/// The servers assigned to `agent`, as its own config store holds them — the
+/// set a named account mirrors. `read_servers_for_agent_type` answers what to
+/// forward over ACP instead, which for pi is always nothing (pi-acp drops
+/// wire MCP); syncing to that would remove every server fanned into a pi
+/// account on each launch.
+pub(crate) fn shared_servers_for_account(
+    agent: crate::models::AgentType,
+) -> Result<BTreeMap<String, Value>, AppCommandError> {
+    match agent {
+        crate::models::AgentType::Pi => read_pi_servers(),
+        _ => read_servers_for_agent_type(agent),
+    }
+}
+
+fn sync_native_account_mcp_from(agent: crate::models::AgentType, home: &Path, servers: &BTreeMap<String, Value>) -> Result<(), AppCommandError> {
+    if !home.is_absolute() || !home.is_dir() { return Err(mcp_configuration_invalid("Restore the missing account folder before continuing.")); }
+    preflight_native_account_homes(&[(agent, home.to_path_buf())])?;
+    let manifest_path = home.join(".codeg-mcp-servers.json");
+    let previous: Vec<String> = match read_config_to_string(&manifest_path)? {
+        Some(raw) => serde_json::from_str(&raw).map_err(|e| mcp_configuration_invalid(format!("Invalid account MCP manifest: {e}")))?,
+        None => Vec::new(),
+    };
+    for id in previous { if !servers.contains_key(&id) { write_native_account_mcp(agent, home, &id, None)?; } }
+    for (id, spec) in servers { write_native_account_mcp(agent, home, id, Some(spec))?; }
+    write_json_file(&manifest_path, &serde_json::json!(servers.keys().collect::<Vec<_>>()))
+}
+
+/// The homes a shared MCP change is fanned into. An account whose folder is
+/// missing is skipped rather than blocking every MCP change: it cannot launch
+/// until the folder is back, and its next launch re-applies the full shared
+/// set (`sync_native_account_mcp`), so nothing is lost by skipping it here.
+async fn native_account_homes(db: &crate::db::AppDatabase) -> Result<Vec<(crate::models::AgentType, PathBuf)>, AppCommandError> {
+    let mut result = Vec::new();
+    for account in crate::db::service::agent_account_service::list_all(&db.conn).await.map_err(AppCommandError::from)? {
+        let Some(agent) = crate::models::AgentType::from_wire(&account.agent_type) else {
+            tracing::warn!("[MCP] skipping account {} with unknown agent {}", account.id, account.agent_type);
+            continue;
+        };
+        let home = PathBuf::from(account.home_dir);
+        if !home.is_absolute() || !home.is_dir() {
+            tracing::warn!("[MCP] skipping account {} until its folder {} is restored", account.name, home.display());
+            continue;
+        }
+        result.push((agent, home));
+    }
+    Ok(result)
+}
+
+fn fanout_native_account_homes(accounts: &[(crate::models::AgentType, PathBuf)], app: McpAppType, id: &str, spec: Option<&Value>) -> Result<(), AppCommandError> {
+    for (agent, home) in accounts {
+        if serde_json::to_value(agent).ok() == serde_json::to_value(app).ok() {
+            write_native_account_mcp(*agent, home, id, spec)?;
+            let manifest = home.join(".codeg-mcp-servers.json");
+            let mut managed: BTreeSet<String> = match read_config_to_string(&manifest)? {
+                Some(raw) => serde_json::from_str(&raw).map_err(|e| mcp_configuration_invalid(format!("Invalid account MCP manifest: {e}")))?,
+                None => BTreeSet::new(),
+            };
+            if spec.is_some() { managed.insert(id.into()); } else { managed.remove(id); }
+            write_json_file(&manifest, &serde_json::json!(managed))?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate every account before a reassignment can remove the shared server
+/// from another family. An unreadable account must not cause a partial move.
+fn preflight_native_account_homes(accounts: &[(crate::models::AgentType, PathBuf)]) -> Result<(), AppCommandError> {
+    use crate::models::AgentType;
+    for (agent, home) in accounts {
+        if let Some(raw) = read_config_to_string(&home.join(".codeg-mcp-servers.json"))? {
+            serde_json::from_str::<Vec<String>>(&raw).map_err(|e| mcp_configuration_invalid(format!("Invalid account MCP manifest: {e}")))?;
+        }
+        let paths: &[&str] = match agent {
+            AgentType::ClaudeCode => &[".claude.json", "settings.json"],
+            AgentType::CodeBuddy => &[".codebuddy.json", "settings.json"],
+            AgentType::Codex => { read_codex_root_toml_at(&home.join("config.toml"))?; continue; },
+            AgentType::Grok => { read_grok_root_toml_at(&home.join("config.toml"))?; continue; },
+            AgentType::Hermes => { read_hermes_servers_at(&home.join("config.yaml"))?; continue; },
+            AgentType::Gemini => &[".gemini/settings.json"],
+            AgentType::OpenCode => &["config/opencode/opencode.json"],
+            AgentType::Cline => &["settings/cline_mcp_settings.json"],
+            AgentType::KimiCode | AgentType::Pi | AgentType::DeepSeek => &["mcp.json"],
+            AgentType::Qoder => &["settings.json"],
+            AgentType::Antigravity => &["config/mcp_config.json"],
+            AgentType::Cursor if cfg!(target_os = "macos") => &[".cursor/mcp.json"],
+            _ => &[],
+        };
+        for path in paths {
+            let path = home.join(path);
+            let root = read_json_file(&path)?;
+            if !root.is_object() || (*agent == AgentType::Antigravity && antigravity_config_blocks_edit(&root)) {
+                return Err(mcp_configuration_invalid(format!("Fix the account MCP configuration at {} before changing server assignments.", path.display())));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), AppCommandError> {
     let spec = &without_cursor_only_fields(app, spec);
     match app {
@@ -3336,7 +3662,8 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
         McpAppType::ZCode => upsert_deepseek_server_at(&zcode_mcp_json_path(), id, spec),
         McpAppType::Trae => upsert_trae_server(id, spec),
         McpAppType::CommandCode => upsert_command_code_server(id, spec),
-    }
+    }?;
+    fanout_live_extra_homes(app, id, Some(spec))
 }
 
 pub fn read_servers_for_agent_type(
@@ -3773,6 +4100,10 @@ fn read_grok_root_toml_at(path: &Path) -> Result<toml::Value, AppCommandError> {
 }
 
 fn write_grok_root_toml_at(path: &Path, root: &toml::Value) -> Result<(), AppCommandError> {
+    // See `write_json_file`: an unchanged config is not rewritten.
+    if toml_file_holds(path, root) {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(AppCommandError::io)?;
     }
@@ -5262,14 +5593,17 @@ fn read_hermes_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCom
 /// serde_yaml and so drops comments — consistent with codeg's existing Hermes
 /// config edits.
 fn upsert_hermes_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    upsert_hermes_server_at(&crate::commands::acp::hermes_config_yaml_path(), id, spec)
+}
+
+fn upsert_hermes_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
     use serde_yaml::{Mapping, Value as Yaml};
     let entry = canonical_to_hermes_entry(spec)?;
-    let path = crate::commands::acp::hermes_config_yaml_path();
 
     // Only a genuinely absent (or empty) config starts from a fresh mapping.
     // A permission / invalid-UTF-8 read error must NOT silently discard the
     // user's real config.yaml by overwriting it with a near-empty document.
-    let mut root: Yaml = match fs::read_to_string(&path) {
+    let mut root: Yaml = match fs::read_to_string(path) {
         Ok(raw) if !raw.trim().is_empty() => serde_yaml::from_str(&raw)
             .map_err(|e| mcp_configuration_invalid(format!("invalid hermes config.yaml: {e}")))?,
         Ok(_) => Yaml::Mapping(Mapping::new()),
@@ -5296,23 +5630,31 @@ fn upsert_hermes_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
         .get_mut(&servers_key)
         .and_then(Yaml::as_mapping_mut)
         .ok_or_else(|| mcp_configuration_invalid("hermes mcp_servers must be a mapping"))?;
-    servers.insert(Yaml::String(id.to_string()), entry);
+    let key = Yaml::String(id.to_string());
+    // See `write_json_file`: an unchanged config is not rewritten.
+    if servers.get(&key) == Some(&entry) {
+        return Ok(());
+    }
+    servers.insert(key, entry);
 
     let yaml = serde_yaml::to_string(&root).map_err(|e| {
         mcp_configuration_invalid(format!("serialize hermes config.yaml failed: {e}"))
     })?;
-    crate::commands::acp::ensure_hermes_home_secure(&crate::commands::acp::hermes_home_dir())
+    crate::commands::acp::ensure_hermes_home_secure(path.parent().ok_or_else(|| mcp_configuration_invalid("missing account config directory"))?)
         .map_err(|e| mcp_configuration_invalid(format!("prepare hermes home failed: {e}")))?;
-    crate::commands::acp::write_hermes_secret_file(&path, &yaml, "config.yaml")
+    crate::commands::acp::write_hermes_secret_file(path, &yaml, "config.yaml")
         .map_err(|e| mcp_configuration_invalid(format!("write hermes config.yaml failed: {e}")))?;
     Ok(())
 }
 
 /// Remove a Hermes MCP server from `~/.hermes/config.yaml` (`mcp_servers`).
 fn remove_hermes_server(id: &str) -> Result<bool, AppCommandError> {
+    remove_hermes_server_at(&crate::commands::acp::hermes_config_yaml_path(), id)
+}
+
+fn remove_hermes_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
     use serde_yaml::Value as Yaml;
-    let path = crate::commands::acp::hermes_config_yaml_path();
-    let raw = match fs::read_to_string(&path) {
+    let raw = match fs::read_to_string(path) {
         Ok(raw) if !raw.trim().is_empty() => raw,
         _ => return Ok(false),
     };
@@ -5341,7 +5683,7 @@ fn remove_hermes_server(id: &str) -> Result<bool, AppCommandError> {
         let yaml = serde_yaml::to_string(&root).map_err(|e| {
             mcp_configuration_invalid(format!("serialize hermes config.yaml failed: {e}"))
         })?;
-        crate::commands::acp::write_hermes_secret_file(&path, &yaml, "config.yaml").map_err(
+        crate::commands::acp::write_hermes_secret_file(path, &yaml, "config.yaml").map_err(
             |e| mcp_configuration_invalid(format!("write hermes config.yaml failed: {e}")),
         )?;
     }
@@ -5349,7 +5691,7 @@ fn remove_hermes_server(id: &str) -> Result<bool, AppCommandError> {
 }
 
 fn remove_server_for_app(app: McpAppType, id: &str) -> Result<bool, AppCommandError> {
-    match app {
+    let removed = match app {
         McpAppType::ClaudeCode => remove_claude_server(id),
         McpAppType::Codex => remove_codex_server(id),
         McpAppType::OpenCode => remove_opencode_server(id),
@@ -5369,7 +5711,11 @@ fn remove_server_for_app(app: McpAppType, id: &str) -> Result<bool, AppCommandEr
         McpAppType::ZCode => remove_deepseek_server_at(&zcode_mcp_json_path(), id),
         McpAppType::Trae => remove_trae_server(id),
         McpAppType::CommandCode => remove_command_code_server(id),
-    }
+    }?;
+    // Always fan out the remove so a stale extra-home entry cannot outlive
+    // the family-row uncheck, even if the default home had nothing to drop.
+    fanout_live_extra_homes(app, id, None)?;
+    Ok(removed)
 }
 
 #[derive(Debug, Deserialize)]
@@ -7124,6 +7470,152 @@ fn resolve_smithery_install_spec_with_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_account_bad_config_stops_reassignment_before_other_homes_change() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("config")).unwrap();
+        fs::write(dir.path().join("config/mcp_config.json"), r#"{"mcpServers":[]}"#).unwrap();
+        let mut changed = false;
+        let result = with_preflight(
+            || preflight_native_account_homes(&[(crate::models::AgentType::Antigravity, dir.path().to_path_buf())]),
+            || { changed = true; Ok(()) },
+        );
+        assert!(result.is_err());
+        assert!(!changed);
+    }
+
+    #[test]
+    fn native_accounts_share_mcp_without_copying_auth_or_removing_local_servers() {
+        use crate::models::AgentType;
+        for &agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            if crate::acp::agent_accounts::layout(agent).is_none() { continue; }
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path();
+            fs::write(home.join("auth.json"), "account-auth-sentinel").unwrap();
+            let local = json!({"type":"stdio", "command":"account-local-command"});
+            let shared = json!({"type":"stdio", "command":"shared-first-command"});
+            write_native_account_mcp(agent, home, "account-local", Some(&local)).unwrap();
+            sync_native_account_mcp_from(agent, home, &BTreeMap::from([("shared".into(), shared)])).unwrap();
+            let path = match agent {
+                AgentType::ClaudeCode => Some(".claude.json"),
+                AgentType::Codex | AgentType::Grok => Some("config.toml"),
+                AgentType::Gemini => Some(".gemini/settings.json"),
+                AgentType::OpenCode => Some("config/opencode/opencode.json"),
+                AgentType::CodeBuddy => Some(".codebuddy.json"),
+                AgentType::Cline => Some("settings/cline_mcp_settings.json"),
+                AgentType::Hermes => Some("config.yaml"),
+                AgentType::KimiCode | AgentType::Pi | AgentType::DeepSeek => Some("mcp.json"),
+                AgentType::Qoder => Some("settings.json"),
+                AgentType::Antigravity => Some("config/mcp_config.json"),
+                AgentType::Cursor if cfg!(target_os = "macos") => Some(".cursor/mcp.json"),
+                AgentType::Cursor => None,
+                _ => unreachable!(),
+            };
+            if let Some(path) = path {
+                let file = home.join(path);
+                let contents = fs::read_to_string(&file).unwrap();
+                assert!(contents.contains("shared-first-command"), "{agent}");
+                assert!(contents.contains("account-local-command"), "{agent}");
+                sync_native_account_mcp_from(agent, home, &BTreeMap::from([("shared".into(), json!({"type":"stdio", "command":"shared-updated-command"}))])).unwrap();
+                assert!(fs::read_to_string(&file).unwrap().contains("shared-updated-command"));
+                sync_native_account_mcp_from(agent, home, &BTreeMap::new()).unwrap();
+                let contents = fs::read_to_string(&file).unwrap();
+                assert!(!contents.contains("shared-updated-command"), "{agent}");
+                assert!(contents.contains("account-local-command"), "{agent}");
+            }
+            assert_eq!(fs::read_to_string(home.join("auth.json")).unwrap(), "account-auth-sentinel");
+        }
+    }
+
+    /// Every launch of a named account re-applies the shared servers to files
+    /// that account's own CLI rewrites too (`.claude.json` on every start). When
+    /// nothing changed they must not be rewritten: here the CLI's own
+    /// formatting and a user's TOML comment survive, while a real change still
+    /// lands.
+    #[test]
+    fn an_unchanged_account_sync_leaves_the_cli_files_untouched() {
+        use crate::models::AgentType;
+        let shared = BTreeMap::from([(
+            "shared".to_string(),
+            json!({"type": "stdio", "command": "shared-command"}),
+        )]);
+
+        let claude = tempfile::tempdir().unwrap();
+        sync_native_account_mcp_from(AgentType::ClaudeCode, claude.path(), &shared).unwrap();
+        let config = claude.path().join(".claude.json");
+        let mut value: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        value["oauthAccount"] = json!({"emailAddress": "fixture@example.test"});
+        let cli_written = serde_json::to_string(&value).unwrap();
+        fs::write(&config, &cli_written).unwrap();
+        sync_native_account_mcp_from(AgentType::ClaudeCode, claude.path(), &shared).unwrap();
+        assert_eq!(fs::read_to_string(&config).unwrap(), cli_written);
+
+        let codex = tempfile::tempdir().unwrap();
+        sync_native_account_mcp_from(AgentType::Codex, codex.path(), &shared).unwrap();
+        let toml_path = codex.path().join("config.toml");
+        let with_comment = format!(
+            "# kept by the user\n{}",
+            fs::read_to_string(&toml_path).unwrap()
+        );
+        fs::write(&toml_path, &with_comment).unwrap();
+        sync_native_account_mcp_from(AgentType::Codex, codex.path(), &shared).unwrap();
+        assert_eq!(fs::read_to_string(&toml_path).unwrap(), with_comment);
+
+        let changed = BTreeMap::from([(
+            "shared".to_string(),
+            json!({"type": "stdio", "command": "changed-command"}),
+        )]);
+        sync_native_account_mcp_from(AgentType::Codex, codex.path(), &changed).unwrap();
+        assert!(fs::read_to_string(&toml_path)
+            .unwrap()
+            .contains("changed-command"));
+    }
+
+    /// A pi account mirrors pi's own server list. The ACP forwarding view is
+    /// empty for pi by design, and syncing to it removed every server fanned
+    /// into the account again on its next launch.
+    #[test]
+    fn a_pi_account_launch_keeps_the_servers_pi_is_assigned() {
+        use crate::models::AgentType;
+        let default_dir = tempfile::tempdir().unwrap();
+        let account = tempfile::tempdir().unwrap();
+        fs::write(
+            default_dir.path().join("mcp.json"),
+            json!({"mcpServers": {"shared": {"command": "pi-shared"}}}).to_string(),
+        )
+        .unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(default_dir.path()), || {
+            assert!(read_servers_for_agent_type(AgentType::Pi).unwrap().is_empty());
+            for _ in 0..2 {
+                sync_native_account_mcp(AgentType::Pi, account.path()).unwrap();
+                let synced = read_pi_servers_at(&account.path().join("mcp.json")).unwrap();
+                assert!(synced.contains_key("shared"));
+            }
+        });
+    }
+
+    /// One account folder that went missing must not block every MCP change:
+    /// that account cannot launch until it is restored, and its next launch
+    /// re-applies the whole shared set anyway.
+    #[tokio::test]
+    async fn a_missing_account_folder_does_not_block_mcp_changes() {
+        use crate::db::service::agent_account_service;
+        use crate::models::AgentType;
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let kept = agent_account_service::create(&db.conn, data.path(), AgentType::Codex, "Kept", None)
+            .await
+            .unwrap();
+        let gone = agent_account_service::create(&db.conn, data.path(), AgentType::Codex, "Gone", None)
+            .await
+            .unwrap();
+        fs::remove_dir_all(&gone.home_dir).unwrap();
+        assert_eq!(
+            native_account_homes(&db).await.unwrap(),
+            vec![(AgentType::Codex, PathBuf::from(&kept.home_dir))]
+        );
+    }
 
     fn test_claude_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
         Ok(BTreeMap::from([
@@ -10236,6 +10728,236 @@ mod tests {
             assert_eq!(back, canonical, "round-trip mismatch for {spec}");
         }
     }
+
+    #[test]
+    fn extra_home_fanout_writes_and_removes_without_touching_auth() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let claude_home = dir.path().join("claude-2");
+        let codex_home = dir.path().join("codex-2");
+        let gemini_home = dir.path().join("gemini-2");
+        let opencode_home = dir.path().join("opencode-2");
+        std::fs::create_dir_all(&claude_home).expect("claude home");
+        std::fs::create_dir_all(&codex_home).expect("codex home");
+        std::fs::create_dir_all(&gemini_home).expect("gemini home");
+        std::fs::create_dir_all(&opencode_home).expect("opencode home");
+
+        let claude_settings = claude_home.join("settings.json");
+        std::fs::write(
+            &claude_settings,
+            "{\n  \"model\": \"keep-me\",\n  \"enabledPlugins\": {\"other@local\": true}\n}\n",
+        )
+        .expect("seed claude settings");
+        let claude_auth = claude_home.join("auth.json");
+        let claude_config = claude_home.join(".claude.json");
+        std::fs::write(&claude_config, "{\"account\":\"keep\",\"mcpServers\":{\"other\":{\"command\":\"other\"}}}")
+            .expect("seed isolated config");
+        let auth_bytes = b"{\"token\":\"do-not-copy\"}\n";
+        std::fs::write(&claude_auth, auth_bytes).expect("seed auth");
+
+        std::fs::write(
+            codex_home.join("config.toml"),
+            "[cli]\nauto_update = true\n",
+        )
+        .expect("seed codex");
+        std::fs::write(
+            gemini_home.join("settings.json"),
+            "{\n  \"theme\": \"dark\"\n}\n",
+        )
+        .expect("seed gemini");
+        std::fs::write(
+            opencode_home.join("opencode.json"),
+            "{\n  \"model\": \"keep\"\n}\n",
+        )
+        .expect("seed opencode");
+
+        let spec = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "ctx7-mcp"],
+        });
+
+        fanout_server_for_extra_homes(
+            McpAppType::ClaudeCode,
+            "ctx7",
+            Some(&spec),
+            std::slice::from_ref(&claude_home),
+        )
+        .expect("claude fanout");
+        fanout_server_for_extra_homes(
+            McpAppType::Codex,
+            "ctx7",
+            Some(&spec),
+            std::slice::from_ref(&codex_home),
+        )
+        .expect("codex fanout");
+        fanout_server_for_extra_homes(
+            McpAppType::Gemini,
+            "ctx7",
+            Some(&spec),
+            std::slice::from_ref(&gemini_home),
+        )
+        .expect("gemini fanout");
+        fanout_server_for_extra_homes(
+            McpAppType::OpenCode,
+            "ctx7",
+            Some(&spec),
+            std::slice::from_ref(&opencode_home),
+        )
+        .expect("opencode fanout");
+
+        let claude_root: Value =
+            serde_json::from_str(&std::fs::read_to_string(&claude_settings).unwrap()).unwrap();
+        assert_eq!(
+            claude_root.pointer("/enabledPlugins/ctx7@local"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            claude_root.pointer("/enabledPlugins/other@local"),
+            Some(&json!(true))
+        );
+        assert_eq!(claude_root.get("model").and_then(Value::as_str), Some("keep-me"));
+        assert_eq!(std::fs::read(&claude_auth).unwrap(), auth_bytes);
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(&claude_config).unwrap()).unwrap();
+        assert_eq!(config.pointer("/mcpServers/ctx7/command"), Some(&json!("npx")));
+        assert_eq!(config.get("account"), Some(&json!("keep")));
+        assert!(config.pointer("/mcpServers/other").is_some());
+
+        let codex_raw = std::fs::read_to_string(codex_home.join("config.toml")).unwrap();
+        let codex_root: toml::Value = codex_raw.parse().unwrap();
+        assert!(codex_root
+            .get("mcp_servers")
+            .and_then(toml::Value::as_table)
+            .map(|t| t.contains_key("ctx7"))
+            .unwrap_or(false));
+        assert!(codex_root.get("cli").is_some(), "unrelated Codex keys survive");
+
+        let gemini_root: Value = serde_json::from_str(
+            &std::fs::read_to_string(gemini_home.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(gemini_root
+            .pointer("/mcpServers/ctx7")
+            .is_some());
+        assert_eq!(gemini_root.get("theme").and_then(Value::as_str), Some("dark"));
+
+        let opencode_root: Value = serde_json::from_str(
+            &std::fs::read_to_string(opencode_home.join("opencode.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            opencode_root.pointer("/mcp/ctx7").is_some()
+                || opencode_root.pointer("/mcpServers/ctx7").is_some()
+        );
+        assert_eq!(
+            opencode_root.get("model").and_then(Value::as_str),
+            Some("keep")
+        );
+
+        fanout_server_for_extra_homes(
+            McpAppType::ClaudeCode,
+            "ctx7",
+            None,
+            std::slice::from_ref(&claude_home),
+        )
+        .expect("claude remove");
+        fanout_server_for_extra_homes(
+            McpAppType::Codex,
+            "ctx7",
+            None,
+            std::slice::from_ref(&codex_home),
+        )
+        .expect("codex remove");
+        fanout_server_for_extra_homes(
+            McpAppType::Gemini,
+            "ctx7",
+            None,
+            std::slice::from_ref(&gemini_home),
+        )
+        .expect("gemini remove");
+        fanout_server_for_extra_homes(
+            McpAppType::OpenCode,
+            "ctx7",
+            None,
+            std::slice::from_ref(&opencode_home),
+        )
+        .expect("opencode remove");
+
+        let claude_root: Value =
+            serde_json::from_str(&std::fs::read_to_string(&claude_settings).unwrap()).unwrap();
+        assert!(claude_root.pointer("/enabledPlugins/ctx7@local").is_none());
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(&claude_config).unwrap()).unwrap();
+        assert!(config.pointer("/mcpServers/ctx7").is_none());
+        assert!(config.pointer("/mcpServers/other").is_some());
+        assert_eq!(config.get("account"), Some(&json!("keep")));
+        assert_eq!(
+            claude_root.pointer("/enabledPlugins/other@local"),
+            Some(&json!(true))
+        );
+        assert_eq!(std::fs::read(&claude_auth).unwrap(), auth_bytes);
+
+        let codex_raw = std::fs::read_to_string(codex_home.join("config.toml")).unwrap();
+        let codex_root: toml::Value = codex_raw.parse().unwrap();
+        assert!(
+            !codex_root
+                .get("mcp_servers")
+                .and_then(toml::Value::as_table)
+                .map(|t| t.contains_key("ctx7"))
+                .unwrap_or(false)
+        );
+        assert!(codex_root.get("cli").is_some());
+    }
+}
+
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_install_from_marketplace(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    provider_id: String,
+    server_id: String,
+    apps: Vec<McpAppType>,
+    spec_override: Option<Value>,
+    option_id: Option<String>,
+    protocol: Option<String>,
+    parameter_values: Option<Value>,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_install_from_marketplace_core(&db, provider_id, server_id, apps, spec_override, option_id, protocol, parameter_values).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_upsert_local_server(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    server_id: String,
+    spec: Value,
+    apps: Vec<McpAppType>,
+    shown_spec: Option<Value>,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_upsert_local_server_core(&db, server_id, spec, apps, shown_spec).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_set_server_apps(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    server_id: String,
+    apps: Vec<McpAppType>,
+) -> Result<Option<LocalMcpServer>, AppCommandError> {
+    mcp_set_server_apps_core(&db, server_id, apps).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_remove_server(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    server_id: String,
+    apps: Option<Vec<McpAppType>>,
+) -> Result<bool, AppCommandError> {
+    mcp_remove_server_core(&db, server_id, apps).await
 }
 
 #[cfg(test)]

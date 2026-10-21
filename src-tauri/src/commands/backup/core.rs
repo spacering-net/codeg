@@ -748,6 +748,19 @@ mod tests {
     }
 
     #[test]
+    fn account_backups_keep_old_ids_and_use_a_marker_unknown_to_v039() {
+        let (compatible, reason) = evaluate_compat(&manifest_with_migration(
+            "m20261017_000001_agent_account",
+            BACKUP_FORMAT_VERSION,
+        ));
+        assert!(compatible && reason.is_none());
+
+        let latest = latest_migration_name();
+        let released = include_str!("../../../tests/fixtures/v039-migrations.txt");
+        assert!(!released.lines().any(|name| name == latest));
+    }
+
+    #[test]
     fn evaluate_compat_gates_on_migration_and_format() {
         // A migration this binary knows → compatible.
         let known = latest_migration_name();

@@ -18,7 +18,7 @@ const ROUTE_FRAME_KIND: &str = "codeg_internal_agent_routes";
 /// is a prefix of every rendered body; a field reorder that broke that is what
 /// `the_body_anchor_is_what_the_renderer_starts_with` guards.
 const ROUTE_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_agent_routes\"";
-const ROUTE_FRAME_VERSION: u8 = 3;
+const ROUTE_FRAME_VERSION: u8 = 4;
 const MAX_ROUTE_FRAME_BYTES: usize = 16 * 1024;
 /// Distinct agents one frame may route, applied AFTER deduplication.
 const MAX_AGENT_ROUTES: usize = 16;
@@ -52,7 +52,7 @@ const MAX_ASSISTANT_BRIEF_FRAME_BYTES: usize = 256 * 1024;
 /// separator in.
 const MAX_INTERNAL_FRAME_BYTES: usize = MAX_ASSISTANT_BRIEF_FRAME_BYTES;
 
-/// One routed agent inside the frame — nothing but the wire slug.
+/// One routed agent and, optionally, the exact native account the user selected.
 ///
 /// The frame is derived from the prompt's own visible `codeg://agent/...`
 /// links, so there is no out-of-band claim to carry or verify. Serializing as
@@ -62,6 +62,8 @@ const MAX_INTERNAL_FRAME_BYTES: usize = MAX_ASSISTANT_BRIEF_FRAME_BYTES;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentRoute {
     agent_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,13 +81,13 @@ fn agent_reference_regex() -> &'static Regex {
     // limited to ASCII alphanumeric, `-`, `_`, and `.`. Requiring a visible
     // label keeps this in lockstep with the frontend reference tokenizer.
     static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\[(?:\\.|[^\]\\\r\n])+\]\(codeg://agent/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\)")
+        Regex::new(r"\[(?:\\.|[^\]\\\r\n])+\]\(codeg://agent/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})(?:\?account=([A-Za-z0-9][A-Za-z0-9._-]{0,127}))?\)")
             .expect("agent reference regex is valid")
     });
     &PATTERN
 }
 
-fn visible_agent_reference_types(blocks: &[PromptInputBlock]) -> Vec<String> {
+fn visible_agent_reference_types(blocks: &[PromptInputBlock]) -> Vec<AgentRoute> {
     let mut references = Vec::new();
     for block in blocks {
         let PromptInputBlock::Text { text } = block else {
@@ -96,7 +98,10 @@ fn visible_agent_reference_types(blocks: &[PromptInputBlock]) -> Vec<String> {
                 return references;
             }
             if let Some(agent_type) = capture.get(1) {
-                references.push(agent_type.as_str().to_string());
+                references.push(AgentRoute {
+                    agent_type: agent_type.as_str().to_string(),
+                    agent_account_id: capture.get(2).map(|id| id.as_str().to_string()),
+                });
             }
         }
     }
@@ -135,12 +140,11 @@ pub(crate) fn append_agent_routes(blocks: &mut Vec<PromptInputBlock>, delegation
     let mut seen = BTreeSet::new();
     let routes: Vec<AgentRoute> = visible_agent_reference_types(blocks)
         .into_iter()
-        .filter(|agent_type| valid_agent_wire_syntax(agent_type))
+        .filter(|route| valid_agent_wire_syntax(&route.agent_type))
         // Dedup first, then bound: a prompt repeating one agent 200 times still
         // routes it, and the cap only bites on distinct agents.
-        .filter(|agent_type| seen.insert(agent_type.clone()))
+        .filter(|route| seen.insert((route.agent_type.clone(), route.agent_account_id.clone())))
         .take(MAX_AGENT_ROUTES)
-        .map(|agent_type| AgentRoute { agent_type })
         .collect();
     if routes.is_empty() {
         return;
@@ -167,12 +171,9 @@ pub(crate) fn append_agent_routes(blocks: &mut Vec<PromptInputBlock>, delegation
 /// history. Any wording change must therefore bump [`ROUTE_FRAME_VERSION`];
 /// `route_frame_wording_is_pinned_to_its_version` guards that.
 ///
-/// No compatibility renderer exists yet: `parse_internal_agent_routes_body` accepts
-/// the current version only, so a bump deliberately abandons the frames already
-/// on disk. That is a pre-release call — there is no shipped history worth
-/// preserving. Once there is, a wording change also has to keep the previous
-/// version's renderer alive for PARSING, and dispatch on the candidate's own
-/// `version` when round-tripping, so old transcripts keep cleaning up.
+/// Parsing retains the exact v3 renderer as well as the current v4 account
+/// renderer. Any future version must preserve these renderers for stored
+/// transcripts and dispatch on the candidate's own version when round-tripping.
 ///
 /// The instruction is narrow on purpose. Agents already discover
 /// `delegate_to_agent` from the companion's tool schema; what they do wrong is
@@ -199,6 +200,19 @@ fn render_internal_agent_routes(frame: &InternalAgentRoutes) -> String {
 fn render_internal_agent_routes_body(frame: &InternalAgentRoutes) -> String {
     let descriptor = serde_json::to_string(frame).expect("internal route frame is serializable");
     let routes = serde_json::to_string(&frame.routes).expect("agent routes are serializable");
+    // v3 frames are already stored in transcripts. Retain their exact renderer
+    // so adding account routing never exposes old internal instructions.
+    if frame.version == 4 {
+        return format!(
+            "{descriptor}\n\
+Codeg composer routing metadata (authoritative): {routes}\n\
+When you delegate any of this work, route it through the `delegate_to_agent` \
+tool from the `codeg-mcp` server with `agent_type` taken from the matching \
+route and `agent_account_id` set to that route's `agentAccountId` when present: \
+do not substitute your own native sub-agent, task, or spawn mechanism, \
+and do not route it through any other delegation tool.\n"
+        );
+    }
     format!(
         "{descriptor}\n\
 Codeg composer routing metadata (authoritative): {routes}\n\
@@ -235,14 +249,21 @@ fn parse_internal_agent_routes_body(candidate: &str) -> Option<InternalAgentRout
         .strip_prefix("Codeg composer routing metadata (authoritative): ")?;
     frame.routes = serde_json::from_str(routes_json).ok()?;
     if frame.kind != ROUTE_FRAME_KIND
-        || frame.version != ROUTE_FRAME_VERSION
+        || !matches!(frame.version, 3 | ROUTE_FRAME_VERSION)
         || uuid::Uuid::parse_str(&frame.nonce).is_err()
         || frame.routes.is_empty()
         || frame.routes.len() > MAX_AGENT_ROUTES
         || frame
             .routes
             .iter()
-            .any(|route| !valid_agent_wire_syntax(&route.agent_type))
+            .any(|route| {
+                !valid_agent_wire_syntax(&route.agent_type)
+                    || (frame.version == 3 && route.agent_account_id.is_some())
+                    || route.agent_account_id.as_deref().is_some_and(|id| {
+                        id.is_empty() || id.len() > 128
+                            || !id.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+                    })
+            })
         || render_internal_agent_routes_body(&frame) != candidate
     {
         return None;
@@ -833,6 +854,54 @@ pub(crate) fn strip_route_separator_from_prompt(blocks: &mut [PromptInputBlock])
 mod tests {
     use super::*;
 
+    #[test]
+    fn named_accounts_keep_native_routes_distinct_and_round_trip() {
+        let visible = "[@Work](codeg://agent/claude_code?account=work) \
+[@Personal](codeg://agent/claude_code?account=personal) \
+[@Default](codeg://agent/claude_code?account=default) \
+[@Again](codeg://agent/claude_code?account=work) \
+[@Legacy](codeg://agent/custom:claude-code-2)";
+        let mut blocks = vec![PromptInputBlock::Text { text: visible.into() }];
+        append_agent_routes(&mut blocks, true);
+        let routing = text(&blocks[1]);
+        let frame = parse_internal_agent_routes_body(routing.trim_matches(ROUTE_FRAME_SEPARATOR)).unwrap();
+        assert_eq!(frame.routes.len(), 4);
+        assert_eq!(frame.routes[0].agent_type, "claude_code");
+        assert_eq!(frame.routes[0].agent_account_id.as_deref(), Some("work"));
+        assert_eq!(frame.routes[2].agent_account_id.as_deref(), Some("default"));
+        assert_eq!(frame.routes[3].agent_account_id, None);
+        assert!(routing.contains("`agent_account_id`"));
+        assert_eq!(strip_internal_frames(&format!("{visible}\n{routing}")), visible);
+    }
+
+    #[test]
+    fn stored_v3_routes_still_strip_after_account_routes_are_added() {
+        let old = concat!(
+            "\u{001e}{\"kind\":\"codeg_internal_agent_routes\",\"version\":3,\"nonce\":\"00000000-0000-0000-0000-000000000001\"}\n",
+            "Codeg composer routing metadata (authoritative): [{\"agentType\":\"codex\"}]\n",
+            "When you delegate any of this work, route it through the `delegate_to_agent` ",
+            "tool from the `codeg-mcp` server with `agent_type` taken from the matching ",
+            "route: do not substitute your own native sub-agent, task, or spawn mechanism, ",
+            "and do not route it through any other delegation tool.\n\u{001e}"
+        );
+        assert!(parse_internal_agent_routes_body(old.trim_matches(ROUTE_FRAME_SEPARATOR)).is_some());
+        assert_eq!(strip_internal_frames(&format!("hello\n{old}")), "hello");
+        assert_eq!(strip_internal_frames(old.trim_matches('\u{001e}')), "");
+    }
+
+    #[test]
+    fn account_and_assistant_mentions_keep_both_routes_and_clean_history() {
+        let visible = "Ask [@Work](codeg://agent/claude_code?account=work) and [@Reviewer](codeg://assistant/3).";
+        let mut blocks = vec![PromptInputBlock::Text { text: visible.into() }];
+        append_agent_routes(&mut blocks, true);
+        append_assistant_routes(&mut blocks, true);
+        assert_eq!(blocks.len(), 3);
+        assert!(text(&blocks[1]).contains(r#""agentAccountId":"work""#));
+        assert!(text(&blocks[2]).contains(r#""assistantId":3"#));
+        let serialized = blocks.iter().map(text).collect::<Vec<_>>().join("\n");
+        assert_eq!(strip_internal_frames(&serialized), visible);
+    }
+
     fn text(block: &PromptInputBlock) -> &str {
         match block {
             PromptInputBlock::Text { text } => text,
@@ -844,6 +913,7 @@ mod tests {
     fn wire_shape_retains_camel_case_agent_type() {
         let value = serde_json::to_value(AgentRoute {
             agent_type: "antigravity".into(),
+            agent_account_id: None,
         })
         .unwrap();
         assert_eq!(value, serde_json::json!({"agentType": "antigravity"}));
@@ -911,15 +981,14 @@ mod tests {
         // The instruction text is part of the frame's byte-exact identity —
         // parsing only accepts a candidate the CURRENT renderer reproduces
         // verbatim — so a reworded frame stops being strippable and surfaces in
-        // every transcript already written with the old wording. There is no
-        // compat renderer: the version bump this test pins is a deliberate
-        // marker for that break, not a fix for it.
+        // every transcript already written with the old wording. Keep the
+        // version pinned here and preserve the older renderer for parsing.
         let mut blocks = vec![PromptInputBlock::Text {
             text: "ask [@Codex](codeg://agent/codex)".into(),
         }];
         append_agent_routes(&mut blocks, true);
         let routing = text(&blocks[1]);
-        assert_eq!(ROUTE_FRAME_VERSION, 3);
+        assert_eq!(ROUTE_FRAME_VERSION, 4);
         assert!(routing.contains(
             "do not substitute your own native sub-agent, task, or spawn mechanism, \
              and do not route it through any other delegation tool."

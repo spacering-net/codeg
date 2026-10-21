@@ -1625,8 +1625,17 @@ pub struct ConversationConnectionInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AcpAgentAccountInfo {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AcpAgentInfo {
     pub agent_type: crate::models::agent::AgentType,
+    /// Mention targets derived from the account registry, without paths or auth.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub named_accounts: Vec<AcpAgentAccountInfo>,
     /// Whether this agent has a codeg-known skill store — every built-in, and
     /// custom agents that declared the shared `.agents/skills` store. Gates
     /// the skills matrices frontend-side.
