@@ -358,3 +358,12 @@ tokio = { version = "1", features = ["test-util", "macros", "rt", "sync", "time"
 insta = { version = "1", features = ["json", "redactions"] }
 axum-test = { version = "17", features = ["ws"] }
 
+# Keep local debug builds usable while cutting DevCache deps debuginfo
+# (often multi-GiB). Full symbols stay available via `cargo build --profile=…`
+# overrides when needed; release profiles are unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
