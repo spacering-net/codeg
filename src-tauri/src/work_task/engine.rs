@@ -1681,6 +1681,38 @@ impl TaskEngine {
             return Ok(wt);
         }
 
+        // A project folder can be added to Codeg before it has a Git
+        // repository. Work tasks need a branch-backed HEAD for their
+        // worktrees, so make the first commit from the folder's current files
+        // before resolving any task-specific base (including a PR base).
+        let mut project_head = resolve_git_head(&root.path)
+            .await
+            .map_err(|e| e.to_string())?;
+        let project_needs_initial_commit = !project_head.is_repo
+            || (project_head.branch.is_some()
+                && task_git::rev_parse(&root.path, "HEAD").await.is_err());
+        if project_needs_initial_commit {
+            // Multiple tasks may be launched from the same folder. Serialize
+            // this one-time mutation and re-check under the lock so they do
+            // not race into multiple root commits.
+            let folder_lock = self.folder_lock(task.folder_id).await;
+            let _folder_guard = folder_lock.lock().await;
+            project_head = resolve_git_head(&root.path)
+                .await
+                .map_err(|e| e.to_string())?;
+            if !project_head.is_repo
+                || (project_head.branch.is_some()
+                    && task_git::rev_parse(&root.path, "HEAD").await.is_err())
+            {
+                task_git::init_with_initial_commit(&self.db.conn, &root.path, "Initial commit")
+                    .await
+                    .map_err(|e| format!("could not initialize project repository: {e}"))?;
+                project_head = resolve_git_head(&root.path)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
         // Where the task's branch starts, and what its diff is measured
         // against. Normally both are the project folder's current HEAD; a task
         // created FOR a particular branch starts at that branch's tip instead,
@@ -1712,8 +1744,7 @@ impl TaskEngine {
                     (branch, tip.clone(), tip)
                 }
                 None => {
-                    let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
-                    let base_branch = head.branch.ok_or_else(|| {
+                    let base_branch = project_head.branch.ok_or_else(|| {
                         "project folder is not on a branch (detached HEAD?)".to_string()
                     })?;
                     let base_sha = task_git::rev_parse(&root.path, "HEAD")

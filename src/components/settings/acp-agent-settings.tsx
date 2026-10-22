@@ -10621,7 +10621,7 @@ supports_websockets = true`}
                             event.target.value
                           )
                         }}
-                        placeholder="claude-sonnet-5-5"
+                        placeholder="provider model id"
                       />
                     </div>
 
@@ -12159,7 +12159,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-sonnet-5-5"
+                              placeholder="provider model id"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -12178,7 +12178,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5-5"
+                              placeholder="provider model id"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -12197,7 +12197,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-haiku-5-5"
+                              placeholder="provider model id"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -12216,7 +12216,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-sonnet-5-5"
+                              placeholder="provider model id"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -12235,7 +12235,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5-5"
+                              placeholder="provider model id"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -12254,7 +12254,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-fable-5-1"
+                              placeholder="provider model id"
                             />
                           </div>
                         </div>
@@ -12279,7 +12279,7 @@ supports_websockets = true`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="my-gateway/claude-opus-5-5"
+                                placeholder="custom provider model id"
                               />
                             </div>
                             <div className="space-y-1.5">

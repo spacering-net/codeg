@@ -2476,6 +2476,10 @@ pub async fn spawn_agent_connection(
         owner_window_label.clone(),
         None, // folder_id 由后续 prompt handler 在首次 send 时绑定 (Phase 2)
     );
+    if agent_type == AgentType::ClaudeCode {
+        initial_state.claude_model_catalog =
+            crate::commands::acp::cc_switch_claude_model_catalog(&runtime_env);
+    }
 
     // Install the SessionStarted dedup signal BEFORE wrapping into Arc so the
     // first event (StatusChanged{Connecting} below) doesn't race with the
@@ -3622,6 +3626,75 @@ fn map_session_config_options(
         .collect()
 }
 
+/// Add models from the cc-switch provider catalog to Claude's model selector.
+/// The ACP adapter intentionally advertises only its built-in aliases, while a
+/// gateway may expose concrete ids such as `claude-opus-5-5`. Keep the agent's
+/// rows and current value intact, append only missing ids, and put the injected
+/// rows in their own group so the UI makes their source clear.
+fn merge_claude_model_catalog(
+    options: &mut [SessionConfigOption],
+    catalog: &[(String, String, Option<String>)],
+) {
+    if catalog.is_empty() {
+        return;
+    }
+    let Some(option) = options.iter_mut().find(|option| {
+        matches!(option.category, Some(SessionConfigOptionCategory::Model))
+            || option.id.to_string() == MODEL_CONFIG_OPTION_ID
+    }) else {
+        return;
+    };
+    let SessionConfigKind::Select(select) = &mut option.kind else {
+        return;
+    };
+    let has = |value: &str| match &select.options {
+        SessionConfigSelectOptions::Ungrouped(rows) =>
+            rows.iter().any(|row| row.value.to_string() == value),
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .any(|row| row.value.to_string() == value),
+        _ => false,
+    };
+    let rows: Vec<SessionConfigSelectOption> = catalog
+        .iter()
+        .filter(|(id, _, _)| !has(id))
+        .map(|(id, name, description)| {
+            SessionConfigSelectOption::new(id.clone(), name.clone()).description(description.clone())
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    // Always keep injected ids in a labeled group so the UI distinguishes
+    // gateway catalog entries from the agent's built-in aliases — including
+    // when the adapter originally advertised an ungrouped list.
+    select.options = match std::mem::replace(
+        &mut select.options,
+        SessionConfigSelectOptions::Ungrouped(Vec::new()),
+    ) {
+        SessionConfigSelectOptions::Ungrouped(existing) => SessionConfigSelectOptions::Grouped(
+            vec![
+                SessionConfigSelectGroup::new("built-in", "Built-in", existing),
+                SessionConfigSelectGroup::new("cc-switch", "cc-switch provider", rows),
+            ],
+        ),
+        SessionConfigSelectOptions::Grouped(mut groups) => {
+            groups.push(SessionConfigSelectGroup::new(
+                "cc-switch",
+                "cc-switch provider",
+                rows,
+            ));
+            SessionConfigSelectOptions::Grouped(groups)
+        }
+        _ => SessionConfigSelectOptions::Grouped(vec![SessionConfigSelectGroup::new(
+            "cc-switch",
+            "cc-switch provider",
+            rows,
+        )]),
+    };
+}
+
 /// Config-option ids a launch carrying `runtime_env` has pinned, so the agent
 /// will reject any attempt to change them (see
 /// [`SessionState::env_pinned_config_option_ids`]).
@@ -3704,8 +3777,18 @@ async fn emit_session_config_options_values(
     // Drop what this launch froze BEFORE mapping, so every producer of this
     // event — establishment, the answer to a set, and the agent's own
     // `config_option_update` push — is filtered by one rule.
-    let pinned = state.read().await.env_pinned_config_option_ids.clone();
-    let visible = visible_config_options(&pinned, config_options);
+    let (pinned, agent_type, catalog) = {
+        let guard = state.read().await;
+        (
+            guard.env_pinned_config_option_ids.clone(),
+            guard.agent_type,
+            guard.claude_model_catalog.clone(),
+        )
+    };
+    let mut visible = visible_config_options(&pinned, config_options);
+    if agent_type == AgentType::ClaudeCode {
+        merge_claude_model_catalog(&mut visible, &catalog);
+    }
     emit_with_state(
         state,
         emitter,
@@ -5442,6 +5525,11 @@ async fn apply_and_emit_session_config_options(
     preferred_config_values: &BTreeMap<String, String>,
     initial_config_options: Vec<SessionConfigOption>,
 ) {
+    let mut initial_config_options = initial_config_options;
+    if agent_type == AgentType::ClaudeCode {
+        let catalog = state.read().await.claude_model_catalog.clone();
+        merge_claude_model_catalog(&mut initial_config_options, &catalog);
+    }
     // Every establishment starts from an empty ledger. `SessionState` outlives a
     // fork transition, so without this the child would inherit — and defend —
     // whatever the parent asserted, on paths that never write it back: Grok's
@@ -20983,6 +21071,54 @@ mod tests {
             SessionConfigKindInfo::Select(sel) => sel,
             other => panic!("expected a select config option, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn merge_claude_model_catalog_promotes_ungrouped_and_skips_duplicates() {
+        let mut options: Vec<SessionConfigOption> = vec![serde_json::from_value(serde_json::json!({
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "sonnet",
+            "options": [
+                {"value": "sonnet", "name": "Sonnet"},
+                {"value": "opus", "name": "Opus"},
+            ],
+        }))
+        .expect("fixture")];
+
+        merge_claude_model_catalog(
+            &mut options,
+            &[
+                (
+                    "sonnet".to_string(),
+                    "Sonnet".to_string(),
+                    Some("cc-switch provider catalog".to_string()),
+                ),
+                (
+                    "claude-opus-5-5".to_string(),
+                    "Opus 5.5".to_string(),
+                    Some("cc-switch provider catalog".to_string()),
+                ),
+            ],
+        );
+
+        let SessionConfigKind::Select(select) = &options[0].kind else {
+            panic!("expected select");
+        };
+        let SessionConfigSelectOptions::Grouped(groups) = &select.options else {
+            panic!("ungrouped catalog merge must promote to grouped: {:?}", select.options);
+        };
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].group.to_string(), "built-in");
+        assert_eq!(groups[1].group.to_string(), "cc-switch");
+        let injected: Vec<String> = groups[1]
+            .options
+            .iter()
+            .map(|row| row.value.to_string())
+            .collect();
+        assert_eq!(injected, vec!["claude-opus-5-5"]);
     }
 
     // ── PermissionQueue (#442) ──────────────────────────────────────────────

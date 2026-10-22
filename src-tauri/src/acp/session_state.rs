@@ -342,6 +342,11 @@ pub struct SessionState {
     pub modes: Option<SessionModeStateInfo>,
     pub current_mode: Option<String>,
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
+    /// Claude model ids supplied by the cc-switch unified provider catalog.
+    /// These are merged into Claude's ACP model selector at establishment so
+    /// a gateway's real catalog (for example `claude-opus-5-5`) remains
+    /// selectable even when the adapter only advertises family aliases.
+    pub claude_model_catalog: Vec<(String, String, Option<String>)>,
     /// Grok only: per-model reasoning-effort specs, parsed from the top-level
     /// `models` of the session-establishment response (guaranteed on
     /// `session/new`; opportunistic on resume/fork) and refreshed by each model
@@ -755,6 +760,7 @@ impl SessionState {
             modes: None,
             current_mode: None,
             config_options: None,
+            claude_model_catalog: Vec::new(),
             grok_model_specs: None,
             grok_catalog_broadcast: None,
             kiro_reasoning: None,

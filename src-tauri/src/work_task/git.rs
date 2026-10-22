@@ -106,6 +106,97 @@ pub async fn commit_all(
     Ok(true)
 }
 
+/// Secret-shaped paths that must not land in an auto-created first commit
+/// when the project folder has no usable `.gitignore` yet.
+const AUTO_INIT_SECRET_GITIGNORE: &[&str] = &[
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "id_rsa",
+    "id_ed25519",
+    "credentials.json",
+];
+
+/// Ensure common secret patterns are ignored before `git add -A` on an
+/// auto-initialized project folder. Appends missing entries; never strips
+/// user-authored rules.
+fn ensure_secret_gitignore_entries(path: &str) -> Result<(), AppCommandError> {
+    let gi_path = std::path::Path::new(path).join(".gitignore");
+    let existing = std::fs::read_to_string(&gi_path).unwrap_or_default();
+    let present: std::collections::HashSet<&str> = existing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let missing: Vec<&str> = AUTO_INIT_SECRET_GITIGNORE
+        .iter()
+        .copied()
+        .filter(|entry| !present.contains(entry))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    if content.is_empty() {
+        content.push_str("# Added by Codeg work-task auto-init\n");
+    } else {
+        content.push_str("\n# Added by Codeg work-task auto-init\n");
+    }
+    for entry in missing {
+        content.push_str(entry);
+        content.push('\n');
+    }
+    std::fs::write(&gi_path, content).map_err(AppCommandError::io)?;
+    tracing::info!(
+        path,
+        "work_task auto-init: ensured secret patterns in .gitignore before first commit"
+    );
+    Ok(())
+}
+
+/// Initialize a project directory and create the first commit from its
+/// current contents. Callers should invoke it only after confirming the
+/// directory is either not a Git work tree or has an unborn branch.
+pub async fn init_with_initial_commit(
+    conn: &sea_orm::DatabaseConnection,
+    path: &str,
+    message: &str,
+) -> Result<(), AppCommandError> {
+    let init = run_git(path, &["init"]).await?;
+    if !init.status.success() {
+        return Err(git_command_error("init", &init.stderr));
+    }
+
+    // Fresh machines / CI often have no global git identity; the auto-init
+    // commit must not depend on one. Only fill local config when missing so
+    // an existing repo's author settings stay untouched.
+    let has_name = run_git(path, &["config", "--get", "user.name"]).await?;
+    if !has_name.status.success() {
+        let set_name = run_git(path, &["config", "user.name", "Codeg Work Task"]).await?;
+        if !set_name.status.success() {
+            return Err(git_command_error("config user.name", &set_name.stderr));
+        }
+        let set_email =
+            run_git(path, &["config", "user.email", "codeg-work-task@localhost"]).await?;
+        if !set_email.status.success() {
+            return Err(git_command_error("config user.email", &set_email.stderr));
+        }
+    }
+
+    ensure_secret_gitignore_entries(path)?;
+
+    let add = run_git(path, &["add", "-A"]).await?;
+    if !add.status.success() {
+        return Err(git_command_error("add -A", &add.stderr));
+    }
+
+    commit_staged_with_allow_empty(conn, path, message).await
+}
+
 /// Commit whatever is staged (used by commit-all and the squash landing).
 /// Resolves the commit author from the matching configured account, like
 /// `git_commit_core`.
@@ -113,6 +204,23 @@ pub async fn commit_staged(
     conn: &sea_orm::DatabaseConnection,
     path: &str,
     message: &str,
+) -> Result<(), AppCommandError> {
+    commit_staged_inner(conn, path, message, false).await
+}
+
+async fn commit_staged_with_allow_empty(
+    conn: &sea_orm::DatabaseConnection,
+    path: &str,
+    message: &str,
+) -> Result<(), AppCommandError> {
+    commit_staged_inner(conn, path, message, true).await
+}
+
+async fn commit_staged_inner(
+    conn: &sea_orm::DatabaseConnection,
+    path: &str,
+    message: &str,
+    allow_empty: bool,
 ) -> Result<(), AppCommandError> {
     let author_override = crate::git_credential::resolve_commit_author(path, conn).await;
     let mut cmd = crate::process::tokio_command("git");
@@ -124,7 +232,11 @@ pub async fn commit_staged(
             &format!("user.email={email}"),
         ]);
     }
-    cmd.args(["commit", "-m", message]).current_dir(path);
+    cmd.args(["commit"]);
+    if allow_empty {
+        cmd.arg("--allow-empty");
+    }
+    cmd.args(["-m", message]).current_dir(path);
     let out = cmd.output().await.map_err(AppCommandError::io)?;
     if !out.status.success() {
         return Err(git_command_error("commit", &out.stderr));
@@ -1483,6 +1595,48 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(wt.join("a.txt")).expect("read"),
             "one\ntwo\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_with_initial_commit_creates_head_and_keeps_dotenv_untracked() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8");
+        std::fs::write(dir.path().join("readme.txt"), "hello\n").expect("readme");
+        std::fs::write(dir.path().join(".env"), "SECRET=1\n").expect("dotenv");
+
+        init_with_initial_commit(&db.conn, path, "Initial commit")
+            .await
+            .expect("auto-init");
+
+        let head = rev_parse(path, "HEAD").await.expect("HEAD after init");
+        assert!(!head.is_empty());
+        let tracked = run_git(path, &["ls-files"]).await.expect("ls-files");
+        assert!(tracked.status.success(), "ls-files failed");
+        let tracked = String::from_utf8_lossy(&tracked.stdout);
+        assert!(
+            tracked.contains("readme.txt"),
+            "project files should be in the first commit: {tracked}"
+        );
+        assert!(
+            !tracked.contains(".env"),
+            ".env must stay untracked after auto-init: {tracked}"
+        );
+        let gi = std::fs::read_to_string(dir.path().join(".gitignore")).expect("gitignore");
+        assert!(
+            gi.lines().any(|line| line.trim() == ".env"),
+            "auto-init must record .env in .gitignore: {gi}"
+        );
+
+        // Second ensure pass (via another folder) must not duplicate entries
+        // when patterns are already present.
+        ensure_secret_gitignore_entries(path).expect("idempotent ensure");
+        let gi2 = std::fs::read_to_string(dir.path().join(".gitignore")).expect("gitignore");
+        assert_eq!(
+            gi2.matches(".env\n").count(),
+            gi.matches(".env\n").count(),
+            "secret ignore entries must not duplicate"
         );
     }
 }
