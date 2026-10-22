@@ -14,6 +14,7 @@ import { toast } from "sonner"
 import {
   type AppUpdateInfo,
   type AppUpdateState,
+  beginOwnServerRestart,
   checkAppUpdateInfo,
   confirmRollbackVersion,
   describeAppUpdateError,
@@ -751,6 +752,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     // (and wasn't auto-rolled-back) before declaring success. Ported from the
     // original in-page upgrade flow so the supervisor trial semantics survive.
     setRestartCountdown(0)
+    const endOwnRestart = beginOwnServerRestart()
+    let reloading = false
     try {
       // The version running now. The server stays on it through swap + staged
       // until it exits, so reading it here (rather than caching it at download
@@ -837,12 +840,14 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       }
 
       toast.success(t("upgradeSuccess"))
+      reloading = true
       window.location.reload()
     } catch (err) {
       const { rawMessage } = normalizeAppUpdateError(err)
       toast.error(t("installFailed", { message: rawMessage }))
       console.error("[Update] restart flow failed:", err)
     } finally {
+      if (!reloading) endOwnRestart()
       setRestartCountdown(null)
       setIsRestarting(false)
     }
@@ -851,6 +856,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const rollback = useCallback(async () => {
     setIsRollingBack(true)
     setRestartCountdown(null)
+    const endOwnRestart = beginOwnServerRestart()
+    let reloading = false
     try {
       // The version we are rolling back *from*. A successful rollback brings the
       // server back onto a different (previous) version.
@@ -898,11 +905,13 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       }
 
       toast.success(t("rollbackSuccess"))
+      reloading = true
       window.location.reload()
     } catch (err) {
       toast.error(t("rollbackFailed"))
       console.error("[Update] rollback failed:", err)
     } finally {
+      if (!reloading) endOwnRestart()
       setIsRollingBack(false)
       setRestartCountdown(null)
     }

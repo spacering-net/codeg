@@ -145,13 +145,14 @@ pub async fn focused_and_main(pid: u32) -> (Option<u64>, Option<u64>) {
 /// What Accessibility says of a menu command before it is chosen: where its
 /// first title sits on the menu bar — `0` is the Apple menu, `1` the
 /// application menu — whether every title on the way was found, once each,
-/// and the command's keyboard shortcut, as a key and the menu's modifier
-/// mask, when it has one.
+/// the command's keyboard shortcut, as a key and the menu's modifier mask,
+/// when it has one, and whether it is turned on, when it says.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MenuTarget {
     pub bar_index: Option<usize>,
     pub reached: bool,
     pub shortcut: Option<(String, i64)>,
+    pub enabled: Option<bool>,
 }
 
 /// The longest the walk through an application's menus may take, however
@@ -226,6 +227,7 @@ fn menu_target_now(pid: u32, path: &[String]) -> MenuTarget {
         return out;
     }
     out.reached = true;
+    out.enabled = flag(&current, "AXEnabled");
     let key = attribute(&current, "AXMenuItemCmdChar")
         .ok()
         .and_then(|v| v.downcast_into::<CFString>())

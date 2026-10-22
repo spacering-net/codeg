@@ -13,9 +13,13 @@
  *
  * A returned "running" poll resolves to the neutral `checked` badge (see
  * `deriveBadge`), so superseded interim checks don't keep spinning.
+ *
+ * Polls the agent split with anything in between land in separate cards; each
+ * row names its latest poll (`latestPollId`) so that only the task's newest
+ * row in the transcript reaches the live sub-agent (`DelegationStatusRow`).
  */
 
-import { useMemo } from "react"
+import { memo, useMemo } from "react"
 
 import { cn } from "@/lib/utils"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
@@ -30,7 +34,7 @@ interface Props {
   testId?: string
 }
 
-export function DelegationStatusGroupCard({
+function DelegationStatusGroupCardImpl({
   polls,
   testId = "delegation-status-group",
 }: Props) {
@@ -70,9 +74,15 @@ export function DelegationStatusGroupCard({
             report={r.report}
             badge={r.badge}
             results={r.results}
+            runningConfirmed={r.runningConfirmed}
+            latestPollId={r.latestPollId}
           />
         </div>
       ))}
     </div>
   )
 }
+
+// Memoized: a settled card keeps its polls array across the parent's streaming
+// batches, so it skips them along with its rows.
+export const DelegationStatusGroupCard = memo(DelegationStatusGroupCardImpl)

@@ -18,8 +18,14 @@ const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
 export type SidebarSortMode = "created" | "updated"
 
 /** Which conversations the flat "Recent" section lists: everything it can
- *  reach (the default), only folderless chats, or only folder-bound sessions. */
-export const SIDEBAR_RECENT_FILTERS = ["all", "chats", "folders"] as const
+ *  reach (the default), only folderless chats, only folder-bound sessions, or
+ *  only the ones `codeg-cli` started. */
+export const SIDEBAR_RECENT_FILTERS = [
+  "all",
+  "chats",
+  "folders",
+  "cli",
+] as const
 
 export type SidebarRecentFilter = (typeof SIDEBAR_RECENT_FILTERS)[number]
 

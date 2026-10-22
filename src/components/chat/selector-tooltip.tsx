@@ -39,9 +39,9 @@ interface SelectorTooltipProps {
 }
 
 /**
- * The hover hint on a selector chip (model / config option / mode / agent /
- * folder / the collapsed agent-settings cog), replacing the native `title`.
- * Shared by the chat composer, the automation editor and the task editor.
+ * The hover hint on a selector chip (the agent settings chip, the agent pill,
+ * the folder field), replacing the native `title`. Shared by the chat
+ * composer, the automation editor and the task editor.
  *
  * Says what the chip IS, not what it currently holds — the value is already the
  * chip's own text, so repeating it here would just be a second copy under the

@@ -24,8 +24,9 @@ function escapeMarkdownText(text: string): string {
 const AUTOLINK_TRIGGER = /(?:https?|ftp|mailto):|www\.|@/i
 
 // Slug shape of a real command / skill / expert id: alphanumeric ends with
-// interior `._-/` separators only. See {@link isLiteralInvocationToken}.
-const SAFE_INVOCATION_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$/
+// interior `._-/:` separators only, `:` for a namespaced command such as
+// Qoder's `sites:sites-building`. See {@link isLiteralInvocationToken}.
+const SAFE_INVOCATION_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._/:-]*[A-Za-z0-9])?$/
 
 /**
  * Whether `token` can be emitted raw after a `/` / `$` prefix without any

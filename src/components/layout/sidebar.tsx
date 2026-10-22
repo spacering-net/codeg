@@ -89,7 +89,7 @@ import {
 } from "@/lib/conversation-tags"
 import {
   SidebarTagFilterBar,
-  SidebarTagFilterButton,
+  SidebarTagFilterSubmenu,
 } from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
@@ -202,6 +202,10 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
+  // Controlled only so the tag filter's "Manage tags…" can close the menu on
+  // its way to the dialog: that entry is a plain button in a panel, not a menu
+  // item, so it does not close the menu by itself.
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
   // What the user picked, persisted as picked. The list gets it PRUNED to tags
   // that still exist (below) — but only once the tag list has loaded: matching
   // needs nothing but ids, so a persisted filter applies from the first paint
@@ -218,9 +222,9 @@ export function Sidebar() {
     shortcuts.new_conversation,
     isMac
   )
-  // General umbrella name for the eye menu (list toggles + nav rows + sort +
-  // section order). Kept generic so the accessible name / tooltip stays
-  // accurate as the menu gains options.
+  // General umbrella name for the eye menu (tag filter + list toggles + nav
+  // rows + sort + section order). Kept generic so the accessible name / tooltip
+  // stays accurate as the menu gains options.
   const viewOptionsLabel = t("viewOptions")
   const toggleExpandLabel = allExpanded
     ? t("collapseAllGroups")
@@ -243,6 +247,8 @@ export function Sidebar() {
     setRawTagFilter(next)
     saveTagFilter(next)
   }, [])
+
+  const closeViewOptions = useCallback(() => setViewOptionsOpen(false), [])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
     setShowCompleted(value)
@@ -365,12 +371,6 @@ export function Sidebar() {
             window's top edge, so its empty space must move the window. */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
-          {/* Narrow the list to conversations carrying chosen tags. A funnel,
-              unlike the view-options eye: this one filters. */}
-          <SidebarTagFilterButton
-            filter={tagFilter}
-            onChange={handleSetTagFilter}
-          />
           {/* Locate the active conversation in the list below (moved here from
               the conversation detail header). Always shown, leading the header
               cluster. The sidebar is unmounted while collapsed, so `listRef` is
@@ -405,7 +405,10 @@ export function Sidebar() {
               <ListChevronsUpDown aria-hidden="true" className="h-3.5 w-3.5" />
             )}
           </Button>
-          <DropdownMenu>
+          <DropdownMenu
+            open={viewOptionsOpen}
+            onOpenChange={setViewOptionsOpen}
+          >
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -414,9 +417,10 @@ export function Sidebar() {
                 title={viewOptionsLabel}
                 aria-label={viewOptionsLabel}
               >
-                {/* An eye, not a funnel: nothing in this menu filters the list
-                    down to matches — every option decides what is shown and in
-                    what order. */}
+                {/* An eye, not a funnel: the menu as a whole decides what the
+                    list shows and in what order. Its one filter, by tags, wears
+                    the funnel on its own row, and a filter that is on announces
+                    itself in the strip above the list. */}
                 <Eye aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
@@ -427,18 +431,28 @@ export function Sidebar() {
             <DropdownMenuContent align="end" className="min-w-56">
               {/* Four groups: what the list shows → which nav rows exist → how
                   the list is sorted → how its sections are stacked. The first
-                  two are hover-opened submenus rather than inline blocks: they
-                  are set-and-forget on/off inventories, six checkboxes between
-                  them, and inlining all six left a fifteen-row menu with Sort
-                  by / Section order — the two settings people actually come
-                  back for — stranded at the bottom of it. Those two stay
-                  inline: a pair of radios and a ranked list read wrong behind
-                  another hop, and the order rows need this menu's width.
+                  group is the tag filter plus the list toggles, and those and
+                  the nav rows are hover-opened submenus rather than inline
+                  blocks. The two inventories are set-and-forget on/off sets,
+                  six checkboxes between them, and inlining all six left a
+                  fifteen-row menu with Sort by / Section order — the two
+                  settings people actually come back for — stranded at the
+                  bottom of it. The tag filter, which people come back for too,
+                  leads the menu instead: it is a whole panel (search, match
+                  mode, tag list) that only a submenu has room for. Sort by and
+                  Section order stay inline: a pair of radios and a ranked list
+                  read wrong behind another hop, and the order rows need this
+                  menu's width.
                   Every option keeps the menu open on select (the default is to
                   close): this menu is a settings panel, not a command list, and
                   flipping two of them used to cost two round trips through the
                   trigger. The one action it used to carry — expand/collapse
                   all — is now a header button of its own. */}
+              <SidebarTagFilterSubmenu
+                filter={tagFilter}
+                onChange={handleSetTagFilter}
+                onCloseMenu={closeViewOptions}
+              />
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <MessagesSquare className="text-muted-foreground" />

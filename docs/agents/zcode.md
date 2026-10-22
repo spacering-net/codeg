@@ -1,6 +1,6 @@
 # ZCode
 
-Codeg connects to [official ZCode](https://github.com/zai-org/ZCode) through the community [zcode-acp-server](https://github.com/william0wang/zcode-acp) bridge. The bundled registry pins the bridge to `0.72.0`.
+Codeg connects to [official ZCode](https://github.com/zai-org/ZCode) through the community [zcode-acp-server](https://github.com/william0wang/zcode-acp) bridge. The bundled registry pins the bridge to `0.76.2`.
 
 ## Setup
 
@@ -17,16 +17,24 @@ The bridge reuses ZCode's existing authentication. Codeg does not copy credentia
 
 ZCode Start Plan accounts cannot run through the bridge. Their model requests need a captcha that only the ZCode desktop app can solve, so each prompt fails with a message saying so. GLM Coding Plan providers are not affected.
 
+## Attachments
+
+Images and embedded resources follow the bridge's negotiated ACP capabilities. Pasted, dropped and uploaded images are sent as image blocks, including uploads hydrated by the Codeg server. Embedded PDFs retain their bytes even when their URI has no local file. File links remain references for native tools; remote links are not downloaded. Audio transcription is not supported.
+
+The bridge accepts up to 100 content blocks and 50 MiB of decoded content per prompt, with a 10 MiB limit per image. Image attachments must be PNG, JPEG, WebP, GIF, BMP or SVG. Other image formats, invalid base64 and oversized prompts return an error. Pause any native goal loop before sending binary attachments; queued goal prompts accept only text.
+
 ## Sessions and tools
 
 A new session explicitly confirms Build mode before sending its first prompt. A valid saved mode, including Yolo, takes precedence. Confirming the mode makes the bridge create the ZCode backend session when the conversation connects rather than at its first prompt. Existing sessions use the normal restore and preference flow. Model and thought selectors follow ACP configuration updates rather than a hardcoded model list.
 
-The bridge writes a disabled sandbox template to `.zcode/acp/sandbox.json` in each workspace it runs in.
+The bridge writes a disabled sandbox template to `.zcode/acp/sandbox.json` in a workspace only while its sandbox is enabled globally, through `sandbox.enabled` in the bridge's user configuration or `ZCODE_ACP_SANDBOX=1`. Codeg sets neither, so unless you enable the sandbox yourself, the bridge does not create that file.
 
 Codeg records its own ACP transcripts for ZCode, including messages, thoughts, tools and usage. These transcripts support history and reconnecting to sessions created in Codeg. Existing custom ZCode entries keep their registration, launch configuration and history; the built-in option records its history separately. This integration does not scan ZCode's native SQLite sessions.
+
+Completed replies retain the bridge's per-turn token usage (including cache reads and writes) and wall time, so their footer and session totals survive reopening. A prompt the bridge works through in several rounds, such as an `/auto` loop or a sandbox continuation, totals every round's usage and keeps Codeg's measured duration. Context-window occupancy remains a separate reading, not additional billable tokens. When the bridge supplies no turn measurements, Codeg keeps its measured duration without inventing token counts. A cancelled reply records no usage, because the bridge reports it only after Codeg has stopped the turn. Older transcripts without those measurements are not retroactively filled.
 
 Manage stdio MCP servers through Codeg's MCP settings and assign them to ZCode. The configuration is stored in Codeg's data directory and forwarded when creating or restoring a session; it is not written into official ZCode's provider or credential files. When multi-agent delegation is enabled, Codeg injects its per-launch `codeg-mcp` companion using the same path.
 
 ## Current scope
 
-The first integration covers ACP conversations, permission requests, cancellation, Codeg transcript history, and stdio MCP. Message-level fork is disabled while the bridge's fork response and checkpoint behavior are incompatible with Codeg's typed flow. Native history import, a ZCode provider/configuration panel, HTTP MCP, attachments, native Goal/queue extensions and remote hub are outside this phase. Runtime validation with official ZCode has been performed on Windows, with bridge 0.69.2; macOS and Linux discovery paths still need platform testing.
+The integration covers ACP conversations, permission requests, cancellation, Codeg transcript history, stdio MCP, images and embedded resources. Message-level fork is disabled while the bridge's fork response and checkpoint behavior are incompatible with Codeg's typed flow. Native history import, a ZCode provider/configuration panel, HTTP MCP, audio, native Goal/queue extensions and remote hub are outside this phase. Initial runtime validation with official ZCode used bridge 0.69.2 on Windows; image and embedded-resource validation also covers 0.72.0. macOS and Linux discovery paths still need platform testing.

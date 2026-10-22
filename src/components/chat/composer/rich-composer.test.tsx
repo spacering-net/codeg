@@ -671,3 +671,90 @@ describe("RichComposer editable-area sizing (#746)", () => {
     expect(scroll!.contains(editable)).toBe(true)
   })
 })
+
+describe("RichComposer predicted follow-up prompt (Tab)", () => {
+  it("fills the empty document with the suggestion on a bare Tab, sending nothing", async () => {
+    const onSubmit = vi.fn()
+    const onChange = vi.fn()
+    const { ref } = await mount({
+      onSubmit,
+      onChange,
+      promptSuggestion: "Run the tests",
+    })
+    const dom = ref.current?.getEditor()?.view.dom as HTMLElement
+    const event = pressKey(dom, { key: "Tab" })
+    expect(event.defaultPrevented).toBe(true)
+    expect(ref.current?.getText()).toBe("Run the tests")
+    expect(onSubmit).not.toHaveBeenCalled()
+    // An ordinary edit: the host's draft hears about it.
+    expect(onChange).toHaveBeenLastCalledWith("Run the tests")
+    // The caret lands after the text, ready to send or keep typing.
+    const { selection, doc } = ref.current!.getEditor()!.state
+    expect(selection.empty).toBe(true)
+    expect(selection.to).toBe(doc.content.size - 1)
+  })
+
+  it("takes precedence over a submit binding on Tab while the document is empty", async () => {
+    const onSubmit = vi.fn()
+    const { ref } = await mount({
+      onSubmit,
+      submitShortcut: "tab",
+      promptSuggestion: "commit this",
+    })
+    dispatchKey(ref, { key: "Tab" })
+    expect(ref.current?.getText()).toBe("commit this")
+    expect(onSubmit).not.toHaveBeenCalled()
+    // Once there is text, Tab is the binding again.
+    dispatchKey(ref, { key: "Tab" })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves Tab alone when the document has content, there is no suggestion, or a modifier is held", async () => {
+    const typed = await mount({ promptSuggestion: "Run the tests" })
+    act(() => typed.ref.current?.setText("my own words"))
+    const typedDom = typed.ref.current?.getEditor()?.view.dom as HTMLElement
+    expect(pressKey(typedDom, { key: "Tab" }).defaultPrevented).toBe(false)
+    expect(typed.ref.current?.getText()).toBe("my own words")
+    typed.unmount()
+
+    const none = await mount({ promptSuggestion: null })
+    const noneDom = none.ref.current?.getEditor()?.view.dom as HTMLElement
+    expect(pressKey(noneDom, { key: "Tab" }).defaultPrevented).toBe(false)
+    expect(none.ref.current?.isEmpty()).toBe(true)
+    none.unmount()
+
+    const blank = await mount({ promptSuggestion: "   " })
+    const blankDom = blank.ref.current?.getEditor()?.view.dom as HTMLElement
+    expect(pressKey(blankDom, { key: "Tab" }).defaultPrevented).toBe(false)
+    expect(blank.ref.current?.isEmpty()).toBe(true)
+    blank.unmount()
+
+    const shifted = await mount({ promptSuggestion: "Run the tests" })
+    const shiftedDom = shifted.ref.current?.getEditor()?.view.dom as HTMLElement
+    expect(
+      pressKey(shiftedDom, { key: "Tab", shiftKey: true }).defaultPrevented
+    ).toBe(false)
+    expect(shifted.ref.current?.isEmpty()).toBe(true)
+  })
+
+  it("reads the newest suggestion at key time, without rebuilding the editor", async () => {
+    const { ref, rerender } = await mount({ promptSuggestion: "first guess" })
+    const editor = ref.current?.getEditor()
+    rerender(<RichComposer ref={ref} promptSuggestion="second guess" />)
+    expect(ref.current?.getEditor()).toBe(editor)
+    dispatchKey(ref, { key: "Tab" })
+    expect(ref.current?.getText()).toBe("second guess")
+  })
+
+  it("lets an open external menu keep its Tab", async () => {
+    const onExternalMenuKeyDown = vi.fn(() => true)
+    const { ref } = await mount({
+      promptSuggestion: "Run the tests",
+      isExternalMenuOpen: true,
+      onExternalMenuKeyDown,
+    })
+    dispatchKey(ref, { key: "Tab" })
+    expect(onExternalMenuKeyDown).toHaveBeenCalledTimes(1)
+    expect(ref.current?.isEmpty()).toBe(true)
+  })
+})

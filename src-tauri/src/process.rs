@@ -22,6 +22,9 @@ pub fn configure_std_command(command: &mut Command) -> &mut Command {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    // The session's environment, not the one an AppImage's launcher set up
+    // for codeg itself.
+    crate::appimage_env::restore(command);
     set_utf8_env(command);
     command
 }
@@ -42,6 +45,7 @@ pub fn configure_tokio_command(
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    crate::appimage_env::restore_tokio(command);
     set_utf8_env(command);
     command
 }

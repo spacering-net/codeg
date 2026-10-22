@@ -11,6 +11,7 @@ import {
 import { Reorder } from "motion/react"
 import type { LucideIcon } from "lucide-react"
 import { Tabs as TabsPrimitive } from "radix-ui"
+import { useTabReselect } from "@/hooks/use-tab-reselect"
 import {
   acquireDragSelectionGuard,
   releaseDragSelectionGuard,
@@ -59,6 +60,10 @@ interface AuxPanelTabRailProps {
   visible: boolean
   icons: Record<AuxPanelTab, LucideIcon>
   labelOf: (tab: AuxPanelTab) => string
+  /** The tab the panel shows: the one whose click closes it. */
+  activeTab: AuxPanelTab
+  /** A click on the tab that was already selected. */
+  onReselect: () => void
 }
 
 /**
@@ -70,12 +75,17 @@ interface AuxPanelTabRailProps {
  * While a drag is in flight the rail shows a local draft of the order, so the
  * tabs move freely under the pointer and the preference — which other windows
  * are listening to — is written once, on release.
+ *
+ * Clicking the tab that is already selected hides the panel (see
+ * `useTabReselect`); a drag that starts on it does not.
  */
 export function AuxPanelTabRail({
   tabs,
   visible,
   icons,
   labelOf,
+  activeTab,
+  onReselect,
 }: AuxPanelTabRailProps) {
   const [dragOrder, setDragOrder] = useState<AuxPanelTab[] | null>(null)
   const dragOrderRef = useRef<AuxPanelTab[] | null>(null)
@@ -165,6 +175,8 @@ export function AuxPanelTabRail({
               Icon={icons[tab]}
               isFirst={tab === shown[0]}
               isLast={tab === shown[shown.length - 1]}
+              selected={tab === activeTab}
+              onReselect={onReselect}
               onMove={move}
               onDragEnd={handleDragEnd}
               setTriggerRef={setTriggerRef}
@@ -200,6 +212,8 @@ interface AuxTabRailItemProps {
   Icon: LucideIcon
   isFirst: boolean
   isLast: boolean
+  selected: boolean
+  onReselect: () => void
   onMove: (tab: AuxPanelTab, delta: -1 | 1) => void
   onDragEnd: () => void
   setTriggerRef: (tab: AuxPanelTab, node: HTMLButtonElement | null) => void
@@ -211,11 +225,14 @@ function AuxTabRailItem({
   Icon,
   isFirst,
   isLast,
+  selected,
+  onReselect,
   onMove,
   onDragEnd,
   setTriggerRef,
 }: AuxTabRailItemProps) {
   const [dragging, setDragging] = useState(false)
+  const reselect = useTabReselect(selected, onReselect)
   const triggerRef = useCallback(
     (node: HTMLButtonElement | null) => setTriggerRef(tab, node),
     [setTriggerRef, tab]
@@ -254,6 +271,9 @@ function AuxTabRailItem({
       layout="position"
       whileDrag={WHILE_DRAG}
       onDragStart={() => {
+        // Grabbing the selected tab to move it is not a click on it: the
+        // release must leave the panel open.
+        reselect.cancel()
         if (!guardHeldRef.current) {
           guardHeldRef.current = true
           acquireDragSelectionGuard()
@@ -282,6 +302,7 @@ function AuxTabRailItem({
         aria-label={label}
         aria-keyshortcuts={MOVE_KEYS}
         onKeyDown={onKeyDown}
+        {...reselect.triggerProps}
         className={TRIGGER_CLASS}
       >
         <Icon className="size-4" />

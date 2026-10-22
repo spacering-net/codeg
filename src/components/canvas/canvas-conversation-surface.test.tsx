@@ -122,6 +122,12 @@ const prefs = vi.hoisted(() => ({
 vi.mock("@/lib/selector-prefs-storage", () => prefs)
 
 import { CanvasConversationSurface } from "@/components/canvas/canvas-conversation-surface"
+import { notify } from "@/lib/notify"
+import {
+  getTimelineTurns,
+  resetConversationRuntimeStore,
+  useConversationRuntimeStore,
+} from "@/stores/conversation-runtime-store"
 
 const CLAUDE_MODES = {
   current_mode_id: "default",
@@ -294,5 +300,132 @@ describe("a draft card whose connection still belongs to the previous agent", ()
 
     expect(api.createConversation).toHaveBeenCalledWith(7, "codex", "hello")
     expect(lifecycle.handleSend).toHaveBeenCalledTimes(1)
+  })
+})
+
+// A card has no message queue. Its composer holds a message written while the
+// card can SEE the agent answering, but a send can still meet a turn the card
+// hadn't heard of yet — one started from another surface, or its `prompting`
+// still on the way — and the backend turns it away. That bounce used to roll
+// the message back and stop there: no notice, and the composer had already
+// cleared itself for it, so the message was simply gone (#991).
+describe("a send the running turn turns away", () => {
+  beforeEach(() => {
+    shell.props = null
+    registry.agents = [agent("codex", "2.0.0")]
+    lifecycle.conn = connection("codex", "connected")
+    lifecycle.handleSend.mockReset()
+    api.createConversation.mockReset()
+    vi.mocked(notify).mockReset()
+    resetConversationRuntimeStore()
+  })
+  afterEach(() => cleanup())
+
+  type SendOpts = {
+    onTurnInProgress?: () => void
+    onSendFailed?: (error: unknown) => void
+  }
+
+  /** The backend's verdict on the send, as the lifecycle hook reports it. */
+  function sendEndsIn(outcome: "turn-in-progress" | "error") {
+    lifecycle.handleSend.mockImplementation(
+      (_draft: PromptDraft, _modeId: unknown, opts: SendOpts) => {
+        if (outcome === "turn-in-progress") opts.onTurnInProgress?.()
+        else opts.onSendFailed?.(new Error("payload too large"))
+      }
+    )
+  }
+
+  function renderPinnedCard() {
+    return render(
+      <CanvasConversationSurface
+        contextKey="canvas-node-1"
+        conversationId={5}
+        agentType="codex"
+        isActive
+      />
+    )
+  }
+
+  async function send(message: PromptDraft) {
+    const onSend = shell.props?.onSend as (draft: PromptDraft) => void
+    await act(async () => {
+      onSend(message)
+    })
+  }
+
+  it("hands the message back to the composer and says why", async () => {
+    sendEndsIn("turn-in-progress")
+    renderPinnedCard()
+    const message: PromptDraft = {
+      blocks: [{ type: "text", text: "12" }],
+      displayText: "12",
+    }
+
+    await send(message)
+
+    // Out of the transcript, since it was never delivered, without leaving the
+    // session pinned to a persist that will never come...
+    expect(getTimelineTurns(5)).toHaveLength(0)
+    expect(
+      useConversationRuntimeStore.getState().byConversationId.get(5)?.syncState
+    ).toBe("idle")
+    // ...and back in the composer, whole, with the reason on screen.
+    expect(shell.props?.injectContent).toEqual({ handBack: message.blocks })
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "info", title: "heldWhileResponding" })
+    )
+
+    // Handed back once: the composer has it now.
+    act(() => (shell.props?.onInjectConsumed as () => void)())
+    expect(shell.props?.injectContent).toBeNull()
+  })
+
+  it("offers a second bounced message once the composer has taken the first", async () => {
+    sendEndsIn("turn-in-progress")
+    renderPinnedCard()
+    const first: PromptDraft = {
+      blocks: [{ type: "text", text: "first" }],
+      displayText: "first",
+    }
+    const second: PromptDraft = {
+      blocks: [{ type: "text", text: "second" }],
+      displayText: "second",
+    }
+
+    await send(first)
+    const offered = shell.props?.injectContent
+    await send(second)
+
+    // The first stays on offer, the SAME object: a new one would cancel the
+    // frame the composer scheduled to take it.
+    expect(shell.props?.injectContent).toBe(offered)
+    expect(offered).toEqual({ handBack: first.blocks })
+    act(() => (shell.props?.onInjectConsumed as () => void)())
+    expect(shell.props?.injectContent).toEqual({ handBack: second.blocks })
+    act(() => (shell.props?.onInjectConsumed as () => void)())
+    expect(shell.props?.injectContent).toBeNull()
+  })
+
+  it("hands back a draft card's first message the same way", async () => {
+    sendEndsIn("turn-in-progress")
+    api.createConversation.mockResolvedValue(42)
+    renderDraftCard()
+
+    await send(draft)
+
+    expect(lifecycle.handleSend).toHaveBeenCalledTimes(1)
+    expect(shell.props?.injectContent).toEqual({ handBack: draft.blocks })
+  })
+
+  it("leaves any other failed send to the error already raised for it", async () => {
+    sendEndsIn("error")
+    renderPinnedCard()
+
+    await send(draft)
+
+    expect(getTimelineTurns(5)).toHaveLength(0)
+    expect(shell.props?.injectContent).toBeNull()
+    expect(notify).not.toHaveBeenCalled()
   })
 })

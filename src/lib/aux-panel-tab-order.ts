@@ -2,8 +2,8 @@
 
 /**
  * The right sidebar's (aux panel's) tabs — Session Details, Files, Changes,
- * Commits — and the order the user dragged them into on the panel's vertical
- * tab rail.
+ * Commits, Automations, Tasks, Issues, Pull requests — and the order the user
+ * dragged them into on the panel's vertical tab rail.
  *
  * Kept in localStorage next to the panel's own open/width state
  * (`workspace:right-sidebar`): it only shapes this device's UI and nothing on
@@ -17,12 +17,25 @@ import { useSyncExternalStore } from "react"
 
 const ORDER_KEY = "workspace:right-sidebar-tab-order"
 
-/** Every aux-panel tab, in the built-in order. */
+/**
+ * Every aux-panel tab, in the built-in order.
+ *
+ * The last four are the project's own work, read off the folder the active
+ * conversation belongs to: its automations, its task board, and its
+ * repository's issues and pull (merge) requests. They follow Commits, so a
+ * rail stored before they existed keeps its own order and gains them as one
+ * block right after Commits, wherever it was dragged to (see
+ * `parseAuxTabOrder`).
+ */
 export const AUX_PANEL_TABS = [
   "session_details",
   "file_tree",
   "changes",
   "git_log",
+  "automations",
+  "tasks",
+  "issues",
+  "pull_requests",
 ] as const
 
 export type AuxPanelTab = (typeof AUX_PANEL_TABS)[number]

@@ -26,12 +26,13 @@
  * drawer.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Loader2 } from "lucide-react"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
+import { DelegationStatusIndexProvider } from "@/components/message/delegation-status-index-context"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import {
   Drawer,
@@ -45,6 +46,10 @@ import {
   type AdaptedMessage,
 } from "@/lib/adapters/ai-elements-adapter"
 import { getConversation } from "@/lib/api"
+import {
+  collectDelegationStatusTasks,
+  createDelegationStatusIndexer,
+} from "@/lib/delegation-status-index"
 import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import { toolStatusUnsettled } from "@/lib/tool-call-lifecycle"
 import type { AgentType, MessageTurn } from "@/lib/types"
@@ -192,6 +197,22 @@ export function SubagentSessionDialog({
     return () => window.clearInterval(timer)
   }, [open, live, load])
 
+  // The child's status rows answer to its own transcript's index, not to the
+  // thread this drawer is opened from (`@/lib/delegation-status-index`). The
+  // indexer keeps it across the refreshes that change no task's newest row.
+  const [indexDelegationStatus] = useState(() =>
+    createDelegationStatusIndexer()
+  )
+  const delegationStatusIndex = useMemo(
+    () =>
+      indexDelegationStatus(
+        (messages ?? []).map((message) =>
+          collectDelegationStatusTasks(message.content)
+        )
+      ),
+    [indexDelegationStatus, messages]
+  )
+
   const subtitle = [subagentType, description].filter(Boolean).join(" · ")
 
   return (
@@ -236,25 +257,27 @@ export function SubagentSessionDialog({
               {error}
             </p>
           ) : messages && messages.length > 0 ? (
-            <div className="flex flex-col gap-4">
-              {messages.map((message, i) => (
-                <div
-                  key={`${message.id ?? "turn"}-${i}`}
-                  className={cn(
-                    "flex flex-col gap-2",
-                    // The kickoff prompt (and any later user turn) reads as an
-                    // aside — the child's own work is the content here.
-                    message.role === "user" &&
-                      "rounded-lg bg-muted/50 px-3 py-2 text-sm"
-                  )}
-                >
-                  <ContentPartsRenderer
-                    parts={message.content}
-                    role={message.role}
-                  />
-                </div>
-              ))}
-            </div>
+            <DelegationStatusIndexProvider value={delegationStatusIndex}>
+              <div className="flex flex-col gap-4">
+                {messages.map((message, i) => (
+                  <div
+                    key={`${message.id ?? "turn"}-${i}`}
+                    className={cn(
+                      "flex flex-col gap-2",
+                      // The kickoff prompt (and any later user turn) reads as
+                      // an aside — the child's own work is the content here.
+                      message.role === "user" &&
+                        "rounded-lg bg-muted/50 px-3 py-2 text-sm"
+                    )}
+                  >
+                    <ContentPartsRenderer
+                      parts={message.content}
+                      role={message.role}
+                    />
+                  </div>
+                ))}
+              </div>
+            </DelegationStatusIndexProvider>
           ) : (
             <p className="text-xs text-muted-foreground">
               {t("agentSessionEmpty")}

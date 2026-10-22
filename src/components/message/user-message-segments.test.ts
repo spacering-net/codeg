@@ -180,6 +180,43 @@ describe("parseUserMessageSegments", () => {
         ).toEqual([{ kind: "text", text: "/a and /b" }])
       })
 
+      // A namespaced name (Qoder's `sites:*` skills) is sent as one token;
+      // stopping at the `:` left `/sites`, which is no command, so a sent
+      // namespaced command never got its badge.
+      it("badges a namespaced command as one token", () => {
+        const segments = parseUserMessageSegments(
+          "run /sites:sites-building now",
+          { knownInvocations: new Set(["/sites:sites-building"]) }
+        )
+        expect(segments).toHaveLength(3)
+        expect(segments[0]).toEqual({ kind: "text", text: "run " })
+        const skill = segments[1] as {
+          kind: "reference"
+          attrs: ReferenceAttrs
+        }
+        expect(skill.attrs.label).toBe("sites:sites-building")
+        expect(segments[2]).toEqual({ kind: "text", text: " now" })
+      })
+
+      it("leaves a colon that ends the token outside it", () => {
+        const segments = parseUserMessageSegments("/review: then fix", {
+          knownInvocations,
+        })
+        expect(segments).toHaveLength(2)
+        const skill = segments[0] as {
+          kind: "reference"
+          attrs: ReferenceAttrs
+        }
+        expect(skill.attrs.label).toBe("review")
+        expect(segments[1]).toEqual({ kind: "text", text: ": then fix" })
+      })
+
+      it("does not badge a known command's prefix of a namespaced name", () => {
+        expect(
+          parseUserMessageSegments("/review:all", { knownInvocations })
+        ).toEqual([{ kind: "text", text: "/review:all" }])
+      })
+
       it("still badges the reference links around an unknown token", () => {
         expect(
           parseUserMessageSegments("/nope [a.ts](file:///a.ts)", {
@@ -291,6 +328,18 @@ describe("parseUserMessageSegments", () => {
           label: "Deploy",
           uri: null,
           meta: { invocationPrefix: "$" },
+        }),
+      ],
+      [
+        // A namespaced command has to travel raw both ways: an escaped `_`
+        // would reach the agent, and come back, as a different command.
+        "namespaced command",
+        ref({
+          refType: "skill",
+          id: "my_plugin:run_all",
+          label: "my_plugin:run_all",
+          uri: null,
+          meta: { invocationPrefix: "/" },
         }),
       ],
     ]

@@ -419,8 +419,11 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
         AgentType::Antigravity => Box::new(antigravity::AntigravityParser::for_env(env)),
         AgentType::Kiro => Box::new(kiro::KiroParser::for_env(env)),
         // Custom ACP agents have no native store to reverse-engineer; their
-        // history is codeg's own ACP transcript.
-        AgentType::Custom(_) | AgentType::ZCode => {
+        // history is codeg's own ACP transcript. TRAE CLI's rollouts use an
+        // undocumented paginated format of its own (see `acp::trae`), and so
+        // do Command Code's session trees (see `acp::command_code`), so both
+        // take the same route.
+        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => {
             Box::new(acp_native::AcpNativeParser::new(agent_type))
         }
     };

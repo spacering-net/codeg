@@ -126,6 +126,33 @@ describe("OverlayScrollbarsInit", () => {
     expect(bodyInstance()).toBeUndefined()
   })
 
+  it("never arms the flow-direction check's scroll block on the document", () => {
+    nav.pathname = "/settings/appearance"
+    render(<OverlayScrollbarsInit />)
+    flushDeferred()
+    const instance = bodyInstance()
+    if (!instance) throw new Error("no body instance")
+    // OverlayScrollbars only measures an element that has a size, and jsdom
+    // lays nothing out.
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(200)
+    const listen = vi.spyOn(EventTarget.prototype, "addEventListener")
+    // The block is the only capture `scroll` listener the library adds.
+    const armed = () =>
+      listen.mock.calls.some(
+        ([type, , options]) =>
+          type === "scroll" && typeof options === "object" && !!options.capture
+      )
+
+    instance.update(true)
+    expect(armed()).toBe(false)
+
+    // The library's default would arm it.
+    instance.options({ update: { flowDirectionStyles: null } })
+    instance.update(true)
+    expect(armed()).toBe(true)
+    vi.restoreAllMocks()
+  })
+
   it("keeps the same instance across pages that scroll", () => {
     nav.pathname = "/settings/appearance"
     const { rerender } = render(<OverlayScrollbarsInit />)

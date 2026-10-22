@@ -10,8 +10,8 @@
  *
  * Pure parsing lives in `@/lib/delegation-card`; this hook adds the two
  * React-state reads it can't do on its own: the live binding
- * (`useDelegatedSubSession`) and the child connection's pending-permission
- * status (so the card can badge "waiting").
+ * (`useDelegatedSubSession`) and whether the child connection is parked on a
+ * decision (so the card can badge "waiting").
  */
 
 import { useCallback, useMemo, useSyncExternalStore } from "react"
@@ -23,6 +23,7 @@ import {
   type ConnectionState,
 } from "@/contexts/acp-connections-context"
 import { useDelegatedSubSession } from "@/hooks/use-delegated-sub-session"
+import { blockingPrompts } from "@/lib/blocking-prompts"
 import {
   isAffirmedResume,
   parseDelegateTaskId,
@@ -197,7 +198,9 @@ export function useDelegationCardModel(
     null
 
   const childLive = useDelegationChildLive(childConnectionId)
-  const childAwaitingPermission = childLive?.pendingPermission != null
+  // Parked on ANY decision — a permission, a question, a plan approval — as
+  // the backend's `blocked_on` and the `get_delegation_status` row count it.
+  const childAwaitingUser = blockingPrompts(childLive) != null
 
   // The assistant the task runs as: the live binding → the call's own
   // `assistant_id` → the broker report → the historical meta. Its name comes
@@ -236,7 +239,7 @@ export function useDelegationCardModel(
     toolOutput,
     state,
     errorText,
-    childAwaitingPermission,
+    childAwaitingUser,
   })
   // The report is the only source for a call refused before any delegation
   // started (`assistant_not_found`, the companion's local refusals): no

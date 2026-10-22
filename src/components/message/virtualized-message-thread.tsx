@@ -25,6 +25,24 @@ import {
 const LOAD_OLDER_THRESHOLD_PX = 240
 
 /**
+ * How far below the viewport's top edge `onViewportTopChange` looks for the
+ * row on top: just inside it, so the row a jump aligned to the top
+ * (`scrollToIndex(…, { align: "start" })`) is the one reported.
+ */
+const VIEWPORT_TOP_PROBE_PX = 4
+
+/** Slack (px) under which the viewport counts as scrolled to the end. */
+const VIEWPORT_END_SLACK_PX = 2
+
+/** What `onViewportTopChange` reports. */
+export interface ViewportTop {
+  /** The `items` index of the row at the viewport's top. */
+  index: number
+  /** The viewport is scrolled to the end of the list. */
+  atEnd: boolean
+}
+
+/**
  * Keys the browser scrolls a focused viewport with. Modifiers don't matter:
  * Cmd+ArrowDown and Ctrl+End jump to the end, Shift+Space pages back up.
  */
@@ -103,6 +121,13 @@ interface VirtualizedMessageThreadProps<T> {
    */
   prependEpoch?: number
   prependScopeKey?: string | number
+  /**
+   * Told which row sits at the top of the viewport whenever that changes, and
+   * once on being passed — the message navigator highlights the message the
+   * transcript shows. Measured a frame after a scroll or an items change, so
+   * a fling costs a lookup per frame at most; omit it and nothing is measured.
+   */
+  onViewportTopChange?: (top: ViewportTop) => void
 }
 
 /**
@@ -136,6 +161,7 @@ function VirtualizedMessageThreadImpl<T>({
   loadingOlderLabel,
   prependEpoch = 0,
   prependScopeKey,
+  onViewportTopChange,
 }: VirtualizedMessageThreadProps<T>) {
   const { scrollRef, stopScroll } = useStickToBottomContext()
   const virtualizerHandleRef = useRef<VirtualizerHandle>(null)
@@ -225,24 +251,78 @@ function VirtualizedMessageThreadImpl<T>({
   // post-commit so the scroll handler stays referentially stable across
   // streaming re-renders; scroll events only fire after commit.
   const loadOlderStateRef = useRef({ hasOlder, isLoadingOlder, onLoadOlder })
+  const viewportTopListenerRef = useRef(onViewportTopChange)
   useEffect(() => {
     rowOffsetRef.current = rowOffset
     loadOlderStateRef.current = { hasOlder, isLoadingOlder, onLoadOlder }
+    viewportTopListenerRef.current = onViewportTopChange
   })
-  const prevScrollOffsetRef = useRef<number | null>(null)
-  const handleScroll = useCallback((offset: number) => {
-    const prev = prevScrollOffsetRef.current
-    prevScrollOffsetRef.current = offset
-    const s = loadOlderStateRef.current
-    if (!s.hasOlder || s.isLoadingOlder || !s.onLoadOlder) return
-    if (
-      offset < LOAD_OLDER_THRESHOLD_PX &&
-      prev !== null &&
-      prev >= LOAD_OLDER_THRESHOLD_PX
-    ) {
-      s.onLoadOlder()
-    }
+
+  // The row at the viewport's top, reported when it changes. Read a frame
+  // after whatever moved it, when virtua has laid the rows out.
+  const lastViewportTopRef = useRef<ViewportTop | null>(null)
+  const viewportTopFrameRef = useRef<number | null>(null)
+  const measureViewportTop = useCallback(() => {
+    viewportTopFrameRef.current = null
+    const report = viewportTopListenerRef.current
+    const handle = virtualizerHandleRef.current
+    if (!report || !handle) return
+    const offset = handle.scrollOffset
+    const index = Math.max(
+      0,
+      handle.findItemIndex(offset + VIEWPORT_TOP_PROBE_PX) -
+        rowOffsetRef.current
+    )
+    const atEnd =
+      offset + handle.viewportSize >= handle.scrollSize - VIEWPORT_END_SLACK_PX
+    const last = lastViewportTopRef.current
+    if (last && last.index === index && last.atEnd === atEnd) return
+    lastViewportTopRef.current = { index, atEnd }
+    report({ index, atEnd })
   }, [])
+  const scheduleViewportTop = useCallback(() => {
+    if (viewportTopFrameRef.current != null) return
+    if (!viewportTopListenerRef.current) return
+    viewportTopFrameRef.current = requestAnimationFrame(measureViewportTop)
+  }, [measureViewportTop])
+  useEffect(
+    () => () => {
+      if (viewportTopFrameRef.current != null) {
+        cancelAnimationFrame(viewportTopFrameRef.current)
+        viewportTopFrameRef.current = null
+      }
+    },
+    []
+  )
+  // A new listener hears where the view is without waiting for a scroll.
+  useEffect(() => {
+    lastViewportTopRef.current = null
+    if (onViewportTopChange) scheduleViewportTop()
+  }, [onViewportTopChange, scheduleViewportTop])
+  // Rows can move under a still viewport: history paged in above, a reply
+  // growing below.
+  useEffect(() => {
+    scheduleViewportTop()
+  }, [items, scheduleViewportTop])
+
+  const prevScrollOffsetRef = useRef<number | null>(null)
+  const handleScroll = useCallback(
+    (offset: number) => {
+      scheduleViewportTop()
+      const prev = prevScrollOffsetRef.current
+      prevScrollOffsetRef.current = offset
+      const s = loadOlderStateRef.current
+      if (!s.hasOlder || s.isLoadingOlder || !s.onLoadOlder) return
+      if (
+        offset < LOAD_OLDER_THRESHOLD_PX &&
+        prev !== null &&
+        prev >= LOAD_OLDER_THRESHOLD_PX
+      ) {
+        s.onLoadOlder()
+      }
+    },
+    [scheduleViewportTop]
+  )
 
   // Make the scroll viewport focusable so the browser's native keyboard
   // scrolling (Arrow keys, PageUp/PageDown, Home/End, Space) works — matching

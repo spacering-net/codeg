@@ -1766,6 +1766,35 @@ pub async fn refresh_diff_stats(
     Ok(res.rows_affected == 1)
 }
 
+/// What a push-back learned as its push landed: the counters it measured (what
+/// the push added to the pull request) and the source snapshot naming the head
+/// it went onto. Written while the delivery is still in flight, bound to that
+/// delivery (`merging`, its `run_seq`). See `TaskEngine::push_back_to_pull`.
+pub async fn record_push_back(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    stats: (i32, i32, i32),
+    source_meta_json: &str,
+) -> Result<bool, DbError> {
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::FilesChanged, Expr::value(Some(stats.0)))
+        .col_expr(work_task::Column::Additions, Expr::value(Some(stats.1)))
+        .col_expr(work_task::Column::Deletions, Expr::value(Some(stats.2)))
+        .col_expr(
+            work_task::Column::SourceMeta,
+            Expr::value(Some(source_meta_json.to_string())),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
+        .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
 pub async fn settle_review(
     conn: &DatabaseConnection,
     id: i32,

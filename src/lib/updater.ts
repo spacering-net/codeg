@@ -437,6 +437,43 @@ export async function readServerVersionStrict(): Promise<string | null> {
   return res?.version ?? null
 }
 
+let ownServerRestarts = 0
+const ownServerRestartListeners = new Set<() => void>()
+
+function notifyOwnServerRestart(): void {
+  for (const listener of ownServerRestartListeners) listener()
+}
+
+/**
+ * Marks a server restart this page started, an upgrade or a rollback, until
+ * the returned function is called. Such a flow reports the outcome and reloads
+ * the page itself, so the page's own version notice keeps quiet meanwhile. A
+ * flow that ends by reloading leaves it marked, or the notice would flash on
+ * the page that is going away.
+ */
+export function beginOwnServerRestart(): () => void {
+  ownServerRestarts += 1
+  notifyOwnServerRestart()
+  let ended = false
+  return () => {
+    if (ended) return
+    ended = true
+    ownServerRestarts -= 1
+    notifyOwnServerRestart()
+  }
+}
+
+export function isOwnServerRestartRunning(): boolean {
+  return ownServerRestarts > 0
+}
+
+export function subscribeOwnServerRestart(listener: () => void): () => void {
+  ownServerRestartListeners.add(listener)
+  return () => {
+    ownServerRestartListeners.delete(listener)
+  }
+}
+
 export type RollbackOutcome = "rolled-back" | "unchanged" | "unreachable"
 
 /**

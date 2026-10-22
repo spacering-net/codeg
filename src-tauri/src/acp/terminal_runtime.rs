@@ -570,6 +570,9 @@ impl TerminalRuntime {
         for env_var in &request.env {
             command.env(&env_var.name, &env_var.value);
         }
+        // The base env's PATH is built from codeg's own: an AppImage's
+        // launcher put the image in it (see `crate::appimage_env`).
+        crate::appimage_env::restore_tokio(command);
     }
 
     pub async fn create_terminal(

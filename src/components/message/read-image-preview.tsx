@@ -47,8 +47,6 @@ type LoadResult = {
  * The body mounts only once the user expands the card, and the path in its
  * header already opens this file in the file panel, through this same reader.
  * Expanding the card reaches no file the card did not already offer to open.
- * A Markdown image renders unprompted, which is why it stays confined to the
- * transcript's folder (`resolveLocalImage`) and this does not.
  *
  * A relative path resolves against the transcript's working directory, never
  * the globally active folder. Without one there is nothing to show.

@@ -16,7 +16,7 @@ import { FilePathLink } from "@/components/ai-elements/link-safety"
 import { useSyncedScroll } from "./use-synced-scroll"
 
 type RowMarker = "none" | "added" | "deleted" | "modified"
-type DiffFileMode = "modified" | "added" | "deleted" | "renamed"
+export type DiffFileMode = "modified" | "added" | "deleted" | "renamed"
 
 export type { DiffViewMode }
 
@@ -35,7 +35,7 @@ export interface ParsedDiffRow {
   newLine: number | null
 }
 
-interface ParsedDiffHunk {
+export interface ParsedDiffHunk {
   key: string
   oldStart: number | null
   oldCount: number | null
@@ -44,7 +44,7 @@ interface ParsedDiffHunk {
   rows: ParsedDiffRow[]
 }
 
-interface ParsedDiffFile {
+export interface ParsedDiffFile {
   key: string
   path: string
   oldPath: string | null
@@ -262,7 +262,13 @@ function resolveFileMode(file: WorkingFile): DiffFileMode {
   return "modified"
 }
 
-function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
+/**
+ * Parse a unified diff — git's, `apply_patch`'s, or the chunks the transcript
+ * builds for an edit or a write — into files of numbered, classified rows.
+ * Shared with `CompactDiff`, the narrow inline view, so both read a diff the
+ * same way.
+ */
+export function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
   const lines = diffText.replace(/\r\n/g, "\n").split("\n")
   const files: WorkingFile[] = []
 

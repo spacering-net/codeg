@@ -91,11 +91,7 @@ pub async fn resolve_forge_auth(
         return Err(ForgeError::Invalid("server host is empty".into()));
     }
     let settings = load_accounts(conn).await?;
-    let on_host: Vec<&GitHubAccount> = settings
-        .accounts
-        .iter()
-        .filter(|a| host_of_server_url(&a.server_url) == host && serves(a, provider))
-        .collect();
+    let on_host = serving_accounts(&settings.accounts, &host, provider);
 
     let account = match account_id {
         Some(id) => on_host
@@ -108,11 +104,7 @@ pub async fn resolve_forge_auth(
         // Nothing configured for this host is the ONE auth miss the user can
         // act on, so it gets its own variant (and with it an i18n key + an
         // "add an account" affordance in the workbench).
-        None => on_host
-            .iter()
-            .find(|a| a.is_default)
-            .or_else(|| on_host.first())
-            .copied()
+        None => unpinned_account(&on_host)
             .ok_or_else(|| {
                 // …unless there is no reason to believe this host is a forge we
                 // speak at all: nothing configured for it, nothing detected on
@@ -167,6 +159,30 @@ pub async fn resolve_forge_auth(
     })
 }
 
+/// The accounts on `host` that may be spent against `provider`, in stored
+/// order — what [`resolve_forge_auth`] chooses among.
+fn serving_accounts<'a>(
+    accounts: &'a [GitHubAccount],
+    host: &str,
+    provider: ForgeProvider,
+) -> Vec<&'a GitHubAccount> {
+    accounts
+        .iter()
+        .filter(|a| host_of_server_url(&a.server_url) == host && serves(a, provider))
+        .collect()
+}
+
+/// The one of them spent when no account is pinned: the host's default, else
+/// the first. [`host_profile_in`] links to the instance through the same
+/// choice, so a link opens the instance the API calls behind it went to.
+fn unpinned_account<'a>(on_host: &[&'a GitHubAccount]) -> Option<&'a GitHubAccount> {
+    on_host
+        .iter()
+        .find(|a| a.is_default)
+        .or_else(|| on_host.first())
+        .copied()
+}
+
 /// Whether a stored account may be used against `provider`. An account with no
 /// declared provider matches anything (legacy rows, and the "generic git
 /// account" the settings page has always allowed).
@@ -186,6 +202,15 @@ pub struct HostProfile {
     /// root" (`https://host/gitlab`), and where one is in use EVERY repository
     /// path in a git remote carries that prefix while no API path does.
     pub base_path: String,
+    /// The instance's web root — scheme, host, port and mount path — as
+    /// registered by the account [`resolve_forge_auth`] spends on this host
+    /// when none is pinned, and `https://{host}` when there is none (or what
+    /// it registered is not an http(s) address). The origin the API base is
+    /// built under, which is what a browser link has to use for an SSH
+    /// remote: that remote carries none of those parts, and an instance
+    /// served over plain `http://` or on a port of its own is not there at
+    /// `https://{host}`.
+    pub web_origin: String,
     /// Whether `provider` is something codeg actually KNOWS about this host —
     /// an account configured for it, or a hostname that names one of the
     /// supported forges — as opposed to the last-resort GitHub guess.
@@ -231,10 +256,11 @@ pub async fn host_profile(conn: &DatabaseConnection, server_host: &str) -> HostP
     let accounts = load_accounts(conn).await.unwrap_or_default().accounts;
     let host = server_host.trim().to_ascii_lowercase();
 
-    // Everything knowable without the network — the mount path, the provider
-    // and the `recognized` rule. Deriving it HERE rather than restating it is
-    // what keeps the two halves from drifting: the probe below can only
-    // replace the provider, and only when it has a conclusive answer.
+    // Everything knowable without the network — the mount path, the web
+    // origin (which the probe below asks), the provider and the `recognized`
+    // rule. Deriving it HERE rather than restating it is what keeps the two
+    // halves from drifting: the probe below can only replace the provider,
+    // and only when it has a conclusive answer.
     let profile = host_profile_in(&host, &accounts);
 
     let authority = authority_in(&host, &accounts);
@@ -248,8 +274,7 @@ pub async fn host_profile(conn: &DatabaseConnection, server_host: &str) -> HostP
     // instance what it is. Only a conclusive answer is taken; anything else
     // falls through to the same guess this has always made, so a host that is
     // slow, offline or behind a proxy is no worse off than before.
-    let origin = server_origin(&host, authority.map_or("", |a| a.server_url.as_str()));
-    match detect_forge(&host, &origin).await {
+    match detect_forge(&host, &profile.web_origin).await {
         // The instance ANSWERED, and that is the strongest witness there is:
         // stronger than an account (which vouches for a host without saying
         // what it runs) and stronger than the name (which is why this probe
@@ -291,10 +316,21 @@ pub fn host_profile_in(server_host: &str, accounts: &[GitHubAccount]) -> HostPro
     let base_path = authority
         .map(|a| path_of_server_url(&a.server_url))
         .unwrap_or_default();
+    // From the account the API spends for this forge, not from the authority
+    // above: an undeclared default beside a declaring account is the one
+    // `resolve_forge_auth` reads with, and a link through the other would open
+    // a different instance from the one the panel's list came from. Only a
+    // web scheme says where an instance lives; anything else — an `ssh://`
+    // typed in by mistake, or worse — would reach a browser link as-is, so it
+    // gets the guess a host without an account gets.
+    let web_origin = unpinned_account(&serving_accounts(accounts, &host, provider))
+        .and_then(|a| super::sanitize_web_url(&server_origin(&host, &a.server_url)))
+        .unwrap_or_else(|| format!("https://{host}"));
 
     HostProfile {
         provider,
         base_path,
+        web_origin,
         recognized,
     }
 }
@@ -1005,6 +1041,80 @@ mod tests {
         assert_eq!(strip_base_path("GitLab/Group/Proj", "gitlab"), "group/proj");
     }
 
+    /// An SSH remote carries no scheme, port or mount path, so whatever links
+    /// to the instance takes all three from the account registered for the
+    /// host — the origin its API is already called under. Assuming `https://`
+    /// linked an http-only instance to a port nothing listens on (#997).
+    #[test]
+    fn the_web_origin_is_the_one_the_hosts_account_registered() {
+        let http = [account("a", "http://gitlab.example.com/", Some("gitlab"))];
+        assert_eq!(
+            host_profile_in("gitlab.example.com", &http).web_origin,
+            "http://gitlab.example.com"
+        );
+        // A port and a mount path are part of where the instance lives, and
+        // the API base is built under exactly the same origin.
+        let mounted = [account(
+            "a",
+            "http://git.corp.com:8929/gitlab/",
+            Some("gitlab"),
+        )];
+        let profile = host_profile_in("git.corp.com", &mounted);
+        assert_eq!(profile.web_origin, "http://git.corp.com:8929/gitlab");
+        assert_eq!(
+            api_base_for(
+                ForgeProvider::GitLab,
+                "git.corp.com",
+                "http://git.corp.com:8929/gitlab/"
+            ),
+            format!("{}/api/v4", profile.web_origin)
+        );
+        // A bare hostname typed as the server URL, and the public service's
+        // empty one, are https — as their API bases are.
+        let bare = [account("a", "ghe.corp.com", None)];
+        assert_eq!(
+            host_profile_in("ghe.corp.com", &bare).web_origin,
+            "https://ghe.corp.com"
+        );
+        let public = [account("a", "", None)];
+        assert_eq!(
+            host_profile_in("github.com", &public).web_origin,
+            "https://github.com"
+        );
+
+        // Nothing registered for the host — an account elsewhere says nothing
+        // about it, and a server URL that is no web address says nothing
+        // either — leaves https as the only thing to go on.
+        let elsewhere = [account("a", "http://other.example", Some("gitlab"))];
+        let not_web = [account("a", "ssh://git@gitlab.example.com", Some("gitlab"))];
+        let script = [account(
+            "a",
+            "javascript://gitlab.example.com/%0aalert(1)",
+            None,
+        )];
+        for accounts in [&[][..], &elsewhere[..], &not_web[..], &script[..]] {
+            assert_eq!(
+                host_profile_in("gitlab.example.com", accounts).web_origin,
+                "https://gitlab.example.com"
+            );
+        }
+
+        // With several accounts on the host, the origin is the one the API
+        // spends — the default among those serving the forge — even where a
+        // non-default account declares the forge and so speaks for the host.
+        // Linking through that one would open the instance on :8443 while
+        // the list on screen was read from the one on :443.
+        let mut legacy = account("legacy", "https://ghe.example.com/", None);
+        legacy.is_default = true;
+        let mixed = [
+            legacy,
+            account("declared", "https://ghe.example.com:8443/", Some("github")),
+        ];
+        let profile = host_profile_in("ghe.example.com", &mixed);
+        assert_eq!(profile.provider, ForgeProvider::GitHub);
+        assert_eq!(profile.web_origin, "https://ghe.example.com");
+    }
+
     /// A GitLab token handed to the GitHub client buys a 401 that reads like
     /// an expired credential. Declared accounts serve only their own forge;
     /// undeclared ones serve whatever the host is.
@@ -1152,6 +1262,60 @@ mod tests {
             resolve_forge_auth(conn, gh, "gitlab.com", Some("acc-gitlab")).await,
             Err(ForgeError::Auth(_))
         ));
+    }
+
+    /// A link to the instance and the API go to the same place, checked
+    /// against the real resolution rather than restated: for each host, the
+    /// profile's origin is the web origin of the identity
+    /// `resolve_forge_auth` hands back. Server mode only, like the happy path
+    /// above — the token store must not be the OS keyring.
+    #[cfg(not(feature = "tauri-runtime"))]
+    #[tokio::test]
+    async fn the_link_origin_is_the_one_the_api_is_called_under() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let conn = db.conn.clone();
+        let dir = tmp.path().to_string_lossy().to_string();
+        temp_env::async_with_vars([("CODEG_DATA_DIR", Some(dir.as_str()))], async move {
+            let mut http = account("http", "http://gitlab.example.com/", Some("gitlab"));
+            http.is_default = true;
+            let mut legacy = account("legacy", "https://ghe.example.com/", None);
+            legacy.is_default = true;
+            let accounts = vec![
+                http,
+                legacy,
+                account("declared", "https://ghe.example.com:8443/", Some("github")),
+                account("mounted", "https://host.example/gitlab/", Some("gitlab")),
+                account("public", "", None),
+            ];
+            let settings = GitHubAccountsSettings {
+                accounts: accounts.clone(),
+            };
+            app_metadata_service::upsert_value(
+                &conn,
+                GITHUB_ACCOUNTS_KEY,
+                &serde_json::to_string(&settings).unwrap(),
+            )
+            .await
+            .unwrap();
+            for a in &accounts {
+                crate::keyring_store::set_token(&a.id, "tok").unwrap();
+            }
+
+            for host in [
+                "gitlab.example.com",
+                "ghe.example.com",
+                "host.example",
+                "github.com",
+            ] {
+                let profile = host_profile_in(host, &accounts);
+                let auth = resolve_forge_auth(&conn, profile.provider, host, None)
+                    .await
+                    .unwrap();
+                assert_eq!(profile.web_origin, crate::forge::web_origin(&auth), "{host}");
+            }
+        })
+        .await;
     }
 
     // ── forge detection ────────────────────────────────────────────────────

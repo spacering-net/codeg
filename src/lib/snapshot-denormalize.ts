@@ -10,6 +10,7 @@ import type {
   PendingPlanApprovalState,
   PendingQuestionState,
   PromptCapabilitiesInfo,
+  RemoteControlInfo,
   SessionConfigOptionInfo,
   SessionFailureRecord,
   SessionModeStateInfo,
@@ -41,11 +42,22 @@ export interface SnapshotPatch {
   // a freshly-started replacement at the same contextKey.
   connectionId: string
   status: ConnectionStatus
+  /** Whether a turn has run on the connection: it is mid-turn, or it is
+   *  linked to its conversation row (`conversation_id`), which the backend
+   *  does at the connection's first prompt (or a fork), never at connect.
+   *  Latched in `ConnectionState.hasPrompted`. */
+  hasPrompted: boolean
   sessionId: string | null
   modes: SessionModeStateInfo | null
   configOptions: SessionConfigOptionInfo[] | null
   availableCommands: AvailableCommandInfo[] | null
   usage: SessionUsageUpdateInfo | null
+  /** The follow-up prompt the agent last predicted, or `null`. Current state,
+   *  like `usage`: applied on the fresh hydrate branch only. */
+  promptSuggestion: string | null
+  /** Claude Code's Remote Control while it is on, or `null`. Current state,
+   *  like `usage`: applied on the fresh hydrate branch only. */
+  remoteControl: RemoteControlInfo | null
   liveMessage: LocalLiveMessage | null
   pendingPermission: PendingPermission | null
   /** Awaiting-answer multiple-choice `ask_user_question` carried by the
@@ -118,11 +130,16 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
   return {
     connectionId: wire.connection_id,
     status: wire.status,
+    hasPrompted: wire.status === "prompting" || wire.conversation_id != null,
     sessionId: wire.external_id,
     modes: wire.modes,
     configOptions: wire.config_options,
     availableCommands: wire.available_commands ?? null,
     usage: wire.usage,
+    promptSuggestion: wire.prompt_suggestion ?? null,
+    remoteControl: wire.remote_control
+      ? { session_url: wire.remote_control.session_url ?? null }
+      : null,
     liveMessage: wire.live_message
       ? denormalizeLiveMessage(wire.live_message, toolMap)
       : null,

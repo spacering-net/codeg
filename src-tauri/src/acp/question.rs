@@ -683,10 +683,11 @@ pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Opti
 /// companion tool, in whatever spelling the host composed it
 /// (`mcp__codeg-mcp__ask_user_question` from claude-agent-acp,
 /// `codeg-mcp/ask_user_question`, `codeg-mcp: ask_user_question`, …). Separators
-/// are folded and case is ignored, so only the two identifying words matter.
+/// are folded and case is ignored ([`crate::acp::delegation::is_codeg_mcp_tool`]).
 ///
-/// BOTH halves have to be present — the server name codeg itself injects
-/// (`codeg-mcp`, see `acp::connection::inject_codeg_mcp`) AND the tool name.
+/// BOTH halves have to be present, and nothing else — the server name codeg
+/// itself injects (`codeg-mcp`, see `acp::connection::inject_codeg_mcp`) AND the
+/// tool name: a server named `other-codeg-mcp` is not codeg's.
 /// The frontend can afford a bare `*ask_user_question` suffix rule because a
 /// wrong match there only picks a nicer card; this one unlocks an AUTO-APPROVAL
 /// of a blocked `session/request_permission`, and a third-party MCP server's
@@ -697,11 +698,7 @@ pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Opti
 /// block until the user answers it. The consent IS the next dialog, so gating it
 /// behind a generic "run this tool?" card asks the user to approve being asked.
 pub fn is_codeg_ask_tool_name(name: &str) -> bool {
-    let normalized = name
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' ', '.', '/', ':'], "_");
-    normalized.ends_with("ask_user_question") && normalized.contains("codeg_mcp")
+    crate::acp::delegation::is_codeg_mcp_tool(name, "ask_user_question")
 }
 
 /// Serialize a resolved [`QuestionOutcome`] into grok's `AskUserQuestionExtResponse`
@@ -3429,6 +3426,11 @@ mod tests {
             // Right server, right words, wrong tool — the match is anchored at
             // the END so a longer name cannot borrow it.
             "mcp__codeg-mcp__ask_user_question_twice",
+            // …and at the start: a server whose name only ends in codeg-mcp
+            // is another one, and so is a server `codeg` whose tool is
+            // `mcp_ask_user_question`.
+            "mcp__other-codeg-mcp__ask_user_question",
+            "mcp__codeg__mcp_ask_user_question",
             "",
         ] {
             assert!(

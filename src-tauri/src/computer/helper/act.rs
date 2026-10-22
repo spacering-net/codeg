@@ -39,8 +39,8 @@
 //!   would land on something the agent never saw. The driver aims a point
 //!   only for a window whose latest snapshot holds a capture of it: every
 //!   snapshot the helper takes captures one (and keeps nothing of it), and
-//!   where the driver has none ([`needs_capture`]) the helper takes a
-//!   snapshot and sends the action once more — nothing went out the first
+//!   where the driver has none ([`needs_capture`]) the helper gives it a
+//!   capture and sends the action once more — nothing went out the first
 //!   time.
 //!
 //! The rest of "is this input still going where it was meant to" is the
@@ -113,6 +113,18 @@ pub struct SnapshotFacts {
     pub elements: HashMap<u32, ElementFacts>,
 }
 
+/// What a read that captured a window did to the driver's snapshot of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureMark {
+    /// Nothing: the read leaves the snapshot alone (`verify_state`).
+    Untouched,
+    /// The driver names this snapshot as the window's now: the one it held,
+    /// its picture refreshed in place — or, where the window had none with
+    /// elements, one holding the capture alone. `None`: it named none, or
+    /// the read was refused.
+    Now(Option<String>),
+}
+
 /// The latest snapshot the helper took of each window, as the driver keeps
 /// them: a new snapshot of a window replaces the one before.
 #[derive(Default)]
@@ -153,6 +165,24 @@ impl SnapshotBook {
             None => {
                 self.windows.remove(&key);
             }
+        }
+    }
+
+    /// A capture of the window was read (`mark` says what it did to the
+    /// driver's snapshot of it): the refs of the snapshot remembered here
+    /// stand only while the driver still names that snapshot as the window's.
+    /// A capture that refreshed its picture in place keeps them; one that
+    /// took its place — or that did not say — leaves nothing current.
+    pub fn captured(&mut self, pid: u32, window_id: u64, mark: &CaptureMark) {
+        let kept = match mark {
+            CaptureMark::Untouched => true,
+            CaptureMark::Now(now) => self
+                .windows
+                .get(&(pid, window_id))
+                .is_some_and(|held| now.as_deref() == Some(held.snapshot_id.as_str())),
+        };
+        if !kept {
+            self.record(pid, window_id, None);
         }
     }
 
@@ -238,6 +268,23 @@ impl SnapshotBook {
                  Click the menu to open it, then click the option.",
             ));
         }
+        // A file's name in the Finder the driver sets by having the Finder
+        // rename the file through AppleScript — a request macOS puts to the
+        // user, in the helper's name, to let it control the Finder. Which
+        // text fields are names the tree does not say.
+        if matches!(action, WindowAction::SetValue { .. })
+            && found.role == "AXTextField"
+            && app_key.is_none_or(is_finder)
+        {
+            return Err(HelperError::new(
+                HelperErrorCode::ActionFailed,
+                "A text field's value is not set in the Finder: on a file's name it would rename \
+                 the file by scripting the Finder, which macOS would ask the user to allow. Type \
+                 into the field with computer_type instead — to rename a file, select it and \
+                 press return, then type the new name into the field that opens and press \
+                 return.",
+            ));
+        }
         Ok(())
     }
 }
@@ -250,6 +297,11 @@ fn snapshot_number(id: &str) -> Option<u64> {
 fn is_safari(app_key: &str) -> bool {
     let key = app_key.to_ascii_lowercase();
     key.starts_with("com.apple.safari") || key.ends_with("/safari.app")
+}
+
+fn is_finder(app_key: &str) -> bool {
+    let key = app_key.to_ascii_lowercase();
+    key == "com.apple.finder" || key.ends_with("/finder.app")
 }
 
 /// Check that the points of an action are still where they were read: the
@@ -638,10 +690,14 @@ pub async fn act(
         } => {
             put_element(&mut args, element);
             let mut key = args.clone();
-            args["text"] = json!(text);
             deliverable.check()?;
             keys_free(mode, held_modifiers)?;
-            let typed = type_text(driver, args, mode, web).await?;
+            let typed = if breaks_go_as_keys(platform, mode) && text.contains(BREAKS) {
+                type_in_pieces(driver, &args, text, mode, deliverable, web).await?
+            } else {
+                args["text"] = json!(text);
+                type_text(driver, args, mode, web).await?
+            };
             if !*submit {
                 return Ok(typed);
             }
@@ -690,8 +746,10 @@ pub async fn act(
             one(driver, "set_value", args, mode, ACT_TIMEOUT).await
         }
         WindowAction::InvokeMenu { path } => {
-            // The driver brings the application forward for it itself, and
-            // reads nothing but these three.
+            // The driver reads nothing but these three. On Linux it brings
+            // the application forward for the command itself; on macOS it
+            // leaves an application that is not in front in the background,
+            // and brings the window forward within one that is.
             if platform == Platform::Windows {
                 return Err(HelperError::new(
                     HelperErrorCode::ActionFailed,
@@ -866,9 +924,33 @@ async fn menu_in_reach(pid: u32, path: &[String], paste_ok: bool) -> Result<(), 
                      instead.",
                 ))
             }
+            Some((key, mask)) if saves_by_script(&key, mask, target.enabled) => {
+                Err(HelperError::new(
+                    HelperErrorCode::BackgroundUnavailable,
+                    "That command (⌘S) is turned off just now, as some are while their \
+                     application is in the background, and choosing it anyway could have codeg \
+                     save the document by scripting the application — which macOS would ask the \
+                     user to allow — so it was not chosen. Press ⌘S with computer_press_key and \
+                     `delivery: \"foreground\"`, where the user allows bringing windows to the \
+                     front, or ask the user to save.",
+                ))
+            }
             _ => Ok(()),
         },
     }
+}
+
+/// Whether choosing a menu command would have the driver save its document
+/// through AppleScript: a command saved by ⌘S alone that is turned off — as
+/// an application in the background turns some off. In the background the
+/// driver then saves the window's document by scripting the application,
+/// which macOS asks the user to allow for the helper. Read just before the
+/// command goes: an application the person sends behind in the moment
+/// between, and that turns the command off as it goes, is still one the
+/// driver may save by script — a request the person can turn down.
+#[cfg(any(test, target_os = "macos"))]
+fn saves_by_script(key: &str, mask: i64, enabled: Option<bool>) -> bool {
+    key.eq_ignore_ascii_case("s") && mask == 0 && enabled == Some(false)
 }
 
 /// Whether `action` pastes by its key: ⌘V / Ctrl+V and the rest of its
@@ -1031,6 +1113,150 @@ async fn type_text(
     typed(&result, mode, web)
 }
 
+/// The characters that are keys, not text: a line break and a tab.
+const BREAKS: [char; 3] = ['\n', '\r', '\t'];
+
+/// The most pieces one text is typed in ([`type_in_pieces`]): each is a call
+/// of its own, and one request to the helper must end in a few minutes.
+const MAX_PIECES: usize = 256;
+
+/// How long typing a text in pieces goes on before what is left is not sent:
+/// under the bound codeg holds a request to, with a piece's own time to spare.
+const PIECES_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Whether line breaks and tabs in a text go as the return and tab keys
+/// between runs of text without them, rather than inside the text: on macOS
+/// in the background. There the driver first inserts the text through
+/// Accessibility, and when the field's value then does not hold it word for
+/// word — as no single-line field holds a line break — it types the whole
+/// text again as keys, line breaks pressed as return: the text twice, and a
+/// submit in between. Its keys, at the front and on the other platforms,
+/// press a line break as return already.
+fn breaks_go_as_keys(platform: Platform, mode: ActDelivery) -> bool {
+    platform == Platform::Mac && mode == ActDelivery::Background
+}
+
+/// One part of a text typed in pieces: a run of text, or a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Piece<'a> {
+    Text(&'a str),
+    Key(&'static str),
+}
+
+/// `text` cut at its line breaks and tabs: the runs between them, and each
+/// one as its key — a CR LF pair is one line break.
+fn pieces(text: &str) -> Vec<Piece<'_>> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let key = match bytes[i] {
+            b'\n' | b'\r' => Some("return"),
+            b'\t' => Some("tab"),
+            _ => None,
+        };
+        if let Some(key) = key {
+            if start < i {
+                out.push(Piece::Text(&text[start..i]));
+            }
+            out.push(Piece::Key(key));
+            if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if start < bytes.len() {
+        out.push(Piece::Text(&text[start..]));
+    }
+    out
+}
+
+/// `text`'s [`pieces`], when there are at most [`MAX_PIECES`] of them.
+fn pieces_in_reach(text: &str) -> Result<Vec<Piece<'_>>, HelperError> {
+    let pieces = pieces(text);
+    if pieces.len() > MAX_PIECES {
+        return Err(HelperError::new(
+            HelperErrorCode::ActionFailed,
+            format!(
+                "That text has too many line breaks and tabs to type in one call here: each goes \
+                 as a key of its own, and at most {MAX_PIECES} runs of text and keys go in one \
+                 call. Nothing was typed; send it in parts of fewer lines."
+            ),
+        ));
+    }
+    Ok(pieces)
+}
+
+/// Type `text` as its [`pieces`], into the element `base` names: each run
+/// with `type_text`, each line break or tab with `press_key`, one after the
+/// other and each held to what must still hold at its own moment. What
+/// they did is as sure as the least sure of them; one that fails after
+/// others went in says so — what came before it is in the field. A text of
+/// more than [`MAX_PIECES`] is refused before any of it goes, and one still
+/// going after [`PIECES_DEADLINE`] stops there.
+async fn type_in_pieces(
+    driver: &DriverProc,
+    base: &Value,
+    text: &str,
+    mode: ActDelivery,
+    deliverable: &Delivery,
+    web: bool,
+) -> Result<RawAct, HelperError> {
+    let pieces = pieces_in_reach(text)?;
+    let started = tokio::time::Instant::now();
+    let mut sent: Option<RawAct> = None;
+    for piece in pieces {
+        let ready = match &sent {
+            // The first piece goes as the action was checked to.
+            None => Ok(()),
+            Some(_) if started.elapsed() > PIECES_DEADLINE => Err(HelperError::new(
+                HelperErrorCode::ActionFailed,
+                "Typing it a line at a time took longer than two minutes, so the rest was not \
+                 sent.",
+            )),
+            Some(_) => deliverable.check(),
+        };
+        let step = match ready {
+            Err(e) => Err(e),
+            Ok(()) => match piece {
+                Piece::Text(run) => {
+                    let mut args = base.clone();
+                    args["text"] = json!(run);
+                    type_text(driver, args, mode, web).await
+                }
+                Piece::Key(key) => {
+                    let mut args = base.clone();
+                    args["key"] = json!(key);
+                    one(driver, "press_key", args, mode, ACT_TIMEOUT).await
+                }
+            },
+        };
+        sent = Some(match (sent, step) {
+            (None, Ok(now)) => now,
+            (Some(before), Ok(now)) => RawAct {
+                effect: weaker(before.effect, now.effect),
+                ..before
+            },
+            (None, Err(e)) => return Err(e),
+            (Some(_), Err(e)) => {
+                return Err(HelperError {
+                    message: format!(
+                        "Only part of the text was typed: what came before this went in. {} \
+                         Take a new computer_snapshot to see what arrived before typing the \
+                         rest.",
+                        e.message
+                    ),
+                    ..e
+                })
+            }
+        });
+    }
+    sent.ok_or_else(|| HelperError::new(HelperErrorCode::BadRequest, "there is no text to type"))
+}
+
 /// What the driver's answer to typing says came of it (see [`type_text`]).
 fn typed(result: &ToolCallResult, mode: ActDelivery, web: bool) -> Result<RawAct, HelperError> {
     if !result.is_error {
@@ -1141,8 +1367,12 @@ const WEB_TYPING_REFUSED: &str = "This application is built on Chromium or Elect
 /// Windows an application's accessibility interface that did not finish a
 /// click it may already have acted on (`effect: "unverifiable"`), and on
 /// Linux background input that goes through `/dev/uinput`, which the
-/// session cannot write. Whether the front is to be had is the person's
-/// setting, which codeg knows and adds to these words.
+/// session cannot write. On macOS the driver names some refusals by their
+/// reason — a window server that will not let it act in the background, a
+/// drag that turned out to be a drag-and-drop, an application that reads
+/// the real pointer — and a drag or a menu command has words of its own.
+/// Whether the front is to be had is the person's setting, which codeg
+/// knows and adds to these words.
 fn background_refusal(tool: &str, result: &ToolCallResult) -> String {
     let said = |key: &str| {
         result
@@ -1161,6 +1391,22 @@ fn background_refusal(tool: &str, result: &ToolCallResult) -> String {
         return "This Linux desktop takes such input in the background only through \
                 /dev/uinput, which codeg cannot use here, so nothing was sent."
             .to_string();
+    }
+    // macOS: what the driver says of the refusal itself, by name.
+    match said("reason") {
+        Some("windowserver_connection_invalid") => return WINDOW_SERVER_REFUSED.to_string(),
+        Some("drag_and_drop_session") => return DRAG_AND_DROP.to_string(),
+        Some("pointer_reading_toolkit") => return POINTER_READING_TOOLKIT.to_string(),
+        _ => {}
+    }
+    match tool {
+        "drag" => {
+            return "This application does not take a drag in the background, so nothing was \
+                    sent."
+                .to_string()
+        }
+        "invoke_menu" => return MENU_OFF_IN_BACKGROUND.to_string(),
+        _ => {}
     }
     if !matches!(tool, "press_key" | "type_text") {
         return "This application does not take that kind of input in the background. Try an \
@@ -1197,6 +1443,41 @@ fn background_refusal(tool: &str, result: &ToolCallResult) -> String {
     words
 }
 
+/// macOS: the window server refused the driver the connection it acts on a
+/// window in the background through — for the life of that driver.
+const WINDOW_SERVER_REFUSED: &str = "macOS's window server refused codeg's driver the connection \
+     it needs to act on a window in the background, so nothing was sent — and no click, drag or \
+     key will go in the background until the driver starts again (switching computer use off and \
+     on starts it again). A click on an element by ref, or computer_set_value, may still work.";
+
+/// macOS: a drag the driver let go of at once, having found it began a
+/// drag-and-drop — after the press and part of the path went out.
+const DRAG_AND_DROP: &str = "That drag began a drag-and-drop — moving a file, reordering a list, \
+     dragging content — which macOS completes only with the real pointer, so it was let go at \
+     once and nothing was dropped; what it was pressed on may have reacted. Look at the window \
+     before trying again.";
+
+/// macOS: an application that reads where the real pointer is (one built on
+/// Tk, or LibreOffice's toolkit), which a click or drag at a point in the
+/// background does not move.
+const POINTER_READING_TOOLKIT: &str = "This application reads where the real pointer is, so a \
+     click or drag at a point does not reach it in the background; nothing was sent. A click on \
+     an element by ref may.";
+
+/// macOS: a menu command the application has turned off while it is in the
+/// background. The front is not codeg's to offer here — a menu command
+/// never comes forward — so the words say what is left.
+const MENU_OFF_IN_BACKGROUND: &str = "That menu command is turned off while its application is \
+     in the background, so it was not chosen. Its keyboard shortcut may do it — computer_press_key, \
+     with `delivery: \"foreground\"` where the user allows bringing windows to the front — or ask \
+     the user to choose it.";
+
+/// The keys could not be sent to this window in the background: its
+/// application would not confirm it as the window they go to (macOS).
+const KEY_WINDOW_UNCONFIRMED: &str = "Its application would not confirm this window as the one \
+     its keys go to, and in the background they could have reached another of its windows — or a \
+     sheet or panel it has open — instead, so nothing was sent.";
+
 /// Said when the driver holds no capture of the window to aim a point by:
 /// its latest snapshot of the window has none. The helper then takes a
 /// snapshot, which captures the window, and tries once more
@@ -1228,6 +1509,21 @@ const FRONT_LOST: &str = "This action, with the window brought to the front, did
      (computer_snapshot or computer_screenshot) before doing it again: repeating it blindly could \
      do it twice.";
 
+/// Typing with the window brought to the front that stopped partway.
+const FRONT_TYPED_PART: &str = "The window lost the front, or stopped taking the keys, partway \
+     through the typing: part of the text may have gone in — the last key perhaps into the window \
+     the user was in — and the rest was not sent. Take a new computer_snapshot to see what \
+     arrived before typing the rest: typing it all again could type part of it twice.";
+
+/// How the driver begins, on Windows, a failure at the front that came after
+/// some of the input went out: the window gave up the front, stopped reading
+/// the keys, or Windows took only some of the events.
+const FRONT_PARTWAY: [&str; 3] = [
+    "foreground_lost",
+    "text_delivery_stalled",
+    "SendInput inserted",
+];
+
 /// What the driver says, word for word, only of a front it failed to have
 /// before any input went out: on Windows its `foreground_unavailable: …`
 /// texts that end "no input was sent" (or never got as far as the mouse); on
@@ -1252,11 +1548,18 @@ const NOTHING_SENT: [&str; 7] = [
 /// Linux by `foreground_unavailable` or, for a window manager that did not
 /// answer in time, `foreground_timeout`. Only a failure the driver says came
 /// before any input went out is one to simply try again: a click it found the
-/// window gone from the front *after* may well have landed.
-fn front_failure(code: &str, text: &str) -> Option<&'static str> {
+/// window gone from the front *after* may well have landed — and on Windows
+/// it says of some ([`FRONT_PARTWAY`]) that part of the input went out.
+fn front_failure(tool: &str, code: &str, text: &str) -> Option<&'static str> {
     let text = text.trim_start();
     if text.starts_with("UIPI") {
         Some(HIGHER_RIGHTS)
+    } else if FRONT_PARTWAY.iter().any(|said| text.starts_with(said)) {
+        Some(if tool == "type_text" {
+            FRONT_TYPED_PART
+        } else {
+            FRONT_LOST
+        })
     } else if matches!(
         code,
         "delivery_failed" | "foreground_unavailable" | "foreground_timeout"
@@ -1281,7 +1584,7 @@ fn act_error(tool: &str, mode: ActDelivery, result: &ToolCallResult) -> HelperEr
     let code = result.code().unwrap_or("");
     let error = |code: HelperErrorCode, words: &str| HelperError::new(code, words);
     if mode == ActDelivery::Foreground {
-        if let Some(words) = front_failure(code, &result.text()) {
+        if let Some(words) = front_failure(tool, code, &result.text()) {
             return error(HelperErrorCode::ActionFailed, words);
         }
     }
@@ -1400,6 +1703,18 @@ fn act_error(tool: &str, mode: ActDelivery, result: &ToolCallResult) -> HelperEr
             "That element's value cannot be set directly here; nothing was changed. Type into it \
              with computer_type, or choose with clicks.",
         ),
+        "write_not_applied" => error(
+            HelperErrorCode::ActionFailed,
+            "The application took the new value without keeping it: the element still holds \
+             what it had, so nothing changed. Type into it with computer_type, or choose with \
+             clicks.",
+        ),
+        "option_not_found" => error(HelperErrorCode::ActionFailed, &no_such_option(result)),
+        "file_name_needs_rename" => error(HelperErrorCode::ActionFailed, &not_renamed(result)),
+        "window_not_key" => error(
+            HelperErrorCode::BackgroundUnavailable,
+            KEY_WINDOW_UNCONFIRMED,
+        ),
         "element_bounds_unavailable" => error(
             HelperErrorCode::ActionFailed,
             "Where that element is cannot be read, so it was not clicked. Click a point on it \
@@ -1441,6 +1756,19 @@ fn act_error(tool: &str, mode: ActDelivery, result: &ToolCallResult) -> HelperEr
         _ => {
             let text = result.text();
             let text: String = text.chars().take(300).collect();
+            // Linux: typing that stopped after some of the characters went
+            // in, which the driver says only in words.
+            if let Some((typed, of)) = typed_count(&text).filter(|(typed, _)| *typed > 0) {
+                return error(
+                    HelperErrorCode::ActionFailed,
+                    &format!(
+                        "Only part of the text was typed — {typed} of {of} characters — before \
+                         the rest could not be: {} Take a new computer_snapshot to see what \
+                         arrived before typing the rest.",
+                        text.trim()
+                    ),
+                );
+            }
             error(
                 HelperErrorCode::ActionFailed,
                 &if text.trim().is_empty() {
@@ -1451,6 +1779,82 @@ fn act_error(tool: &str, mode: ActDelivery, result: &ToolCallResult) -> HelperEr
             )
         }
     }
+}
+
+/// The `K` and `N` of the driver's "typed K of N characters", wherever in
+/// its words it says it.
+fn typed_count(text: &str) -> Option<(u64, u64)> {
+    let number = |s: &str| -> Option<(u64, usize)> {
+        let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+        Some((s[..digits].parse().ok()?, digits))
+    };
+    text.match_indices("typed ").find_map(|(at, said)| {
+        let rest = &text[at + said.len()..];
+        let (typed, used) = number(rest)?;
+        let rest = rest[used..].strip_prefix(" of ")?;
+        let (of, used) = number(rest)?;
+        rest[used..]
+            .starts_with(" characters")
+            .then_some((typed, of))
+    })
+}
+
+/// The options a pop-up menu or list has, as the driver listed them, for a
+/// value it has none of: at most [`MAX_OPTIONS`] of them, each cut short.
+fn no_such_option(result: &ToolCallResult) -> String {
+    const MAX_OPTIONS: usize = 20;
+    let options: Vec<String> = result
+        .structured
+        .as_ref()
+        .and_then(|s| s.get("options"))
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|o| format!("\"{}\"", o.chars().take(60).collect::<String>()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let said = "That pop-up menu or list has no option by that name, so nothing was changed.";
+    if options.is_empty() {
+        return format!(
+            "{said} Open it with a click to see its options (computer_snapshot), then use one of \
+             them exactly."
+        );
+    }
+    let more = options.len().saturating_sub(MAX_OPTIONS);
+    let mut listed = options
+        .into_iter()
+        .take(MAX_OPTIONS)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if more > 0 {
+        listed.push_str(&format!(" and {more} more"));
+    }
+    format!("{said} Its options: {listed}. Use one of them exactly.")
+}
+
+/// A value set refused on a file's name: renaming a file is not what setting
+/// it does here — except where the Finder was asked to rename it, and did
+/// not say it had.
+fn not_renamed(result: &ToolCallResult) -> String {
+    let said = |key: &str| {
+        result
+            .structured
+            .as_ref()
+            .and_then(|s| s.get(key))
+            .and_then(Value::as_str)
+    };
+    if said("path") == Some("apple_events") && said("cause") == Some("rename_unconfirmed") {
+        return "The Finder was asked to rename the file and did not confirm it, so it may have \
+                been renamed. Look at the window before trying again."
+            .to_string();
+    }
+    "That field is a file's name, and setting it does not rename the file here, so nothing was \
+     changed. To rename a file in the Finder, select it and press return, then type the new name \
+     into the field that opens and press return."
+        .to_string()
 }
 
 #[cfg(test)]
@@ -1569,6 +1973,51 @@ mod tests {
         book.record(1, 10, Some(facts("s00000002", &[(3, "AXButton", false)])));
         assert_eq!(book.frame(1, 10, &element("s00000001", 3)), None);
         assert_eq!(book.frame(1, 10, &element("s00000002", 3)), None);
+    }
+
+    /// A capture keeps a window's refs only where the driver still names the
+    /// snapshot they are from: one read without touching the snapshot, or one
+    /// that refreshed its picture in place. One that took its place, or said
+    /// nothing of it, leaves nothing current — and other windows' refs are
+    /// never touched.
+    #[test]
+    fn a_capture_keeps_refs_only_while_the_driver_keeps_their_snapshot() {
+        let held = || facts("s00000007", &[(3, "AXButton", false)]);
+        let click = WindowAction::Click {
+            at: DriverTarget::Element(element("s00000007", 3)),
+            button: PointerButton::Left,
+            count: 1,
+            modifiers: Modifiers::default(),
+        };
+        let kept = |mark: CaptureMark| {
+            let mut book = SnapshotBook::default();
+            book.record(1, 10, Some(held()));
+            book.record(1, 11, Some(held()));
+            book.captured(1, 10, &mark);
+            assert!(book.check(1, 11, &click, None, false).is_ok());
+            book.check(1, 10, &click, None, false).is_ok()
+        };
+        assert!(kept(CaptureMark::Untouched));
+        assert!(kept(CaptureMark::Now(Some("s00000007".into()))));
+        assert!(!kept(CaptureMark::Now(Some("s00000008".into()))));
+        assert!(!kept(CaptureMark::Now(None)));
+        // A window with nothing remembered stays so.
+        let mut book = SnapshotBook::default();
+        book.captured(2, 20, &CaptureMark::Now(Some("s00000001".into())));
+        assert!(book
+            .check(
+                2,
+                20,
+                &WindowAction::Click {
+                    at: DriverTarget::Element(element("s00000001", 0)),
+                    button: PointerButton::Left,
+                    count: 1,
+                    modifiers: Modifiers::default(),
+                },
+                None,
+                false
+            )
+            .is_err());
     }
 
     /// A ref is good only against the window's latest snapshot, and only for
@@ -2132,6 +2581,299 @@ mod tests {
         // In the background the same words are the driver's own.
         let e = act_error("press_key", ActDelivery::Background, &mac);
         assert!(e.message.contains("WindowServer"), "{}", e.message);
+    }
+
+    /// Windows says of some failures at the front that they came partway:
+    /// the window gave up the front, stopped reading the keys, or took only
+    /// some of the events. Typing so cut short went in in part — and so may
+    /// anything else.
+    #[test]
+    fn a_front_that_failed_partway_may_have_done_part() {
+        let failed = |text: &str| ToolCallResult {
+            is_error: true,
+            content: vec![json!({"type": "text", "text": text})],
+            structured: None,
+        };
+        let front = ActDelivery::Foreground;
+        for partway in [
+            "foreground_lost: foreground moved to HWND 0x2 after 3 of 9 text units were read; \
+             the remaining 6 were not sent. Nothing was retried; inspect the target before \
+             sending the rest.",
+            "text_delivery_stalled: the target did not read text unit 4 of 9 within 2000 ms; 3 \
+             earlier units were read.",
+            "SendInput inserted only 2 of 4 key events for text unit 4 of 9 (3 earlier units \
+             were read). Windows blocked the rest: the target runs at a higher integrity level \
+             than the Driver (UIPI)",
+        ] {
+            let e = act_error("type_text", front, &failed(partway));
+            assert_eq!(e.code, HelperErrorCode::ActionFailed);
+            assert_eq!(e.message, FRONT_TYPED_PART);
+        }
+        for tool in ["press_key", "click", "scroll"] {
+            let e = act_error(
+                tool,
+                front,
+                &failed("SendInput inserted only 1 of 4 events. Windows blocked the rest"),
+            );
+            assert_eq!(e.message, FRONT_LOST, "{tool}");
+        }
+    }
+
+    /// Linux says only in words how far typing got before it stopped: some
+    /// of the text went in, and that is told apart from none of it.
+    #[test]
+    fn linux_typing_cut_short_says_how_far_it_got() {
+        assert_eq!(
+            typed_count("typed 3 of 10 characters: no spare keycode"),
+            Some((3, 10))
+        );
+        assert_eq!(
+            typed_count(
+                "virtual master keyboard delivery failed: typed 0 of 12 characters: the text \
+                 needs 4 spare keycodes"
+            ),
+            Some((0, 12))
+        );
+        for unsaid in [
+            "typed of 3 characters",
+            "typed 3 of characters",
+            "typed 3 of 4 keys",
+            "",
+        ] {
+            assert_eq!(typed_count(unsaid), None, "{unsaid}");
+        }
+        let failed = |text: &str| ToolCallResult {
+            is_error: true,
+            content: vec![json!({"type": "text", "text": text})],
+            structured: None,
+        };
+        for mode in [ActDelivery::Background, ActDelivery::Foreground] {
+            let part = act_error("type_text", mode, &failed("typed 3 of 10 characters: gone"));
+            assert_eq!(part.code, HelperErrorCode::ActionFailed);
+            assert!(part
+                .message
+                .starts_with("Only part of the text was typed — 3 of 10"));
+            let none = act_error("type_text", mode, &failed("typed 0 of 10 characters: gone"));
+            assert!(none.message.starts_with("The type_text did not happen"));
+        }
+    }
+
+    /// The refusals 0.36 added are told in codeg's words: an unconfirmed key
+    /// window, a value not kept, an option that is not there (listed), a
+    /// file's name, and — by their reason — a window server that refuses the
+    /// background, a drag-and-drop, an application that reads the real
+    /// pointer, a drag or a menu command the background does not take.
+    #[test]
+    fn the_new_refusals_are_told_in_codegs_words() {
+        let refused = |structured: Value| ToolCallResult {
+            is_error: true,
+            content: vec![json!({"type": "text", "text": "driver words"})],
+            structured: Some(structured),
+        };
+        let back = ActDelivery::Background;
+        let e = act_error(
+            "press_key",
+            back,
+            &refused(json!({"code": "window_not_key", "effect": "refused"})),
+        );
+        assert_eq!(e.code, HelperErrorCode::BackgroundUnavailable);
+        assert_eq!(e.message, KEY_WINDOW_UNCONFIRMED);
+        let e = act_error(
+            "set_value",
+            back,
+            &refused(json!({"code": "write_not_applied", "effect": "not_applied"})),
+        );
+        assert_eq!(e.code, HelperErrorCode::ActionFailed);
+        assert!(e.message.contains("nothing changed"), "{}", e.message);
+
+        let many: Vec<String> = (0..25).map(|i| format!("Option {i}")).collect();
+        let e = act_error(
+            "set_value",
+            back,
+            &refused(json!({"code": "option_not_found", "effect": "none", "options": many})),
+        );
+        assert!(
+            e.message.contains("\"Option 0\", \"Option 1\""),
+            "{}",
+            e.message
+        );
+        assert!(
+            e.message.contains("\"Option 19\" and 5 more"),
+            "{}",
+            e.message
+        );
+        assert!(!e.message.contains("Option 20"), "{}", e.message);
+        let e = act_error(
+            "set_value",
+            back,
+            &refused(json!({"code": "option_not_found", "detail": "no option \"x\""})),
+        );
+        assert!(e.message.contains("Open it with a click"), "{}", e.message);
+
+        let e = act_error(
+            "set_value",
+            back,
+            &refused(json!({"code": "file_name_needs_rename", "path": "ax"})),
+        );
+        assert!(e.message.contains("nothing was changed"), "{}", e.message);
+        let e = act_error(
+            "set_value",
+            back,
+            &refused(json!({
+                "code": "file_name_needs_rename",
+                "path": "apple_events",
+                "cause": "rename_unconfirmed"
+            })),
+        );
+        assert!(e.message.contains("may have been renamed"), "{}", e.message);
+
+        let unavailable = |tool: &str, extra: Value| {
+            let mut structured = json!({"code": "background_unavailable"});
+            for (k, v) in extra.as_object().unwrap() {
+                structured[k] = v.clone();
+            }
+            let e = act_error(tool, back, &refused(structured));
+            assert_eq!(e.code, HelperErrorCode::BackgroundUnavailable, "{tool}");
+            e.message
+        };
+        for tool in ["click", "drag", "press_key"] {
+            assert_eq!(
+                unavailable(
+                    tool,
+                    json!({"reason": "windowserver_connection_invalid", "status": 1002})
+                ),
+                WINDOW_SERVER_REFUSED
+            );
+        }
+        assert_eq!(
+            unavailable(
+                "drag",
+                json!({"reason": "drag_and_drop_session", "effect": "no_drop"})
+            ),
+            DRAG_AND_DROP
+        );
+        assert_eq!(
+            unavailable(
+                "click",
+                json!({"reason": "pointer_reading_toolkit", "toolkit": "tk"})
+            ),
+            POINTER_READING_TOOLKIT
+        );
+        assert!(unavailable("drag", json!({"effect": "refused"})).contains("take a drag"));
+        assert_eq!(
+            unavailable(
+                "invoke_menu",
+                json!({"status": "refused", "refusal": {"code": "background_unavailable"}})
+            ),
+            MENU_OFF_IN_BACKGROUND
+        );
+        // A reason the driver writes as a sentence names none of them.
+        assert!(!unavailable(
+            "scroll",
+            json!({"reason": "Electron windows drop wheel events"})
+        )
+        .contains("window server"));
+    }
+
+    /// Line breaks and tabs go as keys between the runs of text around them
+    /// — in the background on macOS, where typing them inside the text could
+    /// type it twice — a CR LF pair as one return.
+    #[test]
+    fn breaks_in_a_text_are_its_keys() {
+        use Piece::{Key, Text};
+        assert!(breaks_go_as_keys(Platform::Mac, ActDelivery::Background));
+        assert!(!breaks_go_as_keys(Platform::Mac, ActDelivery::Foreground));
+        for platform in [Platform::Windows, Platform::Linux] {
+            assert!(!breaks_go_as_keys(platform, ActDelivery::Background));
+        }
+        assert_eq!(
+            pieces("first\nsecond"),
+            vec![Text("first"), Key("return"), Text("second")]
+        );
+        assert_eq!(
+            pieces("a\r\nb\rc\td\n"),
+            vec![
+                Text("a"),
+                Key("return"),
+                Text("b"),
+                Key("return"),
+                Text("c"),
+                Key("tab"),
+                Text("d"),
+                Key("return")
+            ]
+        );
+        assert_eq!(pieces("\n\n"), vec![Key("return"), Key("return")]);
+        assert_eq!(
+            pieces("中文\t—é"),
+            vec![Text("中文"), Key("tab"), Text("—é")]
+        );
+        assert_eq!(pieces("plain"), vec![Text("plain")]);
+        assert!(!"plain".contains(BREAKS));
+        assert!("a\tb".contains(BREAKS));
+        // As many as one call may hold, and no more: refused before any goes.
+        let most = "x\n".repeat(MAX_PIECES / 2);
+        assert_eq!(pieces_in_reach(&most).unwrap().len(), MAX_PIECES);
+        let more = format!("{most}x");
+        let e = pieces_in_reach(&more).unwrap_err();
+        assert_eq!(e.code, HelperErrorCode::ActionFailed);
+        assert!(e.message.contains("Nothing was typed"), "{}", e.message);
+    }
+
+    /// A text field's value is not set in the Finder — on a file's name the
+    /// driver would rename it by scripting the Finder — while typing into one
+    /// goes, and other applications' fields are set as before.
+    #[test]
+    fn a_finder_text_field_is_not_set() {
+        let mut book = SnapshotBook::default();
+        book.record(
+            1,
+            10,
+            Some(facts("s00000001", &[(2, "AXTextField", false)])),
+        );
+        let set = WindowAction::SetValue {
+            element: element("s00000001", 2),
+            value: "new name".into(),
+        };
+        let e = book
+            .check(1, 10, &set, Some("com.apple.finder"), false)
+            .unwrap_err();
+        assert_eq!(e.code, HelperErrorCode::ActionFailed);
+        assert!(e.message.contains("computer_type"), "{}", e.message);
+        assert!(book
+            .check(
+                1,
+                10,
+                &set,
+                Some("/System/Library/CoreServices/Finder.app"),
+                false
+            )
+            .is_err());
+        assert!(book
+            .check(1, 10, &set, Some("com.apple.TextEdit"), false)
+            .is_ok());
+        let typed = WindowAction::Type {
+            element: element("s00000001", 2),
+            text: "new name".into(),
+            submit: true,
+        };
+        assert!(book
+            .check(1, 10, &typed, Some("com.apple.finder"), false)
+            .is_ok());
+    }
+
+    /// A menu command saved by ⌘S alone that is turned off would be saved by
+    /// scripting the application; one turned on, one with another shortcut
+    /// or other modifiers, or one that does not say, would not.
+    #[test]
+    fn a_turned_off_save_would_be_scripted() {
+        assert!(saves_by_script("s", 0, Some(false)));
+        assert!(saves_by_script("S", 0, Some(false)));
+        assert!(!saves_by_script("s", 0, Some(true)));
+        assert!(!saves_by_script("s", 0, None));
+        // ⇧⌘S (Save As / Duplicate), and a key other than S.
+        assert!(!saves_by_script("s", 1, Some(false)));
+        assert!(!saves_by_script("o", 0, Some(false)));
     }
 
     /// At the front, keys and typing wait for the person's modifiers: none

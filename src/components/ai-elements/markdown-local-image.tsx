@@ -12,7 +12,7 @@ import {
 import type { Components } from "streamdown"
 import { ImageOff, Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { readWorkspaceFileBase64 } from "@/lib/api"
+import { readFileBase64, readWorkspaceFileBase64 } from "@/lib/api"
 import {
   createLocalImageLoader,
   resolveLocalImage,
@@ -24,12 +24,17 @@ import {
 import { ImagePreviewDialog } from "@/components/ui/image-preview-dialog"
 
 type ImageScope = {
-  root: string
+  /** Null for a transcript whose folder is unknown. */
+  root: string | null
   load: ReturnType<typeof createLocalImageLoader>
 }
 const LocalImageContext = createContext<ImageScope | null>(null)
 
-/** Scope belongs to this transcript, never the globally active folder. */
+/**
+ * Scope belongs to this transcript, never the globally active folder. Without
+ * a folder, an absolute path still names its file. Markdown from outside any
+ * transcript, an issue body for one, has no scope and loads no local file.
+ */
 export function MarkdownImageProvider({
   rootPath,
   children,
@@ -37,15 +42,19 @@ export function MarkdownImageProvider({
   rootPath: string | null
   children: ReactNode
 }) {
+  const root = rootPath || null
   const scope = useMemo(
-    () =>
-      rootPath
-        ? {
-            root: rootPath,
-            load: createLocalImageLoader(rootPath, readWorkspaceFileBase64),
-          }
-        : null,
-    [rootPath]
+    () => ({
+      root,
+      // Outside the root: the file panel's own reader, as for a path the
+      // user clicks.
+      load: createLocalImageLoader(
+        root,
+        readWorkspaceFileBase64,
+        readFileBase64
+      ),
+    }),
+    [root]
   )
   return (
     <LocalImageContext.Provider value={scope}>

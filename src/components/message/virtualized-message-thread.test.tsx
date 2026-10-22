@@ -1,5 +1,5 @@
 import type { ReactNode, Ref, RefObject } from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 
@@ -9,7 +9,12 @@ const testState = vi.hoisted(() => ({
   virtuaScrollToIndex: vi.fn(),
   // The virtua handle's geometry: where the view is, where each row starts.
   scrollOffset: 0,
+  viewportSize: 500,
+  scrollSize: 5_000,
   itemOffset: (index: number) => index * 100,
+  findItemIndex: vi.fn((offset: number) => Math.floor(offset / 100)),
+  // The last `onScroll` virtua was handed.
+  onScroll: undefined as undefined | ((offset: number) => void),
 }))
 
 vi.mock("use-stick-to-bottom", () => ({
@@ -26,15 +31,25 @@ vi.mock("virtua", async () => {
     Virtualizer: ({
       children,
       ref,
+      onScroll,
     }: {
       children: ReactNode
       ref?: Ref<unknown>
+      onScroll?: (offset: number) => void
     }) => {
+      testState.onScroll = onScroll
       useImperativeHandle(ref, () => ({
         scrollToIndex: testState.virtuaScrollToIndex,
         getItemOffset: (index: number) => testState.itemOffset(index),
+        findItemIndex: (offset: number) => testState.findItemIndex(offset),
         get scrollOffset() {
           return testState.scrollOffset
+        },
+        get viewportSize() {
+          return testState.viewportSize
+        },
+        get scrollSize() {
+          return testState.scrollSize
         },
       }))
       return <>{children}</>
@@ -93,7 +108,11 @@ beforeEach(() => {
   testState.stopScroll.mockReset()
   testState.virtuaScrollToIndex.mockReset()
   testState.scrollOffset = 0
+  testState.viewportSize = 500
+  testState.scrollSize = 5_000
   testState.itemOffset = (index: number) => index * 100
+  testState.findItemIndex.mockClear()
+  testState.onScroll = undefined
 })
 
 describe("VirtualizedMessageThread scroll API", () => {
@@ -149,6 +168,67 @@ describe("VirtualizedMessageThread scroll API", () => {
       })
     }
   )
+})
+
+describe("VirtualizedMessageThread viewport top", () => {
+  const items = Array.from({ length: 50 }, (_, i) => ({ id: `item-${i}` }))
+
+  function renderWatched(
+    onViewportTopChange?: (top: { index: number; atEnd: boolean }) => void
+  ) {
+    return render(
+      <VirtualizedMessageThread
+        items={items}
+        getItemKey={(item) => item.id}
+        renderItem={() => null}
+        hasOlder
+        onViewportTopChange={onViewportTopChange}
+      />
+    )
+  }
+
+  it("tells a new listener where the view is", async () => {
+    // Row 3 (virtua row 4, past the loader row) is at the top.
+    testState.scrollOffset = 400
+    const listener = vi.fn()
+    renderWatched(listener)
+    await waitFor(() =>
+      expect(listener).toHaveBeenCalledWith({ index: 3, atEnd: false })
+    )
+  })
+
+  it("reports the row a scroll brings to the top, once per change", async () => {
+    const listener = vi.fn()
+    renderWatched(listener)
+    await waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+
+    testState.scrollOffset = 1_000
+    testState.onScroll?.(1_000)
+    await waitFor(() =>
+      expect(listener).toHaveBeenLastCalledWith({ index: 9, atEnd: false })
+    )
+    // A scroll within the same row says nothing new.
+    testState.scrollOffset = 1_050
+    testState.onScroll?.(1_050)
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it("says when the view rests at the end", async () => {
+    testState.scrollOffset = 4_500
+    const listener = vi.fn()
+    renderWatched(listener)
+    await waitFor(() =>
+      expect(listener).toHaveBeenCalledWith({ index: 44, atEnd: true })
+    )
+  })
+
+  it("measures nothing for no listener", async () => {
+    renderWatched()
+    testState.onScroll?.(300)
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(testState.findItemIndex).not.toHaveBeenCalled()
+  })
 })
 
 describe("VirtualizedMessageThread focus origin", () => {

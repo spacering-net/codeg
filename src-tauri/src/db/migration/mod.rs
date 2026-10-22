@@ -52,6 +52,8 @@ mod m20261015_000001_kiro_builtin_agent;
 mod m20261015_000001_work_task_deferred_at;
 mod m20261016_000001_assistant;
 mod m20261016_000002_conversation_assistant;
+mod m20261017_000002_conversation_source;
+mod m20261020_000001_folder_command_run_local;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -110,6 +112,34 @@ impl MigratorTrait for Migrator {
             Box::new(m20261015_000001_work_task_deferred_at::Migration),
             Box::new(m20261016_000001_assistant::Migration),
             Box::new(m20261016_000002_conversation_assistant::Migration),
+            Box::new(m20261017_000002_conversation_source::Migration),
+            Box::new(m20261020_000001_folder_command_run_local::Migration),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm_migration::MigratorTrait;
+
+    use crate::db::migration::Migrator;
+
+    /// A backup records the last migration here as its schema version, and a
+    /// build refuses a backup naming a migration it does not know. A new
+    /// migration listed ahead of a released one (an easy slip when a rebase
+    /// conflicts on this list) leaves the released name last, so that release
+    /// accepts the newer backup and then cannot start on the migration the
+    /// restore brought in. Names are dated when written, so name order keeps
+    /// the newest migration last. A new migration whose name sorts before a
+    /// released one needs a later name, not an earlier place in the list.
+    #[test]
+    fn migrations_are_listed_in_name_order() {
+        let names: Vec<String> = Migrator::migrations()
+            .iter()
+            .map(|m| m.name().to_string())
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
     }
 }

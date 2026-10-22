@@ -11,65 +11,69 @@ import {
 import { useTranslations } from "next-intl"
 
 import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
+
+type DelegationStatusValue =
+  | "starting"
+  | "running"
+  | "waiting"
+  | "ok"
+  | "err"
+  | "checked"
+
+function StatusIcon({ status }: { status: DelegationStatusValue }) {
+  switch (status) {
+    case "starting":
+      return <CircleDashed className="animate-spin text-muted-foreground" />
+    case "waiting":
+      return <ShieldAlert className="text-amber-500" />
+    case "running":
+      return <Loader2 className="animate-spin" />
+    case "checked":
+      // A poll returned "still running" — a settled snapshot, not live work.
+      // Neutral, non-spinning, so a superseded check stops spinning.
+      return <Clock className="text-muted-foreground" />
+    case "ok":
+      return <CheckCircleIcon className="text-green-600" />
+    default:
+      return <XCircleIcon className="text-red-600" />
+  }
+}
+
+function StatusText({
+  status,
+  errorCode,
+}: {
+  status: DelegationStatusValue
+  errorCode?: string
+}) {
+  const t = useTranslations("Folder.chat.delegation.status")
+  if (status === "err") return <ErrorLabel code={errorCode} />
+  return <>{t(status)}</>
+}
 
 export function StatusBadge({
   status,
   errorCode,
+  size = "default",
 }: {
-  status: "starting" | "running" | "waiting" | "ok" | "err" | "checked"
+  status: DelegationStatusValue
   errorCode?: string
+  /** `sm`: the narrower pill of the Session Details side panel's sub-agent
+   *  cards. */
+  size?: "default" | "sm"
 }) {
-  const t = useTranslations("Folder.chat.delegation.status")
-  if (status === "starting") {
-    return (
-      <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-        <CircleDashed className="animate-spin text-muted-foreground" />
-        {t("starting")}
-      </Badge>
-    )
-  }
-  if (status === "waiting") {
-    return (
-      <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-        <ShieldAlert className="text-amber-500" />
-        {t("waiting")}
-      </Badge>
-    )
-  }
-  if (status === "running") {
-    return (
-      <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-        <Loader2 className="animate-spin" />
-        {t("running")}
-      </Badge>
-    )
-  }
-  if (status === "checked") {
-    // A poll returned "still running" — a settled snapshot, not live work.
-    // Neutral, non-spinning, so a superseded check stops spinning.
-    return (
-      <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-        <Clock className="text-muted-foreground" />
-        {t("checked")}
-      </Badge>
-    )
-  }
-  if (status === "ok") {
-    return (
-      <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-        <CheckCircleIcon className="text-green-600" />
-        {t("ok")}
-      </Badge>
-    )
-  }
   return (
     <Badge
-      className="gap-1.5 rounded-full text-xs"
+      className={cn(
+        "rounded-full",
+        size === "sm" ? "h-[1.125rem] gap-1 px-1.5 text-2xs" : "gap-1.5 text-xs"
+      )}
       variant="secondary"
-      title={errorCode ?? undefined}
+      title={status === "err" ? (errorCode ?? undefined) : undefined}
     >
-      <XCircleIcon className="text-red-600" />
-      <ErrorLabel code={errorCode} />
+      <StatusIcon status={status} />
+      <StatusText status={status} errorCode={errorCode} />
     </Badge>
   )
 }

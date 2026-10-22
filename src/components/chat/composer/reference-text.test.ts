@@ -251,6 +251,28 @@ describe("referenceToMarkdown", () => {
       ).toBe("/scope/my.skill_v2")
     })
 
+    it("keeps a namespaced command id literal (must invoke)", () => {
+      // Qoder advertises skills as `sites:sites-building`; an escaped `_` in a
+      // namespaced name would reach the agent as a different command.
+      expect(
+        referenceToMarkdown(
+          ref({ refType: "skill", id: "sites:sites-building" })
+        )
+      ).toBe("/sites:sites-building")
+      expect(
+        referenceToMarkdown(ref({ refType: "skill", id: "my_plugin:run_all" }))
+      ).toBe("/my_plugin:run_all")
+    })
+
+    it("still neutralizes a namespaced id that could autolink or emphasize", () => {
+      expect(
+        referenceToMarkdown(ref({ refType: "skill", id: "http:evil" }))
+      ).toBe("`/http:evil`")
+      expect(referenceToMarkdown(ref({ refType: "skill", id: "a:_b" }))).toBe(
+        "/a:\\_b"
+      )
+    })
+
     it("escapes a `_` that flanks a separator (would emphasize otherwise)", () => {
       // `/a/_b_/c` parses as `/a/<em>b</em>/c` in CommonMark — a non-intraword
       // `_` must be escaped so no emphasis leaks into the prompt/transcript.

@@ -249,6 +249,21 @@
     "autostartDescription": "登录这台电脑后自动启动，无需每次手动打开。",
     "autostartSaveFailed": "开机自启设置保存失败：{message}",
     "autostartUnavailable": "无法读取本机的开机自启状态：{message}",
+    "cliAccessTitle": "命令行访问",
+    "cliAccessDescription": "允许本机的 codeg-cli 命令通过 Codeg 运行提示词，用于脚本、CI 任务或 Codeg 自带的终端。只有本机能连接，密钥保存在私有文件里。",
+    "cliAccessEndpointFile": "发现文件：",
+    "cliAccessExample": "示例：",
+    "cliAccessOff": "已关闭：本机的 codeg-cli 连不上 Codeg。",
+    "cliAccessUnavailable": "命令行访问未能启动：{message}",
+    "cliAccessSaveFailed": "无法更改命令行访问：{message}",
+    "cliToolInstall": "安装命令行工具",
+    "cliToolInstalled": "{command} 已在 PATH 上：",
+    "cliToolPackage": "{command} 随安装包提供，已在 PATH 上：",
+    "cliToolNotInstalled": "把 {command} 放到 PATH 上，Codeg 之外的终端也能找到它。",
+    "cliToolConflict": "保持不变：{message}",
+    "cliToolNote": "注意：{message}",
+    "cliToolInstalledToast": "{command} 已在 PATH 上。打开新终端即可使用。",
+    "cliToolInstallFailed": "无法安装命令行工具：{message}",
     "proxyTitle": "网络代理",
     "proxyDescription": "开启后，后续网络请求将优先走该代理（包括 ACP 对话、Agent 安装、Git 远程操作等）。",
     "loadFailed": "加载失败：{message}",
@@ -959,6 +974,9 @@
       "customApiKeyHint": "内联存储于 `[model.*].api_key`，仅作用于该端点。",
       "customContextWindowLabel": "上下文窗口（tokens）",
       "customContextWindowHint": "可选。用于自动压缩计时；留空则使用端点默认值。",
+      "customReasoningEffortsLabel": "可选推理级别",
+      "customReasoningEffortsEmptyHint": "未声明级别。除非 Grok 自己的模型列表里已有这个模型 ID 的描述，否则输入框不会为它显示推理级别选择器。选上你的端点支持的级别即可加上。",
+      "customReasoningEffortsHint": "写入 `[model.*].reasoning_efforts`。每个级别都会原样发送给你的端点，请只选它支持的。新会话从上方选择的「推理级别」开始；那里为「使用默认」时，从这里的第一个级别开始。",
       "autoCompactLabel": "自动压缩阈值（%）",
       "autoCompactHint": "当上下文使用率达到该百分比时压缩对话（Grok 默认 85）。写入 `[session]`。"
     },
@@ -1112,6 +1130,30 @@
       "apiKeyHint": "以 KIRO_API_KEY 传给 CLI。留空则使用 kiro-cli login 登录的账号；只有无法用浏览器登录的环境（服务器、Docker）才需要 API Key。",
       "saveConfig": "保存 Kiro 配置"
     },
+    "trae": {
+      "configManagement": "配置管理",
+      "configDescription": "TRAE CLI 2.0 仅向 TRAE 企业版旗舰版套餐客户开放。Codeg 运行你安装的 traecli，它把登录状态、技能和 MCP 服务器保存在 ~/.trae 中。模型、模式和推理强度不在这里设置：TRAE CLI 会通过 ACP 上报它们，由输入框自带的选择器按会话管理。",
+      "signInTitle": "登录",
+      "signInHint": "在终端中运行一次下面的命令，用企业 SSO 登录。Codeg 里的会话会复用这次登录。",
+      "copyCommand": "复制命令",
+      "commandCopied": "命令已复制",
+      "patLabel": "个人访问令牌（可选）",
+      "patHint": "适用于无法用浏览器登录的机器，例如服务器或 Docker 部署。Codeg 会以 TRAECLI_PERSONAL_ACCESS_TOKEN 传给 TRAE CLI，并在每次启动会话时用它登录。留空则使用 traecli login 的登录。",
+      "hostLabel": "企业 API 地址（可选）",
+      "hostHint": "仅当你的组织在自有域名上部署 TRAE 时填写。以 TRAECLI_HOST 传入；留空则使用 TRAE 官方服务。",
+      "saveConfig": "保存 TRAE CLI 配置"
+    },
+    "commandCode": {
+      "configManagement": "配置管理",
+      "configDescription": "Codeg 运行 command-code npm 包提供的 Command Code CLI，它把登录状态、技能和 MCP 服务器保存在 ~/.commandcode 中。模型、模式和推理强度不在这里设置：Command Code 会通过 ACP 上报它们，由输入框自带的选择器按会话管理。",
+      "signInTitle": "登录",
+      "signInHint": "在终端中运行一次下面的命令，登录你的 Command Code 账号。Codeg 里的会话会复用这次登录。",
+      "copyCommand": "复制命令",
+      "commandCopied": "命令已复制",
+      "apiKeyLabel": "API 密钥（可选）",
+      "apiKeyHint": "适用于无法用浏览器登录的机器，例如服务器或 Docker 部署。以 COMMAND_CODE_API_KEY 传给 Command Code，优先于 command-code login 的登录。留空则使用那次登录。",
+      "saveConfig": "保存 Command Code 配置"
+    },
     "deepseek": {
       "configManagement": "DeepSeek Harness 配置",
       "configDescription": "端点与密钥是 deepseek-acp 启动时读取的环境变量。模型和推理档位是会话级选择器，在输入框里切换。",
@@ -1131,13 +1173,10 @@
       "modelName": "模型名称",
       "enableWebsocket": "启用 WebSocket",
       "enableWebsocketAria": "Codex Provider 启用 WebSocket",
-      "enableSkills": "启用 Skills",
-      "enableSkillsAria": "Codex 启用 Skills",
+      "enableWebsocketHint": "仅当你的接口支持 Responses API 的 WebSocket 模式（OpenAI 官方 API 支持）时才开启。接口不支持时，codex 可能直接让这一轮失败，或者最多重连 5 次后才退回 HTTPS，而且每个新会话都会再来一遍。会在 ~/.codex/config.toml 里给当前 provider 写入 supports_websockets，下次会话生效。",
       "enableDefaultModeRequestUserInput": "默认模式下允许提问",
       "enableDefaultModeRequestUserInputAria": "允许 Codex 在默认模式下提问",
       "enableDefaultModeRequestUserInputHint": "Codex 的 request_user_input 工具默认只在 Plan 模式可用。开启后，普通回合也能向你提问。会写入 ~/.codex/config.toml 的 [features].default_mode_request_user_input；该开关在上游仍处于开发中。下次新建会话生效。",
-      "enableFast": "启用 Fast",
-      "enableFastAria": "Codex 启用 Fast 服务等级",
       "sandboxGroupTitle": "沙箱与审批",
       "sandboxGroupHint": "写入全局 ~/.codex/config.toml，codex CLI 与 IDE 的会话同样生效。这是线程默认值，只作用于 codex 自行发起的回合（/goal、/review、/compact）；普通对话使用输入框里的审批预设。改动需重开会话才生效。",
       "sandboxShadowedWarning": "config.toml 里设置了 default_permissions，codex 会改走权限配置档并完全忽略 sandbox_mode。删掉 default_permissions 后下面的选项才会生效。",
@@ -1607,6 +1646,10 @@
       "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
       "kiroSaved": "Kiro 配置已保存",
       "saveKiroFailed": "保存 Kiro 配置失败",
+      "traeSaved": "TRAE CLI 配置已保存",
+      "saveTraeFailed": "保存 TRAE CLI 配置失败",
+      "commandCodeSaved": "Command Code 配置已保存",
+      "saveCommandCodeFailed": "保存 Command Code 配置失败",
       "systemAgentAlreadyLatest": "{name} 已是最新版本（{version}）"
     },
     "distribution": {
@@ -1913,6 +1956,62 @@
     "invalidFolderId": "无效的 folderId",
     "loadingRepo": "正在加载仓库..."
   },
+  "CommitMessageGeneration": {
+    "generate": "生成提交信息",
+    "stop": "停止生成（{seconds} 秒）",
+    "generating": "正在生成提交信息… {seconds} 秒",
+    "noChanges": "没有可描述的改动",
+    "selectFiles": "先勾选要提交的文件",
+    "busyCommitting": "正在提交…",
+    "settings": "提交信息生成设置",
+    "settingsMenuItem": "提交信息生成设置…",
+    "untracked": {
+      "title": "一并提交未跟踪的文件？",
+      "description": "勾选的文件会写进提交信息，并随这次提交一起提交；未勾选的留在本地，不提交。",
+      "selectionCount": "已选择 {selected} / {total} 个文件",
+      "selectAll": "全选",
+      "unselectAll": "取消全选",
+      "showMore": "显示其余 {count} 个文件",
+      "confirm": "生成",
+      "included": "同时提交 {count} 个未跟踪文件",
+      "drop": "不提交这些未跟踪文件",
+      "stagedMeanwhile": "部分取消勾选的文件在此期间已被暂存，会随已跟踪改动一起提交"
+    },
+    "toasts": {
+      "failed": "未能生成提交信息",
+      "openSettings": "设置",
+      "autoCommitSkipped": "未自动提交：生成期间改动有变化，请检查提交信息后再提交。"
+    },
+    "errors": {
+      "noChanges": "没有可描述的改动。",
+      "noAgent": "没有可用的 agent，请在提交信息生成设置里选一个。",
+      "emptyAnswer": "agent 的回复里没有提交信息。",
+      "cancelled": "已停止生成。"
+    },
+    "dialog": {
+      "title": "提交信息生成",
+      "description": "提交框旁的生成按钮会让 agent 按这次提交的实际内容写提交信息。生成在单独的会话里进行，不会出现在会话列表里；它申请的任何权限都会被拒绝。",
+      "scope": "作用域",
+      "scopeGlobal": "全部文件夹（全局默认）",
+      "scopeGlobalHint": "未单独设置的文件夹将使用这份全局默认配置。",
+      "source": "配置来源",
+      "sourceGlobal": "使用全局默认",
+      "sourceCustom": "单独配置",
+      "sourceGlobalFollow": "跟随全局设置，全局改动会自动生效。",
+      "sourceCustomHint": "为此文件夹保存独立设置，不再跟随全局默认。",
+      "pinAgent": "指定 agent",
+      "pinAgentHint": "每条提交信息都由这个 agent 按下面的选项来写。选一个又快又便宜的模型就够用。",
+      "followSessionHint": "关闭时由当前正在看的会话的 agent 来写；没有会话时用文件夹的默认 agent，都使用它的默认模型。",
+      "autoCommit": "生成后自动提交",
+      "autoCommitHint": "提交信息写好后立即提交；如果生成期间改动有变化，只填入提交框，留给你检查。",
+      "instructions": "附加说明",
+      "instructionsHint": "每次生成都会附上，并优先于内置规则（比如跟随最近提交的语言）。",
+      "instructionsPlaceholder": "例如：用中文写；遵循 Conventional Commits；在正文里说明原因。",
+      "save": "保存",
+      "cancel": "取消",
+      "loadFailed": "未能读取设置"
+    }
+  },
   "MergePage": {
     "title": "解决冲突",
     "invalidFolderId": "无效的 folderId",
@@ -2079,6 +2178,7 @@
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
       "worktreeRemovedBadge": "源 worktree 已删除",
+      "cliBadge": "从命令行启动",
       "conversationCountUnit": "{count} 条",
       "emptyFolderHint": "暂无会话",
       "noMatchingConversations": "未找到匹配的会话",
@@ -2159,9 +2259,11 @@
         "dropToUngroup": "拖到这里可移出分组"
       },
       "recentFilterAll": "全部",
+      "recentFilterCli": "命令行",
       "recentFilterTitle": "最近显示：{filter}",
       "noRecentChats": "没有最近的聊天",
       "noRecentFolders": "没有最近的文件夹会话",
+      "noRecentCli": "没有最近从命令行启动的会话",
       "recentFilterMenuLabel": "最近显示"
     },
     "conversation": {
@@ -2378,7 +2480,10 @@
         "commits": "提交"
       },
       "noFolderTitle": "暂无打开的文件夹",
-      "noFolderHint": "打开一个文件夹后在这里查看"
+      "noFolderHint": "打开一个文件夹后在这里查看",
+      "openFullPage": "在完整页面中打开",
+      "back": "返回",
+      "noAutomations": "此项目还没有自动化"
     },
     "windowControls": {
       "minimizeWindow": "最小化窗口",
@@ -3135,6 +3240,10 @@
       "manageCommands": "管理命令...",
       "runCommandTitle": "运行：{command}",
       "stopCommandTitle": "停止：{command}",
+      "localUnavailable": "本地命令仅在桌面应用中可用",
+      "localRunFailed": "运行本地命令失败",
+      "globalCommand": "所有文件夹可用",
+      "localCommand": "在本机运行",
       "manageDialog": {
         "title": "管理命令",
         "empty": "暂无命令",
@@ -3143,11 +3252,16 @@
         "newCommand": "新建命令",
         "nameLabel": "名称",
         "commandLabel": "命令",
+        "runLocalLabel": "在本机运行",
+        "runLocalHint": "在本机而不是项目所在主机上运行，不打开终端；<code>{folderVar}</code> 为目录的绝对路径，<code>{hostVar}</code> 为远程主机名，例如 <code>{example}</code>",
+        "globalLabel": "在所有文件夹中显示",
+        "globalHint": "在所有文件夹、worktree 和远程连接中都可用，保存在本机",
         "dragSort": "拖拽排序",
         "dragSortCommand": "拖拽排序 {name}",
         "orderFailed": "保存命令排序失败",
         "loadFailed": "加载命令失败",
         "saveFailed": "保存命令失败",
+        "runLocalNotKept": "文件夹所在主机无法保存“在本机运行”，请更新该主机，或打开“在所有文件夹中显示”把命令保存在本机",
         "deleteFailed": "删除命令失败",
         "confirmDelete": {
           "title": "删除命令？",
@@ -3277,6 +3391,7 @@
       },
       "messageInput": {
         "askAnything": "请开始输入...",
+        "promptSuggestion": "{suggestion}（按 Tab 填入）",
         "removeAttachmentAria": "移除 {name}",
         "attachFiles": "附加文件",
         "attachLocalUpload": "附加本地文件",
@@ -3308,6 +3423,10 @@
         "searchModelAria": "搜索模型",
         "modelListLabel": "模型",
         "recommendedBadge": "推荐",
+        "recommendedValue": "推荐：{value}",
+        "searchOptions": "搜索选项...",
+        "searchOptionsAria": "搜索选项",
+        "noOptions": "未找到选项",
         "noModels": "未找到模型",
         "cancel": "取消",
         "send": "发送",
@@ -3315,6 +3434,7 @@
         "steerIntoTurn": "插入当前回合",
         "steerAsNote": "发送留言，供下次检查时读取",
         "steerQueuedInstead": "已转入队列——将随下一回合发送。",
+        "heldWhileResponding": "仍在响应中——消息已留在输入框里，等响应结束后再发送。",
         "steerFailed": "无法插入当前回合",
         "steerNoteFailed": "留言发送失败",
         "slashCommands": "斜杠命令",
@@ -3672,7 +3792,6 @@
         "unknownAgent": "子智能体",
         "openDetail": "查看会话",
         "resumed": "已恢复",
-        "resumeDetail": "恢复详情",
         "resumeReasonLabel": "恢复原因",
         "detailTitle": "子智能体会话",
         "detailDescription": "只读查看委托给子智能体的会话内容。",
@@ -3918,13 +4037,16 @@
       },
       "messageNav": {
         "title": "消息导航",
-        "collapse": "收起消息导航",
         "loadingEarlier": "正在加载更早的消息…",
         "loadEarlier": "加载更早的消息",
-        "collapsedSummary": "消息 {count}",
         "fileCount": "{count} 个文件",
-        "remove": "移除",
-        "noDiffDataAvailable": "未找到 {filePath} 的差异数据"
+        "subAgentCount": "{count} 个子智能体",
+        "showDiff": "展开 {filePath} 的改动",
+        "hideDiff": "收起 {filePath} 的改动",
+        "openFile": "打开 {filePath}",
+        "collapse": "收起",
+        "currentMessage": "当前消息",
+        "scrollToCurrent": "滚动到当前消息（#{ordinal}）"
       },
       "replyArtifacts": {
         "title": "改动文件",
@@ -3982,6 +4104,9 @@
         "resumeDelegation": "恢复任务 {task}",
         "resumeDelegationNoId": "恢复委派任务",
         "promptLabel": "指令",
+        "ackRecorded": "已记录到待办任务",
+        "ackNotRecorded": "未记录到待办任务",
+        "ackNotRecordedWithReason": "未记录到待办任务：{reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "待复核",
@@ -4098,6 +4223,18 @@
         "tokens": "{count} tokens",
         "stopDeclined": "无法停止该任务，它可能已经结束。",
         "stopFailed": "停止任务失败：{error}"
+      },
+      "remoteControl": {
+        "title": "远程控制已开启",
+        "open": "在浏览器中打开",
+        "copy": "复制链接",
+        "copied": "已复制",
+        "qr": "二维码",
+        "qrLabel": "本会话远程控制链接的二维码",
+        "qrHint": "用手机扫码，在 Claude App 或 claude.ai/code 上继续本会话。",
+        "noUrl": "Claude Code 没有返回本会话的链接",
+        "turnOff": "关闭",
+        "turnOffBusy": "Claude 完成当前工作后可用"
       },
       "proposedPlan": {
         "title": "计划提案",
@@ -5270,7 +5407,12 @@
     "reconnectNow": "立即重连",
     "sessionExpiredTitle": "会话已过期",
     "sessionExpiredDescription": "登录状态已失效，请重新登录以继续。",
-    "goToLogin": "前往登录"
+    "proxySignInTitle": "登录已过期",
+    "proxySignInDescription": "此服务器前置代理的登录已过期。请重新加载页面以再次登录。",
+    "goToLogin": "前往登录",
+    "versionChangedTitle": "服务器已运行 Codeg {version}",
+    "versionChangedDescription": "此页面仍是 {version}，刷新后即可使用服务器上的版本。",
+    "reloadPage": "刷新"
   },
   "LiveFeedback": {
     "placeholder": "在 {agent} 工作时给它留言…",

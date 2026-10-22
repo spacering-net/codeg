@@ -359,6 +359,65 @@ async fn static_js_is_compressed_but_binary_download_is_not() {
     );
 }
 
+fn cache_control(resp: &axum_test::TestResponse) -> Option<String> {
+    resp.headers()
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn static_files_revalidate_except_fingerprinted_assets() {
+    let (server, _data, static_dir) = build_test_server().await;
+    let root = static_dir.path();
+    std::fs::write(root.join("index.html"), "<html>index</html>").expect("write index");
+    std::fs::write(root.join("workspace.html"), "<html>workspace</html>")
+        .expect("write workspace");
+    std::fs::write(root.join("manifest.json"), "{}").expect("write manifest");
+    std::fs::create_dir_all(root.join("_next/static/chunks")).expect("mkdir chunks");
+    std::fs::write(root.join("_next/static/chunks/app-1a2b.js"), "0").expect("write chunk");
+
+    // Same name in every release: a browser that kept one without asking
+    // again would open the previous release after the server was upgraded.
+    for path in ["/", "/workspace", "/manifest.json"] {
+        let resp = server.get(path).await;
+        assert_eq!(resp.status_code(), 200, "{path}");
+        assert_eq!(cache_control(&resp).as_deref(), Some("no-cache"), "{path}");
+    }
+
+    // A fingerprinted asset never changes under its name.
+    let chunk = server.get("/_next/static/chunks/app-1a2b.js").await;
+    assert_eq!(chunk.status_code(), 200);
+    assert_eq!(cache_control(&chunk), None);
+    // The index.html standing in for a missing one is still a document.
+    let missing = server.get("/_next/static/chunks/gone.js").await;
+    assert_eq!(missing.text(), "<html>index</html>");
+    assert_eq!(cache_control(&missing).as_deref(), Some("no-cache"));
+
+    // Revalidating keeps the copy: it is not modified, so nothing is resent.
+    let first = server.get("/").await;
+    let last_modified = first
+        .headers()
+        .get("last-modified")
+        .and_then(|v| v.to_str().ok())
+        .expect("last-modified")
+        .to_owned();
+    let again = server
+        .get("/")
+        .add_header("if-modified-since", last_modified)
+        .await;
+    assert_eq!(again.status_code(), 304);
+    assert_eq!(cache_control(&again).as_deref(), Some("no-cache"));
+
+    let api = server
+        .post("/api/health")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(api.status_code(), 200);
+    assert_eq!(cache_control(&api), None, "the API is not a static file");
+}
+
 #[tokio::test]
 async fn get_folder_conversation_accepts_turn_window_params() {
     let (server, state, _data, _static) = build_test_server_with_state().await;

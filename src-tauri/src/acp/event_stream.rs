@@ -177,6 +177,17 @@ impl RecentEventsBuffer {
         )
     }
 
+    /// Every buffered event with seq greater than `since_seq`, gap or not:
+    /// for a consumer that has its own way to cover what is older (a backstop
+    /// scan) and wants what is left rather than nothing.
+    pub fn retained_after(&self, since_seq: u64) -> Vec<Arc<EventEnvelope>> {
+        self.events
+            .iter()
+            .filter(|e| e.seq > since_seq)
+            .map(|e| e.envelope.clone())
+            .collect()
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.events.len()

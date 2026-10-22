@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useId, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { Check, Search } from "lucide-react"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -31,6 +31,8 @@ interface ModelOptionListProps {
   emptyLabel: string
   /** Focus the search box on mount (the wide popover opens straight into it). */
   autoFocus?: boolean
+  /** Cap on the list's height, in rem (the search box comes on top). */
+  maxHeightRem?: number
 }
 
 // Coarse per-row viewport estimate (headers are shorter, two-line options
@@ -43,8 +45,23 @@ interface ModelOptionListProps {
 const ROW_ESTIMATE_REM = 2.75 // 44px @100%
 const MAX_LIST_HEIGHT_REM = 20 // 320px @100%
 
-// Searchable, virtualized model list shared by both selector forms (the wide
-// popover and the collapsed cog panel). Deliberately NOT a Radix menu and NOT
+// The keyboard cursor's starting place: the current value's row, so the list
+// opens on the row the user came to change (and Enter there is a no-op, not a
+// switch to whatever happens to be first). `null` — the first option — when the
+// value names none.
+function currentOptionKey(
+  groups: ModelOptionGroup[],
+  currentValue: string
+): string | null {
+  const row = flattenModelGroups(groups).find(
+    (candidate) =>
+      candidate.kind === "option" && candidate.option.value === currentValue
+  )
+  return row ? row.key : null
+}
+
+// Searchable, virtualized list behind the composer's settings popover (a long
+// model list, or any setting with many values). Deliberately NOT a Radix menu and NOT
 // cmdk: a Radix menu's roving focus over hundreds of items is the scroll jank we
 // are fixing, and cmdk + virtua was the combination that previously broke item
 // clicks. Instead: a plain search box drives a virtua `Virtualizer` (scrolled by
@@ -63,11 +80,17 @@ export function ModelOptionList({
   listAriaLabel,
   emptyLabel,
   autoFocus = false,
+  maxHeightRem = MAX_LIST_HEIGHT_REM,
 }: ModelOptionListProps) {
   const ime = useImeGuard()
   const { zoomLevel } = useZoomLevel()
   const [query, setQuery] = useState("")
-  const [activeIndex, setActiveIndex] = useState(0)
+  // The keyboard cursor, held as the active option's row key (unique per group)
+  // rather than its position, so a live update that reorders the list keeps it
+  // on the same option.
+  const [activeKey, setActiveKey] = useState<string | null>(() =>
+    currentOptionKey(groups, currentValue)
+  )
   const virtualizerRef = useRef<VirtualizerHandle>(null)
   // virtua scrolls the real OverlayScrollbars viewport (surfaced by ScrollArea's
   // `onViewportRef` once OS initializes). We keep both a ref (for the Virtualizer
@@ -107,21 +130,27 @@ export function ModelOptionList({
     return map
   }, [optionRowIndices])
 
-  // Clamp on read so a shrinking filtered set (or a live groups update) can never
-  // leave the cursor out of range — avoids a setState-in-effect just to re-clamp.
-  const activeIndexClamped =
-    optionCount === 0 ? 0 : Math.min(activeIndex, optionCount - 1)
+  // Resolve the cursor on read: a key that is gone (filtered out, or dropped by
+  // a live update) falls back to the first option — no setState-in-effect just
+  // to re-home it.
+  const keyedIndex =
+    activeKey === null
+      ? -1
+      : optionRowIndices.findIndex(
+          (rowIndex) => rows[rowIndex].key === activeKey
+        )
+  const activeIndexClamped = optionCount === 0 ? 0 : Math.max(keyedIndex, 0)
 
   const moveActiveTo = useCallback(
     (next: number) => {
       if (optionCount === 0) return
       const clamped = Math.max(0, Math.min(optionCount - 1, next))
-      setActiveIndex(clamped)
+      setActiveKey(rows[optionRowIndices[clamped]].key)
       virtualizerRef.current?.scrollToIndex(optionRowIndices[clamped], {
         align: "nearest",
       })
     },
-    [optionCount, optionRowIndices]
+    [optionCount, optionRowIndices, rows]
   )
 
   const handleKeyDown = useCallback(
@@ -174,13 +203,25 @@ export function ModelOptionList({
   // px onto <html>, so every rem-sized measurement here has to go through it.
   const remPx = (16 * zoomLevel) / 100
   const listHeight = Math.min(
-    MAX_LIST_HEIGHT_REM * remPx,
+    maxHeightRem * remPx,
     Math.max(rows.length, 1) * ROW_ESTIMATE_REM * remPx
   )
 
   // Always keep the active row mounted so `aria-activedescendant` resolves to a
   // real element even after wheel-scrolling / filtering unmounts it off-screen.
   const activeFlatIndex = optionRowIndices[activeIndexClamped]
+
+  // Open with the cursor's row — the current value — in view, once: a long list
+  // that opened at its top would hide the very row the user came to change. The
+  // Virtualizer mounts in the same commit that publishes `viewportEl`, so its
+  // handle is there by the time this runs.
+  const openedScrollDoneRef = useRef(false)
+  useEffect(() => {
+    if (openedScrollDoneRef.current || !viewportEl) return
+    openedScrollDoneRef.current = true
+    if (activeFlatIndex == null || activeFlatIndex === 0) return
+    virtualizerRef.current?.scrollToIndex(activeFlatIndex, { align: "center" })
+  }, [viewportEl, activeFlatIndex])
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col">
@@ -204,7 +245,7 @@ export function ModelOptionList({
           placeholder={searchPlaceholder}
           onChange={(event) => {
             setQuery(event.target.value)
-            setActiveIndex(0)
+            setActiveKey(null)
           }}
           {...ime.props}
           onKeyDown={handleKeyDown}
@@ -272,7 +313,7 @@ export function ModelOptionList({
                         id={optionId(optionIndex)}
                         aria-selected={selected}
                         title={row.option.name}
-                        onMouseMove={() => setActiveIndex(optionIndex)}
+                        onMouseMove={() => setActiveKey(row.key)}
                         onClick={() => onSelect(row.option.value)}
                         className={cn(
                           "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",

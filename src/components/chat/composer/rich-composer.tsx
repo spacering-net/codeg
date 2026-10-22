@@ -233,6 +233,15 @@ export interface RichComposerProps {
    * clipboard read is unavailable).
    */
   onPlainPaste?: () => boolean
+  /**
+   * Text a bare Tab fills the document with while it is empty — the follow-up
+   * prompt the agent predicted, which the host shows as the placeholder. The
+   * filled text is an ordinary edit (onChange fires, nothing is sent), and the
+   * caret lands after it. Ignored once the document has content, and Tab then
+   * keeps its default meaning. Read at key time, so a new prediction needs no
+   * editor rebuild.
+   */
+  promptSuggestion?: string | null
 }
 
 /**
@@ -269,6 +278,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       onPasteFiles,
       onDropFiles,
       onPlainPaste,
+      promptSuggestion,
     },
     ref
   ) {
@@ -295,6 +305,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     const onPasteFilesRef = useRef(onPasteFiles)
     const onDropFilesRef = useRef(onDropFiles)
     const onPlainPasteRef = useRef(onPlainPaste)
+    const promptSuggestionRef = useRef(promptSuggestion)
     // The live editor, captured for command access inside editorProps handlers
     // (which are created before `editor` is assigned in this closure).
     const editorInstanceRef = useRef<Editor | null>(null)
@@ -316,6 +327,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       onPasteFilesRef.current = onPasteFiles
       onDropFilesRef.current = onDropFiles
       onPlainPasteRef.current = onPlainPaste
+      promptSuggestionRef.current = promptSuggestion
     })
 
     // ── Unified `@` mention panel state bridge ──
@@ -414,6 +426,28 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           // list) to let the inline token keep growing.
           if (isExternalMenuOpenRef.current) {
             return onExternalMenuKeyDownRef.current?.(event) ?? false
+          }
+          // A bare Tab in the empty composer takes the predicted follow-up
+          // prompt the placeholder shows, as AIR and Claude Code's own prompt
+          // do. It fills the document and sends nothing. Ahead of the
+          // submit/newline bindings: either one bound to Tab would act on an
+          // empty document, which sends or breaks nothing useful.
+          if (
+            event.key === "Tab" &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey
+          ) {
+            const suggestion = promptSuggestionRef.current?.trim()
+            const ed = editorInstanceRef.current
+            if (suggestion && ed?.isEmpty) {
+              ed.chain()
+                .setContent(textToSeededDoc(suggestion, known()))
+                .focus("end")
+                .run()
+              return true
+            }
           }
           // Prompt history (chat composer only): a bare Up/Down at the
           // document's first/last position steps through sent prompts; anywhere

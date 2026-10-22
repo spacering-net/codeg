@@ -631,6 +631,8 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::Qoder,
         AgentType::Antigravity,
         AgentType::Kiro,
+        AgentType::Trae,
+        AgentType::CommandCode,
     ];
     // Custom agents that declared the shared skills store join the built-in
     // set — the same `skill_storage_spec` gate every skills surface uses, so
@@ -1017,6 +1019,14 @@ mod tests {
         assert!(
             expected.contains(&AgentType::Kiro),
             "Kiro declares a skill store, so it is one of the columns"
+        );
+        assert!(
+            expected.contains(&AgentType::Trae),
+            "TRAE CLI declares a skill store, so it is one of the columns"
+        );
+        assert!(
+            expected.contains(&AgentType::CommandCode),
+            "Command Code declares a skill store, so it is one of the columns"
         );
 
         let skill_id = bundled_metadata()

@@ -728,8 +728,11 @@ pub async fn work_task_cleanup_core(id: i32) -> Result<(), DbError> {
         .map_err(|blocked| DbError::Validation(blocked.message))
 }
 
-/// Diff of the task worktree vs. its recorded base (`base_sha`, so the view is
-/// stable even when the base branch advances). `file = None` → full patch.
+/// Diff of the task worktree vs. the base its branch sits on
+/// ([`crate::work_task::engine::branch_base`]: the recorded `base_sha`, moved
+/// forward only once the branch absorbed base content — so the view stays put
+/// while the base branch advances, and base content the agent merged in is not
+/// shown as the task's change). `file = None` → full patch.
 ///
 /// Uncommitted work is part of it: nothing makes the agent commit before the
 /// task reaches review (the merge generation commits the leftovers itself), so
@@ -747,14 +750,12 @@ pub async fn work_task_diff_core(
     let wt_id = task
         .worktree_folder_id
         .ok_or_else(|| AppCommandError::not_found("task has no worktree"))?;
-    let base = task
-        .base_sha
-        .clone()
-        .or(task.base_branch.clone())
-        .ok_or_else(|| AppCommandError::not_found("task has no recorded base"))?;
     let wt = get_folder_core(db, wt_id)
         .await
         .map_err(AppCommandError::from)?;
+    let base = crate::work_task::engine::branch_base(&wt.path, &task)
+        .await
+        .ok_or_else(|| AppCommandError::not_found("task has no recorded base"))?;
     crate::work_task::git::diff_patch_with_untracked(&wt.path, &base, file.as_deref()).await
 }
 
@@ -771,12 +772,15 @@ pub async fn work_task_changed_files_core(
     let Some(wt_id) = task.worktree_folder_id else {
         return Ok(vec![]);
     };
-    let Some(base) = task.base_sha.clone().or(task.base_branch.clone()) else {
+    if task.base_sha.is_none() && task.base_branch.is_none() {
         return Ok(vec![]);
-    };
+    }
     let wt = get_folder_core(db, wt_id)
         .await
         .map_err(AppCommandError::from)?;
+    let Some(base) = crate::work_task::engine::branch_base(&wt.path, &task).await else {
+        return Ok(vec![]);
+    };
     crate::work_task::git::diff_numstat_with_untracked(&wt.path, &base).await
 }
 

@@ -189,6 +189,50 @@ describe("ModelOptionList", () => {
     expect(onSelect).not.toHaveBeenCalled()
   })
 
+  it("opens with the cursor on the current value, not the first row", () => {
+    const { onSelect } = renderList({ currentValue: "openai/gpt-4o" })
+    const input = screen.getByRole("combobox")
+    expect(input.getAttribute("aria-activedescendant")).toBe(
+      screen.getByRole("option", { name: /gpt-4o/ }).id
+    )
+    // Enter right away keeps the current model instead of jumping to the top.
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(onSelect).toHaveBeenCalledWith("openai/gpt-4o")
+  })
+
+  it("keeps the cursor on the same option when a live update reorders the list", () => {
+    const onSelect = vi.fn()
+    const props = {
+      currentValue: "anthropic/opus",
+      onSelect,
+      searchPlaceholder: "Search models",
+      searchAriaLabel: "Search models",
+      listAriaLabel: "Models",
+      emptyLabel: "No models found",
+    }
+    const view = render(<ModelOptionList groups={GROUPS} {...props} />)
+    const input = screen.getByRole("combobox")
+    fireEvent.keyDown(input, { key: "ArrowDown" }) // opus → sonnet
+    // The agent pushes the same models in a new order (openai first).
+    view.rerender(
+      <ModelOptionList groups={[GROUPS[1], GROUPS[0]]} {...props} />
+    )
+    const active = document.getElementById(
+      input.getAttribute("aria-activedescendant") ?? ""
+    )
+    expect(active).toHaveAccessibleName(/sonnet/)
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(onSelect).toHaveBeenCalledWith("anthropic/sonnet")
+  })
+
+  it("caps the list at the requested height", () => {
+    renderList({ maxHeightRem: 4 })
+    const listbox = screen.getByRole("listbox")
+    // listbox → ScrollArea viewport/host → the sized column.
+    const sized = listbox.closest("[style]") as HTMLElement
+    expect(sized.style.height).toBe("64px")
+  })
+
   it("points aria-activedescendant at the active option", async () => {
     const user = userEvent.setup()
     renderList()

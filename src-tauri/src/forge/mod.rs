@@ -421,6 +421,14 @@ pub struct ForgeSourceMeta {
     pub head_repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_pr: Option<String>,
+    /// For a pull-request task, the pull request's head that the task's last
+    /// push-back went onto: read from the forge right before that push, and
+    /// under the task's branch since the push was a fast-forward. The latest
+    /// point known to be where the pull request ends below the task's own
+    /// work, which the own-work counters then measure from (see
+    /// `work_task::engine::pull_head_in_branch`). Absent until a push-back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_onto: Option<String>,
     /// Whether this task comments its outcome back on the item when it
     /// finishes — the answer the user gave in the trigger dialog, frozen here.
     /// It lives on the task rather than in folder settings because it is a

@@ -40,6 +40,10 @@ interface Props {
   output?: string | null
   errorText?: string | null
   state?: ToolCallState
+  /** The call's id. A stray status poll keeps it as its one poll's id, which
+   *  is how the transcript's index tells this row from the task's other ones
+   *  (`@/lib/delegation-status-index`). */
+  toolCallId?: string | null
 }
 
 export function DelegationStatusCard({
@@ -48,6 +52,7 @@ export function DelegationStatusCard({
   output,
   errorText,
   state,
+  toolCallId,
 }: Props) {
   // Status: reuse the batch-aware `DelegationStatusGroupCard` (the real render
   // path groups status polls into it upstream) so a stray ungrouped poll —
@@ -58,7 +63,7 @@ export function DelegationStatusCard({
     () => [
       {
         type: "tool-call",
-        toolCallId: "status",
+        toolCallId: toolCallId ?? "status",
         toolName: "get_delegation_status",
         input: input ?? null,
         state: state ?? "output-available",
@@ -66,7 +71,7 @@ export function DelegationStatusCard({
         errorText: errorText ?? undefined,
       },
     ],
-    [input, output, errorText, state]
+    [toolCallId, input, output, errorText, state]
   )
 
   // Cancel: always a single task — keep the single-report path.

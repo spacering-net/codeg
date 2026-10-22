@@ -194,7 +194,7 @@ describe("the delegation cards follow that state", () => {
         toolOutput: parseToolOutput(null),
         state: "input-available",
         errorText: null,
-        childAwaitingPermission: false,
+        childAwaitingUser: false,
       })
     ).not.toBe("ok")
   })

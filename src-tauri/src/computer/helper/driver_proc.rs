@@ -23,9 +23,11 @@
 //!   environment.
 //! * **What else it inherits.** Nothing: exactly three descriptors, a fresh
 //!   home directory per launch (the driver reads its configuration from
-//!   there), telemetry and the update check off, and embedded mode, which
-//!   only ever removes capability (no disclaim re-exec, no relaunch as its
-//!   own app, no permission prompts).
+//!   there), telemetry and the update check off, embedded mode, which only
+//!   ever removes capability (no disclaim re-exec, no relaunch as its own
+//!   app, no permission prompts), and no scripting: the driver's `run_script`
+//!   runs a script that calls the driver's own tools, past the few the helper
+//!   names, so it is not offered at all.
 //!
 //! On Windows and Linux the same environment rules apply for the same
 //! reasons, and the file is hashed before every launch; there is no running
@@ -159,6 +161,7 @@ fn driver_environment_with(
             "CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS".into(),
             SESSION_IDLE_TTL_SECS.into(),
         ),
+        ("CUA_DRIVER_DISABLE_RUN_SCRIPT".into(), "1".into()),
     ];
     if cfg!(windows) {
         let system_root = lookup("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
@@ -186,6 +189,9 @@ fn driver_environment_with(
     // the session's runtime directory without these. X11 is not a boundary
     // against a same-user process to begin with, so passing the session's own
     // addresses through costs nothing the platform had not already given.
+    // It tells the desktop by the first of the three names it has, and on a
+    // desktop it cannot tell it turns the screen-reader flag on to wake the
+    // applications' accessibility — which on GNOME starts the screen reader.
     if cfg!(target_os = "linux") {
         for key in [
             "DISPLAY",
@@ -194,6 +200,8 @@ fn driver_environment_with(
             "XDG_RUNTIME_DIR",
             "XDG_SESSION_TYPE",
             "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "DESKTOP_SESSION",
             "DBUS_SESSION_BUS_ADDRESS",
         ] {
             if let Some(value) = lookup(key) {
@@ -202,6 +210,37 @@ fn driver_environment_with(
         }
     }
     env
+}
+
+/// How old a run directory has to be before it is taken for abandoned, as
+/// well as its helper being gone: a driver's home is removed when the driver
+/// stops, so one is left only by a helper that was killed — and a pid in use
+/// again since, or a platform that will not say, should not have a live
+/// helper's taken from under it.
+const ABANDONED_RUN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Remove the driver homes in `runs` that their helpers left behind: named
+/// `<pid>-<nanoseconds since the epoch>` (see [`DriverProc::launch`]), older
+/// than [`ABANDONED_RUN_AGE`] as of `now` (nanoseconds since the epoch), and
+/// of a helper `alive` says is not running. Anything else in it is left as
+/// it is, and so is anything that cannot be removed.
+fn sweep_abandoned_runs(runs: &Path, now: u128, alive: impl Fn(u32) -> bool) {
+    let Ok(entries) = std::fs::read_dir(runs) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some((pid, stamp)) = name.to_str().and_then(|n| n.split_once('-')) else {
+            continue;
+        };
+        let (Ok(pid), Ok(stamp)) = (pid.parse::<u32>(), stamp.parse::<u128>()) else {
+            continue;
+        };
+        let old = now.saturating_sub(stamp) > ABANDONED_RUN_AGE.as_nanos();
+        if old && pid != std::process::id() && !alive(pid) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Write the driver's configuration file into its home — `$HOME` on macOS and
@@ -313,6 +352,9 @@ impl DriverProc {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
+        sweep_abandoned_runs(&base.join("runs"), stamp, |pid| {
+            crate::computer::procinfo::process_start(pid).is_some()
+        });
         let run_dir = base
             .join("runs")
             .join(format!("{}-{stamp}", std::process::id()));
@@ -800,6 +842,18 @@ mod tests {
         assert_eq!(get("CUA_DRIVER_RS_TELEMETRY_ENABLED"), Some("false"));
         assert_eq!(get("CUA_DRIVER_RS_UPDATE_CHECK"), Some("false"));
         assert_eq!(get("CUA_DRIVER_EMBEDDED"), Some("1"));
+        // No tool that runs a script of the driver's own tools.
+        assert_eq!(get("CUA_DRIVER_DISABLE_RUN_SCRIPT"), Some("1"));
+        if cfg!(target_os = "linux") {
+            // The desktop is told by any of its three names.
+            for key in [
+                "XDG_CURRENT_DESKTOP",
+                "XDG_SESSION_DESKTOP",
+                "DESKTOP_SESSION",
+            ] {
+                assert_eq!(get(key), Some(format!("/hostile/{key}").as_str()));
+            }
+        }
         // A session that idled out would refuse every later call.
         let ttl: u64 = get("CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS")
             .and_then(|v| v.parse().ok())
@@ -823,6 +877,36 @@ mod tests {
         assert!(env
             .iter()
             .any(|(k, v)| k == home_key && Path::new(v) == run.path()));
+    }
+
+    /// A driver home a killed helper left is removed once it is a day old and
+    /// its helper is gone — never one of a helper still running, one newer
+    /// than that, this helper's own, nor anything not named as a run.
+    #[test]
+    fn abandoned_driver_homes_are_swept() {
+        let runs = tempfile::tempdir().unwrap();
+        let day: u128 = 24 * 60 * 60 * 1_000_000_000;
+        let now: u128 = 100 * day;
+        let own = std::process::id();
+        let make = |name: &str| {
+            let dir = runs.path().join(name);
+            std::fs::create_dir_all(dir.join(".cua-driver")).unwrap();
+            std::fs::write(dir.join(".cua-driver").join("config.json"), b"{}").unwrap();
+            dir
+        };
+        let abandoned = make(&format!("4001-{}", now - 2 * day));
+        let running = make(&format!("4002-{}", now - 2 * day));
+        let recent = make(&format!("4003-{}", now - day / 2));
+        let mine = make(&format!("{own}-{}", now - 2 * day));
+        let other = make("notes");
+        let malformed = make("4004-yesterday");
+        sweep_abandoned_runs(runs.path(), now, |pid| pid == 4002);
+        assert!(!abandoned.exists());
+        for kept in [&running, &recent, &mine, &other, &malformed] {
+            assert!(kept.exists(), "{}", kept.display());
+        }
+        // A runs directory that is not there is nothing to do.
+        sweep_abandoned_runs(&runs.path().join("missing"), now, |_| false);
     }
 
     #[test]

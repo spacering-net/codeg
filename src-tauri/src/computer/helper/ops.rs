@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use super::act::{ElementFacts, SnapshotFacts};
+use super::act::{CaptureMark, ElementFacts, SnapshotFacts};
 use super::driver_proc::DriverProc;
 use super::mcp::ToolCallResult;
 use super::tree::{
@@ -823,26 +823,41 @@ pub fn out_of_sight_capture(why: super::axwin::OutOfSight) -> HelperError {
 /// at any other size would change how the driver maps every later click's
 /// coordinates) — and shrunk here to `max_dimension`.
 ///
-/// Taken without making it the window's snapshot wherever that can be done.
-/// The driver keeps one snapshot of each window, and a capture taken as one
-/// replaces the snapshot the agent's refs name, leaving nothing for them to
-/// name. On macOS and Windows `verify_state` reads the window that way; the
-/// window's bounds and title then come from its listing — read before the
-/// capture and after it, and a point is not aimed by a capture the window
-/// changed size around — and the capture's scale from its size against them,
-/// as the driver reckons it. On Linux that
-/// read is cut down to a model-sized image, so the capture is a snapshot of
-/// its own there, at the window's size, and replaces the window's snapshot
-/// ([`capture_replaces_snapshot`]); one the driver took from the screen
-/// rather than from the window — for a pop-up of the application over it —
-/// could hold other windows, and is not handed on.
+/// On macOS and Windows it is read through `verify_state`, which leaves the
+/// window's snapshot in the driver as it was; the window's bounds and title
+/// then come from its listing — read before the capture and after it, and a
+/// point is not aimed by a capture the window changed size around — and the
+/// capture's scale from its size against them, as the driver reckons it. On
+/// Linux that read is cut down to a model-sized image, so the capture is a
+/// `get_window_state` of its own there, at the window's size. Where the
+/// window has a snapshot with elements, that refreshes the snapshot's
+/// picture in place and its refs stand; otherwise a snapshot holding the
+/// capture alone takes the place of the one it had. One the driver took from
+/// the screen rather than from the window — for a pop-up of the application
+/// over it — could hold other windows, and is not handed on.
+///
+/// Answers, beside the capture, what reading it did to the window's
+/// snapshot, whether or not the capture is handed on.
 pub async fn capture(
     driver: &DriverProc,
     pid: u32,
     window_id: u64,
     max_dimension: Option<u32>,
+) -> (CaptureMark, Result<RawCapture, HelperError>) {
+    let (mark, taken) = take_capture(driver, pid, window_id).await;
+    let captured = match taken {
+        Ok(taken) => scaled(driver, taken, max_dimension).await,
+        Err(e) => Err(e),
+    };
+    (mark, captured)
+}
+
+/// `taken`, shrunk to `max_dimension`, and whether a point may be aimed by it.
+async fn scaled(
+    driver: &DriverProc,
+    taken: Taken,
+    max_dimension: Option<u32>,
 ) -> Result<RawCapture, HelperError> {
-    let taken = take_capture(driver, pid, window_id).await?;
     let data = taken.png_base64;
     let shrunk = tokio::task::spawn_blocking(move || shrink_png(&data, max_dimension))
         .await
@@ -876,30 +891,49 @@ pub async fn capture(
 }
 
 /// Give the driver a capture of the window to aim points by, without a walk
-/// of its tree: a snapshot holding the capture alone, which takes the place
-/// of the window's snapshot. `Ok(true)`: it did, so the refs from the one
-/// before name nothing any more. `Ok(false)`: the window could not be
-/// captured, and its snapshot is as it was.
+/// of its tree. Where the window has a snapshot with elements, the driver
+/// refreshes that snapshot's picture in place, and its refs stand; where it
+/// has none, a snapshot holding the capture alone takes the place of the one
+/// it had. Answers what the driver says the window's snapshot is now.
 pub async fn publish_capture(
     driver: &DriverProc,
     pid: u32,
     window_id: u64,
-) -> Result<bool, HelperError> {
-    let args = json!({
+) -> Result<CaptureMark, HelperError> {
+    let result = call(
+        driver,
+        "get_window_state",
+        capture_args(pid, window_id),
+        WINDOW_STATE_TIMEOUT,
+    )
+    .await?;
+    Ok(snapshot_after(&result))
+}
+
+/// A `get_window_state` that captures the window at its own size and walks
+/// none of its tree — answered in full, every field as the driver wrote it
+/// (`full_output`), since it trims a read's answer unless asked not to.
+fn capture_args(pid: u32, window_id: u64) -> Value {
+    json!({
         "pid": pid,
         "window_id": window_id,
         "include_screenshot": true,
         "include_accessibility_tree": false,
         "max_image_dimension": 0,
-    });
-    let result = call(driver, "get_window_state", args, WINDOW_STATE_TIMEOUT).await?;
-    Ok(result.image().is_some())
+        "full_output": true,
+    })
 }
 
-/// Whether capturing a window replaces the driver's snapshot of it — the one
-/// its refs name: only on Linux (see [`capture`]).
-pub fn capture_replaces_snapshot() -> bool {
-    cfg!(target_os = "linux")
+/// The snapshot a capture without a tree walk left the window with, as the
+/// driver names it in its answer: the one it held, when it refreshed that
+/// one's picture in place, or the one that took its place.
+fn snapshot_after(result: &ToolCallResult) -> CaptureMark {
+    CaptureMark::Now(
+        result
+            .structured
+            .as_ref()
+            .and_then(|s| string(s, "snapshot_id")),
+    )
 }
 
 /// What a capture brought back, before it is scaled.
@@ -915,10 +949,27 @@ struct Taken {
     steady: bool,
 }
 
+/// macOS and Windows: the capture is read without touching the snapshot.
+#[cfg(not(target_os = "linux"))]
+async fn take_capture(
+    driver: &DriverProc,
+    pid: u32,
+    window_id: u64,
+) -> (CaptureMark, Result<Taken, HelperError>) {
+    (
+        CaptureMark::Untouched,
+        verified_capture(driver, pid, window_id).await,
+    )
+}
+
 /// macOS and Windows: one read through `verify_state`, which leaves the
 /// window's snapshot as it was, between two of the window's listings.
 #[cfg(not(target_os = "linux"))]
-async fn take_capture(driver: &DriverProc, pid: u32, window_id: u64) -> Result<Taken, HelperError> {
+async fn verified_capture(
+    driver: &DriverProc,
+    pid: u32,
+    window_id: u64,
+) -> Result<Taken, HelperError> {
     let before = super::act::listed(driver, pid, window_id)
         .await?
         .get("bounds")
@@ -969,19 +1020,25 @@ fn same_size(before: Option<&Rect>, after: Option<&Rect>) -> bool {
     }
 }
 
-/// Linux: a `get_window_state` at the window's own size, which becomes the
-/// window's snapshot.
+/// Linux: a `get_window_state` at the window's own size (see [`capture`]).
 #[cfg(target_os = "linux")]
-async fn take_capture(driver: &DriverProc, pid: u32, window_id: u64) -> Result<Taken, HelperError> {
-    let args = json!({
-        "pid": pid,
-        "window_id": window_id,
-        "include_screenshot": true,
-        "include_accessibility_tree": false,
-        "max_image_dimension": 0,
-    });
-    let result = call(driver, "get_window_state", args, WINDOW_STATE_TIMEOUT).await?;
-    let meta = structured("get_window_state", &result)?;
+async fn take_capture(
+    driver: &DriverProc,
+    pid: u32,
+    window_id: u64,
+) -> (CaptureMark, Result<Taken, HelperError>) {
+    let args = capture_args(pid, window_id);
+    match call(driver, "get_window_state", args, WINDOW_STATE_TIMEOUT).await {
+        // Refused: what became of the snapshot cannot be told.
+        Err(e) => (CaptureMark::Now(None), Err(e)),
+        Ok(result) => (snapshot_after(&result), taken_on_linux(&result)),
+    }
+}
+
+/// What a Linux capture brought back, or why there is nothing to hand on.
+#[cfg(target_os = "linux")]
+fn taken_on_linux(result: &ToolCallResult) -> Result<Taken, HelperError> {
+    let meta = structured("get_window_state", result)?;
     if meta.get("screenshot_composited").and_then(Value::as_bool) == Some(true) {
         return Err(composited_capture());
     }
@@ -1108,6 +1165,41 @@ fn is_whole_window(width: u32, height: u32, bounds: &Rect, scale: f64) -> bool {
     near(width, bounds.width * scale) && near(height, bounds.height * scale)
 }
 
+/// The `get_window_state` of a snapshot: the tree walked for up to
+/// [`WALK_BUDGET_MS`], with the window captured at its own size, and the
+/// answer in full (`full_output`) — as the driver gave it before it learnt to
+/// trim one. A trimmed answer carries the tree's text alone, without the
+/// structured `elements` that every ref is checked against (see
+/// [`element_refs`]), and stops at 250 elements where the walk's own limit is
+/// thousands; in full it carries both, and every field read here.
+fn snapshot_args(
+    pid: u32,
+    window_id: u64,
+    max_depth: Option<u32>,
+    max_elements: Option<u32>,
+    query: Option<String>,
+) -> Value {
+    let mut args = json!({
+        "pid": pid,
+        "window_id": window_id,
+        "include_screenshot": true,
+        "include_accessibility_tree": true,
+        "max_image_dimension": 0,
+        "timeout_ms": WALK_BUDGET_MS,
+        "full_output": true,
+    });
+    if let Some(depth) = max_depth.filter(|d| *d > 0) {
+        args["max_depth"] = json!(depth);
+    }
+    if let Some(elements) = max_elements.filter(|e| *e > 0) {
+        args["max_elements"] = json!(elements);
+    }
+    if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
+        args["query"] = json!(query);
+    }
+    args
+}
+
 /// A window's accessibility tree, with the values of anything that looks like
 /// a secret taken out — and, for the helper to hold on to, what it knows of
 /// each element that can be acted on (see [`SnapshotFacts`]).
@@ -1127,23 +1219,7 @@ pub async fn snapshot(
     query: Option<String>,
     app_menus: bool,
 ) -> Result<(RawSnapshot, Option<SnapshotFacts>), HelperError> {
-    let mut args = json!({
-        "pid": pid,
-        "window_id": window_id,
-        "include_screenshot": true,
-        "include_accessibility_tree": true,
-        "max_image_dimension": 0,
-        "timeout_ms": WALK_BUDGET_MS,
-    });
-    if let Some(depth) = max_depth.filter(|d| *d > 0) {
-        args["max_depth"] = json!(depth);
-    }
-    if let Some(elements) = max_elements.filter(|e| *e > 0) {
-        args["max_elements"] = json!(elements);
-    }
-    if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
-        args["query"] = json!(query);
-    }
+    let args = snapshot_args(pid, window_id, max_depth, max_elements, query);
     let result = call(driver, "get_window_state", args, WINDOW_STATE_TIMEOUT).await?;
     let meta = structured("get_window_state", &result)?;
     let tree = meta
@@ -1494,6 +1570,66 @@ mod tests {
         );
         assert_eq!(e.code, HelperErrorCode::Failed);
         assert_eq!(e.message, "boom");
+    }
+
+    /// A snapshot asks for the whole answer: the driver otherwise sends the
+    /// tree's text without the structured elements every ref is checked
+    /// against, and walks only 250 nodes. What the agent asked to narrow it
+    /// by goes along; nothing else does.
+    #[test]
+    fn a_snapshot_asks_for_the_whole_answer() {
+        let args = snapshot_args(7, 70, None, None, None);
+        assert_eq!(args["full_output"], true);
+        assert_eq!(args["include_accessibility_tree"], true);
+        assert_eq!(args["include_screenshot"], true);
+        assert_eq!(args["max_image_dimension"], 0);
+        assert_eq!(args["timeout_ms"], WALK_BUDGET_MS);
+        assert!(args.get("tree_format").is_none() && args.get("since").is_none());
+        for absent in ["max_depth", "max_elements", "query"] {
+            assert!(args.get(absent).is_none(), "{absent}");
+        }
+        let narrowed = snapshot_args(7, 70, Some(4), Some(300), Some("Save".into()));
+        assert_eq!(narrowed["max_depth"], 4);
+        assert_eq!(narrowed["max_elements"], 300);
+        assert_eq!(narrowed["query"], "Save");
+        assert_eq!(narrowed["full_output"], true);
+        // Zero, or a blank query, is no limit at all.
+        let unlimited = snapshot_args(7, 70, Some(0), Some(0), Some("  ".into()));
+        for absent in ["max_depth", "max_elements", "query"] {
+            assert!(unlimited.get(absent).is_none(), "{absent}");
+        }
+    }
+
+    /// A capture without a tree walk is taken at the window's own size and
+    /// answered in full; what it left as the window's snapshot is read off
+    /// its answer.
+    #[test]
+    fn a_capture_says_which_snapshot_it_left() {
+        let args = capture_args(7, 70);
+        assert_eq!(args["include_accessibility_tree"], false);
+        assert_eq!(args["include_screenshot"], true);
+        assert_eq!(args["max_image_dimension"], 0);
+        assert_eq!(args["full_output"], true);
+        assert!(args.get("display_only").is_none());
+        let answered = |structured: Value| ToolCallResult {
+            is_error: false,
+            content: Vec::new(),
+            structured: Some(structured),
+        };
+        assert_eq!(
+            snapshot_after(&answered(
+                json!({"snapshot_id": "s0000002a", "screenshot_refreshed_snapshot": true})
+            )),
+            CaptureMark::Now(Some("s0000002a".into()))
+        );
+        assert_eq!(
+            snapshot_after(&answered(json!({"window_title": "x"}))),
+            CaptureMark::Now(None)
+        );
+        assert_eq!(
+            snapshot_after(&ToolCallResult::default()),
+            CaptureMark::Now(None)
+        );
     }
 
     fn png_of(width: u32, height: u32) -> String {

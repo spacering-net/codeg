@@ -249,6 +249,21 @@
     "autostartDescription": "このコンピューターにサインインすると自動的に起動します。",
     "autostartSaveFailed": "ログイン時に起動する設定の保存に失敗しました: {message}",
     "autostartUnavailable": "このコンピューターのスタートアップ登録状態を読み取れませんでした: {message}",
+    "cliAccessTitle": "コマンドラインアクセス",
+    "cliAccessDescription": "このコンピューターの codeg-cli コマンドから Codeg 経由でプロンプトを実行できるようにします。スクリプト、CI ジョブ、Codeg 内のターミナルで使えます。接続できるのはこのコンピューターだけで、キーは非公開のファイルに保存されます。",
+    "cliAccessEndpointFile": "エンドポイントファイル:",
+    "cliAccessExample": "例:",
+    "cliAccessOff": "オフ: このコンピューターの codeg-cli は Codeg に接続できません。",
+    "cliAccessUnavailable": "コマンドラインアクセスを開始できませんでした: {message}",
+    "cliAccessSaveFailed": "コマンドラインアクセスを変更できませんでした: {message}",
+    "cliToolInstall": "コマンドラインツールをインストール",
+    "cliToolInstalled": "{command} は PATH 上にあります:",
+    "cliToolPackage": "{command} はパッケージに含まれ、PATH 上にあります:",
+    "cliToolNotInstalled": "{command} を PATH に追加して、Codeg の外のターミナルからも使えるようにします。",
+    "cliToolConflict": "そのままにしました: {message}",
+    "cliToolNote": "注: {message}",
+    "cliToolInstalledToast": "{command} を PATH に追加しました。新しいターミナルを開いて使ってください。",
+    "cliToolInstallFailed": "コマンドラインツールをインストールできませんでした: {message}",
     "proxyTitle": "ネットワークプロキシ",
     "proxyDescription": "有効にすると、以降のネットワークリクエストはこのプロキシを優先して使用します（ACP チャット、エージェントのインストール、Git リモート操作を含む）。",
     "loadFailed": "読み込みに失敗しました: {message}",
@@ -959,6 +974,9 @@
       "customApiKeyHint": "`[model.*].api_key` にインラインで保存され、このエンドポイントにのみ適用されます。",
       "customContextWindowLabel": "コンテキストウィンドウ（トークン）",
       "customContextWindowHint": "任意。自動圧縮のタイミングに使われます。空欄の場合はエンドポイントの既定値を使用します。",
+      "customReasoningEffortsLabel": "選択できる推論レベル",
+      "customReasoningEffortsEmptyHint": "レベルが宣言されていません。Grok 自身のモデル一覧にこのモデル ID の情報がない限り、入力欄にこのモデルの推論レベル選択は表示されません。エンドポイントが受け付けるレベルを選ぶと表示されます。",
+      "customReasoningEffortsHint": "`[model.*].reasoning_efforts` に書き込まれます。各レベルはそのままエンドポイントへ送られるので、受け付けるものだけを選んでください。新しいセッションは上で選んだ「推論レベル」から始まり、それが「デフォルトを使用」のときはここの最初のレベルから始まります。",
       "autoCompactLabel": "自動圧縮のしきい値（%）",
       "autoCompactHint": "コンテキスト使用率がこの割合に達したら会話を圧縮します（Grok の既定は 85）。`[session]` に書き込まれます。"
     },
@@ -1112,6 +1130,30 @@
       "apiKeyHint": "KIRO_API_KEY として CLI に渡されます。空欄なら kiro-cli login でサインインしたアカウントを使います。ブラウザでサインインできない環境（サーバー、Docker）でのみ必要です。",
       "saveConfig": "Kiro 設定を保存"
     },
+    "trae": {
+      "configManagement": "設定管理",
+      "configDescription": "TRAE CLI 2.0 は TRAE エンタープライズ版のフラッグシッププランのお客様のみ利用できます。Codeg はインストール済みの traecli を実行し、サインイン情報・スキル・MCP サーバーは ~/.trae に保存されます。モデル、モード、推論レベルはここにはありません。TRAE CLI が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "signInTitle": "サインイン",
+      "signInHint": "ターミナルでこのコマンドを一度実行し、エンタープライズ SSO でサインインしてください。Codeg のセッションはそのサインインを再利用します。",
+      "copyCommand": "コマンドをコピー",
+      "commandCopied": "コマンドをコピーしました",
+      "patLabel": "個人アクセストークン（任意）",
+      "patHint": "サーバーや Docker など、ブラウザでサインインできないマシン向けです。Codeg は TRAECLI_PERSONAL_ACCESS_TOKEN として TRAE CLI に渡し、セッション開始時にこのトークンでサインインします。空欄なら traecli login のサインインを使います。",
+      "hostLabel": "エンタープライズ API URL（任意）",
+      "hostHint": "組織が独自ドメインで TRAE を運用している場合のみ入力します。TRAECLI_HOST として渡されます。空欄なら TRAE の公式サービスを使います。",
+      "saveConfig": "TRAE CLI 設定を保存"
+    },
+    "commandCode": {
+      "configManagement": "設定管理",
+      "configDescription": "Codeg は command-code npm パッケージの Command Code CLI を実行し、サインイン情報・スキル・MCP サーバーは ~/.commandcode に保存されます。モデル、モード、推論レベルはここにはありません。Command Code が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "signInTitle": "サインイン",
+      "signInHint": "ターミナルでこのコマンドを一度実行し、Command Code アカウントでサインインしてください。Codeg のセッションはそのサインインを再利用します。",
+      "copyCommand": "コマンドをコピー",
+      "commandCopied": "コマンドをコピーしました",
+      "apiKeyLabel": "API キー（任意）",
+      "apiKeyHint": "サーバーや Docker など、ブラウザでサインインできないマシン向けです。COMMAND_CODE_API_KEY として Command Code に渡され、command-code login のサインインより優先されます。空欄ならそのサインインを使います。",
+      "saveConfig": "Command Code 設定を保存"
+    },
     "deepseek": {
       "configManagement": "DeepSeek Harness の設定",
       "configDescription": "エンドポイントと API キーは deepseek-acp が起動時に読み込む環境変数です。モデルと推論レベルはセッションごとのセレクターなので、入力欄で切り替えます。",
@@ -1131,13 +1173,10 @@
       "modelName": "モデル名",
       "enableWebsocket": "WebSocket を有効化",
       "enableWebsocketAria": "Codex Provider の WebSocket を有効化",
-      "enableSkills": "Skills を有効化",
-      "enableSkillsAria": "Codex の Skills を有効化",
+      "enableWebsocketHint": "エンドポイントが Responses API の WebSocket モードに対応している場合（OpenAI 公式 API は対応）にのみオンにしてください。非対応のエンドポイントでは、codex がそのターンを失敗させるか、最大 5 回再接続してから HTTPS にフォールバックすることがあり、新しいセッションのたびに繰り返します。~/.codex/config.toml のこのプロバイダーに supports_websockets を書き込み、次のセッションから有効になります。",
       "enableDefaultModeRequestUserInput": "デフォルトモードでの質問を許可",
       "enableDefaultModeRequestUserInputAria": "デフォルトモードで Codex が質問できるようにする",
       "enableDefaultModeRequestUserInputHint": "Codex の request_user_input ツールは既定では Plan モードでしか使えません。有効にすると通常のターンでも質問できるようになります。~/.codex/config.toml の [features].default_mode_request_user_input に書き込まれます。このフラグは上流ではまだ開発中です。次のセッションから反映されます。",
-      "enableFast": "Fast を有効化",
-      "enableFastAria": "Codex の Fast サービスティアを有効化",
       "sandboxGroupTitle": "サンドボックスと承認",
       "sandboxGroupHint": "グローバルの ~/.codex/config.toml に書き込むため、codex CLI や IDE のセッションにも反映されます。これはスレッドの既定値で、codex 自身が開始するターン（/goal、/review、/compact）にのみ適用されます。通常のプロンプトは入力欄の承認プリセットを使います。変更はセッションを再起動すると有効になります。",
       "sandboxShadowedWarning": "config.toml に default_permissions が設定されているため、codex は権限プロファイル経由で解決し sandbox_mode を完全に無視します。以下の設定を使うには default_permissions を削除してください。",
@@ -1607,6 +1646,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro 設定を保存しました",
       "saveKiroFailed": "Kiro 設定の保存に失敗しました",
+      "traeSaved": "TRAE CLI 設定を保存しました",
+      "saveTraeFailed": "TRAE CLI 設定の保存に失敗しました",
+      "commandCodeSaved": "Command Code 設定を保存しました",
+      "saveCommandCodeFailed": "Command Code 設定の保存に失敗しました",
       "systemAgentAlreadyLatest": "{name} は最新です（{version}）"
     },
     "distribution": {
@@ -1913,6 +1956,62 @@
     "invalidFolderId": "無効なフォルダID",
     "loadingRepo": "リポジトリを読み込み中..."
   },
+  "CommitMessageGeneration": {
+    "generate": "コミットメッセージを生成",
+    "stop": "生成を停止（{seconds} 秒）",
+    "generating": "コミットメッセージを作成中… {seconds} 秒",
+    "noChanges": "説明する変更がありません",
+    "selectFiles": "説明するファイルを選択してください",
+    "busyCommitting": "コミット中…",
+    "settings": "コミットメッセージ生成の設定",
+    "settingsMenuItem": "コミットメッセージ生成の設定…",
+    "untracked": {
+      "title": "未追跡ファイルも一緒にコミットしますか？",
+      "description": "チェックしたファイルはメッセージに書かれ、このコミットに含まれます。チェックしなかったファイルは未追跡のまま残ります。",
+      "selectionCount": "{selected} / {total} 件を選択",
+      "selectAll": "すべて選択",
+      "unselectAll": "すべて選択解除",
+      "showMore": "残り {count} 件を表示",
+      "confirm": "生成",
+      "included": "未追跡ファイル {count} 件も一緒にコミット",
+      "drop": "未追跡ファイルをコミットしない",
+      "stagedMeanwhile": "チェックを外したファイルの一部がその間にステージ済みになったため、追跡中の変更と一緒にコミットされます"
+    },
+    "toasts": {
+      "failed": "コミットメッセージを生成できませんでした",
+      "openSettings": "設定",
+      "autoCommitSkipped": "自動コミットしませんでした：メッセージの生成中に変更が動きました。内容を確認してからコミットしてください。"
+    },
+    "errors": {
+      "noChanges": "説明する変更がありません。",
+      "noAgent": "書き手のエージェントがありません。コミットメッセージ生成の設定で選んでください。",
+      "emptyAnswer": "エージェントの回答にコミットメッセージが含まれていませんでした。",
+      "cancelled": "生成を停止しました。"
+    },
+    "dialog": {
+      "title": "コミットメッセージ生成",
+      "description": "コミット欄の横の生成ボタンを押すと、このコミットに実際に含まれる内容をもとにエージェントがメッセージを書きます。セッション一覧に表示されない別セッションで実行され、権限の要求はすべて拒否されます。",
+      "scope": "適用範囲",
+      "scopeGlobal": "すべてのフォルダ（グローバル既定）",
+      "scopeGlobalHint": "個別設定のないフォルダはこのグローバル既定を使います。",
+      "source": "設定ソース",
+      "sourceGlobal": "グローバル既定",
+      "sourceCustom": "個別設定",
+      "sourceGlobalFollow": "グローバル設定に従います。グローバル側の変更が自動的に反映されます。",
+      "sourceCustomHint": "このフォルダ専用の設定を保存し、グローバル既定には従わなくなります。",
+      "pinAgent": "エージェントを指定",
+      "pinAgentHint": "すべてのメッセージをこのエージェントが下のオプションで書きます。高速で安価なモデルで十分です。",
+      "followSessionHint": "オフのときは表示中のセッションのエージェントが書きます。セッションがなければフォルダーの既定のエージェントを使います（いずれも既定のモデル）。",
+      "autoCommit": "生成後に自動でコミット",
+      "autoCommitHint": "メッセージができたらすぐにコミットします。生成中に変更が動いた場合は、確認できるよう入力欄に入れるだけにします。",
+      "instructions": "追加の指示",
+      "instructionsHint": "毎回の依頼に添えられ、組み込みのルール（最近のコミットの言語に合わせる など）より優先されます。",
+      "instructionsPlaceholder": "例：日本語で書く。Conventional Commits に従う。本文で理由を説明する。",
+      "save": "保存",
+      "cancel": "キャンセル",
+      "loadFailed": "設定を読み込めませんでした"
+    }
+  },
   "MergePage": {
     "title": "コンフリクトの解決",
     "invalidFolderId": "無効なフォルダID",
@@ -2079,6 +2178,7 @@
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
       "worktreeRemovedBadge": "元の worktree は削除済み",
+      "cliBadge": "コマンドラインから開始",
       "conversationCountUnit": "{count} 件",
       "emptyFolderHint": "会話がありません",
       "noMatchingConversations": "一致する会話がありません",
@@ -2159,9 +2259,11 @@
         "dropToUngroup": "ここにドロップしてグループから外す"
       },
       "recentFilterAll": "すべて",
+      "recentFilterCli": "コマンドライン",
       "recentFilterTitle": "最近の表示: {filter}",
       "noRecentChats": "最近のチャットはありません",
       "noRecentFolders": "最近のフォルダー会話はありません",
+      "noRecentCli": "コマンドラインからの最近の会話はありません",
       "recentFilterMenuLabel": "最近の表示"
     },
     "conversation": {
@@ -2378,7 +2480,10 @@
         "commits": "コミット"
       },
       "noFolderTitle": "開いているフォルダがありません",
-      "noFolderHint": "フォルダを開くとここに表示されます"
+      "noFolderHint": "フォルダを開くとここに表示されます",
+      "openFullPage": "フルページで開く",
+      "back": "戻る",
+      "noAutomations": "このプロジェクトにはまだオートメーションがありません"
     },
     "windowControls": {
       "minimizeWindow": "ウィンドウを最小化",
@@ -3135,6 +3240,10 @@
       "manageCommands": "コマンドを管理...",
       "runCommandTitle": "実行: {command}",
       "stopCommandTitle": "停止: {command}",
+      "localUnavailable": "ローカルコマンドはデスクトップアプリでのみ利用できます",
+      "localRunFailed": "ローカルコマンドの実行に失敗しました",
+      "globalCommand": "すべてのフォルダーで利用可能",
+      "localCommand": "このコンピューターで実行",
       "manageDialog": {
         "title": "コマンド管理",
         "empty": "コマンドはまだありません",
@@ -3143,11 +3252,16 @@
         "newCommand": "新しいコマンド",
         "nameLabel": "名前",
         "commandLabel": "コマンド",
+        "runLocalLabel": "このコンピューターで実行",
+        "runLocalHint": "プロジェクトのホストではなく、このコンピューターでターミナルを使わずに実行します。<code>{folderVar}</code> はフォルダーの絶対パス、<code>{hostVar}</code> はリモートホスト名です。例: <code>{example}</code>",
+        "globalLabel": "すべてのフォルダーに表示",
+        "globalHint": "すべてのフォルダー、worktree、リモート接続で利用できます。このコンピューターに保存されます",
         "dragSort": "ドラッグして並び替え",
         "dragSortCommand": "{name} をドラッグして並び替え",
         "orderFailed": "コマンドの並び順の保存に失敗しました",
         "loadFailed": "コマンドの読み込みに失敗しました",
         "saveFailed": "コマンドの保存に失敗しました",
+        "runLocalNotKept": "フォルダーのホストが「このコンピューターで実行」を保存できません。ホストを更新するか、「すべてのフォルダーに表示」をオンにしてコマンドをこのコンピューターに保存してください",
         "deleteFailed": "コマンドの削除に失敗しました",
         "confirmDelete": {
           "title": "コマンドを削除しますか？",
@@ -3277,6 +3391,7 @@
       },
       "messageInput": {
         "askAnything": "何でも質問してください...",
+        "promptSuggestion": "{suggestion}（Tab で入力）",
         "removeAttachmentAria": "{name} を削除",
         "attachFiles": "ファイルを添付",
         "addActions": "追加",
@@ -3306,6 +3421,10 @@
         "searchModelAria": "モデルを検索",
         "modelListLabel": "モデル",
         "recommendedBadge": "推奨",
+        "recommendedValue": "推奨: {value}",
+        "searchOptions": "オプションを検索...",
+        "searchOptionsAria": "オプションを検索",
+        "noOptions": "オプションが見つかりません",
         "noModels": "モデルが見つかりません",
         "cancel": "キャンセル",
         "send": "送信",
@@ -3313,6 +3432,7 @@
         "steerIntoTurn": "現在のターンに挿入",
         "steerAsNote": "次の確認用にメモを送信",
         "steerQueuedInstead": "代わりにキューに追加しました。次のターンで送信されます。",
+        "heldWhileResponding": "まだ応答中です。メッセージは入力欄に残してあります。応答が終わってから送信してください。",
         "steerFailed": "現在のターンに挿入できませんでした",
         "steerNoteFailed": "メモを送信できませんでした",
         "slashCommands": "スラッシュコマンド",
@@ -3672,7 +3792,6 @@
         "unknownAgent": "サブエージェント",
         "openDetail": "会話を表示",
         "resumed": "再開済み",
-        "resumeDetail": "再開の詳細",
         "resumeReasonLabel": "再開理由",
         "detailTitle": "サブエージェントの会話",
         "detailDescription": "委任されたサブエージェントの会話を読み取り専用で表示します。",
@@ -3918,13 +4037,16 @@
       },
       "messageNav": {
         "title": "メッセージナビ",
-        "collapse": "メッセージナビを閉じる",
         "loadingEarlier": "以前のメッセージを読み込み中…",
         "loadEarlier": "以前のメッセージを読み込む",
-        "collapsedSummary": "メッセージ {count}",
         "fileCount": "{count, plural, one {# 個のファイル} other {# 個のファイル}}",
-        "remove": "削除",
-        "noDiffDataAvailable": "{filePath} の差分データがありません"
+        "subAgentCount": "{count, plural, one {# 個のサブエージェント} other {# 個のサブエージェント}}",
+        "showDiff": "{filePath} の変更を表示",
+        "hideDiff": "{filePath} の変更を隠す",
+        "openFile": "{filePath} を開く",
+        "collapse": "折りたたむ",
+        "currentMessage": "現在のメッセージ",
+        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール"
       },
       "replyArtifacts": {
         "title": "変更されたファイル",
@@ -3982,6 +4104,9 @@
         "resumeDelegation": "タスク {task} を再開中",
         "resumeDelegationNoId": "委任タスクを再開中",
         "promptLabel": "プロンプト",
+        "ackRecorded": "作業タスクに記録しました",
+        "ackNotRecorded": "作業タスクに記録されていません",
+        "ackNotRecordedWithReason": "作業タスクに記録されていません: {reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "要確認",
@@ -4098,6 +4223,18 @@
         "tokens": "{count} トークン",
         "stopDeclined": "このタスクは停止できませんでした。すでに終了している可能性があります。",
         "stopFailed": "タスクの停止に失敗しました: {error}"
+      },
+      "remoteControl": {
+        "title": "リモートコントロール有効",
+        "open": "ブラウザで開く",
+        "copy": "リンクをコピー",
+        "copied": "コピーしました",
+        "qr": "QR コード",
+        "qrLabel": "このセッションのリモートコントロール用リンクの QR コード",
+        "qrHint": "スマートフォンでスキャンすると、Claude アプリまたは claude.ai/code でこのセッションを続けられます。",
+        "noUrl": "Claude Code はこのセッションのリンクを返しませんでした",
+        "turnOff": "オフにする",
+        "turnOffBusy": "Claude の作業が終わると使えます"
       },
       "proposedPlan": {
         "title": "提案された計画",
@@ -5270,7 +5407,12 @@
     "reconnectNow": "今すぐ再接続",
     "sessionExpiredTitle": "セッションの有効期限が切れました",
     "sessionExpiredDescription": "セッションが無効になりました。続行するには再度サインインしてください。",
-    "goToLogin": "ログインへ移動"
+    "proxySignInTitle": "サインインの有効期限切れ",
+    "proxySignInDescription": "このサーバーの前段にあるプロキシのサインインが期限切れになりました。ページを再読み込みして再度サインインしてください。",
+    "goToLogin": "ログインへ移動",
+    "versionChangedTitle": "サーバーは Codeg {version} で動作しています",
+    "versionChangedDescription": "このページはまだ {version} です。再読み込みするとサーバーのバージョンを使用します。",
+    "reloadPage": "再読み込み"
   },
   "LiveFeedback": {
     "placeholder": "{agent} の作業中にメモを送る…",

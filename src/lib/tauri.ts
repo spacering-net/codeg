@@ -1129,22 +1129,25 @@ export async function listFolderCommands(
 export async function createFolderCommand(
   folderId: number,
   name: string,
-  command: string
+  command: string,
+  runLocal: boolean
 ): Promise<FolderCommand> {
-  return invoke("create_folder_command", { folderId, name, command })
+  return invoke("create_folder_command", { folderId, name, command, runLocal })
 }
 
 export async function updateFolderCommand(
   id: number,
   name?: string,
   command?: string,
-  sortOrder?: number
+  sortOrder?: number,
+  runLocal?: boolean
 ): Promise<FolderCommand> {
   return invoke("update_folder_command", {
     id,
     name: name ?? null,
     command: command ?? null,
     sortOrder: sortOrder ?? null,
+    runLocal: runLocal ?? null,
   })
 }
 

@@ -18,6 +18,7 @@ function entry(
     additions: 0,
     deletions: 0,
     files: [],
+    subAgents: [],
     hasChanges: false,
   }
 }

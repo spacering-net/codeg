@@ -12,8 +12,15 @@ vi.mock("@/lib/api", () => ({
   getFolderConversationOutline: vi.fn(),
 }))
 
+vi.mock("@/lib/session-files", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/session-files")>()
+  return { ...actual, warmTurnFileChanges: vi.fn(actual.warmTurnFileChanges) }
+})
+
 const { getFolderConversationOutline } = await import("@/lib/api")
 const mockOutline = vi.mocked(getFolderConversationOutline)
+const { warmTurnFileChanges } = await import("@/lib/session-files")
+const mockWarm = vi.mocked(warmTurnFileChanges)
 
 function turn(index: number): MessageTurn {
   return {
@@ -103,6 +110,24 @@ describe("useConversationOutline", () => {
       "turn-2",
       "turn-3",
     ])
+  })
+
+  // Parsing a long history in the render that groups it froze the page.
+  it("serves the history once its edits are parsed", async () => {
+    const parsing: { done?: () => void } = {}
+    mockWarm.mockImplementationOnce((turns, done) => {
+      expect(turns.map((t) => t.id)).toEqual(FULL.slice(0, 4).map((t) => t.id))
+      parsing.done = done
+    })
+    mockOutline.mockResolvedValue(outlineOf(4))
+    const { result } = renderHook(() => useConversationOutline(request(4)))
+    await waitFor(() => expect(parsing.done).toBeDefined())
+    expect(result.current.state).toEqual({ status: "loading" })
+    act(() => parsing.done?.())
+    expect(readyIds(result.current.state)).toEqual(
+      FULL.slice(0, 4).map((t) => t.id)
+    )
+    expect(mockOutline).toHaveBeenCalledTimes(1)
   })
 
   it("keeps serving the window as older pages are prepended", async () => {

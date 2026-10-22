@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
 
+import type { AcpEventDelivery } from "@/contexts/acp-connections-context"
 import {
   DelegationProvider,
   useDelegation,
@@ -12,7 +13,11 @@ import type { EventEnvelope } from "@/lib/types"
 // each test can drive the provider with synthetic acp://event envelopes.
 // `useAcpEvent` runs during render, so the handler is captured synchronously
 // on mount.
-let capturedHandler: ((envelope: EventEnvelope) => void) | null = null
+type CapturedHandler = (
+  envelope: EventEnvelope,
+  delivery?: AcpEventDelivery
+) => void
+let capturedHandler: CapturedHandler | null = null
 
 const mockAttach = vi.fn()
 const mockDetach = vi.fn()
@@ -22,7 +27,7 @@ vi.mock("@/contexts/acp-connections-context", () => ({
     attachDelegationChild: mockAttach,
     detachDelegationChild: mockDetach,
   }),
-  useAcpEvent: (handler: (e: EventEnvelope) => void) => {
+  useAcpEvent: (handler: CapturedHandler) => {
     capturedHandler = handler
   },
 }))
@@ -344,5 +349,41 @@ describe("DelegationProvider", () => {
     for (const probe of screen.getAllByTestId("by-task-id")) {
       expect(probe).toHaveTextContent("none")
     }
+  })
+
+  // A live `delegation_started` arrives before the child's first event, so its
+  // attach needs no snapshot. A binding re-seeded from the parent's snapshot
+  // names a child that is already mid-turn — maybe parked on a permission it
+  // raised before this client attached, which on the desktop firehose nothing
+  // else would ever deliver (#973) — so that attach hydrates.
+  it("hydrates a child re-seeded from a snapshot, and only that one", async () => {
+    renderProvider()
+    await awaitHandlerCaptured()
+    const started = (parentToolUseId: string, child: string) =>
+      ({
+        type: "delegation_started",
+        parent_connection_id: "p1",
+        parent_tool_use_id: parentToolUseId,
+        child_connection_id: child,
+        child_conversation_id: 99,
+        agent_type: "codex",
+      }) as unknown as EventEnvelope
+
+    dispatch(started("pt-live", "c-live"))
+    act(() => {
+      capturedHandler!(started("pt-seeded", "c-seeded"), {
+        seededFromSnapshot: true,
+      })
+    })
+
+    expect(mockAttach).toHaveBeenCalledTimes(2)
+    expect(mockAttach.mock.calls[0][0]).toMatchObject({
+      connectionId: "c-live",
+      hydrate: false,
+    })
+    expect(mockAttach.mock.calls[1][0]).toMatchObject({
+      connectionId: "c-seeded",
+      hydrate: true,
+    })
   })
 })

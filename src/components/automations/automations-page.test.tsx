@@ -16,6 +16,10 @@ import {
 } from "@/lib/api"
 import type { Automation } from "@/lib/types"
 import {
+  peekAutomationsFocus,
+  requestAutomationsFocus,
+} from "@/lib/workbench-focus"
+import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
@@ -54,12 +58,20 @@ vi.mock("./automation-editor", () => ({
   AutomationEditor: ({
     automation,
     onBackToTemplates,
+    defaultFolderId,
   }: {
-    automation: { name?: string } | null
+    automation: { name?: string; root_folder_id?: number | null } | null
     onBackToTemplates?: () => void
+    defaultFolderId?: number | null
   }) => (
     <div>
-      <div data-testid="editor-name">{automation?.name ?? "<blank>"}</div>
+      <div
+        data-testid="editor-name"
+        data-seed-folder={String(automation?.root_folder_id ?? "")}
+        data-default-folder={String(defaultFolderId ?? "")}
+      >
+        {automation?.name ?? "<blank>"}
+      </div>
       {onBackToTemplates ? (
         <button type="button" onClick={onBackToTemplates}>
           back-link
@@ -69,7 +81,7 @@ vi.mock("./automation-editor", () => ({
   ),
 }))
 
-import { AutomationsPage } from "./automations-page"
+import { AutomationsPage, pickCreateFolder } from "./automations-page"
 
 // Components select `folders` from the real zustand store — seed it with the
 // same data the old context mock provided.
@@ -308,5 +320,189 @@ describe("AutomationsPage (master-detail)", () => {
       screen.getByRole("button", { name: enMessages.Automations.edit })
     )
     expect(screen.getByTestId("editor-name")).toHaveTextContent("Nightly sweep")
+  })
+})
+
+/**
+ * Opened from the aux panel's automations tab: the page starts on the project
+ * (and the automation, or the action) the panel was showing — on its first
+ * paint, and only once.
+ */
+describe("AutomationsPage (opened from the aux panel)", () => {
+  const OTHER: Automation = {
+    ...FIXTURE,
+    id: 9,
+    name: "Weekly triage",
+    root_folder_id: 2,
+  }
+
+  beforeEach(() => {
+    automations = [FIXTURE, OTHER]
+    vi.clearAllMocks()
+    useAppWorkspaceStore.setState({
+      folders: [
+        { id: 1, name: "repo", parent_id: null, kind: "regular" },
+        { id: 2, name: "site", parent_id: null, kind: "regular" },
+      ] as never,
+    })
+  })
+
+  it("filters the list to the panel's project and shows its automation", () => {
+    requestAutomationsFocus({ folderId: 2 })
+    renderPage()
+    expect(screen.getAllByText("Weekly triage").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Nightly sweep")).not.toBeInTheDocument()
+    // Applied once: a later visit opens unfocused.
+    expect(peekAutomationsFocus()).toBeNull()
+  })
+
+  it("selects the automation the panel was showing", () => {
+    requestAutomationsFocus({ folderId: null, automationId: 9 })
+    renderPage()
+    // The detail heading is the selected automation, not the first row.
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Weekly triage" })
+    ).toBeInTheDocument()
+  })
+
+  it("opens straight into the editor on an edit", () => {
+    requestAutomationsFocus({ folderId: 1, automationId: 7, intent: "edit" })
+    renderPage()
+    expect(screen.getByTestId("editor-name")).toHaveTextContent("Nightly sweep")
+  })
+
+  it("opens the gallery on a create, its drafts starting in the project", () => {
+    requestAutomationsFocus({ folderId: 2, intent: "create" })
+    renderPage()
+    expect(
+      screen.getByText(enMessages.Automations.startFromTemplate)
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText(enMessages.Automations.tplCodeReviewTitle))
+    expect(screen.getByTestId("editor-name")).toHaveAttribute(
+      "data-seed-folder",
+      "2"
+    )
+    // A blank create gets the same folder, through the editor's default.
+    expect(screen.getByTestId("editor-name")).toHaveAttribute(
+      "data-default-folder",
+      "2"
+    )
+  })
+
+  it("moves the detail onto a row the narrowed list shows", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    // Unfiltered: the first automation.
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Nightly sweep" })
+    ).toBeInTheDocument()
+    // Narrowed to the other folder: its automation, not one the list hides.
+    await user.click(screen.getByRole("button", { name: /All folders/ }))
+    await user.click(await screen.findByRole("option", { name: /site/ }))
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Weekly triage" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { level: 2, name: "Nightly sweep" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("starts new drafts in the first folder when the list is not narrowed", () => {
+    renderPage()
+    fireEvent.click(screen.getByText(enMessages.Automations.new))
+    fireEvent.click(screen.getByText("Blank automation"))
+    expect(screen.getByTestId("editor-name")).toHaveAttribute(
+      "data-default-folder",
+      "1"
+    )
+  })
+})
+
+/**
+ * A project whose root was closed in the sidebar, with a worktree of it open
+ * and active: the aux panel hands "New automation" over on the ROOT. The page
+ * must keep that root as its filter, and the draft must start in a folder the
+ * editor can actually use — the open worktree — never in another repository.
+ */
+describe("AutomationsPage (create for a project whose root is closed)", () => {
+  beforeEach(() => {
+    automations = [
+      { ...FIXTURE, id: 9, name: "Weekly triage", root_folder_id: 2 },
+    ]
+    vi.clearAllMocks()
+    const root = {
+      id: 1,
+      name: "repo",
+      alias: null,
+      path: "/work/repo",
+      parent_id: null,
+      kind: "regular",
+    }
+    const other = {
+      id: 2,
+      name: "site",
+      alias: null,
+      path: "/work/site",
+      parent_id: null,
+      kind: "regular",
+    }
+    const worktree = {
+      id: 11,
+      name: "repo-task-3",
+      alias: null,
+      path: "/work/repo-task-3",
+      parent_id: 1,
+      kind: "regular",
+    }
+    useAppWorkspaceStore.setState({
+      // The other project comes first; the closed root is not in the list.
+      folders: [other, worktree] as never,
+      allFolders: [root, other, worktree] as never,
+      activeFolderId: 11,
+    })
+  })
+
+  it("keeps the closed root as the filter and starts drafts in its open worktree", () => {
+    requestAutomationsFocus({ folderId: 1, intent: "create" })
+    renderPage()
+    // Filtered to the project, by its real name — not dropped to every folder.
+    expect(screen.getByRole("button", { name: "repo" })).toBeInTheDocument()
+    expect(screen.queryByText("Weekly triage")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText(enMessages.Automations.tplCodeReviewTitle))
+    expect(screen.getByTestId("editor-name")).toHaveAttribute(
+      "data-seed-folder",
+      "11"
+    )
+    expect(screen.getByTestId("editor-name")).toHaveAttribute(
+      "data-default-folder",
+      "11"
+    )
+  })
+})
+
+describe("pickCreateFolder", () => {
+  const folders = [
+    { id: 2, parent_id: null },
+    { id: 11, parent_id: 1 },
+    { id: 12, parent_id: 1 },
+  ]
+
+  it("takes the narrowed-to folder when it is open", () => {
+    expect(pickCreateFolder(2, folders, null)).toBe(2)
+    expect(pickCreateFolder(11, folders, null)).toBe(11)
+  })
+
+  it("hands a closed folder over to an open worktree of it, the active one first", () => {
+    expect(pickCreateFolder(1, folders, 12)).toBe(12)
+    expect(pickCreateFolder(1, folders, 2)).toBe(11)
+    expect(pickCreateFolder(1, folders, null)).toBe(11)
+  })
+
+  it("falls back to the first folder otherwise", () => {
+    expect(pickCreateFolder("all", folders, 12)).toBe(2)
+    expect(pickCreateFolder(99, folders, null)).toBe(2)
+    expect(pickCreateFolder("all", [], null)).toBeNull()
   })
 })

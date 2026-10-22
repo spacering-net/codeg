@@ -9,10 +9,15 @@
  * owned by the shared overlay-stack container in `MessageListView`, which
  * places this panel BELOW the plan panel when both are present.
  *
- * Each row resolves its agent type / task / status / child ids from the same
- * `useDelegationCardModel` the inline `DelegatedSubThread` card uses, so the
- * overlay and the message-stream card never disagree. Clicking a row opens the
- * child's full conversation via `SubAgentSessionDialog` ("查看会话").
+ * The overlay is for transcripts with no side panel (a canvas card, the
+ * read-only sub-agent and task drawers); the conversation page lists the same
+ * rows in the Session Details side panel instead.
+ *
+ * Each row (`SubAgentRow`, shared with that panel) resolves its agent type /
+ * task / status / child ids from the same `useDelegationCardModel` the inline
+ * `DelegatedSubThread` card uses, so the overlay and the message-stream card
+ * never disagree. Clicking a row opens the child's full conversation via
+ * `SubAgentSessionDialog` ("查看会话").
  */
 
 import { memo, useState } from "react"
@@ -103,7 +108,7 @@ export const SubAgentOverlay = memo(function SubAgentOverlay({
 
         <div className="max-h-96 overflow-y-auto p-2 space-y-1.5">
           {delegations.map((source) => (
-            <SubAgentOverlayRow key={source.parentToolUseId} source={source} />
+            <SubAgentRow key={source.parentToolUseId} source={source} />
           ))}
         </div>
       </div>
@@ -111,15 +116,18 @@ export const SubAgentOverlay = memo(function SubAgentOverlay({
   )
 })
 
-const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
+/** One sub-agent: who runs it, its task id and status, and its task. Opens the
+ *  child's conversation when it has one. */
+export const SubAgentRow = memo(function SubAgentRow({
   source,
 }: {
   source: DelegationCardSource
 }) {
   const t = useTranslations("Folder.chat.delegation")
   // Same host as the inline card — so the two entry points share one viewer,
-  // and neither depends on its own row surviving. `null` = rendered outside a
-  // `MessageListView`; keep the local drawer then.
+  // and neither depends on its own row surviving. The Session Details side
+  // panel brings a host of its own. `null` = rendered outside any host; keep
+  // the local drawer then.
   const viewerHost = useSessionViewerHost()
   const [dialogOpen, setDialogOpen] = useState(false)
   const {

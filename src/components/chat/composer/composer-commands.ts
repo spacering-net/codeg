@@ -9,7 +9,20 @@ import type { PromptInputBlock } from "@/lib/types"
 import type { InputAttachment } from "../message-input-attachments"
 import { blocksToRestoredDraft } from "./from-prompt-blocks"
 import { textToSeededInlineContent } from "./plain-text-content"
+import { serializeDocToText } from "./to-prompt-blocks"
 import type { ReferenceAttrs } from "./types"
+
+/**
+ * What goes before content added after a document whose text is `existing`, so
+ * that content starts on a line of its own with a blank line above it: nothing
+ * for an empty document, and only the line breaks the document's own tail is
+ * missing otherwise.
+ */
+export function blankLineAfter(existing: string): string {
+  if (!existing.trim()) return ""
+  if (existing.endsWith("\n\n")) return ""
+  return existing.endsWith("\n") ? "\n" : "\n\n"
+}
 
 /**
  * Whether the composer has nothing sendable. Stricter than `editor.isEmpty`,
@@ -157,14 +170,28 @@ export function restampSkillPrefixes(
  * comes back as the text it will be sent as, rather than as a badge claiming a
  * command that isn't there. Lossless either way: re-serializing the restored
  * content reproduces the block text verbatim.
+ *
+ * With `append`, the editor keeps what it holds and the restored prose and
+ * badges follow it, a blank line apart — for putting back a message the
+ * composer already let go of without overwriting anything typed since.
  */
 export function restoreBlocksIntoEditor(
   editor: Editor,
   blocks: PromptInputBlock[],
-  known: KnownInvocations = NO_KNOWN_INVOCATIONS
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS,
+  { append = false }: { append?: boolean } = {}
 ): InputAttachment[] {
   const { segments, attachments } = blocksToRestoredDraft(blocks)
-  let chain = editor.chain().clearContent()
+  let chain = append
+    ? editor.chain().focus("end")
+    : editor.chain().clearContent()
+  // The resources come back as badges too, placed at the end by the host.
+  const addsInline =
+    segments.length > 0 || attachments.some((a) => a.type === "resource")
+  if (append && addsInline) {
+    const gap = blankLineAfter(serializeDocToText(editor.state.doc))
+    if (gap) chain = chain.insertContent(textToSeededInlineContent(gap, known))
+  }
   for (const segment of segments) {
     chain =
       segment.kind === "text"

@@ -22,7 +22,10 @@ import { getCurrentWindowLabel } from "@/lib/browser/window-label"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
-import { useCommandTerminalLinkStore } from "@/stores/command-terminal-link-store"
+import {
+  commandLinkKey,
+  useCommandTerminalLinkStore,
+} from "@/stores/command-terminal-link-store"
 
 export interface TerminalTab {
   id: string
@@ -91,10 +94,10 @@ function isRestorableTab(tab: unknown): tab is StoredTerminalTab {
   )
 }
 
+/** Any safe integer: folder commands have positive ids, global ones (see
+ *  `global-commands`) negative. */
 function storedCommandId(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && (value as number) >= 0
-    ? (value as number)
-    : undefined
+  return Number.isSafeInteger(value) ? (value as number) : undefined
 }
 
 /**
@@ -348,7 +351,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const { setLink } = useCommandTerminalLinkStore.getState()
     for (const tab of restoredSession.tabs) {
-      if (tab.commandId !== undefined) setLink(tab.commandId, tab.id)
+      if (tab.commandId !== undefined) {
+        setLink(commandLinkKey(tab.folderId, tab.commandId), tab.id)
+      }
     }
   }, [restoredSession])
 

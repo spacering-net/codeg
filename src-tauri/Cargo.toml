@@ -1,6 +1,6 @@
 [package]
 name = "codeg"
-version = "0.36.0"
+version = "0.39.0"
 description = "Agent Code Generation App"
 authors = ["feitao"]
 edition = "2021"
@@ -9,11 +9,16 @@ default-run = "codeg"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+# Only an rlib, which is all the bins and integration tests link. Tauri's
+# template adds a `staticlib` and a `cdylib` for its iOS and Android shells,
+# which Codeg does not have, yet every build of a bin or integration test paid
+# for both: an archive of the whole dependency graph (about 1.4 GB in a debug
+# build on macOS) and a second full link, a DLL on Windows. The template's
+# `_lib` suffix kept that DLL's PDB from colliding with the `codeg` bin's
+# (rust-lang/cargo#8519); the name stays because every bin and integration
+# test imports the crate by it.
 name = "codeg_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 default = ["tauri-runtime", "browser-child"]
@@ -43,9 +48,9 @@ tauri-runtime = [
 # `ConnectionManager::insert_test_connection`, parser `with_base_dir`, the
 # `db::test_helpers` module) for integration tests in `tests/*.rs`. Without
 # this feature the items are physically uncompiled in release builds. It
-# also builds the three standalone binaries below, so the test and lint runs
+# also builds the four standalone binaries below, so the test and lint runs
 # cover them.
-test-utils = ["computer-helper", "server-bin", "mcp-bin"]
+test-utils = ["computer-helper", "server-bin", "mcp-bin", "cli-bin"]
 # The `codeg-computer-helper` binary. Off unless asked for: the Tauri CLI puts
 # every binary target whose features are on into a bundle, and the copy
 # `tauri build` would compile is not the helper that ships. That is the one
@@ -56,6 +61,10 @@ computer-helper = ["dep:x11rb"]
 # desktop app serves its web interface from its own process and has no use
 # for a second server, so it must not ship one (70–90 MB) in its bundle.
 server-bin = []
+# The `codeg-cli` binary: the headless client of a running codeg (`codeg-cli
+# run …`). Off unless asked for, like the other sidecars: the copy that ships
+# in the desktop bundle is the one `prepare-sidecars` builds.
+cli-bin = ["dep:clap"]
 # The `codeg-mcp` binary, likewise: the companion that ships is the sidecar
 # `prepare-sidecars` builds without the desktop features, and the copy `tauri
 # build` would compile — with them, WebKit and all — would replace it in the
@@ -94,6 +103,14 @@ required-features = ["server-bin"]
 name = "codeg-mcp"
 path = "src/bin/codeg_mcp.rs"
 required-features = ["mcp-bin"]
+
+# The command-line client: a thin HTTP client of a running desktop app or
+# codeg-server. Built only with `cli-bin` (and, for the real thing, without the
+# default features).
+[[bin]]
+name = "codeg-cli"
+path = "src/bin/codeg_cli.rs"
+required-features = ["cli-bin"]
 
 # The computer-use executor: holds the OS permissions (macOS TCC) in place of
 # codeg, and runs the pinned cua-driver as its child. No Tauri: it is launched
@@ -137,8 +154,16 @@ tauri-runtime-wry = { version = "2.12", optional = true, default-features = fals
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 async-trait = "0.1"
+# `codeg-cli`'s argument parser (feature `cli-bin`).
+clap = { version = "4.5", features = ["derive", "env"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The JSON Schema a `codeg-cli --output-schema` run's result is checked against
+# (drafts 4 to 2020-12). Rather than `jsonschema`: it brings three small crates
+# this tree lacks, where `jsonschema` brings a dozen and turns on serde_json's
+# `float_roundtrip` for everything; and its patterns run on the `regex` crate,
+# in linear time.
+boon = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 # Host IANA zone name (e.g. `Asia/Shanghai`) — chrono only exposes the offset.
@@ -153,12 +178,15 @@ walkdir = "2"
 ignore = "0.4"
 # The official ACP runtime (the `sacp` crate was upstreamed into it and renamed).
 # Stable protocol v1 only: `unstable_protocol_v2` is deliberately left off, so
-# the builder's protocol-compat layer is a pass-through and `initialize` goes
-# out exactly as codeg writes it. The unstable features are exactly the surfaces
-# codeg consumes: `session/fork` and the Session Notices / Session Compaction
-# RFDs. (`unstable_end_turn_token_usage` stays off: codeg's token accounting
-# reads the agents' own transcripts, not the prompt response's `usage`.)
-agent-client-protocol = { version = "2.2.0", features = ["unstable_session_fork", "unstable_session_notices", "unstable_session_compaction"] }
+# `initialize` goes out as codeg writes it, at protocol version 1, and the
+# runtime refuses an answer that names any other version. The one unstable
+# feature is the surface codeg consumes beyond the stable schema:
+# `session/fork` (the Session Notices and Session Compaction RFDs are stable
+# since schema 1.11). (`unstable_end_turn_token_usage` stays off: codeg's token
+# accounting reads the agents' own transcripts, not the prompt response's
+# `usage`.) No default features: codeg runs an agent through its own transport
+# (`acp/agent_process.rs`), not the crate's `process`/`stdio` ones.
+agent-client-protocol = { version = "3.4.0", features = ["unstable_session_fork"] }
 tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt", "net", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 # Version-5 UUIDs (browser profile data-store identifiers) by hand: uuid's
@@ -232,6 +260,9 @@ sha2 = "0.10"
 # HMAC-SHA256 over a forge webhook's body (GitHub / Gitea signatures) with a
 # constant-time check. Already in the lock tree as a transitive dependency.
 hmac = "0.12"
+# RS256 / ES256 signature checks for the opt-in proxy-JWT authentication
+# (`web/proxy_auth.rs`). Already in the lock tree through rustls.
+ring = "0.17"
 aes-gcm = { version = "0.10", features = ["stream"] }
 argon2 = "0.5"
 tempfile = "3"
@@ -279,7 +310,7 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_StationsAndDesktops", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Console", "Win32_System_Registry"] }
 junction = "1"
 # Built-in browser Windows shim (isolated world over CDP, world-scoped eval,
 # snapshots, find, history, the sign-in identity, the subframe fence, and the

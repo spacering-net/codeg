@@ -6,15 +6,19 @@
 //
 // The slug starts with a letter (so `/123` / `$5` don't match) and the boundary
 // before it must be start-of-text or whitespace. A trailing `/` (a path like
-// `/usr/bin`) or word char disqualifies it. Read through `user-message-segments.ts`
-// by both the sent-message bubble and the composer's paste/seed hydration, so the
-// two badge exactly the same tokens.
+// `/usr/bin`) or word char disqualifies it. A namespaced name (Qoder's
+// `sites:sites-building` skills) continues across a `:` that a name character
+// follows: Qoder takes everything up to the first whitespace as the command
+// name, so `/sites` alone names nothing. A `:` that ends the token, as in
+// `/review: then …`, stays outside it. Read through `user-message-segments.ts`
+// by both the sent-message bubble and the composer's paste/seed hydration, so
+// the two badge exactly the same tokens.
 //
 // Stateful (`g` flag): reset `lastIndex` before an `exec` loop, or use `matchAll`
 // (which operates on a private copy). Capture groups: [1] = the leading
 // boundary (start-of-text or the whitespace char), [2] = the token incl. prefix.
 export const INVOCATION_TOKEN_RE =
-  /(^|\s)([/$][A-Za-z][A-Za-z0-9_-]*)(?![/\w-])/g
+  /(^|\s)([/$][A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)*)(?![/\w-])/g
 
 /**
  * The literal invocation tokens (`/review`, `$deploy` — prefix included) the

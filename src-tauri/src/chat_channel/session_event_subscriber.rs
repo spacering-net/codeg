@@ -13,7 +13,8 @@ use super::types::{ChannelMessageTarget, MessageLevel, RichMessage};
 use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{
-    AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PromptInputBlock,
+    AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PermissionAnswerOrigin,
+    PermissionOptionInfo, PromptInputBlock,
 };
 
 use crate::db::service::{
@@ -533,20 +534,24 @@ async fn handle_acp_envelope(
                         .map(|ctx| ctx.auto_approve)
                         .unwrap_or(false);
 
-                if auto_approve {
-                    let option_id = options
-                        .iter()
-                        .find(|o| o.kind == "allow" || o.kind == "allowForSession")
-                        .or_else(|| options.first())
-                        .map(|o| o.option_id.clone());
-
+                // Auto-approve answers one call at a time, with the allow-once
+                // option (see `allow_once_in`). A request without one goes to
+                // the chat like any other, for the sender to answer.
+                let auto_option = if auto_approve {
+                    PermissionOptionInfo::allow_once_in(options).map(|o| o.option_id.clone())
+                } else {
+                    None
+                };
+                if let Some(oid) = auto_option {
                     drop(guard);
-
-                    if let Some(oid) = option_id {
-                        let _ = conn_mgr
-                            .respond_permission(connection_id, request_id, &oid)
-                            .await;
-                    }
+                    let _ = conn_mgr
+                        .respond_permission_from(
+                            connection_id,
+                            request_id,
+                            &oid,
+                            PermissionAnswerOrigin::ChatChannel,
+                        )
+                        .await;
                     return;
                 }
 
@@ -578,7 +583,7 @@ async fn handle_acp_envelope(
 
                 let lang = get_lang(db).await;
                 let prefix = get_prefix(db).await;
-                let body = match lang {
+                let mut body = match lang {
                     Lang::ZhCn | Lang::ZhTw => {
                         format!("Agent 请求权限: {tool_desc}\n\n{prefix}approve 批准 | {prefix}deny 拒绝 | {prefix}approve always 自动批准")
                     }
@@ -586,6 +591,15 @@ async fn handle_acp_envelope(
                         format!("Agent requests permission: {tool_desc}\n\n{prefix}approve | {prefix}deny | {prefix}approve always")
                     }
                 };
+                // Auto-approve is on, yet this request reached the chat.
+                if auto_approve {
+                    body.push_str(match lang {
+                        Lang::ZhCn | Lang::ZhTw => {
+                            "\n\n自动批准跳过了这个请求：它没有「只允许这一次」的选项。"
+                        }
+                        _ => "\n\nAuto-approve skipped this request: it has no allow-once option.",
+                    });
+                }
 
                 let msg = RichMessage {
                     title: Some(match lang {
@@ -2135,5 +2149,193 @@ mod error_terminal_gate_tests {
             read_row_status(&db, conv_id).await,
             ConversationStatus::Cancelled
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_approve_tests {
+    //! A sender who turned on auto-approve (`/approve always`) has codeg answer
+    //! each permission request for them. The answer is the allow-once option,
+    //! found by its kind — never the first option, which an adapter may well
+    //! have made the rejection, and never one that leaves a rule behind in the
+    //! agent's settings.
+    use super::*;
+    use crate::acp::connection::ConnectionCommand;
+    use crate::chat_channel::session_bridge::ActiveSession;
+    use crate::db::service::chat_channel_service;
+    use crate::db::test_helpers;
+    use crate::models::agent::AgentType;
+
+    fn permission_option(option_id: &str, name: &str, kind: &str) -> PermissionOptionInfo {
+        PermissionOptionInfo {
+            option_id: option_id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            meta: None,
+        }
+    }
+
+    /// A sender with auto-approve on and a live session. Returns the receiving
+    /// end of the session's commands.
+    async fn auto_approving_session(
+        db: &crate::db::AppDatabase,
+    ) -> (
+        Arc<Mutex<SessionBridge>>,
+        ConnectionManager,
+        tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    ) {
+        let channel_id = chat_channel_service::create(
+            &db.conn,
+            "Telegram test".to_string(),
+            "telegram".to_string(),
+            serde_json::json!({ "chat_id": "-100123" }).to_string(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed chat channel")
+        .id;
+        sender_context_service::update_auto_approve(&db.conn, channel_id, "u1", true)
+            .await
+            .expect("auto-approve on");
+        let folder_id = test_helpers::seed_folder(db, "/tmp/chat-auto-approve").await;
+        let conv_id = test_helpers::seed_conversation(db, folder_id, AgentType::ClaudeCode).await;
+        let conn_mgr = ConnectionManager::new();
+        let rx = conn_mgr
+            .insert_test_connection_live(
+                "conn-auto",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        bridge.lock().await.register(
+            "conn-auto".to_string(),
+            ActiveSession {
+                channel_id,
+                sender_id: "u1".into(),
+                target: ChannelMessageTarget::channel(channel_id),
+                conversation_id: conv_id,
+                connection_id: "conn-auto".to_string(),
+                agent_type: AgentType::ClaudeCode,
+                content_buffer: String::new(),
+                tool_calls: Vec::new(),
+                tool_call_inputs: std::collections::HashMap::new(),
+                delegation_rendered: std::collections::HashSet::new(),
+                last_flushed: Instant::now(),
+                pending_prompt: None,
+                permission_pending: None,
+            },
+        );
+        (bridge, conn_mgr, rx)
+    }
+
+    async fn request_permission(
+        db: &crate::db::AppDatabase,
+        bridge: &Arc<Mutex<SessionBridge>>,
+        conn_mgr: &ConnectionManager,
+        options: Vec<PermissionOptionInfo>,
+    ) {
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "conn-auto".to_string(),
+            payload: AcpEvent::PermissionRequest {
+                request_id: "req-1".to_string(),
+                tool_call: serde_json::json!({ "title": "Bash" }),
+                options,
+                queued: 0,
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            bridge,
+            &ChatChannelManager::new(),
+            conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+    }
+
+    fn answered_option(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> Option<String> {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::RespondPermission {
+                request_id,
+                option_id,
+                origin,
+            }) => {
+                assert_eq!(origin, PermissionAnswerOrigin::ChatChannel);
+                assert_eq!(request_id, "req-1");
+                Some(option_id)
+            }
+            Ok(_) => panic!("expected a permission response"),
+            Err(_) => None,
+        }
+    }
+
+    async fn pending_request_id(bridge: &Arc<Mutex<SessionBridge>>) -> Option<String> {
+        bridge
+            .lock()
+            .await
+            .get("conn-auto")
+            .and_then(|s| s.permission_pending.as_ref())
+            .map(|p| p.request_id.clone())
+    }
+
+    #[tokio::test]
+    async fn auto_approve_allows_once_when_the_rejection_leads() {
+        // claude-agent-acp 0.91.0 leads with the rejection for a call the
+        // Claude CLI marks `defaultToNo`; picked by position, auto-approve
+        // turned down exactly the calls it was there to let through.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conn_mgr, mut rx) = auto_approving_session(&db).await;
+
+        request_permission(
+            &db,
+            &bridge,
+            &conn_mgr,
+            vec![
+                permission_option("reject", "No", "reject_once"),
+                permission_option("allow-once", "Yes", "allow_once"),
+                permission_option(
+                    "allow-with-updates",
+                    "Yes, and don't ask again",
+                    "allow_always",
+                ),
+            ],
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx).as_deref(), Some("allow-once"));
+        assert_eq!(pending_request_id(&bridge).await, None);
+    }
+
+    #[tokio::test]
+    async fn auto_approve_leaves_a_request_without_an_allow_once_option_to_the_sender() {
+        // Auto-approve answers for the sender one call at a time; a standing
+        // allow in the agent's own settings is not its to grant. The request
+        // goes to the chat like any other, for the sender to answer.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conn_mgr, mut rx) = auto_approving_session(&db).await;
+
+        request_permission(
+            &db,
+            &bridge,
+            &conn_mgr,
+            vec![
+                permission_option(
+                    "allow-with-updates",
+                    "Yes, and don't ask again",
+                    "allow_always",
+                ),
+                permission_option("reject", "No", "reject_once"),
+            ],
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx), None);
+        assert_eq!(pending_request_id(&bridge).await.as_deref(), Some("req-1"));
     }
 }

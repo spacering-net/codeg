@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -289,6 +289,13 @@ struct RootSlot {
     candidates: &'static [(&'static str, &'static str, bool)],
     /// Home-relative default when none of the candidates reaches the child.
     default_rel: &'static [&'static str],
+    /// The variable that renames the directory itself, for the one resolver
+    /// that has such a thing: Qoder's `QODER_CONFIG_DIR_NAME`, which replaces
+    /// the `.qoder` directory name under `QODER_CLI_HOME` or the home
+    /// directory. It stands in for the sub-path of a candidate that appends
+    /// one and for the last segment of `default_rel`; a candidate whose value
+    /// IS the root never reads it. See [`renamed_dir`].
+    dir_name_env: Option<&'static str>,
     /// Whether the agent's own resolver TRIMS the value before using it. Hermes
     /// (`resolve_hermes_home` / `hermes_home_for_launch`) and Cline
     /// (`cline_data_dir`) do, so a whitespace-only value is genuinely unset for
@@ -382,7 +389,7 @@ fn resolve_root_slot(slot: &RootSlot, runtime_env: &BTreeMap<String, String>) ->
         let root = if suffix.is_empty() {
             base
         } else {
-            base.join(suffix)
+            base.join(renamed_dir(slot, runtime_env, suffix)?)
         };
 
         // Same fail-closed rule one level up: a root this broad makes the gate
@@ -412,10 +419,58 @@ fn resolve_root_slot(slot: &RootSlot, runtime_env: &BTreeMap<String, String>) ->
     // default — resolved against the CHILD's home, not codeg's (see
     // `child_home_dir`).
     let mut root = child_home_dir(runtime_env)?;
-    for segment in slot.default_rel {
-        root.push(segment);
+    if let Some((last, parents)) = slot.default_rel.split_last() {
+        for segment in parents {
+            root.push(segment);
+        }
+        root.push(renamed_dir(slot, runtime_env, last)?);
+    }
+
+    // A renamed default can be any directory under the child's home, codeg's
+    // own home included when the child's home is set one level above it, so it
+    // answers to the same rule as a relocation does.
+    if is_over_broad_root(&root, runtime_env) {
+        tracing::warn!(
+            "[ACP] the agent's default directory {} is the home directory or the \
+             filesystem root, which is too broad to authorize; the agent's own \
+             directory is NOT writable this launch",
+            root.display()
+        );
+        return None;
     }
     Some(root)
+}
+
+/// The name the slot's directory goes by for this launch: the value of
+/// [`RootSlot::dir_name_env`] when one reaches the child, else `default`.
+///
+/// `None` when that value is anything but a single plain directory name. Qoder
+/// refuses to start with one (its validator takes letters, digits, `.`, `_`,
+/// `-` and inner spaces, and rejects `.` and `..`), so such a value names no
+/// directory the agent uses, and joining it could climb out of the parent.
+fn renamed_dir(
+    slot: &RootSlot,
+    runtime_env: &BTreeMap<String, String>,
+    default: &str,
+) -> Option<OsString> {
+    let Some(key) = slot.dir_name_env else {
+        return Some(OsString::from(default));
+    };
+    let Some(name) = child_env_value(runtime_env, key, slot.trims) else {
+        return Some(OsString::from(default));
+    };
+    let mut components = Path::new(&name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(only)), None) if only == name.as_os_str() => Some(name),
+        _ => {
+            tracing::warn!(
+                "[ACP] {key}={} is not a plain directory name, so the agent's own \
+                 directory cannot be located and is NOT writable this launch",
+                name.to_string_lossy()
+            );
+            None
+        }
+    }
 }
 
 /// Whether a resolved root would swallow so much that the containment gate
@@ -580,14 +635,21 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("GROK_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".grok"],
+            dir_name_env: None,
         }],
-        // Qoder relocates its whole home via `QODER_CONFIG_DIR` (the env form
-        // of the CLI's `--config-dir`); the sessions tree lives under
-        // `projects/` inside it.
+        // Qoder's directory is `QODER_CONFIG_DIR` itself (the env form of the
+        // CLI's `--config-dir`), else `QODER_CONFIG_DIR_NAME` (default
+        // `.qoder`) under `QODER_CLI_HOME`, else under the home directory — see
+        // `parsers::qoder::resolve_qoder_config_dir`. The sessions tree lives
+        // under `projects/` inside it.
         AgentType::Qoder => &[RootSlot {
-            candidates: &[("QODER_CONFIG_DIR", "", VERBATIM)],
+            candidates: &[
+                ("QODER_CONFIG_DIR", "", VERBATIM),
+                ("QODER_CLI_HOME", ".qoder", VERBATIM),
+            ],
             trims: false,
             default_rel: &[".qoder"],
+            dir_name_env: Some("QODER_CONFIG_DIR_NAME"),
         }],
         // Antigravity's whole tree hangs off `GEMINI_HOME`, which — unlike
         // Gemini CLI's `GEMINI_CLI_HOME` above — names the `.gemini` directory
@@ -598,6 +660,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("GEMINI_HOME", "", EXPANDS_TILDE)],
             trims: false,
             default_rel: &[".gemini"],
+            dir_name_env: None,
         }],
         // `KIRO_HOME` names the `.kiro` directory ITSELF (agents, prompts,
         // skills, steering, settings and sessions all hang off it), the same
@@ -607,32 +670,38 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("KIRO_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".kiro"],
+            dir_name_env: None,
         }],
         AgentType::ClaudeCode => &[RootSlot {
             candidates: &[("CLAUDE_CONFIG_DIR", "", VERBATIM)],
             trims: false,
             default_rel: &[".claude"],
+            dir_name_env: None,
         }],
         AgentType::Codex => &[RootSlot {
             candidates: &[("CODEX_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".codex"],
+            dir_name_env: None,
         }],
         // `resolve_gemini_base_dir_from` joins `.gemini` onto GEMINI_CLI_HOME.
         AgentType::Gemini => &[RootSlot {
             candidates: &[("GEMINI_CLI_HOME", ".gemini", VERBATIM)],
             trims: false,
             default_rel: &[".gemini"],
+            dir_name_env: None,
         }],
         AgentType::CodeBuddy => &[RootSlot {
             candidates: &[("CODEBUDDY_CONFIG_DIR", "", VERBATIM)],
             trims: false,
             default_rel: &[".codebuddy"],
+            dir_name_env: None,
         }],
         AgentType::KimiCode => &[RootSlot {
             candidates: &[("KIMI_CODE_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".kimi-code"],
+            dir_name_env: None,
         }],
         // `resolve_cursor_config_from` prefers CURSOR_CONFIG_DIR verbatim and
         // only then `<XDG_CONFIG_HOME>/cursor` — order matters.
@@ -640,27 +709,32 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("CURSOR_CONFIG_DIR", "", VERBATIM), ("XDG_CONFIG_HOME", "cursor", VERBATIM)],
             trims: false,
             default_rel: &[".cursor"],
+            dir_name_env: None,
         }],
         AgentType::Hermes => &[RootSlot {
             candidates: &[("HERMES_HOME", "", VERBATIM)],
             trims: true,
             default_rel: &[".hermes"],
+            dir_name_env: None,
         }],
         // `resolve_opencode_base_dir` is `<XDG_DATA_HOME>/opencode`.
         AgentType::OpenCode => &[RootSlot {
             candidates: &[("XDG_DATA_HOME", "opencode", VERBATIM)],
             trims: false,
             default_rel: &[".local", "share", "opencode"],
+            dir_name_env: None,
         }],
         AgentType::Cline => &[RootSlot {
             candidates: &[("CLINE_DIR", "", VERBATIM)],
             trims: true,
             default_rel: &[".cline", "data"],
+            dir_name_env: None,
         }],
         AgentType::OpenClaw => &[RootSlot {
             candidates: &[],
             trims: false,
             default_rel: &[".openclaw"],
+            dir_name_env: None,
         }],
         // DeepSeek Harness mirrors pi's two-root shape: the harness home
         // (`DSH_HOME`, default `~/.dsh`) and the session-log root, which
@@ -671,6 +745,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 candidates: &[("DSH_HOME", "", EXPANDS_TILDE)],
                 trims: false,
                 default_rel: &[".dsh"],
+                dir_name_env: None,
             },
             RootSlot {
                 candidates: &[
@@ -682,6 +757,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 ],
                 trims: false,
                 default_rel: &[".dsh", "sessions"],
+                dir_name_env: None,
             },
         ],
         // pi's agent home and its session store relocate INDEPENDENTLY, so both
@@ -693,6 +769,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 candidates: &[("PI_CODING_AGENT_DIR", "", VERBATIM)],
                 trims: false,
                 default_rel: &[".pi", "agent"],
+                dir_name_env: None,
             },
             RootSlot {
                 candidates: &[
@@ -701,12 +778,19 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 ],
                 trims: false,
                 default_rel: &[".pi", "agent", "sessions"],
+                dir_name_env: None,
             },
         ],
         // A custom ACP agent has no codeg-known private directory layout —
         // codeg never reads its store (history comes from codeg's own ACP
         // transcript), so there is nothing to widen the sandbox roots for.
-        AgentType::Custom(_) | AgentType::ZCode => &[],
+        // TRAE CLI's history is codeg's transcript too, and it reads and
+        // writes files itself rather than through `fs/*` (verified against
+        // 0.209.1), so its `~/.trae` never needs to be a write root either.
+        // Command Code is the same case: codeg's transcript is its history,
+        // and its tools never go through `fs/*` (verified against 1.84.0 and
+        // 1.86.3).
+        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => &[],
     }
 }
 
@@ -1764,8 +1848,13 @@ mod tests {
     fn builtin_default_roots(agent_type: AgentType) -> Vec<PathBuf> {
         let blanked: BTreeMap<String, String> = agent_root_slots(agent_type)
             .iter()
-            .flat_map(|slot| slot.candidates.iter())
-            .map(|(key, _, _)| ((*key).to_string(), String::new()))
+            .flat_map(|slot| {
+                slot.candidates
+                    .iter()
+                    .map(|(key, _, _)| *key)
+                    .chain(slot.dir_name_env)
+            })
+            .map(|key| (key.to_string(), String::new()))
             .collect();
         agent_data_roots(agent_type, &blanked)
     }
@@ -2123,8 +2212,9 @@ mod tests {
     fn root_slots_match_parser_resolvers() {
         use crate::parsers;
 
-        let expected: [(AgentType, PathBuf); 13] = [
+        let expected: [(AgentType, PathBuf); 14] = [
             (AgentType::Grok, parsers::grok::resolve_grok_home_dir()),
+            (AgentType::Qoder, parsers::qoder::resolve_qoder_config_dir()),
             (AgentType::Kiro, parsers::kiro::resolve_kiro_home_dir()),
             (
                 AgentType::ClaudeCode,
@@ -2166,8 +2256,13 @@ mod tests {
         for (agent_type, resolver_root) in expected {
             let env_configured = agent_root_slots(agent_type)
                 .iter()
-                .flat_map(|slot| slot.candidates.iter())
-                .any(|(key, _, _)| std::env::var_os(key).is_some());
+                .flat_map(|slot| {
+                    slot.candidates
+                        .iter()
+                        .map(|(key, _, _)| *key)
+                        .chain(slot.dir_name_env)
+                })
+                .any(|key| std::env::var_os(key).is_some());
             if env_configured {
                 continue;
             }
@@ -2368,6 +2463,136 @@ mod tests {
 
         let roots = agent_data_roots(AgentType::Cursor, &runtime_env);
         assert_eq!(roots, vec![config_dir]);
+    }
+
+    /// Qoder's directory is `QODER_CONFIG_DIR` itself, else
+    /// `QODER_CONFIG_DIR_NAME` (default `.qoder`) under `QODER_CLI_HOME`, else
+    /// under the home directory. A table that knew only the first left a Qoder
+    /// relocated by either of the others unable to write its own directory,
+    /// while authorizing `~/.qoder`, which that Qoder does not use.
+    #[test]
+    fn qoder_root_follows_its_cli_home_and_dir_name() {
+        let home = dirs::home_dir().expect("home dir");
+        let config_dir = absolute_path("tmp/codeg-qoder-config");
+        let cli_home = absolute_path("tmp/codeg-qoder-home");
+        let (config, cli) = (config_dir.to_string_lossy(), cli_home.to_string_lossy());
+        // Every key is set, blank meaning removed for the child, so nothing in
+        // this process's own environment can change the answer.
+        const KEYS: [&str; 3] = [
+            "QODER_CONFIG_DIR",
+            "QODER_CLI_HOME",
+            "QODER_CONFIG_DIR_NAME",
+        ];
+        let roots = |pairs: &[(&str, &str)]| {
+            let mut runtime_env: BTreeMap<String, String> = KEYS
+                .iter()
+                .map(|key| (key.to_string(), String::new()))
+                .collect();
+            for (key, value) in pairs {
+                runtime_env.insert(key.to_string(), value.to_string());
+            }
+            agent_data_roots(AgentType::Qoder, &runtime_env)
+        };
+
+        assert_eq!(roots(&[]), vec![home.join(".qoder")]);
+        assert_eq!(
+            roots(&[("QODER_CLI_HOME", &cli)]),
+            vec![cli_home.join(".qoder")]
+        );
+        assert_eq!(
+            roots(&[("QODER_CONFIG_DIR_NAME", ".qalt")]),
+            vec![home.join(".qalt")]
+        );
+        assert_eq!(
+            roots(&[("QODER_CLI_HOME", &cli), ("QODER_CONFIG_DIR_NAME", ".qalt")]),
+            vec![cli_home.join(".qalt")]
+        );
+        assert_eq!(
+            roots(&[
+                ("QODER_CONFIG_DIR", &config),
+                ("QODER_CLI_HOME", &cli),
+                ("QODER_CONFIG_DIR_NAME", ".qalt"),
+            ]),
+            vec![config_dir.clone()],
+            "the config dir is the directory itself, whatever the name says"
+        );
+
+        // Qoder refuses to start unless the name is a plain directory name, so
+        // anything else names no directory it uses and authorizes nothing.
+        for name in ["..", ".", "a/b", "../escape", "/abs"] {
+            assert_eq!(
+                roots(&[("QODER_CONFIG_DIR_NAME", name)]),
+                Vec::<PathBuf>::new(),
+                "{name}"
+            );
+            assert_eq!(
+                roots(&[("QODER_CLI_HOME", &cli), ("QODER_CONFIG_DIR_NAME", name)]),
+                Vec::<PathBuf>::new(),
+                "{name} under QODER_CLI_HOME"
+            );
+        }
+        let overridden = [
+            ("QODER_CONFIG_DIR", &*config),
+            ("QODER_CONFIG_DIR_NAME", ".."),
+        ];
+        assert_eq!(
+            roots(&overridden),
+            vec![config_dir],
+            "a name the config dir overrides is never read"
+        );
+    }
+
+    /// A renamed directory is held to the broad-root rule wherever it lands.
+    /// With the child's home one level above codeg's, a valid name can be
+    /// codeg's own home directory, which must not become writable, whether it
+    /// is reached through the home default or through `QODER_CLI_HOME`.
+    #[test]
+    fn qoder_renamed_root_cannot_be_a_home_directory() {
+        #[cfg(windows)]
+        const HOME_KEY: &str = "USERPROFILE";
+        #[cfg(not(windows))]
+        const HOME_KEY: &str = "HOME";
+
+        // A home with no parent (the filesystem root) leaves no level above it
+        // to set the child's home to, so there is nothing to check there.
+        let home = dirs::home_dir().expect("home dir");
+        let (Some(parent_dir), Some(name)) = (home.parent(), home.file_name()) else {
+            return;
+        };
+        let (parent, name) = (parent_dir.to_string_lossy(), name.to_string_lossy());
+        let roots = |dir_name: &str, pairs: &[(&str, &str)]| {
+            let mut runtime_env: BTreeMap<String, String> = [
+                ("QODER_CONFIG_DIR", ""),
+                ("QODER_CLI_HOME", ""),
+                ("QODER_CONFIG_DIR_NAME", dir_name),
+            ]
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+            for (key, value) in pairs {
+                runtime_env.insert(key.to_string(), value.to_string());
+            }
+            agent_data_roots(AgentType::Qoder, &runtime_env)
+        };
+
+        assert_eq!(roots(&name, &[(HOME_KEY, &parent)]), Vec::<PathBuf>::new());
+        assert_eq!(
+            roots(&name, &[("QODER_CLI_HOME", &parent)]),
+            Vec::<PathBuf>::new()
+        );
+
+        // The same launches with any other name keep their directory, so the
+        // refusals above come from the broad-root rule and from nothing that
+        // would refuse every renamed directory under this parent.
+        let sibling = format!("{name}-qoder");
+        assert_eq!(
+            roots(&sibling, &[(HOME_KEY, &parent)]),
+            vec![parent_dir.join(&sibling)]
+        );
+        assert_eq!(
+            roots(&sibling, &[("QODER_CLI_HOME", &parent)]),
+            vec![parent_dir.join(&sibling)]
+        );
     }
 
     /// pi relocates its session store independently of its agent home, so a

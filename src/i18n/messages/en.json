@@ -249,6 +249,21 @@
     "autostartDescription": "Opens automatically after you sign in to this computer.",
     "autostartSaveFailed": "Failed to save the launch-at-login setting: {message}",
     "autostartUnavailable": "Could not read the startup entry on this computer: {message}",
+    "cliAccessTitle": "Command-line access",
+    "cliAccessDescription": "Lets the codeg-cli command on this computer run prompts through Codeg — from scripts, CI jobs, or Codeg's own terminals. Only this computer can connect, with a key kept in a private file.",
+    "cliAccessEndpointFile": "Endpoint file:",
+    "cliAccessExample": "Try:",
+    "cliAccessOff": "Off: codeg-cli on this computer cannot reach Codeg.",
+    "cliAccessUnavailable": "Command-line access could not start: {message}",
+    "cliAccessSaveFailed": "Could not change command-line access: {message}",
+    "cliToolInstall": "Install command-line tool",
+    "cliToolInstalled": "{command} is on your PATH:",
+    "cliToolPackage": "{command} came with the package, on your PATH:",
+    "cliToolNotInstalled": "Put {command} on your PATH, so a terminal outside Codeg finds it.",
+    "cliToolConflict": "Left as it is: {message}",
+    "cliToolNote": "Note: {message}",
+    "cliToolInstalledToast": "{command} is on your PATH. Open a new terminal to use it.",
+    "cliToolInstallFailed": "Could not install the command-line tool: {message}",
     "proxyTitle": "Network Proxy",
     "proxyDescription": "When enabled, subsequent network requests prefer this proxy (including ACP chat, agent installation and Git remote operations).",
     "loadFailed": "Load failed: {message}",
@@ -959,6 +974,9 @@
       "customApiKeyHint": "Stored inline in `[model.*].api_key`, scoped to this endpoint.",
       "customContextWindowLabel": "Context window (tokens)",
       "customContextWindowHint": "Optional. Drives auto-compact timing; leave empty for the endpoint default.",
+      "customReasoningEffortsLabel": "Reasoning effort levels",
+      "customReasoningEffortsEmptyHint": "No levels declared. Unless Grok's own model list already describes this model ID, the composer shows no reasoning-effort selector for it. Pick the levels your endpoint accepts to add one.",
+      "customReasoningEffortsHint": "Written to `[model.*].reasoning_efforts`. Each level is sent to your endpoint as written, so pick only ones it accepts. New sessions start on the Reasoning effort chosen above, or on the first level here while that is set to “Use default”.",
       "autoCompactLabel": "Auto-compact threshold (%)",
       "autoCompactHint": "Compact the conversation when context usage reaches this percent (Grok default 85). Written to `[session]`."
     },
@@ -1112,6 +1130,30 @@
       "apiKeyHint": "Passed to the CLI as KIRO_API_KEY. Leave empty to use the account you signed in with via kiro-cli login; an API key is only needed where no browser sign-in is possible (servers, Docker).",
       "saveConfig": "Save Kiro Config"
     },
+    "trae": {
+      "configManagement": "Configuration",
+      "configDescription": "TRAE CLI 2.0 is available to customers on the flagship TRAE Enterprise plan. Codeg runs the traecli you installed, which keeps its sign-in, skills and MCP servers in ~/.trae. Model, mode and reasoning effort are not here: TRAE CLI reports them over ACP, so the composer's own selectors own them per session.",
+      "signInTitle": "Sign in",
+      "signInHint": "Run this once in a terminal to sign in with your enterprise SSO. Sessions in Codeg reuse that login.",
+      "copyCommand": "Copy command",
+      "commandCopied": "Command copied",
+      "patLabel": "Personal access token (optional)",
+      "patHint": "For a machine where browser sign-in is not possible, such as a server or Docker install. Codeg passes it to TRAE CLI as TRAECLI_PERSONAL_ACCESS_TOKEN and signs in with it whenever a session starts. Leave empty to use the login from traecli login.",
+      "hostLabel": "Enterprise API URL (optional)",
+      "hostHint": "Only if your organization runs TRAE on its own domain. Passed as TRAECLI_HOST; leave empty for TRAE's own service.",
+      "saveConfig": "Save TRAE CLI Config"
+    },
+    "commandCode": {
+      "configManagement": "Configuration",
+      "configDescription": "Codeg runs the Command Code CLI from the command-code npm package, which keeps its sign-in, skills and MCP servers in ~/.commandcode. Model, mode and reasoning effort are not here: Command Code reports them over ACP, so the composer's own selectors own them per session.",
+      "signInTitle": "Sign in",
+      "signInHint": "Run this once in a terminal to sign in with your Command Code account. Sessions in Codeg reuse that login.",
+      "copyCommand": "Copy command",
+      "commandCopied": "Command copied",
+      "apiKeyLabel": "API key (optional)",
+      "apiKeyHint": "For a machine where browser sign-in is not possible, such as a server or Docker install. Passed to Command Code as COMMAND_CODE_API_KEY, which takes precedence over the login from command-code login. Leave empty to use that login.",
+      "saveConfig": "Save Command Code Config"
+    },
     "deepseek": {
       "configManagement": "DeepSeek Harness Configuration",
       "configDescription": "The endpoint and key are environment variables deepseek-acp reads at launch. Model and reasoning effort are per-session selectors — pick them in the composer.",
@@ -1131,13 +1173,10 @@
       "modelName": "Model Name",
       "enableWebsocket": "Enable WebSocket",
       "enableWebsocketAria": "Enable WebSocket for Codex Provider",
-      "enableSkills": "Enable Skills",
-      "enableSkillsAria": "Enable Skills for Codex",
+      "enableWebsocketHint": "Turn this on only if your endpoint supports the Responses API over WebSocket, as OpenAI's own API does. Against an endpoint that does not, codex may fail the turn, or retry up to five times before falling back to HTTPS, and does this again in every new session. Writes supports_websockets for this provider to ~/.codex/config.toml and takes effect on the next session.",
       "enableDefaultModeRequestUserInput": "Allow questions in Default mode",
       "enableDefaultModeRequestUserInputAria": "Allow Codex to ask questions in Default mode",
       "enableDefaultModeRequestUserInputHint": "Codex may only call its request_user_input tool in Plan mode. Turn this on to let it ask you questions in ordinary turns too. Writes [features].default_mode_request_user_input to ~/.codex/config.toml; the flag is still under development upstream. Takes effect on the next session.",
-      "enableFast": "Enable Fast",
-      "enableFastAria": "Enable Fast service tier for Codex",
       "sandboxGroupTitle": "Sandbox & approvals",
       "sandboxGroupHint": "Written to the global ~/.codex/config.toml, so codex CLI and IDE sessions see it too. These are thread defaults: they govern the turns codex starts on its own (/goal, /review, /compact). Ordinary prompts use the composer's approval preset instead. Restart a session to pick up changes.",
       "sandboxShadowedWarning": "config.toml sets default_permissions, so codex resolves permissions through that profile and ignores sandbox_mode entirely. Remove default_permissions to use the controls below.",
@@ -1607,6 +1646,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro config saved",
       "saveKiroFailed": "Failed to save Kiro config",
+      "traeSaved": "TRAE CLI config saved",
+      "saveTraeFailed": "Failed to save TRAE CLI config",
+      "commandCodeSaved": "Command Code config saved",
+      "saveCommandCodeFailed": "Failed to save Command Code config",
       "systemAgentAlreadyLatest": "{name} is already up to date ({version})"
     },
     "distribution": {
@@ -1913,6 +1956,62 @@
     "invalidFolderId": "Invalid folder ID",
     "loadingRepo": "Loading repository..."
   },
+  "CommitMessageGeneration": {
+    "generate": "Generate a commit message",
+    "stop": "Stop generating ({seconds}s)",
+    "generating": "Writing a commit message… {seconds}s",
+    "noChanges": "No changes to describe",
+    "selectFiles": "Select the files to describe",
+    "busyCommitting": "Committing…",
+    "settings": "Commit message settings",
+    "settingsMenuItem": "Commit message settings…",
+    "untracked": {
+      "title": "Commit untracked files too?",
+      "description": "Checked files are described in the message and committed with it. Unchecked files stay untracked.",
+      "selectionCount": "{selected} / {total} files selected",
+      "selectAll": "Select all",
+      "unselectAll": "Unselect all",
+      "showMore": "Show {count, plural, one {# more file} other {# more files}}",
+      "confirm": "Generate",
+      "included": "Also commits {count, plural, one {# untracked file} other {# untracked files}}",
+      "drop": "Don't commit the untracked files",
+      "stagedMeanwhile": "Some files you unchecked were staged in the meantime, so they're committed with the tracked changes"
+    },
+    "toasts": {
+      "failed": "Couldn't generate a commit message",
+      "openSettings": "Settings",
+      "autoCommitSkipped": "Not committed automatically: the changes moved while the message was being written. Check it, then commit."
+    },
+    "errors": {
+      "noChanges": "There are no changes to describe.",
+      "noAgent": "No agent to write it. Pick one in the commit message settings.",
+      "emptyAnswer": "The agent's answer had no commit message in it.",
+      "cancelled": "Generation was stopped."
+    },
+    "dialog": {
+      "title": "Commit message generation",
+      "description": "The generate button next to the commit box has an agent write a message for exactly what the commit will contain. It runs in a separate session that never appears in your session list, and anything it asks permission for is refused.",
+      "scope": "Scope",
+      "scopeGlobal": "All folders (global defaults)",
+      "scopeGlobalHint": "Folders without their own settings use these global defaults.",
+      "source": "Configuration",
+      "sourceGlobal": "Global defaults",
+      "sourceCustom": "Custom",
+      "sourceGlobalFollow": "Follows the global settings — changes there apply here automatically.",
+      "sourceCustomHint": "Saves this folder's own settings; it stops following the global defaults.",
+      "pinAgent": "Use a specific agent",
+      "pinAgentHint": "This agent writes every message, with the options below. A fast, inexpensive model is plenty for the job.",
+      "followSessionHint": "Off: the agent of the session you're looking at writes it, else the folder's default agent, with its default model.",
+      "autoCommit": "Commit automatically",
+      "autoCommitHint": "Commits as soon as the message is written. If the changes moved in the meantime, the message is only filled in, for you to check.",
+      "instructions": "Instructions",
+      "instructionsHint": "Added to every request, and followed over the built-in rules (such as matching the language of recent commits).",
+      "instructionsPlaceholder": "e.g. Write in Chinese. Use Conventional Commits. Explain why in the body.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "loadFailed": "Couldn't load the settings"
+    }
+  },
   "MergePage": {
     "title": "Resolve Conflicts",
     "invalidFolderId": "Invalid folder ID",
@@ -2079,6 +2178,7 @@
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
       "statusCancelledBadge": "Cancelled",
       "worktreeRemovedBadge": "Source worktree removed",
+      "cliBadge": "Started from the command line",
       "conversationCountUnit": "{count, plural, one {# conversation} other {# conversations}}",
       "emptyFolderHint": "No conversations",
       "noMatchingConversations": "No matching conversations",
@@ -2159,9 +2259,11 @@
         "dropToUngroup": "Drop here to remove from group"
       },
       "recentFilterAll": "All",
+      "recentFilterCli": "Command line",
       "recentFilterTitle": "Show in Recent: {filter}",
       "noRecentChats": "No recent chats",
       "noRecentFolders": "No recent folder conversations",
+      "noRecentCli": "No recent conversations from the command line",
       "recentFilterMenuLabel": "Show in Recent"
     },
     "conversation": {
@@ -2378,7 +2480,10 @@
         "commits": "Commits"
       },
       "noFolderTitle": "No folder open",
-      "noFolderHint": "Open a folder to see its contents here"
+      "noFolderHint": "Open a folder to see its contents here",
+      "openFullPage": "Open full page",
+      "back": "Back",
+      "noAutomations": "No automations for this project yet"
     },
     "windowControls": {
       "minimizeWindow": "Minimize window",
@@ -3135,6 +3240,10 @@
       "manageCommands": "Manage Commands...",
       "runCommandTitle": "Run: {command}",
       "stopCommandTitle": "Stop: {command}",
+      "localUnavailable": "Local commands are only available in the desktop app",
+      "localRunFailed": "Failed to run local command",
+      "globalCommand": "Shown in all folders",
+      "localCommand": "Runs on this computer",
       "manageDialog": {
         "title": "Manage Commands",
         "empty": "No commands yet",
@@ -3143,11 +3252,16 @@
         "newCommand": "New command",
         "nameLabel": "Name",
         "commandLabel": "Command",
+        "runLocalLabel": "Run on this computer",
+        "runLocalHint": "Runs on this computer instead of the project host, without a terminal; <code>{folderVar}</code> is the folder's absolute path and <code>{hostVar}</code> the remote host name, e.g. <code>{example}</code>",
+        "globalLabel": "Show in all folders",
+        "globalHint": "Available in every folder, worktree and remote connection; saved on this computer",
         "dragSort": "Drag to sort",
         "dragSortCommand": "Drag to sort {name}",
         "orderFailed": "Failed to save command order",
         "loadFailed": "Failed to load commands",
         "saveFailed": "Failed to save command",
+        "runLocalNotKept": "the folder's host can't save \"Run on this computer\" — update it, or turn on \"Show in all folders\" to keep the command on this computer",
         "deleteFailed": "Failed to delete command",
         "confirmDelete": {
           "title": "Delete command?",
@@ -3277,6 +3391,7 @@
       },
       "messageInput": {
         "askAnything": "Ask anything...",
+        "promptSuggestion": "{suggestion} (Tab to use)",
         "removeAttachmentAria": "Remove {name}",
         "attachFiles": "Attach files",
         "attachLocalUpload": "Upload local file",
@@ -3308,6 +3423,10 @@
         "searchModelAria": "Search models",
         "modelListLabel": "Models",
         "recommendedBadge": "Recommended",
+        "recommendedValue": "Recommended: {value}",
+        "searchOptions": "Search options...",
+        "searchOptionsAria": "Search options",
+        "noOptions": "No options found",
         "noModels": "No models found",
         "cancel": "Cancel",
         "send": "Send",
@@ -3315,6 +3434,7 @@
         "steerIntoTurn": "Insert into current turn",
         "steerAsNote": "Send note for next check",
         "steerQueuedInstead": "Queued instead — it will be sent with the next turn.",
+        "heldWhileResponding": "Still responding — your message stays in the input. Send it once the reply finishes.",
         "steerFailed": "Couldn't insert into the current turn",
         "steerNoteFailed": "Couldn't send your note",
         "slashCommands": "Slash commands",
@@ -3672,7 +3792,6 @@
         "unknownAgent": "Sub-agent",
         "openDetail": "Open conversation",
         "resumed": "Resumed",
-        "resumeDetail": "Resume details",
         "resumeReasonLabel": "Resume reason",
         "detailTitle": "Sub-agent conversation",
         "detailDescription": "Read-only view of the delegated sub-agent's conversation.",
@@ -3918,13 +4037,16 @@
       },
       "messageNav": {
         "title": "Message navigation",
-        "collapse": "Collapse message navigation",
         "loadingEarlier": "Loading earlier messages…",
         "loadEarlier": "Load earlier messages",
-        "collapsedSummary": "Messages {count}",
         "fileCount": "{count, plural, one {# file} other {# files}}",
-        "remove": "Remove",
-        "noDiffDataAvailable": "No diff data available for {filePath}"
+        "subAgentCount": "{count, plural, one {# sub-agent} other {# sub-agents}}",
+        "showDiff": "Show the changes to {filePath}",
+        "hideDiff": "Hide the changes to {filePath}",
+        "openFile": "Open {filePath}",
+        "collapse": "Collapse",
+        "currentMessage": "Current message",
+        "scrollToCurrent": "Scroll to the current message (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "Files changed",
@@ -3982,6 +4104,9 @@
         "resumeDelegation": "Resuming task {task}",
         "resumeDelegationNoId": "Resuming a delegated task",
         "promptLabel": "Prompt",
+        "ackRecorded": "Recorded on the work task",
+        "ackNotRecorded": "Not recorded on the work task",
+        "ackNotRecordedWithReason": "Not recorded on the work task: {reason}",
         "verdict": {
           "success": "success",
           "needs_review": "needs review",
@@ -4098,6 +4223,18 @@
         "tokens": "{count} tokens",
         "stopDeclined": "That task could not be stopped — it may have already finished.",
         "stopFailed": "Failed to stop the task: {error}"
+      },
+      "remoteControl": {
+        "title": "Remote Control is on",
+        "open": "Open in browser",
+        "copy": "Copy link",
+        "copied": "Copied",
+        "qr": "QR code",
+        "qrLabel": "QR code for this session's Remote Control link",
+        "qrHint": "Scan with your phone to continue this session in the Claude app or on claude.ai/code.",
+        "noUrl": "Claude Code returned no link for this session",
+        "turnOff": "Turn off",
+        "turnOffBusy": "Available once Claude has finished"
       },
       "proposedPlan": {
         "title": "Proposed plan",
@@ -5270,7 +5407,12 @@
     "reconnectNow": "Reconnect now",
     "sessionExpiredTitle": "Session expired",
     "sessionExpiredDescription": "Your session is no longer valid. Please sign in again to continue.",
-    "goToLogin": "Go to login"
+    "proxySignInTitle": "Sign-in expired",
+    "proxySignInDescription": "Your sign-in to the proxy in front of this server has expired. Reload the page to sign in again.",
+    "goToLogin": "Go to login",
+    "versionChangedTitle": "The server is now running Codeg {version}",
+    "versionChangedDescription": "This page is still on {version}. Reload it to use the server's version.",
+    "reloadPage": "Reload"
   },
   "LiveFeedback": {
     "placeholder": "Send a note to {agent} while it works…",

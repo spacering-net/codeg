@@ -813,6 +813,42 @@ function turnFileChanges(turn: MessageTurn): TurnFileChange[] {
 }
 
 /**
+ * Parses the file changes of `turns` into `turnFileChanges`' cache ahead of a
+ * grouping, a slice of about `sliceMs` at a time with the main thread let go
+ * in between: the history above a long conversation's loaded window (the
+ * message navigator's outline) can hold thousands of edits, and parsing them
+ * where the navigator groups them — in a render — freezes the page for as
+ * long. `done` runs once every turn is parsed; at once when the first slice
+ * gets through them all.
+ */
+export function warmTurnFileChanges(
+  turns: readonly MessageTurn[],
+  done: () => void,
+  sliceMs = 8
+): void {
+  let index = 0
+  const slice = () => {
+    const until = performance.now() + sliceMs
+    while (index < turns.length) {
+      const turn = turns[index++]
+      if (turn.role === "assistant") {
+        try {
+          turnFileChanges(turn)
+        } catch {
+          // Left to the grouping, which meets it where it always has.
+        }
+      }
+      if (index < turns.length && performance.now() >= until) {
+        setTimeout(slice, 0)
+        return
+      }
+    }
+    done()
+  }
+  slice()
+}
+
+/**
  * Group the files each user message led to: one group per user turn, holding
  * the edit/write/apply_patch changes of the assistant turns that follow it.
  *

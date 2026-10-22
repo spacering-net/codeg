@@ -249,6 +249,21 @@
     "autostartDescription": "يبدأ التشغيل تلقائيًا بعد تسجيل الدخول إلى هذا الجهاز.",
     "autostartSaveFailed": "فشل حفظ إعدادات التشغيل عند تسجيل الدخول: {message}",
     "autostartUnavailable": "تعذّر قراءة إدخال بدء التشغيل على هذا الجهاز: {message}",
+    "cliAccessTitle": "الوصول عبر سطر الأوامر",
+    "cliAccessDescription": "يتيح لأمر codeg-cli على هذا الكمبيوتر تشغيل المطالبات عبر Codeg من السكربتات أو مهام CI أو طرفيات Codeg نفسها. لا يمكن الاتصال إلا من هذا الكمبيوتر، بمفتاح محفوظ في ملف خاص.",
+    "cliAccessEndpointFile": "ملف الاتصال:",
+    "cliAccessExample": "مثال:",
+    "cliAccessOff": "متوقف: لا يستطيع codeg-cli على هذا الكمبيوتر الوصول إلى Codeg.",
+    "cliAccessUnavailable": "تعذّر بدء الوصول عبر سطر الأوامر: {message}",
+    "cliAccessSaveFailed": "تعذّر تغيير الوصول عبر سطر الأوامر: {message}",
+    "cliToolInstall": "تثبيت أداة سطر الأوامر",
+    "cliToolInstalled": "{command} موجود في PATH لديك:",
+    "cliToolPackage": "{command} مرفق مع الحزمة وموجود في PATH لديك:",
+    "cliToolNotInstalled": "ضع {command} في PATH لديك حتى تجده الطرفيات خارج Codeg.",
+    "cliToolConflict": "تُرك كما هو: {message}",
+    "cliToolNote": "ملاحظة: {message}",
+    "cliToolInstalledToast": "أصبح {command} في PATH لديك. افتح طرفية جديدة لاستخدامه.",
+    "cliToolInstallFailed": "تعذّر تثبيت أداة سطر الأوامر: {message}",
     "proxyTitle": "وكيل الشبكة",
     "proxyDescription": "عند التفعيل، ستُفضَّل إعدادات هذا الوكيل في طلبات الشبكة اللاحقة (بما في ذلك دردشة ACP وتثبيت الوكلاء وعمليات Git البعيدة).",
     "loadFailed": "فشل التحميل: {message}",
@@ -959,6 +974,9 @@
       "customApiKeyHint": "يُخزَّن ضمن `[model.*].api_key`، مقصورًا على نقطة النهاية هذه.",
       "customContextWindowLabel": "نافذة السياق (رموز)",
       "customContextWindowHint": "اختياري. يحدّد توقيت الضغط التلقائي؛ اتركه فارغًا لاستخدام القيمة الافتراضية لنقطة النهاية.",
+      "customReasoningEffortsLabel": "مستويات جهد الاستدلال",
+      "customReasoningEffortsEmptyHint": "لم تُعلَن أي مستويات. ما لم تصف قائمة نماذج Grok نفسها معرّف هذا النموذج، فلن يعرض صندوق الإدخال محدِّد جهد الاستدلال له. اختر المستويات التي تقبلها نقطة النهاية لإضافته.",
+      "customReasoningEffortsHint": "يُكتب في `[model.*].reasoning_efforts`. يُرسَل كل مستوى إلى نقطة النهاية كما هو، فاختر ما تقبله فقط. تبدأ الجلسات الجديدة على «جهد الاستدلال» المختار أعلاه، أو على أول مستوى هنا ما دام مضبوطًا على «استخدام الافتراضي».",
       "autoCompactLabel": "عتبة الضغط التلقائي (%)",
       "autoCompactHint": "يضغط المحادثة عندما يبلغ استخدام السياق هذه النسبة المئوية (الافتراضي في Grok هو 85). يُكتَب في `[session]`."
     },
@@ -1112,6 +1130,30 @@
       "apiKeyHint": "يُمرَّر إلى CLI باسم KIRO_API_KEY. اتركه فارغاً لاستخدام الحساب الذي سجلت الدخول به عبر kiro-cli login؛ لا يلزم إلا حيث يتعذر تسجيل الدخول بالمتصفح (الخوادم، Docker).",
       "saveConfig": "حفظ إعدادات Kiro"
     },
+    "trae": {
+      "configManagement": "إدارة الإعدادات",
+      "configDescription": "يتوفر TRAE CLI 2.0 لعملاء الخطة الرئيسية من TRAE Enterprise فقط. يشغّل Codeg أداة traecli التي ثبّتّها، وهي تحفظ تسجيل الدخول والمهارات وخوادم MCP في ~/.trae. النموذج والوضع ومستوى الاستدلال ليست هنا: يُبلغ عنها TRAE CLI عبر ACP، لذا تديرها محددات المحرّر لكل جلسة.",
+      "signInTitle": "تسجيل الدخول",
+      "signInHint": "شغّل هذا الأمر مرة واحدة في الطرفية لتسجيل الدخول عبر SSO الخاص بمؤسستك. تعيد جلسات Codeg استخدام تسجيل الدخول هذا.",
+      "copyCommand": "نسخ الأمر",
+      "commandCopied": "تم نسخ الأمر",
+      "patLabel": "رمز الوصول الشخصي (اختياري)",
+      "patHint": "للأجهزة التي يتعذر فيها تسجيل الدخول بالمتصفح، مثل الخوادم أو تثبيتات Docker. يمرّره Codeg إلى TRAE CLI باسم TRAECLI_PERSONAL_ACCESS_TOKEN ويسجّل الدخول به عند بدء كل جلسة. اتركه فارغاً لاستخدام تسجيل الدخول من traecli login.",
+      "hostLabel": "عنوان API الخاص بالمؤسسة (اختياري)",
+      "hostHint": "فقط إذا كانت مؤسستك تشغّل TRAE على نطاقها الخاص. يُمرَّر باسم TRAECLI_HOST؛ اتركه فارغاً لاستخدام خدمة TRAE نفسها.",
+      "saveConfig": "حفظ إعدادات TRAE CLI"
+    },
+    "commandCode": {
+      "configManagement": "إدارة الإعدادات",
+      "configDescription": "يشغّل Codeg واجهة Command Code CLI من حزمة npm المسماة command-code، وهي تحفظ تسجيل الدخول والمهارات وخوادم MCP في ~/.commandcode. النموذج والوضع ومستوى الاستدلال ليست هنا: يُبلغ عنها Command Code عبر ACP، لذا تديرها محددات المحرّر لكل جلسة.",
+      "signInTitle": "تسجيل الدخول",
+      "signInHint": "شغّل هذا الأمر مرة واحدة في الطرفية لتسجيل الدخول بحساب Command Code الخاص بك. تعيد جلسات Codeg استخدام تسجيل الدخول هذا.",
+      "copyCommand": "نسخ الأمر",
+      "commandCopied": "تم نسخ الأمر",
+      "apiKeyLabel": "مفتاح API (اختياري)",
+      "apiKeyHint": "للأجهزة التي يتعذر فيها تسجيل الدخول بالمتصفح، مثل الخوادم أو تثبيتات Docker. يُمرَّر إلى Command Code باسم COMMAND_CODE_API_KEY ويتقدّم على تسجيل الدخول من command-code login. اتركه فارغاً لاستخدام تسجيل الدخول ذاك.",
+      "saveConfig": "حفظ إعدادات Command Code"
+    },
     "deepseek": {
       "configManagement": "إعدادات DeepSeek Harness",
       "configDescription": "نقطة النهاية والمفتاح متغيّرا بيئة يقرأهما deepseek-acp عند الإقلاع. أما النموذج ومستوى الاستدلال فمحدِّدان على مستوى الجلسة، ويُختاران من حقل الإدخال.",
@@ -1131,13 +1173,10 @@
       "modelName": "اسم النموذج",
       "enableWebsocket": "تفعيل WebSocket",
       "enableWebsocketAria": "تفعيل WebSocket لـ Codex Provider",
-      "enableSkills": "تفعيل Skills",
-      "enableSkillsAria": "تفعيل Skills لـ Codex",
+      "enableWebsocketHint": "فعّل هذا الخيار فقط إذا كانت نقطة النهاية تدعم Responses API عبر WebSocket، كما تفعل واجهة OpenAI الرسمية. ومع نقطة نهاية لا تدعمه، قد يُفشل codex الدور أو يعيد محاولة الاتصال حتى خمس مرات قبل الرجوع إلى HTTPS، ويكرر ذلك في كل جلسة جديدة. يكتب supports_websockets لهذا المزوّد في ~/.codex/config.toml ويسري من الجلسة التالية.",
       "enableDefaultModeRequestUserInput": "السماح بالأسئلة في وضع Default",
       "enableDefaultModeRequestUserInputAria": "السماح لـ Codex بطرح الأسئلة في وضع Default",
       "enableDefaultModeRequestUserInputHint": "لا يستطيع Codex استدعاء أداة request_user_input إلا في وضع Plan. فعّل هذا الخيار ليتمكن من سؤالك في الجولات العادية أيضًا. يُكتب [features].default_mode_request_user_input في ~/.codex/config.toml، وما زال هذا الخيار قيد التطوير في المشروع الأصلي. يسري ابتداءً من الجلسة التالية.",
-      "enableFast": "تفعيل Fast",
-      "enableFastAria": "تفعيل مستوى خدمة Fast لـ Codex",
       "sandboxGroupTitle": "بيئة العزل والموافقات",
       "sandboxGroupHint": "تُكتب في ~/.codex/config.toml العام، لذا تراها أيضًا جلسات codex CLI وبيئة التطوير. هذه قيم افتراضية للمحادثة: تحكم الأدوار التي يبدأها codex بنفسه (‏/goal و‏/review و‏/compact). أما الرسائل العادية فتستخدم إعداد الموافقة المحدد في صندوق الإدخال. أعد تشغيل الجلسة لتطبيق التغييرات.",
       "sandboxShadowedWarning": "يضبط config.toml المفتاح default_permissions، لذا يحسم codex الأذونات عبر ذلك الملف الشخصي ويتجاهل sandbox_mode تمامًا. احذف default_permissions لاستخدام عناصر التحكم أدناه.",
@@ -1607,6 +1646,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "تم حفظ إعدادات Kiro",
       "saveKiroFailed": "تعذّر حفظ إعدادات Kiro",
+      "traeSaved": "تم حفظ إعدادات TRAE CLI",
+      "saveTraeFailed": "تعذّر حفظ إعدادات TRAE CLI",
+      "commandCodeSaved": "تم حفظ إعدادات Command Code",
+      "saveCommandCodeFailed": "تعذّر حفظ إعدادات Command Code",
       "systemAgentAlreadyLatest": "{name} محدَّث بالفعل ({version})"
     },
     "distribution": {
@@ -1913,6 +1956,62 @@
     "invalidFolderId": "معرّف المجلد غير صالح",
     "loadingRepo": "جارٍ تحميل المستودع..."
   },
+  "CommitMessageGeneration": {
+    "generate": "إنشاء رسالة التزام",
+    "stop": "إيقاف الإنشاء ({seconds} ث)",
+    "generating": "جارٍ كتابة رسالة الالتزام… {seconds} ث",
+    "noChanges": "لا توجد تغييرات لوصفها",
+    "selectFiles": "اختر الملفات المراد وصفها",
+    "busyCommitting": "جارٍ الالتزام…",
+    "settings": "إعدادات رسائل الالتزام",
+    "settingsMenuItem": "إعدادات رسائل الالتزام…",
+    "untracked": {
+      "title": "هل تريد تضمين الملفات غير المتعقبة في الالتزام أيضًا؟",
+      "description": "تُوصف الملفات المحددة في الرسالة وتُضمَّن في هذا الالتزام. أما غير المحددة فتبقى غير متعقبة.",
+      "selectionCount": "تم تحديد {selected} / {total} ملف",
+      "selectAll": "تحديد الكل",
+      "unselectAll": "إلغاء تحديد الكل",
+      "showMore": "عرض {count, plural, one {ملف إضافي واحد} two {ملفين إضافيين} few {# ملفات إضافية} many {# ملفًا إضافيًا} other {# ملف إضافي}}",
+      "confirm": "إنشاء",
+      "included": "يتضمن أيضًا {count, plural, one {ملفًا واحدًا غير متعقب} two {ملفين غير متعقبين} few {# ملفات غير متعقبة} many {# ملفًا غير متعقب} other {# ملف غير متعقب}}",
+      "drop": "عدم تضمين الملفات غير المتعقبة",
+      "stagedMeanwhile": "تمت مرحلة بعض الملفات التي ألغيت تحديدها في الأثناء، لذا ستُضمَّن في الالتزام مع التغييرات المتعقبة"
+    },
+    "toasts": {
+      "failed": "تعذّر إنشاء رسالة الالتزام",
+      "openSettings": "الإعدادات",
+      "autoCommitSkipped": "لم يتم الالتزام تلقائيًا: تغيّرت التعديلات أثناء كتابة الرسالة. راجعها ثم التزم."
+    },
+    "errors": {
+      "noChanges": "لا توجد تغييرات لوصفها.",
+      "noAgent": "لا يوجد وكيل لكتابتها. اختر واحدًا في إعدادات رسائل الالتزام.",
+      "emptyAnswer": "لم يتضمن رد الوكيل أي رسالة التزام.",
+      "cancelled": "تم إيقاف الإنشاء."
+    },
+    "dialog": {
+      "title": "إنشاء رسائل الالتزام",
+      "description": "يجعل زر الإنشاء بجوار مربع الالتزام وكيلًا يكتب رسالة لما سيحتويه الالتزام بالضبط. يعمل ذلك في جلسة منفصلة لا تظهر أبدًا في قائمة الجلسات، ويُرفض أي إذن يطلبه.",
+      "scope": "النطاق",
+      "scopeGlobal": "كل المجلدات (الإعدادات العامة)",
+      "scopeGlobalHint": "المجلدات بلا إعدادات خاصة تستخدم هذه الإعدادات العامة.",
+      "source": "مصدر الإعدادات",
+      "sourceGlobal": "الإعدادات العامة",
+      "sourceCustom": "إعداد خاص",
+      "sourceGlobalFollow": "يتبع الإعدادات العامة — التغييرات هناك تسري هنا تلقائيًا.",
+      "sourceCustomHint": "يحفظ إعدادات خاصة بهذا المجلد ويتوقف عن اتباع الإعدادات العامة.",
+      "pinAgent": "استخدام وكيل محدد",
+      "pinAgentHint": "يكتب هذا الوكيل كل رسالة بالخيارات أدناه. يكفي نموذج سريع ومنخفض التكلفة لهذه المهمة.",
+      "followSessionHint": "عند الإيقاف: يكتبها وكيل الجلسة التي تعرضها، وإلا فالوكيل الافتراضي للمجلد، بنموذجه الافتراضي.",
+      "autoCommit": "الالتزام تلقائيًا",
+      "autoCommitHint": "يلتزم فور كتابة الرسالة. وإذا تغيّرت التعديلات في هذه الأثناء، تُملأ الرسالة فقط لتراجعها.",
+      "instructions": "تعليمات",
+      "instructionsHint": "تُضاف إلى كل طلب ولها الأولوية على القواعد المدمجة (مثل اتباع لغة الالتزامات الأخيرة).",
+      "instructionsPlaceholder": "مثال: اكتب بالعربية. اتبع Conventional Commits. اشرح السبب في المتن.",
+      "save": "حفظ",
+      "cancel": "إلغاء",
+      "loadFailed": "تعذّر تحميل الإعدادات"
+    }
+  },
   "MergePage": {
     "title": "حل التعارضات",
     "invalidFolderId": "معرّف المجلد غير صالح",
@@ -2079,6 +2178,7 @@
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "statusCancelledBadge": "ملغى",
       "worktreeRemovedBadge": "تمت إزالة شجرة العمل الأصلية",
+      "cliBadge": "بدأت من سطر الأوامر",
       "conversationCountUnit": "{count} محادثة",
       "emptyFolderHint": "لا توجد محادثات",
       "noMatchingConversations": "لا توجد محادثات مطابقة",
@@ -2159,9 +2259,11 @@
         "dropToUngroup": "أفلِت هنا لإزالته من المجموعة"
       },
       "recentFilterAll": "الكل",
+      "recentFilterCli": "سطر الأوامر",
       "recentFilterTitle": "عرض في الأحدث: {filter}",
       "noRecentChats": "لا توجد محادثات دردشة حديثة",
       "noRecentFolders": "لا توجد محادثات مجلدات حديثة",
+      "noRecentCli": "لا توجد محادثات حديثة من سطر الأوامر",
       "recentFilterMenuLabel": "عرض في الأحدث"
     },
     "conversation": {
@@ -2378,7 +2480,10 @@
         "commits": "الالتزامات"
       },
       "noFolderTitle": "لا يوجد مجلد مفتوح",
-      "noFolderHint": "افتح مجلدا لعرض محتواه هنا"
+      "noFolderHint": "افتح مجلدا لعرض محتواه هنا",
+      "openFullPage": "فتح في صفحة كاملة",
+      "back": "رجوع",
+      "noAutomations": "لا توجد أتمتة لهذا المشروع بعد"
     },
     "windowControls": {
       "minimizeWindow": "تصغير النافذة",
@@ -3135,6 +3240,10 @@
       "manageCommands": "إدارة الأوامر...",
       "runCommandTitle": "تشغيل: {command}",
       "stopCommandTitle": "إيقاف: {command}",
+      "localUnavailable": "الأوامر المحلية متاحة فقط في تطبيق سطح المكتب",
+      "localRunFailed": "فشل تشغيل الأمر المحلي",
+      "globalCommand": "متاح في كل المجلدات",
+      "localCommand": "يعمل على هذا الكمبيوتر",
       "manageDialog": {
         "title": "إدارة الأوامر",
         "empty": "لا توجد أوامر بعد",
@@ -3143,11 +3252,16 @@
         "newCommand": "أمر جديد",
         "nameLabel": "الاسم",
         "commandLabel": "الأمر",
+        "runLocalLabel": "التشغيل على هذا الكمبيوتر",
+        "runLocalHint": "يعمل على هذا الكمبيوتر بدلاً من مضيف المشروع ومن دون طرفية؛ <code>{folderVar}</code> هو المسار المطلق للمجلد و<code>{hostVar}</code> اسم المضيف البعيد، مثال: <code>{example}</code>",
+        "globalLabel": "إظهار في كل المجلدات",
+        "globalHint": "متاح في كل مجلد وworktree واتصال بعيد؛ ويُحفظ على هذا الكمبيوتر",
         "dragSort": "اسحب للترتيب",
         "dragSortCommand": "اسحب لترتيب {name}",
         "orderFailed": "فشل حفظ ترتيب الأوامر",
         "loadFailed": "فشل تحميل الأوامر",
         "saveFailed": "فشل حفظ الأمر",
+        "runLocalNotKept": "مضيف المجلد لا يمكنه حفظ \"التشغيل على هذا الكمبيوتر\"؛ حدّثه، أو فعّل \"إظهار في كل المجلدات\" ليُحفظ الأمر على هذا الكمبيوتر",
         "deleteFailed": "فشل حذف الأمر",
         "confirmDelete": {
           "title": "حذف الأمر؟",
@@ -3277,6 +3391,7 @@
       },
       "messageInput": {
         "askAnything": "اسأل أي شيء...",
+        "promptSuggestion": "{suggestion} (اضغط Tab للاستخدام)",
         "removeAttachmentAria": "إزالة {name}",
         "attachFiles": "إرفاق ملفات",
         "addActions": "إضافة",
@@ -3306,6 +3421,10 @@
         "searchModelAria": "البحث عن النماذج",
         "modelListLabel": "النماذج",
         "recommendedBadge": "موصى به",
+        "recommendedValue": "موصى به: {value}",
+        "searchOptions": "البحث في الخيارات...",
+        "searchOptionsAria": "البحث في الخيارات",
+        "noOptions": "لم يتم العثور على خيارات",
         "noModels": "لم يتم العثور على نماذج",
         "cancel": "إلغاء",
         "send": "إرسال",
@@ -3313,6 +3432,7 @@
         "steerIntoTurn": "إدراج في الدور الحالي",
         "steerAsNote": "إرسال ملاحظة للفحص التالي",
         "steerQueuedInstead": "أُضيفت إلى قائمة الانتظار — ستُرسل مع الدور التالي.",
+        "heldWhileResponding": "لا يزال الرد جارياً — تبقى رسالتك في مربع الإدخال. أرسلها بعد انتهاء الرد.",
         "steerFailed": "تعذّر الإدراج في الدور الحالي",
         "steerNoteFailed": "تعذّر إرسال ملاحظتك",
         "slashCommands": "أوامر الشرطة المائلة",
@@ -3672,7 +3792,6 @@
         "unknownAgent": "وكيل فرعي",
         "openDetail": "عرض المحادثة",
         "resumed": "تم الاستئناف",
-        "resumeDetail": "تفاصيل الاستئناف",
         "resumeReasonLabel": "سبب الاستئناف",
         "detailTitle": "محادثة الوكيل الفرعي",
         "detailDescription": "عرض للقراءة فقط لمحادثة الوكيل الفرعي المُفوَّض.",
@@ -3918,13 +4037,16 @@
       },
       "messageNav": {
         "title": "تنقل الرسائل",
-        "collapse": "طي تنقل الرسائل",
         "loadingEarlier": "جارٍ تحميل الرسائل السابقة…",
         "loadEarlier": "تحميل الرسائل السابقة",
-        "collapsedSummary": "الرسائل {count}",
         "fileCount": "{count, plural, one {# ملف} other {# ملفات}}",
-        "remove": "إزالة",
-        "noDiffDataAvailable": "لا توجد بيانات diff متاحة لـ {filePath}"
+        "subAgentCount": "{count, plural, one {# وكيل فرعي} other {# وكلاء فرعيين}}",
+        "showDiff": "إظهار تغييرات {filePath}",
+        "hideDiff": "إخفاء تغييرات {filePath}",
+        "openFile": "فتح {filePath}",
+        "collapse": "طي",
+        "currentMessage": "الرسالة الحالية",
+        "scrollToCurrent": "التمرير إلى الرسالة الحالية (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "الملفات المتغيرة",
@@ -3982,6 +4104,9 @@
         "resumeDelegation": "استئناف المهمة {task}",
         "resumeDelegationNoId": "استئناف مهمة مفوضة",
         "promptLabel": "التعليمات",
+        "ackRecorded": "سُجِّل في مهمة العمل",
+        "ackNotRecorded": "لم يُسجَّل في مهمة العمل",
+        "ackNotRecordedWithReason": "لم يُسجَّل في مهمة العمل: {reason}",
         "verdict": {
           "success": "ناجحة",
           "needs_review": "بحاجة إلى مراجعة",
@@ -4098,6 +4223,18 @@
         "tokens": "{count} رمز",
         "stopDeclined": "تعذّر إيقاف هذه المهمة، ربما تكون قد انتهت بالفعل.",
         "stopFailed": "فشل إيقاف المهمة: {error}"
+      },
+      "remoteControl": {
+        "title": "التحكم عن بُعد مُفعّل",
+        "open": "فتح في المتصفح",
+        "copy": "نسخ الرابط",
+        "copied": "تم النسخ",
+        "qr": "رمز QR",
+        "qrLabel": "رمز QR لرابط التحكم عن بُعد لهذه الجلسة",
+        "qrHint": "امسحه بهاتفك لمتابعة هذه الجلسة في تطبيق Claude أو على claude.ai/code.",
+        "noUrl": "لم يُرجع Claude Code رابطًا لهذه الجلسة",
+        "turnOff": "إيقاف",
+        "turnOffBusy": "متاح بعد أن ينتهي Claude"
       },
       "proposedPlan": {
         "title": "الخطة المقترحة",
@@ -5270,7 +5407,12 @@
     "reconnectNow": "إعادة الاتصال الآن",
     "sessionExpiredTitle": "انتهت الجلسة",
     "sessionExpiredDescription": "لم تعد جلستك صالحة. يُرجى تسجيل الدخول مرة أخرى للمتابعة.",
-    "goToLogin": "الانتقال إلى تسجيل الدخول"
+    "proxySignInTitle": "انتهت صلاحية تسجيل الدخول",
+    "proxySignInDescription": "انتهت صلاحية تسجيل دخولك إلى الوكيل الموجود أمام هذا الخادم. أعد تحميل الصفحة لتسجيل الدخول مجددًا.",
+    "goToLogin": "الانتقال إلى تسجيل الدخول",
+    "versionChangedTitle": "يعمل الخادم الآن بإصدار Codeg {version}",
+    "versionChangedDescription": "لا تزال هذه الصفحة على الإصدار {version}. أعد تحميلها لاستخدام إصدار الخادم.",
+    "reloadPage": "إعادة التحميل"
   },
   "LiveFeedback": {
     "placeholder": "أرسل ملاحظة إلى {agent} أثناء عمله…",

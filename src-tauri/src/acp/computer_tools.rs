@@ -397,10 +397,10 @@ pub const MENUS_UNAVAILABLE_NOTE: &str = "Menus cannot be chosen by title on Win
 
 /// Said when a menu command is asked for and the person does not allow
 /// bringing windows to the front.
-pub const MENU_NEEDS_FRONT_NOTE: &str = "A menu command is chosen with its application brought to \
-     the front, and the user has switched that off in codeg's Computer use settings (\"Let agents \
-     bring windows to the front\"), so nothing was sent. Ask the user whether to switch it back \
-     on — only they can.";
+pub const MENU_NEEDS_FRONT_NOTE: &str = "Choosing a menu command can bring its application, or a \
+     window of it, to the front, and the user has switched that off in codeg's Computer use \
+     settings (\"Let agents bring windows to the front\"), so nothing was sent. Ask the user \
+     whether to switch it back on — only they can.";
 
 /// Said when starting an application, or moving a window, is asked for and
 /// the person has not switched it on.

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { getFolderConversationOutline } from "@/lib/api"
+import { warmTurnFileChanges } from "@/lib/session-files"
 import { extendPrefixFingerprint, FNV_SEED_HEX } from "@/lib/turn-window"
 import type { ConversationOutline, MessageTurn } from "@/lib/types"
 
@@ -62,6 +63,8 @@ export function outlinePrefix(
  * for a window whose prefix fingerprint it reproduces. One fetch at a time; an
  * outline that doesn't cover the window it was fetched for marks that window
  * failed instead of being fetched again, until the window moves or `retry`.
+ * A fetched outline stays loading while its edits are parsed, a slice at a
+ * time (`warmTurnFileChanges`).
  */
 export function useConversationOutline({
   fetchId,
@@ -97,13 +100,18 @@ export function useConversationOutline({
     const requested = { key, fetchId, offset, prefixHash }
     getFolderConversationOutline(requested.fetchId, requested.offset)
       .then((outline) => {
-        inFlight.current = false
-        setFetched({ fetchId: requested.fetchId, outline })
-        if (
-          outlinePrefix(outline, requested.offset, requested.prefixHash) == null
-        ) {
-          setFailedKey(requested.key)
-        }
+        // Its edits are parsed before it is served, between frames: the
+        // navigator would otherwise parse the whole history in one render.
+        warmTurnFileChanges(outline.turns, () => {
+          inFlight.current = false
+          setFetched({ fetchId: requested.fetchId, outline })
+          if (
+            outlinePrefix(outline, requested.offset, requested.prefixHash) ==
+            null
+          ) {
+            setFailedKey(requested.key)
+          }
+        })
       })
       .catch(() => {
         inFlight.current = false

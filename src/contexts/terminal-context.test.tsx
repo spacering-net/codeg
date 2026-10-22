@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { TerminalProvider, useTerminalContext } from "./terminal-context"
-import { useCommandTerminalLinkStore } from "@/stores/command-terminal-link-store"
+import {
+  commandLinkKey,
+  useCommandTerminalLinkStore,
+} from "@/stores/command-terminal-link-store"
 
 const h = vi.hoisted(() => ({
   terminalKill: vi.fn(async () => {}),
@@ -469,7 +472,9 @@ describe("TerminalProvider reload recovery", () => {
         <Probe />
       </TerminalProvider>
     )
-    expect(useCommandTerminalLinkStore.getState().links).toEqual({ 42: id })
+    expect(useCommandTerminalLinkStore.getState().links).toEqual({
+      [commandLinkKey(7, 42)]: id,
+    })
     expect(sessionStorage.getItem("codeg:terminal-session:v1")).not.toContain(
       "sleep 120"
     )
@@ -505,6 +510,34 @@ describe("TerminalProvider reload recovery", () => {
     )
     expect(screen.getByTestId("tabs")).toHaveTextContent("1")
     expect(useCommandTerminalLinkStore.getState().links).toEqual({})
+  })
+
+  it("links a global command's tab back to the folder it ran in", () => {
+    // Global commands have negative ids, the same id in every folder.
+    const pageId = "0b6f3d7e-5a1c-4e2b-9f8a-1c2d3e4f5a6b"
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    window.name = `codeg-terminal-page:${pageId}`
+    sessionStorage.setItem(
+      "codeg:terminal-session:v1",
+      JSON.stringify({
+        version: 1,
+        scope: JSON.stringify(["main", null]),
+        pageId,
+        isOpen: true,
+        activeTabId: id,
+        tabs: [
+          { id, folderId: 9, title: "dev", workingDir: "/tmp", commandId: -3 },
+        ],
+      })
+    )
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(useCommandTerminalLinkStore.getState().links).toEqual({
+      [commandLinkKey(9, -3)]: id,
+    })
   })
 
   function storeCommandTab(id: string) {
