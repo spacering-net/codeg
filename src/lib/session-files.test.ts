@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import {
   extractReplyFileChanges,
   extractSessionFilesGrouped,
+  warmTurnFileChanges,
 } from "./session-files"
 import { isAddedFileDiff, isRemovedFileDiff } from "./file-path-display"
 import type { MessageTurn } from "./types"
@@ -119,6 +120,62 @@ describe("extractSessionFilesGrouped", () => {
     expect(extractSessionFilesGrouped([u, after])[0].files[0].path).toBe(
       "/repo/y.ts"
     )
+  })
+})
+
+describe("warmTurnFileChanges", () => {
+  /** A write turn that counts how often its blocks are read: to parse it,
+   *  and never again while it stays parsed. */
+  function countedTurn(id: string) {
+    const turn = writeTurn(id, `${id}-t`, `/repo/${id}.ts`, "x\n")
+    const blocks = turn.blocks
+    const counted = { reads: 0, turn }
+    Object.defineProperty(turn, "blocks", {
+      get: () => {
+        counted.reads += 1
+        return blocks
+      },
+    })
+    return counted
+  }
+
+  it("parses every turn ahead of the grouping, at once when it fits", () => {
+    const a = countedTurn("a1")
+    const done = vi.fn()
+    warmTurnFileChanges([userTurn("u1", "go"), a.turn], done)
+    expect(done).toHaveBeenCalledTimes(1)
+    const parsed = a.reads
+    expect(parsed).toBeGreaterThan(0)
+    const [group] = extractSessionFilesGrouped([userTurn("u1", "go"), a.turn])
+    expect(group.files.map((f) => f.path)).toEqual(["/repo/a1.ts"])
+    expect(a.reads).toBe(parsed)
+  })
+
+  it("lets the main thread go between slices of a long history", async () => {
+    const turns = [countedTurn("a1"), countedTurn("a2"), countedTurn("a3")]
+    const done = vi.fn()
+    // No time to spare: a slice per turn.
+    warmTurnFileChanges(
+      turns.map((t) => t.turn),
+      done,
+      0
+    )
+    expect(done).not.toHaveBeenCalled()
+    expect(turns.map((t) => t.reads > 0)).toEqual([true, false, false])
+    await vi.waitFor(() => expect(done).toHaveBeenCalledTimes(1))
+    expect(turns.map((t) => t.reads > 0)).toEqual([true, true, true])
+  })
+
+  it("is done even with a turn it can't parse", () => {
+    const broken = writeTurn("a1", "t1", "/repo/x.ts", "x\n")
+    Object.defineProperty(broken, "blocks", {
+      get: () => {
+        throw new Error("unreadable")
+      },
+    })
+    const done = vi.fn()
+    warmTurnFileChanges([broken], done)
+    expect(done).toHaveBeenCalledTimes(1)
   })
 })
 

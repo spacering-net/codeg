@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -9,6 +16,11 @@ import { Sidebar } from "./sidebar"
 // stub's imperative handle to the real component's contract.
 import type { SidebarConversationListHandle } from "@/components/conversations/sidebar-conversation-list"
 import enMessages from "@/i18n/messages/en.json"
+import type { TagFilter } from "@/lib/conversation-tags"
+import {
+  resetConversationTagsStore,
+  useConversationTagsStore,
+} from "@/stores/conversation-tags-store"
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
 // factories below (vi.mock is hoisted above imports).
@@ -21,6 +33,8 @@ const spies = vi.hoisted(() => ({
   scrollToActive: vi.fn(),
   expandAll: vi.fn(),
   collapseAll: vi.fn(),
+  // The tag manager the tag filter's footer leads to.
+  openConversationTagsManager: vi.fn(),
   // Latest props the (stubbed) conversation list was rendered with, so tests can
   // assert what the sidebar threads down (e.g. showWorktrees / showCompleted).
   listProps: null as {
@@ -28,6 +42,7 @@ const spies = vi.hoisted(() => ({
     showCompleted?: boolean
     showRecent?: boolean
     sectionOrder?: readonly string[]
+    tagFilter?: TagFilter
   } | null,
 }))
 const mockState = vi.hoisted(() => ({
@@ -51,6 +66,7 @@ vi.mock("@/components/conversations/sidebar-conversation-list", async () => {
       showCompleted?: boolean
       showRecent?: boolean
       sectionOrder?: readonly string[]
+      tagFilter?: TagFilter
     }) => {
       spies.listProps = props
       useImperativeHandle(ref, () => ({
@@ -62,6 +78,9 @@ vi.mock("@/components/conversations/sidebar-conversation-list", async () => {
     },
   }
 })
+vi.mock("@/components/conversations/conversation-tags-manager", () => ({
+  openConversationTagsManager: spies.openConversationTagsManager,
+}))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }))
@@ -130,7 +149,7 @@ function renderSidebar() {
  * instance has no previous position, so nothing ever leaves the trigger.
  */
 async function openViewOptionsGroup(
-  group: "Conversation list" | "Navigation items"
+  group: "Filter by tags" | "Conversation list" | "Navigation items"
 ) {
   await userEvent.click(screen.getByRole("button", { name: "View options" }))
   await userEvent.click(screen.getByRole("menuitem", { name: group }))
@@ -245,6 +264,75 @@ describe("Sidebar — View options grouping", () => {
     ).toBeTruthy()
     // Escape inside a submenu closes the whole stack, root included.
     await user.keyboard("{Escape}")
+  })
+})
+
+describe("Sidebar — Tag filter inside View options", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    spies.listProps = null
+    spies.openConversationTagsManager.mockClear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+    resetConversationTagsStore()
+    useConversationTagsStore.getState().applyChange({
+      kind: "upsert",
+      tag: {
+        id: 1,
+        folder_id: null,
+        name: "bug",
+        color: "#0969da",
+        sort_order: 1,
+      },
+    })
+  })
+
+  it("has no header button of its own any more", () => {
+    renderSidebar()
+    expect(screen.queryByRole("button", { name: "Filter by tags" })).toBeNull()
+    // Control: the header cluster itself rendered.
+    expect(screen.getByRole("button", { name: "View options" })).toBeTruthy()
+  })
+
+  it("leads the View options menu", async () => {
+    renderSidebar()
+    await userEvent.click(screen.getByRole("button", { name: "View options" }))
+
+    const rows = screen.getAllByRole("menuitem")
+    expect(rows[0].textContent).toBe("Filter by tags")
+    expect(rows[1].textContent).toBe("Conversation list")
+  })
+
+  it("narrows the list to a picked tag, persists it and stays open", async () => {
+    renderSidebar()
+    expect(spies.listProps?.tagFilter).toEqual({ tagIds: [], mode: "any" })
+
+    await openViewOptionsGroup("Filter by tags")
+    const panel = await screen.findByRole("dialog", { name: "Filter by tags" })
+    await userEvent.click(within(panel).getByText("bug"))
+
+    expect(spies.listProps?.tagFilter).toEqual({ tagIds: [1], mode: "any" })
+    expect(
+      JSON.parse(localStorage.getItem("workspace:sidebar-tag-filter") ?? "")
+    ).toEqual({ tagIds: [1], mode: "any" })
+    // Picking is iterative, like every option here: the panel stays up, and
+    // the row now counts the pick.
+    expect(screen.getByRole("dialog", { name: "Filter by tags" })).toBe(panel)
+    expect(
+      within(
+        screen.getByRole("menuitem", { name: "Filter by tags" })
+      ).getByText("1")
+    ).toBeTruthy()
+  })
+
+  it("closes the whole menu on the way to the tag manager", async () => {
+    renderSidebar()
+    await openViewOptionsGroup("Filter by tags")
+    const panel = await screen.findByRole("dialog", { name: "Filter by tags" })
+    await userEvent.click(within(panel).getByText("Manage tags…"))
+
+    expect(spies.openConversationTagsManager).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    expect(screen.queryByRole("dialog")).toBeNull()
   })
 })
 

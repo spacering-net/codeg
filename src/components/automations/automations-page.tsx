@@ -102,6 +102,10 @@ import {
 } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import { cn } from "@/lib/utils"
+import {
+  clearAutomationsFocus,
+  peekAutomationsFocus,
+} from "@/lib/workbench-focus"
 import type { Automation, AutomationDraft, AutomationRun } from "@/lib/types"
 import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 
@@ -140,7 +144,7 @@ function StatusChip({ status }: { status: string | null }) {
 
 // Compact, i18n-free relative time ("now"/"5m"/"2h"/"3d"/"2mo"/"1y"), matching
 // the sidebar conversation list's style. Absolute time rides in the title attr.
-function formatRelative(iso: string | null, now: number): string {
+export function formatRelative(iso: string | null, now: number): string {
   if (!iso) return "—"
   const ts = Date.parse(iso)
   if (Number.isNaN(ts)) return "—"
@@ -220,9 +224,34 @@ export function AutomationsPage() {
   const t = useTranslations("Automations")
   const { automations, unseenFailures, refetch } = useAutomationsView()
   const folders = useAppWorkspaceStore((s) => s.folders)
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [mode, setMode] = useState<"detail" | "gallery" | "editor">("detail")
-  const [editing, setEditing] = useState<EditingState | null>(null)
+  // Every folder codeg knows, open or closed — for naming a folder the list is
+  // filtered by that the sidebar no longer shows.
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
+  const activeFolderId = useAppWorkspaceStore((s) => s.activeFolderId)
+  // Opened from the aux panel's automations tab: start on the project — and
+  // the automation, or the action — it was showing. Read in the initializers
+  // below so the first paint is already focused; cleared once applied (see
+  // `workbench-focus.ts`).
+  const [focus] = useState(peekAutomationsFocus)
+  useEffect(() => clearAutomationsFocus(focus), [focus])
+  const [selectedId, setSelectedId] = useState<number | null>(
+    () => focus?.automationId ?? null
+  )
+  // An edit asked for from the panel opens straight into the editor on that
+  // automation; a create opens the template gallery. The provider is always
+  // mounted, so the list is already here to resolve the id against.
+  const [editing, setEditing] = useState<EditingState | null>(() => {
+    if (focus?.intent !== "edit" || focus.automationId == null) return null
+    const target = automations.find((a) => a.id === focus.automationId)
+    return target ? { kind: "edit", automation: target } : null
+  })
+  const [mode, setMode] = useState<"detail" | "gallery" | "editor">(() =>
+    editing != null
+      ? "editor"
+      : focus?.intent === "create"
+        ? "gallery"
+        : "detail"
+  )
 
   // Clear the unseen-failure badges while the page is open — on entry and again
   // whenever a new failure arrives live (the failed run is already on screen, so
@@ -238,18 +267,15 @@ export function AutomationsPage() {
   }, [unseenFailures, refetch])
 
   const hasAutomations = automations.length > 0
-  // The shown automation: the explicit selection, else the first row, so the
-  // detail pane is never blank when automations exist. Derived (no effect) so a
-  // deleted selection cleanly falls back instead of dangling.
-  const current =
-    automations.find((a) => a.id === selectedId) ?? automations[0] ?? null
   // Frozen at mount — the page remounts on each route entry, so relative labels
   // ("Next in 3h") are anchored to when Automations was opened. Reading Date.now
   // during render is impure (react-hooks/purity); this is the RunHistory idiom.
   const [now] = useState(() => Date.now())
 
   // List filters (folder + enabled state), ephemeral per page mount.
-  const [folderFilter, setFolderFilter] = useState<number | "all">("all")
+  const [folderFilter, setFolderFilter] = useState<number | "all">(
+    () => focus?.folderId ?? "all"
+  )
   const [statusFilter, setStatusFilter] = useState<
     "all" | "enabled" | "disabled"
   >("all")
@@ -268,24 +294,32 @@ export function AutomationsPage() {
           path: f.path,
         })
     }
-    const byId = new Map(folders.map((f) => [f.id, f]))
-    for (const a of automations) {
-      if (a.root_folder_id == null || options.has(a.root_folder_id)) continue
-      const known = byId.get(a.root_folder_id)
-      options.set(a.root_folder_id, {
-        id: a.root_folder_id,
-        // A folder the workspace no longer lists is still filterable — by the
-        // only handle left, its id.
-        name: known?.name ?? `#${a.root_folder_id}`,
+    const byId = new Map(allFolders.map((f) => [f.id, f]))
+    const addFolder = (id: number) => {
+      if (options.has(id)) return
+      const known = byId.get(id)
+      options.set(id, {
+        id,
+        // A folder closed in the sidebar is still named; one that no longer
+        // exists at all is still filterable — by the only handle left, its id.
+        name: known?.name ?? `#${id}`,
         alias: known?.alias ?? null,
         path: known?.path ?? null,
       })
     }
+    for (const a of automations) {
+      if (a.root_folder_id != null) addFolder(a.root_folder_id)
+    }
+    // The folder the aux panel opened this page on, whatever the list holds:
+    // a project whose root is closed (only a worktree of it open), or a
+    // worktree no automation targets yet, must stay the filter rather than
+    // dropping the page to "all folders".
+    if (focus?.folderId != null) addFolder(focus.folderId)
     // Sorted by what the row leads with, so the list reads in the order it looks.
     return [...options.values()].sort((a, b) =>
       (a.alias ?? a.name).localeCompare(b.alias ?? b.name)
     )
-  }, [automations, folders])
+  }, [automations, folders, allFolders, focus])
   // Deleting the last automation of a folder strands the filter on an option
   // that no longer exists. Fall back to "all" by derivation (no effect) so the
   // pill never renders blank over an empty list.
@@ -304,6 +338,16 @@ export function AutomationsPage() {
       ),
     [automations, activeFolderFilter, statusFilter]
   )
+  // The shown automation: the explicit selection, else the first row, so the
+  // detail pane is never blank while the list shows anything. Both out of the
+  // FILTERED list — the detail must be a row the list beside it shows, or a
+  // narrowed list sits next to an automation from another folder. Derived (no
+  // effect) so a deleted or filtered-out selection cleanly falls back instead
+  // of dangling.
+  const current =
+    visibleAutomations.find((a) => a.id === selectedId) ??
+    visibleAutomations[0] ??
+    null
 
   const openGallery = () => {
     setEditing(null)
@@ -317,12 +361,17 @@ export function AutomationsPage() {
     setEditing(null)
     setMode("detail")
   }
+  const createFolderId = pickCreateFolder(
+    activeFolderFilter,
+    folders,
+    activeFolderId
+  )
   const pickTemplate = (tpl: AutomationTemplate | null) => {
     const seed = tpl
       ? templateToDraft(tpl, {
           name: t(tpl.titleKey),
           agentType: "claude_code",
-          folderId: folders[0]?.id ?? null,
+          folderId: createFolderId,
         })
       : null
     setEditing({ kind: "create", seed })
@@ -386,6 +435,7 @@ export function AutomationsPage() {
             onBackToTemplates={
               editing.kind === "create" ? backToGallery : undefined
             }
+            defaultFolderId={createFolderId}
           />
         </div>
       </ScrollArea>
@@ -523,9 +573,8 @@ export function AutomationsPage() {
                         onEdit={() => startEdit(current)}
                       />
                     ) : (
-                      // Defensive only: `current` falls back to automations[0],
-                      // which is always present inside this hasAutomations
-                      // branch, so this arm is not reached in practice.
+                      // The filters match nothing: the list says so, and the
+                      // detail has no row of it to show.
                       <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
                         {t("selectHint")}
                       </div>
@@ -557,6 +606,32 @@ export function AutomationsPage() {
       )}
     </div>
   )
+}
+
+/**
+ * The folder a new automation starts in: the one the list is narrowed to —
+ * the one you are evidently working on — and the first folder otherwise.
+ *
+ * Only an OPEN folder will do: the editor resolves the folder's path from the
+ * open list and will not save without it. So a narrowed-to folder that is
+ * closed (a project whose root was closed in the sidebar, kept as the filter by
+ * the aux panel's hand-off) hands over to an open worktree of it — the active
+ * one when the active conversation is in one — rather than to whatever folder
+ * happens to come first, which would be another repository.
+ */
+export function pickCreateFolder(
+  filter: number | "all",
+  folders: readonly { id: number; parent_id: number | null }[],
+  activeFolderId: number | null
+): number | null {
+  if (filter !== "all") {
+    if (folders.some((f) => f.id === filter)) return filter
+    const worktrees = folders.filter((f) => f.parent_id === filter)
+    const active = worktrees.find((f) => f.id === activeFolderId)
+    const worktree = active ?? worktrees[0]
+    if (worktree) return worktree.id
+  }
+  return folders[0]?.id ?? null
 }
 
 /** ONE shell around both columns — a single rounded border for the whole
@@ -712,7 +787,13 @@ function AutomationDot({
   )
 }
 
-function AutomationListItem({
+/**
+ * One automation row: agent mark with its run-state dot, the name, the next /
+ * last run time, and the ⋯ menu (also on right-click). Exported for the aux
+ * panel's automations tab, which lists the active project's automations with
+ * the very same row.
+ */
+export function AutomationListItem({
   automation,
   now,
   selected,
@@ -988,14 +1069,24 @@ function Section({
   )
 }
 
-function AutomationDetail({
+/**
+ * The selected automation: its schedule, prompt and run history. Exported for
+ * the aux panel's automations tab, which drills into the same view — narrow
+ * there, which the `@container` grid below is already built for.
+ */
+export function AutomationDetail({
   automation,
   refetch,
   onEdit,
+  onConversationOpened,
 }: {
   automation: Automation
   refetch: () => Promise<void>
   onEdit: () => void
+  /** Called after a run's conversation has been opened in the workspace — the
+   *  aux panel closes its mobile drawer here, which would otherwise cover the
+   *  conversation it just opened. */
+  onConversationOpened?: () => void
 }) {
   const t = useTranslations("Automations")
   const folders = useAppWorkspaceStore((s) => s.folders)
@@ -1038,15 +1129,24 @@ function AutomationDetail({
             used to sit between the prompt and the run-history cards, where they
             read as belonging to neither. */}
         <div className="flex flex-col gap-3">
+          {/* Narrower than @md — the aux panel's tab, or a squeezed detail
+              pane — the name wraps onto a second line instead of losing its
+              end to an ellipsis, and the switch drops its visible word (its
+              own accessible name says the same) to leave the name the room. */}
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              <h2 className="truncate text-lg font-semibold">
+              <h2
+                className="truncate text-lg font-semibold @max-md:line-clamp-2 @max-md:whitespace-normal @max-md:break-words"
+                title={automation.name}
+              >
                 {automation.name}
               </h2>
               <StatusChip status={automation.last_run_status} />
             </div>
             <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-              {automation.enabled ? t("enabled") : t("statusDisabled")}
+              <span className="@max-md:sr-only">
+                {automation.enabled ? t("enabled") : t("statusDisabled")}
+              </span>
               <Switch
                 checked={automation.enabled}
                 disabled={busy}
@@ -1182,6 +1282,7 @@ function AutomationDetail({
           key={automation.id}
           automation={automation}
           onChanged={refetch}
+          onConversationOpened={onConversationOpened}
         />
       </div>
     </ScrollArea>
@@ -1191,9 +1292,11 @@ function AutomationDetail({
 function RunHistory({
   automation,
   onChanged,
+  onConversationOpened,
 }: {
   automation: Automation
   onChanged: () => Promise<void>
+  onConversationOpened?: () => void
 }) {
   const t = useTranslations("Automations")
   const { openTab } = useTabActions()
@@ -1249,6 +1352,7 @@ function RunHistory({
     if (r.conversation_id == null || folderId == null) return
     openConversations()
     openTab(folderId, r.conversation_id, automation.agent_type)
+    onConversationOpened?.()
   }
 
   const cancel = async (r: AutomationRun) => {

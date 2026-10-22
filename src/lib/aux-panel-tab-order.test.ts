@@ -22,6 +22,10 @@ const custom: AuxTabOrder = [
   "file_tree",
   "session_details",
   "changes",
+  "pull_requests",
+  "issues",
+  "tasks",
+  "automations",
 ]
 
 /** What another window writing the key looks like from this one. */
@@ -46,12 +50,16 @@ describe("aux panel tab order", () => {
     vi.restoreAllMocks()
   })
 
-  it("defaults to the built-in order: session details, files, changes, commits", () => {
+  it("defaults to the built-in order: the folder's tabs, then the project's work", () => {
     expect(loadAuxTabOrder()).toEqual([
       "session_details",
       "file_tree",
       "changes",
       "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
     ])
     expect(DEFAULT_AUX_TAB_ORDER).toEqual(AUX_PANEL_TABS)
   })
@@ -82,12 +90,54 @@ describe("aux panel tab order", () => {
       "file_tree",
       "changes",
       "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
     ])
     expect(parseAuxTabOrder(["git_log", "session_details"])).toEqual([
       "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
       "session_details",
       "file_tree",
       "changes",
+    ])
+  })
+
+  it("keeps a rail stored before the work tabs existed, and adds them after Commits", () => {
+    // Written by a build with only the four folder tabs: the user's order
+    // stands, and the four new tabs arrive together beside their neighbour.
+    localStorage.setItem(
+      KEY,
+      JSON.stringify(["git_log", "changes", "file_tree", "session_details"])
+    )
+    expect(loadAuxTabOrder()).toEqual([
+      "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
+      "changes",
+      "file_tree",
+      "session_details",
+    ])
+
+    localStorage.setItem(
+      KEY,
+      JSON.stringify(["file_tree", "session_details", "changes", "git_log"])
+    )
+    expect(loadAuxTabOrder()).toEqual([
+      "file_tree",
+      "session_details",
+      "changes",
+      "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
     ])
   })
 
@@ -109,6 +159,10 @@ describe("aux panel tab order", () => {
       "session_details",
       "file_tree",
       "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
       "changes",
     ])
   })
@@ -133,19 +187,27 @@ describe("aux panel tab order", () => {
         "changes",
         "file_tree",
         "git_log",
+        "automations",
+        "tasks",
+        "issues",
+        "pull_requests",
       ])
       expect(moveAuxTab(DEFAULT_AUX_TAB_ORDER, "session_details", 3)).toEqual([
         "file_tree",
         "changes",
         "git_log",
         "session_details",
+        "automations",
+        "tasks",
+        "issues",
+        "pull_requests",
       ])
     })
 
     it("hands back the same array for a move that goes nowhere", () => {
       const order = [...custom]
       expect(moveAuxTab(order, "git_log", -1)).toBe(order)
-      expect(moveAuxTab(order, "changes", 1)).toBe(order)
+      expect(moveAuxTab(order, "automations", 1)).toBe(order)
       expect(moveAuxTab(order, "file_tree", 0)).toBe(order)
       expect(moveAuxTab(["git_log"], "changes", 1)).toEqual(["git_log"])
     })

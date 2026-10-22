@@ -1,6 +1,14 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   isLiveTurnId,
   selectTimelineTurns,
@@ -35,11 +43,15 @@ import { TurnStats } from "./turn-stats"
 import { LiveTurnStats } from "./live-turn-stats"
 import { ModelLabelProvider } from "./model-label-context"
 import { KnownInvocationsProvider } from "./known-invocations-context"
+import { DelegationStatusIndexProvider } from "./delegation-status-index-context"
 import { useTranscriptKnownInvocations } from "./use-transcript-known-invocations"
 import { ReplyArtifacts } from "./reply-artifacts"
 import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
-import { AgentPlanOverlay } from "@/components/chat/agent-plan-overlay"
+import {
+  AgentPlanOverlay,
+  getLatestPlanEntries,
+} from "@/components/chat/agent-plan-overlay"
 import { SubAgentOverlay } from "@/components/chat/sub-agent-overlay"
 import { SessionViewerHost } from "@/components/message/session-viewer-host"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
@@ -47,8 +59,14 @@ import { parseResumeTaskId } from "@/lib/codeg-mcp-tool"
 import {
   isDelegateToAgentToolName,
   isRefusedResume,
+  parseDelegateTaskId,
 } from "@/lib/delegation-card"
 import type { DelegationCardSource } from "@/hooks/use-delegation-card-model"
+import {
+  collectDelegationStatusTasks,
+  createDelegationStatusIndexer,
+  type DelegationStatusTaskRef,
+} from "@/lib/delegation-status-index"
 import {
   MessageThread,
   MessageThreadScrollButton,
@@ -79,18 +97,29 @@ import type {
   AvailableCommandInfo,
   ConnectionStatus,
   MessageTurn,
+  PlanEntryInfo,
 } from "@/lib/types"
 import { copyTextToClipboard } from "@/lib/utils"
-import { VirtualizedMessageThread } from "@/components/message/virtualized-message-thread"
-import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
 import {
-  ConversationMessageNav,
-  type MessageNavEntry,
-} from "@/components/message/conversation-message-nav"
+  VirtualizedMessageThread,
+  type ViewportTop,
+} from "@/components/message/virtualized-message-thread"
+import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
+import type { MessageNavEntry } from "@/components/message/conversation-message-nav"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
-import { buildMessageNavEntries } from "@/components/message/message-nav-entries"
+import {
+  buildMessageNavEntries,
+  type LoadedMessageSubAgents,
+} from "@/components/message/message-nav-entries"
 import { useMessageNavJump } from "@/components/message/use-message-nav-jump"
 import { useConversationOutline } from "@/hooks/use-conversation-outline"
+import {
+  publishTranscriptInsights,
+  retractTranscriptInsights,
+  useTranscriptNavDemanded,
+  type TranscriptInsights,
+  type TranscriptInsightsActions,
+} from "@/stores/transcript-insights-store"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
 import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
@@ -140,10 +169,15 @@ interface MessageListViewProps {
   onReload?: () => void
   onNewSession?: () => void
   /**
-   * Renders the per-conversation message navigator rail. Enabled in the main
-   * conversation view; disabled in compact embeds (e.g. the sub-agent dialog).
+   * Where this transcript's message navigator, plan and sub-agents show. The
+   * conversation page sets it: they move to the Session Details side panel
+   * (published to `transcript-insights-store` for the panel to read) and the
+   * transcript draws none of them over its messages. Every other surface — a
+   * canvas card, the read-only sub-agent and task drawers — leaves it unset and
+   * keeps the plan and sub-agent chips in the transcript's top inline-start
+   * corner, with no navigator.
    */
-  showMessageNav?: boolean
+  insightsInSidebar?: boolean
   /**
    * Optional phase label for a user turn (work-task transcripts label each
    * engine-dispatched round: work / retry / return / merge). Called at render
@@ -415,6 +449,9 @@ const EMPTY_DELEGATIONS: DelegationCardSource[] = []
 // when a conversation has no user messages.
 const EMPTY_NAV_ENTRIES: MessageNavEntry[] = []
 
+// Stable empty reference for "the live reply has no plan".
+const EMPTY_PLAN_ENTRIES: PlanEntryInfo[] = []
+
 // A single turn's `sourceTurns` is just `[turn]`. Cache the wrapper per turn
 // object so an unchanged historical turn keeps a stable `sourceTurns` reference
 // across streaming-token re-renders — that's the last prop preventing
@@ -507,6 +544,182 @@ export function extractDelegationSources(
   const out: DelegationCardSource[] = []
   collectDelegationSources(parts, out, new Set())
   return out
+}
+
+// Per-group memo for the two scans below. A historical group keeps its object
+// identity across streaming batches (the adapter and merged-run caches see to
+// that), so only the streaming reply is re-scanned per batch — and its sources
+// keep the same objects whenever the group does.
+const delegationSourcesByGroup = new WeakMap<
+  ResolvedMessageGroup,
+  DelegationCardSource[]
+>()
+
+// The broker task id a `delegate_to_agent` call reported, memoized per source:
+// a finished call's output carries the sub-agent's whole result, and the
+// conversation scan below would otherwise re-parse every one of them on every
+// streaming batch.
+const startedTaskIdBySource = new WeakMap<DelegationCardSource, string | null>()
+
+function startedTaskIdOf(source: DelegationCardSource): string | null {
+  let taskId = startedTaskIdBySource.get(source)
+  if (taskId === undefined) {
+    taskId = parseDelegateTaskId(source.output, source.errorText)
+    startedTaskIdBySource.set(source, taskId)
+  }
+  return taskId
+}
+
+export function groupDelegationSources(
+  group: ResolvedMessageGroup
+): DelegationCardSource[] {
+  let sources = delegationSourcesByGroup.get(group)
+  if (!sources) {
+    const extracted = extractDelegationSources(group.parts)
+    sources = extracted.length > 0 ? extracted : EMPTY_DELEGATIONS
+    delegationSourcesByGroup.set(group, sources)
+  }
+  return sources
+}
+
+// Per group as well, for the status index below: the rows a historical
+// group's status cards draw are read once.
+const delegationStatusTasksByGroup = new WeakMap<
+  ResolvedMessageGroup,
+  readonly DelegationStatusTaskRef[]
+>()
+
+/**
+ * The `get_delegation_status` task rows the thread's turns draw, turn by turn
+ * and in thread order — what the transcript's status index is folded from
+ * (`@/lib/delegation-status-index`), so that only a task's newest row carries
+ * the decision its sub-agent is parked on.
+ */
+export function threadDelegationStatusTasks(
+  items: readonly ThreadRenderItem[]
+): (readonly DelegationStatusTaskRef[])[] {
+  const out: (readonly DelegationStatusTaskRef[])[] = []
+  for (const item of items) {
+    if (item.kind !== "turn") continue
+    let tasks = delegationStatusTasksByGroup.get(item.group)
+    if (!tasks) {
+      tasks = collectDelegationStatusTasks(item.group.parts)
+      delegationStatusTasksByGroup.set(item.group, tasks)
+    }
+    if (tasks.length > 0) out.push(tasks)
+  }
+  return out
+}
+
+/** The sub-agents one message's round lists, in order — see
+ *  `extractMessageDelegationSources`. */
+class MessageDelegationList {
+  readonly sources: DelegationCardSource[] = []
+  private readonly indexByCallId = new Map<string, number>()
+  private readonly listedTaskIds = new Set<string>()
+
+  add(source: DelegationCardSource): void {
+    const resumedTaskId = source.taskIdHint ?? null
+    if (resumedTaskId == null) {
+      const startedTaskId = startedTaskIdOf(source)
+      if (startedTaskId) this.listedTaskIds.add(startedTaskId)
+    }
+    // Another copy of a call already listed refreshes that row — before the
+    // task check below, which would otherwise take a resume's second copy for
+    // a second resume of its task and keep the stale first copy.
+    const existing = this.indexByCallId.get(source.parentToolUseId)
+    if (existing != null) {
+      this.sources[existing] = source
+      return
+    }
+    if (resumedTaskId != null) {
+      if (this.listedTaskIds.has(resumedTaskId)) return
+      this.listedTaskIds.add(resumedTaskId)
+    }
+    this.indexByCallId.set(source.parentToolUseId, this.sources.length)
+    this.sources.push(source)
+  }
+}
+
+/**
+ * The sub-agents each loaded user message's round started or brought back, in
+ * order, one source each — what the message navigator of the Session Details
+ * panel lists under a message. The sources are the ones the round's delegation
+ * cards draw (`groupDelegationSources`).
+ *
+ * Within a round, a `resume_delegation` is listed only for a task the round
+ * didn't already list: the resume re-binds the child to its ORIGINAL
+ * `delegate_to_agent` call, so the original's row already tracks the resumed
+ * run. A resume of a task an earlier message started is listed under the
+ * message that resumed it too — that round put the sub-agent back to work.
+ * The same call seen twice (a reply rendered from two copies while it
+ * settles) keeps its first position and its latest fields.
+ *
+ * Replies loaded ahead of the first loaded user message — a round whose prompt
+ * sits above the loaded window — are `leading`.
+ */
+export function extractMessageDelegationSources(
+  items: readonly ThreadRenderItem[]
+): LoadedMessageSubAgents {
+  // A list only for a round that has a sub-agent: this runs on every
+  // streaming batch, over every loaded message.
+  const lists = new Map<string, MessageDelegationList>()
+  let leading: MessageDelegationList | null = null
+  // The message whose round is being read; null ahead of the first.
+  let currentTurnId: string | null = null
+  let current: MessageDelegationList | null = null
+  for (const item of items) {
+    if (item.kind !== "turn") continue
+    if (item.group.role === "user") {
+      currentTurnId = item.group.id
+      current = lists.get(currentTurnId) ?? null
+      continue
+    }
+    if (item.group.role !== "assistant") continue
+    const sources = groupDelegationSources(item.group)
+    if (sources.length === 0) continue
+    if (!current) {
+      current = new MessageDelegationList()
+      if (currentTurnId == null) leading = current
+      else lists.set(currentTurnId, current)
+    }
+    for (const source of sources) current.add(source)
+  }
+  const byUserTurnId = new Map<string, readonly DelegationCardSource[]>()
+  for (const [turnId, list] of lists) {
+    if (list.sources.length > 0) byUserTurnId.set(turnId, list.sources)
+  }
+  return {
+    byUserTurnId,
+    leading:
+      leading && leading.sources.length > 0
+        ? leading.sources
+        : EMPTY_DELEGATIONS,
+  }
+}
+
+/**
+ * The user message the transcript is showing, for the navigator's highlight:
+ * the one whose prompt — or whose reply — is at the top of the viewport, or
+ * the latest once the view rests at the end. Replies loaded ahead of the first
+ * loaded message belong to `earlierRoundTurnId`, the message above the loaded
+ * window whose round the window starts inside (null while that is unknown).
+ */
+export function currentNavTurnIdAt(
+  items: readonly ThreadRenderItem[],
+  top: ViewportTop,
+  earlierRoundTurnId: string | null
+): string | null {
+  const from = top.atEnd
+    ? items.length - 1
+    : Math.min(top.index, items.length - 1)
+  for (let i = from; i >= 0; i--) {
+    const item = items[i]
+    if (item.kind === "turn" && item.group.role === "user") {
+      return item.group.id
+    }
+  }
+  return earlierRoundTurnId
 }
 
 function extractTextFromParts(parts: AdaptedContentPart[]): string {
@@ -1125,7 +1338,7 @@ export function MessageListView({
   hideEmptyState = false,
   onReload,
   onNewSession,
-  showMessageNav = true,
+  insightsInSidebar = false,
   userTurnHeader = null,
   onQuoteSelection,
   onAskSelection,
@@ -1533,7 +1746,7 @@ export function MessageListView({
   // Sub-agents delegated in the LAST agent reply. Scan the merged timeline
   // backward for the most recent assistant turn (the live streaming turn is
   // merged in too, so this covers both live and historical), and pull its
-  // `delegate_to_agent` tool calls. The overlay shows only while the last reply
+  // `delegate_to_agent` tool calls. The list holds only while the last reply
   // carries delegation cards — a newer non-delegating reply clears it.
   const lastAssistantGroup = useMemo(() => {
     let group: ResolvedMessageGroup | null = null
@@ -1549,7 +1762,7 @@ export function MessageListView({
   const lastAssistantDelegations = useMemo(
     () =>
       lastAssistantGroup
-        ? extractDelegationSources(lastAssistantGroup.parts)
+        ? groupDelegationSources(lastAssistantGroup)
         : EMPTY_DELEGATIONS,
     [lastAssistantGroup]
   )
@@ -1557,13 +1770,29 @@ export function MessageListView({
     ? `subagents-${lastAssistantGroup.id}`
     : `subagents-history-${conversationId}`
 
-  // --- Message navigator panel ------------------------------------------------
-  // Lifted scroll handle so the panel (which lives in the overlay stack, outside
-  // the MessageScrollProvider subtree) can drive scrollToIndex.
+  // Which status row of the thread speaks for each delegated task: only that
+  // one reaches the live sub-agent and carries the decision it is parked on,
+  // however many cards the agent's re-polls left. The indexer keeps its last
+  // result while no task's newest row changes, so a streaming batch that
+  // leaves them alone re-renders no row through the context.
+  const [indexDelegationStatus] = useState(() =>
+    createDelegationStatusIndexer()
+  )
+  const delegationStatusIndex = useMemo(
+    () => indexDelegationStatus(threadDelegationStatusTasks(threadItems)),
+    [indexDelegationStatus, threadItems]
+  )
+
+  // --- Message navigator ------------------------------------------------------
+  // Lifted scroll handle so the navigator — in the Session Details side panel,
+  // outside the MessageScrollProvider subtree — can drive scrollToIndex.
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
-  // Collapse state is owned here (not in the panel) so the expensive per-file
-  // `navEntries` is computed only while the panel is open.
-  const [navExpanded, setNavExpanded] = useState(false)
+  // The per-message rows are computed only while the side panel shows them:
+  // grouping them parses every turn's diffs.
+  const navDemanded = useTranscriptNavDemanded(
+    conversationId,
+    insightsInSidebar
+  )
 
   // Positioning box for the text-selection bubble. It is the transcript's outer
   // (non-scrolling) frame, so the bubble is clipped to the message area and
@@ -1571,12 +1800,12 @@ export function MessageListView({
   const selectionBoxRef = useRef<HTMLDivElement | null>(null)
 
   // The loaded user messages: how many, and where each renders. Cheap — no
-  // diff parsing — so the collapsed chip and the jumps can use it while
+  // diff parsing — so the message count and the jumps can use it while
   // streaming.
   const loadedUserMessages = useMemo(() => {
     const threadIndexByTurnId = new Map<string, number>()
     let count = 0
-    if (!showMessageNav) return { count, threadIndexByTurnId }
+    if (!insightsInSidebar) return { count, threadIndexByTurnId }
     for (let i = 0; i < threadItems.length; i++) {
       const item = threadItems[i]
       if (item.kind === "turn" && item.group.role === "user") {
@@ -1585,15 +1814,15 @@ export function MessageListView({
       }
     }
     return { count, threadIndexByTurnId }
-  }, [showMessageNav, threadItems])
+  }, [insightsInSidebar, threadItems])
 
   // A long conversation is loaded a window at a time (reverse infinite
   // scroll), but the navigator covers all of it: the window reports how many
-  // user messages lie above it, and their outline is fetched while the panel
-  // is open. A server that doesn't report the count predates the outline too;
-  // the navigator then covers the loaded window only.
+  // user messages lie above it, and their outline is fetched while the rows
+  // are shown. A server that doesn't report the count predates the outline
+  // too; the navigator then covers the loaded window only.
   const windowedDetail = isWindowedDetail(detail) ? detail : null
-  const earlierUserCount = showMessageNav
+  const earlierUserCount = insightsInSidebar
     ? (windowedDetail?.user_turns_before_offset ?? 0)
     : 0
   const userMessageCount = earlierUserCount + loadedUserMessages.count
@@ -1601,17 +1830,25 @@ export function MessageListView({
     fetchId: session?.dbConversationId ?? conversationId,
     offset: windowedDetail?.turns_offset ?? 0,
     prefixHash: windowedDetail?.prefix_hash ?? null,
-    enabled: navExpanded && earlierUserCount > 0,
+    enabled: navDemanded && earlierUserCount > 0,
   })
   const earlierOutlineState = earlierOutline.state
 
+  // The sub-agents each loaded message's round ran, from the same sources its
+  // delegation cards draw. Only while the rows are shown, like the rows.
+  const loadedSubAgents = useMemo<LoadedMessageSubAgents | undefined>(
+    () =>
+      navDemanded ? extractMessageDelegationSources(threadItems) : undefined,
+    [navDemanded, threadItems]
+  )
+
   // One entry per user message — including ones with no edits (placeholders).
-  // Computed lazily: only while the panel is expanded, since grouping parses
-  // every turn's diffs. Collapsed (the default) it stays EMPTY, keeping the
-  // streaming hot path free of diff parsing. Thread indices are recomputed
-  // with the items on every prepend, so the jump targets never go stale.
+  // Computed lazily: only while the side panel shows the rows, since grouping
+  // parses every turn's diffs. Otherwise it stays EMPTY, keeping the streaming
+  // hot path free of diff parsing. Thread indices are recomputed with the
+  // items on every prepend, so the jump targets never go stale.
   const navEntries = useMemo<MessageNavEntry[]>(() => {
-    if (!showMessageNav || !navExpanded) return EMPTY_NAV_ENTRIES
+    if (!navDemanded) return EMPTY_NAV_ENTRIES
     const entries = buildMessageNavEntries({
       earlierTurns:
         earlierOutlineState.status === "ready"
@@ -1620,16 +1857,43 @@ export function MessageListView({
       earlierUserCount,
       loadedTurns: timelineTurns.map((item) => item.turn),
       threadIndexByTurnId: loadedUserMessages.threadIndexByTurnId,
+      loadedSubAgents,
     })
     return entries.length > 0 ? entries : EMPTY_NAV_ENTRIES
   }, [
-    showMessageNav,
-    navExpanded,
+    navDemanded,
     earlierOutlineState,
     earlierUserCount,
     timelineTurns,
     loadedUserMessages,
+    loadedSubAgents,
   ])
+
+  // The message the transcript is showing, which the navigator highlights:
+  // the one at the top of the viewport (or the one whose reply is there), or
+  // the latest once the view is at the end. Tracked only while the rows are
+  // shown — the list reports its top row only to a listener.
+  const [viewportTop, setViewportTop] = useState<ViewportTop | null>(null)
+  // Forgotten once nobody shows the rows, so showing them again never starts
+  // from where the view was back then.
+  if (!navDemanded && viewportTop !== null) setViewportTop(null)
+  // The last message the outline lists: the one whose replies the loaded
+  // window starts with, when it starts inside a round.
+  const earlierRoundTurnId = useMemo(() => {
+    if (earlierOutlineState.status !== "ready") return null
+    const { turns } = earlierOutlineState
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role === "user") return turns[i].id
+    }
+    return null
+  }, [earlierOutlineState])
+  const currentNavTurnId = useMemo(
+    () =>
+      navDemanded && viewportTop != null
+        ? currentNavTurnIdAt(threadItems, viewportTop, earlierRoundTurnId)
+        : null,
+    [navDemanded, viewportTop, threadItems, earlierRoundTurnId]
+  )
 
   const navJump = useMessageNavJump({
     conversationId,
@@ -1638,6 +1902,72 @@ export function MessageListView({
     smooth: chatAnimations,
     loadOlderTurnsThrough,
   })
+
+  // --- Session Details side panel ---------------------------------------------
+  // The plan it shows: the live reply's latest plan block while it has one,
+  // else the latest plan in the history (the inline overlay resolves the same
+  // pair itself).
+  const livePlanEntries = useMemo(
+    () =>
+      insightsInSidebar
+        ? getLatestPlanEntries(liveMessage ?? null)
+        : EMPTY_PLAN_ENTRIES,
+    [insightsInSidebar, liveMessage]
+  )
+  const sidebarPlanEntries =
+    livePlanEntries.length > 0 ? livePlanEntries : historicalPlanEntries
+  const insightsActions = useMemo<TranscriptInsightsActions>(
+    () => ({
+      selectNavEntry: navJump.select,
+      retryEarlierNav: earlierOutline.retry,
+    }),
+    [navJump.select, earlierOutline.retry]
+  )
+  const navEarlier =
+    earlierOutlineState.status === "loading" ||
+    earlierOutlineState.status === "error"
+      ? earlierOutlineState.status
+      : null
+  const navRevealingTurnId = navJump.revealingTurnId
+  const replyStreaming = connStatus === "prompting"
+  const transcriptInsights = useMemo<TranscriptInsights | null>(
+    () =>
+      insightsInSidebar
+        ? {
+            nav: {
+              count: userMessageCount,
+              entries: navEntries,
+              earlier: navEarlier,
+              revealingTurnId: navRevealingTurnId,
+              currentTurnId: currentNavTurnId,
+            },
+            plan: { entries: sidebarPlanEntries, streaming: replyStreaming },
+            actions: insightsActions,
+          }
+        : null,
+    [
+      insightsInSidebar,
+      userMessageCount,
+      navEntries,
+      navEarlier,
+      navRevealingTurnId,
+      currentNavTurnId,
+      sidebarPlanEntries,
+      replyStreaming,
+      insightsActions,
+    ]
+  )
+  // Published after every change; the store keeps whatever didn't change, so
+  // a batch that moves none of it wakes no reader.
+  const insightsOwner = useId()
+  useEffect(() => {
+    if (transcriptInsights == null) return
+    publishTranscriptInsights(conversationId, insightsOwner, transcriptInsights)
+  }, [conversationId, insightsOwner, transcriptInsights])
+  useEffect(() => {
+    if (!insightsInSidebar) return
+    return () => retractTranscriptInsights(conversationId, insightsOwner)
+  }, [insightsInSidebar, conversationId, insightsOwner])
 
   const hasRenderableContent = threadItems.length > 0 || Boolean(liveMessage)
 
@@ -1716,7 +2046,8 @@ export function MessageListView({
     // those live in virtua's rows and take their drawer down with them when
     // they scroll out of the buffer. This is the nearest ancestor that owns
     // the virtualizer instead of sitting inside it — and it covers the
-    // top-right SubAgentOverlay's rows too.
+    // inline SubAgentOverlay's rows too. (The Session Details side panel's
+    // sub-agent rows sit in another tree and bring their own host.)
     <SessionViewerHost>
       <div
         ref={selectionBoxRef}
@@ -1746,6 +2077,7 @@ export function MessageListView({
             loadingOlderLabel={t("loadingEarlier")}
             prependEpoch={session?.olderTurnsPrependEpoch ?? 0}
             prependScopeKey={conversationId}
+            onViewportTopChange={navDemanded ? setViewportTop : undefined}
           />
           {/* Stacked, not overlapping: both pin to the thread's bottom centre,
           so the scroll button steps up while the pill is showing. */}
@@ -1777,47 +2109,33 @@ export function MessageListView({
             isStreaming={connStatus === "prompting"}
           />
         )}
-        {/* Shared overlay stack pinned to the inline-start edge (top-left in LTR,
-        top-right in RTL). A flex column keeps the order stable regardless of
-        each panel's expand/collapse height: the message navigator first, then
-        the plan panel, then the sub-agent panel. Empty panels render null and
+        {/* Overlay stack pinned to the inline-start edge (top-left in LTR,
+        top-right in RTL) — only where the plan and sub-agents have no side
+        panel to go to (see `insightsInSidebar`). A flex column keeps the order
+        stable regardless of each panel's expand/collapse height: the plan
+        panel first, then the sub-agent panel. Empty panels render null and
         collapse out. Positioning lives here (not in the child overlays); the
         chips are "bullets" — flat on the start side (flush to the pinned
         edge), rounded on the end side — that expand toward the inline-end on
         hover. Logical `start-0` + `items-start` keep the anchor and the bullet
         on the same side, so the whole stack mirrors cleanly in RTL. */}
-        <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
-          {showMessageNav && userMessageCount > 0 && (
-            <ConversationMessageNav
-              count={userMessageCount}
-              expanded={navExpanded}
-              onToggle={setNavExpanded}
-              entries={navEntries}
-              onSelect={navJump.select}
-              revealingTurnId={navJump.revealingTurnId}
-              earlier={
-                earlierOutlineState.status === "loading" ||
-                earlierOutlineState.status === "error"
-                  ? earlierOutlineState.status
-                  : null
-              }
-              onRetryEarlier={earlierOutline.retry}
+        {!insightsInSidebar && (
+          <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
+            <AgentPlanOverlay
+              key={agentPlanOverlayKey}
+              message={liveMessage ?? null}
+              entries={historicalPlanEntries}
+              planKey={historicalPlanKey}
+              defaultExpanded={false}
+              isStreaming={connStatus === "prompting"}
             />
-          )}
-          <AgentPlanOverlay
-            key={agentPlanOverlayKey}
-            message={liveMessage ?? null}
-            entries={historicalPlanEntries}
-            planKey={historicalPlanKey}
-            defaultExpanded={false}
-            isStreaming={connStatus === "prompting"}
-          />
-          <SubAgentOverlay
-            key={subAgentOverlayKey}
-            delegations={lastAssistantDelegations}
-            overlayKey={subAgentOverlayKey}
-          />
-        </div>
+            <SubAgentOverlay
+              key={subAgentOverlayKey}
+              delegations={lastAssistantDelegations}
+              overlayKey={subAgentOverlayKey}
+            />
+          </div>
+        )}
         <SelectionActionBubble
           containerRef={selectionBoxRef}
           onQuote={onQuoteSelection}
@@ -1831,9 +2149,11 @@ export function MessageListView({
   return (
     <MarkdownImageProvider rootPath={resolvedImageRoot}>
       <ModelLabelProvider value={modelLabel}>
-        <KnownInvocationsProvider value={knownInvocations}>
-          {thread}
-        </KnownInvocationsProvider>
+        <DelegationStatusIndexProvider value={delegationStatusIndex}>
+          <KnownInvocationsProvider value={knownInvocations}>
+            {thread}
+          </KnownInvocationsProvider>
+        </DelegationStatusIndexProvider>
       </ModelLabelProvider>
     </MarkdownImageProvider>
   )

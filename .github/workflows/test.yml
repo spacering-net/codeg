@@ -11,6 +11,15 @@ env:
   # Refuse to silently regenerate snapshots in CI — any drift must be
   # accepted locally with `cargo insta review` and committed.
   INSTA_UPDATE: "no"
+  # Debuginfo as line tables only (`test` inherits `dev`): backtraces keep
+  # their file:line, and the type and variable records no CI step reads are
+  # not built (on macOS they are most of codeg_lib's ~1 GB debug rlib). With
+  # them the desktop cell ran the 16 GB Windows runner out of commit ("The
+  # paging file is too small for this operation to complete. (os error
+  # 1455)"): rustc maps every upstream rlib copy-on-write, Windows charges
+  # such a view in full against RAM + pagefile, and the tests and bins that
+  # link codeg_lib each map their own view, in parallel.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 concurrency:
   group: test-${{ github.ref }}
@@ -69,7 +78,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, macos-latest, windows-latest]
-        mode: [desktop, server]
+        mode: [desktop, server, cli]
         include:
           - mode: desktop
             # `test-utils` exposes test scaffolding (AppState::new_for_test,
@@ -94,6 +103,14 @@ jobs:
             # codeg-server binary, which is exactly the cfg-gated surface
             # that this cell exists to verify.
             clippy_args: "--no-default-features --features server-bin --bin codeg-server --lib"
+          - mode: cli
+            # The `codeg-cli` client (`src/cli/`), which only `cli-bin`
+            # compiles: the server cells leave it out, and the Windows
+            # desktop cell only builds its tests (`--no-run`), so without
+            # this cell they would never run on Windows. The runtime side
+            # (`cli_run`) is in the lib, which the server cells test already.
+            cargo_args: "--no-default-features --features cli-bin --lib cli::"
+            clippy_args: "--no-default-features --features cli-bin --bin codeg-cli --lib"
     steps:
       - uses: actions/checkout@v4
 
@@ -160,3 +177,84 @@ jobs:
             echo "::error::Web handlers must call commands/*_core, not services directly."
             exit 1
           fi
+
+  install-sh:
+    # install.sh stops what runs the files it replaces, and nothing else: on
+    # Linux `cp` onto a running program fails, but the desktop app, other
+    # users, other directories and containers run a codeg-server or codeg-mcp
+    # of their own. The test runs the script's stop section against fake
+    # programs; the installer itself downloads a release and writes to
+    # /usr/local/bin, so it is not run. /bin/bash: on macOS that is 3.2, what
+    # `curl … | bash` gets there. Linux runs it once more as root, for
+    # processes of other mount namespaces.
+    name: install.sh on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install.sh parses
+        run: /bin/bash -n install.sh
+
+      - name: install.sh stops only what runs the files it replaces
+        env:
+          CODEG_INSTALL_TEST_STRICT: "1"
+        run: /bin/bash scripts/test-install-stop.sh install.sh
+
+      - name: The same, as root
+        if: runner.os == 'Linux'
+        run: sudo CODEG_INSTALL_TEST_STRICT=1 /bin/bash scripts/test-install-stop.sh install.sh
+
+  install-ps1:
+    # Two Windows PowerShell 5.1 traps that PowerShell 7 never hits. First,
+    # `.\install.ps1` reads a script without a BOM in the ANSI code page,
+    # where a UTF-8 em-dash ends in a curly quote that closes the string it is
+    # in — and then the whole script fails to parse (`irm … | iex` decodes
+    # UTF-8, so it is spared this one). Second, Join-Path takes two paths: a
+    # third fails when its line runs, however the script was loaded — the
+    # README's `irm … | iex` included.
+    name: install.ps1 in Windows PowerShell 5.1
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check install.ps1 as Windows PowerShell 5.1 reads and runs it
+        shell: powershell
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes((Join-Path $PWD "install.ps1"))
+          if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+          } else {
+            $text = [System.Text.Encoding]::Default.GetString($bytes)
+          }
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors)
+          if ($errors) {
+            foreach ($e in $errors) {
+              Write-Host "::error file=install.ps1,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+            }
+            exit 1
+          }
+          # Windows PowerShell 5.1's Join-Path takes two paths (it has no
+          # -AdditionalChildPath): a third fails when the line runs, not when
+          # the script parses.
+          $bad = $false
+          $calls = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+              $node.GetCommandName() -eq "Join-Path"
+          }, $true)
+          foreach ($call in $calls) {
+            $paths = @($call.CommandElements | Select-Object -Skip 1 | Where-Object {
+              $_ -isnot [System.Management.Automation.Language.CommandParameterAst]
+            })
+            if ($paths.Count -gt 2) {
+              Write-Host "::error file=install.ps1,line=$($call.Extent.StartLineNumber)::Join-Path with $($paths.Count) paths fails in Windows PowerShell 5.1"
+              $bad = $true
+            }
+          }
+          if ($bad) { exit 1 }

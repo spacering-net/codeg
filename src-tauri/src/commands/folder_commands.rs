@@ -78,6 +78,9 @@ pub(crate) fn load_package_scripts_as_commands(folder_path: &str) -> Vec<(String
     commands
 }
 
+/// Every command, `run_local` ones too: this app's own frontend is the only
+/// caller here, and it knows that flag (unlike an older client of the HTTP
+/// route, which `web::handlers::folder_commands` guards against).
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_folder_commands(
@@ -94,8 +97,16 @@ pub async fn create_folder_command(
     folder_id: i32,
     name: String,
     command: String,
+    run_local: Option<bool>,
 ) -> Result<FolderCommandInfo, DbError> {
-    folder_command_service::create(&db.conn, folder_id, &name, &command).await
+    folder_command_service::create(
+        &db.conn,
+        folder_id,
+        &name,
+        &command,
+        run_local.unwrap_or(false),
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -106,8 +117,9 @@ pub async fn update_folder_command(
     name: Option<String>,
     command: Option<String>,
     sort_order: Option<i32>,
+    run_local: Option<bool>,
 ) -> Result<FolderCommandInfo, DbError> {
-    folder_command_service::update(&db.conn, id, name, command, sort_order).await
+    folder_command_service::update(&db.conn, id, name, command, sort_order, run_local).await
 }
 
 #[cfg(feature = "tauri-runtime")]

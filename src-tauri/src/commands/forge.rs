@@ -33,6 +33,13 @@ pub struct ForgeRemote {
     pub server_host: String,
     pub owner_repo: String,
     pub remote_url: String,
+    /// The instance's web root (see `HostProfile::web_origin`): where the
+    /// panel's "open repository" link points when `remote_url` is SSH, which
+    /// no browser can open. It comes from the account the API reads this host
+    /// with instead of being assumed `https://`, because a self-hosted
+    /// instance served over plain http, on its own port or under a mount path
+    /// is only reachable where that account says it is.
+    pub web_origin: String,
     /// Which forge this host is, decided HERE (see `forge::provider_for_host`)
     /// and handed to the client for display and for building the reverse-lookup
     /// keys. The client never picks it: that choice selects a credential.
@@ -539,6 +546,9 @@ pub async fn folder_forge_remote_core(
         // Redacted, not raw: a remote URL can carry `user:token@` from
         // whatever configured it, and this value crosses to the client.
         remote_url: redact_userinfo(&url),
+        // Same treatment: it is whatever was typed as the account's server
+        // URL, and it crosses to the client the same way.
+        web_origin: redact_userinfo(&profile.web_origin),
         provider: profile.provider,
         supported: profile.recognized,
     }))
@@ -1053,6 +1063,7 @@ pub async fn create_forge_task(
         head_sha: pull.as_ref().map(|p| p.head_sha.clone()),
         head_repo: pull.as_ref().map(|p| p.head_repo.clone()),
         result_pr: None,
+        pushed_onto: None,
         // Always stamped explicitly, both answers: the engine reads it as the
         // user's decision, and an absent field there means "an older row that
         // never had the choice" — a meaning a fresh task must not borrow.
@@ -2038,6 +2049,7 @@ mod tests {
                 head_sha: None,
                 head_repo: None,
                 result_pr: None,
+                pushed_onto: None,
                 writeback: stored,
             };
             let round: ForgeSourceMeta =
@@ -2091,5 +2103,71 @@ mod tests {
             let expect = matches!(s, ForgeScenario::PlanFirst | ForgeScenario::ReviewOnly);
             assert_eq!(s.is_report(), expect, "{s:?}");
         }
+    }
+
+    /// A GitLab served over plain http only, its account registered at that
+    /// `http://` URL, and a folder whose origin is the scp-style SSH address
+    /// (#997). The remote names no scheme at all, so the panel's link to the
+    /// repository has to be handed the origin the account registered — it
+    /// used to assume `https://` and open a port nothing listens on. No token
+    /// and no network: a declared forge is never probed.
+    #[tokio::test]
+    async fn an_ssh_remote_carries_the_web_origin_its_hosts_account_registered() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let settings = crate::models::GitHubAccountsSettings {
+            accounts: vec![crate::models::GitHubAccount {
+                id: "acc-gl".into(),
+                server_url: "http://gitlab.example.com/".into(),
+                username: "dev".into(),
+                scopes: vec!["api".into()],
+                avatar_url: None,
+                is_default: true,
+                created_at: "2026-10-20T00:00:00Z".into(),
+                provider: Some("gitlab".into()),
+            }],
+        };
+        crate::db::service::app_metadata_service::upsert_value(
+            &db.conn,
+            "github_accounts",
+            &serde_json::to_string(&settings).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let repo = tempfile::tempdir().expect("tempdir");
+        for args in [
+            vec!["init", "-q"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "git@gitlab.example.com:group/repo.git",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(&args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?}");
+        }
+        let folder = crate::db::service::folder_service::add_folder(
+            &db.conn,
+            &repo.path().to_string_lossy(),
+        )
+        .await
+        .expect("folder");
+
+        let remote = folder_forge_remote_core(&db, folder.id)
+            .await
+            .unwrap()
+            .expect("a forge remote");
+        assert_eq!(remote.remote_url, "git@gitlab.example.com:group/repo.git");
+        assert_eq!(remote.server_host, "gitlab.example.com");
+        assert_eq!(remote.owner_repo, "group/repo");
+        assert_eq!(remote.web_origin, "http://gitlab.example.com");
+        assert_eq!(remote.provider, ForgeProvider::GitLab);
+        assert!(remote.supported);
     }
 }

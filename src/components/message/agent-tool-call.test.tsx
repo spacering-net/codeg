@@ -91,6 +91,49 @@ describe("AgentToolCallPart model and effort", () => {
     expect(screen.getByText("Prompt")).toBeInTheDocument()
     expect(screen.queryByText(/Effort:/)).not.toBeInTheDocument()
   })
+
+  // The Agent tool's schema: a `model` or `effort` argument is ignored for
+  // `subagent_type: "fork"`, which runs on the parent's model and effort.
+  it("shows neither the model nor the effort of a fork, which ignores both", () => {
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "fork",
+          description: "probe fork",
+          prompt: "do it",
+          model: "haiku",
+          effort: "high",
+        }),
+        "output-available"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText("fork: probe fork")).toBeInTheDocument()
+    expect(screen.getByText("Prompt")).toBeInTheDocument()
+    expect(screen.queryByText(/Model:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Effort:/)).not.toBeInTheDocument()
+  })
+
+  it("keeps the model and effort of another agent's role named fork", () => {
+    renderCard(
+      basePart(
+        JSON.stringify({
+          agent_type: "fork",
+          description: "probe role",
+          model: "gpt-5.5",
+          effort: "high",
+        }),
+        "output-available"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText("gpt-5.5").parentElement?.textContent).toBe(
+      "Model: gpt-5.5"
+    )
+    expect(screen.getByText("high").parentElement?.textContent).toBe(
+      "Effort: high"
+    )
+  })
 })
 
 describe("AgentToolCallPart title", () => {

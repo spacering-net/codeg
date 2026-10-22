@@ -4,6 +4,7 @@ import {
   hasTranscriptOverlay,
   isAsyncLaunchAckText,
   isOutOfTurnContentEvent,
+  isUnrenderedAgentTurnContent,
   parseBackgroundTaskMarker,
 } from "@/lib/background-agent"
 
@@ -155,5 +156,70 @@ describe("isOutOfTurnContentEvent", () => {
     expect(
       isOutOfTurnContentEvent({ type: "thinking", text: "\nnext step\n" })
     ).toBe(true)
+  })
+
+  it("rejects codex-acp's MCP start-up report, which no transcript holds", () => {
+    // As codex-acp 2.2.2 sends it for a codeg-mcp that could not start: right
+    // after session/new, before any prompt.
+    expect(
+      isOutOfTurnContentEvent({
+        type: "tool_call",
+        tool_call_id:
+          "mcp_startup.codeg-mcp.4f1c2b9e-8d7a-4c3e-9b1a-2f6d5e8c7a90",
+      })
+    ).toBe(false)
+    // Every other tool call is still turn material, whatever its id.
+    expect(
+      isOutOfTurnContentEvent({ type: "tool_call", tool_call_id: "call_1" })
+    ).toBe(true)
+    expect(
+      isOutOfTurnContentEvent({
+        type: "tool_call",
+        tool_call_id: "mcp__codeg-mcp__check_user_feedback",
+      })
+    ).toBe(true)
+  })
+})
+
+describe("isUnrenderedAgentTurnContent", () => {
+  const connection = (
+    over: Partial<{ status: string; hasPrompted: boolean; agentType: string }>
+  ) => ({ status: "connected", hasPrompted: true, agentType: "codex", ...over })
+
+  it("flags content after a turn has run, outside one", () => {
+    expect(isUnrenderedAgentTurnContent(connection({}))).toBe(true)
+    expect(
+      isUnrenderedAgentTurnContent(connection({ agentType: "code_buddy" }))
+    ).toBe(true)
+  })
+
+  it("leaves content of the running turn to the turn", () => {
+    expect(
+      isUnrenderedAgentTurnContent(connection({ status: "prompting" }))
+    ).toBe(false)
+  })
+
+  it("ignores what an agent sends before its first turn", () => {
+    // A new conversation's agent reporting an MCP server that failed to start,
+    // while the welcome screen still hides the thread: flagging it there is
+    // what showed the notice the moment the first message was sent.
+    expect(
+      isUnrenderedAgentTurnContent(connection({ hasPrompted: false }))
+    ).toBe(false)
+    expect(
+      isUnrenderedAgentTurnContent(
+        connection({ hasPrompted: false, agentType: "open_code" })
+      )
+    ).toBe(false)
+  })
+
+  it("leaves agents with a transcript overlay to the overlay", () => {
+    expect(
+      isUnrenderedAgentTurnContent(connection({ agentType: "claude_code" }))
+    ).toBe(false)
+  })
+
+  it("flags nothing for a connection the store no longer holds", () => {
+    expect(isUnrenderedAgentTurnContent(undefined)).toBe(false)
   })
 })

@@ -7,6 +7,7 @@ import {
   useOverlayScrollbars,
   type UseOverlayScrollbarsParams,
 } from "overlayscrollbars-react"
+import { SKIP_FLOW_DIRECTION_CHECK } from "@/components/ui/scroll-area"
 
 // Routes whose page is a fixed, viewport-filling shell: the body never
 // scrolls there (every pane scrolls inside itself), so a body-level instance
@@ -32,6 +33,9 @@ const BODY_SCROLLBARS_OPTIONS: UseOverlayScrollbarsParams["options"] = {
     dragScroll: false,
   },
   overflow: { x: "hidden" },
+  // The body never scrolls sideways, and the check's scroll block would sit on
+  // the document, catching a scroll anywhere in the page.
+  update: SKIP_FLOW_DIRECTION_CHECK,
 }
 
 export function OverlayScrollbarsInit() {

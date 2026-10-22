@@ -31,18 +31,12 @@ import {
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import { useConversationRuntimeActions } from "@/stores/conversation-runtime-store"
 import {
-  useAcpActions,
   useConnectionStore,
   type ConnectionState,
 } from "@/contexts/acp-connections-context"
-import { PermissionDialog } from "@/components/chat/permission-dialog"
-import { AskQuestionCard } from "@/components/chat/ask-question-card"
-import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
-import {
-  type AgentType,
-  type PlanApprovalAnswer,
-  type QuestionAnswer,
-} from "@/lib/types"
+import { ConnectionBlockingPrompts } from "@/components/chat/connection-blocking-prompts"
+import { blockingPrompts } from "@/lib/blocking-prompts"
+import type { AgentType } from "@/lib/types"
 
 export function useConnectionStateById(
   connectionId: string | null
@@ -270,70 +264,23 @@ export function LiveTranscriptView({
   // The session runs with the user's configured permission level, so it may
   // raise a permission request; it may also call the codeg-mcp
   // `ask_user_question` tool or (Grok) `exit_plan_mode`. All three are
-  // blocking prompts resolved WITHOUT driving a new turn — route the answers
-  // through the viewed connection id. The legacy free-text `pendingQuestion`
-  // path is intentionally NOT hosted here: it is answered by sending a prompt,
-  // which a read-only viewer deliberately cannot do.
-  const { respondPermission, answerQuestion, answerPlanApproval } =
-    useAcpActions()
-  const pendingPermission = conn?.pendingPermission ?? null
-  const onRespondPermission = useCallback(
-    (requestId: string, optionId: string) => {
-      if (!connectionId) return
-      void respondPermission(connectionId, requestId, optionId)
-    },
-    [connectionId, respondPermission]
-  )
-
-  const pendingAskQuestion = conn?.pendingAskQuestion ?? null
-  const onAnswerAskQuestion = useCallback(
-    (questionId: string, answer: QuestionAnswer) => {
-      if (!connectionId) return
-      return answerQuestion(connectionId, questionId, answer)
-    },
-    [connectionId, answerQuestion]
-  )
-
-  const pendingPlanApproval = conn?.pendingPlanApproval ?? null
-  const onAnswerPlanApproval = useCallback(
-    (approvalId: string, answer: PlanApprovalAnswer) => {
-      if (!connectionId) return
-      return answerPlanApproval(connectionId, approvalId, answer)
-    },
-    [connectionId, answerPlanApproval]
-  )
+  // blocking prompts resolved WITHOUT driving a new turn — answered through
+  // the viewed connection id. The legacy free-text `pendingQuestion` path is
+  // intentionally NOT hosted here: it is answered by sending a prompt, which a
+  // read-only viewer deliberately cannot do.
+  const prompts = blockingPrompts(conn)
 
   return (
     // Sized as a flex child: fills the host column's remaining height under
     // its header (h-full here would overflow by the header's height).
     <div className="flex min-h-0 flex-1 flex-col">
-      {pendingPermission && (
-        <div className="border-b border-border px-4 py-3">
-          <PermissionDialog
-            permission={pendingPermission}
-            onRespond={onRespondPermission}
-            agentType={agentType}
-          />
-        </div>
-      )}
-      {connectionId &&
-        pendingAskQuestion &&
-        pendingAskQuestion.questions.length > 0 && (
-          <div className="border-b border-border px-4 py-3">
-            <AskQuestionCard
-              question={pendingAskQuestion}
-              onAnswer={onAnswerAskQuestion}
-            />
-          </div>
-        )}
-      {connectionId && pendingPlanApproval && (
-        <div className="border-b border-border px-4 py-3">
-          <PlanApprovalCard
-            key={pendingPlanApproval.approval_id}
-            approval={pendingPlanApproval}
-            onAnswer={onAnswerPlanApproval}
-          />
-        </div>
+      {connectionId && prompts && (
+        <ConnectionBlockingPrompts
+          connectionId={connectionId}
+          prompts={prompts}
+          agentType={agentType}
+          itemClassName="border-b border-border px-4 py-3"
+        />
       )}
       {/* No padding of its own. `MessageListView` insets its own content —
           every virtualized row is wrapped in `mx-auto chat-content-w px-4` and the
@@ -361,7 +308,6 @@ export function LiveTranscriptView({
           detailError={error}
           acpLoadError={acpLoadError}
           hideEmptyState={false}
-          showMessageNav={false}
           userTurnHeader={userTurnHeader}
         />
       </div>

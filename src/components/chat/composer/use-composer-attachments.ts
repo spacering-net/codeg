@@ -174,13 +174,15 @@ export interface ComposerAttachments {
 
   /** Replay a stored `PromptInputBlock[]` into this composer: prose + file
    *  badges inline, images into the strip, bytes-bearing resources re-registered
-   *  behind fresh sentinel badges. Replaces whatever the editor held. `known`
-   *  is the host's advertised invocations, gating bare `/cmd` tokens in the
-   *  prose (see {@link restoreBlocksIntoEditor}). */
+   *  behind fresh sentinel badges. Replaces whatever the editor held — or, with
+   *  `append`, keeps it all and adds the blocks after it. `known` is the host's
+   *  advertised invocations, gating bare `/cmd` tokens in the prose (see
+   *  {@link restoreBlocksIntoEditor}). */
   hydrateFromBlocks: (
     editor: Editor,
     blocks: PromptInputBlock[],
-    known?: KnownInvocations
+    known?: KnownInvocations,
+    opts?: { append?: boolean }
   ) => void
   removeAttachment: (id: string) => void
   clearAttachments: () => void
@@ -1287,12 +1289,21 @@ export function useComposerAttachments({
   // re-registered in the payload map (their original sentinel uri was never
   // serialized, so each gets a fresh one).
   const hydrateFromBlocks = useCallback(
-    (editor: Editor, blocks: PromptInputBlock[], known?: KnownInvocations) => {
-      embeddedPayloadsRef.current.clear()
-      const restored = restoreBlocksIntoEditor(editor, blocks, known)
-      setAttachments(
-        restored.filter((a): a is ImageInputAttachment => a.type === "image")
+    (
+      editor: Editor,
+      blocks: PromptInputBlock[],
+      known?: KnownInvocations,
+      { append = false }: { append?: boolean } = {}
+    ) => {
+      // Appending keeps the payloads behind the badges already in the editor.
+      if (!append) embeddedPayloadsRef.current.clear()
+      const restored = restoreBlocksIntoEditor(editor, blocks, known, {
+        append,
+      })
+      const images = restored.filter(
+        (a): a is ImageInputAttachment => a.type === "image"
       )
+      setAttachments(append ? (current) => [...current, ...images] : images)
       const resources = restored.filter(
         (a): a is ResourceInputAttachment => a.type === "resource"
       )

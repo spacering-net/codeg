@@ -4,6 +4,7 @@ import type { ForgeTab } from "@/lib/types"
 
 const PAGE_SIZE_KEY = "workspace:forge-page-size"
 const TAB_KEY = "workspace:forge-tab"
+const FOLDER_KEY = "forge:folderId"
 
 /**
  * Page sizes the workbench offers. Kept small and fixed rather than free-form:
@@ -91,6 +92,31 @@ export function saveForgeTab(tab: ForgeTab): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(TAB_KEY, tab)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * The project folder the panel was last pointed at. Remembered across sessions
+ * like the tab: it is the repository you work in. A folder that has since left
+ * the workspace is the page's to fall back from — this only reads back a number.
+ */
+export function loadForgeFolderId(): number | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = localStorage.getItem(FOLDER_KEY)
+    const parsed = raw == null ? NaN : Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function saveForgeFolderId(folderId: number): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(FOLDER_KEY, String(folderId))
   } catch {
     /* ignore */
   }

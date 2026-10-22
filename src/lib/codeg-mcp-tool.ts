@@ -64,11 +64,29 @@ export function isCodegMcpWorkbenchTool(
 /** `task_complete`'s three allowed verdicts (validated companion-side). */
 export type TaskVerdict = "success" | "needs_review" | "blocked"
 
+/**
+ * What the board did with a `task_progress` / `task_complete` report: the
+ * companion's `{ recorded, note? }` ack (`TaskReportAck` in
+ * `src-tauri/src/acp/work_task_tools.rs`).
+ */
+export interface TaskReportAck {
+  /** Whether the report landed on the task (its timeline, or its verdict). */
+  recorded: boolean
+  /**
+   * The companion's reason when it did not ("the task moved on to a new run",
+   * …). Agent-facing English, shown as-is; `null` when none survived.
+   */
+  note: string | null
+}
+
 export interface CodegMcpToolModel {
   /**
    * The single argument worth stating in the collapsed row: the session id,
    * the progress message, the completion summary, the automation/task title.
    * `null` when the arguments haven't streamed yet or didn't parse.
+   *
+   * For `task_progress` / `task_complete` this is also the panel's body: the
+   * report is the whole point of the call, and the row cuts it off at one line.
    */
   detail: string | null
   /** `task_complete` only; `null` for every other tool and for a bad verdict. */
@@ -95,7 +113,18 @@ export interface CodegMcpToolModel {
    * would be visible nowhere.
    */
   reason: string | null
-  /** The result text, envelopes peeled. `null` while the call is in flight. */
+  /**
+   * `task_progress` / `task_complete` only: the ack, read from whichever half
+   * of the result the host kept. `null` for every other tool, while the call is
+   * in flight, for a failed call, and when the result is not an ack at all —
+   * which `resultText` then carries verbatim.
+   */
+  ack: TaskReportAck | null
+  /**
+   * The result text, envelopes peeled. `null` while the call is in flight, and
+   * when the result was an ack: that is `ack`'s to state, because what Claude
+   * Code and Codex persist is the bare `{"recorded":true}`.
+   */
   resultText: string | null
   status: "running" | "ok" | "err"
 }
@@ -305,6 +334,69 @@ function readResultObject(obj: Record<string, unknown>): string | null {
 }
 
 /**
+ * The texts `render_task_ack` (companion.rs) puts in `content` when the ack has
+ * no note — all a host that keeps only that half (OpenCode) leaves behind.
+ */
+const ACK_TEXT_RECORDED = "Recorded."
+const ACK_TEXT_NOT_RECORDED = "Not recorded."
+
+function ackFrom(obj: Record<string, unknown>): TaskReportAck | null {
+  return typeof obj.recorded === "boolean"
+    ? { recorded: obj.recorded, note: str(obj, "note") }
+    : null
+}
+
+/**
+ * Read a task report's ack out of a raw result, whatever the host wrapped it in:
+ * the bare structured `{"recorded":true}` (what Claude Code and Codex persist,
+ * since they show the model only `structuredContent`), the full MCP
+ * `CallToolResult`, a host `{result, error}` / `{Ok}` envelope, Codex's
+ * `"Wall time:…\nOutput:\n<json>"` wrap, JSON-of-JSON, a bare content-block
+ * array, or the companion's own `content` text.
+ *
+ * Positive identification only. A note-bearing plain-text result (OpenCode's
+ * half of a refusal) is indistinguishable from any other text, so it returns
+ * `null` and the caller shows it verbatim — never mislabelled as an ack.
+ */
+function readTaskAck(value: unknown, depth = 0): TaskReportAck | null {
+  if (depth > 4 || value === null || value === undefined) return null
+  if (typeof value === "string") {
+    const text = value.trim()
+    if (!text) return null
+    if (text === ACK_TEXT_RECORDED) return { recorded: true, note: null }
+    if (text === ACK_TEXT_NOT_RECORDED) return { recorded: false, note: null }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      const embedded = extractEmbeddedJsonObject(text)
+      return embedded ? readTaskAck(embedded, depth + 1) : null
+    }
+    return readTaskAck(parsed, depth + 1)
+  }
+  if (Array.isArray(value)) {
+    const first = asRecord(value[0])
+    return first ? readTaskAck(first.text, depth + 1) : null
+  }
+  const obj = asRecord(value)
+  if (!obj) return null
+  const direct = ackFrom(obj)
+  if (direct) return direct
+  const { obj: result, hostError } = peelMcpResultEnvelope(
+    obj,
+    isResolvableResult
+  )
+  // A failed host call carries an error string, not an ack.
+  if (hostError) return null
+  const structured = asRecord(result.structuredContent)
+  const fromStructured = structured ? ackFrom(structured) : null
+  if (fromStructured) return fromStructured
+  return Array.isArray(result.content)
+    ? readTaskAck(result.content, depth + 1)
+    : null
+}
+
+/**
  * Resolve everything `CodegMcpToolCard` renders from a tool call's raw input,
  * raw output and lifecycle state.
  *
@@ -324,11 +416,14 @@ export function parseCodegMcpToolCall(params: {
   const args = parseArgs(params.input, (obj) =>
     spec.fields.some((field) => obj[field] !== undefined)
   )
-  const resultText = parseResultText(params.output)
   const isError = !!params.errorText?.trim() || params.state === "output-error"
 
   const authoring =
     params.tool === "create_automation" || params.tool === "create_work_task"
+  const reporting =
+    params.tool === "task_progress" || params.tool === "task_complete"
+  const ack = reporting && !isError ? readTaskAck(params.output) : null
+  const resultText = ack ? null : parseResultText(params.output)
 
   return {
     detail: args ? spec.detail(args) : null,
@@ -336,6 +431,7 @@ export function parseCodegMcpToolCall(params: {
     prompt: authoring && args ? str(args, "prompt") : null,
     reason:
       params.tool === "resume_delegation" && args ? str(args, "reason") : null,
+    ack,
     resultText: isError ? (params.errorText?.trim() ?? resultText) : resultText,
     status: isError
       ? "err"

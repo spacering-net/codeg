@@ -27,7 +27,7 @@ import { getAgentLabel } from "@/lib/custom-agents"
 import { cn } from "@/lib/utils"
 import { useAssistant } from "@/stores/assistants-store"
 
-export type DelegationIdentitySize = "card" | "header" | "overlay"
+export type DelegationIdentitySize = "card" | "compact" | "header" | "overlay"
 
 const AVATAR: Record<
   DelegationIdentitySize,
@@ -48,6 +48,16 @@ const AVATAR: Record<
     placeholder: "h-2.5 w-2.5",
     corner: "h-4 w-4",
     cornerIcon: "h-2.5 w-2.5",
+  },
+  // The 28px disc of the compact card the Session Details side panel lists a
+  // message's sub-agents with.
+  compact: {
+    px: 28,
+    box: "h-7 w-7 rounded-full",
+    agentIcon: "h-4 w-4",
+    placeholder: "h-2 w-2",
+    corner: "h-3.5 w-3.5",
+    cornerIcon: "h-2 w-2",
   },
   // The session drawer header's 28px tile.
   header: {

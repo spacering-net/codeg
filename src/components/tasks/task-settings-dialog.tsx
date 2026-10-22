@@ -36,6 +36,7 @@ import {
   workTaskSettingsSet,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { isLocalCommand } from "@/lib/local-command"
 import { cn } from "@/lib/utils"
 import {
   SettingCard,
@@ -270,10 +271,13 @@ function TaskSettingsBody({
         setAutoCompactPercent(String(s.auto_compact_percent ?? 0))
         setCompactCommand(s.compact_command ?? "")
         setStagePrompts(s.stage_prompts ?? {})
+        // Never one the desktop app runs on its own machine: the preflight
+        // runs on the folder's host.
         const legacy =
           s.preflight_command_id != null
-            ? (commands.find((c) => c.id === s.preflight_command_id)?.command ??
-              "")
+            ? (commands.find(
+                (c) => c.id === s.preflight_command_id && !isLocalCommand(c)
+              )?.command ?? "")
             : ""
         setPreflightCommand(s.preflight_command?.trim() || legacy)
       })

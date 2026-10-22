@@ -236,8 +236,11 @@ describe("ResumedDelegationCard", () => {
     expect(
       screen.queryByText("the app was killed mid-run")
     ).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Resume details" }))
+    // The row's left part is the card's one expander, as on every delegation
+    // card — a resume with no task text known still opens it for the reason.
+    fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(screen.getByText("the app was killed mid-run")).toBeInTheDocument()
+    expect(screen.getByText("Resume reason")).toBeInTheDocument()
     // The report text is addressed to the LLM ("Call get_delegation_status with
     // this id …") and the persisted form is the bare report JSON — every fact
     // in it is already on the row, so it must not be dumped under the reason.
@@ -246,7 +249,7 @@ describe("ResumedDelegationCard", () => {
     expect(screen.queryByText(/"agent_type"/)).not.toBeInTheDocument()
   })
 
-  it("offers no expander when the resume carried no reason", () => {
+  it("offers no expander when the resume carried no reason and no task is known", () => {
     renderWithIntl(
       <ResumedDelegationCard
         toolCallId="tu-resume"
@@ -256,8 +259,54 @@ describe("ResumedDelegationCard", () => {
       />
     )
     expect(screen.getByTestId("resumed-delegation-card")).toBeInTheDocument()
+    expect(screen.getAllByRole("button")).toEqual([
+      screen.getByRole("button", { name: "Open conversation" }),
+    ])
+  })
+
+  it("expands the task and the reason together, from one toggle", () => {
+    const task = "Build the /test4 sandbox page\nwith a seeded fixture"
+    renderWithIntl(
+      <ResumedDelegationCard
+        toolCallId="tu-resume"
+        input={RESUME_INPUT}
+        output={PERSISTED_ACK}
+        state="output-available"
+        meta={{
+          "codeg.delegation": {
+            status: "running",
+            child_conversation_id: 9,
+            agent_type: "codex",
+            task_id: TASK_ID,
+            task_preview: task,
+          },
+        }}
+      />
+    )
+    // One expander only: the separate reason chevron is gone.
+    const toggles = screen
+      .getAllByRole("button")
+      .filter((b) => b.hasAttribute("aria-expanded"))
+    expect(toggles).toHaveLength(1)
+
+    fireEvent.click(toggles[0])
+    const panel = screen.getByTestId("delegation-card-panel")
+    // The task in full first, then the labelled reason under it.
+    expect(panel.children).toHaveLength(2)
+    expect(panel.children[0].textContent).toBe(task)
+    expect(panel.children[1]).toHaveTextContent(
+      "Resume reasonthe app was killed mid-run"
+    )
+    // Both texts keep their own direction (see the delegate card's test).
+    expect(panel.children[0]).toHaveAttribute("dir", "auto")
+    expect(screen.getByText("the app was killed mid-run")).toHaveAttribute(
+      "dir",
+      "auto"
+    )
+
+    fireEvent.click(toggles[0])
     expect(
-      screen.queryByRole("button", { name: "Resume details" })
+      screen.queryByTestId("delegation-card-panel")
     ).not.toBeInTheDocument()
   })
 

@@ -1,16 +1,26 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { act, renderHook } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  DEFAULT_TASKS_BOARD_FILTER,
+  getTasksBoardFilter,
   loadTasksStatusFilter,
   loadTasksViewMode,
+  resetTasksBoardFilterCacheForTests,
+  saveTasksBoardFilter,
   saveTasksStatusFilter,
   saveTasksViewMode,
+  subscribeTasksBoardFilter,
+  useTasksBoardFilter,
 } from "./tasks-board-filter-storage"
 
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 
+const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
+
 beforeEach(() => {
   localStorage.clear()
+  resetTasksBoardFilterCacheForTests()
 })
 
 describe("tasks view mode storage", () => {
@@ -55,5 +65,50 @@ describe("tasks status filter storage", () => {
 
     localStorage.setItem(STATUS_FILTER_KEY, "{not json")
     expect(loadTasksStatusFilter()).toBeNull()
+  })
+})
+
+/**
+ * The aux panel's task tab follows the board's visibility toggles live: it
+ * stays mounted while the board is opened, changed and left again.
+ */
+describe("tasks board filter, live copy", () => {
+  it("starts from what is stored, and follows every save", () => {
+    localStorage.setItem(
+      BOARD_FILTER_KEY,
+      JSON.stringify({ showCanceled: false, showArchived: true })
+    )
+    const { result } = renderHook(() => useTasksBoardFilter())
+    expect(result.current).toEqual({ showCanceled: false, showArchived: true })
+
+    act(() => saveTasksBoardFilter({ showCanceled: true, showArchived: false }))
+    expect(result.current).toEqual(DEFAULT_TASKS_BOARD_FILTER)
+  })
+
+  it("keeps its identity, and stays quiet, for a save that changes nothing", () => {
+    const before = getTasksBoardFilter()
+    const listener = vi.fn()
+    const unsubscribe = subscribeTasksBoardFilter(listener)
+    saveTasksBoardFilter({ ...before })
+    unsubscribe()
+    expect(listener).not.toHaveBeenCalled()
+    expect(getTasksBoardFilter()).toBe(before)
+  })
+
+  it("picks up another window's write", () => {
+    const { result } = renderHook(() => useTasksBoardFilter())
+    act(() => {
+      localStorage.setItem(
+        BOARD_FILTER_KEY,
+        JSON.stringify({ showCanceled: false, showArchived: false })
+      )
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: BOARD_FILTER_KEY })
+      )
+    })
+    expect(result.current).toEqual({
+      showCanceled: false,
+      showArchived: false,
+    })
   })
 })

@@ -735,6 +735,8 @@ pub async fn act(
             ))
         }
     };
+    let mut args = args;
+    at_the_front(&mut args, crate::computer::keys::Platform::current());
     ready()?;
     let result = driver.call(tool, args, timeout).await?;
     if result.is_error {
@@ -752,6 +754,17 @@ pub async fn act(
         window_frame: None,
         clipboard: None,
     })
+}
+
+/// Say that an action on the screen goes at the front, where the driver
+/// needs telling. Every one does, as the user's own pointer would — codeg
+/// sends none where the user does not allow the front — but macOS's driver,
+/// told nothing, takes one for the background and refuses it wherever its
+/// point is over an application that is not in front.
+fn at_the_front(args: &mut Value, platform: crate::computer::keys::Platform) {
+    if platform == crate::computer::keys::Platform::Mac {
+        args["delivery_mode"] = json!("foreground");
+    }
 }
 
 #[cfg(test)]
@@ -784,6 +797,22 @@ mod tests {
     /// Whether a point of a picture at twice the desktop's units lands clear.
     fn clear(windows: &[ScreenWindow], x: f64, y: f64) -> bool {
         lands_allowed(windows, landing(&point(x, y), 2.0).screen)
+    }
+
+    /// macOS's driver is told an action on the screen goes at the front: told
+    /// nothing, it refuses one over any application not in front. Elsewhere
+    /// nothing is added.
+    #[test]
+    fn a_screen_action_is_said_to_go_at_the_front_on_macos() {
+        use crate::computer::keys::Platform;
+        let mut mac = json!({ "scope": "desktop", "x": 1, "y": 2 });
+        at_the_front(&mut mac, Platform::Mac);
+        assert_eq!(mac["delivery_mode"], "foreground");
+        for platform in [Platform::Windows, Platform::Linux] {
+            let mut args = json!({ "scope": "desktop", "x": 1, "y": 2 });
+            at_the_front(&mut args, platform);
+            assert!(args.get("delivery_mode").is_none(), "{platform:?}");
+        }
     }
 
     /// The system's views of other windows are never seen nor touched over

@@ -1025,21 +1025,35 @@ describe("TerminalView recovery", () => {
       const view = render(<TerminalView {...props} attach />)
       await waitFor(() => expect(h.snapshot).toHaveBeenCalledTimes(2))
 
-      // Re-activated while the handshake is out: the pane fits to 133x41.
-      h.pane = { cols: 133, rows: 41 }
-      view.rerender(<TerminalView {...props} attach isActive={false} />)
-      view.rerender(<TerminalView {...props} attach />)
-      await waitFor(() => expect(h.writes).toContain("<resize 133x41>"))
+      // The queued resize is debounced, so on a real clock the handshake has
+      // to land inside that window — and a busy machine let the debounce fire
+      // first, sending the size before there was anything to drop. From here
+      // the clock moves only when the test moves it.
+      vi.useFakeTimers()
+      try {
+        // Re-activated while the handshake is out: the pane fits to 133x41
+        // in the next animation frame.
+        h.pane = { cols: 133, rows: 41 }
+        view.rerender(<TerminalView {...props} attach isActive={false} />)
+        view.rerender(<TerminalView {...props} attach />)
+        act(() => {
+          vi.advanceTimersToNextFrame()
+        })
+        expect(h.writes).toContain("<resize 133x41>")
+        expect(h.resize).not.toHaveBeenCalled()
 
-      // The pane is back to the PTY's size by the time the handshake lands.
-      h.pane = { cols: 80, rows: 24 }
-      await act(async () => {
-        finishHandshake({ ...snapshot("prompt$ ", 1), cols: 80, rows: 24 })
-      })
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 120))
-      })
-      expect(h.resize).not.toHaveBeenCalledWith("terminal-1", 133, 41)
+        // The pane is back to the PTY's size by the time the handshake lands.
+        h.pane = { cols: 80, rows: 24 }
+        await act(async () => {
+          finishHandshake({ ...snapshot("prompt$ ", 1), cols: 80, rows: 24 })
+        })
+        await act(async () => {
+          vi.advanceTimersByTime(120)
+        })
+        expect(h.resize).not.toHaveBeenCalledWith("terminal-1", 133, 41)
+      } finally {
+        vi.useRealTimers()
+      }
       view.unmount()
     } finally {
       width.mockRestore()

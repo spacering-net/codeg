@@ -69,7 +69,15 @@
 //! its `true`, where the TUI, which builds its options per action
 //! (`enableAgentRetries:(0,E.w5)(n)` with `n=t.action.case`), answers `false`.
 //! The closure therefore gets a second splice that re-evaluates the policy for
-//! the action it is handed ([`follow_up_policy_prefix`]).
+//! the action it is handed ([`follow_up_policy_prefix`]). `2026.10.14-941492e`,
+//! a second build of the same day, ships the options statement and the closure
+//! byte for byte, in all six archives. `2026.10.16-e3cb207` still ships the
+//! options statement byte for byte in all six; its closure differs only in its
+//! name, which is now `F` in every archive. `2026.10.18-ea085cb` still ships
+//! the options statement byte for byte in all six; its closure is named `E` in
+//! the darwin/x64 archive and `F` in the other five, and is otherwise the same.
+//! `2026.10.19-6bbf2c4` still ships the options statement byte for byte in all
+//! six, and its closure is `F` in all six and otherwise the same.
 //!
 //! So nothing about the splice is transcribed by hand any more:
 //!
@@ -121,6 +129,10 @@ const TRIAGED_AFFECTED_VERSIONS: &[&str] = &[
     "2026.09.28-64d2043",
     "2026.10.01-14929f9",
     "2026.10.14-0f9edde",
+    "2026.10.14-941492e",
+    "2026.10.16-e3cb207",
+    "2026.10.18-ea085cb",
+    "2026.10.19-6bbf2c4",
 ];
 
 /// Cursor agent-cli versions whose bundle was inspected and found to already
@@ -173,9 +185,12 @@ const RUN_OPTIONS_DECL: &str = r"(\w+)=(?:Object\.assign\()*\{conversationId:";
 
 /// The closure every action of a prompt is run through, from the builds that
 /// carry the completion drain: `E=e=>this.sharedServices.agentClient.run(t,…,
-/// e,…,w)` in `2026.10.01-14929f9` and `2026.10.14-0f9edde` (windows names it
-/// `F` and passes its tools as `M`). The drain reuses it for follow-ups, run
-/// options and all.
+/// e,…,w)` in `2026.10.01-14929f9` and both `2026.10.14` builds (darwin/arm64
+/// names it `E` and the other archives `F`; windows passes its tools as `M`),
+/// `F` in every archive of `2026.10.16-e3cb207`, `E` on darwin/x64 but `F`
+/// elsewhere in `2026.10.18-ea085cb`, and `F` in every archive of
+/// `2026.10.19-6bbf2c4`. The drain reuses it for follow-ups, run options and
+/// all.
 ///
 /// Captures the parameter, the follow-up splice when one is already there, and
 /// the argument list. Every argument in those builds is a local, a member or an
@@ -1065,9 +1080,17 @@ mod tests {
     /// replaces the `Object.assign` chain, and the debug-log export is
     /// minified (`I.cY`). `2026.10.01-14929f9` ships the same bytes in all six
     /// of its archives (`3990` darwin/arm64, `6787` darwin/x64, `6136` both
-    /// linux, `8971` windows/arm64, `9389` windows/x64), and so does
-    /// `2026.10.14-0f9edde` (`4909` darwin/arm64, `2397` darwin/x64, `6136`
-    /// both linux, `2669` windows/arm64, `6995` windows/x64).
+    /// linux, `8971` windows/arm64, `9389` windows/x64), and so do both
+    /// `2026.10.14` builds: `0f9edde` (`4909` darwin/arm64, `2397` darwin/x64,
+    /// `6136` both linux, `2669` windows/arm64, `6995` windows/x64) and
+    /// `941492e` (`3482` darwin/arm64, `1437` darwin/x64, `6136` both linux,
+    /// `2280` windows/arm64, `6738` windows/x64), as does `2026.10.16-e3cb207`
+    /// (`5300` darwin/arm64, `6460` darwin/x64, `6136` both linux, `4063`
+    /// windows/arm64, `6489` windows/x64), and so do `2026.10.18-ea085cb`
+    /// (`4791` darwin/arm64, `3059` darwin/x64, `6136` both linux, `8014`
+    /// windows/arm64, `4188` windows/x64) and `2026.10.19-6bbf2c4` (`9152`
+    /// darwin/arm64, `7534` darwin/x64, `6136` both linux, `5266`
+    /// windows/arm64, `9544` windows/x64).
     const REAL_ES2020_RUN_OPTIONS: &str = concat!(
         r#"f=new d.ConversationAction({action:{case:"userMessageAction",value:l}}),"#,
         r#"w={conversationId:this.agentStore.getId(),headers:(0,P.o)(this.agentStore),"#,
@@ -1080,10 +1103,15 @@ mod tests {
     );
 
     /// What follows [`REAL_ES2020_RUN_OPTIONS`] up to the first run, exactly as
-    /// `2026.10.01-14929f9` and `2026.10.14-0f9edde` ship it on darwin/arm64:
+    /// `2026.10.01-14929f9` and both `2026.10.14` builds ship it on darwin/arm64:
     /// the closure every action of the prompt is run through, which the
     /// completion drain reuses for its follow-ups. The other archives name the
-    /// closure `F`, and windows names the tools local `M`.
+    /// closure `F`, and windows names the tools local `M`. `2026.10.16-e3cb207`
+    /// names it `F` on darwin/arm64 too and is otherwise identical.
+    /// `2026.10.18-ea085cb` ships it byte for byte on darwin/x64, and the other
+    /// archives differ the same way as before. `2026.10.19-6bbf2c4` names it
+    /// `F` in all six archives and is otherwise identical, windows still naming
+    /// the tools local `M`.
     const REAL_ES2020_RUN_CLOSURE: &str = concat!(
         r#";(0,v.sx)("cli.request.create",{length:n.length,model:h?.modelId??"#,
         r#"this.currentModel.modelId??"unknown",mode:a,conversationId:this.agentStore.getId()});"#,

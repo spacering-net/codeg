@@ -249,6 +249,21 @@
     "autostartDescription": "Startet automatisch, nachdem Sie sich an diesem Computer angemeldet haben.",
     "autostartSaveFailed": "Autostart-Einstellungen konnten nicht gespeichert werden: {message}",
     "autostartUnavailable": "Der Autostart-Eintrag dieses Computers konnte nicht gelesen werden: {message}",
+    "cliAccessTitle": "Befehlszeilenzugriff",
+    "cliAccessDescription": "Erlaubt dem Befehl codeg-cli auf diesem Computer, Prompts über Codeg auszuführen – aus Skripten, CI-Jobs oder Codegs eigenen Terminals. Nur dieser Computer kann sich verbinden, mit einem Schlüssel in einer privaten Datei.",
+    "cliAccessEndpointFile": "Endpunktdatei:",
+    "cliAccessExample": "Beispiel:",
+    "cliAccessOff": "Aus: codeg-cli auf diesem Computer kann Codeg nicht erreichen.",
+    "cliAccessUnavailable": "Der Befehlszeilenzugriff konnte nicht starten: {message}",
+    "cliAccessSaveFailed": "Der Befehlszeilenzugriff konnte nicht geändert werden: {message}",
+    "cliToolInstall": "Kommandozeilenwerkzeug installieren",
+    "cliToolInstalled": "{command} ist in deinem PATH:",
+    "cliToolPackage": "{command} kam mit dem Paket und ist in deinem PATH:",
+    "cliToolNotInstalled": "Lege {command} in deinen PATH, damit ein Terminal außerhalb von Codeg es findet.",
+    "cliToolConflict": "Unverändert gelassen: {message}",
+    "cliToolNote": "Hinweis: {message}",
+    "cliToolInstalledToast": "{command} ist in deinem PATH. Öffne ein neues Terminal, um es zu nutzen.",
+    "cliToolInstallFailed": "Das Kommandozeilenwerkzeug konnte nicht installiert werden: {message}",
     "proxyTitle": "Netzwerk-Proxy",
     "proxyDescription": "Wenn aktiviert, werden nachfolgende Netzwerkanfragen bevorzugt über diesen Proxy ausgeführt (einschließlich ACP-Chat, Agent-Installation und Git-Remote-Operationen).",
     "loadFailed": "Laden fehlgeschlagen: {message}",
@@ -959,6 +974,9 @@
       "customApiKeyHint": "Inline in `[model.*].api_key` gespeichert, nur für diesen Endpunkt.",
       "customContextWindowLabel": "Kontextfenster (Tokens)",
       "customContextWindowHint": "Optional. Steuert den Zeitpunkt der automatischen Verdichtung; leer lassen für den Standard des Endpunkts.",
+      "customReasoningEffortsLabel": "Stufen für den Denkaufwand",
+      "customReasoningEffortsEmptyHint": "Keine Stufen angegeben. Sofern Groks eigene Modellliste diese Modell-ID nicht schon beschreibt, zeigt das Eingabefeld für dieses Modell keine Auswahl für den Denkaufwand. Wähle die Stufen, die dein Endpunkt akzeptiert, um sie hinzuzufügen.",
+      "customReasoningEffortsHint": "Wird in `[model.*].reasoning_efforts` geschrieben. Jede Stufe geht unverändert an deinen Endpunkt – wähle also nur, was er akzeptiert. Neue Sitzungen starten mit dem oben gewählten „Denkaufwand“ oder, solange dort „Standard verwenden“ steht, mit der ersten Stufe hier.",
       "autoCompactLabel": "Schwellenwert für Auto-Verdichtung (%)",
       "autoCompactHint": "Verdichtet die Unterhaltung, wenn die Kontextnutzung diesen Prozentsatz erreicht (Grok-Standard 85). Wird in `[session]` geschrieben."
     },
@@ -1112,6 +1130,30 @@
       "apiKeyHint": "Wird der CLI als KIRO_API_KEY übergeben. Leer lassen, um das per kiro-cli login angemeldete Konto zu nutzen; nur nötig, wo keine Browser-Anmeldung möglich ist (Server, Docker).",
       "saveConfig": "Kiro-Konfiguration speichern"
     },
+    "trae": {
+      "configManagement": "Konfiguration",
+      "configDescription": "TRAE CLI 2.0 steht nur Kunden des Flaggschiff-Tarifs von TRAE Enterprise zur Verfügung. Codeg startet das von dir installierte traecli, das Anmeldung, Skills und MCP-Server in ~/.trae speichert. Modell, Modus und Denkaufwand stehen nicht hier: TRAE CLI meldet sie über ACP, daher verwalten die Auswahlfelder im Eingabebereich sie pro Sitzung.",
+      "signInTitle": "Anmelden",
+      "signInHint": "Führe dies einmal in einem Terminal aus, um dich mit dem SSO deines Unternehmens anzumelden. Sitzungen in Codeg verwenden diese Anmeldung wieder.",
+      "copyCommand": "Befehl kopieren",
+      "commandCopied": "Befehl kopiert",
+      "patLabel": "Persönliches Zugriffstoken (optional)",
+      "patHint": "Für Rechner, auf denen keine Browser-Anmeldung möglich ist, etwa Server oder Docker-Installationen. Codeg übergibt es TRAE CLI als TRAECLI_PERSONAL_ACCESS_TOKEN und meldet sich bei jedem Sitzungsstart damit an. Leer lassen, um die Anmeldung aus traecli login zu nutzen.",
+      "hostLabel": "Enterprise-API-URL (optional)",
+      "hostHint": "Nur wenn deine Organisation TRAE unter einer eigenen Domain betreibt. Wird als TRAECLI_HOST übergeben; leer lassen für den Dienst von TRAE.",
+      "saveConfig": "TRAE CLI-Konfiguration speichern"
+    },
+    "commandCode": {
+      "configManagement": "Konfiguration",
+      "configDescription": "Codeg startet die Command Code CLI aus dem npm-Paket command-code, die Anmeldung, Skills und MCP-Server in ~/.commandcode speichert. Modell, Modus und Denkaufwand stehen nicht hier: Command Code meldet sie über ACP, daher verwalten die Auswahlfelder im Eingabebereich sie pro Sitzung.",
+      "signInTitle": "Anmelden",
+      "signInHint": "Führe dies einmal in einem Terminal aus, um dich mit deinem Command Code-Konto anzumelden. Sitzungen in Codeg verwenden diese Anmeldung wieder.",
+      "copyCommand": "Befehl kopieren",
+      "commandCopied": "Befehl kopiert",
+      "apiKeyLabel": "API-Schlüssel (optional)",
+      "apiKeyHint": "Für Rechner, auf denen keine Browser-Anmeldung möglich ist, etwa Server oder Docker-Installationen. Wird Command Code als COMMAND_CODE_API_KEY übergeben und hat Vorrang vor der Anmeldung aus command-code login. Leer lassen, um diese Anmeldung zu nutzen.",
+      "saveConfig": "Command Code-Konfiguration speichern"
+    },
     "deepseek": {
       "configManagement": "DeepSeek-Harness-Konfiguration",
       "configDescription": "Endpunkt und Schlüssel sind Umgebungsvariablen, die deepseek-acp beim Start liest. Modell und Denkstufe sind Auswahlfelder pro Sitzung — sie werden im Eingabefeld gewählt.",
@@ -1131,13 +1173,10 @@
       "modelName": "Modellname",
       "enableWebsocket": "WebSocket aktivieren",
       "enableWebsocketAria": "WebSocket für Codex Provider aktivieren",
-      "enableSkills": "Skills aktivieren",
-      "enableSkillsAria": "Skills für Codex aktivieren",
+      "enableWebsocketHint": "Nur einschalten, wenn dein Endpunkt die Responses API über WebSocket unterstützt, wie die offizielle OpenAI-API. Bei einem Endpunkt ohne diese Unterstützung kann codex den Turn fehlschlagen lassen oder bis zu fünfmal neu verbinden, bevor es auf HTTPS zurückfällt, und das in jeder neuen Sitzung erneut. Schreibt supports_websockets für diesen Provider in ~/.codex/config.toml und gilt ab der nächsten Sitzung.",
       "enableDefaultModeRequestUserInput": "Rückfragen im Default-Modus erlauben",
       "enableDefaultModeRequestUserInputAria": "Codex im Default-Modus Rückfragen erlauben",
       "enableDefaultModeRequestUserInputHint": "Codex darf sein request_user_input-Tool nur im Plan-Modus aufrufen. Aktiviere dies, damit es dich auch in normalen Turns fragen kann. Schreibt [features].default_mode_request_user_input in ~/.codex/config.toml; das Flag befindet sich upstream noch in Entwicklung. Wirkt ab der nächsten Sitzung.",
-      "enableFast": "Fast aktivieren",
-      "enableFastAria": "Fast-Servicestufe für Codex aktivieren",
       "sandboxGroupTitle": "Sandbox und Freigaben",
       "sandboxGroupHint": "Wird in die globale ~/.codex/config.toml geschrieben und gilt daher auch für codex-CLI- und IDE-Sitzungen. Es sind Thread-Standardwerte: Sie gelten für Turns, die codex selbst startet (/goal, /review, /compact). Normale Eingaben nutzen die Freigabe-Voreinstellung des Eingabefelds. Änderungen greifen nach einem Neustart der Sitzung.",
       "sandboxShadowedWarning": "config.toml setzt default_permissions, daher löst codex Berechtigungen über dieses Profil auf und ignoriert sandbox_mode vollständig. Entferne default_permissions, um die Optionen unten zu nutzen.",
@@ -1607,6 +1646,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro-Konfiguration gespeichert",
       "saveKiroFailed": "Kiro-Konfiguration konnte nicht gespeichert werden",
+      "traeSaved": "TRAE CLI-Konfiguration gespeichert",
+      "saveTraeFailed": "TRAE CLI-Konfiguration konnte nicht gespeichert werden",
+      "commandCodeSaved": "Command Code-Konfiguration gespeichert",
+      "saveCommandCodeFailed": "Command Code-Konfiguration konnte nicht gespeichert werden",
       "systemAgentAlreadyLatest": "{name} ist bereits aktuell ({version})"
     },
     "distribution": {
@@ -1913,6 +1956,62 @@
     "invalidFolderId": "Ungültige Ordner-ID",
     "loadingRepo": "Repository wird geladen..."
   },
+  "CommitMessageGeneration": {
+    "generate": "Commit-Nachricht generieren",
+    "stop": "Generierung stoppen ({seconds} s)",
+    "generating": "Commit-Nachricht wird geschrieben… {seconds} s",
+    "noChanges": "Keine Änderungen zu beschreiben",
+    "selectFiles": "Wähle die Dateien aus, die beschrieben werden sollen",
+    "busyCommitting": "Wird committet…",
+    "settings": "Einstellungen für Commit-Nachrichten",
+    "settingsMenuItem": "Einstellungen für Commit-Nachrichten…",
+    "untracked": {
+      "title": "Nicht verfolgte Dateien mitcommitten?",
+      "description": "Markierte Dateien werden in der Nachricht beschrieben und mit diesem Commit committet. Nicht markierte bleiben unverfolgt.",
+      "selectionCount": "{selected} / {total} Dateien ausgewählt",
+      "selectAll": "Alle auswählen",
+      "unselectAll": "Auswahl aller aufheben",
+      "showMore": "{count, plural, one {# weitere Datei} other {# weitere Dateien}} anzeigen",
+      "confirm": "Generieren",
+      "included": "Committet auch {count, plural, one {# nicht verfolgte Datei} other {# nicht verfolgte Dateien}}",
+      "drop": "Nicht verfolgte Dateien nicht committen",
+      "stagedMeanwhile": "Einige abgewählte Dateien wurden inzwischen gestaget und werden mit den verfolgten Änderungen committet"
+    },
+    "toasts": {
+      "failed": "Commit-Nachricht konnte nicht generiert werden",
+      "openSettings": "Einstellungen",
+      "autoCommitSkipped": "Nicht automatisch committet: Die Änderungen haben sich verschoben, während die Nachricht geschrieben wurde. Prüfe sie und committe dann."
+    },
+    "errors": {
+      "noChanges": "Es gibt keine Änderungen zu beschreiben.",
+      "noAgent": "Kein Agent, der sie schreiben kann. Wähle einen in den Einstellungen für Commit-Nachrichten.",
+      "emptyAnswer": "Die Antwort des Agenten enthielt keine Commit-Nachricht.",
+      "cancelled": "Die Generierung wurde gestoppt."
+    },
+    "dialog": {
+      "title": "Commit-Nachrichten generieren",
+      "description": "Mit der Schaltfläche neben dem Commit-Feld schreibt ein Agent eine Nachricht genau zu dem, was der Commit enthalten wird. Das läuft in einer eigenen Sitzung, die nie in deiner Sitzungsliste erscheint, und jede Berechtigungsanfrage wird abgelehnt.",
+      "scope": "Geltungsbereich",
+      "scopeGlobal": "Alle Ordner (globale Standardwerte)",
+      "scopeGlobalHint": "Ordner ohne eigene Einstellungen verwenden diese globalen Standardwerte.",
+      "source": "Konfigurationsquelle",
+      "sourceGlobal": "Globale Standards",
+      "sourceCustom": "Eigene",
+      "sourceGlobalFollow": "Folgt den globalen Einstellungen — Änderungen dort gelten hier automatisch.",
+      "sourceCustomHint": "Speichert eigene Einstellungen für diesen Ordner; die globalen Standards gelten dann nicht mehr.",
+      "pinAgent": "Bestimmten Agenten verwenden",
+      "pinAgentHint": "Dieser Agent schreibt jede Nachricht, mit den Optionen unten. Ein schnelles, günstiges Modell reicht für die Aufgabe.",
+      "followSessionHint": "Aus: Es schreibt der Agent der Sitzung, die du gerade ansiehst, sonst der Standard-Agent des Ordners, jeweils mit seinem Standardmodell.",
+      "autoCommit": "Automatisch committen",
+      "autoCommitHint": "Committet, sobald die Nachricht geschrieben ist. Haben sich die Änderungen inzwischen verschoben, wird die Nachricht nur eingetragen, damit du sie prüfen kannst.",
+      "instructions": "Anweisungen",
+      "instructionsHint": "Wird jeder Anfrage angehängt und hat Vorrang vor den eingebauten Regeln (etwa der Sprache der letzten Commits zu folgen).",
+      "instructionsPlaceholder": "z. B. Auf Deutsch schreiben. Conventional Commits verwenden. Im Text das Warum erklären.",
+      "save": "Speichern",
+      "cancel": "Abbrechen",
+      "loadFailed": "Einstellungen konnten nicht geladen werden"
+    }
+  },
   "MergePage": {
     "title": "Konflikte lösen",
     "invalidFolderId": "Ungültige Ordner-ID",
@@ -2079,6 +2178,7 @@
       "runningCountBadge": "{count, plural, one {# laufende Sitzung} other {# laufende Sitzungen}}",
       "statusCancelledBadge": "Abgebrochen",
       "worktreeRemovedBadge": "Quell-Worktree entfernt",
+      "cliBadge": "Über die Kommandozeile gestartet",
       "conversationCountUnit": "{count, plural, one {# Konversation} other {# Konversationen}}",
       "emptyFolderHint": "Keine Konversationen",
       "noMatchingConversations": "Keine passenden Konversationen",
@@ -2159,9 +2259,11 @@
         "dropToUngroup": "Hier ablegen, um aus der Gruppe zu entfernen"
       },
       "recentFilterAll": "Alle",
+      "recentFilterCli": "Kommandozeile",
       "recentFilterTitle": "In „Zuletzt“ anzeigen: {filter}",
       "noRecentChats": "Keine letzten Chats",
       "noRecentFolders": "Keine letzten Ordner-Unterhaltungen",
+      "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
       "recentFilterMenuLabel": "In „Zuletzt“ anzeigen"
     },
     "conversation": {
@@ -2378,7 +2480,10 @@
         "commits": "Einträge"
       },
       "noFolderTitle": "Kein Ordner geöffnet",
-      "noFolderHint": "Öffnen Sie einen Ordner, um seinen Inhalt hier zu sehen"
+      "noFolderHint": "Öffnen Sie einen Ordner, um seinen Inhalt hier zu sehen",
+      "openFullPage": "Als ganze Seite öffnen",
+      "back": "Zurück",
+      "noAutomations": "Für dieses Projekt gibt es noch keine Automatisierungen"
     },
     "windowControls": {
       "minimizeWindow": "Fenster minimieren",
@@ -3135,6 +3240,10 @@
       "manageCommands": "Befehle verwalten...",
       "runCommandTitle": "Ausführen: {command}",
       "stopCommandTitle": "Stoppen: {command}",
+      "localUnavailable": "Lokale Befehle sind nur in der Desktop-App verfügbar",
+      "localRunFailed": "Lokaler Befehl konnte nicht ausgeführt werden",
+      "globalCommand": "In allen Ordnern verfügbar",
+      "localCommand": "Läuft auf diesem Computer",
       "manageDialog": {
         "title": "Befehle verwalten",
         "empty": "Noch keine Befehle",
@@ -3143,11 +3252,16 @@
         "newCommand": "Neuer Befehl",
         "nameLabel": "Bezeichnung",
         "commandLabel": "Befehl",
+        "runLocalLabel": "Auf diesem Computer ausführen",
+        "runLocalHint": "Läuft ohne Terminal auf diesem Computer statt auf dem Projekt-Host; <code>{folderVar}</code> ist der absolute Pfad des Ordners, <code>{hostVar}</code> der Name des Remote-Hosts, z. B. <code>{example}</code>",
+        "globalLabel": "In allen Ordnern anzeigen",
+        "globalHint": "In jedem Ordner, Worktree und jeder Remote-Verbindung verfügbar; auf diesem Computer gespeichert",
         "dragSort": "Zum Sortieren ziehen",
         "dragSortCommand": "{name} zum Sortieren ziehen",
         "orderFailed": "Befehlsreihenfolge konnte nicht gespeichert werden",
         "loadFailed": "Befehle konnten nicht geladen werden",
         "saveFailed": "Befehl konnte nicht gespeichert werden",
+        "runLocalNotKept": "der Host des Ordners kann \"Auf diesem Computer ausführen\" nicht speichern – aktualisieren Sie ihn oder aktivieren Sie \"In allen Ordnern anzeigen\", damit der Befehl auf diesem Computer gespeichert wird",
         "deleteFailed": "Befehl konnte nicht gelöscht werden",
         "confirmDelete": {
           "title": "Befehl löschen?",
@@ -3277,6 +3391,7 @@
       },
       "messageInput": {
         "askAnything": "Fragen Sie alles...",
+        "promptSuggestion": "{suggestion} (Tab zum Übernehmen)",
         "removeAttachmentAria": "{name} entfernen",
         "attachFiles": "Dateien anhängen",
         "addActions": "Hinzufügen",
@@ -3306,6 +3421,10 @@
         "searchModelAria": "Modelle suchen",
         "modelListLabel": "Modelle",
         "recommendedBadge": "Empfohlen",
+        "recommendedValue": "Empfohlen: {value}",
+        "searchOptions": "Optionen suchen...",
+        "searchOptionsAria": "Optionen suchen",
+        "noOptions": "Keine Optionen gefunden",
         "noModels": "Keine Modelle gefunden",
         "cancel": "Abbrechen",
         "send": "Senden",
@@ -3313,6 +3432,7 @@
         "steerIntoTurn": "In laufenden Turn einfügen",
         "steerAsNote": "Notiz für die nächste Prüfung senden",
         "steerQueuedInstead": "Stattdessen in die Warteschlange gestellt – wird mit dem nächsten Turn gesendet.",
+        "heldWhileResponding": "Antwortet noch – deine Nachricht bleibt im Eingabefeld. Sende sie, sobald die Antwort fertig ist.",
         "steerFailed": "Konnte nicht in den laufenden Turn eingefügt werden",
         "steerNoteFailed": "Deine Notiz konnte nicht gesendet werden",
         "slashCommands": "Slash-Befehle",
@@ -3672,7 +3792,6 @@
         "unknownAgent": "Sub-Agent",
         "openDetail": "Konversation anzeigen",
         "resumed": "Fortgesetzt",
-        "resumeDetail": "Details zur Fortsetzung",
         "resumeReasonLabel": "Grund der Fortsetzung",
         "detailTitle": "Unteragent-Konversation",
         "detailDescription": "Schreibgeschützte Ansicht der delegierten Unteragent-Konversation.",
@@ -3918,13 +4037,16 @@
       },
       "messageNav": {
         "title": "Nachrichtennavigation",
-        "collapse": "Nachrichtennavigation ausblenden",
         "loadingEarlier": "Frühere Nachrichten werden geladen…",
         "loadEarlier": "Frühere Nachrichten laden",
-        "collapsedSummary": "Nachrichten {count}",
         "fileCount": "{count, plural, one {# Datei} other {# Dateien}}",
-        "remove": "Entfernen",
-        "noDiffDataAvailable": "Keine Diff-Daten verfügbar für {filePath}"
+        "subAgentCount": "{count, plural, one {# Subagent} other {# Subagenten}}",
+        "showDiff": "Änderungen an {filePath} anzeigen",
+        "hideDiff": "Änderungen an {filePath} ausblenden",
+        "openFile": "{filePath} öffnen",
+        "collapse": "Einklappen",
+        "currentMessage": "Aktuelle Nachricht",
+        "scrollToCurrent": "Zur aktuellen Nachricht (#{ordinal}) scrollen"
       },
       "replyArtifacts": {
         "title": "Geänderte Dateien",
@@ -3982,6 +4104,9 @@
         "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
         "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt",
         "promptLabel": "Anweisung",
+        "ackRecorded": "In der Arbeitsaufgabe erfasst",
+        "ackNotRecorded": "Nicht in der Arbeitsaufgabe erfasst",
+        "ackNotRecordedWithReason": "Nicht in der Arbeitsaufgabe erfasst: {reason}",
         "verdict": {
           "success": "erfolgreich",
           "needs_review": "Prüfung nötig",
@@ -4098,6 +4223,18 @@
         "tokens": "{count} Tokens",
         "stopDeclined": "Diese Aufgabe konnte nicht gestoppt werden – sie ist möglicherweise bereits beendet.",
         "stopFailed": "Aufgabe konnte nicht gestoppt werden: {error}"
+      },
+      "remoteControl": {
+        "title": "Fernsteuerung aktiv",
+        "open": "Im Browser öffnen",
+        "copy": "Link kopieren",
+        "copied": "Kopiert",
+        "qr": "QR-Code",
+        "qrLabel": "QR-Code des Fernsteuerungs-Links dieser Sitzung",
+        "qrHint": "Mit dem Handy scannen, um diese Sitzung in der Claude-App oder auf claude.ai/code fortzusetzen.",
+        "noUrl": "Claude Code hat keinen Link für diese Sitzung zurückgegeben",
+        "turnOff": "Ausschalten",
+        "turnOffBusy": "Verfügbar, sobald Claude fertig ist"
       },
       "proposedPlan": {
         "title": "Vorgeschlagener Plan",
@@ -5270,7 +5407,12 @@
     "reconnectNow": "Jetzt neu verbinden",
     "sessionExpiredTitle": "Sitzung abgelaufen",
     "sessionExpiredDescription": "Deine Sitzung ist nicht mehr gültig. Bitte melde dich erneut an, um fortzufahren.",
-    "goToLogin": "Zur Anmeldung"
+    "proxySignInTitle": "Anmeldung abgelaufen",
+    "proxySignInDescription": "Deine Anmeldung beim Proxy vor diesem Server ist abgelaufen. Lade die Seite neu, um dich erneut anzumelden.",
+    "goToLogin": "Zur Anmeldung",
+    "versionChangedTitle": "Auf dem Server läuft jetzt Codeg {version}",
+    "versionChangedDescription": "Diese Seite läuft noch mit {version}. Lade sie neu, um die Version des Servers zu verwenden.",
+    "reloadPage": "Neu laden"
   },
   "LiveFeedback": {
     "placeholder": "Sende {agent} eine Notiz, während er arbeitet…",

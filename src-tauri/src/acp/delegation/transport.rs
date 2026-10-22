@@ -226,6 +226,24 @@ pub struct BrokerTaskCompleteRequest {
     pub summary: Option<String>,
 }
 
+/// The JSON Schema `submit_result` takes, for the companion's `tools/list`.
+/// Answered `{"schema": <schema>}` — `null` when the caller's connection was
+/// asked for no result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerResultSchemaRequest {
+    pub token: String,
+}
+
+/// A result handed in with `submit_result`. Answered with a serialized
+/// [`crate::cli_run::output_schema::SubmitOutcome`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerSubmitResultRequest {
+    pub token: String,
+    /// The tool call's arguments, as the agent gave them.
+    #[serde(default)]
+    pub result: Value,
+}
+
 /// Create an automation (scheduled or manual) from the chat the caller is in.
 /// Backs the `create_automation` MCP tool. Authenticated by the per-launch
 /// `token`; the listener resolves the caller's conversation + working directory
@@ -429,6 +447,8 @@ pub enum BrokerMessage {
     SessionInfo(BrokerSessionRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
+    ResultSchema(BrokerResultSchemaRequest),
+    SubmitResult(BrokerSubmitResultRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
     BrowserTabs(BrokerBrowserTabsRequest),
@@ -645,6 +665,23 @@ pub async fn client_task_complete_round_trip(
     req: &BrokerTaskCompleteRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::TaskComplete(req.clone())).await
+}
+
+/// Ask for the schema `submit_result` takes on the caller's connection.
+pub async fn client_result_schema_round_trip(
+    socket_path: &str,
+    req: &BrokerResultSchemaRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ResultSchema(req.clone())).await
+}
+
+/// Hand in a `submit_result` result and read back its
+/// [`crate::cli_run::output_schema::SubmitOutcome`].
+pub async fn client_submit_result_round_trip(
+    socket_path: &str,
+    req: &BrokerSubmitResultRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SubmitResult(req.clone())).await
 }
 
 /// Dispatch a `create_automation` request and read back the serialized

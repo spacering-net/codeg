@@ -484,8 +484,36 @@ describe("repoWebUrl", () => {
     ).toBe("http://git.corp.com:8443/gitlab/team/app")
   })
 
-  it("falls back to the canonical page for an unopenable remote", () => {
-    // A browser cannot open either of these; the coordinates are all there is.
+  it("opens an SSH remote under the origin the host's account registered", () => {
+    // #997: an http-only GitLab whose account was added at its http:// URL.
+    // The SSH remote names no scheme; assuming https opened a dead port.
+    expect(
+      repoWebUrl(
+        at({
+          server_host: "gitlab.example.com",
+          owner_repo: "group/repo",
+          remote_url: "git@gitlab.example.com:group/repo.git",
+          web_origin: "http://gitlab.example.com",
+        })
+      )
+    ).toBe("http://gitlab.example.com/group/repo")
+    // The instance's own port and mount path come along, while the SSH port
+    // in the remote does not.
+    expect(
+      repoWebUrl(
+        at({
+          server_host: "git.corp.com",
+          owner_repo: "team/app",
+          remote_url: "ssh://git@git.corp.com:2222/team/app.git",
+          web_origin: "http://git.corp.com:8929/gitlab/",
+        })
+      )
+    ).toBe("http://git.corp.com:8929/gitlab/team/app")
+  })
+
+  it("falls back to the https page when the server sent no origin", () => {
+    // A remote codeg-server older than the field: the coordinates are all
+    // there is.
     for (const url of ["git@github.com:o/r.git", "ssh://git@github.com/o/r"]) {
       expect(
         repoWebUrl(at({ remote_url: url, owner_repo: "xintaofei/codeg" }))

@@ -57,6 +57,26 @@ describe("denormalizeSnapshot — active_delegations", () => {
   })
 })
 
+describe("denormalizeSnapshot — hasPrompted", () => {
+  it("is false for a connection no prompt has linked yet", () => {
+    // A new conversation's draft, or a reopened one before its first prompt:
+    // the backend binds `conversation_id` at the first prompt, not at connect.
+    expect(denormalizeSnapshot(baseSnapshot()).hasPrompted).toBe(false)
+  })
+
+  it("is true once a prompt has linked the connection to its row", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ conversation_id: 42 })).hasPrompted
+    ).toBe(true)
+  })
+
+  it("is true mid-turn, linked or not", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ status: "prompting" })).hasPrompted
+    ).toBe(true)
+  })
+})
+
 describe("denormalizeSnapshot — subagent attribution on live blocks", () => {
   it("forwards parent_tool_use_id onto text/thinking, absent field stays undefined", () => {
     const patch = denormalizeSnapshot(

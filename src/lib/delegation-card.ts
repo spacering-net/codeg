@@ -836,18 +836,19 @@ export function resolveDelegationStatus({
   toolOutput,
   state,
   errorText,
-  childAwaitingPermission,
+  childAwaitingUser,
 }: {
   binding: DelegationBinding | undefined
   parsedMeta: ParsedMeta | null
   toolOutput: ParsedToolOutput | null
   state: ToolCallState | undefined
   errorText: string | null | undefined
-  childAwaitingPermission: boolean
+  /** The child is parked on a permission, a question or a plan approval. */
+  childAwaitingUser: boolean
 }): DelegationCardStatus {
-  // A child awaiting a permission decision is blocked until the user acts;
-  // surface it over the plain running state so the card cues opening "查看会话".
-  if (childAwaitingPermission) return "waiting"
+  // A child awaiting a decision is blocked until the user acts; surface it
+  // over the plain running state so the card cues opening "查看会话".
+  if (childAwaitingUser) return "waiting"
   if (binding) return binding.status
   if (parsedMeta) return parsedMeta.status
   if (state === "output-error" || errorText) return "err"

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -76,6 +77,17 @@ vi.mock("./aux-panel-git-changes-tab", () => ({
 vi.mock("./aux-panel-git-log-tab", () => ({
   GitLogTab: () => <div data-testid="body-git_log" />,
 }))
+vi.mock("./aux-panel-automations-tab", () => ({
+  AutomationsAuxTab: () => <div data-testid="body-automations" />,
+}))
+vi.mock("./aux-panel-tasks-tab", () => ({
+  TasksAuxTab: () => <div data-testid="body-tasks" />,
+}))
+vi.mock("./aux-panel-forge-tab", () => ({
+  ForgeAuxTab: ({ auxTab, forgeTab }: { auxTab: string; forgeTab: string }) => (
+    <div data-testid={`body-${auxTab}`} data-forge-tab={forgeTab} />
+  ),
+}))
 
 const scene = vi.hoisted(() => ({
   isOpen: true,
@@ -83,15 +95,22 @@ const scene = vi.hoisted(() => ({
   folderId: 1 as number | null,
   chatMode: false,
   mobile: false,
+  /** The forge the project's remote resolves to. */
+  provider: null as "github" | "gitlab" | "gitea" | null,
+  /** Every folder the panel asked the forge lookup about, in order. */
+  providerAsked: [] as (number | null)[],
 }))
-// A live selection, so a press on the rail really switches the panel.
+// A live selection and open state, so a press on the rail really switches the
+// panel, and a click that closes it really does.
 vi.mock("@/contexts/aux-panel-context", async () => {
   const { useCallback, useState } = await import("react")
   return {
     useAuxPanelContext: () => {
       const [activeTab, setTab] = useState<AuxPanelTab>(scene.initialTab)
+      const [isOpen, setIsOpen] = useState(scene.isOpen)
       const setActiveTab = useCallback((tab: AuxPanelTab) => setTab(tab), [])
-      return { isOpen: scene.isOpen, activeTab, setActiveTab }
+      const setOpen = useCallback((open: boolean) => setIsOpen(open), [])
+      return { isOpen, activeTab, setActiveTab, setOpen }
     },
   }
 })
@@ -100,6 +119,16 @@ vi.mock("@/contexts/active-folder-context", () => ({
 }))
 vi.mock("@/hooks/use-is-active-chat-mode", () => ({
   useIsActiveChatMode: () => scene.chatMode,
+}))
+// The active folder is its own project here: no worktrees in this scene.
+vi.mock("@/hooks/use-active-project-folder", () => ({
+  useActiveProjectFolderId: () => scene.folderId,
+}))
+vi.mock("@/lib/forge-provider-cache", () => ({
+  useFolderForgeProvider: (folderId: number | null) => {
+    scene.providerAsked.push(folderId)
+    return folderId == null ? null : scene.provider
+  },
 }))
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => scene.mobile }))
 vi.mock("@/hooks/use-platform", () => ({
@@ -116,6 +145,31 @@ import { RIGHT_CHROME_CLUSTER } from "@/lib/window-chrome"
 import { AuxPanel, resolveAuxTabView } from "./aux-panel"
 
 const KEY = "workspace:right-sidebar-tab-order"
+
+/** The rail in the built-in order, by name. */
+const BUILT_IN = [
+  "Session Details",
+  "Files",
+  "Changes",
+  "Commits",
+  "Automations",
+  "To-dos",
+  "Issues",
+  "Pull requests",
+]
+
+/** A full custom order, and the same order by name. */
+const REVERSED: AuxPanelTab[] = [
+  "pull_requests",
+  "issues",
+  "tasks",
+  "automations",
+  "git_log",
+  "changes",
+  "file_tree",
+  "session_details",
+]
+const REVERSED_NAMES = [...BUILT_IN].reverse()
 
 function renderPanel() {
   return render(
@@ -194,6 +248,8 @@ describe("AuxPanel", () => {
       folderId: 1,
       chatMode: false,
       mobile: false,
+      provider: null,
+      providerAsked: [],
     })
     motion.onReorder = null
     motion.dragStart.clear()
@@ -208,12 +264,7 @@ describe("AuxPanel", () => {
 
   it("lists every tab on the vertical rail, in the built-in order by default", () => {
     renderPanel()
-    expect(railTabs()).toEqual([
-      "Session Details",
-      "Files",
-      "Changes",
-      "Commits",
-    ])
+    expect(railTabs()).toEqual(BUILT_IN)
     expect(rail()).toHaveAttribute("role", "tablist")
     expect(rail()).toHaveAttribute("aria-orientation", "vertical")
     expect(rail()).toBeVisible()
@@ -256,7 +307,84 @@ describe("AuxPanel", () => {
     )
   })
 
+  it("hides the panel when the tab already showing is clicked again", async () => {
+    const user = userEvent.setup()
+    const { container } = renderPanel()
+
+    // A first click only switches. Radix selects on the mousedown, so by the
+    // time this click lands the tab is selected — it must not count as the
+    // second one.
+    await user.click(screen.getByRole("tab", { name: "Files" }))
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Files")
+
+    await user.click(screen.getByRole("tab", { name: "Files" }))
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("keeps the panel when a press on the tab showing turns into a drag", async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    const details = screen.getByRole("tab", { name: "Session Details" })
+
+    await user.pointer({ keys: "[MouseLeft>]", target: details })
+    act(() => motion.dragStart.get("session_details")?.())
+    await user.pointer({ keys: "[/MouseLeft]", target: details })
+    act(() => motion.dragEnd.get("session_details")?.())
+
+    expect(rail()).toBeVisible()
+    expect(details).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("leaves Enter and Space on the tab showing to the tabs", async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    const details = screen.getByRole("tab", { name: "Session Details" })
+
+    // A press that ends off the tab sends its click elsewhere, so nothing
+    // consumes the press it started. The keyboard's clicks after it must not.
+    await user.pointer([
+      { keys: "[MouseLeft>]", target: details },
+      { target: screen.getByRole("heading", { level: 2 }) },
+      { keys: "[/MouseLeft]" },
+    ])
+    act(() => details.focus())
+    await user.keyboard("{Enter}")
+    await user.keyboard(" ")
+
+    expect(rail()).toBeVisible()
+    expect(details).toHaveAttribute("aria-selected", "true")
+  })
+
   it("follows the stored order, and a reorder made in another window", () => {
+    localStorage.setItem(KEY, JSON.stringify(REVERSED))
+    renderPanel()
+    expect(railTabs()).toEqual(REVERSED_NAMES)
+
+    act(() =>
+      writeFromAnotherWindow([
+        "tasks",
+        "file_tree",
+        "session_details",
+        "issues",
+        "git_log",
+        "changes",
+        "pull_requests",
+        "automations",
+      ])
+    )
+    expect(railTabs()).toEqual([
+      "To-dos",
+      "Files",
+      "Session Details",
+      "Issues",
+      "Commits",
+      "Changes",
+      "Pull requests",
+      "Automations",
+    ])
+  })
+
+  it("adds the work tabs after Commits on a rail stored before they existed", () => {
     localStorage.setItem(
       KEY,
       JSON.stringify(["git_log", "changes", "file_tree", "session_details"])
@@ -264,70 +392,63 @@ describe("AuxPanel", () => {
     renderPanel()
     expect(railTabs()).toEqual([
       "Commits",
+      "Automations",
+      "To-dos",
+      "Issues",
+      "Pull requests",
       "Changes",
       "Files",
       "Session Details",
-    ])
-
-    act(() =>
-      writeFromAnotherWindow([
-        "file_tree",
-        "session_details",
-        "git_log",
-        "changes",
-      ])
-    )
-    expect(railTabs()).toEqual([
-      "Files",
-      "Session Details",
-      "Commits",
-      "Changes",
     ])
   })
 
   it("saves a dragged order once, on release", () => {
     renderPanel()
-    const dragged = ["changes", "session_details", "file_tree", "git_log"]
+    const dragged = [
+      "changes",
+      "session_details",
+      "file_tree",
+      "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
+    ]
+    const draggedNames = [
+      "Changes",
+      "Session Details",
+      "Files",
+      "Commits",
+      "Automations",
+      "To-dos",
+      "Issues",
+      "Pull requests",
+    ]
 
     // Mid-drag the tabs follow the pointer, but nothing is written yet — other
     // windows are listening to the stored order.
     act(() => motion.dragStart.get("changes")?.())
     act(() => motion.onReorder?.(dragged))
-    expect(railTabs()).toEqual([
-      "Changes",
-      "Session Details",
-      "Files",
-      "Commits",
-    ])
+    expect(railTabs()).toEqual(draggedNames)
     expect(localStorage.getItem(KEY)).toBeNull()
     // The press-and-sweep would otherwise select text across the page.
     expect(document.body).toHaveClass("select-none")
 
     act(() => motion.dragEnd.get("changes")?.())
     expect(storedOrder()).toEqual(dragged)
-    expect(railTabs()).toEqual([
-      "Changes",
-      "Session Details",
-      "Files",
-      "Commits",
-    ])
+    expect(railTabs()).toEqual(draggedNames)
     expect(document.body).not.toHaveClass("select-none")
   })
 
   it("writes nothing when a drag ends where it started", () => {
-    localStorage.setItem(
-      KEY,
-      JSON.stringify(["git_log", "changes", "file_tree", "session_details"])
-    )
+    localStorage.setItem(KEY, JSON.stringify(REVERSED))
     renderPanel()
     const setItem = vi.spyOn(Storage.prototype, "setItem")
 
-    act(() =>
-      motion.onReorder?.(["changes", "git_log", "file_tree", "session_details"])
-    )
-    act(() =>
-      motion.onReorder?.(["git_log", "changes", "file_tree", "session_details"])
-    )
+    const swapped = [...REVERSED]
+    ;[swapped[4], swapped[5]] = [swapped[5], swapped[4]]
+    act(() => motion.onReorder?.(swapped))
+    act(() => motion.onReorder?.([...REVERSED]))
     act(() => motion.dragEnd.get("changes")?.())
 
     expect(setItem).not.toHaveBeenCalledWith(KEY, expect.anything())
@@ -349,12 +470,20 @@ describe("AuxPanel", () => {
       "Changes",
       "Files",
       "Commits",
+      "Automations",
+      "To-dos",
+      "Issues",
+      "Pull requests",
     ])
     expect(storedOrder()).toEqual([
       "session_details",
       "changes",
       "file_tree",
       "git_log",
+      "automations",
+      "tasks",
+      "issues",
+      "pull_requests",
     ])
     expect(screen.getByRole("tab", { name: "Changes" })).toHaveFocus()
 
@@ -380,12 +509,7 @@ describe("AuxPanel", () => {
         altKey: true,
       })
     }
-    expect(railTabs()).toEqual([
-      "Session Details",
-      "Files",
-      "Changes",
-      "Commits",
-    ])
+    expect(railTabs()).toEqual(BUILT_IN)
     expect(localStorage.getItem(KEY)).toBeNull()
   })
 
@@ -396,12 +520,7 @@ describe("AuxPanel", () => {
     fireEvent.keyDown(changes, { key: "ArrowUp" })
     fireEvent.keyDown(changes, { key: "ArrowUp", altKey: true, metaKey: true })
     fireEvent.keyDown(changes, { key: "ArrowUp", altKey: true, shiftKey: true })
-    expect(railTabs()).toEqual([
-      "Session Details",
-      "Files",
-      "Changes",
-      "Commits",
-    ])
+    expect(railTabs()).toEqual(BUILT_IN)
     expect(localStorage.getItem(KEY)).toBeNull()
   })
 
@@ -427,10 +546,7 @@ describe("AuxPanel", () => {
   })
 
   it("lists the tabs in the stored order on mobile, without the title strip or the rail", () => {
-    localStorage.setItem(
-      KEY,
-      JSON.stringify(["git_log", "changes", "file_tree", "session_details"])
-    )
+    localStorage.setItem(KEY, JSON.stringify(REVERSED))
     scene.mobile = true
     renderPanel()
 
@@ -442,6 +558,97 @@ describe("AuxPanel", () => {
       within(list)
         .getAllByRole("tab")
         .map((tab) => tab.getAttribute("aria-label"))
-    ).toEqual(["Commits", "Changes", "Files", "Session Details"])
+    ).toEqual(REVERSED_NAMES)
+  })
+
+  it("closes the drawer when the tab already showing is tapped again", async () => {
+    scene.mobile = true
+    const user = userEvent.setup()
+    const { container } = renderPanel()
+
+    await user.click(screen.getByRole("tab", { name: "Changes" }))
+    expect(screen.getByRole("tab", { name: "Changes" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+    expect(container).not.toBeEmptyDOMElement()
+
+    await user.click(screen.getByRole("tab", { name: "Changes" }))
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("opens a work tab from the rail, mounting its body on first view", () => {
+    renderPanel()
+    // Lazy, like the folder tabs: nothing behind a tab never opened.
+    expect(screen.queryByTestId("body-issues")).toBeNull()
+    expect(screen.queryByTestId("body-pull_requests")).toBeNull()
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Issues" }), {
+      button: 0,
+    })
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Issues"
+    )
+    expect(screen.getByTestId("body-issues")).toBeVisible()
+    expect(screen.getByTestId("body-issues")).toHaveAttribute(
+      "data-forge-tab",
+      "issues"
+    )
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Pull requests" }), {
+      button: 0,
+    })
+    expect(screen.getByTestId("body-pull_requests")).toHaveAttribute(
+      "data-forge-tab",
+      "prs"
+    )
+    // Kept mounted once opened, its panel inactive while another tab shows.
+    expect(
+      screen.getByTestId("body-issues").closest("[role=tabpanel]")
+    ).toHaveAttribute("data-state", "inactive")
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "To-dos" }), {
+      button: 0,
+    })
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "To-dos"
+    )
+    expect(screen.getByTestId("body-tasks")).toBeVisible()
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Automations" }), {
+      button: 0,
+    })
+    expect(screen.getByTestId("body-automations")).toBeVisible()
+  })
+
+  it("names the change-request tab after the project's forge", () => {
+    scene.provider = "gitlab"
+    scene.initialTab = "pull_requests"
+    renderPanel()
+    expect(railTabs()).toContain("Merge requests")
+    expect(railTabs()).not.toContain("Pull requests")
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Merge requests"
+    )
+    // Asked about the project the rail is showing.
+    expect(scene.providerAsked).toContain(1)
+  })
+
+  it("does not look the forge up while only Session Details applies", () => {
+    scene.chatMode = true
+    renderPanel()
+    expect(scene.providerAsked.every((id) => id == null)).toBe(true)
+  })
+
+  it("falls back to Session Details when a work tab's folder tabs go away", () => {
+    scene.initialTab = "tasks"
+    scene.folderId = null
+    renderPanel()
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Session Details"
+    )
+    expect(
+      screen.getByRole("tabpanel", { name: "Session Details" })
+    ).toHaveAttribute("data-state", "active")
   })
 })

@@ -42,6 +42,15 @@ export function hasTranscriptOverlay(agentType: string): boolean {
 }
 
 /**
+ * Id prefix of codex-acp's MCP start-up report (`McpStartupReporter`): one
+ * failed tool call per MCP server that failed, was cancelled or was skipped
+ * while the session opened, id `mcp_startup.<server>.<uuid>`, titled
+ * `mcp__<server>__startup`. It goes out whenever start-up settles — right
+ * after `session/new` as a rule, after the first turn when a server is slow.
+ */
+const MCP_STARTUP_REPORT_ID_PREFIX = "mcp_startup."
+
+/**
  * Whether an envelope carries turn material that would be LOST if it arrived
  * outside a prompting turn — i.e. worth telling the user their transcript has
  * content the timeline is not showing.
@@ -53,15 +62,51 @@ export function hasTranscriptOverlay(agentType: string): boolean {
  * - Empty or whitespace-only deltas carry no new readable content. Codex can
  *   flush a final newline after a completed or cancelled turn; treating it as
  *   background work leaves a persistent recovery notice on ordinary replies.
+ * - codex-acp's MCP start-up report is a `tool_call` the adapter makes up to
+ *   say how the session opened, not one the agent made in a turn: the
+ *   transcript never has it, so re-reading it would show nothing new.
  */
 export function isOutOfTurnContentEvent(envelope: {
   type: string
-  text?: string
+  // `null` too: the `prompt_suggestion` event carries `text: null` to withdraw
+  // its offer, and is not content either way.
+  text?: string | null
+  tool_call_id?: string
 }): boolean {
   if (envelope.type === "content_delta" || envelope.type === "thinking") {
     return (envelope.text?.trim().length ?? 0) > 0
   }
-  return envelope.type === "tool_call"
+  if (envelope.type !== "tool_call") return false
+  return !envelope.tool_call_id?.startsWith(MCP_STARTUP_REPORT_ID_PREFIX)
+}
+
+/**
+ * Whether turn content that just reached a connection is a turn the agent ran
+ * on its own: content the out-of-turn guard dropped and nothing else renders,
+ * so the timeline should offer to re-read the transcript.
+ *
+ * Takes the connection as the store holds it AFTER the reducer applied the
+ * envelope, which is what the guard itself read.
+ *
+ * - `prompting`: the content belongs to the running turn, which renders it.
+ * - No turn has run on the connection yet (`hasPrompted`): the content is the
+ *   adapter's own start-up output, such as an MCP server's failed-start report.
+ *   A turn an agent runs by itself follows one of ours (it drains a background
+ *   task, continues a goal), so nothing before the first turn is one. A new
+ *   conversation also has no transcript to re-read before its first prompt.
+ *   Arming there is how the notice appeared the instant a new conversation's
+ *   first message was sent: it was raised while the welcome screen hid the
+ *   thread, and shown as soon as the thread rendered.
+ * - Agents with a transcript overlay render this content themselves.
+ */
+export function isUnrenderedAgentTurnContent(
+  connection:
+    | { status: string; hasPrompted: boolean; agentType: string }
+    | undefined
+): boolean {
+  if (!connection || connection.status === "prompting") return false
+  if (!connection.hasPrompted) return false
+  return !hasTranscriptOverlay(connection.agentType)
 }
 
 export interface BackgroundTaskLifecycle {

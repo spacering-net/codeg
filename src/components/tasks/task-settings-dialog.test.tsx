@@ -9,13 +9,14 @@ const getMock = vi.fn()
 const getOwnMock = vi.fn()
 const setMock = vi.fn().mockResolvedValue(undefined)
 const deleteMock = vi.fn().mockResolvedValue(undefined)
+const commandsMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
   workTaskSettingsGet: (...args: unknown[]) => getMock(...args),
   workTaskSettingsGetOwn: (...args: unknown[]) => getOwnMock(...args),
   workTaskSettingsSet: (...args: unknown[]) => setMock(...args),
   workTaskSettingsDelete: (...args: unknown[]) => deleteMock(...args),
-  listFolderCommands: () => Promise.resolve([]),
+  listFolderCommands: (...args: unknown[]) => commandsMock(...args),
 }))
 
 // The agent surface probes a live CLI; none of it is under test here.
@@ -132,6 +133,7 @@ beforeEach(() => {
   getOwnMock.mockReset().mockResolvedValue(settings())
   setMock.mockClear()
   deleteMock.mockClear()
+  commandsMock.mockReset().mockResolvedValue([])
 })
 
 describe("TaskSettingsDialog stage prompts", () => {
@@ -285,6 +287,53 @@ describe("TaskSettingsDialog merge tab", () => {
 })
 
 describe("TaskSettingsDialog worktree tab", () => {
+  it("carries a legacy preflight reference over as the command it names", async () => {
+    getOwnMock.mockResolvedValue(settings({ preflight_command_id: 7 }))
+    commandsMock.mockResolvedValue([
+      {
+        id: 7,
+        folder_id: 1,
+        name: "test",
+        command: "pnpm test",
+        sort_order: 0,
+        run_local: false,
+        created_at: "",
+        updated_at: "",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toHaveValue("pnpm test")
+  })
+
+  it("doesn't carry over a legacy reference to a command run on the desktop", async () => {
+    // The preflight runs on the folder's host.
+    getOwnMock.mockResolvedValue(settings({ preflight_command_id: 7 }))
+    commandsMock.mockResolvedValue([
+      {
+        id: 7,
+        folder_id: 1,
+        name: "zed",
+        command: "zed .",
+        sort_order: 0,
+        run_local: true,
+        created_at: "",
+        updated_at: "",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toHaveValue("")
+  })
+
   it("saves a chosen worktree directory, and blanks it back to the default", async () => {
     const user = userEvent.setup()
     renderDialog(1)

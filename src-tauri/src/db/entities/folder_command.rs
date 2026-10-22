@@ -9,6 +9,7 @@ pub struct Model {
     pub name: String,
     pub command: String,
     pub sort_order: i32,
+    pub run_local: bool,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

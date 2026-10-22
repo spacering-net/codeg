@@ -64,7 +64,16 @@ struct SessionMetadata {
     title: Option<String>,
     #[serde(default)]
     git: Option<SessionGit>,
+    /// What closed the session, when something other than its own process
+    /// did; see [`session_summary`]. Untyped, because a value of any other
+    /// type would fail the whole manifest and hide the session.
+    #[serde(default)]
+    terminal_marker_source: Option<serde_json::Value>,
 }
+
+/// The `terminal_marker_source` cline stamps on a session it closed because the
+/// process that owned it was gone (`reconcileDeadSessions`).
+const STALE_SESSION_RECONCILER: &str = "stale_session_reconciler";
 
 #[derive(Debug, Default, Deserialize)]
 struct SessionGit {
@@ -609,11 +618,27 @@ fn session_summary(
         .as_deref()
         .and_then(parse_iso8601)
         .unwrap_or_else(Utc::now);
-    let ended_at = manifest
-        .ended_at
-        .as_deref()
-        .and_then(parse_iso8601)
-        .or_else(|| transcript_updated_at.and_then(parse_iso8601));
+    // A `cline --acp` session is still `idle`, with no `ended_at`, after its
+    // process exits. The next cline process to open the session store closes
+    // every such session whose owner is gone (`reconcileDeadSessions`): it
+    // stamps `status: "failed"` and `ended_at` with the moment it noticed, and
+    // leaves the transcript alone. codeg runs every Cline session in its own
+    // process, so that stamp lands on each of them at the next launch, and it
+    // says when that launch happened, not when the session was last used. The
+    // transcript's own write time does, so it wins over a stamped end.
+    let reconciled = manifest
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.terminal_marker_source.as_ref())
+        .and_then(serde_json::Value::as_str)
+        == Some(STALE_SESSION_RECONCILER);
+    let manifest_ended_at = manifest.ended_at.as_deref().and_then(parse_iso8601);
+    let transcript_ended_at = transcript_updated_at.and_then(parse_iso8601);
+    let ended_at = if reconciled {
+        transcript_ended_at.or(manifest_ended_at)
+    } else {
+        manifest_ended_at.or(transcript_ended_at)
+    };
 
     ConversationSummary {
         id: manifest.session_id.clone(),
@@ -1552,6 +1577,83 @@ mod tests {
         assert_eq!(summaries[0].id, "s1");
         assert_eq!(summaries[0].message_count, 2);
         assert_eq!(summaries[0].folder_path.as_deref(), Some("/Users/dev/my-app"));
+    }
+
+    /// cline closes a session whose process is gone the next time any cline
+    /// process opens the store, stamping `ended_at` with that moment. The
+    /// stamp here has the shape 3.0.72 and 3.0.73 write, seen live seconds to
+    /// minutes after a session's last message. Its end must stay the
+    /// transcript's last write, or every session would jump to the top of the
+    /// history at the next Cline launch. An end cline recorded itself still
+    /// wins.
+    #[test]
+    fn a_session_closed_for_its_dead_process_ends_at_its_last_write() {
+        let last_write = parse_iso8601("2026-09-16T03:01:34.018Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut stamped = manifest("s1");
+        stamped["status"] = json!("failed");
+        stamped["exit_code"] = json!(1);
+        stamped["ended_at"] = json!("2026-09-16T03:06:35.953Z");
+        stamped["metadata"]["terminal_marker"] = json!("failed_external_process_exit");
+        stamped["metadata"]["terminal_marker_at"] = json!("2026-09-16T03:06:35.953Z");
+        stamped["metadata"]["terminal_marker_pid"] = json!(33916);
+        stamped["metadata"]["terminal_marker_source"] = json!("stale_session_reconciler");
+        write_session(tmp.path(), "s1", stamped.clone(), one_exchange());
+
+        let mut ended = manifest("s2");
+        ended["status"] = json!("completed");
+        ended["exit_code"] = json!(0);
+        ended["ended_at"] = json!("2026-09-16T03:02:00.000Z");
+        write_session(tmp.path(), "s2", ended.clone(), one_exchange());
+
+        // A marker of some other type is not the reconciler's, and must not
+        // cost the session its place in the listing either.
+        let mut odd = ended;
+        odd["session_id"] = json!("s3");
+        odd["metadata"]["terminal_marker_source"] = json!(7);
+        write_session(tmp.path(), "s3", odd, one_exchange());
+
+        // The marker outlives the stamp: a closed session that is continued
+        // and later completes keeps it in its metadata (seen live), and its
+        // transcript still says when it was last used.
+        let mut continued = stamped.clone();
+        continued["session_id"] = json!("s4");
+        continued["status"] = json!("completed");
+        continued["exit_code"] = json!(0);
+        continued["ended_at"] = json!("2026-09-16T03:09:00.000Z");
+        write_session(tmp.path(), "s4", continued, one_exchange());
+
+        // With no transcript write time to fall back on, the stamp is still
+        // better than nothing.
+        let mut unwritten = stamped.clone();
+        unwritten["session_id"] = json!("s5");
+        let mut no_write_time = one_exchange();
+        no_write_time.as_object_mut().unwrap().remove("updated_at");
+        write_session(tmp.path(), "s5", unwritten, no_write_time);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let mut summaries = parser.list_conversations().expect("list");
+        summaries.sort_by(|a, b| a.id.cmp(&b.id));
+        let ends: Vec<_> = summaries
+            .iter()
+            .map(|s| (s.id.as_str(), s.ended_at))
+            .collect();
+        let own_end = parse_iso8601("2026-09-16T03:02:00.000Z");
+        let stamp = parse_iso8601("2026-09-16T03:06:35.953Z");
+        let expected = [
+            ("s1", last_write),
+            ("s2", own_end),
+            ("s3", own_end),
+            ("s4", last_write),
+            ("s5", stamp),
+        ];
+        assert_eq!(ends, expected);
+
+        // The open path builds its summary the same way.
+        for (id, end) in expected {
+            let detail = parser.get_conversation(id).expect("detail");
+            assert_eq!(detail.summary.ended_at, end, "{id}");
+        }
     }
 
     /// `messages_path` in the manifest is the absolute path the WRITING

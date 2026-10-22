@@ -249,6 +249,21 @@
     "autostartDescription": "Démarre automatiquement après votre connexion à cet ordinateur.",
     "autostartSaveFailed": "Échec de l’enregistrement des paramètres de lancement au démarrage : {message}",
     "autostartUnavailable": "Impossible de lire l’entrée de démarrage de cet ordinateur : {message}",
+    "cliAccessTitle": "Accès en ligne de commande",
+    "cliAccessDescription": "Permet à la commande codeg-cli de cet ordinateur d'exécuter des prompts via Codeg : depuis des scripts, des tâches CI ou les terminaux de Codeg. Seul cet ordinateur peut se connecter, avec une clé conservée dans un fichier privé.",
+    "cliAccessEndpointFile": "Fichier de connexion :",
+    "cliAccessExample": "Exemple :",
+    "cliAccessOff": "Désactivé : codeg-cli sur cet ordinateur ne peut pas joindre Codeg.",
+    "cliAccessUnavailable": "L'accès en ligne de commande n'a pas pu démarrer : {message}",
+    "cliAccessSaveFailed": "Impossible de modifier l'accès en ligne de commande : {message}",
+    "cliToolInstall": "Installer l'outil en ligne de commande",
+    "cliToolInstalled": "{command} est dans votre PATH :",
+    "cliToolPackage": "{command} est fourni avec le paquet, dans votre PATH :",
+    "cliToolNotInstalled": "Mettez {command} dans votre PATH pour qu'un terminal hors de Codeg le trouve.",
+    "cliToolConflict": "Laissé tel quel : {message}",
+    "cliToolNote": "Remarque : {message}",
+    "cliToolInstalledToast": "{command} est dans votre PATH. Ouvrez un nouveau terminal pour l'utiliser.",
+    "cliToolInstallFailed": "Impossible d'installer l'outil en ligne de commande : {message}",
     "proxyTitle": "Proxy réseau",
     "proxyDescription": "Lorsqu’il est activé, les requêtes réseau suivantes utilisent ce proxy en priorité (y compris le chat ACP, l’installation d’agents et les opérations Git distantes).",
     "loadFailed": "Échec du chargement : {message}",
@@ -959,6 +974,9 @@
       "customApiKeyHint": "Stockée en ligne dans `[model.*].api_key`, limitée à ce point de terminaison.",
       "customContextWindowLabel": "Fenêtre de contexte (tokens)",
       "customContextWindowHint": "Facultatif. Détermine le moment du compactage automatique ; laissez vide pour la valeur par défaut du point de terminaison.",
+      "customReasoningEffortsLabel": "Niveaux d'effort de raisonnement",
+      "customReasoningEffortsEmptyHint": "Aucun niveau déclaré. Sauf si la propre liste de modèles de Grok décrit déjà cet ID de modèle, la zone de saisie n'affiche pas de sélecteur d'effort de raisonnement pour lui. Choisissez les niveaux acceptés par votre point de terminaison pour l'ajouter.",
+      "customReasoningEffortsHint": "Écrit dans `[model.*].reasoning_efforts`. Chaque niveau est envoyé tel quel à votre point de terminaison : ne choisissez que ceux qu'il accepte. Les nouvelles sessions démarrent sur l'« Effort de raisonnement » choisi plus haut ou, tant qu'il est sur « Utiliser la valeur par défaut », sur le premier niveau d'ici.",
       "autoCompactLabel": "Seuil de compactage automatique (%)",
       "autoCompactHint": "Compacte la conversation lorsque l'utilisation du contexte atteint ce pourcentage (85 par défaut pour Grok). Écrit dans `[session]`."
     },
@@ -1112,6 +1130,30 @@
       "apiKeyHint": "Transmise à la CLI en tant que KIRO_API_KEY. Laissez vide pour utiliser le compte connecté via kiro-cli login ; nécessaire seulement là où la connexion par navigateur est impossible (serveurs, Docker).",
       "saveConfig": "Enregistrer la configuration Kiro"
     },
+    "trae": {
+      "configManagement": "Configuration",
+      "configDescription": "TRAE CLI 2.0 est réservé aux clients de l'offre phare de TRAE Enterprise. Codeg lance le traecli que vous avez installé, qui conserve sa connexion, ses compétences et ses serveurs MCP dans ~/.trae. Le modèle, le mode et l'effort de raisonnement ne sont pas ici : TRAE CLI les communique via ACP, donc les sélecteurs du compositeur les gèrent pour chaque session.",
+      "signInTitle": "Connexion",
+      "signInHint": "Exécutez cette commande une fois dans un terminal pour vous connecter avec le SSO de votre entreprise. Les sessions de Codeg réutilisent cette connexion.",
+      "copyCommand": "Copier la commande",
+      "commandCopied": "Commande copiée",
+      "patLabel": "Jeton d'accès personnel (facultatif)",
+      "patHint": "Pour une machine où la connexion par navigateur est impossible, comme un serveur ou une installation Docker. Codeg le transmet à TRAE CLI en tant que TRAECLI_PERSONAL_ACCESS_TOKEN et se connecte avec lui au démarrage de chaque session. Laissez vide pour utiliser la connexion de traecli login.",
+      "hostLabel": "URL de l'API d'entreprise (facultative)",
+      "hostHint": "Uniquement si votre organisation exploite TRAE sur son propre domaine. Transmise en tant que TRAECLI_HOST ; laissez vide pour le service de TRAE.",
+      "saveConfig": "Enregistrer la configuration TRAE CLI"
+    },
+    "commandCode": {
+      "configManagement": "Configuration",
+      "configDescription": "Codeg lance la CLI Command Code du paquet npm command-code, qui conserve sa connexion, ses compétences et ses serveurs MCP dans ~/.commandcode. Le modèle, le mode et l'effort de raisonnement ne sont pas ici : Command Code les communique via ACP, donc les sélecteurs du compositeur les gèrent pour chaque session.",
+      "signInTitle": "Connexion",
+      "signInHint": "Exécutez cette commande une fois dans un terminal pour vous connecter avec votre compte Command Code. Les sessions de Codeg réutilisent cette connexion.",
+      "copyCommand": "Copier la commande",
+      "commandCopied": "Commande copiée",
+      "apiKeyLabel": "Clé d'API (facultative)",
+      "apiKeyHint": "Pour une machine où la connexion par navigateur est impossible, comme un serveur ou une installation Docker. Transmise à Command Code en tant que COMMAND_CODE_API_KEY, prioritaire sur la connexion de command-code login. Laissez vide pour utiliser cette connexion.",
+      "saveConfig": "Enregistrer la configuration Command Code"
+    },
     "deepseek": {
       "configManagement": "Configuration de DeepSeek Harness",
       "configDescription": "Le point de terminaison et la clé sont des variables d'environnement que deepseek-acp lit au démarrage. Le modèle et le niveau de raisonnement sont des sélecteurs par session : ils se choisissent dans le champ de saisie.",
@@ -1131,13 +1173,10 @@
       "modelName": "Nom du modèle",
       "enableWebsocket": "Activer WebSocket",
       "enableWebsocketAria": "Activer WebSocket pour Codex Provider",
-      "enableSkills": "Activer Skills",
-      "enableSkillsAria": "Activer Skills pour Codex",
+      "enableWebsocketHint": "Activez-le uniquement si votre endpoint prend en charge la Responses API via WebSocket, comme l'API officielle d'OpenAI. Avec un endpoint qui ne la prend pas en charge, codex peut faire échouer le tour ou retenter jusqu'à cinq fois avant de repasser en HTTPS, et recommence à chaque nouvelle session. Écrit supports_websockets pour ce fournisseur dans ~/.codex/config.toml et prend effet à la prochaine session.",
       "enableDefaultModeRequestUserInput": "Autoriser les questions en mode Default",
       "enableDefaultModeRequestUserInputAria": "Autoriser Codex à poser des questions en mode Default",
       "enableDefaultModeRequestUserInputHint": "Codex ne peut utiliser son outil request_user_input qu'en mode Plan. Activez cette option pour qu'il puisse aussi vous interroger lors des tours ordinaires. Écrit [features].default_mode_request_user_input dans ~/.codex/config.toml ; l'option est encore en développement en amont. Prend effet à la prochaine session.",
-      "enableFast": "Activer Fast",
-      "enableFastAria": "Activer le niveau de service Fast pour Codex",
       "sandboxGroupTitle": "Bac à sable et approbations",
       "sandboxGroupHint": "Écrit dans le ~/.codex/config.toml global, donc les sessions codex CLI et IDE en héritent aussi. Ce sont des valeurs par défaut du fil : elles régissent les tours que codex démarre lui-même (/goal, /review, /compact). Les messages ordinaires utilisent le préréglage d'approbation de la zone de saisie. Redémarrez une session pour appliquer les changements.",
       "sandboxShadowedWarning": "config.toml définit default_permissions : codex résout les permissions via ce profil et ignore totalement sandbox_mode. Supprimez default_permissions pour utiliser les réglages ci-dessous.",
@@ -1607,6 +1646,10 @@
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Configuration Kiro enregistrée",
       "saveKiroFailed": "Impossible d'enregistrer la configuration Kiro",
+      "traeSaved": "Configuration TRAE CLI enregistrée",
+      "saveTraeFailed": "Impossible d'enregistrer la configuration TRAE CLI",
+      "commandCodeSaved": "Configuration Command Code enregistrée",
+      "saveCommandCodeFailed": "Impossible d'enregistrer la configuration Command Code",
       "systemAgentAlreadyLatest": "{name} est déjà à jour ({version})"
     },
     "distribution": {
@@ -1913,6 +1956,62 @@
     "invalidFolderId": "ID de dossier invalide",
     "loadingRepo": "Chargement du dépôt..."
   },
+  "CommitMessageGeneration": {
+    "generate": "Générer un message de commit",
+    "stop": "Arrêter la génération ({seconds} s)",
+    "generating": "Rédaction du message de commit… {seconds} s",
+    "noChanges": "Aucune modification à décrire",
+    "selectFiles": "Sélectionnez les fichiers à décrire",
+    "busyCommitting": "Commit en cours…",
+    "settings": "Paramètres des messages de commit",
+    "settingsMenuItem": "Paramètres des messages de commit…",
+    "untracked": {
+      "title": "Inclure aussi les fichiers non suivis dans le commit ?",
+      "description": "Les fichiers cochés sont décrits dans le message et inclus dans ce commit. Les autres restent non suivis.",
+      "selectionCount": "{selected} / {total} fichiers sélectionnés",
+      "selectAll": "Tout sélectionner",
+      "unselectAll": "Tout désélectionner",
+      "showMore": "Afficher {count, plural, one {# fichier de plus} other {# fichiers de plus}}",
+      "confirm": "Générer",
+      "included": "Inclut aussi {count, plural, one {# fichier non suivi} other {# fichiers non suivis}}",
+      "drop": "Ne pas inclure les fichiers non suivis",
+      "stagedMeanwhile": "Certains fichiers décochés ont été indexés entre-temps : ils sont inclus dans le commit avec les changements suivis"
+    },
+    "toasts": {
+      "failed": "Impossible de générer un message de commit",
+      "openSettings": "Paramètres",
+      "autoCommitSkipped": "Pas de commit automatique : les modifications ont bougé pendant l'écriture du message. Vérifiez-le, puis faites le commit."
+    },
+    "errors": {
+      "noChanges": "Il n'y a aucune modification à décrire.",
+      "noAgent": "Aucun agent pour le rédiger. Choisissez-en un dans les paramètres des messages de commit.",
+      "emptyAnswer": "La réponse de l'agent ne contenait aucun message de commit.",
+      "cancelled": "La génération a été arrêtée."
+    },
+    "dialog": {
+      "title": "Génération des messages de commit",
+      "description": "Le bouton de génération à côté du champ de commit demande à un agent de rédiger un message pour exactement ce que contiendra le commit. Cela s'exécute dans une session à part, qui n'apparaît jamais dans votre liste de sessions, et toute demande d'autorisation est refusée.",
+      "scope": "Portée",
+      "scopeGlobal": "Tous les dossiers (valeurs globales)",
+      "scopeGlobalHint": "Les dossiers sans réglages propres utilisent ces valeurs globales.",
+      "source": "Source de configuration",
+      "sourceGlobal": "Valeurs globales",
+      "sourceCustom": "Personnalisée",
+      "sourceGlobalFollow": "Suit les réglages globaux — les changements globaux s'appliquent ici automatiquement.",
+      "sourceCustomHint": "Enregistre des réglages propres à ce dossier, qui ne suit plus les valeurs globales.",
+      "pinAgent": "Utiliser un agent précis",
+      "pinAgentHint": "Cet agent rédige chaque message, avec les options ci-dessous. Un modèle rapide et peu coûteux suffit largement.",
+      "followSessionHint": "Désactivé : l'agent de la session que vous consultez le rédige, sinon l'agent par défaut du dossier, avec son modèle par défaut.",
+      "autoCommit": "Commit automatique",
+      "autoCommitHint": "Fait le commit dès que le message est écrit. Si les modifications ont bougé entre-temps, le message est seulement rempli, pour que vous le vérifiiez.",
+      "instructions": "Instructions",
+      "instructionsHint": "Ajoutées à chaque demande et prioritaires sur les règles intégrées (comme suivre la langue des derniers commits).",
+      "instructionsPlaceholder": "p. ex. Écrire en français. Suivre Conventional Commits. Expliquer le pourquoi dans le corps.",
+      "save": "Enregistrer",
+      "cancel": "Annuler",
+      "loadFailed": "Impossible de charger les paramètres"
+    }
+  },
   "MergePage": {
     "title": "Résoudre les conflits",
     "invalidFolderId": "ID de dossier invalide",
@@ -2079,6 +2178,7 @@
       "runningCountBadge": "{count, plural, one {# session en cours} other {# sessions en cours}}",
       "statusCancelledBadge": "Annulé",
       "worktreeRemovedBadge": "Worktree d'origine supprimé",
+      "cliBadge": "Lancée depuis la ligne de commande",
       "conversationCountUnit": "{count, plural, one {# conversation} other {# conversations}}",
       "emptyFolderHint": "Aucune conversation",
       "noMatchingConversations": "Aucune conversation correspondante",
@@ -2159,9 +2259,11 @@
         "dropToUngroup": "Déposer ici pour retirer du groupe"
       },
       "recentFilterAll": "Tout",
+      "recentFilterCli": "Ligne de commande",
       "recentFilterTitle": "Afficher dans Récents : {filter}",
       "noRecentChats": "Aucune discussion récente",
       "noRecentFolders": "Aucune conversation de dossier récente",
+      "noRecentCli": "Aucune conversation récente depuis la ligne de commande",
       "recentFilterMenuLabel": "Afficher dans Récents"
     },
     "conversation": {
@@ -2378,7 +2480,10 @@
         "commits": "Validations"
       },
       "noFolderTitle": "Aucun dossier ouvert",
-      "noFolderHint": "Ouvrez un dossier pour voir son contenu ici"
+      "noFolderHint": "Ouvrez un dossier pour voir son contenu ici",
+      "openFullPage": "Ouvrir en pleine page",
+      "back": "Retour",
+      "noAutomations": "Aucune automatisation pour ce projet pour l’instant"
     },
     "windowControls": {
       "minimizeWindow": "Minimiser la fenêtre",
@@ -3135,6 +3240,10 @@
       "manageCommands": "Gérer les commandes...",
       "runCommandTitle": "Exécuter : {command}",
       "stopCommandTitle": "Arrêter : {command}",
+      "localUnavailable": "Les commandes locales ne sont disponibles que dans l'application de bureau",
+      "localRunFailed": "Échec de l'exécution de la commande locale",
+      "globalCommand": "Disponible dans tous les dossiers",
+      "localCommand": "S'exécute sur cet ordinateur",
       "manageDialog": {
         "title": "Gérer les commandes",
         "empty": "Aucune commande pour le moment",
@@ -3143,11 +3252,16 @@
         "newCommand": "Nouvelle commande",
         "nameLabel": "Nom",
         "commandLabel": "Commande",
+        "runLocalLabel": "Exécuter sur cet ordinateur",
+        "runLocalHint": "S'exécute sur cet ordinateur plutôt que sur l'hôte du projet, sans terminal ; <code>{folderVar}</code> est le chemin absolu du dossier et <code>{hostVar}</code> le nom de l'hôte distant, par ex. <code>{example}</code>",
+        "globalLabel": "Afficher dans tous les dossiers",
+        "globalHint": "Disponible dans chaque dossier, worktree et connexion distante ; enregistré sur cet ordinateur",
         "dragSort": "Glisser pour trier",
         "dragSortCommand": "Glisser pour trier {name}",
         "orderFailed": "Échec de l'enregistrement de l'ordre des commandes",
         "loadFailed": "Échec du chargement des commandes",
         "saveFailed": "Échec de l'enregistrement de la commande",
+        "runLocalNotKept": "l'hôte du dossier ne peut pas enregistrer \"Exécuter sur cet ordinateur\" ; mettez-le à jour ou activez \"Afficher dans tous les dossiers\" pour garder la commande sur cet ordinateur",
         "deleteFailed": "Échec de la suppression de la commande",
         "confirmDelete": {
           "title": "Supprimer la commande ?",
@@ -3277,6 +3391,7 @@
       },
       "messageInput": {
         "askAnything": "Posez n'importe quelle question...",
+        "promptSuggestion": "{suggestion} (Tab pour l’utiliser)",
         "removeAttachmentAria": "Retirer {name}",
         "attachFiles": "Joindre des fichiers",
         "addActions": "Ajouter",
@@ -3306,6 +3421,10 @@
         "searchModelAria": "Rechercher des modèles",
         "modelListLabel": "Modèles",
         "recommendedBadge": "Recommandé",
+        "recommendedValue": "Recommandé : {value}",
+        "searchOptions": "Rechercher des options...",
+        "searchOptionsAria": "Rechercher des options",
+        "noOptions": "Aucune option trouvée",
         "noModels": "Aucun modèle trouvé",
         "cancel": "Annuler",
         "send": "Envoyer",
@@ -3313,6 +3432,7 @@
         "steerIntoTurn": "Insérer dans le tour en cours",
         "steerAsNote": "Envoyer une note pour la prochaine vérification",
         "steerQueuedInstead": "Mis en file d'attente — il sera envoyé au tour suivant.",
+        "heldWhileResponding": "Réponse en cours — votre message reste dans la zone de saisie. Envoyez-le une fois la réponse terminée.",
         "steerFailed": "Impossible d'insérer dans le tour en cours",
         "steerNoteFailed": "Impossible d'envoyer votre note",
         "slashCommands": "Commandes slash",
@@ -3672,7 +3792,6 @@
         "unknownAgent": "Sous-agent",
         "openDetail": "Voir la conversation",
         "resumed": "Repris",
-        "resumeDetail": "Détails de la reprise",
         "resumeReasonLabel": "Motif de la reprise",
         "detailTitle": "Conversation du sous-agent",
         "detailDescription": "Vue en lecture seule de la conversation du sous-agent délégué.",
@@ -3918,13 +4037,16 @@
       },
       "messageNav": {
         "title": "Navigation des messages",
-        "collapse": "Réduire la navigation des messages",
         "loadingEarlier": "Chargement des messages précédents…",
         "loadEarlier": "Charger les messages précédents",
-        "collapsedSummary": "Messages {count}",
         "fileCount": "{count, plural, one {# fichier} other {# fichiers}}",
-        "remove": "Retirer",
-        "noDiffDataAvailable": "Aucune donnée de diff disponible pour {filePath}"
+        "subAgentCount": "{count, plural, one {# sous-agent} other {# sous-agents}}",
+        "showDiff": "Afficher les modifications de {filePath}",
+        "hideDiff": "Masquer les modifications de {filePath}",
+        "openFile": "Ouvrir {filePath}",
+        "collapse": "Réduire",
+        "currentMessage": "Message actuel",
+        "scrollToCurrent": "Faire défiler jusqu’au message actuel (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "Fichiers modifiés",
@@ -3982,6 +4104,9 @@
         "resumeDelegation": "Reprise de la tâche {task}",
         "resumeDelegationNoId": "Reprise d'une tâche déléguée",
         "promptLabel": "Instruction",
+        "ackRecorded": "Enregistré dans la tâche",
+        "ackNotRecorded": "Non enregistré dans la tâche",
+        "ackNotRecordedWithReason": "Non enregistré dans la tâche : {reason}",
         "verdict": {
           "success": "réussie",
           "needs_review": "à relire",
@@ -4098,6 +4223,18 @@
         "tokens": "{count} jetons",
         "stopDeclined": "Impossible d'arrêter cette tâche : elle est peut-être déjà terminée.",
         "stopFailed": "Échec de l'arrêt de la tâche : {error}"
+      },
+      "remoteControl": {
+        "title": "Contrôle à distance activé",
+        "open": "Ouvrir dans le navigateur",
+        "copy": "Copier le lien",
+        "copied": "Copié",
+        "qr": "Code QR",
+        "qrLabel": "Code QR du lien de contrôle à distance de cette session",
+        "qrHint": "Scannez-le avec votre téléphone pour poursuivre cette session dans l'app Claude ou sur claude.ai/code.",
+        "noUrl": "Claude Code n'a renvoyé aucun lien pour cette session",
+        "turnOff": "Désactiver",
+        "turnOffBusy": "Disponible une fois que Claude a terminé"
       },
       "proposedPlan": {
         "title": "Plan proposé",
@@ -5270,7 +5407,12 @@
     "reconnectNow": "Se reconnecter maintenant",
     "sessionExpiredTitle": "Session expirée",
     "sessionExpiredDescription": "Votre session n'est plus valide. Veuillez vous reconnecter pour continuer.",
-    "goToLogin": "Aller à la connexion"
+    "proxySignInTitle": "Connexion expirée",
+    "proxySignInDescription": "Votre connexion au proxy placé devant ce serveur a expiré. Rechargez la page pour vous reconnecter.",
+    "goToLogin": "Aller à la connexion",
+    "versionChangedTitle": "Le serveur exécute désormais Codeg {version}",
+    "versionChangedDescription": "Cette page est encore en version {version}. Rechargez-la pour utiliser la version du serveur.",
+    "reloadPage": "Recharger"
   },
   "LiveFeedback": {
     "placeholder": "Envoyez une note à {agent} pendant qu'il travaille…",

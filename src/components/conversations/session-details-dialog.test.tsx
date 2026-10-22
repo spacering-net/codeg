@@ -104,6 +104,9 @@ describe("SessionDetailsDialog", () => {
     expect(getByText("50K / 200K (25.0%)")).toBeTruthy()
     // The message count field was intentionally removed.
     expect(queryByText("Messages")).toBeNull()
+    // The aux-panel tab leaves these two sections out; the dialog keeps them.
+    expect(getByText("Token Usage")).toBeTruthy()
+    expect(getByText("Timestamps")).toBeTruthy()
     expect(mockGet).not.toHaveBeenCalled()
   })
 

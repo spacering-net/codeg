@@ -40,6 +40,22 @@ const BASE_OPTIONS: OverlayScrollbarsComponentProps["options"] = {
   },
 }
 
+/**
+ * `update` options for an OverlayScrollbars instance that never scrolls
+ * sideways: they skip its flow-direction check. Whenever an instance's overflow
+ * changes, or it appears, OverlayScrollbars checks whether a reversed flow
+ * flips its scroll coordinates. It scrolls the viewport to both ends and back,
+ * then stops the next trusted scroll event in the capture phase if its own
+ * offset is still where it left it — whichever element scrolled. So a real
+ * scroll is lost, of the viewport or of a scroller inside it: a virtua list
+ * opened on its current row never hears that it moved, and draws only the row
+ * it keeps mounted until the user scrolls. Of what the check looks for, only
+ * `direction: rtl` occurs in this app, and it flips only the horizontal axis.
+ */
+export const SKIP_FLOW_DIRECTION_CHECK = {
+  flowDirectionStyles: () => ({}),
+}
+
 export function ScrollArea({
   children,
   className,
@@ -54,6 +70,7 @@ export function ScrollArea({
     () => ({
       ...BASE_OPTIONS,
       overflow: { x, y },
+      ...(x === "hidden" ? { update: SKIP_FLOW_DIRECTION_CHECK } : {}),
     }),
     [x, y]
   )
