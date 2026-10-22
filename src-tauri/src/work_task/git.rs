@@ -106,6 +106,27 @@ pub async fn commit_all(
     Ok(true)
 }
 
+/// Initialize a project directory and create the first commit from its
+/// current contents. Callers should invoke it only after confirming the
+/// directory is either not a Git work tree or has an unborn branch.
+pub async fn init_with_initial_commit(
+    conn: &sea_orm::DatabaseConnection,
+    path: &str,
+    message: &str,
+) -> Result<(), AppCommandError> {
+    let init = run_git(path, &["init"]).await?;
+    if !init.status.success() {
+        return Err(git_command_error("init", &init.stderr));
+    }
+
+    let add = run_git(path, &["add", "-A"]).await?;
+    if !add.status.success() {
+        return Err(git_command_error("add -A", &add.stderr));
+    }
+
+    commit_staged_with_allow_empty(conn, path, message).await
+}
+
 /// Commit whatever is staged (used by commit-all and the squash landing).
 /// Resolves the commit author from the matching configured account, like
 /// `git_commit_core`.
@@ -113,6 +134,23 @@ pub async fn commit_staged(
     conn: &sea_orm::DatabaseConnection,
     path: &str,
     message: &str,
+) -> Result<(), AppCommandError> {
+    commit_staged_inner(conn, path, message, false).await
+}
+
+async fn commit_staged_with_allow_empty(
+    conn: &sea_orm::DatabaseConnection,
+    path: &str,
+    message: &str,
+) -> Result<(), AppCommandError> {
+    commit_staged_inner(conn, path, message, true).await
+}
+
+async fn commit_staged_inner(
+    conn: &sea_orm::DatabaseConnection,
+    path: &str,
+    message: &str,
+    allow_empty: bool,
 ) -> Result<(), AppCommandError> {
     let author_override = crate::git_credential::resolve_commit_author(path, conn).await;
     let mut cmd = crate::process::tokio_command("git");
@@ -124,7 +162,11 @@ pub async fn commit_staged(
             &format!("user.email={email}"),
         ]);
     }
-    cmd.args(["commit", "-m", message]).current_dir(path);
+    cmd.args(["commit"]);
+    if allow_empty {
+        cmd.arg("--allow-empty");
+    }
+    cmd.args(["-m", message]).current_dir(path);
     let out = cmd.output().await.map_err(AppCommandError::io)?;
     if !out.status.success() {
         return Err(git_command_error("commit", &out.stderr));

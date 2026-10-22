@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 #[cfg(feature = "tauri-runtime")]
 use tauri::{Manager, State};
 
@@ -10574,6 +10575,112 @@ pub(crate) fn build_runtime_env_from_setting(
     merged
 }
 
+/// Read the Claude model ids from the cc-switch unified Pi catalog that backs
+/// the same provider credentials. cc-switch keeps the catalog in Pi's native
+/// `models.json` even when Claude Code is the active client; matching both the
+/// endpoint and key prevents another gateway's models from leaking into the
+/// Claude picker when several providers are configured.
+pub(crate) fn cc_switch_claude_model_catalog(
+    runtime_env: &BTreeMap<String, String>,
+) -> Vec<(String, String, Option<String>)> {
+    let base_url = runtime_env
+        .get("ANTHROPIC_BASE_URL")
+        .map(|value| normalize_catalog_url(value));
+    let api_key = runtime_env.get("ANTHROPIC_AUTH_TOKEN");
+    let Some(base_url) = base_url.filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let path = pi_agent_dir_for_env(runtime_env).join("models.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(providers) = root.get("providers").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+
+    // cc-switch may keep the active credential in its own auth store while
+    // Codeg's model-provider row still has the same gateway endpoint paired
+    // with a different client token. Prefer an exact credential match when one
+    // exists, but fall back to the endpoint catalog so the unified source is
+    // still visible instead of silently producing an empty picker.
+    let has_exact_key_match = api_key.is_some_and(|expected_key| {
+        providers.values().any(|provider| {
+            provider
+                .get("baseUrl")
+                .and_then(serde_json::Value::as_str)
+                .map(normalize_catalog_url)
+                .is_some_and(|provider_url| provider_url == base_url)
+                && provider
+                    .get("apiKey")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|provider_key| provider_key == expected_key)
+        })
+    });
+
+    let mut rows = Vec::new();
+    for provider in providers.values() {
+        let Some(provider_url) = provider
+            .get("baseUrl")
+            .and_then(serde_json::Value::as_str)
+            .map(normalize_catalog_url)
+        else {
+            continue;
+        };
+        if provider_url != base_url {
+            continue;
+        }
+        if has_exact_key_match {
+            let Some(actual) = api_key else {
+                continue;
+            };
+            if provider
+                .get("apiKey")
+                .and_then(serde_json::Value::as_str)
+                != Some(actual)
+            {
+                continue;
+            }
+        }
+        let Some(models) = provider.get("models").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for model in models {
+            let Some(id) = model.get("id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            // Claude's picker should contain models that the Claude protocol
+            // gateway can serve. Keep the catalog focused on Claude ids while
+            // retaining AWS-style `us.anthropic.claude-*` entries.
+            if !(id.starts_with("claude-") || id.contains(".anthropic.claude-")) {
+                continue;
+            }
+            let name = model
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(id)
+                .to_string();
+            rows.push((id.to_string(), name, Some("cc-switch provider catalog".to_string())));
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows.dedup_by(|a, b| a.0 == b.0);
+    rows
+}
+
+fn normalize_catalog_url(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches('/')
+        .strip_suffix("/v1")
+        .unwrap_or_else(|| value.trim().trim_end_matches('/'))
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// Resolve model provider credentials into runtime env vars if `model_provider_id` is set.
 pub(crate) async fn apply_model_provider_env(
     agent_type: AgentType,
@@ -11119,6 +11226,54 @@ pub(crate) async fn build_session_runtime_env(
     build_runtime_env_for_agent(db, agent_type, session_id, data_dir, false).await
 }
 
+/// Work-task sessions carry their own ACP selections. On a reconnect the chat
+/// surface also supplies the user's global selector preferences; letting those
+/// win would silently turn a task saved as `high` back into the global default
+/// (`medium`). Resolve the task by the external ACP session id and give its
+/// explicit override precedence over the global reconnect preferences.
+pub(crate) async fn task_session_preferences(
+    db: &AppDatabase,
+    agent_type: AgentType,
+    session_id: Option<&str>,
+    preferred_mode_id: Option<String>,
+    preferred_config_values: BTreeMap<String, String>,
+) -> (Option<String>, BTreeMap<String, String>) {
+    let Some(session_id) = session_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return (preferred_mode_id, preferred_config_values);
+    };
+    let agent = agent_type.as_wire();
+    let conversation = crate::db::entities::conversation::Entity::find()
+        .filter(crate::db::entities::conversation::Column::ExternalId.eq(session_id))
+        .filter(crate::db::entities::conversation::Column::AgentType.eq(agent.as_ref()))
+        .one(&db.conn)
+        .await
+        .ok()
+        .flatten();
+    let Some(conversation) = conversation else {
+        return (preferred_mode_id, preferred_config_values);
+    };
+    let task = crate::db::entities::work_task::Entity::find()
+        .filter(crate::db::entities::work_task::Column::ConversationId.eq(conversation.id))
+        .one(&db.conn)
+        .await
+        .ok()
+        .flatten();
+    let Some(task) = task else {
+        return (preferred_mode_id, preferred_config_values);
+    };
+    let Ok(config) = serde_json::from_str::<crate::models::WorkTaskConfig>(&task.config) else {
+        return (preferred_mode_id, preferred_config_values);
+    };
+    if config
+        .agent_type
+        .as_deref()
+        .is_some_and(|configured_agent| configured_agent == agent.as_ref())
+    {
+        return (config.mode_id, config.config_values);
+    }
+    (preferred_mode_id, preferred_config_values)
+}
+
 /// Settings may inspect Pi's local model catalog while the agent is disabled.
 /// Reuse the exact launch environment, bypassing only the connection permission
 /// gate; this path starts no ACP session and sends no prompt.
@@ -11372,6 +11527,14 @@ pub async fn acp_connect(
     // can prompt the user to install it from Agent Settings.
     verify_agent_installed(agent_type).await?;
 
+    let (preferred_mode_id, preferred_config_values) = task_session_preferences(
+        &db,
+        agent_type,
+        session_id.as_deref(),
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+    )
+    .await;
     let emitter = EventEmitter::Tauri(app_handle);
     manager
         .spawn_agent(
@@ -11382,7 +11545,7 @@ pub async fn acp_connect(
             window.label().to_string(),
             emitter,
             preferred_mode_id,
-            preferred_config_values.unwrap_or_default(),
+            preferred_config_values,
         )
         .await
 }
