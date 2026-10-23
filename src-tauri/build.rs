@@ -73,11 +73,20 @@ fn fingerprint_helper_sources() {
 ///
 /// If you ever bypass those wrappers (e.g. invoking the Tauri CLI directly
 /// without beforeBuildCommand) you'd ship the placeholder, so emit a
-/// cargo:warning that surfaces in any compile log to make that loud.
+/// cargo:warning that surfaces in any compile log to make that loud. Cargo
+/// replays it on builds that do not rerun this script.
+///
+/// The placeholder is watched (`rerun-if-changed`), so that the real sidecar
+/// landing reruns this script, and cargo counts a watched file as changed
+/// when it is newer than the start of the script's last run. A placeholder
+/// that already exists is therefore left alone, and a new one is dated back
+/// to 1970: writing it during the run would make the next build rerun the
+/// script, and rebuild every target of the crate after it, every time.
 #[cfg(feature = "tauri-runtime")]
 fn ensure_sidecar_placeholder() {
     use std::fs;
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     let triple = std::env::var("TARGET").unwrap_or_default();
     if triple.is_empty() {
@@ -95,32 +104,34 @@ fn ensure_sidecar_placeholder() {
 
         println!("cargo:rerun-if-changed={}", path.display());
 
-        let needs_placeholder = match fs::metadata(&path) {
-            Ok(meta) => meta.len() == 0,
-            Err(_) => true,
-        };
-
-        if needs_placeholder {
-            if let Err(e) = fs::create_dir_all(&dir) {
-                panic!("failed to create {}: {e}", dir.display());
+        match fs::metadata(&path) {
+            Ok(meta) if meta.len() > 0 => continue,
+            Ok(_) => {}
+            Err(_) => {
+                if let Err(e) = fs::create_dir_all(&dir) {
+                    panic!("failed to create {}: {e}", dir.display());
+                }
+                let placeholder = match fs::File::create(&path) {
+                    Ok(file) => file,
+                    Err(e) => panic!(
+                        "failed to write sidecar placeholder {}: {e}",
+                        path.display()
+                    ),
+                };
+                // Should this fail, the next build reruns the script once.
+                let _ = placeholder.set_modified(SystemTime::UNIX_EPOCH);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+                }
             }
-            if let Err(e) = fs::write(&path, b"") {
-                panic!(
-                    "failed to write sidecar placeholder {}: {e}",
-                    path.display()
-                );
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
-            }
-            println!(
-                "cargo:warning={name} sidecar missing at {}; wrote 0-byte placeholder. \
-                 Run `pnpm tauri:prepare-sidecars` before `tauri build` to ship a working binary.",
-                path.display()
-            );
         }
+        println!(
+            "cargo:warning={name} sidecar at {} is a 0-byte placeholder. \
+             Run `pnpm tauri:prepare-sidecars` before `tauri build` to ship a working binary.",
+            path.display()
+        );
     }
 }
 
