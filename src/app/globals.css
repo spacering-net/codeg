@@ -17,8 +17,10 @@
 :root {
   /* 默认界面字体 = Inter（与 DEFAULT_UI_FONT_ID = "inter" 一致，须等于
      font-presets.ts 的 resolveFontStack("inter", "", "sans")，否则首屏到水合会闪字），
-     运行时由 AppearanceProvider 覆盖 --font-sans。会话消息区等普通文本均跟随 --font-sans；
-     --font-mono 不在此自定义，由 Tailwind 默认等宽栈兜底（与代码编辑器字体相互独立）。 */
+     运行时由 AppearanceProvider 覆盖 --font-sans。会话消息区等普通文本均跟随 --font-sans。
+     --font-mono 不在此写死：默认等于 Tailwind 的系统等宽栈（与
+     resolveFontStack("system-mono", "", "mono") 一致），运行时由 AppearanceProvider 覆盖为
+     编辑器字体。对话代码块（pre/code 的 preflight）与 font-mono 都读它。终端字体不写这个变量。 */
   --font-sans:
     "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;

@@ -98,8 +98,9 @@ export const MONO_FONTS: readonly FontDef[] = FONTS.filter(
 )
 
 /**
- * 默认：界面为 Inter（无衬线），编辑器 / 终端为系统等宽字体（会话消息区跟随界面字体）。
- * 编辑器字体只作用于代码编辑器（Monaco），不影响界面与消息区。
+ * 默认：界面为 Inter（无衬线），编辑器 / 终端为系统等宽字体。
+ * 界面字体驱动 --font-sans（会话正文）。编辑器字体驱动 --font-mono（对话代码块、
+ * font-mono）并作为 Monaco 的 fontFamily。终端字体只走 xterm。
  * 注意：界面默认改动须与 globals.css 的 :root --font-sans 兜底栈保持一致
  * （兜底栈须等于 resolveFontStack(DEFAULT_UI_FONT_ID, "", "sans")），
  * 否则首屏到水合之间会闪字（inline 脚本无存储值时回退到该 CSS 兜底）。

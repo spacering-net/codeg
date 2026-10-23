@@ -44,6 +44,7 @@ import {
   STORAGE_KEY_UI_FONT_STACK,
   STORAGE_KEY_EDITOR_FONT,
   STORAGE_KEY_EDITOR_FONT_CUSTOM,
+  STORAGE_KEY_EDITOR_FONT_STACK,
   STORAGE_KEY_EDITOR_FONT_SIZE,
   STORAGE_KEY_EDITOR_LIGATURES,
   STORAGE_KEY_EDITOR_WORD_WRAP,
@@ -143,7 +144,7 @@ type AppearanceContextValue = {
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
-  /** 编辑器字体（仅作用于代码编辑器 Monaco 的 fontFamily） */
+  /** 编辑器字体（Monaco 的 fontFamily，并驱动 --font-mono） */
   editorFont: FontSelection
   setEditorFont: (id: string, custom?: string) => void
   /** 终端字体（驱动 xterm fontFamily） */
@@ -369,7 +370,8 @@ function useDebouncedPersist(key: string, value: string, delayMs: number) {
  *
  * 与 next-themes 完全正交：next-themes 负责 <html class="dark/light">，
  * 这里负责 <html data-theme="...">、<html style="font-size: ...">
- * 以及界面字体变量 --font-sans（编辑器/终端字体只走各自的 Monaco/xterm 选项）。
+ * 界面字体变量 --font-sans，以及编辑器字体变量 --font-mono（对话代码块）。
+ * 终端字体只走 xterm 的 fontFamily。
  *
  * 注意：next-themes 的 attribute 配置必须保持 "class"。如果改为 "data-theme"
  * 会与本 Provider 冲突，导致主题色无法生效。
@@ -599,10 +601,13 @@ export function AppearanceProvider({
 
   const setEditorFont = useCallback((id: string, custom = "") => {
     setEditorFontState({ id, custom })
-    // 编辑器字体只作用于代码编辑器（Monaco），不写任何全局 CSS 变量，
-    // 不影响界面与会话消息区（它们跟随 --font-sans）。
+    // 同一份栈给 Monaco（组件读 provider）和对话代码块（--font-mono）。
+    // pre/code 的 Tailwind preflight 以及 font-mono 都读这个变量。
+    const stack = resolveFontStack(id, custom, "mono")
+    document.documentElement.style.setProperty("--font-mono", stack)
     persist(STORAGE_KEY_EDITOR_FONT, id)
     persist(STORAGE_KEY_EDITOR_FONT_CUSTOM, custom)
+    persist(STORAGE_KEY_EDITOR_FONT_STACK, stack)
   }, [])
 
   const setTerminalFont = useCallback((id: string, custom = "") => {
@@ -810,15 +815,25 @@ export function AppearanceProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 仅界面字体需要在 mount 时重新解析并应用 --font-sans，吸收跨版本字体目录变更
-  // （inline 脚本写入的是旧版本已解析栈，可能与新目录不一致）。仅在确有漂移时才写，
-  // 避免每次加载都触发 localStorage 写入与跨标签页 storage 事件。
-  // 编辑器/终端字体只走各自的 Monaco/xterm 选项，不在此落 CSS 变量。
+  // 界面字体与编辑器字体在 mount 时重新解析并应用 --font-sans / --font-mono，吸收跨版本
+  // 字体目录变更（inline 脚本写入的是旧版本已解析栈，可能与新目录不一致）。仅在确有漂移时
+  // 才写，避免每次加载都触发 localStorage 写入与跨标签页 storage 事件。已存的编辑器字体
+  // （升级前没有 *_STACK）也在这里补上 --font-mono，否则对话代码块仍停在默认等宽栈。
+  // 终端字体只走 xterm，不在此落 CSS 变量。
   useEffect(() => {
     const sans = resolveFontStack(uiFont.id, uiFont.custom, "sans")
     if (readStored(STORAGE_KEY_UI_FONT_STACK) !== sans) {
       document.documentElement.style.setProperty("--font-sans", sans)
       persist(STORAGE_KEY_UI_FONT_STACK, sans)
+    }
+    // 只在用户显式选过编辑器字体时写 --font-mono。没选过就留给 Tailwind 默认栈
+    // 和自定义 CSS（`:root { --font-mono }` 在样式表里，行内属性会压过它）。
+    if (readStored(STORAGE_KEY_EDITOR_FONT)) {
+      const mono = resolveFontStack(editorFont.id, editorFont.custom, "mono")
+      if (readStored(STORAGE_KEY_EDITOR_FONT_STACK) !== mono) {
+        document.documentElement.style.setProperty("--font-mono", mono)
+        persist(STORAGE_KEY_EDITOR_FONT_STACK, mono)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -956,6 +971,7 @@ export function AppearanceProvider({
       STORAGE_KEY_UI_FONT_STACK,
       STORAGE_KEY_EDITOR_FONT,
       STORAGE_KEY_EDITOR_FONT_CUSTOM,
+      STORAGE_KEY_EDITOR_FONT_STACK,
       STORAGE_KEY_EDITOR_FONT_SIZE,
       STORAGE_KEY_EDITOR_LIGATURES,
       STORAGE_KEY_EDITOR_WORD_WRAP,
@@ -992,11 +1008,18 @@ export function AppearanceProvider({
       setEditorLigaturesState(readBool(STORAGE_KEY_EDITOR_LIGATURES, false))
       setEditorWordWrapState(readBool(STORAGE_KEY_EDITOR_WORD_WRAP, false))
       setTerminalLigaturesState(readBool(STORAGE_KEY_TERMINAL_LIGATURES, false))
-      // 仅界面字体落到 --font-sans；编辑器/终端字体由各自组件读取 provider 状态后应用。
+      // 界面字体落到 --font-sans，编辑器字体落到 --font-mono（对话代码块）。
+      // 终端字体由 xterm 读取 provider 状态后应用。
       document.documentElement.style.setProperty(
         "--font-sans",
         resolveFontStack(ui.id, ui.custom, "sans")
       )
+      if (readStored(STORAGE_KEY_EDITOR_FONT)) {
+        document.documentElement.style.setProperty(
+          "--font-mono",
+          resolveFontStack(ed.id, ed.custom, "mono")
+        )
+      }
     }
 
     const onStorage = (e: StorageEvent) => {

@@ -30,14 +30,16 @@ export const STORAGE_KEY_CHAT_ANIMATIONS = "codeg-chat-animations"
 export const STORAGE_KEY_CHAT_CONTENT_WIDTH = "codeg-chat-content-width"
 
 // 字体偏好（界面 / 编辑器 / 终端）。
-// 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地
-// 预水合写入 --font-sans；编辑器/终端字体只走各自的 Monaco/xterm 选项，水合后才挂载，
-// 无需预水合，也不写任何全局 CSS 变量。*_FONT 存 id、*_CUSTOM 存自定义族名供回显。
+// 界面字体与编辑器字体各有一份 *_STACK（已解析的 CSS font-family 栈），供 inline
+// 脚本零依赖地预水合：界面写入 --font-sans，编辑器写入 --font-mono（会话代码块与
+// font-mono 跟随它；Monaco 仍用同一份栈作为 fontFamily）。终端字体只走 xterm，水合后
+// 才挂载，不写全局 CSS 变量。*_FONT 存 id、*_CUSTOM 存自定义族名供回显。
 export const STORAGE_KEY_UI_FONT = "codeg-ui-font"
 export const STORAGE_KEY_UI_FONT_CUSTOM = "codeg-ui-font-custom"
 export const STORAGE_KEY_UI_FONT_STACK = "codeg-ui-font-stack"
 export const STORAGE_KEY_EDITOR_FONT = "codeg-editor-font"
 export const STORAGE_KEY_EDITOR_FONT_CUSTOM = "codeg-editor-font-custom"
+export const STORAGE_KEY_EDITOR_FONT_STACK = "codeg-editor-font-stack"
 export const STORAGE_KEY_EDITOR_FONT_SIZE = "codeg-editor-font-size"
 export const STORAGE_KEY_EDITOR_LIGATURES = "codeg-editor-ligatures"
 export const STORAGE_KEY_EDITOR_WORD_WRAP = "codeg-editor-word-wrap"
@@ -136,6 +138,16 @@ const SCRIPT = `
     var uiFontStack = localStorage.getItem("${STORAGE_KEY_UI_FONT_STACK}");
     if (uiFontId && uiFontStack && uiFontStack.length < 512 && !/[;{}<>]/.test(uiFontStack)) {
       document.documentElement.style.setProperty("--font-sans", uiFontStack);
+    }
+
+    // 编辑器字体：预水合写入 --font-mono。对话代码块（Streamdown/shiki 的 pre/code，
+    // 以及 font-mono）读的是这个变量，不是 Monaco 的 fontFamily。与界面字体相同：仅当存在
+    // 显式 id 时才应用已解析栈；无显式选择时落到 Tailwind 的默认等宽栈。
+    // 空/超长/含越界字符同样跳过，避免把 localStorage 拼进声明。
+    var editorFontId = localStorage.getItem("${STORAGE_KEY_EDITOR_FONT}");
+    var editorFontStack = localStorage.getItem("${STORAGE_KEY_EDITOR_FONT_STACK}");
+    if (editorFontId && editorFontStack && editorFontStack.length < 512 && !/[;{}<>]/.test(editorFontStack)) {
+      document.documentElement.style.setProperty("--font-mono", editorFontStack);
     }
 
     // Workspace 背景：预水合仅处理首帧就存在的结构性表面。启用时给 <html> 打
