@@ -176,6 +176,12 @@ dirs = "6"
 if-addrs = "0.13"
 walkdir = "2"
 ignore = "0.4"
+# Content search in the file tree tab: ripgrep's searcher and regex matcher
+# (the pieces the `grep` facade crate re-exports, without its printer/CLI
+# layers), walked with the same `ignore` rules as the workspace file listing.
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
 # The official ACP runtime (the `sacp` crate was upstreamed into it and renamed).
 # Stable protocol v1 only: `unstable_protocol_v2` is deliberately left off, so
 # `initialize` goes out as codeg writes it, at protocol version 1, and the

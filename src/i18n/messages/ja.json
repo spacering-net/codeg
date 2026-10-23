@@ -3083,6 +3083,32 @@
       "newConversation": "新しい会話"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "このフォルダーを検索",
+        "placeholderNames": "ファイル名で検索",
+        "placeholderContents": "ファイルの内容を検索",
+        "clear": "検索をクリア",
+        "searchContents": "ファイルの中身を検索",
+        "matchCase": "大文字と小文字を区別",
+        "useRegex": "正規表現を使用",
+        "resultsLabel": "検索結果",
+        "searching": "検索中…",
+        "noResults": "結果なし",
+        "nameSummary": "{count} 件の結果",
+        "contentSummary": "{results} 件の結果 · {files} 件のファイル",
+        "showingFirst": "最初の {count} 件を表示しています",
+        "fileLimitReached": "{count} 件のファイルで停止しました",
+        "skippedFiles": "バイナリまたは大きすぎるファイル {count} 件をスキップしました",
+        "errors": {
+          "emptyQuery": "検索する文字列を入力してください",
+          "queryTooLong": "検索文字列が {max} 文字を超えています",
+          "invalidPattern": "正規表現が無効です",
+          "invalidRoot": "このフォルダーのパスは検索できません",
+          "rootNotFound": "このフォルダーはもう存在しません",
+          "invalidSearchKey": "検索に失敗しました",
+          "failed": "検索に失敗しました"
+        }
+      },
       "workspace": "ワークスペース",
       "retry": "再試行",
       "git": "Git",

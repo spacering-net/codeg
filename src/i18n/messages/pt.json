@@ -3083,6 +3083,32 @@
       "newConversation": "Nova conversa"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "Pesquisar nesta pasta",
+        "placeholderNames": "Pesquisar arquivos por nome",
+        "placeholderContents": "Pesquisar no conteúdo dos arquivos",
+        "clear": "Limpar pesquisa",
+        "searchContents": "Pesquisar dentro dos arquivos",
+        "matchCase": "Diferenciar maiúsculas e minúsculas",
+        "useRegex": "Usar expressão regular",
+        "resultsLabel": "Resultados da pesquisa",
+        "searching": "Pesquisando…",
+        "noResults": "Nenhum resultado",
+        "nameSummary": "{count, plural, one {# resultado} other {# resultados}}",
+        "contentSummary": "{results, plural, one {# resultado} other {# resultados}} em {files, plural, one {# arquivo} other {# arquivos}}",
+        "showingFirst": "Mostrando os primeiros {count} resultados",
+        "fileLimitReached": "interrompida após {count} arquivos",
+        "skippedFiles": "{count, plural, one {# arquivo binário ou grande demais ignorado} other {# arquivos binários ou grandes demais ignorados}}",
+        "errors": {
+          "emptyQuery": "Digite algo para pesquisar",
+          "queryTooLong": "A pesquisa tem mais de {max} caracteres",
+          "invalidPattern": "Expressão regular inválida",
+          "invalidRoot": "O caminho desta pasta não pode ser pesquisado",
+          "rootNotFound": "Esta pasta não existe mais",
+          "invalidSearchKey": "A pesquisa falhou",
+          "failed": "A pesquisa falhou"
+        }
+      },
       "workspace": "Espaço de trabalho",
       "retry": "Tentar novamente",
       "git": "Git",

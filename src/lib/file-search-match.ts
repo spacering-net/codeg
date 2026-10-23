@@ -115,3 +115,80 @@ export function rankFileMatches<T extends FileSearchCandidate>(
   }
   return result
 }
+
+/** A highlighted `[start, end)` span, in UTF-16 code units. */
+export type HighlightRange = [number, number]
+
+/** Indices of `query`'s characters as an in-order subsequence of `s`, or null. */
+function subsequenceIndices(query: string, s: string): number[] | null {
+  const out: number[] = []
+  let qi = 0
+  for (let si = 0; si < s.length && qi < query.length; si++) {
+    if (s[si] === query[qi]) {
+      out.push(si)
+      qi++
+    }
+  }
+  return qi === query.length ? out : null
+}
+
+/** Merge sorted character indices into contiguous ranges. */
+function indicesToRanges(indices: readonly number[]): HighlightRange[] {
+  const out: HighlightRange[] = []
+  for (const i of indices) {
+    const last = out[out.length - 1]
+    if (last && last[1] === i) last[1] = i + 1
+    else out.push([i, i + 1])
+  }
+  return out
+}
+
+/**
+ * Where `query` matched `path` (a forward-slashed relative path), as ranges to
+ * highlight. Follows the tiers of {@link scoreFileMatch} so the highlight shows
+ * the match that ranked the row: a substring of the name, else of the path,
+ * else the characters of a subsequence (name first, then path). Empty when the
+ * query is blank or does not match.
+ */
+export function fileMatchHighlights(
+  query: string,
+  path: string
+): HighlightRange[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  const lowerPath = path.toLowerCase()
+  // Lowercasing can change the length of a few characters (e.g. "İ"); the
+  // indices would then point at the wrong characters, so show none.
+  if (lowerPath.length !== path.length) return []
+  const nameStart = path.lastIndexOf("/") + 1
+  const lowerName = lowerPath.slice(nameStart)
+
+  const nameIdx = lowerName.indexOf(q)
+  if (nameIdx !== -1) {
+    return [[nameStart + nameIdx, nameStart + nameIdx + q.length]]
+  }
+  const pathIdx = lowerPath.indexOf(q)
+  if (pathIdx !== -1) return [[pathIdx, pathIdx + q.length]]
+  const nameSub = subsequenceIndices(q, lowerName)
+  if (nameSub) return indicesToRanges(nameSub.map((i) => i + nameStart))
+  const pathSub = subsequenceIndices(q, lowerPath)
+  return pathSub ? indicesToRanges(pathSub) : []
+}
+
+/**
+ * Clip `ranges` (sorted, over a string) to the window `[from, to)` and shift
+ * them to start at 0, for highlighting one slice of the string.
+ */
+export function sliceHighlightRanges(
+  ranges: readonly HighlightRange[],
+  from: number,
+  to: number
+): HighlightRange[] {
+  const out: HighlightRange[] = []
+  for (const [start, end] of ranges) {
+    const s = Math.max(start, from)
+    const e = Math.min(end, to)
+    if (e > s) out.push([s - from, e - from])
+  }
+  return out
+}

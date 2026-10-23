@@ -3083,6 +3083,32 @@
       "newConversation": "새 대화"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "이 폴더 검색",
+        "placeholderNames": "이름으로 파일 검색",
+        "placeholderContents": "파일 내용에서 검색",
+        "clear": "검색 지우기",
+        "searchContents": "파일 내용 검색",
+        "matchCase": "대/소문자 구분",
+        "useRegex": "정규식 사용",
+        "resultsLabel": "검색 결과",
+        "searching": "검색 중…",
+        "noResults": "결과 없음",
+        "nameSummary": "결과 {count}개",
+        "contentSummary": "결과 {results}개 · 파일 {files}개",
+        "showingFirst": "처음 {count}개 결과만 표시",
+        "fileLimitReached": "파일 {count}개에서 중단됨",
+        "skippedFiles": "바이너리 또는 큰 파일 {count}개 건너뜀",
+        "errors": {
+          "emptyQuery": "검색할 내용을 입력하세요",
+          "queryTooLong": "검색어가 {max}자를 초과합니다",
+          "invalidPattern": "잘못된 정규식입니다",
+          "invalidRoot": "이 폴더 경로는 검색할 수 없습니다",
+          "rootNotFound": "이 폴더가 더 이상 존재하지 않습니다",
+          "invalidSearchKey": "검색에 실패했습니다",
+          "failed": "검색에 실패했습니다"
+        }
+      },
       "workspace": "작업 공간",
       "retry": "다시 시도",
       "git": "Git",

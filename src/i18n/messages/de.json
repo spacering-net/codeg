@@ -3083,6 +3083,32 @@
       "newConversation": "Neue Konversation"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "Diesen Ordner durchsuchen",
+        "placeholderNames": "Dateien nach Namen suchen",
+        "placeholderContents": "In Dateiinhalten suchen",
+        "clear": "Suche löschen",
+        "searchContents": "In Dateien suchen",
+        "matchCase": "Groß-/Kleinschreibung beachten",
+        "useRegex": "Regulären Ausdruck verwenden",
+        "resultsLabel": "Suchergebnisse",
+        "searching": "Suche läuft…",
+        "noResults": "Keine Ergebnisse",
+        "nameSummary": "{count, plural, one {# Ergebnis} other {# Ergebnisse}}",
+        "contentSummary": "{results, plural, one {# Ergebnis} other {# Ergebnisse}} in {files, plural, one {# Datei} other {# Dateien}}",
+        "showingFirst": "Die ersten {count} Ergebnisse werden angezeigt",
+        "fileLimitReached": "nach {count} Dateien abgebrochen",
+        "skippedFiles": "{count, plural, one {# binäre oder zu große Datei übersprungen} other {# binäre oder zu große Dateien übersprungen}}",
+        "errors": {
+          "emptyQuery": "Suchbegriff eingeben",
+          "queryTooLong": "Die Suche ist länger als {max} Zeichen",
+          "invalidPattern": "Ungültiger regulärer Ausdruck",
+          "invalidRoot": "Der Pfad dieses Ordners kann nicht durchsucht werden",
+          "rootNotFound": "Dieser Ordner existiert nicht mehr",
+          "invalidSearchKey": "Suche fehlgeschlagen",
+          "failed": "Suche fehlgeschlagen"
+        }
+      },
       "workspace": "Arbeitsbereich",
       "retry": "Erneut versuchen",
       "git": "Git",
