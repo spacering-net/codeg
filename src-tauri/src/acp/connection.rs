@@ -35864,7 +35864,14 @@ mod tests {
         for key in ["NO_PROXY", "no_proxy"] {
             let value = merged_value(&merged, key).unwrap_or_default();
             assert!(
-                value.starts_with("localhost,127.0.0.1,::1,[::1]") || value == "*",
+                value.starts_with("localhost,127.0.0.1,::1") || value == "*",
+                "{key}: {value:?}"
+            );
+            // The bracketed spelling of the loopback host is exactly what made
+            // HTTPX clients fail, so it must not come back — whatever else the
+            // machine's own list holds.
+            assert!(
+                value == "*" || !value.starts_with("localhost,127.0.0.1,::1,["),
                 "{key}: {value:?}"
             );
         }

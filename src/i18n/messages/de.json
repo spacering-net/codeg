@@ -271,7 +271,7 @@
     "proxyAddress": "Proxy-Adresse",
     "proxyHint": "Unterstützt http(s)/socks5, Beispiel: {example}. Wirksam nur bei aktiviertem System-Proxy.",
     "proxyBypass": "Proxy umgehen für",
-    "proxyBypassHint": "Mehrere Einträge werden durch Kommas ohne Leerzeichen getrennt, z. B. <code>{example}</code>. <code>example.com</code> gilt für diese Domain, <code>.example.com</code> für alle ihre Subdomains; IP-Adressen sind ebenfalls möglich. Lokale Adressen <code>localhost,127.0.0.1,::1</code> werden immer direkt verbunden und müssen nicht eingetragen werden. Die Liste wird als Umgebungsvariable NO_PROXY übernommen.",
+    "proxyBypassHint": "Mehrere Einträge werden durch Kommas ohne Leerzeichen getrennt, z. B. <code>{example}</code>. <code>example.com</code> gilt für diese Domain, <code>.example.com</code> für alle ihre Subdomains; IP-Adressen sind ebenfalls möglich. Lokale Adressen <code>localhost,127.0.0.1,::1</code> stehen immer auf der Liste und müssen nicht eingetragen werden; eine URL, die eine IPv6-Adresse in eckigen Klammern schreibt, z. B. <code>http://[::1]:3000</code>, läuft in manchen Tools trotzdem über den Proxy. Die Liste wird als Umgebungsvariable NO_PROXY übernommen.",
     "save": "Speichern",
     "saving": "Wird gespeichert...",
     "proxyRequired": "Bei aktiviertem Proxy ist eine Proxy-URL erforderlich",

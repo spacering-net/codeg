@@ -271,7 +271,7 @@
     "proxyAddress": "Proxy address",
     "proxyHint": "Supports http(s)/socks5, example: {example}. Only effective when system proxy is enabled.",
     "proxyBypass": "Bypass proxy for",
-    "proxyBypassHint": "Separate entries with commas and no spaces, e.g. <code>{example}</code>. <code>example.com</code> matches that domain, <code>.example.com</code> matches all of its subdomains, and IP addresses work too. Local addresses <code>localhost,127.0.0.1,::1</code> always connect directly and do not need to be listed. The list takes effect as the NO_PROXY environment variable.",
+    "proxyBypassHint": "Separate entries with commas and no spaces, e.g. <code>{example}</code>. <code>example.com</code> matches that domain, <code>.example.com</code> matches all of its subdomains, and IP addresses work too. Local addresses <code>localhost,127.0.0.1,::1</code> are always on the bypass list and do not need to be added, but a URL that writes an IPv6 address in brackets, such as <code>http://[::1]:3000</code>, still goes through the proxy in some tools. The list takes effect as the NO_PROXY environment variable.",
     "save": "Save",
     "saving": "Saving...",
     "proxyRequired": "Proxy URL is required when proxy is enabled",

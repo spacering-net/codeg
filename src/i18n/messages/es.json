@@ -271,7 +271,7 @@
     "proxyAddress": "Dirección del proxy",
     "proxyHint": "Compatible con http(s)/socks5, ejemplo: {example}. Solo funciona cuando el proxy del sistema está activado.",
     "proxyBypass": "Omitir el proxy para",
-    "proxyBypassHint": "Separa las entradas con comas y sin espacios, por ejemplo <code>{example}</code>. <code>example.com</code> coincide con ese dominio y <code>.example.com</code> con todos sus subdominios; también se admiten direcciones IP. Las direcciones locales <code>localhost,127.0.0.1,::1</code> siempre se conectan directamente y no hace falta añadirlas. La lista se aplica como la variable de entorno NO_PROXY.",
+    "proxyBypassHint": "Separa las entradas con comas y sin espacios, por ejemplo <code>{example}</code>. <code>example.com</code> coincide con ese dominio y <code>.example.com</code> con todos sus subdominios; también se admiten direcciones IP. Las direcciones locales <code>localhost,127.0.0.1,::1</code> siempre están en la lista y no hace falta añadirlas; una URL que escriba una dirección IPv6 entre corchetes, como <code>http://[::1]:3000</code>, sigue pasando por el proxy en algunas herramientas. La lista se aplica como la variable de entorno NO_PROXY.",
     "save": "Guardar",
     "saving": "Guardando...",
     "proxyRequired": "Se requiere URL del proxy cuando el proxy está activado",

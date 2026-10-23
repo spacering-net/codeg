@@ -271,7 +271,7 @@
     "proxyAddress": "프록시 주소",
     "proxyHint": "http(s)/socks5 지원, 예: {example}. 시스템 프록시를 활성화한 경우에만 적용됩니다.",
     "proxyBypass": "프록시를 거치지 않을 주소",
-    "proxyBypassHint": "여러 주소는 공백 없이 쉼표(<code>,</code>)로 구분합니다. 예: <code>{example}</code>. <code>example.com</code>은 해당 도메인과, <code>.example.com</code>은 모든 하위 도메인과 일치하며, IP 주소도 입력할 수 있습니다. 로컬 주소 <code>localhost,127.0.0.1,::1</code>은 항상 직접 연결되므로 입력할 필요가 없습니다. 이 목록은 환경 변수 NO_PROXY로 적용됩니다.",
+    "proxyBypassHint": "여러 주소는 공백 없이 쉼표(<code>,</code>)로 구분합니다. 예: <code>{example}</code>. <code>example.com</code>은 해당 도메인과, <code>.example.com</code>은 모든 하위 도메인과 일치하며, IP 주소도 입력할 수 있습니다. 로컬 주소 <code>localhost,127.0.0.1,::1</code>은 항상 목록에 포함되므로 입력할 필요가 없지만, IPv6 주소를 대괄호로 쓴 URL(예: <code>http://[::1]:3000</code>)은 일부 도구에서 프록시를 거칩니다. 이 목록은 환경 변수 NO_PROXY로 적용됩니다.",
     "save": "저장",
     "saving": "저장 중...",
     "proxyRequired": "프록시를 활성화하면 프록시 URL이 필요합니다",
