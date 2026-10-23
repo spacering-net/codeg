@@ -216,6 +216,19 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /**
+   * Ask the newest user question again — the answer to it carries the button in
+   * its footer row (`TurnStats`), which is where a reader decides the answer
+   * was not one they wanted. Retry re-submits the LAST user prompt, so the view
+   * offers it on the newest answer only: on an older reply it would silently
+   * re-ask a different question.
+   *
+   * Undefined hides the affordance everywhere in this view — pass it only where
+   * re-asking can actually run (the conversation's owning surface, with a live
+   * connection to enqueue on). Embeds that are not that surface (sub-agent
+   * dialog, task transcripts, canvas cards) leave it unset.
+   */
+  onRetryLastQuestion?: () => void
 }
 
 export interface ResolvedMessageGroup {
@@ -256,6 +269,10 @@ export type ThreadRenderItem =
        *  as assistant then user message, so the newest REPLY is not the tail).
        *  Read by the fork gate, where the two differ by a wrong fork point. */
       isThreadTail: boolean
+      /** This item is the newest user question's answer — the reply a retry
+       *  re-asks that question from, or the failed round's closing line when
+       *  the round never produced one. See `markRetryTarget`. */
+      isRetryTarget: boolean
       /** Raw assistant sub-turn(s) that compose this reply — fed to the
        *  per-reply artifacts card so it can list files changed this reply. */
       sourceTurns: MessageTurn[]
@@ -1164,6 +1181,43 @@ export function isForkPointUnnamed(
   return forkPoint.source_turn_id == null && isLiveTurnId(forkPoint.id)
 }
 
+/**
+ * Flag the newest user question's answer — the one item a retry can hang off,
+ * since retry re-asks the LAST question.
+ *
+ * Anything user-authored after the newest reply means that reply answers an
+ * older question, so it is not the target; a question still waiting for its
+ * answer (an optimistic turn, the typing dots) has no answer to put the button
+ * on yet. A failed round's closing line IS that round's answer — the error is
+ * all the agent said in reply — so it is a target too, which is the one place
+ * the button is worth the most.
+ *
+ * Mutates in place, like `markThreadTail` (and reset by the same loop before
+ * it, so a stale `true` cannot survive on a cached merged item). Exported for
+ * tests.
+ */
+export function markRetryTarget(items: ThreadRenderItem[]): void {
+  let lastUserIdx = -1
+  let answerIdx = -1
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx]
+    if (item.kind !== "turn") continue
+    if (item.group.role === "user") {
+      lastUserIdx = idx
+      continue
+    }
+    if (item.group.role === "assistant" || isTurnErrorGroup(item.group)) {
+      answerIdx = idx
+    }
+  }
+  // `answerIdx < lastUserIdx` is the unanswered tail; `-1` is a thread with no
+  // user question or no answer at all.
+  if (lastUserIdx < 0 || answerIdx < lastUserIdx) return
+  const answer = items[answerIdx]
+  if (answer.kind !== "turn" || isEmptyTurnItem(answer)) return
+  answer.isRetryTarget = true
+}
+
 const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   group,
   dimmed = false,
@@ -1178,6 +1232,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onForkFromTurn,
   forkDisabled = false,
   isThreadTail = false,
+  isRetryTarget = false,
+  onRetryLastQuestion,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -1194,12 +1250,27 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
+  /** This group answers the newest user question — see `markRetryTarget`. */
+  isRetryTarget?: boolean
+  /** Re-ask that question. Undefined on surfaces that don't own the
+   *  conversation (see `MessageListViewProps.onRetryLastQuestion`). */
+  onRetryLastQuestion?: () => void
 }) {
   if (group.role === "system") {
     // A failed turn's line is the agent's account of the failure, not a
-    // message the system sent: it closes the round in place, unboxed.
+    // message the system sent: it closes the round in place, unboxed. The
+    // retry rides BELOW it when this is the newest round, so the one reply a
+    // failure left — the error itself — is where the user can ask again, right
+    // where they read what went wrong.
     if (isTurnErrorGroup(group)) {
-      return <ContentPartsRenderer parts={group.parts} role="system" />
+      return (
+        <>
+          <ContentPartsRenderer parts={group.parts} role="system" />
+          {isRetryTarget && onRetryLastQuestion ? (
+            <TurnStats onRetryLastQuestion={onRetryLastQuestion} />
+          ) : null}
+        </>
+      )
     }
     return <CollapsibleSystemMessage parts={group.parts} />
   }
@@ -1276,6 +1347,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
                 }
               : undefined
           }
+          onRetryLastQuestion={isRetryTarget ? onRetryLastQuestion : undefined}
         />
       )}
     </div>
@@ -1344,6 +1416,7 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  onRetryLastQuestion,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1529,6 +1602,7 @@ export function MessageListView({
         previousUserIndex: null,
         isLastAssistantRun: false,
         isThreadTail: false,
+        isRetryTarget: false,
         sourceTurns: singletonSourceTurns(allTurns[i]),
       }
     })
@@ -1559,6 +1633,7 @@ export function MessageListView({
       item.previousUserIndex = null
       item.isLastAssistantRun = false
       item.isThreadTail = false
+      item.isRetryTarget = false
 
       // isRoleTransition: role differs from previous turn item
       if (idx > 0) {
@@ -1588,6 +1663,7 @@ export function MessageListView({
       lastAssistantRunning = !lastAssistantItem.isResponseComplete
     }
     markThreadTail(items)
+    markRetryTarget(items)
 
     const lastPhase = timelineTurns[timelineTurns.length - 1]?.phase ?? null
     if (
@@ -1688,6 +1764,8 @@ export function MessageListView({
                 onForkFromTurn={onForkFromTurn}
                 forkDisabled={forkBusy}
                 isThreadTail={item.isThreadTail}
+                isRetryTarget={item.isRetryTarget}
+                onRetryLastQuestion={onRetryLastQuestion}
               />
             </div>
           )
@@ -1717,6 +1795,7 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      onRetryLastQuestion,
     ]
   )
 

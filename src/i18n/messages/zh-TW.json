@@ -3714,6 +3714,7 @@
         "systemMessage": "系統訊息",
         "turnFailed": "本輪失敗：{message}",
         "copyMessage": "複製",
+        "retryLastQuestion": "重試最後一個問題",
         "forkFromHere": "從此處分叉",
         "forkBusy": "目前有回合正在進行，暫不可分叉",
         "forkNotReady": "這則回覆暫時還不能作為分叉點，請稍後再試",

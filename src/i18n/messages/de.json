@@ -3714,6 +3714,7 @@
         "systemMessage": "Systemnachricht",
         "turnFailed": "Runde fehlgeschlagen: {message}",
         "copyMessage": "Kopieren",
+        "retryLastQuestion": "Letzte Frage wiederholen",
         "forkFromHere": "Ab hier verzweigen",
         "forkBusy": "Verzweigen nicht möglich, während ein Zug läuft",
         "forkNotReady": "Von dieser Antwort kann noch nicht verzweigt werden – bitte gleich erneut versuchen",

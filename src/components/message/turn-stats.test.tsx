@@ -197,6 +197,48 @@ describe("TurnStats fork-from-here gating", () => {
   })
 })
 
+const retryLabel = enMessages.Folder.chat.messageList.retryLastQuestion
+
+describe("TurnStats retry-last-question gating", () => {
+  it("hides the retry button when the surface passes no handler", () => {
+    // Only the conversation's own surface, with a live connection and this
+    // reply as the newest answer, passes one — every other embed leaves it
+    // undefined and must show no button.
+    renderStats(<TurnStats copyText="hello" />)
+    expect(screen.queryByLabelText(retryLabel)).not.toBeInTheDocument()
+  })
+
+  it("re-asks the question when clicked", async () => {
+    const onRetryLastQuestion = vi.fn()
+    renderStats(
+      <TurnStats copyText="hello" onRetryLastQuestion={onRetryLastQuestion} />
+    )
+    await userEvent.click(screen.getByLabelText(retryLabel))
+    expect(onRetryLastQuestion).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders for a failed round that has nothing else to show", () => {
+    // A turn that failed left an error line and no text to copy, so the row's
+    // emptiness check is the only thing that could swallow the button — and
+    // that error line is exactly where a retry is wanted.
+    renderStats(<TurnStats copyText="" onRetryLastQuestion={vi.fn()} />)
+    expect(screen.getByLabelText(retryLabel)).toBeInTheDocument()
+  })
+
+  it("offers nothing while the reply is still streaming", () => {
+    // "At the end of the answer" is the whole point: mid-answer there is no
+    // end to put it at, and the row is withheld entirely.
+    renderStats(
+      <TurnStats
+        copyText="hello"
+        isResponseComplete={false}
+        onRetryLastQuestion={vi.fn()}
+      />
+    )
+    expect(screen.queryByLabelText(retryLabel)).not.toBeInTheDocument()
+  })
+})
+
 const modelLabel = enMessages.Folder.chat.messageList.model
 
 describe("TurnStats model label", () => {
