@@ -28,6 +28,8 @@ interface ChatInputProps {
   agentName?: string
   onFocus?: () => void
   onSend: (draft: PromptDraft, modeId?: string | null) => void
+  /** Pass-through: see `MessageInput.modeSelectorSignal`. */
+  modeSelectorSignal?: number
   onCancel: () => void
   modes?: SessionModeInfo[]
   configOptions?: SessionConfigOptionInfo[]
@@ -109,6 +111,7 @@ export const ChatInput = memo(function ChatInput({
   agentName,
   onFocus,
   onSend,
+  modeSelectorSignal,
   onCancel,
   modes,
   configOptions,
@@ -205,6 +208,7 @@ export const ChatInput = memo(function ChatInput({
         )}
       <MessageInput
         onSend={onSend}
+        modeSelectorSignal={modeSelectorSignal}
         promptCapabilities={promptCapabilities}
         onFocus={onFocus}
         defaultPath={defaultPath}

@@ -4,6 +4,7 @@ import { useContext } from "react"
 import {
   AppearanceContext,
   ChatAnimationsContext,
+  DEFAULT_FLOATING_BALL_SIZE,
 } from "@/components/appearance-provider"
 import {
   applyChatContentWidth,
@@ -43,6 +44,27 @@ export function useWelcomeQuickActions() {
 export function useChatAnimationsSetting() {
   const { chatAnimations, setChatAnimations } = useAppearance()
   return { chatAnimations, setChatAnimations }
+}
+
+/**
+ * 悬浮球开关与停靠位置。同样允许在 Provider 之外降级：球只在工作区里渲染，
+ * 设置页是另一个窗口，那里只读开关、不渲染球。
+ */
+export function useFloatingBall() {
+  const ctx = useContext(AppearanceContext)
+  return {
+    floatingBallEnabled: ctx?.floatingBallEnabled ?? false,
+    setFloatingBallEnabled: ctx?.setFloatingBallEnabled ?? (() => {}),
+    floatingBallPosition: ctx?.floatingBallPosition ?? null,
+    setFloatingBallPosition: ctx?.setFloatingBallPosition ?? (() => {}),
+    floatingBallBindings: ctx?.floatingBallBindings ?? {},
+    setFloatingBallBindings: ctx?.setFloatingBallBindings ?? (() => {}),
+    floatingBallSize: ctx?.floatingBallSize ?? DEFAULT_FLOATING_BALL_SIZE,
+    setFloatingBallSize: ctx?.setFloatingBallSize ?? (() => {}),
+    floatingBallFavoriteAgents: ctx?.floatingBallFavoriteAgents ?? [],
+    setFloatingBallFavoriteAgents:
+      ctx?.setFloatingBallFavoriteAgents ?? (() => {}),
+  }
 }
 
 /**
