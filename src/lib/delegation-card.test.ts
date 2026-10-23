@@ -4,6 +4,7 @@ import { ALL_AGENT_TYPES } from "@/lib/types"
 import {
   coerceAssistantId,
   isAffirmedResume,
+  isCodeModeDelegationInput,
   isRefusedResume,
   parseDelegateTaskId,
   parseDelegationMeta,
@@ -493,5 +494,372 @@ describe("resume verdicts never read a child's prose as a verdict", () => {
     expect(isRefusedResume(legacyErr)).toBe(false)
     // No child named ⇒ nothing corroborates a task-id binding.
     expect(isAffirmedResume(legacyErr)).toBe(false)
+  })
+})
+
+// opencode 2.x code-mode: MCP calls execute as JS source inside the built-in
+// `execute` tool, arriving as raw_input `{"code": "…tools[\"codeg-mcp\"].
+// delegate_to_agent({…})…"}`. The scanner/unescaper here mirrors
+// `acp/lifecycle.rs` (`code_mode_call_span` & friends) — these cases pin the
+// shared predicate so the two sides can never disagree about what counts as
+// a delegation call.
+describe("opencode code-mode execute payloads", () => {
+  // The exact literal the Rust 对拍 test uses (`lifecycle.rs::
+  // code_mode_key_matches_the_mcp_side_for_the_same_call`): a real opencode
+  // emission — bracketed accessor, working_dir, template task with escaped
+  // newline/tab, CJK text. The `\\n`/`\\t` are JS SOURCE escapes; the runtime
+  // cooks them to a real newline/tab, which is what the card must show.
+  const OPENCODE_CALL =
+    'await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: "/tmp/对拍", task: `review 对拍\\nsecond\\tline ✓` })'
+
+  it("recognizes and parses the opencode emission", () => {
+    const raw = JSON.stringify({ code: OPENCODE_CALL })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    const parsed = parseInput(raw)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("review 对拍\nsecond\tline ✓")
+    expect(parsed.workingDir).toBe("/tmp/对拍")
+    expect(parsed.assistantId).toBeNull()
+  })
+
+  it("parses an LS/PS-bearing emission verbatim like the MCP side", () => {
+    // U+2028/U+2029 pass through BOTH sides verbatim (ECMA-262 TV-normalizes
+    // only CR/CRLF), so the card shows exactly what the listener receives.
+    const raw = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `seg\u2028a\u2029b` })',
+    })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    const parsed = parseInput(raw)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("seg\u2028a\u2029b")
+  })
+
+  it("parses the namespaced accessor form with working_dir", () => {
+    const raw = JSON.stringify({
+      code: `await tools.codeg_mcp.delegate_to_agent({ agent_type: 'codex', task: 'ship it', working_dir: "/tmp/proj" })`,
+    })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    const parsed = parseInput(raw)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("ship it")
+    expect(parsed.workingDir).toBe("/tmp/proj")
+  })
+
+  it("unescapes the minimal JS escape set in template tasks", () => {
+    const raw = JSON.stringify({
+      code: `tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: \`a\\nb\\tc\\u4e2d\\u{1F600}\` })`,
+    })
+    const parsed = parseInput(raw)
+    expect(parsed.task).toBe("a\nb\tc中😀")
+  })
+
+  it("rejects shapes that are not delegation calls", () => {
+    const negatives: unknown[] = [
+      "not json at all",
+      JSON.stringify({ code: 42 }),
+      JSON.stringify({}),
+      JSON.stringify({ command: "ls" }),
+      // A different method on the same accessor is an execute call, not ours.
+      JSON.stringify({ code: `tools["codeg-mcp"].list_agents({})` }),
+      // `tools.search` is a plain method call, not an accessor chain.
+      JSON.stringify({ code: `tools.search({ query: "delegate_to_agent" })` }),
+      // The call shape inside a string/template/comment is not a call site.
+      JSON.stringify({
+        code: `const s = "tools[\\"codeg-mcp\\"].delegate_to_agent("`,
+      }),
+      JSON.stringify({
+        code: 'const t = `tools["codeg-mcp"].delegate_to_agent()`',
+      }),
+      JSON.stringify({
+        code: `// tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode" })`,
+      }),
+    ]
+    for (const raw of negatives) {
+      expect(isCodeModeDelegationInput(raw as string)).toBe(false)
+      const parsed = parseInput(raw as string)
+      expect(parsed.agentType).toBeNull()
+      expect(parsed.task).toBeNull()
+    }
+  })
+
+  it("keeps the card renderable when a value is unreadable", () => {
+    // `${…}` interpolation evaluates differently than the source reads —
+    // the backend goes unkeyed, the card degrades to the generic task row.
+    const interp = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: `hi ${name}` })',
+    })
+    expect(isCodeModeDelegationInput(interp)).toBe(true)
+    expect(parseInput(interp)).toEqual({
+      agentType: "zcode",
+      assistantId: null,
+      task: null,
+      workingDir: null,
+    })
+
+    // An escape outside the minimal set bails the same way.
+    const unknownEscape = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: `a\\qb` })',
+    })
+    expect(isCodeModeDelegationInput(unknownEscape)).toBe(true)
+    expect(parseInput(unknownEscape).task).toBeNull()
+
+    // An escaped quoted task could decode differently than it reads — bail.
+    const escapedQuoted = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "a\\nb" })',
+    })
+    expect(isCodeModeDelegationInput(escapedQuoted)).toBe(true)
+    expect(parseInput(escapedQuoted).task).toBeNull()
+
+    // No agent_type / an unknown slug: still a call, generic card.
+    const noAgent = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ task: `t` })',
+    })
+    expect(isCodeModeDelegationInput(noAgent)).toBe(true)
+    expect(parseInput(noAgent).agentType).toBeNull()
+
+    const badAgent = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "nope", task: `t` })',
+    })
+    expect(parseInput(badAgent).agentType).toBeNull()
+  })
+
+  it("reads a stringified assistant_id without mistaking the target", () => {
+    // Mixed shape `{assistant_id: "3", agent_type: …}` resolves to the
+    // ASSISTANT on the backend (key deliberately not minted — see
+    // `lifecycle.rs::extract_code_mode_match_key`); the card only needs
+    // display values, so both identities surface.
+    const raw = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ assistant_id: "3", agent_type: "codex", task: `t` })',
+    })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    const parsed = parseInput(raw)
+    expect(parsed.assistantId).toBe(3)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("t")
+  })
+
+  it("reads a bare numeric assistant_id in every spelling", () => {
+    // `assistant_id: 3` is the common spelling; leaving it unread would make
+    // the card fall back to `agent_type` and mislabel an Assistant run.
+    const bare = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ assistant_id: 3, agent_type: "codex", task: `t` })',
+    })
+    const bareParsed = parseInput(bare)
+    expect(bareParsed.assistantId).toBe(3)
+    expect(bareParsed.agentType).toBe("codex")
+
+    const quotedKey = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ "assistant_id": 3, task: `t` })',
+    })
+    expect(parseInput(quotedKey).assistantId).toBe(3)
+
+    const quotedBoth = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ "assistant_id": "3", task: `t` })',
+    })
+    expect(parseInput(quotedBoth).assistantId).toBe(3)
+
+    // A bare number NOT ending its property is not the value.
+    const concat = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ assistant_id: 3 + 1, task: `t` })',
+    })
+    expect(parseInput(concat).assistantId).toBeNull()
+  })
+
+  it("degrades the parse when working_dir is present but unreadable", () => {
+    // Present-and-unreadable is not the same as absent: the backend bails
+    // the whole key (the MCP side sees Some(dir)); the card just shows the
+    // fields it can read.
+    const cases = [
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: "C:\\\\proj", task: `t` })',
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: `${cwd}/proj`, task: `t` })',
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: projectDir, task: `t` })',
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: "/tmp" + "/w", task: `t` })',
+    ]
+    for (const code of cases) {
+      const raw = JSON.stringify({ code })
+      expect(isCodeModeDelegationInput(raw)).toBe(true)
+      const parsed = parseInput(raw)
+      expect(parsed.workingDir).toBeNull()
+      expect(parsed.agentType).toBe("codex")
+      expect(parsed.task).toBe("t")
+    }
+  })
+
+  it("does not read a value that continues past its literal", () => {
+    // A literal followed by an operator evaluates to something else at
+    // runtime; reading the literal alone would mislabel the card.
+    const taskConcat = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "a" + b })',
+    })
+    expect(parseInput(taskConcat).task).toBeNull()
+    expect(parseInput(taskConcat).agentType).toBe("codex")
+
+    const taskMethod = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `a`.trim() })',
+    })
+    expect(parseInput(taskMethod).task).toBeNull()
+
+    const agentConcat = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "co" + "dex", task: `t` })',
+    })
+    expect(parseInput(agentConcat).agentType).toBeNull()
+    expect(parseInput(agentConcat).task).toBe("t")
+
+    const dirConcat = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: "/a" + suffix, task: `t` })',
+    })
+    expect(parseInput(dirConcat).workingDir).toBeNull()
+    expect(parseInput(dirConcat).task).toBe("t")
+
+    // Duplicate keys take the LAST spelling — the one the runtime uses.
+    const dup = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `stale`, task: `fresh` })',
+    })
+    expect(parseInput(dup).task).toBe("fresh")
+
+    // …and a later unreadable spelling degrades the read instead of keying
+    // the earlier readable one.
+    const dupUnreadable = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `stale`, task: "a" + b })',
+    })
+    expect(parseInput(dupUnreadable).task).toBeNull()
+  })
+
+  it("accepts comments between values and their property terminators", () => {
+    const raw = JSON.stringify({
+      code: `tools["codeg-mcp"].delegate_to_agent({
+  // choose the agent
+  agent_type: "codex", /* trailing */ task: \`t\` /* last */, // done
+})`,
+    })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    const parsed = parseInput(raw)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("t")
+  })
+
+  it("reads quoted property keys and ignores nested same-named keys", () => {
+    const quoted = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ "agent_type": "codex", \'task\': "plain" })',
+    })
+    expect(isCodeModeDelegationInput(quoted)).toBe(true)
+    expect(parseInput(quoted).agentType).toBe("codex")
+    expect(parseInput(quoted).task).toBe("plain")
+
+    // The backend reads FLAT args, so a same-named key inside a sub-object
+    // must not surface — in either source order.
+    const nested = JSON.stringify({
+      code: `tools["codeg-mcp"].delegate_to_agent({
+  meta: { agent_type: "zzz", task: \`decoy\` },
+  agent_type: "codex",
+  task: \`real\`,
+})`,
+    })
+    const parsed = parseInput(nested)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("real")
+
+    const nestedRev = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `real`, meta: { task: `decoy`, agent_type: "zzz" } })',
+    })
+    const parsedRev = parseInput(nestedRev)
+    expect(parsedRev.agentType).toBe("codex")
+    expect(parsedRev.task).toBe("real")
+  })
+
+  it("screens unknowable argument syntax out of the parse entirely", () => {
+    // Spread may carry an assistant_id; a `[` covers computed keys and array
+    // values. The call still renders as a delegation card (the backend
+    // registers it unkeyed), but the card content is the generic task row.
+    const cases = [
+      'tools["codeg-mcp"].delegate_to_agent({ ...base, task: `t` })',
+      'tools["codeg-mcp"].delegate_to_agent({ ["assistant_id"]: 3, agent_type: "codex", task: `t` })',
+      'tools["codeg-mcp"].delegate_to_agent({ ["agent_type"]: "codex", task: `t` })',
+    ]
+    for (const code of cases) {
+      const raw = JSON.stringify({ code })
+      expect(isCodeModeDelegationInput(raw)).toBe(true)
+      expect(parseInput(raw)).toEqual({
+        agentType: null,
+        assistantId: null,
+        task: null,
+        workingDir: null,
+      })
+    }
+  })
+
+  it("normalizes template line terminators the way the JS runtime cooks them", () => {
+    // TV normalization: bare CR and CRLF collapse to a single LF; a backslash
+    // line continuation contributes nothing. (A literal CRLF inside the JS
+    // source survives JSON.stringify round-trip.)
+    const crlf = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `a\r\nb\rc` })',
+    })
+    expect(parseInput(crlf).task).toBe("a\nb\nc")
+
+    const ls = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `a b` })',
+    })
+    // U+2028/U+2029 are JS line terminators but NOT TV-normalized (ECMA-262
+    // rewrites only CR and CRLF); they pass through verbatim.
+    expect(parseInput(ls).task).toBe("a\u2028b")
+
+    const ps = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `a\u2029b` })',
+    })
+    expect(parseInput(ps).task).toBe("a\u2029b")
+
+    const cont = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `a\\\r\nb` })',
+    })
+    expect(parseInput(cont).task).toBe("ab")
+  })
+
+  it("bails to the generic row when args syntax is unreadable", () => {
+    // Shorthand properties evaluate to the variable's runtime value; nested
+    // calls and regex literals are expressions the scanner cannot evaluate —
+    // and a regex body could feed quotes/braces to the string/template arms.
+    const cases = [
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t`, working_dir })',
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t`, assistant_id })',
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: pick("codex"), task: `t` })',
+      'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t`, flag: /}/ })',
+    ]
+    for (const code of cases) {
+      const raw = JSON.stringify({ code })
+      expect(isCodeModeDelegationInput(raw)).toBe(true)
+      expect(parseInput(raw)).toEqual({
+        agentType: null,
+        assistantId: null,
+        task: null,
+        workingDir: null,
+      })
+    }
+  })
+
+  it("stops reading keys at the argument object close", () => {
+    // A second object after the first's closing brace is a different
+    // argument, not part of the flat args; its keys must not win.
+    const raw = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` }, { agent_type: "goose", task: `u` })',
+    })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    const parsed = parseInput(raw)
+    expect(parsed.agentType).toBe("codex")
+    expect(parsed.task).toBe("t")
+  })
+
+  it("ends line comments at every JS line terminator", () => {
+    // ECMA-262 line comments end at CR, LF, U+2028 and U+2029; a scanner
+    // stopping only at LF would swallow the real code after the others.
+    const cr = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ // pick\r agent_type: "codex", task: `t` })',
+    })
+    expect(parseInput(cr).task).toBe("t")
+
+    const ls = JSON.stringify({
+      code: 'tools["codeg-mcp"].delegate_to_agent({ // pick\u2028 agent_type: "codex", task: `t` })',
+    })
+    expect(parseInput(ls).task).toBe("t")
   })
 })

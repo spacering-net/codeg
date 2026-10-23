@@ -11,7 +11,10 @@ import {
 import { parseBackgroundLaunch } from "@/lib/background-task"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { normalizePriority, normalizeStatus } from "@/lib/plan-parse"
-import { isDelegateToAgentToolName } from "@/lib/delegation-card"
+import {
+  isCodeModeDelegationInput,
+  isDelegateToAgentToolName,
+} from "@/lib/delegation-card"
 import { useTranslations } from "next-intl"
 import {
   countUnifiedDiffLineChanges,
@@ -2789,10 +2792,16 @@ const ToolCallPart = memo(function ToolCallPart({
   // server-prefixed form (`mcp__<server>__delegate_to_agent`,
   // `<server>/delegate_to_agent`, `<server>.delegate_to_agent`, etc.)
   // as a defensive fallback in case the value reaches the renderer
-  // un-normalized. Falls through to the normal renderer when no
+  // un-normalized — AND opencode's code-mode `execute` payloads, whose
+  // delegation call lives inside the `code` source string rather than in
+  // the tool name. Falls through to the normal renderer when no
   // toolCallId is available (snapshot replays without a live binding)
   // so the user still sees the tool input/output.
-  if (isDelegateToAgentToolName(normalizedToolName) && part.toolCallId) {
+  if (
+    (isDelegateToAgentToolName(normalizedToolName) ||
+      isCodeModeDelegationInput(part.input ?? null)) &&
+    part.toolCallId
+  ) {
     return (
       <DelegatedSubThread
         parentToolUseId={part.toolCallId}

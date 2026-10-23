@@ -1347,6 +1347,13 @@ fn parse_resume_task_id(input: &str) -> Option<String> {
 /// an earlier turn). Without this the resumed card would be frozen at the
 /// `running` its ack reported, forever — the child's real outcome landed on the
 /// DB row, not on the resume result.
+///
+/// Any OTHER tool block whose title+args pass [`crate::acp::lifecycle::is_delegation_invocation`]
+/// binds by `tool_use_id` exactly like `delegate_to_agent`. This is what covers
+/// opencode 2.x code mode: the host wraps the MCP call in its `execute` tool, so
+/// the persisted block's title is `execute` and the real invocation lives inside
+/// a JS `code` string. The live path registers those calls through the same
+/// predicate, so replay recognition cannot drift from it.
 fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationSummary]) {
     if children.is_empty() {
         return;
@@ -1412,6 +1419,20 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
                         .as_deref()
                         .and_then(parse_resume_task_id)
                         .and_then(|task_id| by_task_id.get(task_id.as_str()).copied())
+                } else if crate::acp::lifecycle::is_delegation_invocation(
+                    tool_name,
+                    input_preview.as_deref(),
+                ) {
+                    tool_use_id.as_deref().and_then(|tu| {
+                        by_parent_tool_use_id
+                            .get(tu)
+                            .or_else(|| {
+                                task_id_by_call
+                                    .get(tu)
+                                    .and_then(|task_id| by_task_id.get(task_id.as_str()))
+                            })
+                            .copied()
+                    })
                 } else {
                     continue;
                 };
@@ -3461,6 +3482,71 @@ mod tests {
         assert!(
             inner.get("error_code").is_none(),
             "completed has no error_code"
+        );
+    }
+
+    /// opencode 2.x wraps the MCP call in its `execute` tool — the persisted
+    /// block's title is `execute` and the real invocation lives in a JS `code`
+    /// string. Replay binds it by the same predicate the live path registers
+    /// with, so a refreshed card keeps its status mapping and 查看会话.
+    #[test]
+    fn inject_delegation_meta_binds_an_opencode_execute_call() {
+        let code = r#"await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` })"#;
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("tu-exec-1"),
+            "execute",
+            Some(&serde_json::json!({ "code": code }).to_string()),
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "tu-exec-1", "completed")]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .expect("execute card should be bound");
+        assert_eq!(inner["status"], "completed");
+        assert_eq!(inner["child_conversation_id"], 42);
+        assert_eq!(inner["agent_type"], "codex");
+    }
+
+    /// The binding fallback is the shared closure, not the tool-name branch:
+    /// an `execute` block whose tool_use_id never meets the child row still
+    /// binds through the task id echoed on its own result.
+    #[test]
+    fn inject_delegation_meta_binds_an_execute_call_by_its_task_id() {
+        let code = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: `t` })"#;
+        let mut turns = vec![
+            tool_use_turn_with_input(
+                Some("call_exec_2"),
+                "execute",
+                Some(&serde_json::json!({ "code": code }).to_string()),
+            ),
+            tool_result_turn(
+                "call_exec_2",
+                "Delegation successful. task_id=8ff4c14c-740c-4482-b758-8f2091f97063.",
+            ),
+        ];
+        let mut child = summary_child(7, "exec-unmatched-id", "completed");
+        child.delegation_call_id = Some("8ff4c14c-740c-4482-b758-8f2091f97063".into());
+
+        inject_delegation_meta(&mut turns, &[child]);
+
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .expect("execute card should bind via task id");
+        assert_eq!(inner["child_conversation_id"], 7);
+    }
+
+    /// The shape gate cuts both ways: an `execute` block whose code is not a
+    /// delegation must stay unbound.
+    #[test]
+    fn inject_delegation_meta_does_not_bind_an_unrelated_execute_call() {
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("tu-exec-3"),
+            "execute",
+            Some(r#"{"code":"const x = 1"}"#),
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "tu-exec-3", "completed")]);
+        assert!(
+            first_block_meta(&turns[0]).is_none(),
+            "a non-delegation execute call must not be bound"
         );
     }
 

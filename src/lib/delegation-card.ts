@@ -230,6 +230,632 @@ function findDelegationArgs(
   return null
 }
 
+// ---------------------------------------------------------------------------
+// opencode code-mode (`execute`) payloads
+//
+// opencode 2.x runs MCP tools through its built-in `execute` tool: the model
+// writes `tools["codeg-mcp"].delegate_to_agent({…})` as JS source packed into
+// a `{code: "…"}` raw input. These helpers recognize such a payload and read
+// the argument values back out of the JS source — the same structural scanner
+// as `acp/lifecycle.rs` (`code_mode_call_span` and friends), so the backend's
+// registration decision and the frontend's card classification can never
+// disagree about what counts as a delegation call. Like the Rust side, the
+// scanner is STRICT: `tools` must reach `delegate_to_agent(` through a real
+// accessor, strings/templates/comments are skipped (a task text *quoting* a
+// call is not a call), and every ambiguity degrades to "unreadable" rather
+// than a guessed value — spread / computed-key / escaped-quoted-key syntax
+// screens the whole region out, values must end where their property ends,
+// quoted keys match only escape-free at brace depth 1, and template text is
+// read as the runtime would cook it (escapes decoded, bare line terminators
+// TV-normalized to LF).
+// ---------------------------------------------------------------------------
+
+const CODE_MODE_MAX_CODE_LENGTH = 1 << 20
+const CODE_MODE_MAX_TEMPLATE_FRAMES = 16
+
+type JsTemplateFrame =
+  | { kind: "content" }
+  | { kind: "interp"; braceDepth: number }
+
+// Any non-BMP-ish unit counts as an identifier char: the scan only needs
+// boundaries of ASCII words (`tools`, `delegate_to_agent`, argument keys), and
+// over-approximating Unicode as identifier chars can only reject, never
+// mis-split, a boundary. Matches `is_js_ident_byte` (>= 0x80).
+function isJsIdentUnit(code: string, at: number): boolean {
+  const c = code.charCodeAt(at)
+  if (Number.isNaN(c)) return false
+  return (
+    (c >= 48 && c <= 57) || // 0-9
+    (c >= 65 && c <= 90) || // A-Z
+    (c >= 97 && c <= 122) || // a-z
+    c === 95 || // _
+    c === 36 || // $
+    c >= 0x80
+  )
+}
+
+function isJsWordAt(code: string, at: number, word: string): boolean {
+  if (at < 0 || at + word.length > code.length) return false
+  if (code.slice(at, at + word.length) !== word) return false
+  const after = at + word.length
+  return (
+    (at === 0 || !isJsIdentUnit(code, at - 1)) &&
+    (after >= code.length || !isJsIdentUnit(code, after))
+  )
+}
+
+function jsIdentEnd(code: string, at: number): number {
+  let end = at
+  while (isJsIdentUnit(code, end)) end += 1
+  return end
+}
+
+function skipJsString(code: string, open: number): number | null {
+  const quote = code[open]
+  let i = open + 1
+  while (i < code.length) {
+    if (code[i] === "\\") {
+      i += 2
+      continue
+    }
+    if (code[i] === quote) return i + 1
+    i += 1
+  }
+  return null
+}
+
+function skipJsTemplate(code: string, open: number): number | null {
+  const stack: JsTemplateFrame[] = [{ kind: "content" }]
+  let i = open + 1
+  while (stack.length > 0) {
+    if (stack.length > CODE_MODE_MAX_TEMPLATE_FRAMES) return null
+    if (i >= code.length) return null
+    const c = code[i]
+    const frame = stack[stack.length - 1]
+    if (frame.kind === "content") {
+      if (c === "`") {
+        stack.pop()
+        i += 1
+        if (stack.length === 0) return i
+      } else if (c === "\\") {
+        i += 2
+      } else if (c === "$" && code[i + 1] === "{") {
+        stack.push({ kind: "interp", braceDepth: 0 })
+        i += 2
+      } else {
+        i += 1
+      }
+    } else if (c === "{") {
+      frame.braceDepth += 1
+      i += 1
+    } else if (c === "}") {
+      if (frame.braceDepth === 0) stack.pop()
+      else frame.braceDepth -= 1
+      i += 1
+    } else if (c === "'" || c === '"') {
+      const end = skipJsString(code, i)
+      if (end === null) return null
+      i = end
+    } else if (c === "`") {
+      stack.push({ kind: "content" })
+      i += 1
+    } else if (c === "/" && code[i + 1] === "/") {
+      while (i < code.length && !isJsLineTerminator(code[i])) i += 1
+    } else if (c === "/" && code[i + 1] === "*") {
+      const close = code.indexOf("*/", i + 2)
+      if (close === -1) return null
+      i = close + 2
+    } else {
+      i += 1
+    }
+  }
+  return null
+}
+
+// Rust's `u8::is_ascii_whitespace`: space, \t, \n, \f, \r (not \v).
+function isJsWs(c: string | undefined): boolean {
+  return c === " " || c === "\t" || c === "\n" || c === "\f" || c === "\r"
+}
+
+// JS LineTerminator: LF, CR, U+2028 (LS), U+2029 (PS) — ECMA-262 line
+// comments end at ANY of these, not just LF.
+function isJsLineTerminator(c: string | undefined): boolean {
+  return c === "\n" || c === "\r" || c === "\u2028" || c === "\u2029"
+}
+
+function skipJsWsAndComments(code: string, i: number): number {
+  for (;;) {
+    if (isJsWs(code[i])) {
+      i += 1
+      continue
+    }
+    if (code[i] === "/" && code[i + 1] === "/") {
+      i += 2
+      while (i < code.length && !isJsLineTerminator(code[i])) i += 1
+      continue
+    }
+    if (code[i] === "/" && code[i + 1] === "*") {
+      const close = code.indexOf("*/", i + 2)
+      if (close === -1) return code.length
+      i = close + 2
+      continue
+    }
+    return i
+  }
+}
+
+/** `(open, close)` of the `(` … `)` wrapping the first `delegate_to_agent(`
+ *  call reached via a `tools` accessor, or `null`. */
+function codeModeCallSpan(code: string): [number, number] | null {
+  if (code.length > CODE_MODE_MAX_CODE_LENGTH) return null
+  let i = 0
+  while (i < code.length) {
+    const c = code[i]
+    if (c === "'" || c === '"') {
+      const end = skipJsString(code, i)
+      if (end === null) return null
+      i = end
+    } else if (c === "`") {
+      const end = skipJsTemplate(code, i)
+      if (end === null) return null
+      i = end
+    } else if (c === "/" && (code[i + 1] === "/" || code[i + 1] === "*")) {
+      i = skipJsWsAndComments(code, i)
+    } else if (isJsWordAt(code, i, "tools")) {
+      const open = codeModeToolsCallOpen(code, i)
+      if (open !== null) {
+        const close = matchingParen(code, open)
+        if (close === null) return null
+        return [open, close]
+      }
+      i += 1
+    } else {
+      i += 1
+    }
+  }
+  return null
+}
+
+function codeModeToolsCallOpen(code: string, toolsAt: number): number | null {
+  let i = toolsAt + "tools".length
+  i = skipJsWsAndComments(code, i)
+  const c = code[i]
+  if (c === "[") {
+    i = skipJsWsAndComments(code, i + 1)
+    const quote = code[i]
+    if (quote !== "'" && quote !== '"') return null
+    const end = skipJsString(code, i)
+    if (end === null) return null
+    if (end === i + 2) return null
+    i = skipJsWsAndComments(code, end)
+    if (code[i] !== "]") return null
+    i = skipJsWsAndComments(code, i + 1)
+    if (code[i] !== ".") return null
+    i = skipJsWsAndComments(code, i + 1)
+  } else if (c === ".") {
+    i = skipJsWsAndComments(code, i + 1)
+    const end = jsIdentEnd(code, i)
+    if (end === i) return null
+    i = skipJsWsAndComments(code, end)
+    if (code[i] !== ".") return null
+    i = skipJsWsAndComments(code, i + 1)
+  } else {
+    return null
+  }
+  if (!isJsWordAt(code, i, "delegate_to_agent")) return null
+  i = skipJsWsAndComments(code, i + "delegate_to_agent".length)
+  return code[i] === "(" ? i : null
+}
+
+function matchingParen(code: string, open: number): number | null {
+  let depth = 0
+  let i = open
+  while (i < code.length) {
+    const c = code[i]
+    if (c === "'" || c === '"') {
+      const end = skipJsString(code, i)
+      if (end === null) return null
+      i = end
+    } else if (c === "`") {
+      const end = skipJsTemplate(code, i)
+      if (end === null) return null
+      i = end
+    } else if (c === "/" && (code[i + 1] === "/" || code[i + 1] === "*")) {
+      i = skipJsWsAndComments(code, i)
+    } else if (c === "(") {
+      depth += 1
+      i += 1
+    } else if (c === ")") {
+      depth -= 1
+      if (depth === 0) return i
+      i += 1
+    } else {
+      i += 1
+    }
+  }
+  return null
+}
+
+/** Unit offset of the VALUE of a top-level `key:` inside `[start, end)`,
+ *  skipping strings/templates/comments. Both spellings of a key match — bare
+ *  `agent_type:` and quoted `"agent_type":` / `'agent_type':` — but only
+ *  escape-free quoted keys (an escaped quoted key evaluates to an unknowable
+ *  spelling) and only at brace depth 1, i.e. directly inside the call's
+ *  argument object: the backend reads FLAT args, so a same-named key nested
+ *  in a sub-object must not be seen; scanning STOPS when that object closes
+ *  (depth 1→0), so a second argument object can never override the first's
+ *  keys. Duplicate keys take the LAST occurrence
+ *  — the spelling the JS runtime (and the JSON path) actually uses. Missing a
+ *  key degrades the card to the generic task row; reading a wrong one could
+ *  mislabel it. Mirrors `code_mode_find_key` in `acp/lifecycle.rs`. */
+function codeModeFindKey(
+  code: string,
+  start: number,
+  end: number,
+  key: string
+): number | null {
+  let i = start
+  let depth = 0
+  let found: number | null = null
+  while (i < end) {
+    const c = code[i]
+    if (c === "'" || c === '"') {
+      const s = skipJsString(code, i)
+      if (s === null) return null
+      if (depth === 1 && s >= i + 2) {
+        const inner = code.slice(i + 1, s - 1)
+        const after = skipJsWsAndComments(code, s)
+        if (code[after] === ":" && !inner.includes("\\") && inner === key) {
+          found = skipJsWsAndComments(code, after + 1)
+        }
+      }
+      i = s
+    } else if (c === "`") {
+      const s = skipJsTemplate(code, i)
+      if (s === null) return null
+      i = s
+    } else if (c === "/" && (code[i + 1] === "/" || code[i + 1] === "*")) {
+      i = skipJsWsAndComments(code, i)
+    } else if (c === "{") {
+      depth += 1
+      i += 1
+    } else if (c === "}") {
+      if (depth <= 1) {
+        // Closes the call's argument object (or a stray close): everything
+        // after lies outside the flat args, so a second object must not
+        // contribute keys — last-wins applies within ONE object only.
+        break
+      }
+      depth -= 1
+      i += 1
+    } else if (depth === 1 && isJsWordAt(code, i, key)) {
+      const after = skipJsWsAndComments(code, i + key.length)
+      if (code[after] === ":") {
+        found = skipJsWsAndComments(code, after + 1)
+      }
+      i += 1
+    } else {
+      i += 1
+    }
+  }
+  return found
+}
+
+/** Whether the value's last consumed unit is followed (past whitespace and
+ *  comments) by `,` or `}` — the literal ends where its object property ends.
+ *  A literal followed by an operator (`"a" + b`, `` `a`.trim() ``) evaluates
+ *  to something else at runtime and must not be read as the value. */
+function valueEndsObjectProperty(code: string, end: number): boolean {
+  const after = skipJsWsAndComments(code, end)
+  return code[after] === "," || code[after] === "}"
+}
+
+/** Contents of the escape-free `'…'`/`"…"` string at `at` plus the offset
+ *  past its closing quote; `null` when it contains a backslash (an escaped
+ *  value could decode differently than it reads). */
+function plainStringValueEnd(
+  code: string,
+  at: number
+): [string, number] | null {
+  const quote = code[at]
+  if (quote !== "'" && quote !== '"') return null
+  const end = skipJsString(code, at)
+  if (end === null) return null
+  const inner = code.slice(at + 1, end - 1)
+  if (inner.includes("\\")) return null
+  return [inner, end]
+}
+
+/** The evaluated `agent_type` / `working_dir` VALUE at `at`: an escape-free
+ *  plain string ending where its property ends; anything else `null`. */
+function objectStringValue(code: string, at: number): string | null {
+  const r = plainStringValueEnd(code, at)
+  if (r === null || !valueEndsObjectProperty(code, r[1])) return null
+  return r[0]
+}
+
+/** The evaluated `task` VALUE at `at`: template literals via the minimal
+ *  unescaper, plain strings only when escape-free, each required to end where
+ *  its property ends; anything else (numbers, shorthand) `null`. */
+function objectTaskValue(code: string, at: number): string | null {
+  const c = code[at]
+  let r: [string, number] | null
+  if (c === "`") r = templateLiteralTextEnd(code, at)
+  else if (c === "'" || c === '"') r = plainStringValueEnd(code, at)
+  else return null
+  if (r === null || !valueEndsObjectProperty(code, r[1])) return null
+  return r[0]
+}
+
+function hexDigitValue(c: string): number | null {
+  if (c >= "0" && c <= "9") return c.charCodeAt(0) - 48
+  if (c >= "a" && c <= "f") return c.charCodeAt(0) - 87
+  if (c >= "A" && c <= "F") return c.charCodeAt(0) - 55
+  return null
+}
+
+// JS `\u` escapes denote scalar values: lone surrogates and anything past
+// U+10FFFF are invalid (Rust `char::from_u32` returns `None` for both).
+function unicodeFromU32(v: number): string | null {
+  if (v > 0x10ffff) return null
+  if (v >= 0xd800 && v <= 0xdfff) return null
+  return String.fromCodePoint(v)
+}
+
+function readHexDigits(
+  code: string,
+  at: number,
+  count: number
+): [number, number] | null {
+  if (at + count > code.length) return null
+  let v = 0
+  for (let k = 0; k < count; k += 1) {
+    const d = hexDigitValue(code[at + k])
+    if (d === null) return null
+    v = v * 16 + d
+  }
+  return [v, at + count]
+}
+
+/** The evaluated text of the template literal starting at `at`, plus the unit
+ *  offset past its closing backtick — the exact string the JS runtime passes
+ *  to the MCP listener. That means the template's cooked text, not its
+ *  source: `\n \t \r \b \f \v \0 \\ \` \' \" \$ \u{…} \uXXXX \xXX` decode,
+ *  line continuations (`\` + CR/CRLF/LF) contribute nothing, and a BARE CR
+ *  or CRLF is TV-normalized to a single LF — ECMA-262's normalization
+ *  rewrites only those two, so U+2028/U+2029 pass through verbatim.
+ *  `null` for `${…}` interpolation, for any escape outside the
+ *  minimal set, and for legacy octal. */
+function templateLiteralTextEnd(
+  code: string,
+  at: number
+): [string, number] | null {
+  let out = ""
+  let i = at + 1
+  while (i < code.length) {
+    const c = code[i]
+    if (c === "`") return [out, i + 1]
+    if (c === "\\") {
+      i += 1
+      const e = code[i]
+      if (e === undefined) return null
+      i += 1
+      if (e === "n") out += "\n"
+      else if (e === "t") out += "\t"
+      else if (e === "r") out += "\r"
+      else if (e === "b") out += "\b"
+      else if (e === "f") out += "\f"
+      else if (e === "v") out += "\v"
+      else if (e === "0") {
+        if (code[i] !== undefined && code[i] >= "0" && code[i] <= "9") {
+          // Legacy octal (`\01` ≠ `\0` + `1`); not supported.
+          return null
+        }
+        out += "\0"
+      } else if (e === "\\") out += "\\"
+      else if (e === "`") out += "`"
+      else if (e === "$") out += "$"
+      else if (e === "'") out += "'"
+      else if (e === '"') out += '"'
+      else if (e === "u") {
+        if (code[i] === "{") {
+          const close = code.indexOf("}", i)
+          if (close === -1) return null
+          const digits = code.slice(i + 1, close)
+          if (digits.length === 0 || digits.length > 6) return null
+          let v = 0
+          for (const d of digits) {
+            const h = hexDigitValue(d)
+            if (h === null) return null
+            v = v * 16 + h
+          }
+          const cp = unicodeFromU32(v)
+          if (cp === null) return null
+          out += cp
+          i = close + 1
+        } else {
+          const r = readHexDigits(code, i, 4)
+          if (r === null) return null
+          const cp = unicodeFromU32(r[0])
+          if (cp === null) return null
+          out += cp
+          i = r[1]
+        }
+      } else if (e === "x") {
+        const r = readHexDigits(code, i, 2)
+        if (r === null) return null
+        const cp = unicodeFromU32(r[0])
+        if (cp === null) return null
+        out += cp
+        i = r[1]
+      } else if (e === "\r") {
+        // Line continuation: the newline is dropped.
+        if (code[i] === "\n") i += 1
+      } else if (e === "\n") {
+        // Line continuation: the newline is dropped.
+      } else {
+        return null
+      }
+    } else if (c === "$" && code[i + 1] === "{") {
+      return null
+    } else if (c === "\r") {
+      // A bare CR (or the CR of a CRLF) is TV-normalized to a single LF.
+      out += "\n"
+      i += 1
+      if (code[i] === "\n") i += 1
+    } else {
+      // U+2028/U+2029 are JS line terminators but NOT TV-normalized (only
+      // CR and CRLF are); folding them to LF here would mint a key the MCP
+      // side never receives.
+      out += c
+      i += 1
+    }
+  }
+  return null
+}
+
+/** The `code` source and its call span for a recognized code-mode delegation
+ *  payload, or `null`. The exact frontend mirror of `code_mode_delegation_code`
+ *  in `acp/lifecycle.rs`: same predicate, so a card renders exactly when the
+ *  backend registers the call. */
+function codeModeCallOf(
+  parsed: unknown
+): { code: string; span: [number, number] } | null {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null
+  }
+  const code = (parsed as Record<string, unknown>).code
+  if (typeof code !== "string") return null
+  const span = codeModeCallSpan(code)
+  return span === null ? null : { code, span }
+}
+
+/** Conservative pre-pass over the argument region: `false` when the region
+ *  contains syntax whose effect the scanner cannot evaluate. Spread
+ *  (`...base`) may carry an `assistant_id`; a `[` covers computed keys
+ *  (`["assistant_id"]: 3`) and array values; a quoted KEY containing a
+ *  backslash evaluates to an unknowable spelling; a `(`/`)` or a non-comment
+ *  `/` is a call/parenthesized/division/regex expression the scanner cannot
+ *  evaluate; a bare `working_dir` / `assistant_id` identifier is a SHORTHAND
+ *  property whose value is the variable's runtime value. Each degrades the
+ *  parse to `null`. Mirrors `code_mode_args_transparent` in
+ *  `acp/lifecycle.rs`. */
+function codeModeArgsTransparent(
+  code: string,
+  start: number,
+  end: number
+): boolean {
+  let i = start
+  while (i < end) {
+    const c = code[i]
+    if (c === "'" || c === '"') {
+      const s = skipJsString(code, i)
+      if (s === null) return false
+      const after = skipJsWsAndComments(code, s)
+      if (code[after] === ":" && code.slice(i + 1, s - 1).includes("\\")) {
+        return false
+      }
+      i = s
+    } else if (c === "`") {
+      const s = skipJsTemplate(code, i)
+      if (s === null) return false
+      i = s
+    } else if (c === "/" && (code[i + 1] === "/" || code[i + 1] === "*")) {
+      i = skipJsWsAndComments(code, i)
+    } else if (c === "/" || c === "(" || c === ")") {
+      return false
+    } else if (c === "[") {
+      return false
+    } else if (c === "." && code[i + 1] === "." && code[i + 2] === ".") {
+      return false
+    } else if (isJsWordAt(code, i, "working_dir")) {
+      const after = skipJsWsAndComments(code, i + "working_dir".length)
+      if (code[after] !== ":") return false
+      i += "working_dir".length
+    } else if (isJsWordAt(code, i, "assistant_id")) {
+      const after = skipJsWsAndComments(code, i + "assistant_id".length)
+      if (code[after] !== ":") return false
+      i += "assistant_id".length
+    } else {
+      i += 1
+    }
+  }
+  return true
+}
+
+/** The `assistant_id` VALUE at `at`, as a string for `coerceAssistantId`: an
+ *  escape-free quoted number, or bare digits. Numbers must be read —
+ *  `assistant_id: 3` is the common spelling, and leaving it unread would make
+ *  the card fall back to `agent_type` and mislabel an Assistant delegation. */
+function readAssistantIdValue(code: string, at: number): string | null {
+  const quoted = plainStringValueEnd(code, at)
+  if (quoted !== null) {
+    return valueEndsObjectProperty(code, quoted[1]) ? quoted[0] : null
+  }
+  let i = at
+  while (i < code.length && code[i] >= "0" && code[i] <= "9") i += 1
+  if (i === at) return null
+  if (!valueEndsObjectProperty(code, i)) return null
+  return code.slice(at, i)
+}
+
+/** Parse a code-mode payload's arguments out of the JS source. The region is
+ *  first screened by [`codeModeArgsTransparent`]: syntax the scanner cannot
+ *  evaluate (spread, computed keys, escaped quoted keys) could hide an
+ *  `assistant_id` or change any value, so the whole parse degrades to `null`
+ *  and the card renders the generic task row — correlation goes through the
+ *  tool_call id binding, not these values, so unlike the backend key there is
+ *  nothing to mint wrong. Readable values become card content; unreadable
+ *  ones (interpolation, unknown escapes) stay `null` per field. */
+function parseCodeModeInput(parsed: unknown): ParsedInput | null {
+  const call = codeModeCallOf(parsed)
+  if (call === null) return null
+  const { code, span } = call
+  const [open, close] = span
+  const start = open + 1
+  if (!codeModeArgsTransparent(code, start, close)) return null
+  const assistantAt = codeModeFindKey(code, start, close, "assistant_id")
+  const agentAt = codeModeFindKey(code, start, close, "agent_type")
+  const workingAt = codeModeFindKey(code, start, close, "working_dir")
+  const taskAt = codeModeFindKey(code, start, close, "task")
+  return {
+    agentType:
+      agentAt !== null
+        ? coerceAgentType(objectStringValue(code, agentAt))
+        : null,
+    assistantId:
+      assistantAt !== null
+        ? coerceAssistantId(readAssistantIdValue(code, assistantAt))
+        : null,
+    task: taskAt !== null ? objectTaskValue(code, taskAt) : null,
+    workingDir: workingAt !== null ? objectStringValue(code, workingAt) : null,
+  }
+}
+
+/**
+ * Whether a raw tool input is an opencode code-mode `execute` payload whose
+ * `code` source announces a `delegate_to_agent` call — the frontend half of
+ * the backend's code-mode registration branch. Classification gates OR this
+ * in next to `isDelegateToAgentToolName` so the `execute` call renders as a
+ * delegation card.
+ */
+export function isCodeModeDelegationInput(
+  raw: string | null | undefined
+): boolean {
+  if (!raw || typeof raw !== "string") return false
+  // Cheap pre-gate, same as the backend's: any JSON payload carrying a `code`
+  // key contains the literal `"code"` bytes, so skipping the parse for
+  // payloads that don't keeps this branch free for every non-code-mode call.
+  if (!raw.includes('"code"')) return false
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return false
+  }
+  return codeModeCallOf(parsed) !== null
+}
+
 /**
  * A content-free structural descriptor of a value: object keys (recursively,
  * depth- and width-capped), array lengths, and primitive *types* — never the
@@ -279,6 +905,13 @@ export function parseInput(raw: string | null | undefined): ParsedInput {
   }
   const obj = findDelegationArgs(parsed)
   if (!obj) {
+    // opencode code-mode: the args live as a JS object literal INSIDE the
+    // `code` source string, not on the wire object. Return whatever values
+    // are readable — a `task` that can't be read still leaves the agent
+    // slug, and the card renders the generic task row (same grade as
+    // Cursor's identityless `{}`).
+    const codeMode = parseCodeModeInput(parsed)
+    if (codeMode) return codeMode
     // An empty object is the EXPECTED shape on identity-less hosts (Cursor
     // announces every MCP call with raw_input "{}") — nothing to diagnose,
     // so don't spam the console on every render of those cards.

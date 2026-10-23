@@ -2242,6 +2242,44 @@ impl DelegationBroker {
             .await
     }
 
+    /// One-line summaries of the keyed pending entries still unclaimed on
+    /// this parent, for the synthetic-fallback WARN: a budget expiry with
+    /// keyed entries present means their keys disagree with the request's key
+    /// (an ACP-side parse that doesn't match what the MCP call actually
+    /// carries), and the summaries make that mismatch visible in the log
+    /// without a reproducer. Keyed entries are never FIFO-claimed, so they
+    /// persist here until their own round-trip, a terminal tombstone, or
+    /// teardown.
+    pub(crate) async fn unmatched_pending_key_summaries(
+        &self,
+        parent_connection_id: &str,
+    ) -> Vec<String> {
+        let map = self.tool_calls.inner.lock().await;
+        let Some(bucket) = map.get(parent_connection_id) else {
+            return Vec::new();
+        };
+        bucket
+            .pending
+            .iter()
+            .filter_map(|p| {
+                let key = p.match_key.as_ref()?;
+                let task_preview: String = key.task.chars().take(80).collect();
+                let dir_preview: String = key
+                    .working_dir
+                    .as_deref()
+                    .unwrap_or("-")
+                    .chars()
+                    .take(120)
+                    .collect();
+                Some(format!(
+                    "id={} target={target:?} task={task_preview:?} dir={dir_preview}",
+                    p.tool_call_id,
+                    target = key.target,
+                ))
+            })
+            .collect()
+    }
+
     /// Remove `handle` from the pre-cancel set, returning whether it was
     /// present. Used by `handle_request` at two checkpoints (entry + just
     /// after pending registration) so a cancel that lost the race with the
@@ -2505,13 +2543,27 @@ impl DelegationBroker {
                 .claim_pending_tool_call_with_brief_wait(&req.parent_connection_id, &match_key)
                 .await;
             let claimed_identityless = matches!(claimed, Some((_, true)));
-            req.parent_tool_use_id = claimed.map(|(id, _)| id).unwrap_or_else(|| {
-                tracing::warn!(
-                    "[delegation] synthetic fallback for parent_tool_use_id on conn={} (no ACP tool_call_id arrived within claim budget)",
-                    req.parent_connection_id
-                );
-                format!("delegation-{}", uuid::Uuid::new_v4())
-            });
+            req.parent_tool_use_id = match claimed {
+                Some((id, _)) => id,
+                None => {
+                    let unmatched = self
+                        .unmatched_pending_key_summaries(&req.parent_connection_id)
+                        .await;
+                    if unmatched.is_empty() {
+                        tracing::warn!(
+                            "[delegation] synthetic fallback for parent_tool_use_id on conn={} (no ACP tool_call_id arrived within claim budget)",
+                            req.parent_connection_id
+                        );
+                    } else {
+                        tracing::warn!(
+                            "[delegation] synthetic fallback for parent_tool_use_id on conn={} (no ACP tool_call_id arrived within claim budget); unmatched keyed pending entries remain: {}",
+                            req.parent_connection_id,
+                            unmatched.join(" | ")
+                        );
+                    }
+                    format!("delegation-{}", uuid::Uuid::new_v4())
+                }
+            };
             // The claimed announcement never carried an identity (Cursor's
             // "MCP: tool" + "{}" — the wire will not re-send title/arguments):
             // restore it NOW, before the multi-second spawn, so the live card

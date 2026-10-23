@@ -57,6 +57,7 @@ import { SessionViewerHost } from "@/components/message/session-viewer-host"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { parseResumeTaskId } from "@/lib/codeg-mcp-tool"
 import {
+  isCodeModeDelegationInput,
   isDelegateToAgentToolName,
   isRefusedResume,
   parseDelegateTaskId,
@@ -495,7 +496,13 @@ function collectDelegationSources(
     if (part.type === "tool-call") {
       if (!part.toolCallId) continue
       const name = normalizeToolName(part.toolName)
-      if (isDelegateToAgentToolName(name)) {
+      // Code-mode payloads (opencode's `execute`) reach this arm by INPUT
+      // shape — the delegation call lives inside the `code` string, so the
+      // tool name alone can't classify them.
+      if (
+        isDelegateToAgentToolName(name) ||
+        isCodeModeDelegationInput(part.input ?? null)
+      ) {
         out.push({
           parentToolUseId: part.toolCallId,
           input: part.input ?? null,
