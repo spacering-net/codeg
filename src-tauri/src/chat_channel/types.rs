@@ -47,8 +47,55 @@ pub enum ChannelConnectionStatus {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SentMessageId(pub String);
+
+/// Outcome of attempting to send a message via a chat channel backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendOutcome {
+    /// Delivered to the upstream provider (with provider message id or client id).
+    Sent(SentMessageId),
+    /// Queued locally for delivery once context refreshes (e.g. Weixin iLink).
+    Buffered,
+    /// Dropped because the local pending buffer was full or message aged out.
+    Dropped,
+}
+
+impl SendOutcome {
+    pub fn is_sent(&self) -> bool {
+        matches!(self, SendOutcome::Sent(_))
+    }
+
+    pub fn is_buffered(&self) -> bool {
+        matches!(self, SendOutcome::Buffered)
+    }
+
+    pub fn is_dropped(&self) -> bool {
+        matches!(self, SendOutcome::Dropped)
+    }
+
+    pub fn status_str(&self) -> &'static str {
+        match self {
+            SendOutcome::Sent(_) => "sent",
+            SendOutcome::Buffered => "buffered",
+            SendOutcome::Dropped => "dropped",
+        }
+    }
+
+    pub fn sent_message_id(&self) -> Option<&SentMessageId> {
+        match self {
+            SendOutcome::Sent(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+impl From<SentMessageId> for SendOutcome {
+    fn from(id: SentMessageId) -> Self {
+        SendOutcome::Sent(id)
+    }
+}
 
 pub struct IncomingCommand {
     pub channel_id: i32,

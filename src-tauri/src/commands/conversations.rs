@@ -5514,20 +5514,24 @@ mod tests {
             &self,
             _text: &str,
         ) -> Result<
-            crate::chat_channel::types::SentMessageId,
+            crate::chat_channel::types::SendOutcome,
             crate::chat_channel::error::ChatChannelError,
         > {
-            Ok(crate::chat_channel::types::SentMessageId("sent".into()))
+            Ok(crate::chat_channel::types::SendOutcome::Sent(
+                crate::chat_channel::types::SentMessageId("sent".into()),
+            ))
         }
 
         async fn send_rich_message(
             &self,
             _message: &crate::chat_channel::types::RichMessage,
         ) -> Result<
-            crate::chat_channel::types::SentMessageId,
+            crate::chat_channel::types::SendOutcome,
             crate::chat_channel::error::ChatChannelError,
         > {
-            Ok(crate::chat_channel::types::SentMessageId("sent".into()))
+            Ok(crate::chat_channel::types::SendOutcome::Sent(
+                crate::chat_channel::types::SentMessageId("sent".into()),
+            ))
         }
 
         async fn edit_thread_title(

@@ -385,13 +385,13 @@ async fn process_envelope(
         // Send
         let send_result = manager.send_to_channel(ch.id, &msg).await;
         let (status, error_detail) = match &send_result {
-            Ok(_) => {
-                // Only update the debounce timestamp on success, and only for
-                // debounced event types.
-                if debounced {
+            Ok(outcome) => {
+                // Only advance debounce timestamp on actual delivery, not when
+                // buffered locally or dropped.
+                if outcome.is_sent() && debounced {
                     last_push.insert(key, now);
                 }
-                ("sent", None)
+                (outcome.status_str(), None)
             }
             Err(e) => ("failed", Some(e.to_string())),
         };
@@ -465,7 +465,7 @@ mod permission_push_tests {
     use crate::chat_channel::session_bridge::ActiveSession;
     use crate::chat_channel::traits::ChatChannelBackend;
     use crate::chat_channel::types::{
-        ChannelConnectionStatus, ChannelType, IncomingCommand, SentMessageId,
+        ChannelConnectionStatus, ChannelType, IncomingCommand, SendOutcome, SentMessageId,
     };
     use crate::db::test_helpers;
     use crate::models::agent::AgentType;
@@ -497,16 +497,111 @@ mod permission_push_tests {
         async fn status(&self) -> ChannelConnectionStatus {
             ChannelConnectionStatus::Connected
         }
-        async fn send_message(&self, text: &str) -> Result<SentMessageId, ChatChannelError> {
+        async fn send_message(&self, text: &str) -> Result<SendOutcome, ChatChannelError> {
             self.rec.msgs.lock().await.push(text.to_string());
-            Ok(SentMessageId("1".into()))
+            Ok(SendOutcome::Sent(SentMessageId("1".into())))
         }
         async fn send_rich_message(
             &self,
             message: &RichMessage,
-        ) -> Result<SentMessageId, ChatChannelError> {
+        ) -> Result<SendOutcome, ChatChannelError> {
             self.rec.msgs.lock().await.push(message.to_plain_text());
-            Ok(SentMessageId("1".into()))
+            Ok(SendOutcome::Sent(SentMessageId("1".into())))
+        }
+        async fn test_connection(&self) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+    }
+
+    /// Backend that queues a message instead of delivering it, the way the
+    /// Weixin iLink backend does while its `context_token` is stale.
+    struct BufferingBackend;
+
+    #[async_trait]
+    impl ChatChannelBackend for BufferingBackend {
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::Telegram
+        }
+        async fn start(&self, _tx: mpsc::Sender<IncomingCommand>) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+        async fn status(&self) -> ChannelConnectionStatus {
+            ChannelConnectionStatus::Connected
+        }
+        async fn send_message(&self, _text: &str) -> Result<SendOutcome, ChatChannelError> {
+            Ok(SendOutcome::Buffered)
+        }
+        async fn send_rich_message(
+            &self,
+            _message: &RichMessage,
+        ) -> Result<SendOutcome, ChatChannelError> {
+            Ok(SendOutcome::Buffered)
+        }
+        async fn test_connection(&self) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+    }
+
+    /// Backend that drops messages when pending queue is full.
+    struct DroppingBackend;
+
+    #[async_trait]
+    impl ChatChannelBackend for DroppingBackend {
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::Telegram
+        }
+        async fn start(&self, _tx: mpsc::Sender<IncomingCommand>) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+        async fn status(&self) -> ChannelConnectionStatus {
+            ChannelConnectionStatus::Connected
+        }
+        async fn send_message(&self, _text: &str) -> Result<SendOutcome, ChatChannelError> {
+            Ok(SendOutcome::Dropped)
+        }
+        async fn send_rich_message(
+            &self,
+            _message: &RichMessage,
+        ) -> Result<SendOutcome, ChatChannelError> {
+            Ok(SendOutcome::Dropped)
+        }
+        async fn test_connection(&self) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+    }
+
+    /// Backend that simulates a provider returning an empty message id on success
+    /// (e.g. Telegram or Lark).
+    struct EmptyIdBackend;
+
+    #[async_trait]
+    impl ChatChannelBackend for EmptyIdBackend {
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::Telegram
+        }
+        async fn start(&self, _tx: mpsc::Sender<IncomingCommand>) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<(), ChatChannelError> {
+            Ok(())
+        }
+        async fn status(&self) -> ChannelConnectionStatus {
+            ChannelConnectionStatus::Connected
+        }
+        async fn send_message(&self, _text: &str) -> Result<SendOutcome, ChatChannelError> {
+            Ok(SendOutcome::Sent(SentMessageId(String::new())))
+        }
+        async fn send_rich_message(
+            &self,
+            _message: &RichMessage,
+        ) -> Result<SendOutcome, ChatChannelError> {
+            Ok(SendOutcome::Sent(SentMessageId(String::new())))
         }
         async fn test_connection(&self) -> Result<(), ChatChannelError> {
             Ok(())
@@ -698,6 +793,163 @@ mod permission_push_tests {
         assert_eq!(msgs.len(), 1, "expected one push, got {msgs:?}");
         assert!(msgs[0].contains("Permission Request"), "got {:?}", msgs[0]);
         assert!(msgs[0].contains("Bash: npm test"), "got {:?}", msgs[0]);
+    }
+
+    /// A push the backend could only queue must be recorded as `buffered`
+    /// rather than `sent`, so a stalled channel is visible in the message log
+    /// instead of looking healthy.
+    #[tokio::test]
+    async fn buffered_push_is_logged_as_buffered() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        // `chat_channel_message_log` carries a foreign key to `chat_channel`,
+        // so the channel has to exist in the database as well as in the
+        // in-memory manager.
+        let channel_id = crate::db::service::chat_channel_service::create(
+            &db.conn,
+            "Stalled test".to_string(),
+            "telegram".to_string(),
+            "{}".to_string(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed chat channel")
+        .id;
+
+        let chat = ChatChannelManager::new();
+        chat.add_channel(
+            channel_id,
+            "stalled".into(),
+            ChannelType::Telegram,
+            Box::new(BufferingBackend),
+        )
+        .await
+        .unwrap();
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let config = config_all_on(channel_id);
+        let mut last_push = HashMap::new();
+
+        process_envelope(
+            &permission_envelope("desktop-conn"),
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut last_push,
+            &test_client(),
+        )
+        .await;
+
+        let logs = crate::db::service::chat_channel_message_log_service::list_by_channel(
+            &db.conn, channel_id, 10, 0,
+        )
+        .await
+        .expect("list message logs");
+        assert_eq!(logs.len(), 1, "expected one log row, got {logs:?}");
+        assert_eq!(logs[0].status, "buffered");
+        assert!(logs[0].error_detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropped_push_is_logged_as_dropped() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let channel_id = crate::db::service::chat_channel_service::create(
+            &db.conn,
+            "Dropped test".to_string(),
+            "telegram".to_string(),
+            "{}".to_string(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed chat channel")
+        .id;
+
+        let chat = ChatChannelManager::new();
+        chat.add_channel(
+            channel_id,
+            "dropped".into(),
+            ChannelType::Telegram,
+            Box::new(DroppingBackend),
+        )
+        .await
+        .unwrap();
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let config = config_all_on(channel_id);
+        let mut last_push = HashMap::new();
+
+        process_envelope(
+            &permission_envelope("desktop-conn"),
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut last_push,
+            &test_client(),
+        )
+        .await;
+
+        let logs = crate::db::service::chat_channel_message_log_service::list_by_channel(
+            &db.conn, channel_id, 10, 0,
+        )
+        .await
+        .expect("list message logs");
+        assert_eq!(logs.len(), 1, "expected one log row, got {logs:?}");
+        assert_eq!(logs[0].status, "dropped");
+        assert!(logs[0].error_detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn empty_provider_id_is_logged_as_sent_and_advances_debounce() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let channel_id = crate::db::service::chat_channel_service::create(
+            &db.conn,
+            "Empty id test".to_string(),
+            "telegram".to_string(),
+            "{}".to_string(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed chat channel")
+        .id;
+
+        let chat = ChatChannelManager::new();
+        chat.add_channel(
+            channel_id,
+            "empty_id".into(),
+            ChannelType::Telegram,
+            Box::new(EmptyIdBackend),
+        )
+        .await
+        .unwrap();
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let config = config_all_on(channel_id);
+        let mut last_push = HashMap::new();
+
+        process_envelope(
+            &turn_complete_envelope("desktop-conn"),
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut last_push,
+            &test_client(),
+        )
+        .await;
+
+        let logs = crate::db::service::chat_channel_message_log_service::list_by_channel(
+            &db.conn, channel_id, 10, 0,
+        )
+        .await
+        .expect("list message logs");
+        assert_eq!(logs.len(), 1, "expected one log row, got {logs:?}");
+        assert_eq!(logs[0].status, "sent", "empty id from provider must not be confused with buffered");
+        assert!(logs[0].error_detail.is_none());
+        assert!(!last_push.is_empty(), "debounce map must be updated on real delivery");
     }
 
     /// A permission request from a chat-channel-bridged connection is suppressed

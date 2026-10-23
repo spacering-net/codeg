@@ -133,7 +133,7 @@ impl ChatChannelManager {
         &self,
         channel_id: i32,
         message: &RichMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let backend = {
             let channels = self.inner.channels.lock().await;
             channels
@@ -149,7 +149,7 @@ impl ChatChannelManager {
         &self,
         target: &ChannelMessageTarget,
         message: &RichMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let backend = {
             let channels = self.inner.channels.lock().await;
             channels
@@ -165,7 +165,7 @@ impl ChatChannelManager {
         &self,
         target: &ChannelMessageTarget,
         message: &InteractiveMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let backend = {
             let channels = self.inner.channels.lock().await;
             channels
