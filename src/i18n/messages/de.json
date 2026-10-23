@@ -2385,6 +2385,7 @@
       "toggleTerminal": "Terminal umschalten",
       "toggleAuxPanel": "Hilfspaneel umschalten",
       "search": "Suchen",
+      "openTabs": "Geöffnete Tabs",
       "openSettings": "Einstellungen öffnen",
       "backToConversations": "Zurück zu Konversationen",
       "withShortcut": "{label} (Tastenkürzel: {shortcut})"

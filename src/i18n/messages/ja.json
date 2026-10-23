@@ -2385,6 +2385,7 @@
       "toggleTerminal": "ターミナルを切り替え",
       "toggleAuxPanel": "補助パネルを切り替え",
       "search": "検索",
+      "openTabs": "開いているタブ",
       "openSettings": "設定を開く",
       "backToConversations": "会話に戻る",
       "withShortcut": "{label}（{shortcut}）"

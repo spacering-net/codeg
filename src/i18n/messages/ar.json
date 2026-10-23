@@ -2385,6 +2385,7 @@
       "toggleTerminal": "تبديل الطرفية",
       "toggleAuxPanel": "تبديل اللوحة المساعدة",
       "search": "بحث",
+      "openTabs": "علامات التبويب المفتوحة",
       "openSettings": "فتح الإعدادات",
       "backToConversations": "العودة إلى المحادثات",
       "withShortcut": "{label} (اختصار: {shortcut})"
