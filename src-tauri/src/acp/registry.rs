@@ -5514,8 +5514,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // install and pins none; `~/.local/bin` is probed by the system
             // resolver even when a Finder-launched app's PATH lacks it.
             //
-            // History is codeg's own ACP transcript
-            // (`AgentType::uses_acp_transcript`), not TRAE CLI's rollouts —
+            // Message history is codeg's own ACP transcript
+            // (`AgentType::uses_acp_transcript`); only exact
+            // `token_usage_record` rows are read from TRAE CLI's rollouts —
             // see `acp::trae` for why. MCP servers
             // come from `<TRAE_HOME>/traecli.toml`, which the CLI loads itself
             // and codeg's MCP settings manage, so codeg does not forward the

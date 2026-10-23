@@ -57,24 +57,50 @@ use crate::acp_transcript::{self, EntryKind, Transcript, TranscriptEntry};
 use crate::models::agent::AgentType;
 use crate::models::conversation::{ConversationDetail, ConversationSummary, SessionStats};
 use crate::models::message::{ContentBlock, ImageData, MessageTurn, TurnRole, TurnUsage};
-use crate::parsers::{user_turn_block, user_turn_block_from_wire, AgentParser, ParseError};
+use crate::parsers::{
+    user_turn_block, user_turn_block_from_wire, AgentEnv, AgentParser, ParseError,
+};
 
 pub struct AcpNativeParser {
     agent_type: AgentType,
     root: PathBuf,
+    trae_sessions: Option<PathBuf>,
 }
 
 impl AcpNativeParser {
     pub fn new(agent_type: AgentType) -> Self {
+        Self::for_env(agent_type, &AgentEnv::inherited())
+    }
+
+    pub fn for_env(agent_type: AgentType, env: &AgentEnv) -> Self {
         Self {
             agent_type,
             root: crate::paths::codeg_acp_transcripts_root(),
+            trae_sessions: crate::acp::trae::uses_trae_rollouts(agent_type)
+                .then(|| crate::acp::trae::resolve_trae_sessions_dir_for_env(env)),
         }
     }
 
     /// Root-injectable constructor for tests.
     pub fn new_in(agent_type: AgentType, root: PathBuf) -> Self {
-        Self { agent_type, root }
+        Self {
+            agent_type,
+            root,
+            trae_sessions: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_in_with_trae_sessions(
+        agent_type: AgentType,
+        root: PathBuf,
+        trae_sessions: PathBuf,
+    ) -> Self {
+        Self {
+            agent_type,
+            root,
+            trae_sessions: Some(trae_sessions),
+        }
     }
 
     /// Directory name for this agent's transcripts: its ACP registry id.
@@ -113,6 +139,12 @@ impl AgentParser for AcpNativeParser {
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
         let dir = self.agent_dir();
+        let mut native_session_ids = vec![conversation_id.to_string()];
+        native_session_ids.extend(acp_transcript::continuation_ancestors_in(
+            &self.root,
+            dir,
+            conversation_id,
+        ));
         // Reads the whole continuation chain: when the agent had forgotten the
         // session and codeg started a fresh one, the earlier turns still live
         // under the previous session id.
@@ -120,10 +152,23 @@ impl AgentParser for AcpNativeParser {
         if transcript.header.is_none() && transcript.is_empty() {
             return Err(ParseError::ConversationNotFound(conversation_id.to_string()));
         }
-        let turns = project_turns(&transcript.entries);
+        let mut turns = project_turns(&transcript.entries);
+        let native_usage = self.trae_sessions.as_deref().and_then(|sessions| {
+            super::trae_usage::enrich_turns(sessions, &native_session_ids, &mut turns)
+        });
         let (used, size) = latest_context_window(&transcript.entries);
+        let stats = session_stats(&turns);
+        let stats = if stats
+            .as_ref()
+            .and_then(|stats| stats.total_usage.as_ref())
+            .is_none()
+        {
+            session_stats_with_native_usage(stats, native_usage)
+        } else {
+            stats
+        };
         let session_stats = crate::parsers::merge_context_window_stats(
-            session_stats(&turns),
+            stats,
             used,
             size,
         );
@@ -1051,6 +1096,36 @@ fn session_stats(turns: &[MessageTurn]) -> Option<SessionStats> {
         context_window_max_tokens: None,
         context_window_usage_percent: None,
     })
+}
+
+/// Preserve native usage from a TRAE turn that produced no renderable
+/// assistant message. Normally `trae_usage::enrich_turns` attaches every
+/// native turn to an ACP turn and the regular aggregation above wins.
+fn session_stats_with_native_usage(
+    stats: Option<SessionStats>,
+    native_usage: Option<TurnUsage>,
+) -> Option<SessionStats> {
+    let usage = native_usage?;
+    let total_tokens = usage
+        .input_tokens
+        .saturating_add(usage.output_tokens)
+        .saturating_add(usage.cache_creation_input_tokens)
+        .saturating_add(usage.cache_read_input_tokens);
+    match stats {
+        Some(mut stats) => {
+            stats.total_usage = Some(usage);
+            stats.total_tokens = Some(total_tokens);
+            Some(stats)
+        }
+        None => Some(SessionStats {
+            total_usage: Some(usage),
+            total_tokens: Some(total_tokens),
+            total_duration_ms: 0,
+            context_window_used_tokens: None,
+            context_window_max_tokens: None,
+            context_window_usage_percent: None,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -2371,6 +2446,110 @@ mod tests {
             Err(ParseError::ConversationNotFound(_))
         ));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn custom_traecli_history_is_enriched_from_its_native_usage_record() {
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let native_dir = tempfile::tempdir().unwrap();
+        let session_id = "01a13673-cfd5-7c23-bc00-ce5be75fd42b";
+        let agent = AgentType::custom("traecli").unwrap();
+        let agent_dir = crate::acp::registry::registry_id_for(agent);
+
+        let header = TranscriptHeader::new(
+            "custom:traecli",
+            session_id,
+            "/workspace",
+            1_791_914_922_197,
+        );
+        acp_transcript::record_header_in(transcript_dir.path(), agent_dir, &header)
+            .await
+            .unwrap();
+        for (kind, payload) in [
+            (
+                EntryKind::Prompt,
+                serde_json::json!([{"type":"text","text":"hello"}]),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({
+                    "sessionUpdate":"agent_message_chunk",
+                    "content":{"type":"text","text":"done"}
+                }),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({
+                    "sessionUpdate":"usage_update",
+                    "used":20_584,
+                    "size":760_000
+                }),
+            ),
+            (
+                EntryKind::TurnEnd,
+                serde_json::json!({
+                    "stopReason":"end_turn",
+                    "durationMs":3_497,
+                    "model":"gpt-5.6-sol"
+                }),
+            ),
+        ] {
+            acp_transcript::record_entry_in(
+                transcript_dir.path(),
+                agent_dir,
+                session_id,
+                kind,
+                payload,
+            )
+            .await
+            .unwrap();
+        }
+
+        let day = native_dir.path().join("2026/10/14");
+        std::fs::create_dir_all(&day).unwrap();
+        let rollout = day.join(format!(
+            "rollout-2026-10-14T02-08-42-{session_id}.jsonl"
+        ));
+        std::fs::write(
+            rollout,
+            serde_json::json!({
+                "timestamp":"2026-10-13T18:08:45.732Z",
+                "type":"token_usage_record",
+                "payload":{
+                    "thread_id":session_id,
+                    "session_id":session_id,
+                    "turn_id":"turn-1",
+                    "response_id":"resp-1",
+                    "usage":{
+                        "input_tokens":20_454,
+                        "cache_creation_input_tokens":128,
+                        "cached_input_tokens":19_968,
+                        "output_tokens":130,
+                        "reasoning_output_tokens":24,
+                        "total_tokens":20_584
+                    }
+                }
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let parser = AcpNativeParser::new_in_with_trae_sessions(
+            agent,
+            transcript_dir.path().to_path_buf(),
+            native_dir.path().to_path_buf(),
+        );
+        let detail = parser.get_conversation(session_id).unwrap();
+        let usage = detail.turns[1].usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, 358);
+        assert_eq!(usage.cache_creation_input_tokens, 128);
+        assert_eq!(usage.cache_read_input_tokens, 19_968);
+        assert_eq!(usage.output_tokens, 130);
+        let stats = detail.session_stats.unwrap();
+        assert_eq!(stats.total_tokens, Some(20_584));
+        assert_eq!(stats.context_window_used_tokens, Some(20_584));
+        assert_eq!(stats.context_window_max_tokens, Some(760_000));
     }
 
     #[test]

@@ -3,13 +3,15 @@
 //! TRAE CLI 2.0 is ByteDance's terminal coding agent. It is a fork of OpenAI's
 //! Codex CLI (the binary its installer ships is `traex`, linked into
 //! `~/.local/bin` as `traecli`) with its own ACP server, `traecli acp serve`.
-//! codeg launches the user's own install (see the registry entry) and keeps no
-//! parser for its store: TRAE CLI writes Codex-derived rollouts in a paginated
-//! format of its own (`history_mutation` / `world_state` records under
+//! codeg launches the user's own install (see the registry entry). TRAE CLI
+//! writes Codex-derived rollouts in a paginated format of its own
+//! (`history_mutation` / `world_state` records under
 //! `<TRAE_HOME>/cli/sessions/YYYY/MM/DD/rollout-*.jsonl`, plus SQLite state
-//! beside them) that no public contract describes, so history comes from
-//! codeg's own ACP transcript (`parsers::acp_native`), like ZCode and custom
-//! agents.
+//! beside them) that no public contract describes, so message history comes
+//! from codeg's own ACP transcript (`parsers::acp_native`), like ZCode and
+//! custom agents. The stable `token_usage_record` rows in those rollouts are
+//! read separately by `parsers::trae_usage` to enrich that history with exact
+//! usage.
 //!
 //! Everything here was verified against `traecli 0.209.1` (public channel)
 //! with an isolated `HOME`:
@@ -36,12 +38,17 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::acp::registry::AgentDistribution;
+use crate::models::AgentType;
 use crate::parsers::AgentEnv;
 
 /// Overrides the `~/.trae` directory (config, skills, sessions).
 pub(crate) const TRAE_HOME_ENV: &str = "TRAE_HOME";
+
+/// Overrides TRAE CLI's runtime directory below [`TRAE_HOME_ENV`].
+pub(crate) const TRAECLI_HOME_ENV: &str = "TRAECLI_HOME";
 
 /// TRAE CLI's personal access token: the sign-in for a machine without a
 /// browser (a server or Docker install). TRAE CLI reads it only when its PAT
@@ -72,11 +79,57 @@ pub(crate) fn resolve_trae_home_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_trae_home_dir_from(env.var_os(TRAE_HOME_ENV), dirs::home_dir())
 }
 
+/// The runtime directory that owns TRAE's native session rollouts.
+pub(crate) fn resolve_trae_cli_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    env.var_os(TRAECLI_HOME_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| resolve_trae_home_dir_for_env(env).join("cli"))
+}
+
+/// `<TRAECLI_HOME>/sessions`, where `token_usage_record` rows are written.
+pub(crate) fn resolve_trae_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_trae_cli_home_dir_for_env(env).join("sessions")
+}
+
 fn resolve_trae_home_dir_from(trae_home: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
     if let Some(dir) = trae_home.filter(|value| !value.is_empty()) {
         return PathBuf::from(dir);
     }
     home.unwrap_or_default().join(".trae")
+}
+
+/// Whether this agent is backed by TRAE CLI's native rollout store.
+///
+/// Besides the built-in, this recognizes installations created before TRAE
+/// became built in, when users registered `traecli` as a custom ACP agent.
+pub(crate) fn uses_trae_rollouts(agent_type: AgentType) -> bool {
+    match agent_type {
+        AgentType::Trae => true,
+        AgentType::Custom(id) => {
+            matches!(
+                id.to_ascii_lowercase().as_str(),
+                "trae" | "traecli" | "trae-cli"
+            ) || crate::acp::custom_registry::get(id)
+                .is_some_and(|meta| distribution_runs_trae(&meta.distribution))
+        }
+        _ => false,
+    }
+}
+
+fn distribution_runs_trae(distribution: &AgentDistribution) -> bool {
+    let command = match distribution {
+        AgentDistribution::Npx { cmd, .. }
+        | AgentDistribution::Binary { cmd, .. }
+        | AgentDistribution::Uvx { cmd, .. }
+        | AgentDistribution::System { cmd, .. } => cmd,
+    };
+    let trimmed = command.trim();
+    let basename = Path::new(trimmed)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed);
+    basename.eq_ignore_ascii_case("traecli") || basename.eq_ignore_ascii_case("traex")
 }
 
 /// `<TRAE_HOME>/traecli.toml`, the user config TRAE CLI loads at startup (and
@@ -126,6 +179,35 @@ mod tests {
             resolve_trae_home_dir_from(Some(OsString::from("~/x")), home),
             PathBuf::from("~/x")
         );
+    }
+
+    #[test]
+    fn traecli_home_relocates_the_native_sessions_store() {
+        let env = AgentEnv::with_overrides(&[
+            (TRAE_HOME_ENV, "/srv/trae"),
+            (TRAECLI_HOME_ENV, "/data/trae-runtime"),
+        ]);
+        assert_eq!(
+            resolve_trae_sessions_dir_for_env(&env),
+            PathBuf::from("/data/trae-runtime/sessions")
+        );
+
+        let env = AgentEnv::with_overrides(&[(TRAE_HOME_ENV, "/srv/trae")]);
+        assert_eq!(
+            resolve_trae_sessions_dir_for_env(&env),
+            PathBuf::from("/srv/trae/cli/sessions")
+        );
+    }
+
+    #[test]
+    fn builtin_and_legacy_custom_trae_agents_use_native_rollouts() {
+        assert!(uses_trae_rollouts(AgentType::Trae));
+        assert!(uses_trae_rollouts(
+            AgentType::custom("traecli").unwrap()
+        ));
+        assert!(!uses_trae_rollouts(
+            AgentType::custom("unrelated-agent").unwrap()
+        ));
     }
 
     #[test]

@@ -29,7 +29,8 @@ const ALL_PARSER_AGENTS: [AgentType; 19] = [
     AgentType::Kiro,
     // Codeg-owned ACP history only; no scan of ZCode's native SQLite store.
     AgentType::ZCode,
-    // Codeg-owned ACP history only; TRAE CLI's own rollouts are not read.
+    // Codeg-owned ACP message history, enriched with usage from TRAE's native
+    // token_usage_record rows.
     AgentType::Trae,
     // Codeg-owned ACP history only; Command Code's own session trees are not
     // read.

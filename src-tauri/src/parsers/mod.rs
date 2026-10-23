@@ -20,6 +20,7 @@ mod opencode_context_window;
 pub mod pi;
 pub mod qoder;
 mod summary_cache;
+mod trae_usage;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -419,12 +420,12 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
         AgentType::Antigravity => Box::new(antigravity::AntigravityParser::for_env(env)),
         AgentType::Kiro => Box::new(kiro::KiroParser::for_env(env)),
         // Custom ACP agents have no native store to reverse-engineer; their
-        // history is codeg's own ACP transcript. TRAE CLI's rollouts use an
-        // undocumented paginated format of its own (see `acp::trae`), and so
-        // do Command Code's session trees (see `acp::command_code`), so both
-        // take the same route.
+        // history is codeg's own ACP transcript. TRAE CLI takes the same route
+        // for message history, but AcpNativeParser enriches those turns from
+        // the precise token_usage_record rows in TRAE's native rollouts.
+        // Command Code's undocumented session tree remains ACP-only.
         AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => {
-            Box::new(acp_native::AcpNativeParser::new(agent_type))
+            Box::new(acp_native::AcpNativeParser::for_env(agent_type, env))
         }
     };
     Box::new(RouteSanitized(inner))
