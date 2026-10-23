@@ -506,15 +506,18 @@ describe("SidebarConversationCard sub-session chevron", () => {
     expect(queryByLabelText("Expand sub-conversations")).toBeNull()
   })
 
-  it("overlays the chevron on the rail axis (the agent-icon position)", () => {
-    const { getByLabelText } = renderCard(conv(2), {
-      hasChildren: true,
-      expanded: false,
-    })
-    // The chevron now sits at the agent-icon's rail-axis x (revealed on hover),
-    // not in the right-hand time/action slot.
-    const chevron = getByLabelText("Expand sub-conversations")
-    expect(chevron.style.left).toContain("--conv-rail-axis")
+  it("shows the child count and expand action without hovering", () => {
+    const { getByLabelText } = renderCard(
+      { ...conv(2), child_count: 3 },
+      {
+        hasChildren: true,
+        expanded: false,
+      }
+    )
+    const toggle = getByLabelText("Expand sub-conversations")
+    expect(toggle).toBeVisible()
+    expect(toggle).toHaveTextContent("3")
+    expect(toggle).toHaveAttribute("aria-description", "Sub-conversations (3)")
   })
 
   it("indents deeper rows by CONV_RAIL_DEPTH_STEP per level so the child icon aligns under the parent title", () => {

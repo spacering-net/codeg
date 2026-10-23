@@ -3597,6 +3597,17 @@
         "notInstalled": "未インストール",
         "moreAgents": "他のエージェント（{count}）"
       },
+      "subsessions": {
+        "title": "サブセッション",
+        "trigger": "サブセッション（{count}）",
+        "loading": "サブセッションを読み込み中…",
+        "loadError": "サブセッションを読み込めませんでした。",
+        "retry": "再試行",
+        "empty": "サブセッションはまだありません。",
+        "untitled": "無題のタスク",
+        "view": "表示",
+        "viewSession": "{agent} のセッションを表示：{title}"
+      },
       "subAgentOverlay": {
         "title": "サブエージェント",
         "collapsedSummary": "サブエージェント {count}",

@@ -61,8 +61,10 @@ export function useSubsessionSync(params: {
    *  can't resurrect a deleted child — the child-cache analog of the root list's
    *  deletion guard. */
   deletedChildIdsRef: RefObject<Set<number>>
+  /** Lets a history loader buffer id-only updates before the child is known. */
+  onStatus?: (id: number, status: string) => void
 }): void {
-  const { setChildrenByParent, deletedChildIdsRef } = params
+  const { setChildrenByParent, deletedChildIdsRef, onStatus } = params
 
   useEffect(() => {
     // Insert-or-replace a child in its parent's loaded array (reuse-stable). A
@@ -171,6 +173,7 @@ export function useSubsessionSync(params: {
           if (change.kind === "upsert") {
             applyChildUpsert(change.summary)
           } else if (change.kind === "status") {
+            onStatus?.(change.id, change.status)
             applyChildStatus(change.id, change.status)
           } else {
             applyChildRemove(change.id)
@@ -194,5 +197,5 @@ export function useSubsessionSync(params: {
       unlisten?.()
       offReconnect?.()
     }
-  }, [setChildrenByParent, deletedChildIdsRef])
+  }, [setChildrenByParent, deletedChildIdsRef, onStatus])
 }

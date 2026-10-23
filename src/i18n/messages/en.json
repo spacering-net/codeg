@@ -3597,6 +3597,17 @@
         "notInstalled": "Not installed",
         "moreAgents": "More agents ({count})"
       },
+      "subsessions": {
+        "title": "Sub-conversations",
+        "trigger": "Sub-conversations ({count})",
+        "loading": "Loading sub-conversations…",
+        "loadError": "Could not load sub-conversations.",
+        "retry": "Retry",
+        "empty": "No sub-conversations yet.",
+        "untitled": "Untitled task",
+        "view": "View",
+        "viewSession": "View {agent} conversation: {title}"
+      },
       "subAgentOverlay": {
         "title": "Sub-agents",
         "collapsedSummary": "Sub-agents {count}",

@@ -224,6 +224,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   onToggleExpand,
 }: SidebarConversationCardProps) {
   const t = useTranslations("Folder.conversationCard")
+  const tSubsessions = useTranslations("Folder.chat.subsessions")
   const ime = useImeGuard()
   const tSidebar = useTranslations("Folder.sidebar")
   const tStatus = useTranslations("Folder.statusLabels")
@@ -413,14 +414,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     />
                     <div
                       className={cn(
-                        "pointer-events-none absolute top-1/2 z-10 flex items-center justify-center",
-                        // With children, the row hover (or focus) swaps this agent
-                        // icon out for the expand chevron at the same spot — fade it
-                        // so the two cross-fade in place. On touch (no hover) the
-                        // chevron is always shown, so the icon is always hidden.
-                        hasChildren &&
-                          onToggleExpand &&
-                          "transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:opacity-0"
+                        "pointer-events-none absolute top-1/2 z-10 flex items-center justify-center"
                       )}
                       style={{
                         left: "var(--conv-rail-axis, 0.875rem)",
@@ -494,56 +488,6 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     worktree (`origin_cwd`): the row stays quiet about it, and
                     the hover bubble names the original path instead. */}
                   </button>
-
-                  {/* Expand/collapse affordance for delegation children. It overlays
-                  the agent icon at the rail axis: idle shows the icon, and
-                  hovering (or focusing) the row swaps in this chevron at the very
-                  same spot while the icon fades. A sibling of the row button (HTML
-                  forbids nested buttons) with `stopPropagation` so a toggle never
-                  selects the row; pointer events stay off until revealed so a
-                  click on the icon area still selects the row when not hovering. */}
-                  {hasChildren && onToggleExpand && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onToggleExpand(conversation.id)
-                      }}
-                      aria-label={
-                        expanded
-                          ? t("collapseSubsessions")
-                          : t("expandSubsessions")
-                      }
-                      aria-expanded={expanded}
-                      title={
-                        expanded
-                          ? t("collapseSubsessions")
-                          : t("expandSubsessions")
-                      }
-                      className={cn(
-                        "absolute top-0 bottom-0 z-20 flex items-center justify-center",
-                        "cursor-pointer outline-none",
-                        "opacity-0 pointer-events-none transition-opacity duration-150",
-                        "group-hover:opacity-100 group-hover:pointer-events-auto",
-                        "group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
-                        "[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
-                      )}
-                      style={{
-                        left: "var(--conv-rail-axis, 0.875rem)",
-                        width: "0.875rem",
-                        transform: "translateX(-50%)",
-                      }}
-                    >
-                      <ChevronRight
-                        aria-hidden
-                        className={cn(
-                          "h-3 w-3 shrink-0 text-muted-foreground/70",
-                          "transition-transform duration-200 ease-out",
-                          expanded && "rotate-90"
-                        )}
-                      />
-                    </button>
-                  )}
 
                   {/* Right slot: sizes to its content — the time / status badge
                   normally, the two quick-action buttons (pin, done) on hover —
@@ -669,6 +613,48 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       </div>
                     )}
                   </div>
+
+                  {/* Keep the child toggle at the right edge so hover actions
+                  cannot move it underneath the pointer. Expanding children does
+                  not select the parent conversation. */}
+                  {hasChildren && onToggleExpand && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onToggleExpand(conversation.id)
+                      }}
+                      aria-label={
+                        expanded
+                          ? t("collapseSubsessions")
+                          : t("expandSubsessions")
+                      }
+                      aria-expanded={expanded}
+                      aria-description={tSubsessions("trigger", {
+                        count: conversation.child_count,
+                      })}
+                      title={
+                        expanded
+                          ? t("collapseSubsessions")
+                          : t("expandSubsessions")
+                      }
+                      className="mr-1 h-7 shrink-0 px-1.5"
+                    >
+                      <span className="tabular-nums">
+                        {conversation.child_count}
+                      </span>
+                      <ChevronRight
+                        aria-hidden
+                        data-icon="inline-end"
+                        className={cn(
+                          "transition-transform duration-200 ease-out",
+                          expanded && "rotate-90"
+                        )}
+                      />
+                    </Button>
+                  )}
                 </div>
               </div>
             </HoverCardTrigger>
