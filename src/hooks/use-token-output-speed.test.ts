@@ -152,9 +152,9 @@ describe("useTokenOutputSpeed", () => {
     expect(result.current).toBeCloseTo(200)
   })
 
-  it("decays through a silent gap instead of freezing the reading", () => {
-    // No new content at all — a quiet long-running tool, a retry backoff, or a
-    // permission prompt blocking the turn. The reading has to fall.
+  it("preserves the rolling average velocity through a silent gap instead of falling to zero", () => {
+    // Matching Hermes: when output pauses (tool execution, network gap, stream finish),
+    // hold the rolling average velocity instead of decaying to 0.0 tok/s.
     const { result, rerender } = mount(
       msg([{ type: "text", text: "a".repeat(80) }])
     )
@@ -164,7 +164,29 @@ describe("useTokenOutputSpeed", () => {
     expect(result.current).toBeCloseTo(100)
 
     for (let i = 0; i < 20; i++) tick()
-    expect(result.current as number).toBeLessThan(5)
+    expect(result.current).toBeCloseTo(100)
+  })
+
+  it("maintains a rolling average over the last 10 samples (Hermes-style)", () => {
+    let text = "a".repeat(80)
+    const { result, rerender } = mount(msg([{ type: "text", text }]))
+
+    // 10 samples with +200 chars (+50 tokens) each tick = 100 tok/s
+    for (let i = 0; i < 10; i++) {
+      text += "a".repeat(200)
+      rerender({ message: msg([{ type: "text", text }]) })
+      tick()
+    }
+    expect(result.current).toBeCloseTo(100)
+
+    // 10 samples with +400 chars (+100 tokens) each tick = 200 tok/s
+    for (let i = 0; i < 10; i++) {
+      text += "a".repeat(400)
+      rerender({ message: msg([{ type: "text", text }]) })
+      tick()
+    }
+    // Older 100 tok/s samples are fully shifted out of the 10-sample window
+    expect(result.current).toBeCloseTo(200)
   })
 
   it("repaints on its own cadence, not on every delta", () => {
