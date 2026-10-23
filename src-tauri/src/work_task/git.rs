@@ -333,7 +333,11 @@ pub async fn diff_numstat(
     path: &str,
     base: &str,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
-    let out = run_git(path, &["diff", "--numstat", base]).await?;
+    let out = run_git(
+        path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", base],
+    )
+    .await?;
     if !out.status.success() {
         return Err(git_command_error("diff --numstat", &out.stderr));
     }
@@ -347,13 +351,28 @@ pub async fn diff_numstat_between(
     from: &str,
     to: &str,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
-    let out = run_git(path, &["diff", "--numstat", from, to]).await?;
+    let out = run_git(
+        path,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--numstat",
+            from,
+            to,
+        ],
+    )
+    .await?;
     if !out.status.success() {
         return Err(git_command_error("diff --numstat", &out.stderr));
     }
     Ok(parse_numstat(&out.stdout))
 }
 
+/// Reads `--numstat` run with `core.quotePath=false`. Without it git prints a
+/// non-ASCII path C-quoted and octal-escaped (`"\351\234\200\346\261\202.md"`):
+/// unreadable in the task drawer, and a pathspec that matches nothing when the
+/// drawer asks [`diff_patch_with_untracked`] for that file.
 fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
     let mut files = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -497,7 +516,12 @@ pub async fn diff_numstat_with_untracked(
     anchor: &str,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
     let scratch = ScratchIndex::build(path, anchor).await?;
-    let out = run_git_with_index(path, &scratch.path, &["diff", "--numstat", anchor]).await?;
+    let out = run_git_with_index(
+        path,
+        &scratch.path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", anchor],
+    )
+    .await?;
     if !out.status.success() {
         return Err(git_command_error("diff --numstat", &out.stderr));
     }
@@ -514,7 +538,9 @@ pub async fn diff_patch_with_untracked(
 ) -> Result<String, AppCommandError> {
     let scratch = ScratchIndex::build(path, anchor).await?;
     let literal = file.map(|f| format!(":(literal){f}"));
-    let mut args = vec!["diff", "--no-color", anchor];
+    // Unquoted like the file list, so the preview names a non-ASCII file as
+    // itself rather than by its octal escapes.
+    let mut args = vec!["-c", "core.quotePath=false", "diff", "--no-color", anchor];
     if let Some(ref f) = literal {
         args.push("--");
         args.push(f);
@@ -1079,6 +1105,58 @@ mod tests {
             seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
             ["kept.log"],
             "committed work must not vanish because a pattern would have ignored it: {seen:?}"
+        );
+    }
+
+    /// The task drawer lists a file by the name numstat gives it, then asks for
+    /// that file's patch by the same name. By default git prints a non-ASCII
+    /// path C-quoted and octal-escaped, so the drawer showed
+    /// `"\351\234\200\346\261\202.md"` and the patch it asked for came back
+    /// empty.
+    #[tokio::test]
+    async fn a_non_ascii_path_is_listed_and_diffed_by_its_own_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 path");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        // Git's default, set repo-local so the git the code under test runs
+        // reads it too: a developer's global `core.quotePath=false` must not
+        // hide the bug.
+        git_run(dir.path(), &["config", "core.quotePath", "true"]);
+        std::fs::write(dir.path().join("需求.md"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        std::fs::write(dir.path().join("需求.md"), "one\ntwo\n").expect("write");
+        std::fs::write(dir.path().join("新文件.txt"), "x\n").expect("write");
+
+        let plain = diff_numstat(path, &base).await.expect("plain diff");
+        assert_eq!(
+            plain.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["需求.md"]
+        );
+        let seen = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("acceptance diff");
+        assert_eq!(
+            seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["新文件.txt", "需求.md"]
+        );
+        let patch = diff_patch_with_untracked(path, &base, Some("需求.md"))
+            .await
+            .expect("patch");
+        assert!(patch.contains("+++ b/需求.md"), "{patch}");
+        assert!(patch.contains("+two"), "{patch}");
+
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "the task's work"]);
+        let head = rev_parse(path, "HEAD").await.expect("head sha");
+        let committed = diff_numstat_between(path, &base, &head)
+            .await
+            .expect("commit diff");
+        assert_eq!(
+            committed.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["新文件.txt", "需求.md"]
         );
     }
 
