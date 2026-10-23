@@ -92,14 +92,25 @@ vi.mock("@/components/chat/conversation-context-bar", () => ({
   }) => <div data-testid="ctx-bar">{extraContent}</div>,
   // The composer imports these to render the below-input folder/branch row.
   // Hidden by default; the cold-start test resolves it after the editor mounts.
-  ConversationFolderBranchPicker: () => null,
+  ConversationFolderBranchPicker: () => <div data-testid="folder-picker" />,
   useConversationFolderBranchPickerVisible: folderPickerVisible,
 }))
-vi.mock("./composer-context-usage", () => ({
-  ComposerContextUsage: () => null,
+vi.mock("@/components/chat/composer-context-usage", () => ({
+  ComposerUsageIndicators: ({
+    children,
+  }: {
+    children: (indicators: {
+      context: React.ReactNode
+      summary: React.ReactNode
+    }) => React.ReactNode
+  }) =>
+    children({
+      context: <span data-testid="context-usage" />,
+      summary: <span data-testid="token-summary" />,
+    }),
 }))
-vi.mock("./composer-connection-status", () => ({
-  ComposerConnectionStatus: () => null,
+vi.mock("@/components/chat/composer-connection-status", () => ({
+  ComposerConnectionStatus: () => <span data-testid="connection-status" />,
 }))
 // The platform opener is the DESKTOP arm of the shared opener; this suite runs
 // in web mode, where a system-browser target lands on `window.open` instead.
@@ -249,7 +260,10 @@ function renderInput(
 }
 
 describe("MessageInput (RichComposer integration)", () => {
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    folderPickerVisible.mockReturnValue(false)
+  })
 
   it("mounts and renders the rich-text composer surface", async () => {
     const { container } = renderInput({})
@@ -502,6 +516,23 @@ describe("MessageInput (RichComposer integration)", () => {
     const editor = container.querySelector('[role="textbox"]') as HTMLElement
     firePointer(stop, "click", "touch")
     expect(document.activeElement).not.toBe(editor)
+  })
+
+  it("gives the attached status row an ancestor size container", async () => {
+    folderPickerVisible.mockReturnValue(true)
+    const { container } = renderInput({ attachmentTabId: "tab-1" })
+    const summary = await screen.findByTestId("token-summary")
+
+    let queryContainer = summary.parentElement
+    while (queryContainer && !queryContainer.classList.contains("@container")) {
+      queryContainer = queryContainer.parentElement
+    }
+
+    expect(queryContainer).not.toBeNull()
+    expect(queryContainer).toContainElement(
+      container.querySelector(".codeg-composer-chrome")
+    )
+    expect(within(queryContainer!).getByTestId("folder-picker")).toBeVisible()
   })
 })
 
