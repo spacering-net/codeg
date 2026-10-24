@@ -33,6 +33,11 @@ import { BranchPicker } from "@/components/shared/branch-picker"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import {
+  getSavedSelections,
+  saveConfigPreference,
+  saveModePreference,
+} from "@/lib/selector-prefs-storage"
+import {
   workTaskSettingsEffective,
   workTaskTemplateDelete,
   workTaskTemplateList,
@@ -175,6 +180,13 @@ function TaskEditorBody({
   // Mirrors the composer's attached-file count, so a brief that is only a
   // screenshot still passes the "say something" gate below.
   const [attachmentCount, setAttachmentCount] = useState(0)
+  // The effective task settings' OWN mode / options, as loaded below. Kept only
+  // to tell whether the bar is showing something inheriting would not launch —
+  // its values are what a task without an agent override runs.
+  const [settingsSelections, setSettingsSelections] = useState<{
+    modeId: string | null
+    configValues: Record<string, string>
+  } | null>(null)
   const { contentRef, onPointerDownOutside, onFocusOutside } =
     useScrollbarSafeDismiss()
 
@@ -197,6 +209,17 @@ function TaskEditorBody({
     [folders, folderId]
   )
 
+  // What a NEW conversation starts on when nothing else pins it: the user's
+  // LAST selections for this agent — the same memory the chat composer writes.
+  // Without this the pickers fall back to the agent's own defaults, so a
+  // permission chosen once had to be chosen again on every new task.
+  const isCreate = task == null
+  const seedSelectionsForAgent = (agent: AgentType) => {
+    const saved = getSavedSelections(agent)
+    setModeId(saved.modeId)
+    setConfigValues(saved.configValues)
+  }
+
   // Prefill the agent controls from the folder's effective settings while the
   // user hasn't touched them; follows folder switches and template resets
   // (the effect re-runs when `agentDirty` flips back to false).
@@ -211,14 +234,25 @@ function TaskEditorBody({
         // Nothing to inherit: a placeholder, which a save keeps rather than
         // inherits (see `pinsShownAgent`).
         setAgentType(agent ?? "claude_code")
-        setModeId(s.mode_id ?? null)
-        setConfigValues(s.config_values ?? {})
+        // Settings this folder explicitly pinned win; whatever they leave
+        // unset starts on the agent's last selections instead of its defaults.
+        // Only for a CREATE: an existing task's own config (or the settings it
+        // follows) is not re-decided just because the dialog was opened.
+        const saved = isCreate
+          ? getSavedSelections(agent ?? "claude_code")
+          : { modeId: null, configValues: {} }
+        setSettingsSelections({
+          modeId: s.mode_id ?? null,
+          configValues: s.config_values ?? {},
+        })
+        setModeId(s.mode_id ?? saved.modeId)
+        setConfigValues({ ...saved.configValues, ...(s.config_values ?? {}) })
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [agentDirty, folderId, folderDefaultAgent])
+  }, [agentDirty, folderId, folderDefaultAgent, isCreate])
 
   const folderPath = useMemo(
     () => folders.find((f) => f.id === folderId)?.path ?? null,
@@ -261,6 +295,24 @@ function TaskEditorBody({
       : t("agentInheritedUnavailableHint", {
           agent: getAgentLabel(inherited.agent),
         })
+
+  // The bar is showing a value the task settings do NOT provide — it came from
+  // the agent's last selections (see `seedSelectionsForAgent`). Inheriting
+  // would launch the settings' mode/options instead, or the agent's own
+  // defaults where the settings pin nothing, i.e. a permission the user never
+  // saw on screen. So the bar's selections are saved with the task, the same
+  // way `pinsShownAgent` saves an agent that inheriting would not launch (the
+  // engine resolves a task's options only from a task that owns its agent).
+  const showsUninheritedSelections =
+    !agentDirty &&
+    inherited != null &&
+    inherited.folderId === folderId &&
+    settingsSelections != null &&
+    ((modeId != null && modeId !== settingsSelections.modeId) ||
+      Object.entries(configValues).some(
+        ([optionId, value]) =>
+          settingsSelections.configValues[optionId] !== value
+      ))
 
   // The captured composer + agent state as a `WorkTaskConfig` — the shared
   // payload of both the task draft and a saved template. Without `ownAgent`
@@ -324,7 +376,9 @@ function TaskEditorBody({
       const draft: WorkTaskDraft = {
         folder_id: folderId,
         title: title.trim(),
-        config: await buildConfig(agentDirty || pinsShownAgent),
+        config: await buildConfig(
+          agentDirty || pinsShownAgent || showsUninheritedSelections
+        ),
       }
       await onSubmit(draft)
     } catch (e) {
@@ -427,8 +481,9 @@ function TaskEditorBody({
             onSelect={(a) => {
               setAgentDirty(true)
               setAgentType(a)
-              setModeId(null)
-              setConfigValues({})
+              // The previous agent's picks are not this one's: start on what
+              // this agent was last left on.
+              seedSelectionsForAgent(a)
             }}
             // A system substitution (agent unavailable) must not count as a
             // user override choice. The mode and options loaded for the agent
@@ -436,8 +491,14 @@ function TaskEditorBody({
             // on an untouched pill is saved with the task.
             onFallback={(a) => {
               setAgentType(a)
-              setModeId(null)
-              setConfigValues({})
+              if (isCreate) {
+                seedSelectionsForAgent(a)
+              } else {
+                // Keep the existing fallback behavior; remembered selections
+                // seed new tasks, not a task the user is only editing.
+                setModeId(null)
+                setConfigValues({})
+              }
             }}
             onAgentsLoaded={(agents) =>
               setAgentShown(agents.some((a) => a.enabled && a.available))
@@ -489,6 +550,15 @@ function TaskEditorBody({
               onModeChange={(m) => {
                 setAgentDirty(true)
                 setModeId(m)
+                // Remember it as the agent's last selection, so the NEXT
+                // conversation — task, automation or chat — opens on it.
+                const modes = agentOptions.snapshot?.modes
+                if (m != null && modes) {
+                  saveModePreference(agentType, {
+                    ...modes,
+                    current_mode_id: m,
+                  })
+                }
               }}
               onConfigChange={(optionId, valueId) => {
                 setAgentDirty(true)
@@ -498,6 +568,11 @@ function TaskEditorBody({
                   else next[optionId] = valueId
                   return next
                 })
+                // Same memory as the mode above. The inline bar never clears a
+                // value (`allowInherit` is off), so only real picks land here.
+                if (valueId !== null) {
+                  saveConfigPreference(agentType, optionId, valueId)
+                }
               }}
             />
           }
