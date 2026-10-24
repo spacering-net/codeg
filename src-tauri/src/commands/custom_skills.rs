@@ -835,6 +835,18 @@ mod tests {
     }
 
     #[test]
+    fn zcode_joins_the_custom_skill_matrix_at_its_native_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        temp_env::with_var("ZCODE_HOME", Some(tmp.path()), || {
+            assert!(supported_agents().contains(&AgentType::ZCode));
+            assert_eq!(
+                agent_link_path(AgentType::ZCode, "example").unwrap(),
+                tmp.path().join("skills/example")
+            );
+        });
+    }
+
+    #[test]
     fn a_custom_agent_joins_the_matrix_by_declaring_a_store() {
         use crate::acp::custom_registry::{
             hydrate, hydrate_test_guard, CustomAgentDef, CustomAgentSpec, CustomDistributionKind,
@@ -1103,6 +1115,80 @@ mod tests {
             assert!(results.iter().all(|r| r.ok), "{results:?}");
             assert!(!dir.exists(), "central dir must be gone after delete");
         })
+        .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fs_zcode_import_and_matrix_links_use_its_native_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let native = tmp.path().join("native data");
+        temp_env::async_with_vars(
+            [
+                ("HOME", Some(tmp.path())),
+                ("ZCODE_HOME", Some(native.as_path())),
+            ],
+            async {
+                assert!(central_experts_dir().starts_with(tmp.path()));
+                let source = native.join("skills/zcode-import-fixture");
+                fs::create_dir_all(source.join("references")).unwrap();
+                fs::write(
+                    source.join("SKILL.md"),
+                    "---\nname: Original\ndescription: Example\n---\nbody",
+                )
+                .unwrap();
+                fs::write(source.join("references/proof.txt"), "asset").unwrap();
+                let imported =
+                    custom_import_from_agent(AgentType::ZCode, vec!["zcode-import-fixture".into()])
+                        .await
+                        .unwrap();
+                assert!(imported[0].ok, "{imported:?}");
+                assert_eq!(
+                    fs::read_to_string(
+                        central_experts_dir().join("zcode-import-fixture/references/proof.txt")
+                    )
+                    .unwrap(),
+                    "asset"
+                );
+
+                let id = "zcode-managed-fixture";
+                custom_create_skill(
+                    id.into(),
+                    "---\nname: Managed\ndescription: Test\n---\nbody".into(),
+                )
+                .await
+                .unwrap();
+                let rows = custom_apply_links(vec![LinkOp {
+                    expert_id: id.into(),
+                    agent_type: AgentType::ZCode,
+                    enable: true,
+                }])
+                .await
+                .unwrap();
+                assert!(rows[0].ok, "{rows:?}");
+                assert_eq!(
+                    rows[0].status.as_ref().unwrap().state,
+                    ExpertLinkState::LinkedToCodeg
+                );
+                let link = native.join("skills").join(id);
+                assert!(path_is_symlink(&link));
+                let rows = custom_list_all_install_statuses().await.unwrap();
+                assert!(rows.iter().any(|r| r.expert_id == id
+                    && r.agent_type == AgentType::ZCode
+                    && r.state == ExpertLinkState::LinkedToCodeg));
+                let rows = custom_apply_links(vec![LinkOp {
+                    expert_id: id.into(),
+                    agent_type: AgentType::ZCode,
+                    enable: false,
+                }])
+                .await
+                .unwrap();
+                assert!(rows[0].ok, "{rows:?}");
+                assert!(!link.exists() && !path_is_symlink(&link));
+                assert!(central_experts_dir().join(id).join("SKILL.md").is_file());
+                assert!(source.join("references/proof.txt").is_file());
+            },
+        )
         .await;
     }
 

@@ -9515,6 +9515,19 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".commandcode/skills", ".agents/skills"],
         }),
+        // zcode-acp 0.76.2 discovers directory bundles in this order: native
+        // ZCODE_HOME/skills, OS-home .agents/skills, enabled plugin caches,
+        // then cwd/.agents/skills. Manage the user-owned roots here; plugin
+        // caches and cli/config.json enablement stay with ZCode. Its ACP
+        // command advertisement remains authoritative for invocable skills.
+        AgentType::ZCode => Some(SkillStorageSpec {
+            kind: SkillStorageKind::SkillDirectoryOnly,
+            global_dirs: vec![
+                crate::acp::zcode::skills_home_dir()?.join("skills"),
+                home_dir_or_default().join(".agents").join("skills"),
+            ],
+            project_rel_dirs: vec![".agents/skills"],
+        }),
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -9528,7 +9541,6 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // this function). The dedicated path was normalized to absolute at
         // save time; a non-absolute value (a hand-edited database) is ignored
         // rather than resolved against an arbitrary working directory.
-        AgentType::ZCode => None,
         AgentType::Custom(id) => {
             let decl = crate::acp::custom_registry::skills_decl(id);
             let mut global_dirs = Vec::new();
@@ -14931,6 +14943,268 @@ pub(crate) async fn codex_poll_device_code_core(
         refresh_token: Some(tokens.refresh_token),
         account_id: Some(account_id),
     })
+}
+
+#[cfg(test)]
+mod zcode_skills_tests {
+    use super::*;
+
+    fn write_skill(root: &Path, id: &str, body: &str) {
+        fs::create_dir_all(root.join(id)).unwrap();
+        fs::write(root.join(id).join("SKILL.md"), body).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn zcode_skills_manage_directory_bundles_in_native_then_shared_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let native = tmp.path().join("Native ZCode");
+        temp_env::async_with_vars(
+            [
+                ("ZCODE_HOME", Some(native.as_path())),
+                ("HOME", Some(tmp.path())),
+                ("USERPROFILE", Some(tmp.path())),
+            ],
+            async {
+                let os_home = home_dir_or_default();
+                assert!(
+                    os_home.starts_with(tmp.path()),
+                    "fixture must isolate OS home"
+                );
+                let shared = os_home.join(".agents/skills");
+                let native_skills = native.join("skills");
+                write_skill(&native_skills, "duplicate", "native");
+                write_skill(&shared, "duplicate", "shared");
+                write_skill(&shared, "shared-only", "shared only");
+                fs::write(native_skills.join("flat.md"), "not a directory bundle").unwrap();
+                fs::create_dir_all(native.join("cli")).unwrap();
+                let config = r#"{"skills":{"disabled":{"enable":false}},"other":"preserve"}"#;
+                fs::write(native.join("cli/config.json"), config).unwrap();
+                let plugin = native.join("cli/plugins/cache/market/plugin/1.0.0/skills");
+                write_skill(&plugin, "plugin-owned", "plugin bytes");
+
+                let listed = acp_list_agent_skills(AgentType::ZCode, None).await.unwrap();
+                assert!(listed.supported);
+                assert_eq!(listed.locations[0].path, native_skills.to_string_lossy());
+                assert_eq!(
+                    listed.skills.len(),
+                    2,
+                    "flat files and plugin caches stay out"
+                );
+                let duplicate = listed.skills.iter().find(|s| s.id == "duplicate").unwrap();
+                assert_eq!(Path::new(&duplicate.path), native_skills.join("duplicate"));
+
+                let saved = acp_save_agent_skill(
+                    AgentType::ZCode,
+                    AgentSkillScope::Global,
+                    "new-skill".into(),
+                    "---\nname: new-skill\ndescription: Test\n---\nbody".into(),
+                    None,
+                    Some(AgentSkillLayout::MarkdownFile),
+                )
+                .await
+                .unwrap();
+                assert_eq!(saved.layout, AgentSkillLayout::SkillDirectory);
+                assert_eq!(Path::new(&saved.path), native_skills.join("new-skill"));
+                assert!(native_skills.join("new-skill/SKILL.md").is_file());
+                assert!(
+                    !shared.join("new-skill").exists(),
+                    "installs use the native store"
+                );
+                let read = acp_read_agent_skill(
+                    AgentType::ZCode,
+                    AgentSkillScope::Global,
+                    "new-skill".into(),
+                    None,
+                )
+                .await
+                .unwrap();
+                assert!(read.content.ends_with("body"));
+                acp_save_agent_skill(
+                    AgentType::ZCode,
+                    AgentSkillScope::Global,
+                    "new-skill".into(),
+                    "edited".into(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    fs::read_to_string(native_skills.join("new-skill/SKILL.md")).unwrap(),
+                    "edited"
+                );
+                acp_delete_agent_skill(
+                    AgentType::ZCode,
+                    AgentSkillScope::Global,
+                    "new-skill".into(),
+                    None,
+                )
+                .await
+                .unwrap();
+                assert!(!native_skills.join("new-skill").exists());
+                assert_eq!(
+                    fs::read_to_string(shared.join("duplicate/SKILL.md")).unwrap(),
+                    "shared"
+                );
+                assert_eq!(
+                    fs::read_to_string(native.join("cli/config.json")).unwrap(),
+                    config
+                );
+                assert_eq!(
+                    fs::read_to_string(plugin.join("plugin-owned/SKILL.md")).unwrap(),
+                    "plugin bytes"
+                );
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn zcode_native_skill_crud_does_not_rewrite_cli_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("cli")).unwrap();
+        let config = r#"{"skills":{"keep-disabled":{"enable":false}}}"#;
+        fs::write(tmp.path().join("cli/config.json"), config).unwrap();
+        temp_env::async_with_vars([("ZCODE_HOME", Some(tmp.path()))], async {
+            let id = "codeg-zcode-crud-fixture";
+            // Seed the native entry so the generic global lookup never falls
+            // through to a same-id skill in the developer's shared store.
+            write_skill(&tmp.path().join("skills"), id, "before");
+            let skill = acp_save_agent_skill(
+                AgentType::ZCode,
+                AgentSkillScope::Global,
+                id.into(),
+                "body".into(),
+                None,
+                Some(AgentSkillLayout::MarkdownFile),
+            )
+            .await
+            .unwrap();
+            assert_eq!(skill.layout, AgentSkillLayout::SkillDirectory);
+            assert_eq!(Path::new(&skill.path), tmp.path().join("skills").join(id));
+            let listed = acp_list_agent_skills(AgentType::ZCode, None).await.unwrap();
+            assert!(listed.skills.iter().any(|s| s.id == id));
+            let content =
+                acp_read_agent_skill(AgentType::ZCode, AgentSkillScope::Global, id.into(), None)
+                    .await
+                    .unwrap();
+            assert_eq!(content.content, "body");
+            acp_save_agent_skill(
+                AgentType::ZCode,
+                AgentSkillScope::Global,
+                id.into(),
+                "edited".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                fs::read_to_string(tmp.path().join("skills").join(id).join("SKILL.md")).unwrap(),
+                "edited"
+            );
+            acp_delete_agent_skill(AgentType::ZCode, AgentSkillScope::Global, id.into(), None)
+                .await
+                .unwrap();
+            assert!(!tmp.path().join("skills").join(id).exists());
+            assert_eq!(
+                fs::read_to_string(tmp.path().join("cli/config.json")).unwrap(),
+                config
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn zcode_project_skills_follow_the_session_cwd_not_its_git_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("repo/nested");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(tmp.path().join("repo/.git")).unwrap();
+        write_skill(
+            &tmp.path().join("repo/.agents/skills"),
+            "ancestor-only",
+            "parent",
+        );
+        temp_env::async_with_vars([("ZCODE_HOME", Some(tmp.path()))], async {
+            let workspace_arg = Some(workspace.to_string_lossy().into_owned());
+            let saved = acp_save_agent_skill(
+                AgentType::ZCode,
+                AgentSkillScope::Project,
+                "project-test".into(),
+                "project".into(),
+                workspace_arg.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                Path::new(&saved.path),
+                workspace.join(".agents/skills/project-test")
+            );
+            let listed = acp_list_agent_skills(AgentType::ZCode, workspace_arg.clone())
+                .await
+                .unwrap();
+            let project: Vec<_> = listed
+                .skills
+                .iter()
+                .filter(|s| s.scope == AgentSkillScope::Project)
+                .collect();
+            assert_eq!(project.len(), 1);
+            assert_eq!(project[0].id, "project-test");
+            assert!(acp_save_agent_skill(
+                AgentType::ZCode,
+                AgentSkillScope::Project,
+                "bad".into(),
+                "body".into(),
+                None,
+                None,
+            )
+            .await
+            .is_err());
+            assert!(acp_save_agent_skill(
+                AgentType::ZCode,
+                AgentSkillScope::Global,
+                "../escape".into(),
+                "body".into(),
+                None,
+                None,
+            )
+            .await
+            .is_err());
+            acp_delete_agent_skill(
+                AgentType::ZCode,
+                AgentSkillScope::Project,
+                "project-test".into(),
+                workspace_arg,
+            )
+            .await
+            .unwrap();
+            assert!(!workspace.join(".agents/skills/project-test").exists());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn zcode_has_authoritative_rows_in_every_bundled_skill_matrix() {
+        let tmp = tempfile::tempdir().unwrap();
+        temp_env::async_with_vars([("ZCODE_HOME", Some(tmp.path()))], async {
+            let rows = crate::commands::experts::experts_list_all_install_statuses()
+                .await
+                .unwrap();
+            assert!(rows.iter().any(|r| r.agent_type == AgentType::ZCode));
+            let rows = crate::commands::science::science_list_all_install_statuses()
+                .await
+                .unwrap();
+            assert!(rows.iter().any(|r| r.agent_type == AgentType::ZCode));
+            let rows = crate::commands::office_tools::officecli_skill_list_all_install_statuses()
+                .await
+                .unwrap();
+            assert!(rows.iter().any(|r| r.agent_type == AgentType::ZCode));
+        })
+        .await;
+    }
 }
 
 #[cfg(test)]

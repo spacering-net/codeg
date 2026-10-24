@@ -9,6 +9,34 @@ pub struct ZCodeRuntime {
     pub node: PathBuf,
 }
 
+/// Match the bridge's `zcodeHomeDir`: ZCODE_HOME, then HOME/USERPROFILE.
+/// Its native data home differs from Node's OS home used by shared skills.
+/// A relative data home changes with each session cwd and cannot be exposed
+/// as one global Skills store by Codeg.
+pub(crate) fn skills_home_dir() -> Option<PathBuf> {
+    skills_home_from_env(
+        std::env::var_os("ZCODE_HOME"),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+fn skills_home_from_env(
+    zcode_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let root = zcode_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .or_else(|| userprofile.filter(|value| !value.is_empty()))
+                .map(|home| PathBuf::from(home).join(".zcode"))
+        })?;
+    root.is_absolute().then_some(root)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("Official ZCode CLI could not be found. Install ZCode and sign in, or set ZCODE_BIN to its zcode.cjs entry in Agent Settings.")]
@@ -377,6 +405,31 @@ pub fn initial_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skills_home_matches_the_bridges_environment_precedence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let native = tmp.path().join("Native ZCode");
+        assert_eq!(
+            skills_home_from_env(Some(native.into_os_string()), Some(tmp.path().into()), None),
+            Some(tmp.path().join("Native ZCode")),
+        );
+        assert_eq!(
+            skills_home_from_env(Some("".into()), Some(tmp.path().into()), None),
+            Some(tmp.path().join(".zcode")),
+        );
+        assert_eq!(
+            skills_home_from_env(None, None, Some(tmp.path().into())),
+            Some(tmp.path().join(".zcode")),
+        );
+    }
+
+    #[test]
+    fn relative_skills_homes_are_not_a_global_store() {
+        for value in ["relative-zcode", "~/zcode", "../zcode"] {
+            assert!(skills_home_from_env(Some(value.into()), None, None).is_none());
+        }
+    }
 
     fn file(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

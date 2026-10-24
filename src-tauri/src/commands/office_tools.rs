@@ -1064,6 +1064,7 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::Qoder,
         AgentType::Antigravity,
         AgentType::Kiro,
+        AgentType::ZCode,
         AgentType::Trae,
         AgentType::CommandCode,
     ];

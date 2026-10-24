@@ -9,8 +9,8 @@ use crate::acp::error::AcpError;
 use crate::acp::opencode_plugins::PluginCheckSummary;
 use crate::acp::preflight::PreflightResult;
 use crate::acp::types::{
-    AcpAgentInfo, AcpAgentStatus, AgentDiagnosticsReport, AgentSkillContent, AgentSkillLayout,
-    AgentSkillScope, AgentSkillsListResult, ConnectionInfo, ForkResultInfo,
+    AcpAgentInfo, AcpAgentStatus, AgentDiagnosticsReport, AgentSkillContent, AgentSkillItem,
+    AgentSkillLayout, AgentSkillScope, AgentSkillsListResult, ConnectionInfo, ForkResultInfo,
 };
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::app_state::AppState;
@@ -294,8 +294,8 @@ pub struct AcpSaveAgentSkillParams {
 
 pub async fn acp_save_agent_skill(
     Json(params): Json<AcpSaveAgentSkillParams>,
-) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_save_agent_skill(
+) -> Result<Json<AgentSkillItem>, AppCommandError> {
+    let skill = acp_commands::acp_save_agent_skill(
         params.agent_type,
         params.scope,
         params.skill_id,
@@ -305,7 +305,7 @@ pub async fn acp_save_agent_skill(
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    Ok(Json(skill))
 }
 
 #[derive(Deserialize)]
@@ -1512,6 +1512,36 @@ mod tests {
     use super::*;
 
     use crate::acp::agent_mentions::append_agent_routes;
+
+    #[tokio::test]
+    async fn zcode_skill_save_returns_the_item_the_web_editor_needs() {
+        let tmp = tempfile::tempdir().unwrap();
+        temp_env::async_with_vars([("ZCODE_HOME", Some(tmp.path()))], async {
+            let params = serde_json::from_value(serde_json::json!({
+                "agentType": "zcode",
+                "scope": "project",
+                "skillId": "web-skill",
+                "content": "---\nname: web-skill\ndescription: Test\n---\nbody",
+                "workspacePath": tmp.path().to_string_lossy(),
+                "layout": "markdown_file"
+            }))
+            .unwrap();
+            let response = acp_save_agent_skill(Json(params)).await.unwrap();
+            let value = serde_json::to_value(response.0).unwrap();
+            assert_eq!(value["id"], "web-skill");
+            assert_eq!(value["scope"], "project");
+            assert_eq!(value["layout"], "skill_directory");
+            let directory = tmp.path().join(".agents/skills/web-skill");
+            assert_eq!(
+                std::path::Path::new(value["path"].as_str().unwrap()),
+                directory
+            );
+            assert!(std::fs::read_to_string(directory.join("SKILL.md"))
+                .unwrap()
+                .ends_with("body"));
+        })
+        .await;
+    }
 
     #[test]
     fn prompt_params_deserialize_camel_case_fields() {

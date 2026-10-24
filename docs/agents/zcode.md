@@ -23,6 +23,31 @@ Images and embedded resources follow the bridge's negotiated ACP capabilities. P
 
 The bridge accepts up to 100 content blocks and 50 MiB of decoded content per prompt, with a 10 MiB limit per image. Image attachments must be PNG, JPEG, WebP, GIF, BMP or SVG. Other image formats, invalid base64 and oversized prompts return an error. Pause any native goal loop before sending binary attachments; queued goal prompts accept only text.
 
+## Skills
+
+Codeg's Skills settings can list, read, create, edit, delete and import ZCode
+directory bundles (`<id>/SKILL.md`). ZCode also appears in the custom, expert,
+science and Office skill installation matrices.
+
+Global discovery checks the native ZCode data home's `skills/` first, then the
+OS home directory's `.agents/skills/`. New global skills and Codeg installation
+links go into the native store, keeping installs separate from the shared
+store. Project skills use `<session cwd>/.agents/skills/`, including when that
+directory is below a Git root. Flat `.md` files are not ZCode skill bundles.
+
+The native data home follows the bridge: `ZCODE_HOME`, otherwise
+`$HOME/.zcode` (or `$USERPROFILE/.zcode` when HOME is unset). To relocate the
+managed store, set an absolute `ZCODE_HOME` before starting Codeg. The shared
+file manager uses Codeg's process environment, not per-agent environment
+overrides; keep the bridge on that same data home. A relative `ZCODE_HOME`
+cannot identify one global store, so Skills management is unavailable for it.
+
+Codeg manages user-owned files and installation links; the bridge continues to
+decide which skills appear as commands. Native per-path disable flags in
+`cli/config.json` still apply. Codeg does not rewrite those flags or edit
+plugin caches. Reconnect the conversation after changing skills so the bridge
+publishes its current commands.
+
 ## Sessions and tools
 
 A new session explicitly confirms Build mode before sending its first prompt. A valid saved mode, including Yolo, takes precedence. Confirming the mode makes the bridge create the ZCode backend session when the conversation connects rather than at its first prompt. Existing sessions use the normal restore and preference flow. Model and thought selectors follow ACP configuration updates rather than a hardcoded model list.
