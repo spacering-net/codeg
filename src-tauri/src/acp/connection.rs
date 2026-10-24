@@ -1031,6 +1031,23 @@ fn apply_codex_env_policy(
     merged.retain(|(k, _)| k != key);
     merged.push((key.to_string(), "true".to_string()));
 
+    // codex-acp spawns `CODEX_PATH` instead of the `@openai/codex` shipped with
+    // the adapter. An inherited path often points at a desktop/CLI client older
+    // than the `codex-code-mode-host` it loads, which then rejects
+    // `code_mode_host_duration_ns` (#656). An empty value is the spawn layer's
+    // `env_remove`, so the matched bundled pair runs. A non-empty runtime value
+    // is an explicit override and still wins. This has to run before the mode
+    // early-return below, or a session that already has `INITIAL_AGENT_MODE`
+    // keeps the mismatched client.
+    let path_key = "CODEX_PATH";
+    let explicit = merged
+        .iter()
+        .any(|(k, v)| k == path_key && !v.trim().is_empty());
+    if !explicit {
+        merged.retain(|(k, _)| k != path_key);
+        merged.push((path_key.to_string(), String::new()));
+    }
+
     // Make `~/.codex/config.toml`'s sandbox/approval choice mean something.
     // codex-acp re-sends its own approvalPolicy + sandboxPolicy every turn from
     // an `AgentMode` seeded once per session, so without this the user's config
@@ -26468,6 +26485,10 @@ mod tests {
                 !env.iter().any(|(k, _)| k == "INITIAL_AGENT_MODE"),
                 "{agent:?} must not receive codex's approval preset"
             );
+            assert!(
+                !env.iter().any(|(k, _)| k == "CODEX_PATH"),
+                "{agent:?} must not have its Codex CLI override cleared"
+            );
         }
     }
 
@@ -26514,6 +26535,53 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1, "blank twin replaced, not duplicated");
         assert_eq!(hits[0].1, "read-only");
+    }
+
+    #[test]
+    fn codex_env_policy_strips_an_inherited_codex_path() {
+        // codex-acp spawns `CODEX_PATH` instead of the `@openai/codex` bundled
+        // with the adapter. A desktop/CLI install often updates
+        // `codex-code-mode-host` (it emits `code_mode_host_duration_ns`) without
+        // updating that client, whose decoder still expects only `cell_id`,
+        // `content_items`, `error_text` and rejects the field (#656). An empty
+        // value is the spawn layer's `env_remove`, so the inherited override
+        // is gone and the matched bundled pair runs. The scrub has to happen
+        // even when an explicit approval preset returns early.
+        let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_codex_env_policy(AgentType::Codex, &mut env, None);
+        let hits: Vec<_> = env.iter().filter(|(k, _)| k == "CODEX_PATH").collect();
+        assert_eq!(hits.len(), 1, "inherited CODEX_PATH must be removed");
+        assert!(hits[0].1.is_empty(), "empty value env_removes the var");
+
+        let mut with_mode = vec![(
+            "INITIAL_AGENT_MODE".to_string(),
+            "agent-full-access".to_string(),
+        )];
+        apply_codex_env_policy(AgentType::Codex, &mut with_mode, Some("read-only"));
+        let hits: Vec<_> = with_mode
+            .iter()
+            .filter(|(k, _)| k == "CODEX_PATH")
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].1.is_empty());
+    }
+
+    #[test]
+    fn codex_env_policy_keeps_an_explicit_codex_path() {
+        let mut env = vec![(
+            "CODEX_PATH".to_string(),
+            "/opt/codex/codex".to_string(),
+        )];
+        apply_codex_env_policy(AgentType::Codex, &mut env, None);
+        let hits: Vec<_> = env.iter().filter(|(k, _)| k == "CODEX_PATH").collect();
+        assert_eq!(hits.len(), 1, "no duplicate key");
+        assert_eq!(hits[0].1, "/opt/codex/codex");
+
+        let mut blank = vec![("CODEX_PATH".to_string(), "  ".to_string())];
+        apply_codex_env_policy(AgentType::Codex, &mut blank, None);
+        let hits: Vec<_> = blank.iter().filter(|(k, _)| k == "CODEX_PATH").collect();
+        assert_eq!(hits.len(), 1, "blank twin replaced, not duplicated");
+        assert!(hits[0].1.is_empty());
     }
 
     #[test]
