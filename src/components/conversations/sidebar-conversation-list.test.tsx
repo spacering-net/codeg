@@ -1197,6 +1197,29 @@ describe("SidebarConversationList — Recent section", () => {
     ).toHaveLength(2)
   })
 
+  it("keeps a pinned conversation in Recent as well as in Pinned", () => {
+    // Pinning used to remove the row from Recent outright, so bookmarking
+    // something made it vanish from the one list the user scans by time.
+    // The collapse test above persists `{recent: true}`; left in place the
+    // section renders collapsed and contributes no row at all.
+    localStorage.clear()
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1, { pinned_at: new Date(FIXED).toISOString() }),
+      ],
+    })
+    render(recentTree(true))
+
+    const cards = Array.from(
+      document.querySelectorAll("[data-conversation-id]")
+    )
+    expect(cards).toHaveLength(2)
+    const text = document.body.textContent ?? ""
+    // One row under Pinned, one under Recent — the section headers bracket them.
+    expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("conv-11"))
+    expect(text.indexOf(RECENT)).toBeLessThan(text.lastIndexOf("conv-11"))
+  })
+
   it("orders by last activity even though the sidebar sorts by creation time", () => {
     // The list under test is `sortMode="created"`. conv-11 was created first
     // but touched last; conv-12 is newer but idle. A section called "Recent"
@@ -1586,7 +1609,7 @@ describe("SidebarConversationList — expand / collapse all", () => {
       allFolders: folders,
       conversations: [
         // conv-11 is folder-bound (Folders + Recent), conv-12 is folderless
-        // chat mode (Chat + Recent only), conv-14 is pinned (Pinned only).
+        // chat mode (Chat + Recent only), conv-14 is pinned (Pinned + Recent).
         conv(11, 1),
         conv(12, 99, { kind: "chat" }),
         conv(14, 1, { pinned_at: new Date(FIXED).toISOString() }),
@@ -1609,7 +1632,7 @@ describe("SidebarConversationList — expand / collapse all", () => {
     // Not just the header state — every row is actually gone. The three
     // conversations cover the three ways a row can reach the list: conv-11 via
     // a folder group, conv-12 (folderless chat mode) via Chat + Recent, conv-14
-    // via Pinned. What is left is four headers and nothing under them.
+    // via Pinned + Recent. What is left is four headers and nothing under them.
     for (const title of ["conv-11", "conv-12", "conv-14"])
       expect(document.body.textContent).not.toContain(title)
     expect(document.querySelectorAll("[data-conversation-id]")).toHaveLength(0)

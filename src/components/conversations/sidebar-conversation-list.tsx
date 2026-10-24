@@ -1412,8 +1412,10 @@ export function SidebarConversationList({
   // closing a folder also removes its sessions here. Always ordered by
   // `updated_at`, never by the sidebar's created/updated `sortMode`: "Recent"
   // means last activity, and a session created long ago but used this morning
-  // belongs at the top. Reference reuse keeps an unrelated status event from
-  // rebuilding it and defeating the section's card memos.
+  // belongs at the top. Pinned rows stay in this list too (they are bookmarked,
+  // not retired), which is why the same conversation can show under Pinned and
+  // here. Reference reuse keeps an unrelated status event from rebuilding it and
+  // defeating the section's card memos.
   const recentConvsRef = useRef<DbConversationSummary[]>([])
   const recentConversations = useMemo(() => {
     const next = selectRecentConversationsWithReuse(
