@@ -10,6 +10,7 @@ pub mod message;
 pub mod model_provider;
 pub mod pet;
 pub mod quick_message;
+pub mod quota;
 pub mod remote_workspace_connection;
 pub mod system;
 pub mod token_usage;
@@ -43,6 +44,7 @@ pub use message::{
     MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
 pub use quick_message::QuickMessageInfo;
+pub use quota::{AgentQuotaInfo, QuotaWindow, SpendLimit};
 pub use remote_workspace_connection::{
     RemoteWorkspaceConnectionInfo, RemoteWorkspaceHeader, ToHeaderMap,
 };
