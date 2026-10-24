@@ -1450,6 +1450,13 @@
       "baseUrlInvalid": "Introduce una URL http(s) válida.",
       "loginHint": "¿No tienes clave de API? Ejecuta «codebuddy» en una terminal para iniciar sesión con tu cuenta de Tencent."
     },
+    "minimaxCode": {
+      "title": "Configuración de MiniMax Code",
+      "description": "codeg reutiliza las credenciales nativas y el proveedor seleccionado de mcode. Configura tu clave API en mcode, no aquí. Una configuración BYOK existente no requiere otro inicio de sesión.",
+      "loginHint": "Para una suscripción MiniMax, ejecuta esto en un terminal del equipo donde se ejecuta codeg (región China):",
+      "globalHint": "Para una cuenta global:",
+      "modelHint": "Tras configurar, vuelve a conectar el agente. mcode proporciona los modelos y modos de permisos disponibles mediante ACP en la conversación."
+    },
     "kimiCode": {
       "configManagement": "Configuración de Kimi Code",
       "configDescription": "`kimi acp` solo acepta un token de sesión almacenado, así que codeg escribe un proveedor gestionado en ~/.kimi-code/config.toml y siembra un token de acceso local: la inferencia sigue usando tu propia clave.",

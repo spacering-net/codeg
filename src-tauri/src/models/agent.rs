@@ -8,9 +8,9 @@ pub const CUSTOM_AGENT_WIRE_PREFIX: &str = "custom:";
 
 /// Which agent backs a conversation.
 ///
-/// The nineteen named variants are compile-time built-ins with hand-written
+/// The twenty named variants are compile-time built-ins with hand-written
 /// launch metadata (`acp::registry`). Most use a dedicated transcript parser;
-/// ZCode, TRAE CLI and Command Code use the Codeg-owned ACP transcript.
+/// ZCode, TRAE CLI, Command Code and MiniMax Code use the Codeg-owned ACP transcript.
 /// [`AgentType::Custom`] is the open end: a user-registered
 /// ACP agent whose launch metadata lives in the database
 /// (`acp::custom_registry`) and whose history comes from codeg's own ACP
@@ -41,12 +41,13 @@ pub enum AgentType {
     ZCode,
     Trae,
     CommandCode,
+    MiniMaxCode,
     /// A user-registered ACP agent, identified by its ACP-registry id
     /// (interned). Ordered last so built-ins keep their relative order.
     Custom(&'static str),
 }
 
-/// The nineteen compile-time agents, in declaration order. Does NOT include
+/// The twenty compile-time agents, in declaration order. Does NOT include
 /// custom agents — use [`crate::acp::registry::all_acp_agents`] for the live
 /// set that includes them.
 pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
@@ -69,6 +70,7 @@ pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
     AgentType::ZCode,
     AgentType::Trae,
     AgentType::CommandCode,
+    AgentType::MiniMaxCode,
 ];
 
 impl AgentType {
@@ -81,7 +83,11 @@ impl AgentType {
     pub fn uses_acp_transcript(&self) -> bool {
         matches!(
             self,
-            AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode
+            AgentType::Custom(_)
+                | AgentType::ZCode
+                | AgentType::Trae
+                | AgentType::CommandCode
+                | AgentType::MiniMaxCode
         )
     }
 
@@ -128,6 +134,7 @@ impl AgentType {
             AgentType::ZCode => Cow::Borrowed("zcode"),
             AgentType::Trae => Cow::Borrowed("trae"),
             AgentType::CommandCode => Cow::Borrowed("command_code"),
+            AgentType::MiniMaxCode => Cow::Borrowed("minimax_code"),
             AgentType::Custom(id) => Cow::Owned(format!("{CUSTOM_AGENT_WIRE_PREFIX}{id}")),
         }
     }
@@ -155,6 +162,7 @@ impl AgentType {
             "zcode" => Some(AgentType::ZCode),
             "trae" => Some(AgentType::Trae),
             "command_code" => Some(AgentType::CommandCode),
+            "minimax_code" => Some(AgentType::MiniMaxCode),
             other => other
                 .strip_prefix(CUSTOM_AGENT_WIRE_PREFIX)
                 .and_then(AgentType::custom),
@@ -246,6 +254,7 @@ impl fmt::Display for AgentType {
             AgentType::ZCode => write!(f, "ZCode"),
             AgentType::Trae => write!(f, "TRAE CLI"),
             AgentType::CommandCode => write!(f, "Command Code"),
+            AgentType::MiniMaxCode => write!(f, "MiniMax Code"),
             // Prefer the registered display name; fall back to the raw id when
             // the registry has not been hydrated (or the agent was deleted
             // while conversations still reference it).
@@ -285,12 +294,16 @@ mod tests {
             (AgentType::ZCode, "zcode"),
             (AgentType::Trae, "trae"),
             (AgentType::CommandCode, "command_code"),
+            (AgentType::MiniMaxCode, "minimax_code"),
         ];
         for (agent, wire) in expected {
             assert_eq!(agent.as_wire(), wire);
             assert_eq!(AgentType::from_wire(wire), Some(agent));
             // The JSON form is what `serde_json::to_string` writes to the DB.
-            assert_eq!(serde_json::to_string(&agent).unwrap(), format!("\"{wire}\""));
+            assert_eq!(
+                serde_json::to_string(&agent).unwrap(),
+                format!("\"{wire}\"")
+            );
             assert_eq!(
                 serde_json::from_str::<AgentType>(&format!("\"{wire}\"")).unwrap(),
                 agent
@@ -390,6 +403,17 @@ mod tests {
             let stored = serde_json::to_string(&custom).unwrap();
             assert_eq!(serde_json::from_str::<AgentType>(&stored).unwrap(), custom);
             assert_ne!(custom, AgentType::CommandCode);
+        }
+    }
+
+    #[test]
+    fn minimax_code_builtin_preserves_hand_registered_custom_identities() {
+        assert!(AgentType::MiniMaxCode.uses_acp_transcript());
+        assert_eq!(AgentType::MiniMaxCode.to_string(), "MiniMax Code");
+        for id in ["mcode", "minimax-code", "minimax_code"] {
+            let custom = AgentType::custom(id).expect("previously valid custom id");
+            assert_eq!(AgentType::from_wire(&format!("custom:{id}")), Some(custom));
+            assert_ne!(custom, AgentType::MiniMaxCode);
         }
     }
 

@@ -1450,6 +1450,13 @@
       "baseUrlInvalid": "أدخل عنوان URL صالحًا بصيغة http(s).",
       "loginHint": "لا تملك مفتاح API؟ شغّل «codebuddy» في الطرفية لتسجيل الدخول بحساب Tencent بدلاً من ذلك."
     },
+    "minimaxCode": {
+      "title": "إعداد MiniMax Code",
+      "description": "يعيد codeg استخدام بيانات اعتماد mcode الأصلية والمزوّد المحدد. اضبط مفتاح API في mcode وليس هنا. لا يتطلب إعداد BYOK الحالي تسجيل دخول إضافياً.",
+      "loginHint": "لاشتراك MiniMax، نفّذ هذا في الطرفية على الجهاز الذي يشغّل codeg (منطقة الصين):",
+      "globalHint": "للحساب العالمي، استخدم:",
+      "modelHint": "بعد الإعداد، أعد توصيل الوكيل. يوفّر mcode النماذج وأوضاع الأذونات المتاحة عبر ACP في المحادثة."
+    },
     "kimiCode": {
       "configManagement": "إعدادات Kimi Code",
       "configDescription": "لا يقبل `kimi acp` سوى رمز تسجيل دخول مخزَّن، لذا يكتب codeg مزوّدًا مُدارًا في ~/.kimi-code/config.toml ويزرع رمز بوابة محليًا — أما الاستدلال فيظل يعمل بمفتاحك أنت.",

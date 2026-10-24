@@ -239,3 +239,20 @@ describe("an embedded reference uri that carries its ref", () => {
     })
   })
 })
+
+it("preserves MiniMax Code agent and session references", () => {
+  expect(
+    parseCodegReferenceUri("codeg://agent/minimax_code", "@MiniMax Code")
+  ).toMatchObject({
+    refType: "agent",
+    label: "MiniMax Code",
+    meta: { agentType: "minimax_code" },
+  })
+  expect(
+    parseCodegReferenceUri("codeg://session/minimax_code_session-123", "")
+  ).toMatchObject({
+    refType: "session",
+    id: "minimax_code_session-123",
+    meta: { agentType: "minimax_code" },
+  })
+})

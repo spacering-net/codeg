@@ -1,4 +1,4 @@
-/** The nineteen agents codeg ships hand-written support for. */
+/** The built-in agents codeg ships hand-written support for. */
 export type BuiltinAgentType =
   | "claude_code"
   | "codex"
@@ -9,6 +9,7 @@ export type BuiltinAgentType =
   | "hermes"
   | "code_buddy"
   | "kimi_code"
+  | "minimax_code"
   | "pi"
   | "grok"
   | "cursor"
@@ -1113,6 +1114,7 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "hermes",
   "code_buddy",
   "kimi_code",
+  "minimax_code",
   "pi",
   "grok",
   "cursor",
@@ -1151,6 +1153,7 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "hermes",
   "code_buddy",
   "kimi_code",
+  "minimax_code",
   "pi",
   "grok",
   "cursor",
@@ -1466,6 +1469,7 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   hermes: "Hermes Agent",
   code_buddy: "CodeBuddy",
   kimi_code: "Kimi Code",
+  minimax_code: "MiniMax Code",
   pi: "Pi",
   grok: "Grok",
   cursor: "Cursor",
@@ -1488,6 +1492,7 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   hermes: "bg-amber-500",
   code_buddy: "bg-[#0052D9]",
   kimi_code: "bg-[#1783FF]",
+  minimax_code: "bg-[#F23F5D]",
   pi: "bg-[#0D9488]",
   grok: "bg-neutral-900",
   cursor: "bg-zinc-800",
@@ -4579,6 +4584,7 @@ export type McpAppType =
   | "hermes"
   | "code_buddy"
   | "kimi_code"
+  | "minimax_code"
   | "grok"
   | "cursor"
   | "deepseek"

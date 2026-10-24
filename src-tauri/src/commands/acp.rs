@@ -239,12 +239,33 @@ pub(crate) fn resolve_system_agent_binary_for(agent_type: AgentType, cmd: &str) 
     if let Some(path) = resolve_system_agent_binary(cmd) {
         return Some(path);
     }
+    resolve_system_agent_installer_binary(agent_type, cmd, &home_dir_or_default())
+}
+
+fn resolve_system_agent_installer_binary(
+    agent_type: AgentType,
+    cmd: &str,
+    home: &Path,
+) -> Option<PathBuf> {
     let exe = binary_cache::executable_file_name(cmd);
-    let home = home_dir_or_default();
-    registry::binary_system_dirs(agent_type).iter().find_map(|dir| {
-        let cand = home.join(dir).join(&exe);
-        cand.is_file().then_some(cand)
-    })
+    registry::binary_system_dirs(agent_type)
+        .iter()
+        .find_map(|dir| {
+            let cand = home.join(dir).join(&exe);
+            if cand.is_file() {
+                return Some(cand);
+            }
+            // The official Windows installer ships a cmd shim, not mcode.exe.
+            // PATH/PATHEXT handles it above; GUI launches also need this fallback.
+            #[cfg(windows)]
+            if agent_type == AgentType::MiniMaxCode {
+                let shim = home.join(dir).join("mcode.cmd");
+                if shim.is_file() {
+                    return Some(shim);
+                }
+            }
+            None
+        })
 }
 
 /// Resolve the VENDOR CLI wrapped by an ACP adapter agent (`claude`, `codex`
@@ -9515,6 +9536,9 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".commandcode/skills", ".agents/skills"],
         }),
+        // Native profile roots and external skill discovery are CLI-owned;
+        // do not install into a different profile than the launch env selects.
+        AgentType::ZCode | AgentType::MiniMaxCode => None,
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -9528,7 +9552,6 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // this function). The dedicated path was normalized to absolute at
         // save time; a non-absolute value (a hand-edited database) is ignored
         // rather than resolved against an arbitrary working directory.
-        AgentType::ZCode => None,
         AgentType::Custom(id) => {
             let decl = crate::acp::custom_registry::skills_decl(id);
             let mut global_dirs = Vec::new();
@@ -10869,6 +10892,13 @@ pub(crate) fn build_runtime_env_from_setting(
         merged.insert(key, trimmed.to_string());
     }
 
+    // MiniMax Code uses its existing native login/provider configuration.
+    // Explicit env overrides remain available, but generic provider fields
+    // must not synthesize OPENAI_* or invented MiniMax variables.
+    if agent_type == AgentType::MiniMaxCode {
+        return merged;
+    }
+
     let (api_base_url_key, api_key_key, model_key) = agent_env_keys(agent_type);
     if let Some(value) = trim_non_empty(config.api_base_url) {
         merged.insert(api_base_url_key.to_string(), value);
@@ -10898,6 +10928,9 @@ pub(crate) async fn apply_model_provider_env(
     runtime_env: &mut BTreeMap<String, String>,
     conn: &sea_orm::DatabaseConnection,
 ) {
+    if agent_type == AgentType::MiniMaxCode {
+        return;
+    }
     let provider_id = match setting.and_then(|s| s.model_provider_id) {
         Some(id) => id,
         None => return,
@@ -11052,6 +11085,9 @@ fn cascade_update_agent_config(
     codex_model: &CodexModelAction,
     codex_model_raw: Option<&str>,
 ) -> Result<(), AcpError> {
+    if agent_type == AgentType::MiniMaxCode {
+        return Ok(());
+    }
     let (url_key, key_key, _) = agent_env_keys(agent_type);
     match agent_type {
         AgentType::ClaudeCode | AgentType::Gemini => {
@@ -11287,8 +11323,8 @@ fn cascade_update_agent_config(
             // `KIRO_API_KEY` in the agent's env) and accepts no custom base
             // URL, so it stays off the model-provider credential cascade.
         }
-        AgentType::ZCode => {
-            // Authentication and providers belong to the official ZCode runtime.
+        AgentType::ZCode | AgentType::MiniMaxCode => {
+            // Authentication and providers belong to the official agent runtime.
         }
         AgentType::Trae => {
             // TRAE CLI signs in to TRAE's own service (`traecli login`, or a
@@ -11334,6 +11370,10 @@ pub(crate) async fn cascade_update_model_provider(
             Ok(at) => at,
             Err(_) => continue,
         };
+
+        if agent_type == AgentType::MiniMaxCode {
+            continue;
+        }
 
         // 1. Update env_json in database (uses agent_env_keys for consistent key names)
         let (url_key, key_key, _) = agent_env_keys(agent_type);
@@ -12270,16 +12310,18 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
                     }
                     env.insert(key, trimmed.to_string());
                 }
-                let (api_base_url_key, api_key_key, model_key) = agent_env_keys(agent_type);
-                if let Some(value) = trim_non_empty(local_cfg.api_base_url) {
-                    env.insert(api_base_url_key.to_string(), value);
-                }
-                if let Some(value) = trim_non_empty(local_cfg.api_key) {
-                    env.insert(api_key_key.to_string(), value);
-                }
-                if agent_type != AgentType::ClaudeCode {
-                    if let Some(value) = trim_non_empty(local_cfg.model) {
-                        env.insert(model_key.to_string(), value);
+                if agent_type != AgentType::MiniMaxCode {
+                    let (api_base_url_key, api_key_key, model_key) = agent_env_keys(agent_type);
+                    if let Some(value) = trim_non_empty(local_cfg.api_base_url) {
+                        env.insert(api_base_url_key.to_string(), value);
+                    }
+                    if let Some(value) = trim_non_empty(local_cfg.api_key) {
+                        env.insert(api_key_key.to_string(), value);
+                    }
+                    if agent_type != AgentType::ClaudeCode {
+                        if let Some(value) = trim_non_empty(local_cfg.model) {
+                            env.insert(model_key.to_string(), value);
+                        }
                     }
                 }
             }
@@ -22269,6 +22311,46 @@ model = "gpt"
         // Ollama has no API key, but the gate only tests the var for emptiness.
         assert_eq!(env.get("CLINE_API_KEY").map(String::as_str), Some("local"));
         assert_eq!(env.get("CLINE_PROVIDER").map(String::as_str), Some("ollama"));
+    }
+
+    #[test]
+    fn minimax_code_installer_discovery_finds_only_an_existing_launcher() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(resolve_system_agent_installer_binary(
+            AgentType::MiniMaxCode,
+            "mcode",
+            home.path()
+        )
+        .is_none());
+        #[cfg(not(windows))]
+        let relative = ".minimax-code/bin/mcode";
+        #[cfg(windows)]
+        let relative = ".minimax-code/mcode.cmd";
+        let launcher = home.path().join(relative);
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        std::fs::write(&launcher, "not executed").unwrap();
+        assert_eq!(
+            resolve_system_agent_installer_binary(AgentType::MiniMaxCode, "mcode", home.path()),
+            Some(launcher)
+        );
+    }
+
+    #[test]
+    fn minimax_code_keeps_explicit_env_without_inventing_provider_overrides() {
+        let config = serde_json::json!({
+            "apiBaseUrl": "https://example.test", "apiKey": "not-used",
+            "model": "not-used",
+            "env": {"MINIMAX_DATA_DIR": "/profiles/selected", "EXPLICIT": "value"}
+        });
+        let env =
+            build_runtime_env_from_setting(AgentType::MiniMaxCode, None, Some(&config.to_string()));
+        assert_eq!(env.len(), 2);
+        assert_eq!(
+            env.get("MINIMAX_DATA_DIR").map(String::as_str),
+            Some("/profiles/selected")
+        );
+        assert_eq!(env.get("EXPLICIT").map(String::as_str), Some("value"));
+        assert!(skill_storage_spec(AgentType::MiniMaxCode).is_none());
     }
 
     #[test]

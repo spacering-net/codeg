@@ -423,9 +423,11 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
         // undocumented paginated format of its own (see `acp::trae`), and so
         // do Command Code's session trees (see `acp::command_code`), so both
         // take the same route.
-        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => {
-            Box::new(acp_native::AcpNativeParser::new(agent_type))
-        }
+        AgentType::Custom(_)
+        | AgentType::ZCode
+        | AgentType::Trae
+        | AgentType::CommandCode
+        | AgentType::MiniMaxCode => Box::new(acp_native::AcpNativeParser::new(agent_type)),
     };
     Box::new(RouteSanitized(inner))
 }

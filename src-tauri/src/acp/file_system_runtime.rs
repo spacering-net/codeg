@@ -790,7 +790,11 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // Command Code is the same case: codeg's transcript is its history,
         // and its tools never go through `fs/*` (verified against 1.84.0 and
         // 1.86.3).
-        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => &[],
+        AgentType::Custom(_)
+        | AgentType::ZCode
+        | AgentType::Trae
+        | AgentType::CommandCode
+        | AgentType::MiniMaxCode => &[],
     }
 }
 

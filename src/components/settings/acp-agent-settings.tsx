@@ -177,6 +177,7 @@ import {
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
 import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
+import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 import { QoderConfigPanel } from "./qoder-config-panel"
@@ -930,6 +931,11 @@ export function importantEnvKeysByAgent(
       apiKey: [TRAE_PAT_ENV],
       model: [],
     }
+  }
+  if (agentType === "minimax_code") {
+    // Reuse mcode's own configuration and authentication. Do not offer
+    // generic OpenAI fields that the native CLI does not consume.
+    return { apiBaseUrl: [], apiKey: [], model: [] }
   }
   if (agentType === "command_code") {
     // Command Code's non-interactive sign-in is `COMMAND_CODE_API_KEY`, which
@@ -11359,6 +11365,8 @@ base_url = "https://api.openai.com/v1"`}
                       )
                     }
                   />
+                ) : selectedAgent.agent_type === "minimax_code" ? (
+                  <MiniMaxCodeConfigPanel />
                 ) : selectedAgent.agent_type === "kimi_code" ? (
                   <KimiCodeConfigPanel
                     agent={selectedAgent}

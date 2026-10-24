@@ -31,7 +31,7 @@
 
 <table>
   <tr>
-    <td width="50%" valign="top">🧩 <strong>Uma interface para todos os agentes</strong><br/>Dezenove agentes integrados, e qualquer agente compatível com ACP pode entrar — todos exibidos como a mesma conversa estruturada, e não como um terminal.</td>
+    <td width="50%" valign="top">🧩 <strong>Uma interface para todos os agentes</strong><br/>Vinte agentes integrados, e qualquer agente compatível com ACP pode entrar — todos exibidos como a mesma conversa estruturada, e não como um terminal.</td>
     <td width="50%" valign="top">🔎 <strong>Sessões que viajam</strong><br/>Importe, pesquise e retome o histórico que cada agente guarda em disco e depois entregue-o a outro agente.</td>
   </tr>
   <tr>
@@ -101,7 +101,7 @@
 
 ### Uma interface para todos os agentes
 
-19 agentes integrados e qualquer agente ACP, num chat com cartões de ferramentas, diffs e respostas interativas.
+20 agentes integrados e qualquer agente ACP, num chat com cartões de ferramentas, diffs e respostas interativas.
 
 [Documentação →](https://docs.codeg.app/guide/supported-agents) · [Agentes personalizados →](https://docs.codeg.app/guide/custom-agents) · [Renderização de UI →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
@@ -273,7 +273,7 @@ git diff | codeg-cli -a codex \
 
 ## 🤖 Agentes suportados
 
-O Codeg conversa com todos os agentes pelo [Agent Client Protocol](https://agentclientprotocol.com), então cada um ganha a mesma interface estruturada. Dezenove já vêm integrados, e o Codeg instala, fixa a versão e atualiza a maioria deles por você:
+O Codeg conversa com todos os agentes pelo [Agent Client Protocol](https://agentclientprotocol.com), então cada um ganha a mesma interface estruturada. Vinte já vêm integrados, e o Codeg instala, fixa a versão e atualiza a maioria deles por você:
 
 <p>
   <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
@@ -285,6 +285,7 @@ O Codeg conversa com todos os agentes pelo [Agent Client Protocol](https://agent
   <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
   <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
   <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="../agents/minimax-code.md"><kbd>MiniMax Code</kbd></a> &nbsp;
   <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
   <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
   <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;

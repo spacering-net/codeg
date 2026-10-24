@@ -79,6 +79,8 @@ pub enum McpAppType {
     Trae,
     /// Serializes as `command_code`, matching `AgentType::as_wire`.
     CommandCode,
+    #[serde(rename = "minimax_code")]
+    MiniMaxCode,
     /// Serializes as `pi`, matching `AgentType::as_wire`. Scan-only: codeg
     /// reads and round-trips the pi MCP EXTENSION's config, but pi is not an
     /// assignable target and gets no MCP over the ACP wire. See the pi section
@@ -96,7 +98,7 @@ pub enum McpAppType {
 /// server come back on the next refresh. Both used to keep their own hand-typed
 /// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
 /// (which fails to compile when a variant is added) is what keeps them honest.
-const ALL_MCP_APPS: [McpAppType; 19] = [
+const ALL_MCP_APPS: [McpAppType; 20] = [
     McpAppType::ClaudeCode,
     McpAppType::Codex,
     McpAppType::Gemini,
@@ -116,6 +118,7 @@ const ALL_MCP_APPS: [McpAppType; 19] = [
     McpAppType::ZCode,
     McpAppType::Trae,
     McpAppType::CommandCode,
+    McpAppType::MiniMaxCode,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -2606,6 +2609,13 @@ fn write_deepseek_json_file(path: &Path, value: &Value) -> Result<(), AppCommand
     Ok(())
 }
 
+// MiniMax Code client MCP assignments belong to Codeg, not the native CLI
+// profile. Forward this canonical stdio/http/sse store over ACP; the CLI also
+// loads its own MCP config, and session entries win same-name conflicts.
+fn read_minimax_code_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
+    read_deepseek_servers_at(&crate::acp::minimax_code::mcp_json_path())
+}
+
 fn read_deepseek_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
     read_deepseek_servers_at(&deepseek_mcp_json_path())
 }
@@ -3144,7 +3154,7 @@ impl LocalMcpReader {
     }
 }
 
-fn local_mcp_readers() -> [LocalMcpReader; 19] {
+fn local_mcp_readers() -> [LocalMcpReader; 20] {
     [
         LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, read_claude_servers),
         LocalMcpReader::new("Codex", McpAppType::Codex, read_codex_servers),
@@ -3171,6 +3181,11 @@ fn local_mcp_readers() -> [LocalMcpReader; 19] {
             "Command Code",
             McpAppType::CommandCode,
             read_command_code_servers,
+        ),
+        LocalMcpReader::new(
+            "MiniMax Code",
+            McpAppType::MiniMaxCode,
+            read_minimax_code_servers,
         ),
         // Scan-only, so it reads last: the merge below is first-writer-wins,
         // and a pi entry that won would decide the transport every save of
@@ -3336,6 +3351,9 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
         McpAppType::ZCode => upsert_deepseek_server_at(&zcode_mcp_json_path(), id, spec),
         McpAppType::Trae => upsert_trae_server(id, spec),
         McpAppType::CommandCode => upsert_command_code_server(id, spec),
+        McpAppType::MiniMaxCode => {
+            upsert_deepseek_server_at(&crate::acp::minimax_code::mcp_json_path(), id, spec)
+        }
     }
 }
 
@@ -3383,6 +3401,8 @@ pub fn read_servers_for_agent_type(
         // Command Code loads `~/.commandcode/mcp.json` natively — see the
         // Command Code section below for why it rides the forward skip list.
         AgentType::CommandCode => read_command_code_servers(),
+        // MiniMax Code receives client-owned assignments over the ACP wire.
+        AgentType::MiniMaxCode => read_minimax_code_servers(),
         // Custom agents get MCP purely over the ACP wire (`session/new`'s
         // `mcpServers`); codeg deliberately knows nothing about their native
         // config files, so there is no per-agent store to read back here.
@@ -5369,6 +5389,9 @@ fn remove_server_for_app(app: McpAppType, id: &str) -> Result<bool, AppCommandEr
         McpAppType::ZCode => remove_deepseek_server_at(&zcode_mcp_json_path(), id),
         McpAppType::Trae => remove_trae_server(id),
         McpAppType::CommandCode => remove_command_code_server(id),
+        McpAppType::MiniMaxCode => {
+            remove_deepseek_server_at(&crate::acp::minimax_code::mcp_json_path(), id)
+        }
     }
 }
 
@@ -8946,7 +8969,8 @@ mod tests {
                 | McpAppType::Pi
                 | McpAppType::ZCode
                 | McpAppType::Trae
-                | McpAppType::CommandCode => {}
+                | McpAppType::CommandCode
+                | McpAppType::MiniMaxCode => {}
             }
         }
 
@@ -9005,6 +9029,7 @@ mod tests {
             (McpAppType::ZCode, AgentType::ZCode),
             (McpAppType::Trae, AgentType::Trae),
             (McpAppType::CommandCode, AgentType::CommandCode),
+            (McpAppType::MiniMaxCode, AgentType::MiniMaxCode),
         ] {
             let wire = serde_json::to_value(app).expect("serialize app type");
             assert_eq!(
@@ -9018,6 +9043,68 @@ mod tests {
                 app
             );
         }
+    }
+
+    #[test]
+    fn minimax_code_mcp_overlay_round_trips_all_transports() {
+        use crate::models::agent::AgentType;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp/minimax_code.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let auth_path = dir.path().join("auth.json");
+        fs::write(&auth_path, "leave native login untouched").unwrap();
+        fs::write(&path, r#"{"other":{"keep":true},"mcpServers":{"existing":{"command":"existing","env":{"KEEP":"yes"}}}}"#).unwrap();
+        temp_env::with_vars(
+            [
+                ("CODEG_HOME", Some(dir.path())),
+                ("MINIMAX_DATA_DIR", Some(dir.path())),
+            ],
+            || {
+                assert_eq!(crate::acp::minimax_code::mcp_json_path(), path);
+                for (id, spec) in [
+                    (
+                        "stdio",
+                        json!({"type":"stdio","command":"tool","args":["serve"],"env":{"TEST":"value"}}),
+                    ),
+                    (
+                        "http",
+                        json!({"type":"http","url":"https://example.test/mcp","headers":{"X-Test":"value"}}),
+                    ),
+                    (
+                        "sse",
+                        json!({"type":"sse","url":"https://example.test/events"}),
+                    ),
+                ] {
+                    assert!(app_can_host_spec(McpAppType::MiniMaxCode, &spec));
+                    upsert_server_for_app(McpAppType::MiniMaxCode, id, &spec).unwrap();
+                    let read = read_servers_for_agent_type(AgentType::MiniMaxCode).unwrap();
+                    assert_eq!(read[id]["type"], spec["type"]);
+                    assert_eq!(read["existing"]["env"]["KEEP"], "yes");
+                    assert!(remove_server_for_app(McpAppType::MiniMaxCode, id).unwrap());
+                    assert!(!read_servers_for_agent_type(AgentType::MiniMaxCode)
+                        .unwrap()
+                        .contains_key(id));
+                }
+                let saved: Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(saved["other"]["keep"], true);
+                assert_eq!(saved["mcpServers"].as_object().unwrap().len(), 1);
+                assert_eq!(
+                    fs::read_to_string(&auth_path).unwrap(),
+                    "leave native login untouched"
+                );
+                fs::write(&path, "{broken").unwrap();
+                assert!(upsert_server_for_app(
+                    McpAppType::MiniMaxCode,
+                    "new",
+                    &json!({"command":"tool"})
+                )
+                .is_err());
+                assert_eq!(fs::read_to_string(&path).unwrap(), "{broken");
+                assert!(!dir.path().join("mcp.json").exists());
+            },
+        );
     }
 
     #[test]

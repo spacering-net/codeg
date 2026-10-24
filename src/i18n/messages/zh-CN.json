@@ -1450,6 +1450,13 @@
       "baseUrlInvalid": "请输入合法的 http(s) 地址。",
       "loginHint": "没有 API Key？也可以在终端运行 “codebuddy” 用腾讯云账号登录。"
     },
+    "minimaxCode": {
+      "title": "MiniMax Code 设置",
+      "description": "codeg 复用 mcode 原生凭据与已选服务商。请在 mcode 中配置自己的 API 密钥，无需在此重复保存；已有 BYOK 配置无需额外登录。",
+      "loginHint": "使用 MiniMax 订阅时，请在运行 codeg 的机器终端中执行（中国区）：",
+      "globalHint": "国际区账号请使用：",
+      "modelHint": "完成配置后重新连接智能体。可用模型和权限模式由 mcode 通过 ACP 在会话中提供。"
+    },
     "kimiCode": {
       "configManagement": "Kimi Code 配置",
       "configDescription": "`kimi acp` 只认已存储的登录令牌，所以 codeg 会在 ~/.kimi-code/config.toml 写入受管供应商，并在本地播种一个门控令牌——推理仍然走你自己的 Key。",

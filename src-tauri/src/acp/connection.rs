@@ -31344,6 +31344,25 @@ mod tests {
     }
 
     #[test]
+    fn minimax_code_model_config_preserves_opaque_native_ids() {
+        let model = "m:minimax:MiniMax-M2.5:u";
+        let options: Vec<SessionConfigOption> = serde_json::from_value(serde_json::json!([{
+            "id": "model", "name": "Model", "category": "model", "type": "select",
+            "currentValue": model,
+            "options": [{"value": model, "name": "MiniMax M2.5"}]
+        }]))
+        .unwrap();
+        let mapped = map_session_config_options(&options);
+        assert!(is_model_config_option(&options[0]));
+        assert!(config_option_already_holds(&options[0], model));
+        assert_eq!(current_model_id_from_opts(&mapped).as_deref(), Some(model));
+        assert_eq!(
+            serde_json::to_value(encode_config_option_value(false, model)).unwrap(),
+            serde_json::json!({"value": model})
+        );
+    }
+
+    #[test]
     fn config_option_rejection_reads_a_grouped_select() {
         // Grouped options are flattened by `map_session_config_options` before the
         // comparison, so a grouped model picker resolves its labels too.
@@ -42505,6 +42524,47 @@ mod wire_mcp_gate_tests {
         assert!(agent_delivers_wire_mcp(AgentType::Trae));
         assert!(agent_reads_own_mcp_config(AgentType::Trae));
         assert!(load_mcp_servers_for_agent(AgentType::Trae).is_empty());
+    }
+
+    #[test]
+    fn minimax_code_forwards_client_mcp_and_keeps_delegation_on_the_wire() {
+        assert!(agent_delivers_wire_mcp(AgentType::MiniMaxCode));
+        assert!(!agent_reads_own_mcp_config(AgentType::MiniMaxCode));
+        let dir = tempfile::tempdir().unwrap();
+        temp_env::with_var("CODEG_HOME", Some(dir.path()), || {
+            let path = crate::acp::minimax_code::mcp_json_path();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::json!({"mcpServers": {
+                    "stdio": {"command": "test-tool", "args": ["serve"]},
+                    "http": {"type": "http", "url": "https://example.test/mcp"},
+                    "sse": {"type": "sse", "url": "https://example.test/events"}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            let servers =
+                serde_json::to_value(load_mcp_servers_for_agent(AgentType::MiniMaxCode)).unwrap();
+            let entries = servers.as_array().unwrap();
+            assert_eq!(entries.len(), 3);
+            assert!(entries
+                .iter()
+                .any(|server| server["name"] == "stdio" && server["command"] == "test-tool"));
+            for transport in ["http", "sse"] {
+                assert!(entries
+                    .iter()
+                    .any(|server| server["name"] == transport && server["type"] == transport));
+            }
+        });
+        assert_eq!(
+            transcript_dir_for(AgentType::MiniMaxCode),
+            Some("codeg-minimax-code")
+        );
+        assert_ne!(
+            transcript_dir_for(AgentType::MiniMaxCode),
+            transcript_dir_for(AgentType::Custom("mcode"))
+        );
     }
 
     // Command Code also starts both its `~/.commandcode/mcp.json` servers and

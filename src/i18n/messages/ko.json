@@ -1450,6 +1450,13 @@
       "baseUrlInvalid": "유효한 http(s) URL을 입력하세요.",
       "loginHint": "API 키가 없나요? 터미널에서 ‘codebuddy’를 실행하여 Tencent 계정으로 로그인할 수도 있습니다."
     },
+    "minimaxCode": {
+      "title": "MiniMax Code 설정",
+      "description": "codeg는 mcode의 기본 인증 정보와 선택한 공급자를 재사용합니다. API 키는 여기가 아닌 mcode에서 설정하세요. 기존 BYOK 설정에는 별도 로그인이 필요하지 않습니다.",
+      "loginHint": "MiniMax 구독은 codeg를 실행하는 컴퓨터의 터미널에서 로그인하세요(중국 리전):",
+      "globalHint": "글로벌 계정은 다음을 사용하세요:",
+      "modelHint": "설정 후 에이전트를 다시 연결하세요. 사용 가능한 모델과 권한 모드는 mcode가 ACP를 통해 대화에 제공합니다."
+    },
     "kimiCode": {
       "configManagement": "Kimi Code 설정",
       "configDescription": "`kimi acp`는 저장된 로그인 토큰만 인정하므로, codeg가 ~/.kimi-code/config.toml에 관리형 공급자를 기록하고 로컬에 게이트 토큰을 심습니다. 추론은 여전히 사용자의 키로 실행됩니다.",

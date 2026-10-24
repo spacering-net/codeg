@@ -335,3 +335,22 @@ describe("buildSessionSettings — values", () => {
     expect(model.target).toEqual({ type: "config", configId: "model" })
   })
 })
+
+describe("MiniMax Code ACP model settings", () => {
+  it("uses the native model config option rather than a legacy model setter", () => {
+    const settings = build([
+      select("model", "Model", "model", "m:minimax:MiniMax-M2.7:u", [
+        "m:minimax:MiniMax-M2.7:u",
+        "m:custom%3Aprovider:vendor%2Fmodel:v:fast",
+      ]),
+    ])
+    const model = choice(settings[0])
+    expect(model.isModel).toBe(true)
+    expect(model.currentValue).toBe("m:minimax:MiniMax-M2.7:u")
+    expect(model.target).toEqual({ type: "config", configId: "model" })
+    expect(model.groups[0].options.map((option) => option.value)).toEqual([
+      "m:minimax:MiniMax-M2.7:u",
+      "m:custom%3Aprovider:vendor%2Fmodel:v:fast",
+    ])
+  })
+})

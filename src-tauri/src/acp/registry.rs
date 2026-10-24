@@ -256,7 +256,7 @@ pub fn current_platform() -> &'static str {
     }
 }
 
-/// The nineteen built-in agents. Excludes user-registered custom agents — use
+/// The twenty built-in agents. Excludes user-registered custom agents — use
 /// [`all_acp_agents`] for the live set.
 pub fn builtin_acp_agents() -> Vec<AgentType> {
     vec![
@@ -279,10 +279,11 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
         AgentType::ZCode,
         AgentType::Trae,
         AgentType::CommandCode,
+        AgentType::MiniMaxCode,
     ]
 }
 
-/// Every agent codeg can currently drive: the nineteen built-ins followed by
+/// Every agent codeg can currently drive: the twenty built-ins followed by
 /// the user's registered custom ACP agents (sorted by id).
 pub fn all_acp_agents() -> Vec<AgentType> {
     let mut agents = builtin_acp_agents();
@@ -321,6 +322,8 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         // a hand-registered custom Command Code most likely sits under the
         // package or bin name (`command-code`, `commandcode`, `cmd`, …).
         AgentType::CommandCode => "codeg-command-code",
+        // Preserve pre-existing hand-registered mcode / minimax-code agents.
+        AgentType::MiniMaxCode => "codeg-minimax-code",
         // A custom agent's registry id IS its identity.
         AgentType::Custom(id) => id,
     }
@@ -347,6 +350,7 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "codeg-zcode-acp" => Some(AgentType::ZCode),
         "codeg-trae-cli" => Some(AgentType::Trae),
         "codeg-command-code" => Some(AgentType::CommandCode),
+        "codeg-minimax-code" => Some(AgentType::MiniMaxCode),
         // Only ids the user has actually registered resolve. An unregistered
         // id must stay `None` so the ACP-registry picker still offers it as
         // "addable" rather than treating it as already supported.
@@ -437,6 +441,10 @@ pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation>
 pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
     match agent_type {
         AgentType::OpenCode => &[".opencode/bin"],
+        #[cfg(not(windows))]
+        AgentType::MiniMaxCode => &[".minimax-code/bin"],
+        #[cfg(windows)]
+        AgentType::MiniMaxCode => &[".minimax-code"],
         _ => &[],
     }
 }
@@ -5620,8 +5628,29 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 node_required: Some("22.0.0"),
             },
         },
-        // Handled by the early return above; kept so the match stays
-        // exhaustive without a catch-all that could swallow a new built-in.
+        AgentType::MiniMaxCode => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "MiniMax Code",
+            description: "MiniMax's terminal coding agent (native ACP via mcode acp)",
+            // Launch the user's installation, retaining its native login and
+            // config. No wrapper, copied credentials or managed binary cache.
+            // Models/modes, streaming and permission requests use the generic
+            // ACP pipeline. Models are advertised through configOptions, not
+            // a hard-coded catalogue or the legacy session/set_model method.
+            // History is the Codeg-owned ACP transcript; native CLI history
+            // is deliberately not scanned without a stable import contract.
+            distribution: AgentDistribution::System {
+                cmd: "mcode",
+                args: &["acp"],
+                env: &[],
+                install_url: "https://github.com/MiniMax-AI/minimax-code#quick-start",
+                // Leave upgrades to the official CLI installer until an
+                // unattended updater contract is verified.
+                update_args: None,
+            },
+        },
+        // Handled by the early return above; keep this match exhaustive.
         AgentType::Custom(_) => unreachable!("custom agents resolve via custom_registry"),
     }
 }
@@ -5881,10 +5910,13 @@ mod tests {
             }
             other => panic!("expected system distribution for Kiro, got {other:?}"),
         }
-        // Only Kiro and TRAE CLI ride the system distribution: every other
+        // Kiro, TRAE CLI and MiniMax Code use the system distribution; every other
         // built-in has a pinned version codeg installs itself.
         for agent_type in builtin_acp_agents() {
-            if !matches!(agent_type, AgentType::Kiro | AgentType::Trae) {
+            if !matches!(
+                agent_type,
+                AgentType::Kiro | AgentType::Trae | AgentType::MiniMaxCode
+            ) {
                 assert!(
                     get_agent_meta(agent_type).registry_version().is_some(),
                     "{agent_type:?} lost its pin"
@@ -5897,6 +5929,53 @@ mod tests {
     // up, so there is no pin, the launch is the user's `traecli acp serve`,
     // and Upgrade runs the CLI's own `traecli update`. Its registry id must
     // stay clear of every id a hand-registered custom TRAE entry could carry.
+    #[test]
+    fn minimax_code_launches_native_acp_without_overriding_configuration() {
+        let meta = get_agent_meta(AgentType::MiniMaxCode);
+        assert_eq!(meta.name, "MiniMax Code");
+        assert!(meta.supports_mcp);
+        assert_eq!(
+            registry_id_for(AgentType::MiniMaxCode),
+            "codeg-minimax-code"
+        );
+        assert_eq!(
+            from_registry_id("codeg-minimax-code"),
+            Some(AgentType::MiniMaxCode)
+        );
+        assert!(meta.registry_version().is_none());
+        assert!(!meta.supports_custom_version());
+        assert!(acp_adapter_relation(AgentType::MiniMaxCode).is_none());
+        match meta.distribution {
+            AgentDistribution::System {
+                cmd,
+                args,
+                env,
+                install_url,
+                update_args,
+            } => {
+                assert_eq!(cmd, "mcode");
+                assert_eq!(args, &["acp"]);
+                assert!(env.is_empty());
+                assert_eq!(
+                    install_url,
+                    "https://github.com/MiniMax-AI/minimax-code#quick-start"
+                );
+                assert!(update_args.is_none());
+            }
+            other => panic!("expected native system distribution, got {other:?}"),
+        }
+        #[cfg(not(windows))]
+        assert_eq!(
+            binary_system_dirs(AgentType::MiniMaxCode),
+            &[".minimax-code/bin"]
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            binary_system_dirs(AgentType::MiniMaxCode),
+            &[".minimax-code"]
+        );
+    }
+
     #[test]
     fn trae_launches_the_system_cli_without_a_pin() {
         let meta = get_agent_meta(AgentType::Trae);

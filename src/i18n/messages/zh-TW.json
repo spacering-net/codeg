@@ -1450,6 +1450,13 @@
       "baseUrlInvalid": "請輸入合法的 http(s) 位址。",
       "loginHint": "沒有 API Key？也可以在終端機執行「codebuddy」用騰訊雲帳號登入。"
     },
+    "minimaxCode": {
+      "title": "MiniMax Code 設定",
+      "description": "codeg 沿用 mcode 原生憑證與所選服務商。請在 mcode 中設定自己的 API 金鑰，不必在此重複儲存；已有 BYOK 設定無須額外登入。",
+      "loginHint": "使用 MiniMax 訂閱時，請在執行 codeg 的機器終端中執行（中國區）：",
+      "globalHint": "國際區帳號請使用：",
+      "modelHint": "完成設定後重新連線智慧體。可用模型和權限模式由 mcode 透過 ACP 在對話中提供。"
+    },
     "kimiCode": {
       "configManagement": "Kimi Code 設定",
       "configDescription": "`kimi acp` 只認已儲存的登入權杖，所以 codeg 會在 ~/.kimi-code/config.toml 寫入受管供應商，並在本機植入一個門控權杖——推論仍然走你自己的 Key。",

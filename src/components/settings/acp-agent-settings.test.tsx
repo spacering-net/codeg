@@ -2812,3 +2812,21 @@ describe("ZCode runtime configuration", () => {
     ).toBe("pass")
   })
 })
+
+describe("MiniMax Code native configuration", () => {
+  it("does not offer generic API fields or write keys to codeg settings", () => {
+    expect(importantEnvKeysByAgent("minimax_code")).toEqual({
+      apiBaseUrl: [],
+      apiKey: [],
+      model: [],
+    })
+    expect(importantFieldsFor("minimax_code")).toEqual({
+      apiBaseUrl: false,
+      apiKey: false,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("minimax_code", "KEEP=value", "apiKey", "secret")
+    ).toBe("KEEP=value")
+  })
+})

@@ -585,6 +585,25 @@ const CommandCodeColorIcon = memo(function CommandCodeColorIcon({
   )
 })
 
+// A compact typographic mark, not a claim to reproduce MiniMax's wordmark.
+const MiniMaxCodeColorIcon = memo(function MiniMaxCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>MiniMax Code</title>
+      <rect width="24" height="24" rx="6" fill="#F23F5D" />
+      <path d="M5 17V7h3l4 6 4-6h3v10h-3v-5l-4 6-4-6v5H5Z" fill="#FFFFFF" />
+    </svg>
+  )
+})
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyIcon = React.ComponentType<any>
 
@@ -594,6 +613,7 @@ const COLOR_ICONS: Partial<Record<AgentType, AnyIcon>> = {
   gemini: GeminiCliColorIcon,
   open_claw: OpenClawColorIcon,
   kimi_code: KimiCodeColorIcon,
+  minimax_code: MiniMaxCodeColorIcon,
   pi: PiColorIcon,
   deepseek: DeepSeekColorIcon,
   kiro: KiroColorIcon,

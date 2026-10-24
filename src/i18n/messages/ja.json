@@ -1450,6 +1450,13 @@
       "baseUrlInvalid": "有効な http(s) URL を入力してください。",
       "loginHint": "API キーがない場合は、ターミナルで「codebuddy」を実行して Tencent アカウントでサインインすることもできます。"
     },
+    "minimaxCode": {
+      "title": "MiniMax Code の設定",
+      "description": "codeg は mcode の認証情報と選択済みプロバイダーを再利用します。API キーはここではなく mcode で設定してください。既存の BYOK 設定では追加のログインは不要です。",
+      "loginHint": "MiniMax サブスクリプションでは、codeg を実行するマシンのターミナルで実行してください（中国リージョン）：",
+      "globalHint": "グローバルアカウントの場合：",
+      "modelHint": "設定後、エージェントに再接続してください。利用可能なモデルと権限モードは mcode が ACP を通じて会話内に提供します。"
+    },
     "kimiCode": {
       "configManagement": "Kimi Code の設定",
       "configDescription": "`kimi acp` は保存済みのログイントークンしか受け付けないため、codeg は ~/.kimi-code/config.toml に管理対象プロバイダーを書き込み、ローカルにゲートトークンを配置します。推論は引き続きご自身のキーで実行されます。",
