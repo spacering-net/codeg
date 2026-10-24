@@ -25,6 +25,15 @@ const state = vi.hoisted(() => ({
   desktop: true,
   shortcuts: {} as Record<string, string>,
   listeners: new Map<string, (payload: unknown) => void>(),
+  // Floating-ball action context: the active tab row and the agent universe.
+  activeTab: null as {
+    id: string
+    conversationId: number | null
+    agentType: string
+  } | null,
+  sortedAgentTypes: ["zcode", "codex"] as string[],
+  favoriteAgents: [] as string[],
+  activeFolder: { id: 1, path: "/repo" } as { id: number; path: string } | null,
 }))
 
 const spies = vi.hoisted(() => ({
@@ -36,11 +45,54 @@ const spies = vi.hoisted(() => ({
   setActivePane: vi.fn(),
   closeCurrentWindow: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(),
+  setRoute: vi.fn(),
+  openSettingsWindow: vi.fn(() => Promise.resolve()),
+  auxOpenTab: vi.fn(),
+  confirmDraftAgent: vi.fn(),
+  openChatModeTab: vi.fn(),
+  openNewConversationTab: vi.fn(),
 }))
 
-vi.mock("@/lib/api", () => ({ openSettingsWindow: vi.fn() }))
+/** Captured from the (stubbed) FloatingBall: the controller's action handler. */
+let ballAction: ((action: string) => void) | null = null
+
+vi.mock("@/lib/api", () => ({ openSettingsWindow: spies.openSettingsWindow }))
+vi.mock("next-intl", () => ({
+  useTranslations: () => (key: string) => key,
+}))
+// The floating ball reads the active ACP connection (to stop a turn) and the
+// zoom level. Both pull provider modules this test does not exercise, and the
+// ACP context imports the workspace store in a shape the stub below does not
+// provide; the ⌘W behaviour under test touches neither.
+vi.mock("@/contexts/acp-connections-context", () => ({
+  useAcpActions: () => ({ cancel: vi.fn() }),
+  // Not a zustand store: it returns the context value directly.
+  useConnectionStore: () => ({
+    getActiveKey: () => null,
+    getConnection: () => null,
+  }),
+}))
+vi.mock("@/hooks/use-appearance", () => ({
+  useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: vi.fn() }),
+  useFloatingBall: () => ({
+    floatingBallFavoriteAgents: state.favoriteAgents,
+  }),
+}))
+vi.mock("@/hooks/use-sorted-available-agents", () => ({
+  useSortedAvailableAgents: () => ({
+    sortedTypes: state.sortedAgentTypes,
+    fresh: true,
+    refresh: () => Promise.resolve(),
+  }),
+}))
+vi.mock("@/components/layout/floating-ball", () => ({
+  FloatingBall: ({ onAction }: { onAction: (action: string) => void }) => {
+    ballAction = onAction
+    return null
+  },
+}))
 vi.mock("@/contexts/active-folder-context", () => ({
-  useActiveFolder: () => ({ activeFolder: { id: 1, path: "/repo" } }),
+  useActiveFolder: () => ({ activeFolder: state.activeFolder }),
 }))
 vi.mock("@/hooks/use-is-active-chat-mode", () => ({
   useIsActiveChatMode: () => false,
@@ -49,24 +101,44 @@ vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ toggle: vi.fn() }),
 }))
 vi.mock("@/contexts/aux-panel-context", () => ({
-  useAuxPanelContext: () => ({ toggle: vi.fn() }),
+  useAuxPanelContext: () => ({ toggle: vi.fn(), openTab: spies.auxOpenTab }),
 }))
 vi.mock("@/contexts/terminal-context", () => ({
   useTerminalContext: () => ({ toggle: vi.fn() }),
 }))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
-    openNewConversationTab: vi.fn(),
+    openNewConversationTab: spies.openNewConversationTab,
     openTab: vi.fn(),
     switchTab: spies.switchTab,
     closeTab: spies.closeTab,
+    confirmDraftAgent: spies.confirmDraftAgent,
+    openChatModeTab: spies.openChatModeTab,
   }),
   useTabStore: <T,>(
-    selector: (s: { tabs: { id: string }[]; activeTabId: string | null }) => T
+    selector: (s: {
+      tabs: { id: string; conversationId: number | null; agentType: string }[]
+      activeTabId: string | null
+      rawTabs: {
+        id: string
+        conversationId: number | null
+        agentType: string
+      }[]
+    }) => T
   ) =>
     selector({
-      tabs: state.activeTabId ? [{ id: state.activeTabId }] : [],
+      tabs: state.activeTabId
+        ? state.activeTab
+          ? [state.activeTab]
+          : [{ id: state.activeTabId, conversationId: 7, agentType: "zcode" }]
+        : [],
       activeTabId: state.activeTabId,
+      rawTabs:
+        state.activeTabId && state.activeTab
+          ? [state.activeTab]
+          : state.activeTabId
+            ? [{ id: state.activeTabId, conversationId: 7, agentType: "zcode" }]
+            : [],
     }),
 }))
 vi.mock("@/contexts/workspace-context", () => ({
@@ -90,7 +162,10 @@ vi.mock("@/contexts/workspace-context", () => ({
   }),
 }))
 vi.mock("@/contexts/workbench-route-context", () => ({
-  useWorkbenchRoute: () => ({ openConversations: vi.fn() }),
+  useWorkbenchRoute: () => ({
+    openConversations: vi.fn(),
+    setRoute: spies.setRoute,
+  }),
 }))
 vi.mock("@/contexts/search-dialog-context", () => ({
   useSearchDialog: () => ({ open: false, setOpen: vi.fn() }),
@@ -100,7 +175,8 @@ vi.mock("@/hooks/use-shortcut-settings", () => ({
 }))
 vi.mock("@/stores/app-workspace-store", () => ({
   isConversationDeleted: () => false,
-  useAppWorkspaceStore: { getState: () => ({ getFolder: () => null }) },
+  useAppWorkspaceStore: (selector: (s: { conversations: [] }) => unknown) =>
+    selector({ conversations: [] }),
 }))
 vi.mock("@/lib/closed-tab-stack", () => ({ popClosedTab: () => null }))
 vi.mock("@/components/conversations/search-command-dialog", () => ({
@@ -167,6 +243,16 @@ beforeEach(() => {
       return () => state.listeners.delete(event)
     }
   )
+  spies.setRoute.mockClear()
+  spies.openSettingsWindow.mockClear()
+  spies.auxOpenTab.mockClear()
+  spies.confirmDraftAgent.mockClear()
+  spies.openChatModeTab.mockClear()
+  spies.openNewConversationTab.mockClear()
+  state.activeTab = { id: "conv-1", conversationId: 7, agentType: "zcode" }
+  state.sortedAgentTypes = ["zcode", "codex"]
+  state.favoriteAgents = []
+  state.activeFolder = { id: 1, path: "/repo" }
 })
 
 afterEach(() => {
@@ -364,5 +450,99 @@ describe("WorkspaceChromeController — ⌘W the page hears", () => {
     fireEvent(document, event)
     expect(spies.closeFileTab).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+describe("WorkspaceChromeController — floating-ball actions", () => {
+  function fire(action: string): void {
+    render(<WorkspaceChromeController />)
+    expect(typeof ballAction).toBe("function")
+    ballAction?.(action)
+  }
+
+  it("routes the workspace actions", async () => {
+    fire("openTodos")
+    expect(spies.setRoute).toHaveBeenCalledWith("tasks")
+    fire("openAutomations")
+    expect(spies.setRoute).toHaveBeenCalledWith("automations")
+    fire("openCanvas")
+    expect(spies.setRoute).toHaveBeenCalledWith("canvas")
+    fire("openAgents")
+    await waitFor(() =>
+      expect(spies.openSettingsWindow).toHaveBeenCalledWith("agents")
+    )
+    fire("openSystemAdmin")
+    await waitFor(() =>
+      expect(spies.openSettingsWindow).toHaveBeenCalledWith("system")
+    )
+  })
+
+  it("opens the new-to-do composer even when the tasks route is already active", () => {
+    const received: CustomEvent[] = []
+    const listener = (e: Event) => received.push(e as CustomEvent)
+    window.addEventListener("codeg:create-task-from-text", listener)
+    fire("openTodosNew")
+    window.removeEventListener("codeg:create-task-from-text", listener)
+    expect(spies.setRoute).toHaveBeenCalledWith("tasks")
+    expect(received).toHaveLength(1)
+  })
+
+  it("renames the active tab's conversation by id", () => {
+    const received: unknown[] = []
+    const listener = (e: Event) => received.push((e as CustomEvent).detail)
+    window.addEventListener("codeg:rename-conversation", listener)
+    fire("renameConversation")
+    window.removeEventListener("codeg:rename-conversation", listener)
+    expect(received).toEqual([{ conversationId: 7 }])
+  })
+
+  it("opens the file tree only with a workspace folder", () => {
+    fire("openSessionFolder")
+    expect(spies.auxOpenTab).toHaveBeenCalledWith("file_tree")
+
+    state.activeFolder = null
+    fire("openSessionFolder")
+    expect(spies.auxOpenTab).toHaveBeenCalledTimes(1)
+  })
+
+  it("cycles the active draft tab's agent and confirms it", () => {
+    state.activeTab = {
+      id: "conv-1",
+      conversationId: null,
+      agentType: "zcode",
+    }
+    fire("cycleAgent")
+    expect(spies.confirmDraftAgent).toHaveBeenCalledWith("conv-1", "codex")
+    // The store would have applied the switch; reflect it like the real tab
+    // row would, so the next stroke continues from codex.
+    state.activeTab = {
+      id: "conv-1",
+      conversationId: null,
+      agentType: "codex",
+    }
+    fire("cycleAgent")
+    expect(spies.confirmDraftAgent).toHaveBeenLastCalledWith("conv-1", "zcode")
+  })
+
+  it("pins a new draft to the next agent when the active tab is saved", () => {
+    fire("cycleAgent")
+    expect(spies.confirmDraftAgent).not.toHaveBeenCalled()
+    expect(spies.openNewConversationTab).toHaveBeenCalledWith(
+      1,
+      "/repo",
+      expect.objectContaining({ forceAgent: "codex" })
+    )
+  })
+
+  it("cycles only within the favorite list for cycleFavoriteAgent", () => {
+    state.sortedAgentTypes = ["zcode", "codex", "cline"]
+    state.favoriteAgents = ["codex", "cline"]
+    fire("cycleFavoriteAgent")
+    // Current tab agent zcode is not in the list → head of the list.
+    expect(spies.openNewConversationTab).toHaveBeenCalledWith(
+      1,
+      "/repo",
+      expect.objectContaining({ forceAgent: "codex" })
+    )
   })
 })

@@ -5,6 +5,7 @@ import {
   Monitor,
   Moon,
   MoveHorizontal,
+  Orbit,
   Sparkles,
   Sun,
   Type,
@@ -29,7 +30,15 @@ import {
   useWelcomeQuickActions,
   useChatAnimationsSetting,
   useChatContentWidth,
+  useFloatingBall,
 } from "@/hooks/use-appearance"
+import { useAcpAgents } from "@/hooks/use-acp-agents"
+import {
+  DEFAULT_FLOATING_BALL_BINDINGS,
+  FLOATING_BALL_GESTURES,
+  type FloatingBallAction,
+} from "@/lib/floating-ball-gestures"
+import { type FloatingBallSize } from "@/components/appearance-provider"
 import {
   CHAT_CONTENT_DEFAULT,
   CHAT_CONTENT_MIN,
@@ -44,6 +53,11 @@ import {
   type ThemeColor,
   type ZoomLevel,
 } from "@/lib/theme-presets"
+import {
+  readRecentSessionDepth,
+  writeRecentSessionDepth,
+  type RecentSessionDepth,
+} from "@/lib/recent-sessions-prefs"
 import { PetManagerSection } from "./pet-manager-section"
 import { FontSettingsSection } from "./font-settings-section"
 import { WorkspaceBackgroundSection } from "./workspace-background-section"
@@ -60,6 +74,112 @@ function readScreenWidth(): number {
 
 type ThemeMode = "system" | "light" | "dark"
 
+/** Actions the binding dropdown offers (everything but the panel toggle). */
+const BALL_BINDABLE_ACTIONS: readonly FloatingBallAction[] = [
+  "panel",
+  "newConversation",
+  "toggleSidebar",
+  "toggleAuxPanel",
+  "toggleSearch",
+  "toggleTerminal",
+  "nextTab",
+  "prevTab",
+  "reopenClosedTab",
+  "openFolder",
+  "openTodos",
+  "openTodosNew",
+  "openAutomations",
+  "openCanvas",
+  "openAgents",
+  "openSystemAdmin",
+  "openSessionDetails",
+  "openChanges",
+  "openGitLog",
+  "renameConversation",
+  "openSessionFolder",
+  "cycleAgent",
+  "cycleFavoriteAgent",
+  "openBallBindings",
+  "cycleRunningSessions",
+  "cycleRecentSessions",
+  "deleteCurrentConversation",
+  "openImportSessions",
+  "togglePinConversation",
+  "focusModeSelector",
+  "togglePlanFullAccess",
+  "openCollaboration",
+  "zoomIn",
+  "zoomOut",
+  "zoomReset",
+  "stopGenerating",
+  "openSettings",
+]
+
+function isFloatingBallSize(v: string): v is FloatingBallSize {
+  return v === "small" || v === "medium" || v === "large"
+}
+
+/** Label of a gesture's built-in default, for the placeholder row. */
+function defaultGestureLabel(
+  action: FloatingBallAction,
+  // Loosely typed: callers pass the FloatingBall namespace's t; next-intl's
+  // key union would force a per-key overload for no safety gain here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any
+): string {
+  return action === "panel" ? t("panelTitle") : t(`actions.${action}`)
+}
+
+/** Multi-select (2-3) of agents the cycle-favorite gesture switches between. */
+function FavoriteAgentsPicker() {
+  const t = useTranslations("FloatingBall")
+  const { floatingBallFavoriteAgents, setFloatingBallFavoriteAgents } =
+    useFloatingBall()
+  const { agents } = useAcpAgents()
+  const usable = agents.filter((a) => a.enabled && a.available)
+
+  const toggle = (agentType: string) => {
+    const has = floatingBallFavoriteAgents.includes(agentType)
+    if (has) {
+      setFloatingBallFavoriteAgents(
+        floatingBallFavoriteAgents.filter((a) => a !== agentType)
+      )
+      return
+    }
+    // Cap at 3: the cycle is a thumb gesture, a longer loop defeats it.
+    if (floatingBallFavoriteAgents.length >= 3) return
+    setFloatingBallFavoriteAgents([...floatingBallFavoriteAgents, agentType])
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {usable.map((agent) => {
+        const picked = floatingBallFavoriteAgents.includes(agent.agent_type)
+        return (
+          <button
+            key={agent.agent_type}
+            type="button"
+            onClick={() => toggle(agent.agent_type)}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-2xs transition-colors",
+              picked
+                ? "border-primary bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            )}
+          >
+            {agent.name}
+          </button>
+        )
+      })}
+      {usable.length === 0 && (
+        <span className="text-2xs text-muted-foreground">
+          {t("favoriteAgentsEmpty")}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function AppearanceSettings() {
   const t = useTranslations("AppearanceSettings")
   const { theme, resolvedTheme, setTheme } = useTheme()
@@ -68,11 +188,31 @@ export function AppearanceSettings() {
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
   const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
+  const {
+    floatingBallEnabled,
+    setFloatingBallEnabled,
+    floatingBallPosition,
+    setFloatingBallPosition,
+    floatingBallBindings,
+    setFloatingBallBindings,
+    floatingBallSize,
+    setFloatingBallSize,
+  } = useFloatingBall()
   const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
   const [screenWidth] = useState(readScreenWidth)
   // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
   // 的宽度更小。
   const chatWidthMax = chatContentWidthCeiling(screenWidth, zoomLevel / 100)
+
+  // Gesture/action labels come from the FloatingBall namespace — the only one
+  // that actually carries translations; the AppearanceSettings.gestures/actions
+  // mirror is legacy and no longer read here.
+  const ballT = useTranslations("FloatingBall")
+  const [recentSessionDepth, setRecentSessionDepth] = useState(
+    readRecentSessionDepth
+  )
+  const actionLabel = (action: FloatingBallAction) =>
+    action === "panel" ? ballT("panelTitle") : ballT(`actions.${action}`)
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -295,6 +435,175 @@ export function AppearanceSettings() {
           </label>
         </section>
 
+        {/* ===== Floating ball ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Orbit className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("floatingBall.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("floatingBall.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={floatingBallEnabled}
+              onCheckedChange={setFloatingBallEnabled}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("floatingBall.enable")}
+            </span>
+          </label>
+
+          <div className="space-y-2">
+            <p className="text-2xs text-muted-foreground leading-4">
+              {t("floatingBall.hint")}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!floatingBallEnabled || !floatingBallPosition}
+              onClick={() => setFloatingBallPosition(null)}
+            >
+              {t("floatingBall.resetPosition")}
+            </Button>
+          </div>
+
+          {/* Ball size: three presets, defaults to large (the v81 size). */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium">{t("floatingBall.ballSize")}</p>
+            <Select
+              value={floatingBallSize}
+              onValueChange={(v) => {
+                if (isFloatingBallSize(v)) setFloatingBallSize(v)
+              }}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="small">
+                  {t("floatingBall.sizeSmall")}
+                </SelectItem>
+                <SelectItem value="medium">
+                  {t("floatingBall.sizeMedium")}
+                </SelectItem>
+                <SelectItem value="large">
+                  {t("floatingBall.sizeLarge")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Per-gesture binding overrides. An empty SelectValue means the
+              gesture falls back to the built-in default row below. */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium">
+              {t("floatingBall.gestureBindings")}
+            </p>
+            <div className="space-y-1">
+              {FLOATING_BALL_GESTURES.map((gesture) => {
+                const override = floatingBallBindings[gesture]
+                const value = override ?? ""
+                return (
+                  <div
+                    key={gesture}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="w-40 shrink-0 truncate text-2xs text-muted-foreground">
+                      {ballT(`gestures.${gesture}`, {
+                        fallback: gesture,
+                      })}
+                    </span>
+                    <Select
+                      value={value}
+                      onValueChange={(v) => {
+                        const next = { ...floatingBallBindings }
+                        if (v === "") delete next[gesture]
+                        else next[gesture] = v
+                        setFloatingBallBindings(next)
+                      }}
+                    >
+                      <SelectTrigger className="h-7 w-44 text-2xs">
+                        <SelectValue
+                          placeholder={
+                            DEFAULT_FLOATING_BALL_BINDINGS[gesture]
+                              ? defaultGestureLabel(
+                                  DEFAULT_FLOATING_BALL_BINDINGS[gesture],
+                                  ballT
+                                )
+                              : ballT("bindingCleared")
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="" className="text-2xs">
+                          {DEFAULT_FLOATING_BALL_BINDINGS[gesture]
+                            ? defaultGestureLabel(
+                                DEFAULT_FLOATING_BALL_BINDINGS[gesture],
+                                ballT
+                              )
+                            : ballT("bindingCleared")}
+                        </SelectItem>
+                        {BALL_BINDABLE_ACTIONS.map((action) => (
+                          <SelectItem
+                            key={action}
+                            value={action}
+                            className="text-2xs"
+                          >
+                            {actionLabel(action)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Favorite agents for the cycle-favorite gesture. */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium">
+              {t("floatingBall.favoriteAgents")}
+            </p>
+            <FavoriteAgentsPicker />
+            <p className="text-2xs text-muted-foreground leading-4">
+              {t("floatingBall.favoriteAgentsHint")}
+            </p>
+          </div>
+
+          {/* Depth of the recent-sessions cycle (2 = toggle between the two
+              most recently opened). Read/written straight to localStorage —
+              the writer lives in tab-store, outside React. */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium">{ballT("recentSessionDepth")}</p>
+            <Select
+              value={String(recentSessionDepth)}
+              onValueChange={(v) => {
+                if (v === "2" || v === "3" || v === "4") {
+                  const next = Number(v) as RecentSessionDepth
+                  setRecentSessionDepth(next)
+                  writeRecentSessionDepth(next)
+                }
+              }}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {([2, 3, 4] as const).map((d) => (
+                  <SelectItem key={d} value={String(d)}>
+                    {d}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </section>
         {/* ===== Chat content width ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
