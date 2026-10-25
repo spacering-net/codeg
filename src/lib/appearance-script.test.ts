@@ -8,6 +8,8 @@ import {
   STORAGE_KEY_CUSTOM_STYLE_SUSPENDED,
   STORAGE_KEY_CUSTOM_THEME,
   STORAGE_KEY_CUSTOM_THEME_ENABLED,
+  STORAGE_KEY_EDITOR_FONT,
+  STORAGE_KEY_EDITOR_FONT_STACK,
   STORAGE_KEY_THEME_COLOR,
   STORAGE_KEY_ZOOM_LEVEL,
 } from "./appearance-script"
@@ -334,4 +336,37 @@ describe("APPEARANCE_INIT_SCRIPT — chat area", () => {
       expect(chatWidth()).toBe("")
     }
   )
+})
+
+describe("APPEARANCE_INIT_SCRIPT — editor monospace font", () => {
+  it("writes a stored editor font stack to --font-mono before paint", () => {
+    // Conversation code blocks inherit --font-mono (Tailwind preflight on
+    // pre/code, and the font-mono utility). The inline script must apply the
+    // editor stack the same way it applies --font-sans, or the first frame
+    // stays on the default mono stack.
+    const stack =
+      '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace'
+    localStorage.setItem(STORAGE_KEY_EDITOR_FONT, "jetbrains-mono")
+    localStorage.setItem(STORAGE_KEY_EDITOR_FONT_STACK, stack)
+
+    runInitScript()
+
+    expect(document.documentElement.style.getPropertyValue("--font-mono")).toBe(
+      stack
+    )
+  })
+
+  it("drops an editor stack that could break out of the declaration", () => {
+    localStorage.setItem(STORAGE_KEY_EDITOR_FONT, "custom")
+    localStorage.setItem(
+      STORAGE_KEY_EDITOR_FONT_STACK,
+      "foo; } body { display:none }"
+    )
+
+    runInitScript()
+
+    expect(document.documentElement.style.getPropertyValue("--font-mono")).toBe(
+      ""
+    )
+  })
 })
