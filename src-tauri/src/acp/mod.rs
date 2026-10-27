@@ -16,6 +16,7 @@ pub mod codex_endpoint_catalog;
 pub mod codex_goal;
 pub mod codex_model_catalog;
 pub mod codex_runtime;
+pub(crate) mod codex_v2;
 pub mod command_code;
 pub mod computer_tools;
 pub mod connection;

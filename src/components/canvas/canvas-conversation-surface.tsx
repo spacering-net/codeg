@@ -19,6 +19,13 @@ import {
   useAcpActions,
 } from "@/contexts/acp-connections-context"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { useMessageQueue } from "@/hooks/use-message-queue"
+import { useSessionFeedback } from "@/hooks/use-session-feedback"
+import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
+import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
+import { buildSteerPayload } from "@/lib/prompt-draft"
+import { flushRetryDelayMs, isConnectionReady } from "@/lib/queue-flush"
+import { deliverQueuedSteer } from "@/lib/queued-steer"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
@@ -75,12 +82,8 @@ import { useShallow } from "zustand/react/shallow"
  *   `MessageListView`         the transcript (reads turns by conversation id)
  *   `ConversationShell`       composer + the three interrupt dialogs
  *
- * What it deliberately leaves out: the message queue, live-feedback steering,
- * transcript export and the welcome-page quick actions. Those belong
- * to the full workspace surface, which the card's "open in workspace" menu
- * entry is one click away from. Without a queue, a message written while the
- * agent is still answering stays in the composer (`MessageInput` holds it), and
- * one that bounces off a turn the card hadn't heard of yet is handed back there.
+ * The queue and native insertion use the same hooks as workspace tabs.
+ * Export and welcome-page actions remain on the full workspace surface.
  *
  * `contextKey` is the ACP connection key and must be STABLE for the card's
  * lifetime; when this conversation is also open in a workspace tab, the two
@@ -193,6 +196,11 @@ export function CanvasConversationSurface({
   const tAsyncTasks = useTranslations("Folder.chat.asyncTasks")
   const tComposer = useTranslations("Folder.chat.messageInput")
   const acpActions = useAcpActions()
+  const queue = useMessageQueue()
+  const lastBounceAt = useRef(0)
+  const steeringRef = useRef(false)
+  const [steering, setSteering] = useState(false)
+  const [unknownSteer, setUnknownSteer] = useState<string | null>(null)
   const {
     appendOptimisticTurn,
     removeOptimisticTurn,
@@ -574,7 +582,11 @@ export function CanvasConversationSurface({
   )
 
   const handleSend = useCallback(
-    (draft: PromptDraft, selectedModeIdArg?: string | null) => {
+    (
+      draft: PromptDraft,
+      selectedModeIdArg?: string | null,
+      fromQueue = false
+    ) => {
       // Bail BEFORE the optimistic turn exists. A second submit while the first
       // one is still minting the conversation row cannot be sent (there is no
       // row to send it against yet), and painting it into the transcript first
@@ -585,6 +597,13 @@ export function CanvasConversationSurface({
       // The composer already reads as not ready while the connection belongs
       // to another agent; this catches a submit that races the switch.
       if (connIsForOtherAgent) return
+      if (
+        !fromQueue &&
+        (queue.getQueueLength() > 0 || connStatus === "prompting")
+      ) {
+        queue.enqueue(draft, selectedModeIdArg ?? null)
+        return
+      }
 
       const optimisticTurn = buildOptimisticUserTurn(
         draft,
@@ -606,31 +625,37 @@ export function CanvasConversationSurface({
       // typing indicator, with `awaiting_persist` pinned so no refetch clears
       // it either. Both calls ignore a turn that isn't there, so this is
       // unconditional rather than a guess about which one won.
-      const onSendFailed = () => {
+      const rollback = () => {
         removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
         const persistedId = dbConversationIdRef.current
         if (persistedId != null && persistedId !== effectiveConversationId) {
           removeOptimisticTurn(persistedId, optimisticTurn.id)
         }
       }
-      // No message queue on this surface, so a send the backend bounces (a
-      // turn already in flight) has nowhere to wait. The composer holds one
-      // written while the card can SEE the agent answering; what lands here is
-      // a turn it hadn't heard of yet — started from another surface, or its
-      // `prompting` still on the way. Rolling the message back used to be all
-      // that happened, and the composer had cleared itself when it went out, so
-      // it was simply gone, with no notice either. Hand it back instead.
+      const onSendFailed = () => {
+        rollback()
+        // An ambiguous transport error must never trigger an automatic resend.
+        if (fromQueue)
+          setComposerHandBacks((pending) => [
+            ...pending,
+            { handBack: draft.blocks },
+          ])
+      }
       const onTurnInProgress = () => {
-        onSendFailed()
-        setComposerHandBacks((pending) => [
-          ...pending,
-          { handBack: draft.blocks },
-        ])
-        notify({
-          level: "info",
-          key: `held-while-responding:${contextKey}`,
-          title: tComposer("heldWhileResponding"),
-        })
+        rollback()
+        lastBounceAt.current = Date.now()
+        if (fromQueue) queue.requeueFront(draft, selectedModeIdArg ?? null)
+        else {
+          setComposerHandBacks((pending) => [
+            ...pending,
+            { handBack: draft.blocks },
+          ])
+          notify({
+            level: "info",
+            key: `held-while-responding:${contextKey}`,
+            title: tComposer("heldWhileResponding"),
+          })
+        }
       }
 
       const persistedId = dbConversationIdRef.current
@@ -715,6 +740,8 @@ export function CanvasConversationSurface({
       appendOptimisticTurn,
       boundFolderId,
       connIsForOtherAgent,
+      connStatus,
+      queue,
       connSessionId,
       contextKey,
       draftTarget,
@@ -828,6 +855,90 @@ export function CanvasConversationSurface({
     [effectiveConversationId]
   )
 
+  const feedbackEnabled = useFeedbackEnabled()
+  const feedback = useSessionFeedback({
+    connectionId: connIsForOtherAgent ? null : conn.connectionId,
+    connStatus,
+    enabled: feedbackEnabled,
+    steeredMessageIds: conn.steeredMessageIds,
+    onResendAsPrompt: (text) =>
+      queue.enqueue(
+        { blocks: [{ type: "text", text }], displayText: text },
+        selectedModeId
+      ),
+  })
+  const runtimeSyncState = useConversationRuntimeStore(
+    (state) => state.byConversationId.get(effectiveConversationId)?.syncState
+  )
+  const ready =
+    isActive &&
+    !creating &&
+    isConnectionReady(
+      connStatus,
+      conn.connectedWorkingDir,
+      workingDir,
+      conn.agentType,
+      agentType
+    )
+  const sendRef = useRef(handleSend)
+  sendRef.current = handleSend
+  useEffect(() => {
+    if (
+      !ready ||
+      steering ||
+      unknownSteer ||
+      queue.editingItemId ||
+      runtimeSyncState === "awaiting_persist" ||
+      queue.queue.length === 0
+    )
+      return
+    const timer = setTimeout(
+      () => {
+        if (steeringRef.current) return
+        const next = queue.dequeue()
+        if (next)
+          sendRef.current(
+            next.draft,
+            next.adoptSendTimeMode ? selectedModeId : next.modeId,
+            true
+          )
+      },
+      flushRetryDelayMs(Date.now(), lastBounceAt.current)
+    )
+    return () => clearTimeout(timer)
+  }, [ready, steering, unknownSteer, queue, runtimeSyncState, selectedModeId])
+  const steerQueued = async (id: string) => {
+    const item = queue.queue.find((entry) => entry.id === id)
+    if (!item || steeringRef.current || unknownSteer) return
+    const payload = buildSteerPayload(item.draft)
+    if (!payload) return
+    steeringRef.current = true
+    setSteering(true)
+    try {
+      if (
+        await deliverQueuedSteer(
+          () => feedback.steer(payload.text, payload.blocks),
+          () => queue.moveToFront(id)
+        )
+      )
+        queue.remove(id)
+    } catch (error) {
+      // The adapter may have consumed the item before the connection broke.
+      // Keep it visible and stop automatic flushing until the user removes it.
+      setUnknownSteer(id)
+      notify({
+        level: "warning",
+        key: `canvas-steer:${contextKey}`,
+        title: tComposer("queueDeliveryUnknown"),
+        description: toErrorMessage(error),
+      })
+    } finally {
+      steeringRef.current = false
+      setSteering(false)
+    }
+  }
+  const editing = queue.queue.find((item) => item.id === queue.editingItemId)
+
   const isDraft = dbConversationId == null
 
   return (
@@ -860,6 +971,58 @@ export function CanvasConversationSurface({
           pendingPlanApproval={conn.pendingPlanApproval}
           onFocus={handleFocus}
           onSend={handleSend}
+          queue={queue.queue}
+          onEnqueue={queue.enqueue}
+          onQueueReorder={steering ? undefined : queue.reorder}
+          onQueueEdit={
+            steering || unknownSteer ? undefined : queue.startEditing
+          }
+          onQueueDelete={
+            steering
+              ? undefined
+              : (id) => {
+                  queue.remove(id)
+                  if (unknownSteer === id) setUnknownSteer(null)
+                }
+          }
+          editingItemId={queue.editingItemId}
+          isEditingQueueItem={!!editing}
+          editingDraftText={editing?.draft.displayText}
+          editingDraftBlocks={editing?.draft.blocks}
+          onSaveQueueEdit={(draft) => {
+            if (editing) queue.updateItem(editing.id, draft)
+          }}
+          onCancelQueueEdit={queue.cancelEditing}
+          onQueueSteer={
+            feedback.steerAvailable && !steering && !unknownSteer
+              ? steerQueued
+              : undefined
+          }
+          onSteer={
+            feedback.steerAvailable && !steering && !unknownSteer
+              ? async (text, blocks) => {
+                  steeringRef.current = true
+                  setSteering(true)
+                  try {
+                    await feedback.steer(text, blocks)
+                  } finally {
+                    steeringRef.current = false
+                    setSteering(false)
+                  }
+                }
+              : undefined
+          }
+          steerChannel={feedback.channel}
+          feedbackList={
+            feedback.showList ? (
+              <FeedbackNotesDisplay
+                notes={feedback.notes}
+                expired={feedback.notesExpired}
+                onResend={feedback.resendNote}
+                onDismiss={feedback.dismissNote}
+              />
+            ) : undefined
+          }
           onCancel={handleCancel}
           onRespondPermission={handleRespondPermission}
           onAnswerQuestion={handleAnswerQuestion}

@@ -12,7 +12,7 @@
  * The heavy children (shell, transcript, picker) are stubbed; the card's own
  * wiring is real.
  */
-import { act, cleanup, render } from "@testing-library/react"
+import { act, cleanup, render, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { AcpAgentInfo, PromptDraft } from "@/lib/types"
 
@@ -62,6 +62,7 @@ vi.mock("@/contexts/acp-connections-context", () => {
   }
   return {
     useAcpActions: () => actions,
+    useAcpEvent: () => {},
     getCachedSelectors: (agentType: string) =>
       cachedSelectors.get(agentType) ?? null,
   }
@@ -110,8 +111,22 @@ const api = vi.hoisted(() => ({
   createChatConversation: vi.fn(),
   createConversation: vi.fn(),
   createChatDir: vi.fn(),
+  getFeedbackSettings: vi.fn().mockResolvedValue({ enabled: false }),
+  acpGetSessionSnapshot: vi.fn().mockResolvedValue(null),
+  submitSessionFeedback: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
+
+const transport = vi.hoisted(() => ({
+  call: vi.fn().mockResolvedValue(null),
+  subscribe: vi.fn().mockResolvedValue(() => {}),
+  isDesktop: () => false,
+}))
+vi.mock("@/lib/transport", () => ({
+  getTransport: () => transport,
+  getShellTransport: () => transport,
+  isDesktop: () => false,
+}))
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }))
 
@@ -119,7 +134,10 @@ const prefs = vi.hoisted(() => ({
   getSavedModeId: vi.fn((): string | null => null),
   saveModePreference: vi.fn(),
 }))
-vi.mock("@/lib/selector-prefs-storage", () => prefs)
+vi.mock("@/lib/selector-prefs-storage", () => ({
+  ...prefs,
+  workspaceSelectorKey: (agent: string) => agent,
+}))
 
 import { CanvasConversationSurface } from "@/components/canvas/canvas-conversation-surface"
 import { notify } from "@/lib/notify"
@@ -205,6 +223,110 @@ const draft: PromptDraft = {
   blocks: [{ type: "text", text: "hello" }],
   displayText: "hello",
 }
+
+describe("ordinary canvas queue and native steering", () => {
+  const lockDescriptor = Object.getOwnPropertyDescriptor(navigator, "locks")
+  beforeEach(() => {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _key: string,
+          _options: unknown,
+          callback: (lock: object) => Promise<void>
+        ) => callback({}),
+      },
+    })
+    localStorage.clear()
+    resetConversationRuntimeStore()
+    registry.agents = [agent("codex", "2.3.0")]
+    lifecycle.conn = connection("codex", "prompting")
+    lifecycle.handleSend.mockReset()
+    transport.call.mockClear()
+    api.acpGetSessionSnapshot.mockResolvedValue({
+      native_steering_available: true,
+      feedback_tool_available: false,
+      feedback: [],
+    })
+    api.submitSessionFeedback.mockReset().mockResolvedValue({
+      id: "steer-1",
+      text: "hello",
+      status: "delivered",
+      created_at: 1,
+    })
+  })
+  afterEach(() => {
+    cleanup()
+    api.acpGetSessionSnapshot.mockResolvedValue(null)
+    if (lockDescriptor)
+      Object.defineProperty(navigator, "locks", lockDescriptor)
+    else Reflect.deleteProperty(navigator, "locks")
+  })
+  function card() {
+    return (
+      <CanvasConversationSurface
+        contextKey="native-canvas"
+        conversationId={5}
+        agentType="codex"
+        isActive
+        folderPickerOverride={{
+          folderId: 7,
+          editable: false,
+          onSelectFolder: () => {},
+          onSelectChatMode: () => {},
+        }}
+      />
+    )
+  }
+  it("offers native insertion with tool feedback disabled and carries attachments", async () => {
+    render(card())
+    await waitFor(() => expect(shell.props?.onSteer).toBeTypeOf("function"))
+    expect(shell.props?.steerChannel).toBe("native")
+    const blocks = [
+      { type: "text" as const, text: "hello" },
+      { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" },
+    ]
+    await act(async () => {
+      await (
+        shell.props!.onSteer as (
+          text: string,
+          blocks: unknown[]
+        ) => Promise<void>
+      )("hello", blocks)
+    })
+    expect(api.submitSessionFeedback).toHaveBeenCalledWith(
+      "codex-conn",
+      "hello",
+      blocks
+    )
+    expect(shell.props?.queue).toEqual([])
+  })
+  it("keeps ordinary sends queued in order until the owned turn ends", async () => {
+    const rendered = render(card())
+    await waitFor(() => expect(shell.props?.onSteer).toBeTypeOf("function"))
+    await act(async () => {
+      const enqueue = shell.props!.onEnqueue as (
+        draft: PromptDraft,
+        mode: null
+      ) => void
+      enqueue(draft, null)
+      enqueue(
+        { blocks: [{ type: "text", text: "second" }], displayText: "second" },
+        null
+      )
+    })
+    expect(
+      (shell.props?.queue as Array<{ draft: PromptDraft }>).map(
+        (item) => item.draft.displayText
+      )
+    ).toEqual(["hello", "second"])
+    expect(lifecycle.handleSend).not.toHaveBeenCalled()
+    lifecycle.conn = connection("codex", "connected")
+    rendered.rerender(card())
+    await waitFor(() => expect(lifecycle.handleSend).toHaveBeenCalledTimes(1))
+    expect(lifecycle.handleSend.mock.calls[0][0]).toEqual(draft)
+  })
+})
 
 describe("a draft card whose connection still belongs to the previous agent", () => {
   beforeEach(() => {

@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "Sitzungen",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Fähigkeiten",
-        "mentionGroupAssistant": "Assistenten"
+        "mentionGroupAssistant": "Assistenten",
+        "queueDeliveryUnknown": "Die Zustellung konnte nicht bestätigt werden. Prüfe den Chat vor dem erneuten Senden. Diese Nachricht wird nicht automatisch erneut gesendet."
       },
       "messageQueue": {
         "addToQueue": "Zur Warteschlange",

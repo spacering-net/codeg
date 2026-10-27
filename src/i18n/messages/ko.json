@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
         "mentionGroupSkill": "스킬",
-        "mentionGroupAssistant": "어시스턴트"
+        "mentionGroupAssistant": "어시스턴트",
+        "queueDeliveryUnknown": "전송 여부를 확인할 수 없습니다. 다시 보내기 전에 대화를 확인하세요. 이 메시지는 자동으로 재전송되지 않습니다."
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",

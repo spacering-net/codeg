@@ -81,6 +81,27 @@ beforeEach(() => {
 })
 
 describe("useSessionFeedback", () => {
+  it("offers native steering with the feedback tool setting off", async () => {
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: false,
+        native_steering_available: true,
+      })
+    )
+    mockSubmit.mockResolvedValue(note("native", "update", "delivered"))
+    const { result } = renderHook(() =>
+      useSessionFeedback({ ...baseProps, enabled: false })
+    )
+    await waitFor(() => expect(result.current.canSubmit).toBe(true))
+    expect(result.current.featureEnabled).toBe(true)
+    expect(result.current.steerAvailable).toBe(true)
+    expect(result.current.channel).toBe("native")
+    await act(async () => {
+      await result.current.submit("update")
+    })
+    expect(mockSubmit).toHaveBeenCalledWith("c1", "update")
+  })
+
   it("hydrates notes and tool availability from the snapshot", async () => {
     mockSnapshot.mockResolvedValue(
       snapshot({ feedback: [note("n1", "hi")], feedback_tool_available: true })
@@ -200,10 +221,10 @@ describe("useSessionFeedback", () => {
         useSessionFeedback(props),
       { initialProps: { ...baseProps, enabled: false } }
     )
-    // Feature off: never submittable, never fetches the snapshot.
+    // Pull feature off: still discover the independent native capability.
     expect(result.current.featureEnabled).toBe(false)
     expect(result.current.canSubmit).toBe(false)
-    expect(mockSnapshot).not.toHaveBeenCalled()
+    expect(mockSnapshot).toHaveBeenCalled()
 
     // Enabled but idle (not prompting): entry shown but not submittable.
     rerender({ ...baseProps, connStatus: "connected" })
@@ -518,10 +539,9 @@ describe("useSessionFeedback", () => {
     act(() => result.current.dismissNote("n1"))
     expect(result.current.notes).toHaveLength(0)
 
-    // Toggling the feature off and back on re-runs the hydrate on the SAME
-    // connection, against a snapshot that still lists the note.
+    // Reattaching re-runs hydration against a snapshot that still lists the note.
     const before = mockSnapshot.mock.calls.length
-    rerender({ ...baseProps, enabled: false })
+    rerender({ ...baseProps, connectionId: null })
     rerender(baseProps)
     await waitFor(() =>
       expect(mockSnapshot.mock.calls.length).toBeGreaterThan(before)

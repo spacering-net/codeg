@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Compétences",
-        "mentionGroupAssistant": "Assistants"
+        "mentionGroupAssistant": "Assistants",
+        "queueDeliveryUnknown": "L’envoi n’a pas pu être confirmé. Vérifiez la conversation avant de renvoyer le message. Il ne sera pas renvoyé automatiquement."
       },
       "messageQueue": {
         "addToQueue": "Mettre en file",

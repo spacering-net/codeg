@@ -3666,8 +3666,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (`codex_acp_session_title`, cut included) and then the live
             // path's (`codex_thread_title`).
             distribution: AgentDistribution::Npx {
-                version: "2.2.2",
-                package: "@agentclientprotocol/codex-acp@2.2.2",
+                version: "2.3.0",
+                package: "@agentclientprotocol/codex-acp@2.3.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -6223,8 +6223,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.2.2",
-            "@agentclientprotocol/codex-acp@2.2.2",
+            "2.3.0",
+            "@agentclientprotocol/codex-acp@2.3.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));

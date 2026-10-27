@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "アシスタント"
+        "mentionGroupAssistant": "アシスタント",
+        "queueDeliveryUnknown": "送信を確認できませんでした。再送する前に会話を確認してください。このメッセージは自動では再送されません。"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",

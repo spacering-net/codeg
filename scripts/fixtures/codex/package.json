@@ -1,0 +1,11 @@
+{
+  "name": "codeg-codex-acp-fixture",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "2.3.0"
+  }
+}

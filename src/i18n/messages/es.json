@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "Sesiones",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "mentionGroupAssistant": "Asistentes"
+        "mentionGroupAssistant": "Asistentes",
+        "queueDeliveryUnknown": "No se pudo confirmar el envío. Revisa la conversación antes de volver a enviar el mensaje. No se reenviará automáticamente."
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",

@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2534,6 +2535,7 @@ async fn build_agent(
     // alignment (process cwd == session cwd). Guard on an existing directory
     // so a not-yet-created working_dir (e.g. a worktree path) can't make the
     // spawn fail.
+    let agent = agent.with_codex_v2(agent_type == AgentType::Codex);
     Ok(if cwd.is_dir() {
         agent.with_current_dir(cwd)
     } else {
@@ -13952,6 +13954,16 @@ async fn run_conversation_loop(
                 // Read updates until turn completes.
                 // We must also listen for commands (e.g. RespondPermission)
                 // to avoid deadlocking when the agent awaits a permission response.
+                type PendingSteer = futures::future::BoxFuture<
+                    'static,
+                    (
+                        Vec<PromptInputBlock>,
+                        tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
+                        Result<SteerOutcome, AcpError>,
+                    ),
+                >;
+                let mut pending_steers = futures::stream::FuturesUnordered::<PendingSteer>::new();
+
                 loop {
                     tokio::select! {
                         // Updates before the response: an agent that writes
@@ -14137,7 +14149,14 @@ async fn run_conversation_loop(
                                 log_dropped_update(&mut drop_log_throttle, "turn", &e);
                             }
                         }
-                        prompt_result = &mut prompt_response => {
+                        Some((blocks, reply, outcome)) = pending_steers.next(), if !pending_steers.is_empty() => {
+                            if matches!(outcome, Ok(SteerOutcome::Injected)) {
+                                prompt_ledger.record_prompt_blocks(&blocks);
+                                record_steer(agent_type, &sid.0, &map_prompt_blocks(blocks)).await;
+                            }
+                            let _ = reply.send(outcome);
+                        }
+                        prompt_result = &mut prompt_response, if pending_steers.is_empty() => {
                             // A rejected prompt is a TURN failure, not a dead
                             // connection: the agent answered, so it is still
                             // there, and the session it answered about is still
@@ -14575,14 +14594,9 @@ async fn run_conversation_loop(
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
-                                    // once this outcome arrives (Fork's
-                                    // protocol/persistence split). Awaiting
-                                    // inline matches SetMode/SetConfigOption:
-                                    // the runtime pumps I/O on its own task, so the
-                                    // round-trip only defers other queued
-                                    // commands, not session updates. A dead
-                                    // receiver is fine — the reply is then
-                                    // moot (teardown), nothing to unwind.
+                                    // once this outcome arrives. Poll concurrently with
+                                    // permissions, updates and cancellation: Codex can
+                                    // wait for an approval before accepting a steer.
                                     //
                                     // A steer while an `ask_user_question` card
                                     // is up answers it declined first. Through
@@ -14603,59 +14617,22 @@ async fn run_conversation_loop(
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
                                     }
-                                    let outcome = send_steer_request(&cx, &sid, &blocks).await;
-                                    // A steered message still lands in the
-                                    // agent's OWN transcript: as a user record
-                                    // when it runs as a turn of its own, and as
-                                    // a `queued_command` attachment when the
-                                    // CLI folds it into the running turn
-                                    // (`parsers::claude::queued_human_prompt`).
-                                    // Fingerprint it so the background watcher
-                                    // classifies that turn, or the rest of the
-                                    // turn it was folded into, as wire-rendered
-                                    // foreground: the owning prompt stays in
-                                    // flight across the steered work
-                                    // (claude-agent-acp #958), so all of it
-                                    // already streams into the live turn —
-                                    // surfacing it as overlay activity too
-                                    // renders it twice and reorders the
-                                    // transcript as the upserts land.
-                                    //
-                                    // `Injected` ONLY: `PromptRequired` leaves
-                                    // the content unconsumed (the caller
-                                    // resends it as a real prompt, which
-                                    // fingerprints itself, and a stale entry
-                                    // would swallow a same-text out-of-turn
-                                    // refire for the whole ledger TTL), and a
-                                    // `StartedNewTurn` genuinely runs detached
-                                    // — the overlay is the only place its work
-                                    // can surface at all.
-                                    if matches!(outcome, Ok(SteerOutcome::Injected)) {
-                                        prompt_ledger.record_prompt_blocks(&blocks);
-                                        // A custom agent's history is codeg's
-                                        // own transcript, and only codeg knows
-                                        // the steer happened (see
-                                        // `record_steer`). Recorded in the
-                                        // encoding it went out in, and before
-                                        // the reply, so every frame this loop
-                                        // takes in from here on lands after it.
-                                        record_steer(
-                                            agent_type,
-                                            &sid.0,
-                                            &map_prompt_blocks(blocks.clone()),
-                                        )
-                                        .await;
-                                    }
-                                    let _ = reply.send(outcome);
+                                    // Keep approvals and cancellation responsive while the
+                                    // adapter waits for insertion or a turn-start reservation.
+                                    let steer_cx = cx.clone();
+                                    let steer_sid = sid.clone();
+                                    pending_steers.push(Box::pin(async move {
+                                        let outcome = send_steer_request(&steer_cx, &steer_sid, &blocks).await;
+                                        (blocks, reply, outcome)
+                                    }));
                                 }
                                 Some(ConnectionCommand::StopAsyncTask {
                                     task_id,
                                     reply,
                                 }) => {
-                                    // Mid-turn is the COMMON case: a background
+                                    // Mid-turn is the common case: a background
                                     // task is usually launched by the turn that
-                                    // is still running. Awaited inline like
-                                    // Steer above — the runtime pumps I/O on its own
+                                    // is still running. Awaited inline; the runtime pumps I/O on its own
                                     // task, so this defers other queued
                                     // commands, not the turn's updates.
                                     let _ = reply.send(
@@ -14675,6 +14652,20 @@ async fn run_conversation_loop(
                                         .release_all_for_session(sid.0.as_ref())
                                         .await;
                                     tracked_terminal_tool_calls.clear();
+                                    if agent_type == AgentType::Codex
+                                        && state.read().await.native_steering_available
+                                    {
+                                        // The v2 codec still owns accepted steers, including
+                                        // a fallback turn that can start after cancellation.
+                                        // Keep polling its reply and commands until idle.
+                                        drain_permissions(perms, state, emitter).await;
+                                        if let Some(inj) = delegation_injection {
+                                            inj.broker.cancel_by_parent_turn(conn_id).await;
+                                            inj.questions.cancel_questions_by_parent(conn_id).await;
+                                            inj.plan_approvals.cancel_plan_approvals_by_parent(conn_id).await;
+                                        }
+                                        continue;
+                                    }
                                     // No turn end is recorded here, for ZCode
                                     // as for every agent whose history is
                                     // codeg's transcript: the agent's last
@@ -17594,6 +17585,15 @@ fn synthesize_native_steering(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
     agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
 ) -> bool {
+    if agent_type == AgentType::Codex {
+        return init_advertises_steering(meta)
+            && meta
+                .and_then(|m| m.get(crate::acp::codex_v2::LIFECYCLE_META))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            && agent_info.is_some_and(|info| info.name == "@agentclientprotocol/codex-acp")
+            && steering_version_ok(agent_info, "2.3.0");
+    }
     init_advertises_steering(meta)
         && registry::steering_prompt_required_min_version(steering_policy_agent(
             agent_type, agent_info,
@@ -39471,6 +39471,8 @@ mod tests {
             let agent_go = Arc::clone(&go);
             let agent_respond = Arc::clone(&respond);
             let agent_after = Arc::clone(&after);
+            let steer_cancelled = Arc::new(tokio::sync::Notify::new());
+            let cancel_steer = Arc::clone(&steer_cancelled);
             let set_models = Arc::new(std::sync::Mutex::new(Vec::new()));
             let agent_set_models = Arc::clone(&set_models);
             let agent = tokio::spawn(async move {
@@ -39522,9 +39524,27 @@ mod tests {
                     )
                     .on_receive_notification(
                         async move |_cancel: CancelNotification, cx: ConnectionTo<Client>| {
+                            cancel_steer.notify_waiters();
                             send_grok_frames(&cx, &cancel_script.on_cancel)
                         },
                         on_receive_notification!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: TestSteeringRequest,
+                                    responder: Responder<serde_json::Value>,
+                                    cx: ConnectionTo<Client>| {
+                            let cancelled = Arc::clone(&steer_cancelled);
+                            tokio::spawn(async move {
+                                let ready = cancelled.notified();
+                                tokio::pin!(ready);
+                                ready.as_mut().enable();
+                                send_grok_frames(&cx, &[grok_barrier()])?;
+                                ready.await;
+                                responder.respond(serde_json::json!({"outcome":"injected"}))
+                            });
+                            Ok(())
+                        },
+                        on_receive_request!(),
                     )
                     .on_receive_request(
                         async move |_req: ForkSessionRequest,
@@ -39702,6 +39722,77 @@ mod tests {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.client).await;
             self.agent.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn codex_cancel_keeps_pending_steer_and_turn_owned_until_adapter_finishes() {
+        let mut lp = GrokLoop::start_as(
+            GrokScript {
+                hold_response: true,
+                in_turn: vec![grok_barrier()],
+                ..Default::default()
+            },
+            AgentType::Codex,
+        )
+        .await;
+        lp.state.write().await.native_steering_available = true;
+        lp.prompt("work").await;
+        lp.until_barrier().await;
+        let (reply, outcome) = oneshot::channel();
+        lp.send(ConnectionCommand::Steer {
+            blocks: vec![PromptInputBlock::Text {
+                text: "insert".into(),
+            }],
+            reply,
+        })
+        .await;
+        lp.until_barrier().await;
+        lp.send(ConnectionCommand::Cancel).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), outcome)
+            .await
+            .expect("cancel must reach an adapter holding a steer")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, SteerOutcome::Injected);
+        assert!(lp.state.read().await.turn_in_flight);
+        assert!(!lp
+            .seen
+            .iter()
+            .any(|e| matches!(e, AcpEvent::TurnComplete { .. })));
+        lp.release_response();
+        lp.after_turn_end().await;
+        assert!(!lp.state.read().await.turn_in_flight);
+        lp.shutdown().await;
+    }
+
+    #[test]
+    fn codex_native_steering_requires_codec_proof_and_running_adapter_identity() {
+        use agent_client_protocol::schema::v1::Implementation;
+        let meta = meta_map(
+            serde_json::json!({"steering":{"supported":true}, "codeg.codexV2Lifecycle":true}),
+        );
+        for (name, version, expected) in [
+            ("@agentclientprotocol/codex-acp", "2.3.0", true),
+            ("@agentclientprotocol/codex-acp", "2.2.3", false),
+            ("codex-acp", "2.3.0", false),
+        ] {
+            assert_eq!(
+                synthesize_native_steering(
+                    AgentType::Codex,
+                    Some(&meta),
+                    Some(&Implementation::new(name, version))
+                ),
+                expected
+            );
+        }
+        assert!(!synthesize_native_steering(
+            AgentType::Codex,
+            None,
+            Some(&Implementation::new(
+                "@agentclientprotocol/codex-acp",
+                "2.3.0"
+            ))
+        ));
     }
 
     fn turn_completes(seen: &[AcpEvent]) -> Vec<(usize, String)> {

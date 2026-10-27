@@ -78,7 +78,7 @@ export interface UseSessionFeedbackArgs {
 export interface UseSessionFeedback {
   /** All notes for the current turn (pending + delivered). */
   notes: FeedbackItem[]
-  /** Global feature flag — gates whether the "+" menu entry is shown at all. */
+  /** Whether either native insertion or optional tool feedback is available. */
   featureEnabled: boolean
   /** Whether a note can be sent right now (entry is enabled vs. greyed out). */
   canSubmit: boolean
@@ -205,7 +205,7 @@ export function useSessionFeedback({
     // keeping it is what stops a re-hydrate (same connection, feature flag
     // toggled off and on) from resurrecting a row the user already retired. It
     // is bounded by the per-turn clear below.
-    if (!enabled || !connectionId) return
+    if (!connectionId) return
     let cancelled = false
     const startGen = turnGenRef.current
     void acpGetSessionSnapshot(connectionId)
@@ -238,7 +238,7 @@ export function useSessionFeedback({
     return () => {
       cancelled = true
     }
-  }, [connectionId, enabled])
+  }, [connectionId])
 
   // Self-heal capability flags. The hydrate above is keyed on `connectionId`,
   // which appears the moment a NEW conversation's connection is created — while
@@ -248,7 +248,7 @@ export function useSessionFeedback({
   // connection is actually live, re-read (only while either is still unknown —
   // a `false` no-ops so this can't loop, and it stops once both are known).
   useEffect(() => {
-    if (!enabled || !connectionId || (toolAvailable && nativeSteering)) return
+    if (!connectionId || (toolAvailable && nativeSteering)) return
     if (connStatus !== "connected" && connStatus !== "prompting") return
     let cancelled = false
     void acpGetSessionSnapshot(connectionId)
@@ -264,7 +264,7 @@ export function useSessionFeedback({
     return () => {
       cancelled = true
     }
-  }, [enabled, connectionId, connStatus, toolAvailable, nativeSteering])
+  }, [connectionId, connStatus, toolAvailable, nativeSteering])
 
   // Build the note list from the live event stream, scoped to this connection.
   useAcpEvent(
@@ -380,7 +380,7 @@ export function useSessionFeedback({
       // session — close the dialog instead. NOTE: a merely-ended turn keeps
       // `enabled`/`toolAvailable` true, so it still flows to the submit below and
       // gets rerouted via the no-active-turn fallback (draft preserved).
-      if (!enabled || (!toolAvailable && !nativeSteering)) {
+      if (!nativeSteering && (!enabled || !toolAvailable)) {
         setDialogOpen(false)
         return
       }
@@ -489,8 +489,9 @@ export function useSessionFeedback({
   // channel to offer — the composer would surface a mid-turn send whose only
   // possible outcome is `steer`'s "nothing to steer" rejection.
   const steerAvailable =
-    Boolean(connectionId) && (toolAvailable || nativeSteering)
-  const canSubmit = enabled && steerAvailable && isPrompting
+    Boolean(connectionId) && (nativeSteering || (enabled && toolAvailable))
+  const featureEnabled = enabled || nativeSteering
+  const canSubmit = steerAvailable && isPrompting
   const channel: "native" | "pull" = nativeSteering ? "native" : "pull"
   // Drop the notes the transcript is already rendering as user turns. Kept as
   // a derivation rather than a filter on `setNotes` so a note stays recoverable
@@ -526,7 +527,7 @@ export function useSessionFeedback({
   return useMemo(
     () => ({
       notes: visibleNotes,
-      featureEnabled: enabled,
+      featureEnabled,
       canSubmit,
       channel,
       steerAvailable,
@@ -543,7 +544,7 @@ export function useSessionFeedback({
     }),
     [
       visibleNotes,
-      enabled,
+      featureEnabled,
       canSubmit,
       channel,
       steerAvailable,

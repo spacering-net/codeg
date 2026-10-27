@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "الجلسات",
         "mentionGroupCommit": "عمليات الإيداع",
         "mentionGroupSkill": "المهارات",
-        "mentionGroupAssistant": "المساعدون"
+        "mentionGroupAssistant": "المساعدون",
+        "queueDeliveryUnknown": "تعذّر تأكيد الإرسال. راجع المحادثة قبل الإرسال مجددًا. لن تُعاد محاولة إرسال هذه الرسالة تلقائيًا."
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",

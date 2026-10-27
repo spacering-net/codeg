@@ -3465,7 +3465,8 @@
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "queueDeliveryUnknown": "尚無法確認是否已傳送，請先核對對話。這則訊息不會自動重送。"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",

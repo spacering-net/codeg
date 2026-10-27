@@ -246,6 +246,7 @@ pub struct AcpAgent {
     server: McpServer,
     debug_callback: Option<DebugCallback>,
     current_dir: Option<PathBuf>,
+    codex_v2: bool,
     spawn_callback: Option<Arc<dyn Fn(u32) + Send + Sync + 'static>>,
     exit_callback: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
@@ -275,9 +276,16 @@ impl AcpAgent {
             server,
             debug_callback: None,
             current_dir: None,
+            codex_v2: false,
             spawn_callback: None,
             exit_callback: None,
         }
+    }
+
+    /// Negotiate Codex's v2 wire while retaining the host's event schema.
+    pub fn with_codex_v2(mut self, enabled: bool) -> Self {
+        self.codex_v2 = enabled;
+        self
     }
 
     /// Add a debug callback that will be invoked for each line sent/received.
@@ -815,10 +823,28 @@ impl<Counterpart: AcpAgentCounterpartRole> ConnectTo<Counterpart> for AcpAgent {
 
         // Race the protocol against child process exit
         // If the child exits early (e.g., with an error), we return that error
-        let protocol_future = ConnectTo::<Counterpart>::connect_to(
-            Lines::new(outgoing_sink, incoming_lines),
-            client,
-        );
+        if self.codex_v2 {
+            use futures::SinkExt;
+            let (host_out, host_requests) = futures::channel::mpsc::unbounded();
+            let (host_responses, host_in) = futures::channel::mpsc::unbounded();
+            let bridge = crate::acp::codex_v2::bridge(
+                outgoing_sink,
+                incoming_lines,
+                host_requests,
+                host_responses,
+            );
+            let protocol = ConnectTo::<Counterpart>::connect_to(
+                Lines::new(host_out.sink_map_err(std::io::Error::other), host_in),
+                client,
+            );
+            return tokio::select! {
+                result = protocol => result,
+                result = bridge => result.map_err(agent_client_protocol::Error::into_internal_error),
+                result = child_monitor => result,
+            };
+        }
+        let protocol_future =
+            ConnectTo::<Counterpart>::connect_to(Lines::new(outgoing_sink, incoming_lines), client);
 
         tokio::select! {
             result = protocol_future => result,
@@ -883,6 +909,7 @@ impl AcpAgent {
             current_dir: None,
             spawn_callback: None,
             exit_callback: None,
+            codex_v2: false,
         })
     }
 }
