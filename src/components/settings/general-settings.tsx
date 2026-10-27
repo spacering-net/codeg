@@ -47,6 +47,7 @@ import { DesktopNotificationSettingsSection } from "@/components/settings/deskto
 import { MentionPanelSettingsSection } from "@/components/settings/mention-panel-settings"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
 import { WindowAttentionSettingsSection } from "@/components/settings/window-attention-settings"
+import { ChatProcessSettingsSection } from "@/components/settings/chat-process-settings"
 
 const TERMINAL_SHELL_OPTION_SYSTEM = "system"
 const TERMINAL_SHELL_OPTION_CUSTOM = "custom"
@@ -514,6 +515,8 @@ export function GeneralSettings() {
             )}
           </SettingsSection>
         )}
+
+        <ChatProcessSettingsSection />
 
         <MentionPanelSettingsSection />
 
