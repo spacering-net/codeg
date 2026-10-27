@@ -1,0 +1,43 @@
+{
+  "repository": "https://github.com/xintaofei/pi-acp",
+  "commit": "fc1a99260c345ffca6ff2cb40db58d1bddf452e7",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": {
+    "LICENSE": "a31299f34b841baf92657b6731263a950f1db88e",
+    "README.md": "a562f10976c31a1b9cf0ccb3551a07d74f4bf743",
+    "package-lock.json": "c198717a5a5d37078a5f7e65ca2ec1a58c78242f",
+    "package.json": "f590442c6c8dd7a07ca9565fa05139bff4d1b83a",
+    "src/acp/agent.ts": "58584fd3a9d0d6480fd7529be724405f68dad9d3",
+    "src/acp/auth-required.ts": "2768430959899c24886af772731dc2c87397561d",
+    "src/acp/auth.ts": "caa89e338b747fa1cfc72c4f589cd9c3f010e480",
+    "src/acp/mcp-bridge.ts": "161fc3e4cce0bfd3c7d6dcc52924dd8e48e5ec7a",
+    "src/acp/paths.ts": "4f55af3b91b09b8a1c6d407af202c34115da285b",
+    "src/acp/pi-commands.ts": "b60511bb6a3018c9694e80b40526e84b6f99412e",
+    "src/acp/pi-sessions.ts": "56ae1088f02655393c9085b3f765c5ffad36f38f",
+    "src/acp/pi-settings.ts": "e0b6cf4e2f1854e397fb3fde3f169de7d062df71",
+    "src/acp/session-store.ts": "acc80f2ad60a118d5da68afe159c157b9e4e1c6d",
+    "src/acp/session.ts": "d6780b0a552a58cfb05589d473c6cdd11de597b8",
+    "src/acp/slash-commands.ts": "a014a0088e0679ed462d64f72d603c35b71c32ba",
+    "src/acp/translate/bash.ts": "ad852e51cf79e2d747603409f7d530aa48b15e57",
+    "src/acp/translate/pi-messages.ts": "18e682e3392802012d33d72dcf4cab52a807b4bc",
+    "src/acp/translate/pi-tools.ts": "59f6e4c410119b3f92edd1a8338a9bdbd24816d2",
+    "src/acp/translate/prompt.ts": "609146e7331fc4a90cb793e8c825793916e81a28",
+    "src/index.ts": "95442e256d155fea8fe26f44506c8a6683a0ea81",
+    "src/pi-extension/mcp-bridge.ts": "2d52ea33420709cff14b7a609edc871a90f54705",
+    "src/pi-rpc/command.ts": "711809b42ad1e01244eb49d7a2070bae8d40ec3f",
+    "src/pi-rpc/jsonl.ts": "d034e499af92bdd80be62273edcdc5251a43ee23",
+    "src/pi-rpc/process.ts": "3c845669e6cb543a663547ba5b04847ad7cabbba"
+  },
+  "localSources": {
+    "pi-adapter/overlay.mjs": "c8569efb1bf8fe3bc1894dfc9158fc9967e9c4f053c3f9fda2729b804bc40b9f",
+    "pi-adapter/mcp-bridge.mjs": "bf80e11d97528b97ba08fa7d78f79fb46c2c58f9f82b5a4f588dbfb97878b169",
+    "scripts/build-pi-adapter.mjs": "c2d6c41a8e50d9cfe5b23c6fea2889ab88f85a390e7b6a3008c3632e517aa6f3"
+  },
+  "sha256": {
+    "adapter.mjs": "8b21416eb3cc5e7a2a16555875a3e679271fad4f3cc51b46291d4e2ccf855ba2",
+    "mcp-bridge.mjs": "5b1185ac982aad9c181f077379bb28ae3c189ad9443c9649c87cd3ce5eb346eb",
+    "LICENSE": "216415112fb8cdf9c67392a7c63f5b056fb822ae58755b743082fe21fbc66c71",
+    "THIRD_PARTY_NOTICES": "3cfab6e9ffc71cbfbdd90ae41822d9d9a9bfaa48e0d15cd3c86adc05c6ce3222"
+  }
+}

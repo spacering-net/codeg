@@ -1659,7 +1659,8 @@
       "systemAgentAlreadyLatest": "{name}은(는) 이미 최신 버전입니다({version})"
     },
     "distribution": {
-      "system": "공식 설치 프로그램"
+      "system": "공식 설치 프로그램",
+      "bundledNode": "내장 ACP 어댑터"
     },
     "version": {
       "statusLabel": "버전 상태",
@@ -1678,7 +1679,8 @@
       "upgradeAvailable": "{versionText}. 업그레이드가 가능합니다.",
       "recommendedUnavailable": "{versionText}. 권장 버전이 없습니다.",
       "latest": "{versionText}. 이미 최신입니다.",
-      "unreviewedAvailable": "{versionText}. 검토되지 않은 새 릴리스가 있습니다."
+      "unreviewedAvailable": "{versionText}. 검토되지 않은 새 릴리스가 있습니다.",
+      "piBundled": "어댑터 {version}이 포함되어 있습니다. Pi {piVersion} 이상 및 Node.js 22.19.0 이상이 필요합니다."
     },
     "adapter": {
       "label": "ACP 어댑터",

@@ -54,6 +54,8 @@ const eslintConfig = defineConfig([
     "browser-agent/vendor/**",
     // esbuild's output, committed so a cargo build needs no node.
     "src-tauri/src/browser/js/**",
+    "pi-adapter/vendor/**",
+    "src-tauri/src/acp/pi-bundle/**",
   ]),
   eslintConfigPrettier,
   eslintPluginPrettierRecommended,

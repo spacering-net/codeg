@@ -1659,7 +1659,8 @@
       "systemAgentAlreadyLatest": "{name} は最新です（{version}）"
     },
     "distribution": {
-      "system": "公式インストーラー"
+      "system": "公式インストーラー",
+      "bundledNode": "内蔵 ACP アダプター"
     },
     "version": {
       "statusLabel": "バージョン状態",
@@ -1678,7 +1679,8 @@
       "upgradeAvailable": "{versionText}。アップグレード可能です。",
       "recommendedUnavailable": "{versionText}。推奨バージョンはありません。",
       "latest": "{versionText}。すでに最新です。",
-      "unreviewedAvailable": "{versionText}。未レビューの新しいリリースがあります。"
+      "unreviewedAvailable": "{versionText}。未レビューの新しいリリースがあります。",
+      "piBundled": "アダプター {version} を内蔵しています。Pi {piVersion} 以上と Node.js 22.19.0 以上が必要です。"
     },
     "adapter": {
       "label": "ACP アダプター",

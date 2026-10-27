@@ -640,6 +640,9 @@ fn system_agent_is_user_managed(name: &str, install_url: &str) -> AcpError {
 pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), AcpError> {
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
+        registry::AgentDistribution::BundledNode { .. } => {
+            crate::acp::pi_bundle::node().await.map(|_| ())
+        }
         registry::AgentDistribution::Npx { cmd, .. } => {
             if !is_cmd_available(agent_type, cmd).await {
                 // INVARIANT: the substring "is not installed" is matched
@@ -769,6 +772,7 @@ async fn npm_list_version(
 async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
+        registry::AgentDistribution::BundledNode { version } => Some(version.to_owned()),
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await?;
             // Try `npm list -g <package_name> --json` to get the real installed version.
@@ -1097,6 +1101,17 @@ async fn collect_agent_diag(
     // Each distribution resolves launchability differently — mirror the exact
     // gates `verify_agent_installed` uses so the report agrees with connect.
     match meta.distribution {
+        registry::AgentDistribution::BundledNode { version } => {
+            diag.distribution = "bundled_node";
+            diag.cmd = "node (bundled Pi adapter)".into();
+            diag.node_required = Some(crate::acp::pi_bundle::NODE_MIN.into());
+            diag.launchable = crate::acp::pi_bundle::node()
+                .await
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+            diag.detected_version = Some(version.into());
+        }
+
         registry::AgentDistribution::Npx {
             cmd,
             package,
@@ -6385,7 +6400,7 @@ fn pi_settings_dir_checked(pi_dir: PathBuf) -> Result<PathBuf, AcpError> {
     }
 }
 
-async fn pi_settings_dir_from_db(db: &AppDatabase) -> Result<PathBuf, AcpError> {
+pub(crate) async fn pi_settings_dir_from_db(db: &AppDatabase) -> Result<PathBuf, AcpError> {
     pi_settings_dir_checked(pi_agent_dir_for_env(&pi_runtime_env_from_db(db).await?))
 }
 
@@ -12103,6 +12118,7 @@ pub(crate) async fn acp_get_agent_status_core(
         .map_err(|e| AcpError::protocol(e.to_string()))?;
 
     let (available, installed_version) = match &meta.distribution {
+        registry::AgentDistribution::BundledNode { version } => (true, Some((*version).to_owned())),
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await;
             let mut version = resolved
@@ -12212,6 +12228,9 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         let setting = settings_map.get(&agent_type);
         let meta = registry::get_agent_meta(agent_type);
         let (available, dist_type, local_installed_version) = match &meta.distribution {
+            registry::AgentDistribution::BundledNode { version } => {
+                (true, "bundled_node", Some((*version).to_owned()))
+            }
             registry::AgentDistribution::Npx { cmd, package, .. } => {
                 // Keep the list path bounded: each list request probes npm
                 // global prefix at most once, then reuses the result across
@@ -13451,6 +13470,9 @@ pub(crate) async fn acp_download_agent_binary_core(
 
     let meta = registry::get_agent_meta(agent_type);
     let result = match meta.distribution {
+        registry::AgentDistribution::BundledNode { .. } => Err(AcpError::protocol(
+            "The bundled Pi adapter is updated with the application",
+        )),
         registry::AgentDistribution::Binary {
             version,
             cmd,
@@ -13860,6 +13882,7 @@ pub(crate) async fn acp_detect_agent_local_version_core(
     // The returned value does NOT depend on the mirror write below, so a
     // swallowed write cannot reintroduce the phantom.
     let not_installed = match registry::get_agent_meta(agent_type).distribution {
+        registry::AgentDistribution::BundledNode { .. } => false,
         // Binary agents detect their version purely from the on-disk cache, so
         // a `None` means the binary is genuinely absent (cleared cache, or a
         // failed custom/upgrade install). A system agent is the same case: its
@@ -13967,6 +13990,20 @@ pub(crate) async fn acp_prepare_npx_agent_core(
 
     let meta = registry::get_agent_meta(agent_type);
     let result = match meta.distribution {
+        registry::AgentDistribution::BundledNode { version } => {
+            if version_override
+                .as_deref()
+                .is_some_and(|v| !v.is_empty() && v != version)
+            {
+                return Err(AcpError::protocol(
+                    "This Pi adapter is pinned; use a Custom agent for another adapter",
+                ));
+            }
+            crate::acp::pi_bundle::node().await?;
+            crate::acp::pi_bundle::prepare()?;
+            Ok(version.to_owned())
+        }
+
         registry::AgentDistribution::Npx { package, cmd, .. } => {
             // `version_override` of None/empty keeps the registry-pinned spec;
             // a custom version installs `<name>@<version>` instead.
@@ -14215,6 +14252,9 @@ pub(crate) async fn acp_uninstall_agent_core(
 
     let result: Result<(), AcpError> = async {
         match meta.distribution {
+            registry::AgentDistribution::BundledNode { .. } => {
+                return Err(AcpError::protocol("The bundled Pi adapter is part of the application; global Pi installations remain user-managed"));
+            }
             registry::AgentDistribution::Binary { .. } => {
                 binary_cache::clear_agent_cache(agent_type)?;
             }
@@ -14291,8 +14331,16 @@ pub(crate) async fn acp_install_pi_binary_core(
 ) -> Result<(), AcpError> {
     emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
 
-    let result =
-        install_npm_global_package_streaming(PI_CODING_AGENT_PACKAGE, &task_id, emitter).await;
+    let result = install_npm_global_package_streaming(
+        &format!(
+            "{}@{}",
+            PI_CODING_AGENT_PACKAGE,
+            registry::PI_MIN_RUNTIME_VERSION
+        ),
+        &task_id,
+        emitter,
+    )
+    .await;
 
     match &result {
         Ok(()) => emit_agent_install_event(

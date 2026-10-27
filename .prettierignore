@@ -9,3 +9,5 @@ docs/
 pnpm-lock.yaml
 browser-agent/vendor/
 src-tauri/src/browser/js/
+pi-adapter/vendor/
+src-tauri/src/acp/pi-bundle/

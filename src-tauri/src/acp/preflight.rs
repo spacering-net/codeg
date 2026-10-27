@@ -93,6 +93,9 @@ pub async fn run_preflight_with_env(
     let meta = registry::get_agent_meta(agent_type);
     debug_assert_eq!(meta.agent_type, agent_type);
     let mut checks = match &meta.distribution {
+        AgentDistribution::BundledNode { .. } => {
+            check_npm_environment(Some(crate::acp::pi_bundle::NODE_MIN)).await
+        }
         AgentDistribution::Npx { node_required, .. } => check_npm_environment(*node_required).await,
         AgentDistribution::Binary {
             version,

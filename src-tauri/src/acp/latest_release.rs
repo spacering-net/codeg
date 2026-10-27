@@ -107,7 +107,7 @@ fn lookup_for(meta: &AcpAgentMeta, custom_source: Option<CustomAgentSource>) -> 
                 pin,
                 pinned_url: p.url,
             }),
-        AgentDistribution::Uvx { .. } => None,
+        AgentDistribution::Uvx { .. } | AgentDistribution::BundledNode { .. } => None,
         // The user's own install, kept current by its vendor's updater (the
         // Upgrade action); codeg pins no version of it. Already ruled out by
         // `supports_custom_version` above.

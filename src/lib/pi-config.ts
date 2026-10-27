@@ -26,12 +26,11 @@ export function piUsesCustomAgentDir(agent: AcpAgentInfo): boolean {
 }
 
 /**
- * The oldest pi the pinned pi-acp can open a session with: pi-acp asks pi for
- * the model's thinking levels (`get_available_thinking_levels`, new in pi
- * 0.81.0) on every session open. Mirrors `PI_MIN_RUNTIME_VERSION` in
+ * The verified Pi runtime baseline for native MCP and current RPC support.
+ * Mirrors `PI_MIN_RUNTIME_VERSION` in
  * `src-tauri/src/acp/registry.rs`, and a Rust test keeps the two equal.
  */
-export const PI_MIN_RUNTIME_VERSION = "0.81.0"
+export const PI_MIN_RUNTIME_VERSION = "1.4.0"
 
 function parseVersion(text: string | null | undefined): number[] | null {
   const match = text?.match(/(\d+)\.(\d+)\.(\d+)/)

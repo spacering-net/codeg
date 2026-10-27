@@ -1,5 +1,7 @@
 "use client"
 
+import { PI_MIN_RUNTIME_VERSION } from "@/lib/pi-config"
+
 import {
   useCallback,
   useEffect,
@@ -444,6 +446,8 @@ function publishAgentDisplay(list: AcpAgentInfo[]): void {
  * vendor's installer put it there", which reads as noise next to them.
  */
 function distributionLabel(distributionType: string): string {
+  if (distributionType === "bundled_node")
+    return acpText("distribution.bundledNode", "Bundled ACP")
   if (distributionType === "system") {
     return acpText("distribution.system", "official installer")
   }
@@ -4424,6 +4428,22 @@ export function buildVersionCheck(
   // (its `system_cli` check), or `undefined` before a preflight has answered.
   systemCliFound?: boolean
 ): UiCheckItem | null {
+  if (agent.distribution_type === "bundled_node") {
+    return {
+      check_id: "version_status",
+      label: "Pi ACP",
+      status: "pass",
+      message: acpText(
+        "version.piBundled",
+        "Adapter {version} is included. Requires Pi {piVersion}+ and Node.js 22.19.0+.",
+        {
+          version: agent.registry_version ?? "",
+          piVersion: PI_MIN_RUNTIME_VERSION,
+        }
+      ),
+      fixes: [],
+    }
+  }
   // An agent codeg launches but never installs (Kiro CLI): no pin to compare
   // against, and installing or removing it is its own installer's job. The
   // card says whether the user's install was found — where to get it when it

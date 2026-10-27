@@ -21,7 +21,11 @@
     "tauri:prepare-sidecars": "node src-tauri/scripts/prepare-sidecars.mjs",
     "tauri:before-dev": "pnpm tauri:prepare-sidecars && pnpm dev",
     "tauri:before-build": "pnpm build && pnpm tauri:prepare-sidecars",
-    "postinstall": "node -e \"const fs=require('fs');fs.cpSync('node_modules/monaco-editor/min/vs','public/vs',{recursive:true,force:true});const p='public/vs/loader.js';fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace(/\\n\\/\\/# sourceMappingURL=.*/,''));const q='node_modules/pdfjs-dist/';fs.rmSync('public/pdfjs',{recursive:true,force:true});for(const s of ['legacy/build/pdf.worker.min.mjs','cmaps','standard_fonts','wasm','iccs'])fs.cpSync(q+s,'public/pdfjs/'+s.replace('legacy/build/',''),{recursive:true})\""
+    "postinstall": "node -e \"const fs=require('fs');fs.cpSync('node_modules/monaco-editor/min/vs','public/vs',{recursive:true,force:true});const p='public/vs/loader.js';fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace(/\\n\\/\\/# sourceMappingURL=.*/,''));const q='node_modules/pdfjs-dist/';fs.rmSync('public/pdfjs',{recursive:true,force:true});for(const s of ['legacy/build/pdf.worker.min.mjs','cmaps','standard_fonts','wasm','iccs'])fs.cpSync(q+s,'public/pdfjs/'+s.replace('legacy/build/',''),{recursive:true})\"",
+    "pi:adapter": "node scripts/build-pi-adapter.mjs",
+    "pi:adapter:check": "node scripts/build-pi-adapter.mjs --check",
+    "pi:adapter:test": "node --test pi-adapter/bridge.test.mjs",
+    "pi:adapter:probe": "node pi-adapter/probe.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

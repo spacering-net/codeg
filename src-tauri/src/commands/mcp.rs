@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::app_error::AppCommandError;
+use crate::db::AppDatabase;
+
+#[cfg(test)]
+#[path = "pi_mcp_tests.rs"]
+mod pi_mcp_tests;
 
 const MARKETPLACE_OFFICIAL: &str = "official_registry";
 const MARKETPLACE_SMITHERY: &str = "smithery";
@@ -79,10 +84,7 @@ pub enum McpAppType {
     Trae,
     /// Serializes as `command_code`, matching `AgentType::as_wire`.
     CommandCode,
-    /// Serializes as `pi`, matching `AgentType::as_wire`. Scan-only: codeg
-    /// reads and round-trips the pi MCP EXTENSION's config, but pi is not an
-    /// assignable target and gets no MCP over the ACP wire. See the pi section
-    /// below.
+    /// Pi native MCP configuration (stdio and Streamable HTTP).
     Pi,
 }
 
@@ -221,9 +223,16 @@ pub struct McpMarketplaceServerDetail {
     pub spec: Value,
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_scan_local() -> LocalMcpScan {
-    scan_local_servers()
+pub async fn mcp_scan_local_core(db: &AppDatabase) -> Result<LocalMcpScan, AppCommandError> {
+    Ok(McpPaths::from_db(db).await?.scan())
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_scan_local(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<LocalMcpScan, AppCommandError> {
+    mcp_scan_local_core(&db).await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -383,8 +392,8 @@ pub async fn mcp_get_marketplace_server_detail(
     }
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_install_from_marketplace(
+pub async fn mcp_install_from_marketplace_core(
+    db: &AppDatabase,
     provider_id: String,
     server_id: String,
     apps: Vec<McpAppType>,
@@ -393,6 +402,7 @@ pub async fn mcp_install_from_marketplace(
     protocol: Option<String>,
     parameter_values: Option<Value>,
 ) -> Result<LocalMcpServer, AppCommandError> {
+    let paths = McpPaths::from_db(db).await?;
     let normalized_apps = normalize_apps(apps);
     if normalized_apps.is_empty() {
         return Err(mcp_invalid_input("at least one target app is required")
@@ -439,17 +449,42 @@ pub async fn mcp_install_from_marketplace(
         tracing::warn!(
             "[MCP] {app:?} cannot host server '{server_id}' (transport unsupported); removing any stale entry"
         );
-        let _ = remove_server_for_app(app, &server_id)?;
+        let _ = paths.remove(app, &server_id)?;
     }
     for app in hostable {
-        upsert_server_for_app(app, &server_id, &canonical_spec)?;
+        paths.upsert(app, &server_id, &canonical_spec)?;
     }
 
-    find_local_server(&server_id).ok_or_else(|| {
+    paths.find(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
             "installed server '{server_id}', but failed to load it from local configuration"
         ))
     })
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_install_from_marketplace(
+    db: tauri::State<'_, AppDatabase>,
+    provider_id: String,
+    server_id: String,
+    apps: Vec<McpAppType>,
+    spec_override: Option<Value>,
+    option_id: Option<String>,
+    protocol: Option<String>,
+    parameter_values: Option<Value>,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_install_from_marketplace_core(
+        &db,
+        provider_id,
+        server_id,
+        apps,
+        spec_override,
+        option_id,
+        protocol,
+        parameter_values,
+    )
+    .await
 }
 
 /// Save `spec` for `server_id` to exactly the agents in `apps`.
@@ -462,13 +497,14 @@ pub async fn mcp_install_from_marketplace(
 /// which fields the user touched. A client that sends none (a new server, or
 /// an older build) gets the scan's spec for the id as the closest stand-in,
 /// and a new server has none.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_upsert_local_server(
+pub async fn mcp_upsert_local_server_core(
+    db: &AppDatabase,
     server_id: String,
     spec: Value,
     apps: Vec<McpAppType>,
     shown_spec: Option<Value>,
 ) -> Result<LocalMcpServer, AppCommandError> {
+    let paths = McpPaths::from_db(db).await?;
     let canonical_spec = canonicalize_spec(&spec, "local MCP save")?;
     let target_apps = normalize_apps(apps);
     if target_apps.is_empty() {
@@ -496,7 +532,7 @@ pub async fn mcp_upsert_local_server(
     // Nothing below is reversible, and the walk REMOVES the server from every
     // non-target agent, so a target whose config cannot take it has to be
     // caught before the first write rather than halfway through.
-    let scan = scan_local_servers();
+    let scan = paths.scan();
     require_complete_scan(&scan)?;
     // Canonicalized like the saved spec, so a field left alone compares equal.
     let shown = match shown_spec {
@@ -517,29 +553,42 @@ pub async fn mcp_upsert_local_server(
                     (McpAppType::Cursor, Some(shown)) => {
                         upsert_cursor_server_edited(&server_id, &canonical_spec, shown)?
                     }
-                    _ => upsert_server_for_app(app, &server_id, &canonical_spec)?,
+                    _ => paths.upsert(app, &server_id, &canonical_spec)?,
                 }
             } else {
-                let _ = remove_server_for_app(app, &server_id)?;
+                let _ = paths.remove(app, &server_id)?;
             }
         }
         Ok(())
     })?;
 
-    find_local_server(&server_id).ok_or_else(|| {
+    paths.find(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
             "saved local MCP server '{server_id}', but failed to reload it"
         ))
     })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_set_server_apps(
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_upsert_local_server(
+    db: tauri::State<'_, AppDatabase>,
+    server_id: String,
+    spec: Value,
+    apps: Vec<McpAppType>,
+    shown_spec: Option<Value>,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_upsert_local_server_core(&db, server_id, spec, apps, shown_spec).await
+}
+
+pub async fn mcp_set_server_apps_core(
+    db: &AppDatabase,
     server_id: String,
     apps: Vec<McpAppType>,
 ) -> Result<Option<LocalMcpServer>, AppCommandError> {
+    let paths = McpPaths::from_db(db).await?;
     let target_apps = normalize_apps(apps);
-    let scan = scan_local_servers();
+    let scan = paths.scan();
     require_complete_scan(&scan)?;
     let current = scan
         .servers
@@ -572,22 +621,33 @@ pub async fn mcp_set_server_apps(
     let added: BTreeSet<McpAppType> = target_set.difference(&current_set).copied().collect();
     with_upsert_preflight(&added, || {
         for app in current_set.difference(&target_set) {
-            remove_server_for_app(*app, &server_id)?;
+            paths.remove(*app, &server_id)?;
         }
         for app in &added {
-            upsert_server_for_app(*app, &server_id, &current.spec)?;
+            paths.upsert(*app, &server_id, &current.spec)?;
         }
         Ok(())
     })?;
 
-    Ok(find_local_server(&server_id))
+    Ok(paths.find(&server_id))
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn mcp_remove_server(
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_set_server_apps(
+    db: tauri::State<'_, AppDatabase>,
+    server_id: String,
+    apps: Vec<McpAppType>,
+) -> Result<Option<LocalMcpServer>, AppCommandError> {
+    mcp_set_server_apps_core(&db, server_id, apps).await
+}
+
+pub async fn mcp_remove_server_core(
+    db: &AppDatabase,
     server_id: String,
     apps: Option<Vec<McpAppType>>,
 ) -> Result<bool, AppCommandError> {
+    let paths = McpPaths::from_db(db).await?;
     let target_apps = match apps {
         Some(selected) => normalize_apps(selected),
         None => ALL_MCP_APPS.to_vec(),
@@ -599,9 +659,19 @@ pub async fn mcp_remove_server(
 
     let mut removed = false;
     for app in target_apps {
-        removed |= remove_server_for_app(app, &server_id)?;
+        removed |= paths.remove(app, &server_id)?;
     }
     Ok(removed)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_remove_server(
+    db: tauri::State<'_, AppDatabase>,
+    server_id: String,
+    apps: Option<Vec<McpAppType>>,
+) -> Result<bool, AppCommandError> {
+    mcp_remove_server_core(&db, server_id, apps).await
 }
 
 fn normalize_apps(apps: Vec<McpAppType>) -> Vec<McpAppType> {
@@ -632,6 +702,7 @@ fn app_can_host_spec(app: McpAppType, canonical_spec: &Value) -> bool {
     !(matches!(
         app,
         McpAppType::Codex
+            | McpAppType::Pi
             | McpAppType::DeepSeek
             | McpAppType::Kiro
             | McpAppType::Trae
@@ -2689,36 +2760,9 @@ fn remove_deepseek_server_at(path: &Path, id: &str) -> Result<bool, AppCommandEr
 // ---------------------------------------------------------------------------
 // pi  (<PI_CODING_AGENT_DIR|~/.pi/agent>/mcp.json  →  top-level `mcpServers`)
 //
-// The odd one out: this file belongs to neither pi nor codeg but to a
-// THIRD-PARTY pi extension — pi itself has no MCP support, and the extension is
-// what reads `mcpServers` and mounts the servers. The schema it accepts is
-// Claude Code's (`command`/`args`/`env` | `url`/`headers`), which is codeg's
-// canonical shape, so no translation layer is needed (issue #653).
-//
-// SCAN-ONLY, in both directions:
-//
-//   - Not an assignable target. `APP_OPTIONS` in `mcp-settings.tsx` omits pi, so
-//     no checkbox can add a server here; the settings page carries an existing
-//     `pi` assignment forward on save instead (`hiddenLegacyApps`), exactly as
-//     it does for OpenClaw. Writing here for a user without the extension would
-//     create a file nothing on the machine reads.
-//   - Still fully round-trippable. `Pi` IS in `ALL_MCP_APPS`, so editing an
-//     entry rewrites it in place and "uninstall" clears it — without that, a
-//     removed server would reappear at the next scan.
-//   - Nothing reaches pi over the wire. `read_servers_for_agent_type` returns an
-//     empty map for `AgentType::Pi` on purpose (pi-acp drops `session/new`'s
-//     `mcpServers`); do NOT wire it to `read_pi_servers` to "fix" the asymmetry.
-//
-// Registered LAST in `local_mcp_readers`, so on an id shared with an assignable
-// agent that agent's spec wins the merge — and a later save writes THAT spec
-// into this file. Any extension-specific key on the losing pi entry is lost
-// (Kimi has a `KIMI_SHARED_KEYS` carve-out for the same hazard; pi gets none
-// because the extension's schema beyond `mcpServers` is not pinned anywhere).
-//
-// Resolves the agent dir from the PROCESS env, like pi's `settings.json` /
-// `auth.json` / `models.json` writers in `commands::acp` — a per-agent BYO
-// `PI_CODING_AGENT_DIR` override is not visible here, the same known limitation
-// those three already have.
+// Pi 1.4 reads native mcp.json itself. Settings resolve the same per-agent
+// PI_CODING_AGENT_DIR as launch; no user servers are duplicated on the ACP wire.
+// Preserve native/extension fields while editing shared transport fields.
 // ---------------------------------------------------------------------------
 
 fn pi_mcp_path() -> PathBuf {
@@ -2731,6 +2775,16 @@ fn read_pi_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
 
 fn read_pi_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCommandError> {
     let root = read_json_file(path)?;
+    if !root.is_object()
+        || root
+            .get("mcpServers")
+            .is_some_and(|value| !value.is_object())
+    {
+        return Err(mcp_configuration_invalid(format!(
+            "invalid Pi MCP configuration in {}",
+            path.display()
+        )));
+    }
     let mut out = BTreeMap::new();
 
     let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else {
@@ -2756,11 +2810,17 @@ fn upsert_pi_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
 }
 
 fn upsert_pi_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+    read_pi_servers_at(path)?; // Refuse malformed native configuration before writing.
     let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
     }
 
+    if !app_can_host_spec(McpAppType::Pi, spec) {
+        return Err(mcp_invalid_input(
+            "Pi supports stdio and Streamable HTTP, not SSE",
+        ));
+    }
     let canonical = canonicalize_spec(spec, "pi write")?;
 
     let obj = root.as_object_mut().ok_or_else(|| {
@@ -2776,7 +2836,21 @@ fn upsert_pi_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCom
         .ok_or_else(|| {
             mcp_configuration_invalid(format!("invalid mcpServers in {}", path.display()))
         })?;
-    map.insert(id.to_string(), canonical);
+    let mut merged = map
+        .get(id)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    // Remove the previous transport only, retaining native policy/extensions.
+    for key in ["type", "command", "args", "env", "url", "headers"] {
+        merged.remove(key);
+    }
+    for (key, value) in canonical.as_object().unwrap() {
+        merged.insert(key.clone(), value.clone());
+    }
+    // Pi selects transport from command/url and has no `type` property.
+    merged.remove("type");
+    map.insert(id.to_string(), Value::Object(merged));
 
     write_json_file(path, &root)
 }
@@ -3144,6 +3218,40 @@ impl LocalMcpReader {
     }
 }
 
+struct McpPaths {
+    pi: PathBuf,
+}
+impl McpPaths {
+    async fn from_db(db: &AppDatabase) -> Result<Self, AppCommandError> {
+        Ok(Self {
+            pi: super::acp::pi_settings_dir_from_db(db)
+                .await
+                .map_err(|e| mcp_configuration_invalid(e.to_string()))?
+                .join("mcp.json"),
+        })
+    }
+    fn scan(&self) -> LocalMcpScan {
+        scan_local_servers_with_pi(&local_mcp_readers(), Some(&self.pi))
+    }
+    fn find(&self, id: &str) -> Option<LocalMcpServer> {
+        self.scan().servers.into_iter().find(|s| s.id == id)
+    }
+    fn upsert(&self, app: McpAppType, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+        if app == McpAppType::Pi {
+            upsert_pi_server_at(&self.pi, id, spec)
+        } else {
+            upsert_server_for_app(app, id, spec)
+        }
+    }
+    fn remove(&self, app: McpAppType, id: &str) -> Result<bool, AppCommandError> {
+        if app == McpAppType::Pi {
+            remove_pi_server_at(&self.pi, id)
+        } else {
+            remove_server_for_app(app, id)
+        }
+    }
+}
+
 fn local_mcp_readers() -> [LocalMcpReader; 19] {
     [
         LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, read_claude_servers),
@@ -3192,6 +3300,10 @@ fn local_mcp_readers() -> [LocalMcpReader; 19] {
 /// Reading degrades. WRITING does not: callers that mutate must first clear the
 /// scan through [`require_complete_scan`].
 fn scan_local_servers_from_readers(readers: &[LocalMcpReader]) -> LocalMcpScan {
+    scan_local_servers_with_pi(readers, None)
+}
+
+fn scan_local_servers_with_pi(readers: &[LocalMcpReader], pi_path: Option<&Path>) -> LocalMcpScan {
     let mut merged: BTreeMap<String, (Value, BTreeSet<McpAppType>)> = BTreeMap::new();
     let mut warnings: Vec<LocalMcpSourceWarning> = Vec::new();
     // OpenClaw is the one agent that shares a key with Kimi (`auth`), so keep
@@ -3202,7 +3314,14 @@ fn scan_local_servers_from_readers(readers: &[LocalMcpReader]) -> LocalMcpScan {
     let mut openclaw_declares: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
 
     for reader in readers {
-        let servers = match (reader.read)() {
+        let read = if reader.app == McpAppType::Pi {
+            pi_path
+                .map(read_pi_servers_at)
+                .unwrap_or_else(|| (reader.read)())
+        } else {
+            (reader.read)()
+        };
+        let servers = match read {
             Ok(servers) => servers,
             Err(err) => {
                 tracing::warn!(
@@ -3355,9 +3474,8 @@ pub fn read_servers_for_agent_type(
         AgentType::KimiCode => read_kimi_code_servers(),
         AgentType::Grok => read_grok_servers(),
         AgentType::Cursor => read_cursor_servers(),
-        // pi-acp drops ACP-wire MCP and pi has no native MCP (it needs a
-        // third-party extension). Scanning its extension config must not
-        // change the servers forwarded to a pi ACP session.
+        // Pi reads its effective native mcp.json itself. Only ephemeral
+        // companion servers go over ACP, avoiding duplicate registrations.
         AgentType::Pi => Ok(BTreeMap::new()),
         // deepseek-acp has no native MCP config file: it takes servers only
         // as `session/new`'s `mcpServers`. `$DSH_HOME/mcp.json` is codeg's own

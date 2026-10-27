@@ -195,7 +195,9 @@ async fn perform(
     let task_id = format!("cli-install-{}", uuid::Uuid::new_v4());
     let meta = registry::get_agent_meta(agent);
     let installed = match meta.distribution {
-        AgentDistribution::Npx { .. } | AgentDistribution::Uvx { .. } => {
+        AgentDistribution::Npx { .. }
+        | AgentDistribution::Uvx { .. }
+        | AgentDistribution::BundledNode { .. } => {
             if matches!(meta.distribution, AgentDistribution::Uvx { .. }) {
                 acp::acp_install_uv_tool_core(task_id.clone(), emitter)
                     .await

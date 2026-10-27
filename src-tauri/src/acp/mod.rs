@@ -39,6 +39,7 @@ pub mod one_shot;
 pub mod opencode_catalog;
 pub mod opencode_launch;
 pub mod opencode_plugins;
+pub(crate) mod pi_bundle;
 pub mod plan_approval;
 pub mod preflight;
 pub mod prompt_hydration;

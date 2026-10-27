@@ -520,17 +520,17 @@ describe("Pi runtime minimum", () => {
     await renderPanel({ PI_ACP_PI_COMMAND: "/tmp/old-pi" })
     expect(api.acpValidatePiCommand).toHaveBeenCalledWith("/tmp/old-pi")
     expect(
-      await screen.findByText(/Codeg needs Pi 0\.81\.0 or newer/)
+      await screen.findByText(/Codeg needs Pi 1\.4\.0 or newer/)
     ).toBeInTheDocument()
   })
 
   it("flags only versions known to predate the minimum", () => {
     expect(piRuntimeIsTooOld("0.80.9")).toBe(true)
-    expect(piRuntimeIsTooOld("pi 0.81.0")).toBe(false)
-    expect(piRuntimeIsTooOld("0.87.1")).toBe(false)
-    expect(piRuntimeIsTooOld("1.0.0")).toBe(false)
+    expect(piRuntimeIsTooOld("pi 1.4.0")).toBe(false)
+    expect(piRuntimeIsTooOld("1.3.9")).toBe(true)
+    expect(piRuntimeIsTooOld("1.5.0")).toBe(false)
     // A prerelease counts as the release it leads up to.
-    expect(piRuntimeIsTooOld("0.81.0-rc.1")).toBe(false)
+    expect(piRuntimeIsTooOld("1.4.0-rc.1")).toBe(false)
     // What pi prints without a package version (a source build): unknown.
     expect(piRuntimeIsTooOld("0.0.0")).toBe(false)
     expect(piRuntimeIsTooOld(null)).toBe(false)

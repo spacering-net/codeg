@@ -132,10 +132,7 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "zcode", label: "ZCode" },
   { value: "trae", label: "TRAE CLI" },
   { value: "command_code", label: "Command Code" },
-  // pi 同理不作为可分配目标：读写的 ~/.pi/agent/mcp.json 属于第三方 pi 扩展，
-  // pi 自身没有 MCP，pi-acp 也不转发线缆上的 mcpServers。给没装该扩展的用户
-  // 写这个文件只会造出一个没人读的配置。存量 "pi" 条目照样能改能删——
-  // saveLocalServer 会保留既有分配，后端 ALL_MCP_APPS 也包含 Pi。
+  { value: "pi", label: "Pi" },
 ]
 
 // The backend SCANS more agents than it lets you assign to: OpenClaw and pi are
@@ -144,7 +141,6 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
 // scan warning can still name them, so they need a label.
 const SCAN_ONLY_APP_LABELS: Partial<Record<McpAppType, string>> = {
   open_claw: "OpenClaw",
-  pi: "pi",
 }
 
 function appLabel(app: McpAppType): string {

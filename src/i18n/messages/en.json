@@ -1659,9 +1659,11 @@
       "systemAgentAlreadyLatest": "{name} is already up to date ({version})"
     },
     "distribution": {
+      "bundledNode": "Bundled ACP",
       "system": "official installer"
     },
     "version": {
+      "piBundled": "Adapter {version} is included. Requires Pi {piVersion}+ and Node.js 22.19.0+.",
       "statusLabel": "Version Status",
       "notInstalled": "Not installed",
       "recommendedLocal": "Recommended: {recommendedVersion} · Local: {localVersion}",

@@ -1659,7 +1659,8 @@
       "systemAgentAlreadyLatest": "{name} 已是最新版本（{version}）"
     },
     "distribution": {
-      "system": "官方安裝"
+      "system": "官方安裝",
+      "bundledNode": "內建適配器"
     },
     "version": {
       "statusLabel": "版本狀態",
@@ -1678,7 +1679,8 @@
       "upgradeAvailable": "{versionText}。發現可升級版本。",
       "recommendedUnavailable": "{versionText}。暫無建議版本。",
       "latest": "{versionText}。已是最新版本。",
-      "unreviewedAvailable": "{versionText}。有未經審查的較新版本。"
+      "unreviewedAvailable": "{versionText}。有未經審查的較新版本。",
+      "piBundled": "已內建適配器 {version}。需要 Pi {piVersion}+ 和 Node.js 22.19.0+。"
     },
     "adapter": {
       "label": "ACP 轉接器",

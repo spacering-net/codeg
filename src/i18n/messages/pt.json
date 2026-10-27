@@ -1659,7 +1659,8 @@
       "systemAgentAlreadyLatest": "{name} já está atualizado ({version})"
     },
     "distribution": {
-      "system": "instalador oficial"
+      "system": "instalador oficial",
+      "bundledNode": "Adaptador ACP integrado"
     },
     "version": {
       "statusLabel": "Status da versão",
@@ -1678,7 +1679,8 @@
       "upgradeAvailable": "{versionText}. Atualização disponível.",
       "recommendedUnavailable": "{versionText}. Nenhuma versão recomendada disponível.",
       "latest": "{versionText}. Já está na versão mais recente.",
-      "unreviewedAvailable": "{versionText}. Há uma versão mais recente, não revisada."
+      "unreviewedAvailable": "{versionText}. Há uma versão mais recente, não revisada.",
+      "piBundled": "O adaptador {version} está incluído. Requer Pi {piVersion}+ e Node.js 22.19.0+."
     },
     "adapter": {
       "label": "Adaptador ACP",

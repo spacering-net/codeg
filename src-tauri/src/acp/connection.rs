@@ -1668,9 +1668,10 @@ fn pi_launch_preflight(launch_env: &BTreeMap<String, String>, cwd: &Path) -> Opt
 /// missing, whatever version a custom build reports.
 fn pi_runtime_is_outdated(err: &agent_client_protocol::Error, agent_type: AgentType) -> bool {
     agent_type == AgentType::Pi
-        && err
+        && (err
             .to_string()
             .contains("Unknown command: get_available_thinking_levels")
+            || err.to_string().contains("pi runtime is too old for pi-acp"))
 }
 
 /// The explanation [`AcpError::AgentRuntimeOutdated`] carries for pi.
@@ -2046,22 +2047,31 @@ async fn build_agent(
     debug_assert_eq!(meta.agent_type, agent_type);
 
     let agent = match meta.distribution {
-        AgentDistribution::Npx { cmd, args, env, .. } => {
-            let mut merged_env = merge_agent_env(env, runtime_env, scratch);
-            let mut zcode_runtime = None;
-            if agent_type == AgentType::ZCode {
-                let runtime = crate::acp::zcode::resolve_runtime(runtime_env, cwd)
-                    .await
-                    .map_err(|error| AcpError::protocol(error.to_string()))?;
-                runtime.apply(&mut merged_env);
-                zcode_runtime = Some(runtime);
-            }
+        AgentDistribution::BundledNode { .. } => {
+            let node = crate::acp::pi_bundle::node().await?;
+            let entry = crate::acp::pi_bundle::prepare()?;
+            let mut env = merge_agent_env(
+                &[("PI_ACP_ENABLE_EMBEDDED_CONTEXT", "true")],
+                runtime_env,
+                scratch,
+            );
+            prepend_agent_install_dirs_path(&mut env, agent_type);
+            // Built-in capabilities are proven against this verified extension.
+            // Custom adapter recipes keep their own launch environment.
+            env.retain(|(name, _)| name != "PI_ACP_BRIDGE_EXTENSION");
+            env.push((
+                "PI_ACP_BRIDGE_EXTENSION".into(),
+                entry
+                    .with_file_name("mcp-bridge.mjs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ));
             // pi-acp spawns the real `pi` binary; fail fast with a clear,
             // install-prompt-routable error if it (or a BYO-pi override) isn't
             // resolvable, rather than letting pi-acp die mid-connection on a raw
             // ENOENT that surfaces as an opaque protocol error.
             if agent_type == AgentType::Pi {
-                let launch_env: BTreeMap<String, String> = merged_env.iter().cloned().collect();
+                let launch_env: BTreeMap<String, String> = env.iter().cloned().collect();
                 if let Some(message) = pi_launch_preflight(&launch_env, cwd) {
                     return Err(AcpError::SdkNotInstalled(message));
                 }
@@ -2088,6 +2098,34 @@ async fn build_agent(
                 {
                     return Err(AcpError::PiProjectTrustRequired(message));
                 }
+            }
+            let mut server = agent_client_protocol::schema::v1::McpServerStdio::new("pi", node);
+            server.args = vec![entry.to_string_lossy().into_owned()];
+            server.env = env
+                .into_iter()
+                .map(|(name, value)| {
+                    agent_client_protocol::schema::v1::EnvVariable::new(name, value)
+                })
+                .collect();
+            Ok(
+                AcpAgent::new(agent_client_protocol::schema::v1::McpServer::Stdio(server))
+                    .with_debug(agent_debug_callback(
+                        meta.name.to_string(),
+                        Arc::clone(stderr_tail),
+                        false,
+                    )),
+            )
+        }
+
+        AgentDistribution::Npx { cmd, args, env, .. } => {
+            let mut merged_env = merge_agent_env(env, runtime_env, scratch);
+            let mut zcode_runtime = None;
+            if agent_type == AgentType::ZCode {
+                let runtime = crate::acp::zcode::resolve_runtime(runtime_env, cwd)
+                    .await
+                    .map_err(|error| AcpError::protocol(error.to_string()))?;
+                runtime.apply(&mut merged_env);
+                zcode_runtime = Some(runtime);
             }
             // Resolve the config-derived preset HERE (like Grok's
             // `grok_launch_permission_mode` below) so the policy helper stays a
@@ -7183,16 +7221,10 @@ async fn send_new_session_capturing_models(
 }
 
 /// Whether MCP servers forwarded over the ACP wire (`session/new.mcpServers`)
-/// actually reach the agent's model. Almost all adapters deliver them; pi-acp
-/// (0.0.31) accepts the `mcpServers` field but DROPS it — it never forwards MCP
-/// to the inner `pi --mode rpc` process, and pi has no native MCP. So forwarding
-/// either user servers or the built-in codeg-mcp companion to pi is futile, and
-/// injecting codeg-mcp would falsely mark delegation/feedback/ask as available
-/// (`feedback_tool_available`, a registered delegation token pi can never use).
-/// `supports_mcp` stays `true` for pi (session/new tolerates the field), so this
-/// is a separate, narrower gate. Gate codeg-mcp injection on it.
+/// actually reach the agent's model. The managed Pi adapter injects them using
+/// its bundled extension and confirms real active tools in the session report.
 ///
-/// Cline drops them the same way. Its ACP agent (`apps/cli/src/acp/acpAgent.ts`)
+/// Cline drops wire servers. Its ACP agent (`apps/cli/src/acp/acpAgent.ts`)
 /// keeps the `mcpServers` of `session/new` and `session/load` in its session
 /// state and never reads them back: the config it starts each session with
 /// carries no MCP servers, and the SDK connects only the servers in cline's own
@@ -7203,7 +7235,7 @@ async fn send_new_session_capturing_models(
 /// through that file (see [`agent_reads_own_mcp_config`]); the codeg-mcp
 /// companion, which only travels over the wire, cannot.
 fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
-    !matches!(agent_type, AgentType::Pi | AgentType::Cline)
+    !matches!(agent_type, AgentType::Cline)
 }
 
 /// Agents that load the MCP servers codeg's MCP settings manage from their OWN
@@ -7212,7 +7244,8 @@ fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
 fn agent_reads_own_mcp_config(agent_type: AgentType) -> bool {
     matches!(
         agent_type,
-        AgentType::Hermes
+        AgentType::Pi
+            | AgentType::Hermes
             | AgentType::KimiCode
             | AgentType::Grok
             | AgentType::Cursor
@@ -7660,9 +7693,47 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     Some(features.join(","))
 }
 
-/// Outcome of injecting the `codeg-mcp` companion: the per-launch token to
-/// stash for revocation, plus whether the `check_user_feedback` tool was exposed
-/// to this agent (so the session can gate submit + UI on its real capability).
+/// Pi's bridge report is authoritative: accepting mcpServers alone is not proof.
+fn pi_companion_registered(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> bool {
+    let report = meta.and_then(|m| m.get("piAcp")).and_then(|m| m.get("mcp"));
+    report.is_some_and(|r| {
+        r["unsupported"] == false
+            && r["registered"]
+                .as_array()
+                .is_some_and(|names| names.iter().any(|n| n == "codeg-mcp"))
+            && r["skipped"]
+                .as_array()
+                .is_some_and(|items| !items.iter().any(|i| i["name"] == "codeg-mcp"))
+    })
+}
+
+async fn confirm_pi_companion(
+    agent: AgentType,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    injection: Option<&CompanionInjection>,
+    state: &Arc<tokio::sync::RwLock<SessionState>>,
+    emitter: &EventEmitter,
+) {
+    if agent != AgentType::Pi {
+        return;
+    }
+    let Some(injection) = injection else { return };
+    let delivered = pi_companion_registered(meta);
+    {
+        let mut s = state.write().await;
+        s.delegation_enabled = delivered && injection.delegation_enabled;
+        s.feedback_tool_available = delivered && injection.feedback_available;
+        s.result_tool_available = delivered && injection.result_enabled;
+    }
+    if !delivered {
+        emit_with_state(state, emitter, AcpEvent::Error {
+            message: "Pi did not register the session MCP companion. Delegation, feedback and structured results are unavailable; check Pi MCP/extension configuration.".into(),
+            agent_type: agent.to_string(), code: Some("pi_mcp_registration_failed".into()), details: None, terminal: false,
+        }).await;
+    }
+}
+
+/// Token and groups requested for the per-launch companion.
 struct CompanionInjection {
     token: String,
     feedback_available: bool,
@@ -8806,12 +8877,12 @@ async fn run_connection(
                 s.goal_actions = Some(goal_actions);
                 if let Some(ref injected) = delegate_injection {
                     s.delegation_token = Some(injected.token.clone());
-                    s.delegation_enabled = injected.delegation_enabled;
+                    s.delegation_enabled = agent_type != AgentType::Pi && injected.delegation_enabled;
                     // The agent's actual feedback capability for this session
                     // — the authoritative gate for submit + UI, fixed at
                     // launch.
-                    s.feedback_tool_available = injected.feedback_available;
-                    s.result_tool_available = injected.result_enabled;
+                    s.feedback_tool_available = agent_type != AgentType::Pi && injected.feedback_available;
+                    s.result_tool_available = agent_type != AgentType::Pi && injected.result_enabled;
                 } else {
                     // Keep a reused/test state fail-closed if companion
                     // injection was skipped; no stale token or delegation
@@ -8882,6 +8953,7 @@ async fn run_connection(
                             // on resume; absent ⇒ empty specs ⇒ flat fallback.
                             let grok_model_specs = (agent_type == AgentType::Grok)
                                 .then(|| parse_grok_model_specs(models_raw.as_ref()));
+                            confirm_pi_companion(agent_type, new_resp.meta.as_ref(), delegate_injection.as_ref(), &state, &emitter_clone).await;
                             let mut session = AgentSession::attach(&cx, new_resp)?;
 
                             // No drain: session/resume does not replay history,
@@ -9046,6 +9118,7 @@ async fn run_connection(
                         } else {
                             None
                         };
+                        confirm_pi_companion(agent_type, new_resp.meta.as_ref(), delegate_injection.as_ref(), &state, &emitter_clone).await;
                         let mut session = AgentSession::attach(&cx, new_resp)?;
 
                         // Drain historical replay notifications from session/load,
@@ -9388,6 +9461,7 @@ async fn run_connection(
                         // Read BEFORE `AgentSession::attach` consumes the response.
                         state.write().await.pi_startup_banner =
                             pi_startup_banner(agent_type, new_resp.meta.as_ref());
+                        confirm_pi_companion(agent_type, new_resp.meta.as_ref(), delegate_injection.as_ref(), &state, &emitter_clone).await;
                         let mut session = AgentSession::attach(&cx, new_resp)?;
                         let (initial_config_options, preferred_config_values) = configure_new_zcode_session(
                             agent_type, &cx, &session, &handshake, preferred_mode_id.as_deref(),
@@ -9513,6 +9587,7 @@ async fn run_connection(
                 // Read BEFORE `AgentSession::attach` consumes the response.
                 state.write().await.pi_startup_banner =
                     pi_startup_banner(agent_type, new_resp.meta.as_ref());
+                confirm_pi_companion(agent_type, new_resp.meta.as_ref(), delegate_injection.as_ref(), &state, &emitter_clone).await;
                 let mut session = AgentSession::attach(&cx, new_resp)?;
                 let (initial_config_options, preferred_config_values) = configure_new_zcode_session(
                     agent_type, &cx, &session, &handshake, preferred_mode_id.as_deref(),
@@ -39704,6 +39779,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pi_companion_requires_a_successful_unambiguous_registration_report() {
+        let report = |registered: serde_json::Value,
+                      skipped: serde_json::Value,
+                      unsupported: bool| {
+            meta_map(
+                serde_json::json!({"piAcp":{"mcp":{ "registered":registered, "skipped":skipped, "unsupported":unsupported }}}),
+            )
+        };
+        assert!(pi_companion_registered(Some(&report(
+            serde_json::json!(["codeg-mcp"]),
+            serde_json::json!([]),
+            false
+        ))));
+        for bad in [
+            report(serde_json::json!([]), serde_json::json!([]), false),
+            report(
+                serde_json::json!(["codeg_mcp"]),
+                serde_json::json!([]),
+                false,
+            ),
+            report(
+                serde_json::json!(["codeg-mcp"]),
+                serde_json::json!([]),
+                true,
+            ),
+            report(
+                serde_json::json!(["codeg-mcp"]),
+                serde_json::json!([{"name":"codeg-mcp","reason":"conflict"}]),
+                false,
+            ),
+        ] {
+            assert!(!pi_companion_registered(Some(&bad)));
+        }
+        assert!(!pi_companion_registered(None));
+    }
+
     fn turn_completes(seen: &[AcpEvent]) -> Vec<(usize, String)> {
         seen.iter()
             .enumerate()
@@ -43680,8 +43792,9 @@ mod wire_mcp_gate_tests {
     }
 
     #[test]
-    fn pi_stays_off_the_wire_and_the_rest_stay_on_it() {
-        assert!(!agent_delivers_wire_mcp(AgentType::Pi));
+    fn pi_bridges_wire_companions_but_reads_user_configuration_itself() {
+        assert!(agent_delivers_wire_mcp(AgentType::Pi));
+        assert!(agent_reads_own_mcp_config(AgentType::Pi));
         for agent_type in [
             AgentType::ClaudeCode,
             AgentType::Codex,

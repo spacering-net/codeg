@@ -2,6 +2,8 @@ use crate::models::agent::AgentType;
 
 #[derive(Debug, Clone)]
 pub enum AgentDistribution {
+    /// Fixed-source JavaScript adapter shipped with the host; Node remains user-managed.
+    BundledNode { version: &'static str },
     Npx {
         version: &'static str,
         package: &'static str,
@@ -168,8 +170,8 @@ impl AcpAgentMeta {
         match &self.distribution {
             AgentDistribution::Npx { version, .. }
             | AgentDistribution::Binary { version, .. }
-            | AgentDistribution::Uvx { version, .. } => Some(*version),
-            // Nothing is pinned: the user's own install is the only version.
+            | AgentDistribution::Uvx { version, .. }
+            | AgentDistribution::BundledNode { version } => Some(*version),
             AgentDistribution::System { .. } => None,
         }
     }
@@ -200,7 +202,9 @@ impl AcpAgentMeta {
     pub fn supports_custom_version(&self) -> bool {
         match &self.distribution {
             AgentDistribution::Npx { .. } => true,
-            AgentDistribution::Uvx { .. } | AgentDistribution::System { .. } => false,
+            AgentDistribution::Uvx { .. }
+            | AgentDistribution::BundledNode { .. }
+            | AgentDistribution::System { .. } => false,
             AgentDistribution::Binary {
                 version, platforms, ..
             } => platforms
@@ -445,13 +449,11 @@ pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
 /// the same explicit `{#acp-adapters}` anchor.
 const ACP_ADAPTER_DOCS_URL: &str = "https://docs.codeg.app/guide/supported-agents#acp-adapters";
 
-/// The oldest pi the pinned pi-acp can open a session with. pi-acp 0.0.34 asks
-/// pi for the current model's thinking levels (`get_available_thinking_levels`,
-/// new in pi 0.81.0) on every `session/new` and `session/load`, and fails the
-/// open without it. Move it with the pin (see `AgentType::Pi` below); the
+/// Verified baseline for the managed adapter, native MCP and current RPC.
+/// The adapter also diagnoses missing runtime capabilities. The
 /// settings panel warns with the same value (`PI_MIN_RUNTIME_VERSION` in
 /// `src/lib/pi-config.ts`, held equal by a test).
-pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
+pub const PI_MIN_RUNTIME_VERSION: &str = "1.4.0";
 
 /// The `@openai/codex` the pinned codex-acp drives (`AgentType::Codex` below),
 /// for when the installed copy's own package.json cannot be read. A runtime
@@ -551,6 +553,7 @@ pub fn uses_cursor_acp_backend(agent_type: AgentType) -> bool {
 
 fn distribution_uses_cursor_acp(distribution: &AgentDistribution) -> bool {
     match distribution {
+        AgentDistribution::BundledNode { .. } => false,
         AgentDistribution::Npx { cmd, args, .. }
         | AgentDistribution::Binary { cmd, args, .. }
         | AgentDistribution::System { cmd, args, .. } => launch_spec_uses_cursor_acp(cmd, args),
@@ -4630,31 +4633,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
         },
         AgentType::Pi => AcpAgentMeta {
             agent_type,
-            // pi-acp accepts ACP-wire `mcpServers` but drops them (does not
-            // forward to pi), and pi has no native MCP. supports_mcp stays
-            // `true` only to satisfy the `only_openclaw_opts_out_of_mcp`
-            // invariant — actual wire forwarding is short-circuited in
-            // `connection.rs` (see the skip-list), so neither user servers nor
-            // the codeg-mcp companion are futilely forwarded.
             supports_mcp: true,
             name: "Pi",
-            description: "Self-extensible coding agent (ACP via pi-acp)",
-            // pi-acp 0.0.34 spawns `pi --mode rpc` as a child, so `pi` (npm
-            // `@earendil-works/pi-coding-agent`, at least
-            // `PI_MIN_RUNTIME_VERSION`) must be resolvable on PATH — or
-            // pointed at a custom build via the `PI_ACP_PI_COMMAND` env (see
-            // BYO-pi). Args are empty: the ACP server is the default mode
-            // (`npx -y pi-acp`, no subcommand). `node_required` follows pi's
-            // 22+ requirement (pi-acp's own engines say >=20). The embedded
-            // context env lets pi-acp advertise `promptCapabilities.embeddedContext`.
-            distribution: AgentDistribution::Npx {
-                version: "0.0.34",
-                package: "pi-acp@0.0.34",
-                cmd: "pi-acp",
-                args: &[],
-                env: &[("PI_ACP_ENABLE_EMBEDDED_CONTEXT", "true")],
-                node_required: Some("22.0.0"),
-            },
+            description: "Pi coding agent with a bundled ACP and native MCP bridge",
+            // xintaofei/pi-acp fc1a992, built reproducibly with its lockfile.
+            // Global pi-acp installations and Custom adapter recipes are untouched.
+            distribution: AgentDistribution::BundledNode { version: "0.1.0" },
         },
         AgentType::Grok => AcpAgentMeta {
             agent_type,
@@ -6227,7 +6211,10 @@ mod tests {
             "@agentclientprotocol/codex-acp@2.2.2",
             Some("20.3.0"),
         );
-        assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));
+        assert!(matches!(
+            get_agent_meta(AgentType::Pi).distribution,
+            AgentDistribution::BundledNode { version: "0.1.0" }
+        ));
         assert_npx_version(
             AgentType::Grok,
             "1.0.62",

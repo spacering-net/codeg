@@ -1659,7 +1659,8 @@
       "systemAgentAlreadyLatest": "{name} محدَّث بالفعل ({version})"
     },
     "distribution": {
-      "system": "المثبّت الرسمي"
+      "system": "المثبّت الرسمي",
+      "bundledNode": "محوّل ACP مضمّن"
     },
     "version": {
       "statusLabel": "حالة الإصدار",
@@ -1678,7 +1679,8 @@
       "upgradeAvailable": "{versionText}. تتوفر ترقية.",
       "recommendedUnavailable": "{versionText}. لا يتوفر إصدار موصى به.",
       "latest": "{versionText}. أنت على أحدث إصدار.",
-      "unreviewedAvailable": "{versionText}. يتوفر إصدار أحدث غير مُراجَع."
+      "unreviewedAvailable": "{versionText}. يتوفر إصدار أحدث غير مُراجَع.",
+      "piBundled": "المحوّل {version} مضمّن. يتطلب Pi {piVersion} أو أحدث وNode.js 22.19.0 أو أحدث."
     },
     "adapter": {
       "label": "محوّل ACP",

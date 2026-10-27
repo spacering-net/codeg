@@ -1659,9 +1659,11 @@
       "systemAgentAlreadyLatest": "{name} 已是最新版本（{version}）"
     },
     "distribution": {
+      "bundledNode": "内置适配器",
       "system": "官方安装"
     },
     "version": {
+      "piBundled": "已内置适配器 {version}。需要 Pi {piVersion}+ 和 Node.js 22.19.0+。",
       "statusLabel": "版本状态",
       "notInstalled": "未安装",
       "recommendedLocal": "推荐：{recommendedVersion} · 本地：{localVersion}",
