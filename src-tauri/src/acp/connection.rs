@@ -8887,6 +8887,7 @@ async fn run_connection(
                 // that needs no tool; OpenClaw-style `supports_mcp: false`
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
+                s.close_supported = supports_close;
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
@@ -13931,6 +13932,12 @@ async fn run_conversation_loop(
     // own needs a turn to have started it, and background work cannot outlive
     // the agent process this loop's connection owns.
     let mut prompted = false;
+    // Whether this agent accepts `session/close` at all — its initialize
+    // `session_capabilities.close`, written to the state by `run_connection`
+    // before this loop starts. Set on a clean Disconnect so the live session is
+    // released on the agent (see the send after the loop).
+    let supports_close = state.read().await.close_supported;
+    let mut close_session_on_exit = false;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
@@ -15133,6 +15140,7 @@ async fn run_conversation_loop(
                                     tracked_terminal_tool_calls.clear();
                                     drain_permissions(perms, state, emitter).await;
                                     disconnect_requested = true;
+                                    close_session_on_exit = supports_close;
                                     break;
                                 }
                                 Some(ConnectionCommand::Prompt { .. }) => {
@@ -15397,9 +15405,45 @@ async fn run_conversation_loop(
                     }
                 }
             }
-            Some(ConnectionCommand::Disconnect) | None => {
+            Some(ConnectionCommand::Disconnect) => {
+                close_session_on_exit = supports_close;
                 break;
             }
+            None => {
+                // Every command sender is gone (the manager dropped the
+                // connection): nothing ordered a close, and the agent ends
+                // with the transport.
+                break;
+            }
+        }
+    }
+    if close_session_on_exit {
+        let sid = session.session_id().clone();
+        let cx = session.connection();
+        // Unlike the fork's `close_forked_parent`, this close is awaited: the
+        // transport dies the moment this function returns, so an unawaited
+        // request would be dropped before the agent heard it. The short
+        // ceiling keeps a wedged agent from stalling the disconnect; the
+        // outcome is logged either way, and an agent that never closes the
+        // session loses it with the process anyway.
+        let close = async move {
+            cx.send_request_to(Agent, CloseSessionRequest::new(sid))
+                .block_task()
+                .await
+                .map(|_| ())
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(2), close).await {
+            Ok(Ok(())) => {
+                tracing::info!("[ACP] Closed session {}, left by a disconnect", session.session_id().0)
+            }
+            Ok(Err(e)) => tracing::warn!(
+                "[ACP] session/close for session {}, left by a disconnect, failed: {e}",
+                session.session_id().0
+            ),
+            Err(_) => tracing::warn!(
+                "[ACP] session/close for session {} timed out; the process ends with the connection anyway",
+                session.session_id().0
+            ),
         }
     }
     Ok(None)
@@ -42192,6 +42236,10 @@ mod tests {
                 "win".to_string(),
                 None,
             )));
+            // Stand in for the initialize-time write `run_connection` makes
+            // before starting the loop, so the disconnect arm sees the same
+            // capability the real connections do.
+            state.write().await.close_supported = supports_close;
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
@@ -42358,8 +42406,9 @@ mod tests {
         (session.to_string(), "empty".to_string())
     }
 
-    /// The parent a fork leaves is closed on the agent — nothing else is: the
-    /// child the loop moves on to stays open and keeps working.
+    /// The parent a fork leaves is closed on the agent immediately; the child
+    /// the loop moves on to stays open and keeps working until the connection
+    /// ends, and the disconnect then closes it too.
     #[tokio::test]
     async fn a_fork_closes_the_session_it_leaves() {
         let mut fork = ForkTransition::start("child", true, CloseAnswer::Closed).await;
@@ -42374,7 +42423,10 @@ mod tests {
         )
         .await;
         assert_eq!(fork.prompt_to_end().await, answered("child"));
-        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
     }
 
     fn fork_test_servers() -> Vec<McpServer> {
@@ -42416,7 +42468,11 @@ mod tests {
         assert_eq!(forks[0]["mcpServers"][0]["name"], "codeg-mcp");
         assert_eq!(forks[0]["_meta"], resumes[0]["_meta"]);
         assert_eq!(forks[0]["_meta"]["claudeCode"]["emitRawSDKMessages"], true);
-        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+        // The parent's close came from the fork; the child's from the disconnect.
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
     }
 
     /// A fork of the forked session runs on the loop `handle_fork_or_exit`
@@ -42460,7 +42516,12 @@ mod tests {
         }
         assert_eq!(
             fork.shutdown().await,
-            vec!["parent".to_string(), "child".to_string()]
+            vec![
+                "parent".to_string(),
+                "child".to_string(),
+                // The loop's final session goes on the disconnect close too.
+                "child-2".to_string(),
+            ]
         );
     }
 
@@ -42508,8 +42569,9 @@ mod tests {
         assert!(closed.is_empty(), "closed {closed:?}");
     }
 
-    /// A fork that answers with the parent's own id has not left it, so
-    /// nothing is closed — closing would close the session the loop goes on with.
+    /// A fork that answers with the parent's own id has not left it, so the
+    /// fork closes nothing — closing would close the session the loop goes on
+    /// with. The disconnect at the end still closes it, once.
     #[tokio::test]
     async fn a_fork_onto_the_same_session_closes_nothing() {
         let mut fork = ForkTransition::start("parent", true, CloseAnswer::Closed).await;
@@ -42518,19 +42580,22 @@ mod tests {
             ("parent".to_string(), "parent".to_string())
         );
         assert_eq!(fork.prompt_to_end().await, answered("parent"));
-        let closed = fork.shutdown().await;
-        assert!(closed.is_empty(), "closed {closed:?}");
+        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
     }
 
-    /// Nothing waits on the close: an agent that never answers it still runs
-    /// the child's first turn.
+    /// Nothing waits on the FORK's close: an agent that never answers it still
+    /// runs the child's first turn. The disconnect's own close is awaited but
+    /// time-bounded, so the same silence only delays teardown, never hangs it.
     #[tokio::test]
     async fn an_unanswered_close_does_not_hold_up_the_fork() {
         let mut fork = ForkTransition::start("child", true, CloseAnswer::Unanswered).await;
         fork.fork().await;
         fork.close_requested().await;
         assert_eq!(fork.prompt_to_end().await, answered("child"));
-        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
     }
 
     /// The close is best-effort: an agent refusing it leaves the connection,
@@ -42541,7 +42606,28 @@ mod tests {
         fork.fork().await;
         fork.close_requested().await;
         assert_eq!(fork.prompt_to_end().await, answered("child"));
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
+    }
+
+    /// An agent that advertises `session/close` is asked to close the live
+    /// session when the connection disconnects — the cleanup codeg used to
+    /// leave to the process exiting.
+    #[tokio::test]
+    async fn a_disconnect_closes_the_live_session_the_agent_advertises() {
+        let fork = ForkTransition::start("unused", true, CloseAnswer::Closed).await;
         assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+    }
+
+    /// The same disconnect sends no close to an agent that never advertised
+    /// the capability (the gate is the initialize answer, not the agent type).
+    #[tokio::test]
+    async fn a_disconnect_sends_no_close_the_agent_did_not_advertise() {
+        let fork = ForkTransition::start("unused", false, CloseAnswer::Closed).await;
+        let closed = fork.shutdown().await;
+        assert!(closed.is_empty(), "closed {closed:?}");
     }
 
     #[test]
