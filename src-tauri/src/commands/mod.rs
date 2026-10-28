@@ -1,4 +1,5 @@
 pub mod acp;
+mod conversation_search;
 #[cfg(feature = "tauri-runtime")]
 pub mod app_update;
 pub mod assistants;

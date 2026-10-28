@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::agent::AgentType;
-use super::message::{MessageTurn, TurnUsage};
+use super::message::{MessageTurn, TurnRole, TurnUsage};
 use crate::db::entities::conversation::ConversationKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +23,23 @@ pub struct ConversationSummary {
     pub parent_tool_use_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegation_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSearchMatch {
+    pub turn_id: String,
+    pub turn_index: usize,
+    pub role: TurnRole,
+    pub before: String,
+    pub matched_text: String,
+    pub after: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSearchResult {
+    #[serde(flatten)]
+    pub summary: DbConversationSummary,
+    pub matches: Vec<ConversationSearchMatch>,
 }
 
 #[derive(Debug, Clone, Serialize)]

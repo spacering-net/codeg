@@ -635,6 +635,19 @@ export type ConversationChange =
   | { kind: "deleted"; id: number }
   | { kind: "status"; id: number; status: string }
 
+export interface ConversationSearchMatch {
+  turn_id: string
+  turn_index: number
+  role: "user" | "assistant"
+  before: string
+  matched_text: string
+  after: string
+}
+
+export interface ConversationSearchResult extends DbConversationSummary {
+  matches: ConversationSearchMatch[]
+}
+
 export const CONVERSATION_CHANGED_EVENT = "conversation://changed"
 
 /** Payload for the global `folder://changed` side-channel. A folder created or

@@ -2413,7 +2413,10 @@
       "typeToSearch": "輸入關鍵字搜尋會話",
       "typeToSearchFiles": "輸入關鍵字搜尋檔案或目錄",
       "noResults": "找不到結果。",
-      "untitledConversation": "未命名會話"
+      "untitledConversation": "未命名會話",
+      "userMessage": "使用者",
+      "assistantReply": "助手",
+      "jumpUnavailable": "無法定位這則訊息，對話歷史可能已變更。"
     },
     "folderTitleBar": {
       "showSidebar": "顯示側邊欄",

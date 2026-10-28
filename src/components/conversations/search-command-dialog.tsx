@@ -11,11 +11,14 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
-import { listAllConversations } from "@/lib/api"
+import { searchConversations } from "@/lib/api"
+import { requestConversationSearchJump } from "@/stores/conversation-search-store"
 import type {
   AgentType,
   ConversationStatus,
   DbConversationSummary,
+  ConversationSearchMatch,
+  ConversationSearchResult,
 } from "@/lib/types"
 import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
 import { rankFileMatches } from "@/lib/file-search-match"
@@ -75,9 +78,10 @@ export function SearchCommandDialog({
   }, [])
   const [query, setQuery] = useState("")
   const [agentFilter, setAgentFilter] = useState<AgentType | null>(null)
-  const [results, setResults] = useState<DbConversationSummary[]>([])
+  const [results, setResults] = useState<ConversationSearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const searchVersion = useRef(0)
 
   const folderPath = folder?.path ?? ""
 
@@ -104,7 +108,7 @@ export function SearchCommandDialog({
   )
 
   const doSearch = useCallback(
-    async (q: string, agent: AgentType | null) => {
+    async (q: string, agent: AgentType | null, version: number) => {
       if (!q.trim() && !agent) {
         setResults([])
         setSearching(false)
@@ -112,16 +116,16 @@ export function SearchCommandDialog({
       }
       setSearching(true)
       try {
-        const data = await listAllConversations({
+        const data = await searchConversations({
           folder_ids: folderId > 0 ? [folderId] : null,
           search: q.trim() || null,
           agent_type: agent,
         })
-        setResults(data)
+        if (version === searchVersion.current) setResults(data)
       } catch {
-        setResults([])
+        if (version === searchVersion.current) setResults([])
       } finally {
-        setSearching(false)
+        if (version === searchVersion.current) setSearching(false)
       }
     },
     [folderId]
@@ -129,15 +133,18 @@ export function SearchCommandDialog({
 
   // Debounced search on query change (conversations tab only)
   useEffect(() => {
-    if (activeTab !== "conversations") return
+    const version = ++searchVersion.current
+    if (!open || activeTab !== "conversations") return
+    setResults([])
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      doSearch(query, agentFilter)
+      doSearch(query, agentFilter, version)
     }, 300)
     return () => {
+      searchVersion.current = version + 1
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query, agentFilter, doSearch, activeTab])
+  }, [query, agentFilter, doSearch, activeTab, open])
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -151,11 +158,12 @@ export function SearchCommandDialog({
   }, [open, resetFileTree])
 
   const handleSelectConversation = useCallback(
-    (conv: DbConversationSummary) => {
+    (conv: DbConversationSummary, match?: ConversationSearchMatch) => {
       // Leave any workbench route (e.g. Automations) so the picked conversation
       // isn't stranded behind the route overlay — covers re-selecting the
       // already-active tab, which doesn't change activeTabId.
       openConversations()
+      if (match) requestConversationSearchJump(conv.id, match)
       openTab(conv.folder_id, conv.id, conv.agent_type, true)
       onOpenChange(false)
     },
@@ -191,7 +199,7 @@ export function SearchCommandDialog({
       }
       open={open}
       onOpenChange={onOpenChange}
-      shouldFilter={activeTab === "conversations"}
+      shouldFilter={false}
       // Not `autoFocus`: an input focused while mounting takes focus before
       // the focus trap starts listening, so the trap never records it and has
       // nothing to pull focus back to when the chat composer behind the dialog
@@ -304,32 +312,70 @@ export function SearchCommandDialog({
                   : t("noResults")}
             </CommandEmpty>
             {results.length > 0 && (
-              <CommandGroup>
+              <>
                 {results.map((conv) => (
-                  <CommandItem
+                  <CommandGroup
                     key={conv.id}
-                    value={`${conv.id}-${formatConversationTitle(conv.title)}`}
-                    onSelect={() => handleSelectConversation(conv)}
+                    className="mx-3 my-3 rounded-lg border border-border bg-background p-1 shadow-sm"
                   >
-                    <ConversationStatusDot
-                      status={conv.status as ConversationStatus}
-                    />
-                    <span className="flex-1 truncate">
-                      {formatConversationTitle(conv.title) ||
-                        t("untitledConversation")}
-                    </span>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {getAgentLabel(conv.agent_type)}
-                    </span>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {formatDistanceToNow(new Date(conv.created_at), {
-                        addSuffix: true,
-                        locale: dateFnsLocale,
-                      })}
-                    </span>
-                  </CommandItem>
+                    <CommandItem
+                      key={conv.id}
+                      value={`${conv.id}-${formatConversationTitle(conv.title)}`}
+                      onSelect={() =>
+                        handleSelectConversation(conv, conv.matches?.[0])
+                      }
+                      className="gap-2 rounded-md px-3 py-2.5"
+                    >
+                      <ConversationStatusDot
+                        status={conv.status as ConversationStatus}
+                      />
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {formatConversationTitle(conv.title) ||
+                          t("untitledConversation")}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {getAgentLabel(conv.agent_type)}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {formatDistanceToNow(new Date(conv.created_at), {
+                          addSuffix: true,
+                          locale: dateFnsLocale,
+                        })}
+                      </span>
+                    </CommandItem>
+                    {conv.matches?.slice(0, 3).map((match) => (
+                      <CommandItem
+                        key={match.turn_id}
+                        value={`${conv.id}-${match.turn_id}`}
+                        onSelect={() => handleSelectConversation(conv, match)}
+                        className="mx-2 items-start gap-3 rounded-none border-t border-border/60 px-1 py-3 first:rounded-t-md last:rounded-b-md"
+                      >
+                        <span
+                          className={cn(
+                            "mt-0.5 shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium leading-4",
+                            match.role === "user"
+                              ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300"
+                              : "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300"
+                          )}
+                        >
+                          {t(
+                            match.role === "user"
+                              ? "userMessage"
+                              : "assistantReply"
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/85">
+                          {match.before}
+                          <mark className="rounded-sm bg-amber-200/80 px-0.5 font-medium text-foreground dark:bg-amber-800/70">
+                            {match.matched_text}
+                          </mark>
+                          {match.after}
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
                 ))}
-              </CommandGroup>
+              </>
             )}
           </>
         )}

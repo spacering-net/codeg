@@ -47,6 +47,32 @@ pub struct ListChildConversationsParams {
     pub parent_conversation_id: i32,
 }
 
+pub async fn search_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListAllConversationsParams>,
+) -> Result<Json<Vec<ConversationSearchResult>>, AppCommandError> {
+    Ok(Json(
+        conv_commands::search_conversations_core(
+            &state.db.conn,
+            &state.emitter,
+            &state.chat_channel_manager,
+            conv_commands::ListAllConversationsOptions {
+                folder_ids: params.folder_ids,
+                agent_type: params.agent_type,
+                search: params.search,
+                sort_by: params.sort_by,
+                status: params.status,
+                include_children: params.include_children.unwrap_or(false),
+            },
+        )
+        .await?,
+    ))
+}
+
+#[cfg(test)]
+#[path = "conversation_search_tests.rs"]
+mod conversation_search_http_tests;
+
 pub async fn list_child_conversations(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ListChildConversationsParams>,

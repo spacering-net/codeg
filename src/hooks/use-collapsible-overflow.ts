@@ -46,7 +46,8 @@ function remember(contentKey: unknown, overflowing: boolean) {
  * another.
  */
 export function useCollapsibleOverflow<T extends HTMLElement>(
-  contentKey: unknown
+  contentKey: unknown,
+  revealToken?: number
 ): {
   contentRef: React.RefObject<T | null>
   contentId: string
@@ -60,6 +61,19 @@ export function useCollapsibleOverflow<T extends HTMLElement>(
   )
   const [expanded, setExpanded] = useState(false)
   const contentId = useId()
+
+  useEffect(() => {
+    if (revealToken == null) return
+    const frame = requestAnimationFrame(() => {
+      const el = contentRef.current
+      if (el && el.scrollHeight > el.clientHeight + 1) {
+        remember(contentKey, true)
+        setIsOverflowing(true)
+      }
+      setExpanded(true)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [revealToken, contentKey])
 
   useEffect(() => {
     // Nothing useful to redetect once expanded: the caller drops its clamp

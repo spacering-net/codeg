@@ -1,5 +1,5 @@
 import { type ReactElement } from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, describe, expect, it } from "vitest"
 
@@ -24,6 +24,17 @@ describe("CollapsibleUserMessage", () => {
   afterEach(() => {
     restoreMetrics?.()
     restoreMetrics = null
+  })
+
+  it("展开搜索定位的长消息，并允许用户再次收起", async () => {
+    restoreMetrics = mockClampLayout(600, 240)
+    renderWithIntl(
+      <CollapsibleUserMessage parts={[...TEXT_PART]} revealToken={1} />
+    )
+    const toggle = screen.getByTestId("collapsible-user-message-toggle")
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-expanded", "true"))
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute("aria-expanded", "false")
   })
 
   it("renders short content with no toggle", () => {

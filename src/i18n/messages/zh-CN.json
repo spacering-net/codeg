@@ -2413,7 +2413,10 @@
       "typeToSearch": "输入关键词搜索会话",
       "typeToSearchFiles": "输入关键词搜索文件或目录",
       "noResults": "未找到结果。",
-      "untitledConversation": "未命名会话"
+      "untitledConversation": "未命名会话",
+      "userMessage": "用户",
+      "assistantReply": "助手",
+      "jumpUnavailable": "无法定位这条消息，会话历史可能已发生变化。"
     },
     "folderTitleBar": {
       "showSidebar": "显示侧边栏",

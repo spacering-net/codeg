@@ -19,12 +19,14 @@ import { ContentPartsRenderer } from "./content-parts-renderer"
  */
 export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
   parts,
+  revealToken,
 }: {
   parts: AdaptedContentPart[]
+  revealToken?: number
 }) {
   const t = useTranslations("Folder.chat.messageList")
   const { contentRef, contentId, isOverflowing, expanded, toggle } =
-    useCollapsibleOverflow<HTMLDivElement>(parts)
+    useCollapsibleOverflow<HTMLDivElement>(parts, revealToken)
 
   const clipped = !expanded
 

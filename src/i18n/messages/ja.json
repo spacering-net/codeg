@@ -2413,7 +2413,10 @@
       "typeToSearch": "入力して会話を検索",
       "typeToSearchFiles": "入力してファイルまたはディレクトリを検索",
       "noResults": "結果が見つかりません。",
-      "untitledConversation": "無題の会話"
+      "untitledConversation": "無題の会話",
+      "userMessage": "ユーザー",
+      "assistantReply": "アシスタント",
+      "jumpUnavailable": "メッセージが見つかりません。履歴が変更された可能性があります。"
     },
     "folderTitleBar": {
       "showSidebar": "サイドバーを表示",

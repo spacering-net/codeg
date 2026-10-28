@@ -2413,7 +2413,10 @@
       "typeToSearch": "Tapez pour rechercher des conversations",
       "typeToSearchFiles": "Tapez pour rechercher des fichiers ou répertoires",
       "noResults": "Aucun résultat trouvé.",
-      "untitledConversation": "Conversation sans titre"
+      "untitledConversation": "Conversation sans titre",
+      "userMessage": "Utilisateur",
+      "assistantReply": "Assistant",
+      "jumpUnavailable": "Message introuvable. L’historique a peut-être changé."
     },
     "folderTitleBar": {
       "showSidebar": "Afficher la barre latérale",

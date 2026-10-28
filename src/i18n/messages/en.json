@@ -2413,7 +2413,10 @@
       "typeToSearch": "Type to search conversations",
       "typeToSearchFiles": "Type to search files or directories",
       "noResults": "No results found.",
-      "untitledConversation": "Untitled conversation"
+      "untitledConversation": "Untitled conversation",
+      "userMessage": "User",
+      "assistantReply": "Assistant",
+      "jumpUnavailable": "Could not locate this message. Its history may have changed."
     },
     "folderTitleBar": {
       "showSidebar": "Show Sidebar",

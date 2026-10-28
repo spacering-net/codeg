@@ -50,6 +50,22 @@ const queryToggle = () =>
   screen.queryByRole("button", { name: /^(Activity|Working)$/ })
 
 describe("splitAssistantTurnParts", () => {
+  it("展开搜索定位到的过程正文，并允许用户再次收起", async () => {
+    renderWithIntl(
+      <CompletedTurnContent
+        parts={freshCompletedParts()}
+        completed
+        revealToken={1}
+      />
+    )
+    expect(
+      await screen.findByText("I found the relevant component.")
+    ).toBeVisible()
+    fireEvent.click(toggle())
+    expect(
+      screen.queryByText("I found the relevant component.")
+    ).not.toBeInTheDocument()
+  })
   it("keeps only the trailing final response outside progress", () => {
     const split = splitAssistantTurnParts(COMPLETED_PARTS)
 

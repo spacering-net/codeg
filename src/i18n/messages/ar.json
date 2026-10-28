@@ -2413,7 +2413,10 @@
       "typeToSearch": "اكتب للبحث في المحادثات",
       "typeToSearchFiles": "اكتب للبحث في الملفات أو المجلدات",
       "noResults": "لم يتم العثور على نتائج.",
-      "untitledConversation": "محادثة بدون عنوان"
+      "untitledConversation": "محادثة بدون عنوان",
+      "userMessage": "المستخدم",
+      "assistantReply": "المساعد",
+      "jumpUnavailable": "تعذر العثور على الرسالة. ربما تغير سجل المحادثة."
     },
     "folderTitleBar": {
       "showSidebar": "إظهار الشريط الجانبي",

@@ -2413,7 +2413,10 @@
       "typeToSearch": "Digite para buscar conversas",
       "typeToSearchFiles": "Digite para buscar arquivos ou diretórios",
       "noResults": "Nenhum resultado encontrado.",
-      "untitledConversation": "Conversa sem título"
+      "untitledConversation": "Conversa sem título",
+      "userMessage": "Usuário",
+      "assistantReply": "Assistente",
+      "jumpUnavailable": "Não foi possível localizar a mensagem. O histórico pode ter sido alterado."
     },
     "folderTitleBar": {
       "showSidebar": "Mostrar barra lateral",

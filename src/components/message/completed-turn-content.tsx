@@ -1,6 +1,14 @@
 "use client"
 
-import { memo, useCallback, useId, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 
 import {
@@ -81,6 +89,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   roundOpen = true,
   onRoundOpenChange,
   foldEpoch = 0,
+  revealToken,
 }: {
   parts: AdaptedContentPart[]
   durationMs?: number | null
@@ -94,6 +103,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   onRoundOpenChange?: (open: boolean) => void
   /** Bumped by `message-list-view` on every user send. */
   foldEpoch?: number
+  revealToken?: number
 }) {
   const tElapsed = useTranslations("Folder.chat.liveTurnStats")
   const split = useMemo(() => splitAssistantTurnParts(parts), [parts])
@@ -155,6 +165,16 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     },
     [currentRound, foldEpoch, onRoundOpenChange, parts]
   )
+
+  const appliedReveal = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (revealToken == null || appliedReveal.current === revealToken) return
+    const frame = requestAnimationFrame(() => {
+      appliedReveal.current = revealToken
+      handleOpenChange(true)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [revealToken, handleOpenChange])
 
   const elapsed =
     typeof durationMs === "number" && durationMs > 0

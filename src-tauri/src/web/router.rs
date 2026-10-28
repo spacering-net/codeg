@@ -73,6 +73,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::conversations::list_all_conversations),
         )
         .route(
+            "/search_conversations",
+            post(handlers::conversations::search_conversations),
+        )
+        .route(
             "/list_child_conversations",
             post(handlers::conversations::list_child_conversations),
         )

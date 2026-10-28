@@ -131,6 +131,7 @@ import type {
   WorktreeResolution,
   GitWorktreeRemoval,
   DbConversationSummary,
+  ConversationSearchResult,
   ImportResult,
   ImportSelectedResult,
   ScanResult,
@@ -2339,6 +2340,19 @@ export async function listChildConversations(
 ): Promise<DbConversationSummary[]> {
   return getTransport().call("list_child_conversations", {
     parentConversationId,
+  })
+}
+
+export async function searchConversations(
+  params?: Parameters<typeof listAllConversations>[0]
+): Promise<ConversationSearchResult[]> {
+  return getTransport().call("search_conversations", {
+    folderIds: params?.folder_ids ?? null,
+    agentType: params?.agent_type ?? null,
+    search: params?.search ?? null,
+    sortBy: params?.sort_by ?? null,
+    status: params?.status ?? null,
+    includeChildren: params?.include_children ?? null,
   })
 }
 

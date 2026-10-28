@@ -112,6 +112,8 @@ import {
   type LoadedMessageSubAgents,
 } from "@/components/message/message-nav-entries"
 import { useMessageNavJump } from "@/components/message/use-message-nav-jump"
+import { useConversationSearchJump } from "./use-conversation-search-jump"
+import { toast } from "sonner"
 import { useConversationOutline } from "@/hooks/use-conversation-outline"
 import {
   publishTranscriptInsights,
@@ -1219,6 +1221,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onForkFromTurn,
   forkDisabled = false,
   isThreadTail = false,
+  revealToken,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -1235,6 +1238,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
+  revealToken?: number
 }) {
   if (group.role === "system") {
     // A failed turn's line is the agent's account of the failure, not a
@@ -1263,7 +1267,10 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
             <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
-              <CollapsibleUserMessage parts={group.parts} />
+              <CollapsibleUserMessage
+                parts={group.parts}
+                revealToken={revealToken}
+              />
             </MessageContent>
           </div>
         ) : (
@@ -1276,6 +1283,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
               roundOpen={roundOpen}
               onRoundOpenChange={onRoundOpenChange}
               foldEpoch={foldEpoch}
+              revealToken={revealToken}
             />
           </MessageContent>
         )}
@@ -1701,17 +1709,50 @@ export function MessageListView({
   // "not right now" instead of dropping its button and shifting the icon row.
   const forkBusy = connStatus === "prompting"
 
+  const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
+  const tSearch = useTranslations("Folder.search")
+  const handleSearchUnavailable = useCallback(() => {
+    toast.error(tSearch("jumpUnavailable"))
+  }, [tSearch])
+  const { highlightedTarget } = useConversationSearchJump({
+    conversationId,
+    dbConversationId: session?.dbConversationId ?? conversationId,
+    enabled: isActive && !detailLoading && detail != null,
+    threadItems,
+    scrollApiRef,
+    loadOlderTurnsThrough,
+    onUnavailable: handleSearchUnavailable,
+  })
+
   const renderThreadItem = useCallback(
     (item: ThreadRenderItem) => {
       switch (item.kind) {
         case "turn": {
           const pt = item.isRoleTransition ? 16 : 0
+          const searchHighlighted =
+            highlightedTarget != null &&
+            (highlightedTarget.role == null ||
+              highlightedTarget.role === item.group.role) &&
+            (item.group.id === highlightedTarget.turnId ||
+              item.sourceTurns.some(
+                (turn) =>
+                  turn.id === highlightedTarget.turnId ||
+                  turn.source_turn_id === highlightedTarget.turnId
+              ))
           const phaseLabel =
             item.group.role === "user" && userTurnHeader
               ? userTurnHeader(item.group)
               : null
           return (
-            <div style={pt > 0 ? { paddingTop: pt } : undefined}>
+            <div
+              style={pt > 0 ? { paddingTop: pt } : undefined}
+              data-search-highlighted={searchHighlighted || undefined}
+              className={
+                searchHighlighted
+                  ? "rounded-lg bg-yellow-100/40 ring-2 ring-yellow-400/60 dark:bg-yellow-900/20"
+                  : undefined
+              }
+            >
               {phaseLabel ? (
                 <div className="flex items-center gap-2 px-1 pb-3 pt-1">
                   <span aria-hidden="true" className="h-px flex-1 bg-border" />
@@ -1735,6 +1776,9 @@ export function MessageListView({
                 onForkFromTurn={onForkFromTurn}
                 forkDisabled={forkBusy}
                 isThreadTail={item.isThreadTail}
+                revealToken={
+                  searchHighlighted ? highlightedTarget?.token : undefined
+                }
               />
             </div>
           )
@@ -1764,6 +1808,7 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      highlightedTarget,
     ]
   )
 
@@ -1833,7 +1878,6 @@ export function MessageListView({
   // --- Message navigator ------------------------------------------------------
   // Lifted scroll handle so the navigator — in the Session Details side panel,
   // outside the MessageScrollProvider subtree — can drive scrollToIndex.
-  const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
   // The per-message rows are computed only while the side panel shows them:
   // grouping them parses every turn's diffs.
   const navDemanded = useTranscriptNavDemanded(

@@ -92,17 +92,21 @@ async fn list_all_conversations_core_with_codex_titles(
         status,
         include_children,
     } = options;
-    conversation_service::list_all(
+    let rows = conversation_service::list_all(
         conn,
         folder_ids,
         agent_type,
-        search,
+        None,
         sort_by,
         status,
         include_children,
     )
     .await
-    .map_err(AppCommandError::from)
+    .map_err(AppCommandError::from)?;
+    match search.as_deref().filter(|query| !query.trim().is_empty()) {
+        Some(query) => super::conversation_search::filter_by_text(conn, rows, query).await,
+        None => Ok(rows),
+    }
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -124,6 +128,46 @@ pub async fn list_all_conversations(
         &db.conn,
         &emitter,
         &chat_channel_manager,
+        ListAllConversationsOptions {
+            folder_ids,
+            agent_type,
+            search,
+            sort_by,
+            status,
+            include_children: include_children.unwrap_or(false),
+        },
+    )
+    .await
+}
+
+pub(crate) async fn search_conversations_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    mut options: ListAllConversationsOptions,
+) -> Result<Vec<ConversationSearchResult>, AppCommandError> {
+    let search = options.search.take().unwrap_or_default();
+    let rows = list_all_conversations_core(conn, emitter, chat_channel_manager, options).await?;
+    super::conversation_search::search_with_matches(conn, rows, &search).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn search_conversations(
+    app: tauri::AppHandle,
+    folder_ids: Option<Vec<i32>>,
+    agent_type: Option<AgentType>,
+    search: Option<String>,
+    sort_by: Option<String>,
+    status: Option<String>,
+    include_children: Option<bool>,
+) -> Result<Vec<ConversationSearchResult>, AppCommandError> {
+    let db = app.state::<AppDatabase>();
+    let manager = app.state::<crate::chat_channel::manager::ChatChannelManager>();
+    search_conversations_core(
+        &db.conn,
+        &EventEmitter::Tauri(app.clone()),
+        &manager,
         ListAllConversationsOptions {
             folder_ids,
             agent_type,
@@ -3038,6 +3082,145 @@ fn parse_error_to_app_error(error: ParseError) -> AppCommandError {
 mod tests {
     use super::*;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+    #[tokio::test]
+    async fn content_search_reads_configured_history_and_preserves_scope() {
+        let db = fresh_in_memory_db().await;
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions/2026/01/01");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let session_id = "01900000-0000-7000-8000-000000000001";
+        let records = [
+            serde_json::json!({"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":session_id,"cwd":"/search-project"}}),
+            serde_json::json!({"timestamp":"2026-01-01T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"用户正文：连接超时"}]}}),
+            serde_json::json!({"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Retry the CONNECTION timeout"}]}}),
+            serde_json::json!({"timestamp":"2026-01-01T00:00:03Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"tool-only-secret"}}),
+            serde_json::json!({"timestamp":"2026-01-01T00:00:04Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking-only-secret"}]}}),
+        ];
+        std::fs::write(
+            sessions.join(format!("rollout-2026-01-01T00-00-00-{session_id}.jsonl")),
+            records.iter().map(|r| format!("{r}\n")).collect::<String>(),
+        )
+        .unwrap();
+        agent_setting_service::ensure_defaults(
+            &db.conn,
+            &[agent_setting_service::AgentDefaultInput {
+                agent_type: AgentType::Codex,
+                registry_id: "codex".into(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .unwrap();
+        agent_setting_service::update_preferences(
+            &db.conn,
+            AgentType::Codex,
+            true,
+            Some(serde_json::json!({"CODEX_HOME":home.path()}).to_string()),
+        )
+        .await
+        .unwrap();
+        let folder = seed_folder(&db, "/search-project").await;
+        let other_folder = seed_folder(&db, "/other-project").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("Maintenance".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, row.id, session_id, &[])
+            .await
+            .unwrap();
+        let (_, emitter) = sync_test_emitter();
+        let manager = crate::chat_channel::manager::ChatChannelManager::new();
+        for (query, scope, agent, expected) in [
+            ("连接超时", folder, AgentType::Codex, vec![row.id]),
+            ("connection TIMEOUT", folder, AgentType::Codex, vec![row.id]),
+            ("maintenance", folder, AgentType::Codex, vec![row.id]),
+            ("连接超时", other_folder, AgentType::Codex, vec![]),
+            ("连接超时", folder, AgentType::ClaudeCode, vec![]),
+            ("absent", folder, AgentType::Codex, vec![]),
+            ("tool-only-secret", folder, AgentType::Codex, vec![]),
+            ("thinking-only-secret", folder, AgentType::Codex, vec![]),
+            ("%", folder, AgentType::Codex, vec![]),
+        ] {
+            let rows = list_all_conversations_core_with_codex_titles(
+                &db.conn,
+                &emitter,
+                &manager,
+                ListAllConversationsOptions {
+                    folder_ids: Some(vec![scope]),
+                    agent_type: Some(agent),
+                    search: Some(query.into()),
+                    ..Default::default()
+                },
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+                expected,
+                "query={query}"
+            );
+        }
+        let rows = list_all_conversations_core_with_codex_titles(
+            &db.conn,
+            &emitter,
+            &manager,
+            ListAllConversationsOptions {
+                search: Some("连接超时".into()),
+                status: Some("completed".into()),
+                ..Default::default()
+            },
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(rows.is_empty(), "正文匹配不能绕过状态筛选");
+        let previews = search_conversations_core(
+            &db.conn,
+            &emitter,
+            &manager,
+            ListAllConversationsOptions {
+                folder_ids: Some(vec![folder]),
+                search: Some("connection timeout".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let payload = serde_json::to_value(&previews).unwrap();
+        assert_eq!(payload[0]["id"], row.id);
+        assert_eq!(
+            payload[0]["matches"][0]["matched_text"],
+            "CONNECTION timeout"
+        );
+        assert_eq!(payload[0]["matches"][0]["turn_index"], 1);
+        assert_eq!(payload[0]["matches"][0]["role"], "assistant");
+        assert!(payload[0]["matches"][0]["turn_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        conversation_service::soft_delete(&db.conn, row.id)
+            .await
+            .unwrap();
+        let rows = list_all_conversations_core_with_codex_titles(
+            &db.conn,
+            &emitter,
+            &manager,
+            ListAllConversationsOptions {
+                search: Some("连接超时".into()),
+                ..Default::default()
+            },
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(rows.is_empty(), "已删除会话不能通过正文重新出现");
+    }
 
     /// Serializes every test that touches the process-global [`IMPORT_GUARD`].
     ///

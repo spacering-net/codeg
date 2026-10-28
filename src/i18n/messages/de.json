@@ -2413,7 +2413,10 @@
       "typeToSearch": "Tippen, um Konversationen zu suchen",
       "typeToSearchFiles": "Tippen, um Dateien oder Verzeichnisse zu suchen",
       "noResults": "Keine Ergebnisse gefunden.",
-      "untitledConversation": "Unbenannte Konversation"
+      "untitledConversation": "Unbenannte Konversation",
+      "userMessage": "Benutzer",
+      "assistantReply": "Assistent",
+      "jumpUnavailable": "Die Nachricht wurde nicht gefunden. Der Verlauf wurde möglicherweise geändert."
     },
     "folderTitleBar": {
       "showSidebar": "Seitenleiste anzeigen",
