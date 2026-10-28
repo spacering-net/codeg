@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "Réinitialiser le zoom",
         "description": "Remet le zoom de la fenêtre à 100%"
+      },
+      "find_in_conversation": {
+        "title": "Rechercher dans la conversation",
+        "description": "Rechercher des messages dans la conversation actuelle"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "Rechercher dans la conversation…",
+    "next": "Résultat suivant (Entrée)",
+    "previous": "Résultat précédent (Maj+Entrée)",
+    "noMatches": "Aucun résultat",
+    "close": "Fermer (Échap)",
+    "matchCount": "{current} sur {total}",
+    "loadingOlder": "Chargement des messages précédents…"
   }
 }

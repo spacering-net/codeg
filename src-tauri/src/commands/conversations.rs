@@ -2225,6 +2225,123 @@ pub async fn get_folder_conversation_outline(
     get_folder_conversation_outline_core(&db.conn, conversation_id, before_index).await
 }
 
+
+fn char_boundary_snippet(text: &str, byte_pos: usize, query_len: usize) -> String {
+    let mut start = byte_pos.saturating_sub(30);
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (byte_pos + query_len + 40).min(text.len());
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    let mut s = String::new();
+    if start > 0 {
+        s.push_str("... ");
+    }
+    if let Some(slice) = text.get(start..end) {
+        s.push_str(slice);
+    }
+    if end < text.len() {
+        s.push_str(" ...");
+    }
+    s.replace('\n', " ").trim().to_string()
+}
+
+/// In-conversation search for message content across all turns.
+pub async fn search_conversation_messages_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+    query: &str,
+) -> Result<Vec<ConversationMessageMatch>, AppCommandError> {
+    let query_trimmed = query.trim();
+    if query_trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (detail, _parsed_title) = get_folder_conversation_core(conn, conversation_id).await?;
+    let query_lower = query_trimmed.to_lowercase();
+    let mut matches = Vec::new();
+
+    for (turn_index, turn) in detail.turns.into_iter().enumerate() {
+        let mut turn_text = String::new();
+        for block in &turn.blocks {
+            match block {
+                ContentBlock::Text { text } => {
+                    turn_text.push_str(text);
+                    turn_text.push('\n');
+                }
+                ContentBlock::ToolUse {
+                    tool_name,
+                    input_preview,
+                    ..
+                } => {
+                    turn_text.push_str(tool_name);
+                    turn_text.push(' ');
+                    if let Some(input) = input_preview {
+                        turn_text.push_str(input);
+                        turn_text.push('\n');
+                    }
+                }
+                ContentBlock::ToolResult {
+                    output_preview: Some(out),
+                    ..
+                } => {
+                    turn_text.push_str(out);
+                    turn_text.push('\n');
+                }
+                ContentBlock::Thinking { text } => {
+                    turn_text.push_str(text);
+                    turn_text.push('\n');
+                }
+                ContentBlock::TurnError { message } => {
+                    turn_text.push_str(message);
+                    turn_text.push('\n');
+                }
+                ContentBlock::ImageGeneration {
+                    revised_prompt: Some(prompt),
+                    ..
+                } => {
+                    turn_text.push_str(prompt);
+                    turn_text.push('\n');
+                }
+                _ => {}
+            }
+        }
+
+        let text_lower = turn_text.to_lowercase();
+        if text_lower.contains(&query_lower) {
+            let count = text_lower.match_indices(&query_lower).count();
+            let snippet = if let Some(pos) = text_lower.find(&query_lower) {
+                char_boundary_snippet(&turn_text, pos, query_lower.len())
+            } else {
+                String::new()
+            };
+
+            matches.push(ConversationMessageMatch {
+                turn_index,
+                turn_id: turn.id,
+                role: turn.role,
+                match_count: count,
+                snippet,
+            });
+        }
+    }
+
+    Ok(matches)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn search_conversation_messages(
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+    query: String,
+) -> Result<Vec<ConversationMessageMatch>, AppCommandError> {
+    search_conversation_messages_core(&db.conn, conversation_id, &query).await
+}
+
+
 /// Emit a `conversation://changed` Upsert for `conversation_id` so every
 /// client's sidebar inserts-or-replaces the row in real time. Re-fetches the
 /// fresh summary via `get_by_id`, which filters out soft-deleted rows — so an
@@ -7456,6 +7573,14 @@ mod tests {
             detail.prefix_hash.as_deref(),
             Some(crate::commands::turn_window::prefix_fingerprint(&full[..2]).as_str())
         );
+    }
+
+    #[test]
+    fn char_boundary_snippet_handles_multibyte_and_boundaries() {
+        let text = "你好世界，这是一个测试文本，用于测试对话内查找功能是否正常工作。";
+        let snippet = char_boundary_snippet(text, 15, 6);
+        assert!(!snippet.is_empty());
+        assert!(snippet.contains("测试"));
     }
 
     #[test]

@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "Reset zoom",
         "description": "Set the window zoom back to 100%"
+      },
+      "find_in_conversation": {
+        "title": "Find in Conversation",
+        "description": "Search messages within the current conversation"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "Find in conversation…",
+    "next": "Next match (Enter)",
+    "previous": "Previous match (Shift+Enter)",
+    "noMatches": "No matches",
+    "close": "Close (Esc)",
+    "matchCount": "{current} of {total}",
+    "loadingOlder": "Loading earlier messages…"
   }
 }

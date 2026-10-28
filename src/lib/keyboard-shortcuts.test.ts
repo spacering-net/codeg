@@ -35,6 +35,26 @@ function keyEvent(
   }
 }
 
+describe("in-conversation find shortcut", () => {
+  it("defaults to Ctrl/Cmd+F", () => {
+    const ids = SHORTCUT_DEFINITIONS.map((definition) => definition.id)
+    expect(ids).toContain("find_in_conversation")
+    expect(DEFAULT_SHORTCUTS.find_in_conversation).toBe("mod+f")
+    expect(
+      matchShortcutEvent(
+        keyEvent("f", { ctrlKey: true }),
+        DEFAULT_SHORTCUTS.find_in_conversation
+      )
+    ).toBe(true)
+    expect(
+      matchShortcutEvent(
+        keyEvent("f", { metaKey: true }),
+        DEFAULT_SHORTCUTS.find_in_conversation
+      )
+    ).toBe(true)
+  })
+})
+
 describe("tab cycling shortcuts", () => {
   it("registers next_tab and prev_tab with defaults", () => {
     const ids = SHORTCUT_DEFINITIONS.map((definition) => definition.id)

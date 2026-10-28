@@ -1,5 +1,6 @@
 export type ShortcutActionId =
   | "toggle_search"
+  | "find_in_conversation"
   | "toggle_sidebar"
   | "toggle_terminal"
   | "new_terminal_tab"
@@ -36,6 +37,9 @@ export interface ShortcutDefinition {
 export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   {
     id: "toggle_search",
+  },
+  {
+    id: "find_in_conversation",
   },
   {
     id: "toggle_sidebar",
@@ -134,6 +138,7 @@ export type ShortcutSettings = Record<ShortcutActionId, string>
 
 export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   toggle_search: "mod+k",
+  find_in_conversation: "mod+f",
   toggle_sidebar: "mod+b",
   toggle_terminal: "mod+j",
   new_terminal_tab: "mod+t",

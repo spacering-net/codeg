@@ -3992,3 +3992,13 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     opacity: 0;
   }
 }
+
+/* In-conversation find highlights (CSS Custom Highlight API - web standard find appearance) */
+::highlight(search-match) {
+  background-color: #fde047;
+  color: #000000;
+}
+::highlight(search-match-active) {
+  background-color: #f97316;
+  color: #ffffff;
+}

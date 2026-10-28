@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "重置缩放",
         "description": "把窗口缩放恢复为 100%"
+      },
+      "find_in_conversation": {
+        "title": "对话内搜索",
+        "description": "在当前对话中搜索消息"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "在对话中查找…",
+    "next": "下一个匹配项 (Enter)",
+    "previous": "上一个匹配项 (Shift+Enter)",
+    "noMatches": "未找到匹配项",
+    "close": "关闭 (Esc)",
+    "matchCount": "{current} / {total}",
+    "loadingOlder": "正在加载更早的消息…"
   }
 }

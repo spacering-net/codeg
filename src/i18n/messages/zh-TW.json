@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "重設縮放",
         "description": "把視窗縮放恢復為 100%"
+      },
+      "find_in_conversation": {
+        "title": "對話內搜尋",
+        "description": "在當前對話中搜尋訊息"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "內建瀏覽器無法確認它能透過通道連到遠端主機。請稍後再試。"
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "在對話中尋找…",
+    "next": "下一個相符項 (Enter)",
+    "previous": "上一個相符項 (Shift+Enter)",
+    "noMatches": "未找到相符項",
+    "close": "關閉 (Esc)",
+    "matchCount": "{current} / {total}",
+    "loadingOlder": "正在載入更早的訊息…"
   }
 }

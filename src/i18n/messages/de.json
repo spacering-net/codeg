@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "Zoom zurücksetzen",
         "description": "Fensterzoom auf 100% zurücksetzen"
+      },
+      "find_in_conversation": {
+        "title": "In Konversation suchen",
+        "description": "Nachrichten in der aktuellen Konversation suchen"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "Der integrierte Browser konnte nicht bestätigen, dass er den entfernten Host über den Tunnel erreicht. Versuche es gleich noch einmal."
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "In Konversation suchen…",
+    "next": "Nächster Treffer (Enter)",
+    "previous": "Vorheriger Treffer (Shift+Enter)",
+    "noMatches": "Keine Treffer",
+    "close": "Schließen (Esc)",
+    "matchCount": "{current} von {total}",
+    "loadingOlder": "Frühere Nachrichten laden…"
   }
 }

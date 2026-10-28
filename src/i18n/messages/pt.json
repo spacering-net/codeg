@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "Redefinir zoom",
         "description": "Restaura o zoom da janela para 100%"
+      },
+      "find_in_conversation": {
+        "title": "Buscar na conversa",
+        "description": "Pesquisar mensagens na conversa atual"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "Localizar na conversa…",
+    "next": "Próxima correspondência (Enter)",
+    "previous": "Correspondência anterior (Shift+Enter)",
+    "noMatches": "Nenhum resultado",
+    "close": "Fechar (Esc)",
+    "matchCount": "{current} de {total}",
+    "loadingOlder": "Carregando mensagens anteriores…"
   }
 }

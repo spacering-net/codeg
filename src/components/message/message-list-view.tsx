@@ -1,5 +1,7 @@
 "use client"
 
+import { ConversationFindBar } from "@/components/chat/conversation-find-bar"
+
 import {
   memo,
   useCallback,
@@ -1253,7 +1255,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   const forkPointUnnamed = isForkPointUnnamed(forkPoint, isThreadTail)
 
   return (
-    <div className={dimmed ? "opacity-70" : undefined}>
+    <div data-turn-id={group.id} className={dimmed ? "opacity-70" : undefined}>
       <Message from={group.role}>
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
@@ -1343,6 +1345,7 @@ const AutoScrollOnSend = memo(function AutoScrollOnSend({
   signal: number
 }) {
   const { scrollToBottom } = useStickToBottomContext()
+
   const chatAnimations = useChatAnimationsEnabled()
   const lastSignalRef = useRef(signal)
 
@@ -1386,6 +1389,25 @@ export function MessageListView({
   onSaveNoteSelection,
   onForkFromTurn,
 }: MessageListViewProps) {
+  const [findOpen, setFindOpen] = useState(false)
+  const [findFocusToken, setFindFocusToken] = useState(0)
+
+  useEffect(() => {
+    if (!isActive) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        e.key.toLowerCase() === "f"
+      ) {
+        e.preventDefault()
+        setFindOpen(true)
+        setFindFocusToken((t) => t + 1)
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isActive])
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
   const pageHandoffName = usePageHandoffName()
@@ -2100,6 +2122,18 @@ export function MessageListView({
         ref={selectionBoxRef}
         className="chat-motion-scope relative flex h-full min-h-0 flex-col"
       >
+        <ConversationFindBar
+          conversationId={conversationId}
+          open={findOpen}
+          focusToken={findFocusToken}
+          onClose={() => setFindOpen(false)}
+          threadItems={threadItems}
+          liveMessage={liveMessage}
+          scrollApiRef={scrollApiRef}
+          containerRef={selectionBoxRef}
+          loadOlderTurnsThrough={loadOlderTurnsThrough}
+          turnsOffset={windowedDetail?.turns_offset ?? 0}
+        />
         <MessageThread
           className="flex-1 min-h-0"
           resize={

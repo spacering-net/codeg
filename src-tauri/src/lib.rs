@@ -1853,6 +1853,7 @@ mod tauri_app {
                 conversations::get_folder_conversation,
                 conversations::get_folder_conversation_turns,
                 conversations::get_folder_conversation_outline,
+                conversations::search_conversation_messages,
                 conversations::list_folders,
                 conversations::get_stats,
                 conversations::get_sidebar_data,

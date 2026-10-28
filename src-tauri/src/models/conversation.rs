@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::agent::AgentType;
-use super::message::{MessageTurn, TurnUsage};
+use super::message::{MessageTurn, TurnRole, TurnUsage};
 use crate::db::entities::conversation::ConversationKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +232,17 @@ pub struct ConversationOutline {
     /// fingerprint when the outline was cut at the window start.
     pub prefix_hash: String,
 }
+
+/// A search match for in-conversation search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMessageMatch {
+    pub turn_index: usize,
+    pub turn_id: String,
+    pub role: TurnRole,
+    pub match_count: usize,
+    pub snippet: String,
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderInfo {

@@ -240,6 +240,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::conversations::get_folder_conversation_outline),
         )
         .route(
+            "/search_conversation_messages",
+            post(handlers::conversations::search_conversation_messages),
+        )
+        .route(
             "/list_opened_tabs",
             post(handlers::conversations::list_opened_tabs),
         )

@@ -67,6 +67,7 @@ import type {
   WorkTaskTemplate,
   ConversationSummary,
   ConversationDetail,
+  ConversationMessageMatch,
   ConversationOutline,
   ConversationTurnsPage,
   DbConversationDetail,
@@ -2601,6 +2602,17 @@ export async function getFolderConversationOutline(
   return getTransport().call("get_folder_conversation_outline", {
     conversationId,
     beforeIndex,
+  })
+}
+
+/** Search message content within a conversation across all turns. */
+export async function searchConversationMessages(
+  conversationId: number,
+  query: string
+): Promise<ConversationMessageMatch[]> {
+  return getTransport().call("search_conversation_messages", {
+    conversationId,
+    query,
   })
 }
 

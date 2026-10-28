@@ -205,6 +205,28 @@ pub async fn get_folder_conversation_outline(
     Ok(Json(result))
 }
 
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchConversationMessagesParams {
+    pub conversation_id: i32,
+    pub query: String,
+}
+
+pub async fn search_conversation_messages(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SearchConversationMessagesParams>,
+) -> Result<Json<Vec<crate::models::ConversationMessageMatch>>, AppCommandError> {
+    let result = conv_commands::search_conversation_messages_core(
+        &state.db.conn,
+        params.conversation_id,
+        &params.query,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+
 pub async fn list_folders(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<Vec<FolderInfo>>, AppCommandError> {

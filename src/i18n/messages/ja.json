@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "ズームをリセット",
         "description": "ウィンドウのズームを 100% に戻します"
+      },
+      "find_in_conversation": {
+        "title": "会話内検索",
+        "description": "現在の会話内のメッセージを検索"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "会話内を検索…",
+    "next": "次の一致 (Enter)",
+    "previous": "前の一致 (Shift+Enter)",
+    "noMatches": "一致なし",
+    "close": "閉じる (Esc)",
+    "matchCount": "{current} / {total}",
+    "loadingOlder": "以前のメッセージを読み込み中…"
   }
 }

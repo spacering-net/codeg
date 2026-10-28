@@ -1068,6 +1068,15 @@ export interface ConversationOutline {
   prefix_hash: string
 }
 
+/** One match result for in-conversation search. */
+export interface ConversationMessageMatch {
+  turn_index: number
+  turn_id: string
+  role: "user" | "assistant" | "system"
+  match_count: number
+  snippet: string
+}
+
 export type ConversationStatus =
   | "in_progress"
   | "pending_review"

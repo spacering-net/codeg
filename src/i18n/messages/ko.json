@@ -560,6 +560,10 @@
       "zoom_reset": {
         "title": "확대/축소 초기화",
         "description": "창 확대/축소를 100%로 되돌립니다"
+      },
+      "find_in_conversation": {
+        "title": "대화 내 검색",
+        "description": "현재 대화 내 메시지 검색"
       }
     }
   },
@@ -7641,5 +7645,14 @@
         "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
       }
     }
+  },
+  "ConversationFind": {
+    "placeholder": "대화 내 검색…",
+    "next": "다음 일치 항목 (Enter)",
+    "previous": "이전 일치 항목 (Shift+Enter)",
+    "noMatches": "일치하는 항목 없음",
+    "close": "닫기 (Esc)",
+    "matchCount": "{current} / {total}",
+    "loadingOlder": "이전 메시지 로드 중…"
   }
 }
