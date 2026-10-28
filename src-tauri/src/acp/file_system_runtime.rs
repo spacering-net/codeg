@@ -792,7 +792,8 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // and its tools never go through `fs/*` (verified against 1.84.0,
         // 1.86.3 and 1.88.0). So is MiniMax Code: its tools run in-process and it sends
         // codeg no `fs/*` or `terminal/*` request (verified against 0.7.0).
-        AgentType::Custom(_)
+        AgentType::DeepSeekOfficial
+        | AgentType::Custom(_)
         | AgentType::ZCode
         | AgentType::Trae
         | AgentType::CommandCode

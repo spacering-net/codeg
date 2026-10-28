@@ -9544,7 +9544,7 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // directory comes first so linking targets it without cross-agent side
         // effects on the shared `.agents` store — the same ordering rationale
         // as pi and Cursor.
-        AgentType::DeepSeek => Some(SkillStorageSpec {
+        AgentType::DeepSeek | AgentType::DeepSeekOfficial => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOrMarkdownFile,
             global_dirs: vec![
                 crate::parsers::deepseek::resolve_dsh_home_dir().join("skills"),
@@ -9865,7 +9865,7 @@ fn project_skill_dirs(
 fn project_skill_bases(agent_type: AgentType, workspace: &str) -> Vec<PathBuf> {
     let workspace = PathBuf::from(workspace);
     let every_level = match agent_type {
-        AgentType::DeepSeek | AgentType::KimiCode => false,
+        AgentType::DeepSeek | AgentType::DeepSeekOfficial | AgentType::KimiCode => false,
         AgentType::ZCode => true,
         _ => return vec![workspace],
     };
@@ -10898,6 +10898,12 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
             "DEEPSEEK_API_KEY",
             "DEEPSEEK_ACP_MODEL",
         ),
+        // Official DSH selects models through ACP config options, not env.
+        AgentType::DeepSeekOfficial => (
+            "DEEPSEEK_BASE_URL",
+            "DEEPSEEK_API_KEY",
+            "DSH_MODEL", // no-op fallback; do not inherit OPENAI_MODEL
+        ),
         // Qoder's non-interactive credential is `QODER_PERSONAL_ACCESS_TOKEN`
         // — "设置后自动使用 PAT 认证" in the 1.1.23 package's own README, and the
         // only way to authenticate a headless/server/Docker install, where the
@@ -11288,6 +11294,9 @@ pub(crate) fn parse_provider_model(
                 trimmed_raw.map(str::to_string),
             );
         }
+        AgentType::DeepSeekOfficial => {
+            // Model changes use session/set_config_option, not a provider env var.
+        }
         AgentType::Codex => {
             // The provider stores a structured model config (JSON) or a legacy
             // plain slug; OPENAI_MODEL is the default slug either way.
@@ -11417,7 +11426,7 @@ fn cascade_update_agent_config(
             // (`acpUpdateAgentEnv`); it does not write provider creds into
             // ~/.grok/config.toml and does not participate in the cascade.
         }
-        AgentType::DeepSeek => {
+        AgentType::DeepSeek | AgentType::DeepSeekOfficial => {
             // deepseek-acp authenticates via `DEEPSEEK_API_KEY` (or
             // `~/.dsh/.credentials.yaml`, which codeg never writes), injected
             // as a runtime env var through the generic agent settings panel;

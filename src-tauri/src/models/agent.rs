@@ -8,7 +8,7 @@ pub const CUSTOM_AGENT_WIRE_PREFIX: &str = "custom:";
 
 /// Which agent backs a conversation.
 ///
-/// The twenty named variants are compile-time built-ins with hand-written
+/// The twenty-one named variants are compile-time built-ins with hand-written
 /// launch metadata (`acp::registry`). Most use a dedicated transcript parser;
 /// ZCode, TRAE CLI, Command Code and MiniMax Code use the Codeg-owned ACP transcript.
 /// [`AgentType::Custom`] is the open end: a user-registered
@@ -35,6 +35,7 @@ pub enum AgentType {
     Grok,
     Cursor,
     DeepSeek,
+    DeepSeekOfficial,
     Qoder,
     Antigravity,
     Kiro,
@@ -47,7 +48,7 @@ pub enum AgentType {
     Custom(&'static str),
 }
 
-/// The twenty compile-time agents, in declaration order. Does NOT include
+/// The twenty-one compile-time agents, in declaration order. Does NOT include
 /// custom agents — use [`crate::acp::registry::all_acp_agents`] for the live
 /// set that includes them.
 pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
@@ -64,6 +65,7 @@ pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
     AgentType::Grok,
     AgentType::Cursor,
     AgentType::DeepSeek,
+    AgentType::DeepSeekOfficial,
     AgentType::Qoder,
     AgentType::Antigravity,
     AgentType::Kiro,
@@ -88,6 +90,7 @@ impl AgentType {
                 | AgentType::Trae
                 | AgentType::CommandCode
                 | AgentType::MiniMaxCode
+                | AgentType::DeepSeekOfficial
         )
     }
 
@@ -128,6 +131,7 @@ impl AgentType {
             AgentType::Grok => Cow::Borrowed("grok"),
             AgentType::Cursor => Cow::Borrowed("cursor"),
             AgentType::DeepSeek => Cow::Borrowed("deepseek"),
+            AgentType::DeepSeekOfficial => Cow::Borrowed("deepseek_official"),
             AgentType::Qoder => Cow::Borrowed("qoder"),
             AgentType::Antigravity => Cow::Borrowed("antigravity"),
             AgentType::Kiro => Cow::Borrowed("kiro"),
@@ -156,6 +160,7 @@ impl AgentType {
             "grok" => Some(AgentType::Grok),
             "cursor" => Some(AgentType::Cursor),
             "deepseek" => Some(AgentType::DeepSeek),
+            "deepseek_official" => Some(AgentType::DeepSeekOfficial),
             "qoder" => Some(AgentType::Qoder),
             "antigravity" => Some(AgentType::Antigravity),
             "kiro" => Some(AgentType::Kiro),
@@ -212,6 +217,7 @@ pub fn is_valid_custom_agent_id(id: &str) -> bool {
                 | "grok"
                 | "cursor"
                 | "deepseek"
+                | "deepseek_official"
                 | "qoder"
                 | "antigravity"
                 | "kiro"
@@ -248,6 +254,7 @@ impl fmt::Display for AgentType {
             AgentType::Grok => write!(f, "Grok"),
             AgentType::Cursor => write!(f, "Cursor"),
             AgentType::DeepSeek => write!(f, "DeepSeek Harness"),
+            AgentType::DeepSeekOfficial => write!(f, "DeepSeek Harness (Official ACP)"),
             AgentType::Qoder => write!(f, "Qoder"),
             AgentType::Antigravity => write!(f, "Google Antigravity"),
             AgentType::Kiro => write!(f, "Kiro CLI"),
@@ -288,6 +295,7 @@ mod tests {
             (AgentType::Grok, "grok"),
             (AgentType::Cursor, "cursor"),
             (AgentType::DeepSeek, "deepseek"),
+            (AgentType::DeepSeekOfficial, "deepseek_official"),
             (AgentType::Qoder, "qoder"),
             (AgentType::Antigravity, "antigravity"),
             (AgentType::Kiro, "kiro"),
@@ -310,6 +318,18 @@ mod tests {
             );
         }
         assert_eq!(BUILTIN_AGENT_TYPES.len(), expected.len());
+    }
+
+    #[test]
+    fn official_deepseek_keeps_existing_agent_identities_distinct() {
+        assert!(AgentType::DeepSeekOfficial.uses_acp_transcript());
+        assert!(!AgentType::DeepSeek.uses_acp_transcript());
+        assert!(!is_valid_custom_agent_id("deepseek_official"));
+        assert_eq!(AgentType::DeepSeek.as_wire(), "deepseek");
+        assert_eq!(AgentType::DeepSeekOfficial.as_wire(), "deepseek_official");
+        for id in ["dsh", "deepseek-harness"] {
+            assert_ne!(AgentType::custom(id), Some(AgentType::DeepSeekOfficial));
+        }
     }
 
     #[test]
@@ -457,7 +477,8 @@ mod tests {
         assert!(AgentType::CommandCode < AgentType::custom("goose").unwrap());
         assert!(AgentType::ClaudeCode < AgentType::Cursor);
         assert!(AgentType::Cursor < AgentType::DeepSeek);
-        assert!(AgentType::DeepSeek < AgentType::Qoder);
+        assert!(AgentType::DeepSeek < AgentType::DeepSeekOfficial);
+        assert!(AgentType::DeepSeekOfficial < AgentType::Qoder);
         assert!(AgentType::Qoder < AgentType::Antigravity);
         assert!(AgentType::Antigravity < AgentType::Kiro);
         assert!(AgentType::Kiro < AgentType::ZCode);

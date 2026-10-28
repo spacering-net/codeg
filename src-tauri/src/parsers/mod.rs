@@ -427,7 +427,8 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
         // for message history, but AcpNativeParser enriches those turns from
         // the precise token_usage_record rows in TRAE's native rollouts.
         // Command Code's undocumented session tree remains ACP-only.
-        AgentType::Custom(_)
+        AgentType::DeepSeekOfficial
+        | AgentType::Custom(_)
         | AgentType::ZCode
         | AgentType::Trae
         | AgentType::CommandCode

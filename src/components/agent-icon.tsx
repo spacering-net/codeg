@@ -616,6 +616,7 @@ const COLOR_ICONS: Partial<Record<AgentType, AnyIcon>> = {
   minimax_code: MiniMaxCodeColorIcon,
   pi: PiColorIcon,
   deepseek: DeepSeekColorIcon,
+  deepseek_official: DeepSeekColorIcon,
   kiro: KiroColorIcon,
   zcode: ZCodeColorIcon,
   trae: TraeColorIcon,
