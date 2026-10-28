@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
+use crate::acp::manager::ConnectionManager;
 use crate::acp::types::ToolApprovalInfo;
 use crate::app_error::AppCommandError;
 use crate::db::entities::conversation;
@@ -2943,12 +2944,14 @@ pub async fn cleanup_chat_folder_for_deleted_conversation(
 
 /// Full conversation-delete orchestration shared by the Tauri command and the web
 /// handler: capture the backing folder BEFORE the soft-delete (so a hidden chat
-/// folder can be retired afterward), soft-delete, broadcast the deletion, then run
+/// folder can be retired afterward), tell the live connection (if any) to drop
+/// the session on its agent, soft-delete, broadcast the deletion, then run
 /// the tab + chat-folder cleanups. The thin `delete_conversation_core` primitive
 /// stays event-free for internal/test callers, so the orchestration lives here.
 pub async fn delete_conversation_with_cleanup_core(
     emitter: &EventEmitter,
     conn: &sea_orm::DatabaseConnection,
+    connections: &ConnectionManager,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
     // Capture the backing folder AND parent before the soft-delete: a hidden
@@ -2960,6 +2963,13 @@ pub async fn delete_conversation_with_cleanup_core(
         .ok();
     let folder_id = pre.as_ref().map(|c| c.folder_id);
     let parent_id = pre.as_ref().and_then(|c| c.parent_id);
+    // Before the soft-delete, so the agent hears "this conversation is gone"
+    // while the connection can still answer: an ACP agent advertising
+    // `session_capabilities.delete` gets `session/delete` (its session outlives
+    // the codeg row only when the adapter persists it); agents without
+    // `delete` fall back to the disconnect's `session/close`. Offline
+    // conversations have no connection and need nothing unpinned.
+    connections.delete_session_for_conversation(conversation_id).await;
     delete_conversation_core(conn, conversation_id).await?;
     emit_conversation_deleted(emitter, conversation_id);
     // A removed delegation child drops its parent's child_count (→ 0 hides the
@@ -2985,10 +2995,11 @@ pub async fn delete_conversation_with_cleanup_core(
 pub async fn delete_conversation(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    connections: tauri::State<'_, ConnectionManager>,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
     let emitter = EventEmitter::Tauri(app);
-    delete_conversation_with_cleanup_core(&emitter, &db.conn, conversation_id).await
+    delete_conversation_with_cleanup_core(&emitter, &db.conn, &connections, conversation_id).await
 }
 
 fn compute_stats(all_conversations: &[ConversationSummary]) -> AgentStats {
@@ -6188,7 +6199,14 @@ mod tests {
         .expect("child");
         let (broadcaster, emitter) = sync_test_emitter();
         let mut rx = broadcaster.subscribe();
-        delete_conversation_with_cleanup_core(&emitter, &db.conn, child.id)
+        delete_conversation_with_cleanup_core(
+            &emitter,
+            &db.conn,
+            // No live connection: the delete-session handoff is a no-op here,
+            // and its own wiring is covered by the acp tests.
+            &ConnectionManager::new(),
+            child.id,
+        )
             .await
             .expect("delete child");
         let mut saw_deleted = false;

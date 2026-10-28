@@ -7,7 +7,8 @@ use agent_client_protocol::schema::v1::{
     AuthMethod, AuthenticateRequest, BlobResourceContents, CancelNotification,
     ClientCapabilities, ClientSessionCapabilities,
     CloseSessionRequest, CompactionCapabilities, ContentBlock, ContentChunk,
-    CreateTerminalRequest, CreateTerminalResponse, ElicitationCapabilities,
+    CreateTerminalRequest, CreateTerminalResponse, DeleteSessionRequest,
+    ElicitationCapabilities,
     ElicitationFormCapabilities, EmbeddedResource, EmbeddedResourceResource,
     FileSystemCapabilities, ImageContent, InitializeRequest,
     KillTerminalRequest,
@@ -1375,6 +1376,14 @@ pub enum ConnectionCommand {
         reply: tokio::sync::oneshot::Sender<Result<bool, AcpError>>,
     },
     Disconnect,
+    /// End the connection AND, when the agent advertises
+    /// `session_capabilities.delete`, drop the session there with
+    /// `session/delete` — the conversation is being deleted in codeg and a
+    /// persistent adapter should not keep it. Agents without `delete` get the
+    /// same `session/close` (when advertised) that a plain
+    /// [`Self::Disconnect`] sends, so the live session never outlives the
+    /// connection either way.
+    DeleteSession,
 }
 
 /// The part of a connection's `runtime_env` its ACP `terminal/create`
@@ -8799,12 +8808,18 @@ async fn run_connection(
                 .session_capabilities
                 .close
                 .is_some();
+            let supports_delete = init_resp
+                .agent_capabilities
+                .session_capabilities
+                .delete
+                .is_some();
             tracing::info!(
-                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}",
+                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}, delete={}",
                 init_resp.agent_capabilities.load_session,
                 supports_fork,
                 supports_resume,
-                supports_close
+                supports_close,
+                supports_delete
             );
 
             // Native live-feedback steering, synthesized ONCE from three gates
@@ -8966,6 +8981,8 @@ async fn run_connection(
                 // that needs no tool; OpenClaw-style `supports_mcp: false`
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
+                s.close_supported = supports_close;
+                s.delete_supported = supports_delete;
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
@@ -14067,6 +14084,20 @@ async fn run_conversation_loop(
     // own needs a turn to have started it, and background work cannot outlive
     // the agent process this loop's connection owns.
     let mut prompted = false;
+    // Whether this agent accepts `session/close` / `session/delete` at all —
+    // its initialize `session_capabilities`, written to the state by
+    // `run_connection` before this loop starts. Set on a clean Disconnect so
+    // the live session is released on the agent, or on a DeleteSession so it
+    // is dropped there (see the send after the loop).
+    let supports_close = state.read().await.close_supported;
+    let supports_delete = state.read().await.delete_supported;
+    // What to ask the agent to do with the live session once this loop ends:
+    // `None` — send nothing (the command senders are gone, the agent ends with
+    // the transport); `Some(false)` — plain disconnect, release the session
+    // with `session/close` when advertised (the conversation may reopen it);
+    // `Some(true)` — the conversation is being deleted in codeg, so prefer
+    // `session/delete` when advertised, falling back to the close.
+    let mut end_session_on_exit: Option<bool> = None;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
@@ -15259,7 +15290,9 @@ async fn run_conversation_loop(
                                     });
                                     break;
                                 }
-                                Some(ConnectionCommand::Disconnect) | None => {
+                                cmd @ (Some(ConnectionCommand::Disconnect)
+                                | Some(ConnectionCommand::DeleteSession)
+                                | None) => {
                                     tracing::info!(
                                         "[ACP] disconnect requested during prompting; connection_id={conn_id}"
                                     );
@@ -15273,6 +15306,8 @@ async fn run_conversation_loop(
                                     tracked_terminal_tool_calls.clear();
                                     drain_permissions(perms, state, emitter).await;
                                     disconnect_requested = true;
+                                    end_session_on_exit =
+                                        Some(matches!(cmd, Some(ConnectionCommand::DeleteSession)));
                                     break;
                                 }
                                 Some(ConnectionCommand::Prompt { .. }) => {
@@ -15537,9 +15572,62 @@ async fn run_conversation_loop(
                     }
                 }
             }
-            Some(ConnectionCommand::Disconnect) | None => {
+            Some(ConnectionCommand::Disconnect) => {
+                end_session_on_exit = Some(false);
                 break;
             }
+            Some(ConnectionCommand::DeleteSession) => {
+                end_session_on_exit = Some(true);
+                break;
+            }
+            None => {
+                // Every command sender is gone (the manager dropped the
+                // connection): nothing ordered a close, and the agent ends
+                // with the transport.
+                break;
+            }
+        }
+    }
+    // One request, decided by what the agent advertised and why the loop ended:
+    // the conversation's session is dropped with `session/delete` when the
+    // delete was requested and the agent supports it, else released with
+    // `session/close` when the agent supports that.
+    let use_delete = end_session_on_exit == Some(true) && supports_delete;
+    if end_session_on_exit.is_some() && (use_delete || supports_close) {
+        let sid = session.session_id().clone();
+        let cx = session.connection();
+        let verb = if use_delete { "session/delete" } else { "session/close" };
+        // Unlike the fork's `close_forked_parent`, this request is awaited: the
+        // transport dies the moment this function returns, so an unawaited
+        // request would be dropped before the agent heard it. The short
+        // ceiling keeps a wedged agent from stalling the disconnect; the
+        // outcome is logged either way, and an agent that never drops the
+        // session loses it with the process anyway.
+        let end_session = async move {
+            if use_delete {
+                cx.send_request_to(Agent, DeleteSessionRequest::new(sid))
+                    .block_task()
+                    .await
+                    .map(|_| ())
+            } else {
+                cx.send_request_to(Agent, CloseSessionRequest::new(sid))
+                    .block_task()
+                    .await
+                    .map(|_| ())
+            }
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(2), end_session).await {
+            Ok(Ok(())) => {
+                tracing::info!("[ACP] {verb} for session {}, left by a disconnect, accepted", session.session_id().0)
+            }
+            Ok(Err(e)) => tracing::warn!(
+                "[ACP] {verb} for session {}, left by a disconnect, failed: {e}",
+                session.session_id().0
+            ),
+            Err(_) => tracing::warn!(
+                "[ACP] {verb} for session {} timed out; the process ends with the connection anyway",
+                session.session_id().0
+            ),
         }
     }
     Ok(None)
@@ -45081,12 +45169,14 @@ mod tests {
     /// One fork, the way `run_connection` drives it: `run_conversation_loop`
     /// on `parent` until the fork, then `handle_fork_or_exit` on to the
     /// session the agent forks to. The agent records every `session/close`,
-    /// and every `session/fork` and `session/resume` as it arrived.
+    /// every `session/delete`, and every `session/fork` and `session/resume`
+    /// as it arrived.
     struct ForkTransition {
         state: Arc<RwLock<SessionState>>,
         cmd_tx: mpsc::Sender<ConnectionCommand>,
         events: tokio::sync::broadcast::Receiver<Arc<crate::acp::types::EventEnvelope>>,
         closes: Arc<std::sync::Mutex<Vec<String>>>,
+        deletes: Arc<std::sync::Mutex<Vec<String>>>,
         close_seen: Arc<tokio::sync::Notify>,
         forks: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
         resumes: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
@@ -45108,6 +45198,7 @@ mod tests {
                 Vec::new(),
                 fork_id,
                 supports_close,
+                false,
                 answer,
             )
             .await
@@ -45120,10 +45211,12 @@ mod tests {
             mcp_servers: Vec<McpServer>,
             fork_id: &'static str,
             supports_close: bool,
+            supports_delete: bool,
             answer: CloseAnswer,
         ) -> Self {
             use agent_client_protocol::schema::v1::{
-                CloseSessionResponse, ForkSessionRequest, ForkSessionResponse, PromptResponse,
+                CloseSessionResponse, DeleteSessionResponse, ForkSessionRequest, ForkSessionResponse,
+                PromptResponse,
             };
 
             let forks = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -45131,11 +45224,14 @@ mod tests {
             let agent_forks = Arc::clone(&forks);
             let agent_resumes = Arc::clone(&resumes);
             let closes = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let deletes = Arc::new(std::sync::Mutex::new(Vec::new()));
             let close_seen = Arc::new(tokio::sync::Notify::new());
             let unanswered = Arc::new(std::sync::Mutex::new(Vec::new()));
             let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
             let agent_closes = Arc::clone(&closes);
+            let agent_deletes = Arc::clone(&deletes);
             let agent_close_seen = Arc::clone(&close_seen);
+            let agent_delete_seen = Arc::clone(&close_seen);
             let agent_unanswered = Arc::clone(&unanswered);
             let agent = tokio::spawn(async move {
                 let _ = Agent
@@ -45205,6 +45301,19 @@ mod tests {
                         on_receive_request!(),
                     )
                     .on_receive_request(
+                        async move |req: DeleteSessionRequest,
+                                    responder: Responder<DeleteSessionResponse>,
+                                    _cx: ConnectionTo<Client>| {
+                            agent_deletes
+                                .lock()
+                                .unwrap()
+                                .push(req.session_id.0.to_string());
+                            agent_delete_seen.notify_one();
+                            responder.respond(DeleteSessionResponse::new())
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
                         async |_req: PromptRequest,
                                responder: Responder<PromptResponse>,
                                _cx: ConnectionTo<Client>| {
@@ -45225,6 +45334,11 @@ mod tests {
                 "win".to_string(),
                 None,
             )));
+            // Stand in for the initialize-time write `run_connection` makes
+            // before starting the loop, so the disconnect arm sees the same
+            // capability the real connections do.
+            state.write().await.close_supported = supports_close;
+            state.write().await.delete_supported = supports_delete;
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
@@ -45292,6 +45406,7 @@ mod tests {
                 cmd_tx,
                 events,
                 closes,
+                deletes,
                 close_seen,
                 forks,
                 resumes,
@@ -45374,14 +45489,27 @@ mod tests {
             .expect("timed out waiting for a session/close");
         }
 
-        /// End the loop, then the agent; returns every session the agent was
-        /// asked to close while the connection lasted.
+        /// End the loop with a plain Disconnect, then the agent; returns every
+        /// session the agent was asked to close while the connection lasted.
         async fn shutdown(self) -> Vec<String> {
-            let _ = self.cmd_tx.send(ConnectionCommand::Disconnect).await;
+            self.end_with(ConnectionCommand::Disconnect).await.0
+        }
+
+        /// End the loop with a DeleteSession (the conversation is going away),
+        /// then the agent; returns the sessions the agent was asked to close
+        /// and to delete while the connection lasted.
+        async fn shutdown_delete(self) -> (Vec<String>, Vec<String>) {
+            self.end_with(ConnectionCommand::DeleteSession).await
+        }
+
+        async fn end_with(self, cmd: ConnectionCommand) -> (Vec<String>, Vec<String>) {
+            let _ = self.cmd_tx.send(cmd).await;
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.client).await;
             self.agent.abort();
-            let closes = self.closes.lock().unwrap().clone();
-            closes
+            (
+                self.closes.lock().unwrap().clone(),
+                self.deletes.lock().unwrap().clone(),
+            )
         }
     }
 
@@ -45391,8 +45519,9 @@ mod tests {
         (session.to_string(), "empty".to_string())
     }
 
-    /// The parent a fork leaves is closed on the agent — nothing else is: the
-    /// child the loop moves on to stays open and keeps working.
+    /// The parent a fork leaves is closed on the agent immediately; the child
+    /// the loop moves on to stays open and keeps working until the connection
+    /// ends, and the disconnect then closes it too.
     #[tokio::test]
     async fn a_fork_closes_the_session_it_leaves() {
         let mut fork = ForkTransition::start("child", true, CloseAnswer::Closed).await;
@@ -45407,7 +45536,10 @@ mod tests {
         )
         .await;
         assert_eq!(fork.prompt_to_end().await, answered("child"));
-        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
     }
 
     fn fork_test_servers() -> Vec<McpServer> {
@@ -45429,6 +45561,7 @@ mod tests {
             fork_test_servers(),
             "child",
             true,
+            false,
             CloseAnswer::Closed,
         )
         .await;
@@ -45449,7 +45582,11 @@ mod tests {
         assert_eq!(forks[0]["mcpServers"][0]["name"], "codeg-mcp");
         assert_eq!(forks[0]["_meta"], resumes[0]["_meta"]);
         assert_eq!(forks[0]["_meta"]["claudeCode"]["emitRawSDKMessages"], true);
-        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+        // The parent's close came from the fork; the child's from the disconnect.
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
     }
 
     /// A fork of the forked session runs on the loop `handle_fork_or_exit`
@@ -45461,6 +45598,7 @@ mod tests {
             fork_test_servers(),
             "child",
             true,
+            false,
             CloseAnswer::Closed,
         )
         .await;
@@ -45493,7 +45631,12 @@ mod tests {
         }
         assert_eq!(
             fork.shutdown().await,
-            vec!["parent".to_string(), "child".to_string()]
+            vec![
+                "parent".to_string(),
+                "child".to_string(),
+                // The loop's final session goes on the disconnect close too.
+                "child-2".to_string(),
+            ]
         );
     }
 
@@ -45506,6 +45649,7 @@ mod tests {
             fork_test_servers(),
             "child",
             true,
+            false,
             CloseAnswer::Closed,
         )
         .await;
@@ -45541,8 +45685,9 @@ mod tests {
         assert!(closed.is_empty(), "closed {closed:?}");
     }
 
-    /// A fork that answers with the parent's own id has not left it, so
-    /// nothing is closed — closing would close the session the loop goes on with.
+    /// A fork that answers with the parent's own id has not left it, so the
+    /// fork closes nothing — closing would close the session the loop goes on
+    /// with. The disconnect at the end still closes it, once.
     #[tokio::test]
     async fn a_fork_onto_the_same_session_closes_nothing() {
         let mut fork = ForkTransition::start("parent", true, CloseAnswer::Closed).await;
@@ -45551,19 +45696,22 @@ mod tests {
             ("parent".to_string(), "parent".to_string())
         );
         assert_eq!(fork.prompt_to_end().await, answered("parent"));
-        let closed = fork.shutdown().await;
-        assert!(closed.is_empty(), "closed {closed:?}");
+        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
     }
 
-    /// Nothing waits on the close: an agent that never answers it still runs
-    /// the child's first turn.
+    /// Nothing waits on the FORK's close: an agent that never answers it still
+    /// runs the child's first turn. The disconnect's own close is awaited but
+    /// time-bounded, so the same silence only delays teardown, never hangs it.
     #[tokio::test]
     async fn an_unanswered_close_does_not_hold_up_the_fork() {
         let mut fork = ForkTransition::start("child", true, CloseAnswer::Unanswered).await;
         fork.fork().await;
         fork.close_requested().await;
         assert_eq!(fork.prompt_to_end().await, answered("child"));
-        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
     }
 
     /// The close is best-effort: an agent refusing it leaves the connection,
@@ -45574,7 +45722,98 @@ mod tests {
         fork.fork().await;
         fork.close_requested().await;
         assert_eq!(fork.prompt_to_end().await, answered("child"));
+        assert_eq!(
+            fork.shutdown().await,
+            vec!["parent".to_string(), "child".to_string()]
+        );
+    }
+
+    /// An agent that advertises `session/close` is asked to close the live
+    /// session when the connection disconnects — the cleanup codeg used to
+    /// leave to the process exiting.
+    #[tokio::test]
+    async fn a_disconnect_closes_the_live_session_the_agent_advertises() {
+        let fork = ForkTransition::start("unused", true, CloseAnswer::Closed).await;
         assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+    }
+
+    /// The same disconnect sends no close to an agent that never advertised
+    /// the capability (the gate is the initialize answer, not the agent type).
+    #[tokio::test]
+    async fn a_disconnect_sends_no_close_the_agent_did_not_advertise() {
+        let fork = ForkTransition::start("unused", false, CloseAnswer::Closed).await;
+        let closed = fork.shutdown().await;
+        assert!(closed.is_empty(), "closed {closed:?}");
+    }
+
+    /// A delete-disconnect (the conversation is being deleted in codeg) drops
+    /// the live session with `session/delete` on an agent advertising
+    /// `session_capabilities.delete` — the close would only release it, and a
+    /// persistent adapter would keep it resumable forever.
+    #[tokio::test]
+    async fn a_delete_disconnect_drops_the_session_the_agent_advertises() {
+        let fork =
+            ForkTransition::start_with(AgentType::Codex, Vec::new(), "unused", true, true, CloseAnswer::Closed)
+                .await;
+        let (closed, deleted) = fork.shutdown_delete().await;
+        assert!(closed.is_empty(), "closed {closed:?}");
+        assert_eq!(deleted, vec!["parent".to_string()]);
+    }
+
+    /// Without `delete` the delete-disconnect falls back to the plain
+    /// disconnect's `session/close` — capability-driven release, never a
+    /// request the agent didn't advertise.
+    #[tokio::test]
+    async fn a_delete_disconnect_falls_back_to_close_without_delete() {
+        let fork = ForkTransition::start_with(
+            AgentType::Codex,
+            Vec::new(),
+            "unused",
+            true,
+            false,
+            CloseAnswer::Closed,
+        )
+        .await;
+        let (closed, deleted) = fork.shutdown_delete().await;
+        assert_eq!(closed, vec!["parent".to_string()]);
+        assert!(deleted.is_empty(), "deleted {deleted:?}");
+    }
+
+    /// An agent advertising neither gets neither request: the process ends
+    /// with the transport, and its session dies with it.
+    #[tokio::test]
+    async fn a_delete_disconnect_sends_nothing_the_agent_advertised_neither() {
+        let fork = ForkTransition::start_with(
+            AgentType::Codex,
+            Vec::new(),
+            "unused",
+            false,
+            false,
+            CloseAnswer::Closed,
+        )
+        .await;
+        let (closed, deleted) = fork.shutdown_delete().await;
+        assert!(closed.is_empty(), "closed {closed:?}");
+        assert!(deleted.is_empty(), "deleted {deleted:?}");
+    }
+
+    /// A plain disconnect NEVER deletes, even on an agent that advertises
+    /// `delete`: the conversation may reopen the session, so releasing it with
+    /// the close (when advertised) is all the disconnect does.
+    #[tokio::test]
+    async fn a_plain_disconnect_never_deletes_the_session() {
+        let fork = ForkTransition::start_with(
+            AgentType::Codex,
+            Vec::new(),
+            "unused",
+            true,
+            true,
+            CloseAnswer::Closed,
+        )
+        .await;
+        let (closed, deleted) = fork.end_with(ConnectionCommand::Disconnect).await;
+        assert_eq!(closed, vec!["parent".to_string()]);
+        assert!(deleted.is_empty(), "deleted {deleted:?}");
     }
 
     #[test]

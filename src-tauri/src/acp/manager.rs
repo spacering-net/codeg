@@ -2667,6 +2667,37 @@ impl ConnectionManager {
     }
 
     pub async fn disconnect(&self, conn_id: &str) -> Result<(), AcpError> {
+        self.disconnect_with(conn_id, ConnectionCommand::Disconnect)
+            .await
+    }
+
+    /// End the live connection for `conversation_id` AND, when its agent
+    /// advertises `session_capabilities.delete`, drop the session there with
+    /// `session/delete` — called when the conversation is deleted in codeg, so
+    /// a persistent adapter does not keep a session codeg will never reopen.
+    /// Agents without `delete` get the plain disconnect's `session/close`
+    /// (when advertised). No-op when no connection is bound to the
+    /// conversation: an offline deletion needs nothing unpinned from the agent.
+    pub async fn delete_session_for_conversation(&self, conversation_id: i32) {
+        let Some(conn_id) = self.find_connection_by_conversation_id(conversation_id).await else {
+            return;
+        };
+        // A vanished entry between the lookup and the teardown is a benign
+        // race (someone else disconnected first) — the deletion itself is the
+        // DB transaction this runs beside.
+        let _ = self
+            .disconnect_with(&conn_id, ConnectionCommand::DeleteSession)
+            .await;
+    }
+
+    /// [`Self::disconnect`], with the command handed to the connection loop in
+    /// place of `Disconnect` — the loop's teardown request depends on which one
+    /// arrives (see `run_conversation_loop`).
+    async fn disconnect_with(
+        &self,
+        conn_id: &str,
+        cmd: ConnectionCommand,
+    ) -> Result<(), AcpError> {
         let removed = {
             // The map lock is held ACROSS the handoff into `draining`, and
             // readers take it in the same order, so an observer can never see
@@ -2684,7 +2715,7 @@ impl ConnectionManager {
             // `cmd_tx`, and a full channel would hold the send below until it
             // did. Cancelled, it stops and drops the receiver instead.
             conn.handshake.cancel();
-            let _ = conn.cmd_tx.send(ConnectionCommand::Disconnect).await;
+            let _ = conn.cmd_tx.send(cmd).await;
             Ok(())
         } else {
             Err(AcpError::ConnectionNotFound(conn_id.into()))

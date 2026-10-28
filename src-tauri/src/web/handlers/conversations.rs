@@ -426,6 +426,7 @@ pub async fn delete_conversation(
     conv_commands::delete_conversation_with_cleanup_core(
         &state.emitter,
         &state.db.conn,
+        &state.connection_manager,
         params.conversation_id,
     )
     .await?;

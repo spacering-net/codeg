@@ -474,6 +474,22 @@ pub struct SessionState {
     pub pi_enabled_model_patterns: Option<Vec<String>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
+    /// The agent's `session_capabilities.close` as read at initialize: whether
+    /// a session on this connection can be released on the agent with
+    /// `session/close`. Drives the disconnect close in
+    /// `run_conversation_loop`; the fork-leave close uses the same signal,
+    /// threaded to `handle_fork_or_exit` as a parameter.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub close_supported: bool,
+    /// The agent's `session_capabilities.delete` as read at initialize: whether
+    /// a session on this connection can be dropped on the agent with
+    /// `session/delete`. Drives the delete-on-disconnect path in
+    /// `run_conversation_loop` (a `DeleteSession` command), which prefers
+    /// `session/delete` over the plain disconnect's `session/close`.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub delete_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub usage: Option<UsageInfo>,
     /// The follow-up prompt the agent last predicted (`AcpEvent::PromptSuggestion`),
@@ -908,6 +924,8 @@ impl SessionState {
             pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,
+            close_supported: false,
+            delete_supported: false,
             available_commands: Vec::new(),
             usage: None,
             prompt_suggestion: None,
