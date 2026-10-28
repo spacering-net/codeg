@@ -87,6 +87,10 @@ export interface UseConnectionLifecycleReturn {
   handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
+  handleRequestPlanChanges: (
+    requestId: string,
+    feedback: string
+  ) => Promise<void>
 }
 
 /**
@@ -153,6 +157,7 @@ export function useConnectionLifecycle({
     setConfigOption: connSetConfigOption,
     cancel: connCancel,
     respondPermission: connRespondPermission,
+    requestPlanChanges: connRequestPlanChanges,
     modes,
     configOptions,
     hasCachedSelectors,
@@ -563,6 +568,16 @@ export function useConnectionLifecycle({
     [connRespondPermission, contextKey, touchActivity]
   )
 
+  const handleRequestPlanChanges = useCallback(
+    (requestId: string, feedback: string) => {
+      touchActivity(contextKey)
+      // The dialog awaits this so a rejection can keep the draft. Do not
+      // swallow it the way a one-shot permission click is swallowed.
+      return connRequestPlanChanges(requestId, feedback)
+    },
+    [connRequestPlanChanges, contextKey, touchActivity]
+  )
+
   return {
     conn,
     modeLoading,
@@ -574,5 +589,6 @@ export function useConnectionLifecycle({
     handleSetConfigOption,
     handleCancel,
     handleRespondPermission,
+    handleRequestPlanChanges,
   }
 }

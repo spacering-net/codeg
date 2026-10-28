@@ -12073,6 +12073,19 @@ pub async fn acp_stop_async_task(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_request_plan_changes(
+    connection_id: String,
+    request_id: String,
+    feedback: String,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::acp::types::PlanRevisionReceipt, crate::app_error::AppCommandError> {
+    manager
+        .request_plan_changes(&connection_id, &request_id, &feedback)
+        .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_respond_permission(
     connection_id: String,
     request_id: String,

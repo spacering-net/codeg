@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  isCodexPlanReviewRequest,
   parsePermissionOptionChanges,
   parsePermissionToolCall,
 } from "./permission-request"
@@ -8,6 +9,33 @@ import {
 function metaWith(changes: unknown[]): Record<string, unknown> {
   return { permission: { version: 1, changes } }
 }
+
+describe("isCodexPlanReviewRequest", () => {
+  it("reuses the normalized Codex markers and ignores the title", () => {
+    const marked = {
+      title: "Need extra access",
+      kind: "other",
+      toolCallId: "cmd-1",
+      _meta: { codex: { kind: "plan_review", planItemId: "item-7" } },
+    }
+    expect(isCodexPlanReviewRequest("codex", marked)).toBe(true)
+    expect(isCodexPlanReviewRequest("grok", marked)).toBe(false)
+    expect(
+      isCodexPlanReviewRequest("codex", {
+        title: "Implement this plan?",
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+      })
+    ).toBe(true)
+    expect(
+      isCodexPlanReviewRequest("cursor", {
+        title: "Implement this plan?",
+        kind: "switch_mode",
+      })
+    ).toBe(false)
+    expect(parsePermissionToolCall(marked).toolCallId).toBe("cmd-1")
+  })
+})
 
 describe("parsePermissionOptionChanges", () => {
   it("keeps the agent's description and normalizes every lifetime shape", () => {

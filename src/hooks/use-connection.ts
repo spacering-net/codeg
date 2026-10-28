@@ -154,6 +154,7 @@ export interface UseConnectionReturn {
   setConfigOption: (configId: string, valueId: string) => Promise<void>
   cancel: () => Promise<void>
   respondPermission: (requestId: string, optionId: string) => Promise<void>
+  requestPlanChanges: (requestId: string, feedback: string) => Promise<void>
   answerQuestion: (questionId: string, answer: QuestionAnswer) => Promise<void>
 }
 
@@ -372,6 +373,12 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     [actions, contextKey]
   )
 
+  const requestPlanChanges = useCallback(
+    (requestId: string, feedback: string) =>
+      actions.requestPlanChanges(contextKey, requestId, feedback),
+    [actions, contextKey]
+  )
+
   const answerQuestion = useCallback(
     (questionId: string, answer: QuestionAnswer) =>
       actions.answerQuestion(contextKey, questionId, answer),
@@ -433,6 +440,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       setConfigOption,
       cancel,
       respondPermission,
+      requestPlanChanges,
       answerQuestion,
     }),
     [
@@ -479,6 +487,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       setConfigOption,
       cancel,
       respondPermission,
+      requestPlanChanges,
       answerQuestion,
     ]
   )

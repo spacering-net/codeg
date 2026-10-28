@@ -312,6 +312,9 @@ pub struct SessionState {
     /// `exit_plan_mode` tool call); the connection parks the ext responder keyed
     /// by `approval_id`.
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
+    /// Accepted Codex feedback and immutable physical boundary identities.
+    /// Connection-scoped, not cleared by TurnComplete or UserMessage.
+    pub plan_revisions: crate::acp::plan_revision::PlanRevisions,
 
     /// In-flight (running) sub-agent delegations keyed by `parent_tool_use_id`.
     /// `DelegationStarted` inserts; `DelegationCompleted` removes. UNLIKE
@@ -889,6 +892,7 @@ impl SessionState {
             pending_permission: None,
             pending_question: None,
             pending_plan_approval: None,
+            plan_revisions: Default::default(),
             active_delegations: BTreeMap::new(),
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
@@ -1423,7 +1427,9 @@ impl SessionState {
                 // A turn the agent started itself never held the gate; a set
                 // flag then belongs to a prompt admitted while it ran.
                 if !self.agent_initiated_turn {
-                    self.turn_in_flight = false;
+                    // A claimed revision owns the next serial prompt too. Do
+                    // not admit an unrelated prompt in the physical turn gap.
+                    self.turn_in_flight = self.plan_revisions.is_boundary(self.event_seq + 1);
                 }
                 self.agent_initiated_turn = false;
                 // Same edge, the identity half: anyone holding "the turn I was
@@ -2423,6 +2429,7 @@ impl SessionState {
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
             pending_plan_approval: self.pending_plan_approval.clone(),
+            plan_revisions: self.plan_revisions.snapshot(),
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
             feedback: self.feedback.clone(),
@@ -2502,6 +2509,8 @@ pub(crate) fn background_keepalive_max_age() -> chrono::Duration {
 /// `to_snapshot()` 的输出——前端可消费的 wire shape。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveSessionSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_revisions: Vec<crate::acp::plan_revision::PlanRevision>,
     pub connection_id: String,
     pub conversation_id: Option<i32>,
     pub folder_id: Option<i32>,

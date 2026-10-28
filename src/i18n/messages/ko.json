@@ -3676,7 +3676,20 @@
         "changeScopeUser": "사용자 설정에 저장",
         "changeScopeProject": "프로젝트 설정에 저장",
         "changeScopeProjectLocal": "로컬 프로젝트 설정에 저장",
-        "changeScopePersistent": "영구 저장"
+        "changeScopePersistent": "영구 저장",
+        "planFeedbackLabel": "계획에 대한 수정 의견",
+        "planFeedbackPlaceholder": "Codex가 이 계획에서 무엇을 바꿔야 하나요?",
+        "planFeedbackHint": "Codex는 이 세션을 유지한 채 이 의견으로 계획을 수정합니다. 이번 위임은 끝나지 않습니다.",
+        "planFeedbackSubmit": "계획 수정 요청",
+        "planFeedbackCancel": "편집 취소",
+        "planRejectOnly": "거절만 하고 계속하지 않음",
+        "planFeedbackEmpty": "보내기 전에 바꿔야 할 내용을 입력하세요.",
+        "planFeedbackTooLong": "의견이 너무 깁니다. 16,384자 이내로 줄이세요.",
+        "planFeedbackNotReview": "이 요청은 Codex plan 검토가 아닙니다.",
+        "planFeedbackConnectionMissing": "Codex 세션이 더 이상 연결되어 있지 않습니다.",
+        "planFeedbackNotPending": "이 plan 검토는 더 이상 대기 중이 아닙니다.",
+        "planFeedbackAlreadyDecided": "이 plan 검토는 이미 응답되었습니다.",
+        "planFeedbackSendFailed": "수정 의견을 보내지 못했습니다. 초안은 그대로 남아 있습니다."
       },
       "questionDialog": {
         "title": "에이전트가 질문하고 있습니다",

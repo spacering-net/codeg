@@ -514,6 +514,25 @@ pub struct AcpRespondPermissionParams {
     pub option_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpRequestPlanChangesParams {
+    pub connection_id: String,
+    pub request_id: String,
+    pub feedback: String,
+}
+
+pub async fn acp_request_plan_changes(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpRequestPlanChangesParams>,
+) -> Result<Json<crate::acp::types::PlanRevisionReceipt>, AppCommandError> {
+    state
+        .connection_manager
+        .request_plan_changes(&params.connection_id, &params.request_id, &params.feedback)
+        .await
+        .map(Json)
+}
+
 pub async fn acp_respond_permission(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpRespondPermissionParams>,

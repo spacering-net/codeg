@@ -33,6 +33,7 @@ import {
   acpGoalControl,
   acpCancel,
   acpRespondPermission,
+  acpRequestPlanChanges,
   acpAnswerQuestion,
   acpAnswerPlanApproval,
   acpDisconnect,
@@ -3485,6 +3486,16 @@ export interface AcpActionsValue {
     contextKey: string,
     requestId: string,
     optionId: string
+  ): Promise<void>
+  /**
+   * Deliver non-empty feedback as the next user message of the same Codex
+   * session. Does not answer the permission itself — the backend owns that
+   * once it accepts. A missing connection rejects; it is not a success.
+   */
+  requestPlanChanges(
+    contextKey: string,
+    requestId: string,
+    feedback: string
   ): Promise<void>
   answerQuestion(
     contextKey: string,
@@ -8133,6 +8144,43 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [dispatch]
   )
 
+  const requestPlanChanges = useCallback(
+    async (contextKey: string, requestId: string, feedback: string) => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) {
+        // The card awaits this and keeps the draft. Resolving here would look
+        // like the revision was claimed when nothing was sent.
+        throw new Error(
+          `[AcpConnections] requestPlanChanges: no connection for ${contextKey}`
+        )
+      }
+      try {
+        lastActivityRef.current.set(contextKey, Date.now())
+        const receipt = await acpRequestPlanChanges(
+          conn.connectionId,
+          requestId,
+          feedback
+        )
+        if (receipt?.status !== "accepted" || !receipt.requestId) {
+          throw new Error(
+            "[AcpConnections] requestPlanChanges: backend did not accept"
+          )
+        }
+        // Claimed, not rewritten. Drop only this request's card; the next
+        // plan arrives as its own permission_request.
+        dispatch({
+          type: "PERMISSION_CLEARED",
+          contextKey,
+          requestId: receipt.requestId,
+        })
+      } catch (e) {
+        console.error("[AcpConnections] requestPlanChanges failed:", e)
+        throw e
+      }
+    },
+    [dispatch]
+  )
+
   const answerQuestion = useCallback(
     async (contextKey: string, questionId: string, answer: QuestionAnswer) => {
       const conn = storeRef.current.connections.get(contextKey)
@@ -8341,6 +8389,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       cancel,
       goalControl,
       respondPermission,
+      requestPlanChanges,
       answerQuestion,
       answerPlanApproval,
       setActiveKey,
@@ -8369,6 +8418,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       cancel,
       goalControl,
       respondPermission,
+      requestPlanChanges,
       answerQuestion,
       answerPlanApproval,
       setActiveKey,

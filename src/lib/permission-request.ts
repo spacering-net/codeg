@@ -1,4 +1,7 @@
-import { normalizeToolName } from "@/lib/tool-call-normalization"
+import {
+  isCodexPlanReviewPermission,
+  normalizeToolName,
+} from "@/lib/tool-call-normalization"
 import {
   countUnifiedDiffLineChanges,
   estimateChangedLineStats,
@@ -27,6 +30,8 @@ export interface PermissionAllowedPrompt {
 
 export interface ParsedPermissionToolCall {
   title: string
+  /** ACP tool-call id, when the request named one. */
+  toolCallId: string | null
   /**
    * Human-readable description from `_meta.claudeCode.title`
    * (claude-agent-acp ≥0.63; for Bash it is the model-authored `description`
@@ -748,6 +753,16 @@ function shellCommandLabel(
   return label.slice(0, MAX_HEADING_CHARS)
 }
 
+function permissionToolCallId(record: ObjectLike | null): string | null {
+  for (const key of ["toolCallId", "tool_call_id", "id"]) {
+    const value = record?.[key]
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
 function formatFallbackTitle(kind: string): string {
   const normalized = kind.replace(/_/g, " ").trim()
   if (!normalized) return "Permission Request"
@@ -941,6 +956,7 @@ export function parsePermissionToolCall(
 
   return {
     title,
+    toolCallId: permissionToolCallId(toolCallObj),
     description,
     reason,
     defaultToNo,
@@ -1092,6 +1108,17 @@ function parsePermissionMetaFlag(permission: unknown, key: string): boolean {
  * `ruleBehavior`) stay ignored: those `description` really does summarize.
  * codex's flat form carries no lifetime at all, hence `scope: null`.
  */
+/**
+ * Codex plan review, as the backend normalises it. The dialog uses this — not
+ * the English title — to decide whether "No" opens a feedback editor.
+ */
+export function isCodexPlanReviewRequest(
+  agentType: string | null | undefined,
+  toolCall: unknown
+): boolean {
+  return isCodexPlanReviewPermission(agentType, toolCall)
+}
+
 export function parsePermissionOptionChanges(
   meta: Record<string, unknown> | null | undefined
 ): PermissionOptionChange[] {

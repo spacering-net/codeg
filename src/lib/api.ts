@@ -79,6 +79,7 @@ import type {
   FeedbackItem,
   QuestionAnswer,
   PlanApprovalAnswer,
+  PlanChangesReceipt,
   AcpAgentInfo,
   AcpAgentStatus,
   AgentLatestRelease,
@@ -436,6 +437,26 @@ export async function acpRespondPermission(
     connectionId,
     requestId,
     optionId,
+  })
+}
+
+/**
+ * Ask Codex to revise the pending plan, delivering `feedback` as the next
+ * user message on the same session.
+ *
+ * `accepted` only means the backend claimed the request. It does not mean the
+ * plan has been rewritten, and this call must not be paired with a separate
+ * `revise_plan` permission response — that race settles the delegation.
+ */
+export async function acpRequestPlanChanges(
+  connectionId: string,
+  requestId: string,
+  feedback: string
+): Promise<PlanChangesReceipt> {
+  return getTransport().call("acp_request_plan_changes", {
+    connectionId,
+    requestId,
+    feedback,
   })
 }
 

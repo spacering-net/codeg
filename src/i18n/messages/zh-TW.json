@@ -3676,7 +3676,20 @@
         "changeScopeUser": "儲存至使用者設定",
         "changeScopeProject": "儲存至專案設定",
         "changeScopeProjectLocal": "儲存至本機專案設定",
-        "changeScopePersistent": "永久儲存"
+        "changeScopePersistent": "永久儲存",
+        "planFeedbackLabel": "對計畫的修改意見",
+        "planFeedbackPlaceholder": "希望 Codex 如何修改這份計畫？",
+        "planFeedbackHint": "Codex 會留在這次工作階段，依這則意見修訂計畫。這不會結束這次委派。",
+        "planFeedbackSubmit": "請求修改計畫",
+        "planFeedbackCancel": "取消編輯",
+        "planRejectOnly": "僅拒絕，不繼續",
+        "planFeedbackEmpty": "傳送前請寫下需要修改的內容。",
+        "planFeedbackTooLong": "意見過長，請控制在 16,384 個字元以內。",
+        "planFeedbackNotReview": "這個請求不是 Codex 的 plan 審查。",
+        "planFeedbackConnectionMissing": "Codex 工作階段已中斷連線。",
+        "planFeedbackNotPending": "這次 plan 審查已不再等待。",
+        "planFeedbackAlreadyDecided": "這次 plan 審查已經作答。",
+        "planFeedbackSendFailed": "修改意見沒有傳送成功，草稿仍保留在這裡。"
       },
       "questionDialog": {
         "title": "代理正在提問",

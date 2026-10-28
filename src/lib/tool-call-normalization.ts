@@ -1035,6 +1035,54 @@ export function codexMarksPlanReview(
   return (codex as Record<string, unknown>).kind === "plan_review"
 }
 
+/** Id prefix every codex-acp plan-review gate shares (`PlanReviewReporter`). */
+export const CODEX_PLAN_REVIEW_ID_PREFIX = "plan-review:"
+
+/**
+ * A Codex plan-review permission, recognised the way the backend seeds the
+ * card — never by the English question in `title`.
+ *
+ * Either marker is enough, and both are Codex-only:
+ * - `_meta.codex.kind === "plan_review"` (codex-acp 1.1.8–1.13.x, and the
+ *   marker the backend writes back onto a 2.0.0 card).
+ * - `kind === "switch_mode"` with a non-empty `plan-review:<itemId>` tool
+ *   call id (the shape 2.0.0 still sends when the marker is absent).
+ *
+ * A Grok/Cursor plan approval, another agent's `switch_mode`, or a plain tool
+ * permission is not this gate.
+ */
+export function isCodexPlanReviewPermission(
+  agentType: string | null | undefined,
+  toolCall: unknown
+): boolean {
+  if (agentType !== "codex") return false
+  if (!toolCall || typeof toolCall !== "object") return false
+  const record = toolCall as Record<string, unknown>
+  const meta = record._meta ?? record.meta
+  if (codexMarksPlanReview(asMetaRecord(meta))) return true
+
+  const kind = typeof record.kind === "string" ? record.kind : ""
+  if (kind !== "switch_mode") return false
+  const toolCallId = permissionToolCallId(record)
+  if (!toolCallId?.startsWith(CODEX_PLAN_REVIEW_ID_PREFIX)) return false
+  return toolCallId.length > CODEX_PLAN_REVIEW_ID_PREFIX.length
+}
+
+function asMetaRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function permissionToolCallId(record: Record<string, unknown>): string | null {
+  for (const key of ["toolCallId", "tool_call_id", "id"]) {
+    const value = record[key]
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
 /**
  * claude-agent-acp ≥0.63 exposes the tool's human-readable description as
  * `_meta.claudeCode.title` (for Bash: the model-authored `description` input;

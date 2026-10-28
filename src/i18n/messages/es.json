@@ -3676,7 +3676,20 @@
         "changeScopeUser": "Guardado en la configuración del usuario",
         "changeScopeProject": "Guardado en la configuración del proyecto",
         "changeScopeProjectLocal": "Guardado en la configuración local del proyecto",
-        "changeScopePersistent": "Guardado permanentemente"
+        "changeScopePersistent": "Guardado permanentemente",
+        "planFeedbackLabel": "Cambios al plan",
+        "planFeedbackPlaceholder": "¿Qué debe cambiar Codex en este plan?",
+        "planFeedbackHint": "Codex mantiene esta sesión y revisa el plan con tu nota. Esto no termina la delegación.",
+        "planFeedbackSubmit": "Pedir cambios del plan",
+        "planFeedbackCancel": "Cancelar edición",
+        "planRejectOnly": "Solo rechazar, no continuar",
+        "planFeedbackEmpty": "Escribe qué debe cambiar antes de enviar.",
+        "planFeedbackTooLong": "La nota es demasiado larga. Máximo 16.384 caracteres.",
+        "planFeedbackNotReview": "Esta solicitud no es una revisión de plan de Codex.",
+        "planFeedbackConnectionMissing": "La sesión de Codex ya no está conectada.",
+        "planFeedbackNotPending": "Esta revisión de plan ya no está pendiente.",
+        "planFeedbackAlreadyDecided": "Esta revisión de plan ya fue respondida.",
+        "planFeedbackSendFailed": "No se pudieron enviar los cambios. Tu nota sigue aquí."
       },
       "questionDialog": {
         "title": "El agente está haciendo una pregunta",

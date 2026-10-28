@@ -67,6 +67,7 @@ const h = vi.hoisted(() => {
     acpGetSessionSnapshot: vi.fn(),
     acpTouchConnection: vi.fn(),
     acpCancel: vi.fn(),
+    acpRequestPlanChanges: vi.fn(),
     buildDelegationSeedEnvelopes: vi.fn(() => []),
     denormalizeSnapshot: vi.fn(),
     // Stable across renders so tests can assert on what the error handler
@@ -160,6 +161,7 @@ vi.mock("@/lib/api", () => ({
   acpSetConfigOption: vi.fn(),
   acpCancel: h.acpCancel,
   acpRespondPermission: vi.fn(),
+  acpRequestPlanChanges: h.acpRequestPlanChanges,
   acpTouchConnection: h.acpTouchConnection,
   openSettingsWindow: h.openSettingsWindow,
   // Imported by the conversation runtime store (a real dependency of the
@@ -251,6 +253,7 @@ beforeEach(() => {
   h.acpTouchConnection.mockResolvedValue(true)
   h.acpCancel.mockReset()
   h.acpCancel.mockResolvedValue(undefined)
+  h.acpRequestPlanChanges.mockReset()
   h.tCalls.length = 0
   h.toastWarning.mockClear()
   h.toastError.mockClear()
@@ -1871,6 +1874,128 @@ describe("AcpConnectionsProvider abandoned connect tears down only what it creat
     })
 
     expect(h.acpDisconnect).toHaveBeenCalledWith("fresh-conn")
+  })
+})
+
+describe("AcpConnectionsProvider Codex plan changes", () => {
+  it("claims the pending review only after the backend accepts", async () => {
+    h.acpRequestPlanChanges.mockReset()
+    let resolveClaim: (value: {
+      requestId: string
+      status: "accepted"
+    }) => void = () => {}
+    h.acpRequestPlanChanges.mockReturnValue(
+      new Promise((resolve) => {
+        resolveClaim = resolve
+      })
+    )
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "codex", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-plan",
+      tool_call: {
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+        _meta: { codex: { kind: "plan_review", planItemId: "item-7" } },
+      },
+      options: [
+        { option_id: "implement_plan", name: "Yes", kind: "allow_once" },
+        { option_id: "revise_plan", name: "No", kind: "reject_once" },
+      ],
+    })
+    expect(h.store!.getConnection(TAB)!.pendingPermission?.request_id).toBe(
+      "req-plan"
+    )
+
+    let pending: Promise<void> | undefined
+    act(() => {
+      pending = h.actions!.requestPlanChanges(
+        TAB,
+        "req-plan",
+        "Split the migration."
+      )
+    })
+    expect(h.acpRequestPlanChanges).toHaveBeenCalledWith(
+      "spawned-conn",
+      "req-plan",
+      "Split the migration."
+    )
+    // Accepted is a claim, not a finished rewrite. Until it lands the card
+    // stays, so another view still answers the same request.
+    expect(h.store!.getConnection(TAB)!.pendingPermission?.request_id).toBe(
+      "req-plan"
+    )
+
+    await act(async () => {
+      resolveClaim({ requestId: "req-plan", status: "accepted" })
+      await pending
+    })
+    expect(h.store!.getConnection(TAB)!.pendingPermission).toBeNull()
+  })
+
+  it("keeps the card when the claim fails and rejects a missing connection", async () => {
+    h.acpRequestPlanChanges.mockRejectedValue({
+      code: "not_found",
+      message: "plan_review_not_pending",
+      detail: "plan_review_not_pending",
+    })
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "codex", "/tmp/x", "sess-1")
+    })
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-plan",
+      tool_call: { kind: "switch_mode", toolCallId: "plan-review:item-7" },
+      options: [],
+    })
+
+    await expect(
+      h.actions!.requestPlanChanges(TAB, "req-plan", "Split it")
+    ).rejects.toMatchObject({ detail: "plan_review_not_pending" })
+    expect(h.store!.getConnection(TAB)!.pendingPermission?.request_id).toBe(
+      "req-plan"
+    )
+    expect(h.acpRequestPlanChanges).toHaveBeenCalledTimes(1)
+
+    // A missing connection is not a successful claim, and nothing is sent.
+    await expect(
+      h.actions!.requestPlanChanges("missing-tab", "req-plan", "Split it")
+    ).rejects.toThrow(/no connection/)
+    expect(h.acpRequestPlanChanges).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not clear the next plan when an older resolution arrives", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "codex", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-next",
+      tool_call: { kind: "switch_mode", toolCallId: "plan-review:item-8" },
+      options: [],
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "permission_resolved",
+      request_id: "req-plan",
+    })
+    expect(h.store!.getConnection(TAB)!.pendingPermission?.request_id).toBe(
+      "req-next"
+    )
   })
 })
 

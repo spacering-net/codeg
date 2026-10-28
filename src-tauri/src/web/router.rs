@@ -1038,6 +1038,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::acp::acp_stop_async_task),
         )
         .route(
+            "/acp_request_plan_changes",
+            post(handlers::acp::acp_request_plan_changes),
+        )
+        .route(
             "/acp_respond_permission",
             post(handlers::acp::acp_respond_permission),
         )

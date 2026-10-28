@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ShieldAlert,
@@ -12,30 +12,59 @@ import {
   GlobeLock,
   Search,
   KeyRound,
+  Loader2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
 import { CodeBlock } from "@/components/ai-elements/code-block"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
 import { MessageResponse } from "@/components/ai-elements/message"
 import type { PendingPermission } from "@/contexts/acp-connections-context"
 import {
+  isCodexPlanReviewRequest,
   parsePermissionOptionChanges,
   parsePermissionToolCall,
   type PermissionChangeScope,
   type PermissionOptionChange,
 } from "@/lib/permission-request"
+import { extractAppCommandError } from "@/lib/app-error"
 import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import type { AgentType } from "@/lib/types"
+
+/** Codex plan feedback, after trim. Mirrors the backend's accept window. */
+const PLAN_FEEDBACK_MIN = 1
+const PLAN_FEEDBACK_MAX = 16384
+
+const PLAN_FEEDBACK_ERROR_KEYS = {
+  plan_feedback_empty: "planFeedbackEmpty",
+  plan_feedback_too_long: "planFeedbackTooLong",
+  not_codex_plan_review: "planFeedbackNotReview",
+  connection_not_found: "planFeedbackConnectionMissing",
+  plan_review_not_pending: "planFeedbackNotPending",
+  plan_review_already_decided: "planFeedbackAlreadyDecided",
+  plan_revision_send_failed: "planFeedbackSendFailed",
+} as const
+
+type PlanFeedbackErrorKey =
+  (typeof PLAN_FEEDBACK_ERROR_KEYS)[keyof typeof PLAN_FEEDBACK_ERROR_KEYS]
 
 interface PermissionDialogProps {
   permission: PendingPermission | null
   onRespond: (requestId: string, optionId: string) => void
   /**
+   * Codex plan revision. Required wherever a Codex plan review can appear;
+   * a missing handler leaves that "No" on the plain reject path.
+   */
+  onRequestPlanChanges?: (
+    requestId: string,
+    feedback: string
+  ) => void | Promise<void>
+  /**
    * Which agent asked. Only used to localise option labels an agent hardcodes
    * in one language (`deepseek-acp` ships Simplified Chinese with no locale
    * switch); optional so a caller with no agent in scope keeps today's verbatim
-   * rendering.
+   * rendering. Also required to recognise a Codex plan review.
    */
   agentType?: AgentType | null
 }
@@ -62,6 +91,7 @@ const CHANGE_SCOPE_LABEL_KEYS = {
 export function PermissionDialog({
   permission,
   onRespond,
+  onRequestPlanChanges,
   agentType,
 }: PermissionDialogProps) {
   const t = useTranslations("Folder.chat.permissionDialog")
@@ -70,6 +100,19 @@ export function PermissionDialog({
     () => parsePermissionToolCall(permission?.tool_call),
     [permission?.tool_call]
   )
+  const planReview =
+    onRequestPlanChanges != null &&
+    isCodexPlanReviewRequest(agentType, permission?.tool_call)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedback, setFeedback] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  const [feedbackError, setFeedbackError] =
+    useState<PlanFeedbackErrorKey | null>(null)
+  const inFlight = useRef(false)
+  const trimmedFeedback = feedback.trim()
+  const feedbackReady =
+    trimmedFeedback.length >= PLAN_FEEDBACK_MIN &&
+    trimmedFeedback.length <= PLAN_FEEDBACK_MAX
   // Both the grant list and the buttons below read this, so the two never
   // disagree about what an option is called.
   const options = useMemo(
@@ -92,6 +135,30 @@ export function PermissionDialog({
     return out
   }, [permission?.options])
   if (!permission) return null
+
+  const requestId = permission.request_id
+  const rejectOption = options.find((opt) => opt.kind.startsWith("reject"))
+  const showPlanFeedback = planReview && feedbackOpen
+
+  const submitPlanFeedback = () => {
+    if (!onRequestPlanChanges || !feedbackReady || inFlight.current) return
+    inFlight.current = true
+    setSubmitting(true)
+    setFeedbackError(null)
+    void Promise.resolve(onRequestPlanChanges(requestId, trimmedFeedback))
+      .then(() => {
+        // Accepted only claims the request. The card stays until this
+        // request id is cleared, so release the lock; a retry of the same
+        // note is safe because the backend will not deliver it twice.
+        inFlight.current = false
+        setSubmitting(false)
+      })
+      .catch((error: unknown) => {
+        inFlight.current = false
+        setSubmitting(false)
+        setFeedbackError(planFeedbackErrorKey(error))
+      })
+  }
 
   // Approvals are surfaced one at a time (backend FIFO), so the count of the
   // ones still behind this card has to be visible or they read as a hang.
@@ -370,22 +437,111 @@ export function PermissionDialog({
           options first — so all that is left is the emphasis, which today puts
           the single filled button on "Allow". Inverting it keeps every option
           one click away while making the decline the one the eye lands on. */}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {options.map((opt) => {
-          const isReject = opt.kind.startsWith("reject")
-          const emphasized = parsed.defaultToNo ? isReject : !isReject
-          return (
+      {showPlanFeedback ? (
+        <div className="mt-3 space-y-2">
+          <Textarea
+            value={feedback}
+            onChange={(event) => {
+              setFeedback(event.target.value)
+              if (feedbackError) setFeedbackError(null)
+            }}
+            placeholder={t("planFeedbackPlaceholder")}
+            aria-label={t("planFeedbackLabel")}
+            disabled={submitting}
+            rows={4}
+            maxLength={PLAN_FEEDBACK_MAX}
+            autoFocus
+          />
+          <p className="text-xs text-muted-foreground">
+            {t("planFeedbackHint")}
+          </p>
+          {feedbackError ? (
+            <p className="text-xs text-destructive" role="alert">
+              {t(feedbackError)}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
-              key={opt.option_id}
-              variant={emphasized ? "default" : "outline"}
-              className="h-auto min-h-9 whitespace-normal break-words text-left"
-              onClick={() => onRespond(permission.request_id, opt.option_id)}
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={submitting}
+              onClick={() => {
+                setFeedbackOpen(false)
+                setFeedbackError(null)
+              }}
             >
-              {opt.name}
+              {t("planFeedbackCancel")}
             </Button>
-          )
-        })}
-      </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={submitting || !feedbackReady}
+              onClick={submitPlanFeedback}
+            >
+              {submitting ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : null}
+              {t("planFeedbackSubmit")}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {options.map((opt) => {
+            const isReject = opt.kind.startsWith("reject")
+            if (planReview && isReject) return null
+            const emphasized = parsed.defaultToNo ? isReject : !isReject
+            return (
+              <Button
+                key={opt.option_id}
+                variant={emphasized ? "default" : "outline"}
+                className="h-auto min-h-9 whitespace-normal break-words text-left"
+                onClick={() => onRespond(permission.request_id, opt.option_id)}
+              >
+                {opt.name}
+              </Button>
+            )
+          })}
+          {planReview && rejectOption ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-auto min-h-9 whitespace-normal break-words text-left"
+              onClick={() => setFeedbackOpen(true)}
+            >
+              {rejectOption.name}
+            </Button>
+          ) : null}
+          {planReview && rejectOption ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-auto min-h-9 whitespace-normal break-words text-left text-muted-foreground"
+              onClick={() =>
+                onRespond(permission.request_id, rejectOption.option_id)
+              }
+            >
+              {t("planRejectOnly")}
+            </Button>
+          ) : null}
+        </div>
+      )}
     </div>
   )
+}
+
+function planFeedbackErrorKey(error: unknown): PlanFeedbackErrorKey {
+  const appError = extractAppCommandError(error)
+  const detail = lookupPlanFeedbackError(appError?.detail)
+  if (detail) return detail
+  return lookupPlanFeedbackError(appError?.message) ?? "planFeedbackSendFailed"
+}
+
+function lookupPlanFeedbackError(
+  value: string | null | undefined
+): PlanFeedbackErrorKey | null {
+  const key = value?.trim()
+  if (!key || !(key in PLAN_FEEDBACK_ERROR_KEYS)) return null
+  return PLAN_FEEDBACK_ERROR_KEYS[key as keyof typeof PLAN_FEEDBACK_ERROR_KEYS]
 }

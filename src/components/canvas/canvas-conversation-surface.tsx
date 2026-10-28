@@ -383,6 +383,7 @@ export function CanvasConversationSurface({
     handleSetConfigOption,
     handleCancel,
     handleRespondPermission,
+    handleRequestPlanChanges,
   } = useConnectionLifecycle({
     contextKey,
     agentType,
@@ -862,6 +863,7 @@ export function CanvasConversationSurface({
           onSend={handleSend}
           onCancel={handleCancel}
           onRespondPermission={handleRespondPermission}
+          onRequestPlanChanges={handleRequestPlanChanges}
           onAnswerQuestion={handleAnswerQuestion}
           onAnswerAskQuestion={handleAnswerAskQuestion}
           onAnswerPlanApproval={handleAnswerPlanApproval}

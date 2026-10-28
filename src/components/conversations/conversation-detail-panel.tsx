@@ -672,6 +672,7 @@ const ConversationTabView = memo(function ConversationTabView({
     handleSetConfigOption,
     handleCancel,
     handleRespondPermission,
+    handleRequestPlanChanges,
   } = useConnectionLifecycle({
     contextKey: tabId,
     agentType: selectedAgent,
@@ -2321,6 +2322,7 @@ const ConversationTabView = memo(function ConversationTabView({
       onSend={handleSend}
       onCancel={handleCancel}
       onRespondPermission={handleRespondPermission}
+      onRequestPlanChanges={handleRequestPlanChanges}
       onAnswerQuestion={handleAnswerQuestion}
       onAnswerAskQuestion={handleAnswerAskQuestion}
       onAnswerPlanApproval={handleAnswerPlanApproval}

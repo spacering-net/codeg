@@ -84,6 +84,7 @@ vi.mock("@/hooks/use-connection-lifecycle", () => ({
     handleSetConfigOption: lifecycle.handleSetConfigOption,
     handleCancel: vi.fn(),
     handleRespondPermission: vi.fn(),
+    handleRequestPlanChanges: vi.fn(),
   }),
 }))
 

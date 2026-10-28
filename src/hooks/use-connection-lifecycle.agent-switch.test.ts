@@ -46,6 +46,7 @@ vi.mock("@/hooks/use-connection", () => {
       setConfigOption: conn.setConfigOption,
       cancel: noop,
       respondPermission: noop,
+      requestPlanChanges: noop,
       modes: null,
       configOptions: null,
       isViewer: false,

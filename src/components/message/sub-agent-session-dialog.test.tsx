@@ -17,6 +17,7 @@ const mockSetLiveOwnsActiveTurn = vi.fn()
 const mockGetSession = vi.fn()
 const mockGetTimelineTurns = vi.fn(() => [])
 const mockRespondPermission = vi.fn()
+const mockRequestPlanChanges = vi.fn()
 const mockAnswerQuestion = vi.fn()
 // syncTurnMetadata returns a cancel function; hand back a spy so tests can
 // assert both that the backfill is kicked off and that it's cancelled on close.
@@ -92,6 +93,7 @@ vi.mock("@/contexts/acp-connections-context", async () => {
     }),
     useAcpActions: () => ({
       respondPermission: mockRespondPermission,
+      requestPlanChanges: mockRequestPlanChanges,
       answerQuestion: mockAnswerQuestion,
     }),
   }
@@ -104,17 +106,38 @@ vi.mock("@/components/chat/permission-dialog", () => ({
   PermissionDialog: ({
     permission,
     onRespond,
+    onRequestPlanChanges,
   }: {
     permission: { request_id: string } | null
     onRespond: (requestId: string, optionId: string) => void
+    onRequestPlanChanges?: (
+      requestId: string,
+      feedback: string
+    ) => void | Promise<void>
   }) =>
     permission ? (
-      <button
-        data-testid="permission-dialog"
-        onClick={() => onRespond(permission.request_id, "approve")}
-      >
-        permission for {permission.request_id}
-      </button>
+      <>
+        <button
+          data-testid="permission-dialog"
+          onClick={() => onRespond(permission.request_id, "approve")}
+        >
+          permission for {permission.request_id}
+        </button>
+        {onRequestPlanChanges ? (
+          <button
+            data-testid="request-plan-changes"
+            onClick={() => {
+              void Promise.resolve(
+                onRequestPlanChanges(permission.request_id, "Split it")
+              ).catch(() => {
+                // The real card keeps its draft; this stub only records.
+              })
+            }}
+          >
+            request changes
+          </button>
+        ) : null}
+      </>
     ) : null,
 }))
 
@@ -255,6 +278,7 @@ describe("SubAgentSessionDialog", () => {
     mockGetSession.mockReset()
     mockGetTimelineTurns.mockClear()
     mockRespondPermission.mockReset()
+    mockRequestPlanChanges.mockReset()
     mockAnswerQuestion.mockReset()
     mockSyncCancel.mockReset()
     mockSyncTurnMetadata.mockClear()
@@ -314,6 +338,102 @@ describe("SubAgentSessionDialog", () => {
     fireEvent.click(dialog)
     // Routed via the CHILD connection id (c1), not the parent.
     expect(mockRespondPermission).toHaveBeenCalledWith("c1", "req-7", "approve")
+    fireEvent.click(screen.getByTestId("request-plan-changes"))
+    expect(mockRequestPlanChanges).toHaveBeenCalledWith("c1", "req-7", "Split it")
+  })
+
+  it("keeps the pending plan review when the child reconnects under the same id", () => {
+    mockChildConnection = makeConnState({
+      pendingPermission: {
+        request_id: "req-plan",
+        tool_call: {
+          kind: "switch_mode",
+          toolCallId: "plan-review:item-7",
+        },
+        options: [],
+      } as unknown as ConnectionState["pendingPermission"],
+    })
+    const view = renderWithIntl(
+      <SubAgentSessionDialog
+        open
+        onOpenChange={() => {}}
+        childConversationId={99}
+        childConnectionId="c1"
+        identity={{
+          agentType: "codex",
+          assistantId: null,
+          assistantName: null,
+        }}
+      />
+    )
+    expect(screen.getByTestId("permission-dialog")).toHaveTextContent(
+      "permission for req-plan"
+    )
+
+    // Dropped during reconnect: the shared store no longer has a card, so
+    // neither the drawer nor a parent row would invent one.
+    mockChildConnection = makeConnState({ pendingPermission: null })
+    act(() => notifyStore())
+    expect(screen.queryByTestId("permission-dialog")).not.toBeInTheDocument()
+
+    mockChildConnection = makeConnState({
+      connectionId: "c1",
+      pendingPermission: {
+        request_id: "req-plan-2",
+        tool_call: {
+          kind: "switch_mode",
+          toolCallId: "plan-review:item-8",
+        },
+        options: [],
+      } as unknown as ConnectionState["pendingPermission"],
+    })
+    act(() => notifyStore())
+    expect(screen.getByTestId("permission-dialog")).toHaveTextContent(
+      "permission for req-plan-2"
+    )
+    view.unmount()
+  })
+
+  it("surfaces a rejected plan-change request without clearing the card", async () => {
+    mockRequestPlanChanges.mockRejectedValue(
+      new Error(
+        JSON.stringify({
+          code: "not_found",
+          message: "connection_not_found",
+          detail: "connection_not_found",
+        })
+      )
+    )
+    mockChildConnection = makeConnState({
+      pendingPermission: {
+        request_id: "req-plan",
+        tool_call: { kind: "switch_mode", toolCallId: "plan-review:item-7" },
+        options: [],
+      } as unknown as ConnectionState["pendingPermission"],
+    })
+    renderWithIntl(
+      <SubAgentSessionDialog
+        open
+        onOpenChange={() => {}}
+        childConversationId={99}
+        childConnectionId="c1"
+        identity={{
+          agentType: "codex",
+          assistantId: null,
+          assistantName: null,
+        }}
+      />
+    )
+    fireEvent.click(screen.getByTestId("request-plan-changes"))
+    expect(mockRequestPlanChanges).toHaveBeenCalledWith(
+      "c1",
+      "req-plan",
+      "Split it"
+    )
+    await vi.waitFor(() => {
+      expect(mockRequestPlanChanges).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.getByTestId("permission-dialog")).toBeInTheDocument()
   })
 
   it("renders no permission dialog when the child has no pending permission", () => {

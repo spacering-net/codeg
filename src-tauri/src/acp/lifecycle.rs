@@ -335,6 +335,11 @@ pub(crate) async fn handle_event(
             };
             let (conversation_id, last_text, claimed) = {
                 let mut snap = state_arc.write().await;
+                // Request-linked, immutable sequence identity: the next prompt
+                // may already have finished before this worker sees the event.
+                if snap.plan_revisions.is_boundary(envelope.seq) {
+                    return Ok(());
+                }
                 // Re-entrant for this worker: a retry of this same envelope
                 // claims again and goes on. Only a CLI run's fallback that
                 // already wrote this turn's status makes it skip.
@@ -3882,6 +3887,86 @@ mod tests {
             read_row_status(&db, conv.id).await,
             ConversationStatus::PendingReview
         );
+    }
+
+    #[tokio::test]
+    async fn handle_event_plan_revision_boundary_never_enters_complete_call() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/plan-revision-boundary").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        let connection = fake_connection_with_state("revision-child", Some(conv.id));
+        {
+            let mut state = connection.state.write().await;
+            state
+                .plan_revisions
+                .accept("review-1".into(), "Revise first".into());
+            state.plan_revisions.bind_boundary(10);
+            state.plan_revisions.take_next().unwrap();
+            state.plan_revisions.finish(
+                "review-1",
+                crate::acp::plan_revision::RevisionStatus::Delivered,
+            );
+            state
+                .plan_revisions
+                .accept("review-2".into(), "Revise again".into());
+            state.plan_revisions.bind_boundary(20);
+            state.plan_revisions.abort_pending();
+            // Lifecycle is deliberately delayed until both the next turn and
+            // its cleanup have run. Neither can erase the boundary identity.
+        }
+        mgr.connections
+            .lock()
+            .await
+            .insert("revision-child".into(), connection);
+        let (broker, driver) = stage_pending_delegation("revision-child", conv.id).await;
+        for seq in [10, 20] {
+            let event = EventEnvelope {
+                seq,
+                connection_id: "revision-child".into(),
+                payload: AcpEvent::TurnComplete {
+                    session_id: "same-session".into(),
+                    stop_reason: "end_turn".into(),
+                    agent_type: "codex".into(),
+                },
+            };
+            handle_event(&db.conn, &mgr, &event, Some(&broker))
+                .await
+                .unwrap();
+            assert_eq!(
+                read_row_status(&db, conv.id).await,
+                ConversationStatus::InProgress
+            );
+            assert_eq!(
+                broker.pending_count().await,
+                1,
+                "complete_call must not run at a revision boundary"
+            );
+            assert!(!driver.is_finished());
+        }
+        let event = EventEnvelope {
+            seq: 30,
+            connection_id: "revision-child".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "same-session".into(),
+                stop_reason: "rejected".into(),
+                agent_type: "codex".into(),
+            },
+        };
+        handle_event(&db.conn, &mgr, &event, Some(&broker))
+            .await
+            .unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::Cancelled
+        );
+        assert_eq!(broker.pending_count().await, 0);
+        assert!(matches!(
+            driver.await.unwrap(),
+            DelegationOutcome::Err { .. }
+        ));
     }
 
     /// A turn whose status a CLI run's fallback already wrote is skipped

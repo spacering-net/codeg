@@ -2168,6 +2168,41 @@ impl ConnectionManager {
         Ok(())
     }
 
+    /// Atomically claim a Codex review and await the loop's durable-in-session receipt.
+    pub async fn request_plan_changes(
+        &self,
+        conn_id: &str,
+        request_id: &str,
+        feedback: &str,
+    ) -> Result<crate::acp::types::PlanRevisionReceipt, crate::app_error::AppCommandError> {
+        use crate::acp::plan_revision::PlanRevisions;
+        use crate::app_error::AppCommandError;
+
+        let feedback = PlanRevisions::normalize(feedback)?;
+        let cmd_tx = {
+            let connections = self.connections.lock().await;
+            connections
+                .get(conn_id)
+                .ok_or_else(|| AppCommandError::not_found("connection_not_found"))?
+                .cmd_tx
+                .clone()
+        };
+        let (reply, result) = tokio::sync::oneshot::channel();
+        cmd_tx
+            .send(ConnectionCommand::RequestPlanChanges {
+                request_id: request_id.to_string(),
+                feedback,
+                reply,
+            })
+            .await
+            .map_err(|_| AppCommandError::task_execution_failed("plan_revision_send_failed"))?;
+        // Enqueue success is NOT a claim. The loop returns only after saving
+        // the feedback and resolving the permission in the same serial path.
+        result
+            .await
+            .map_err(|_| AppCommandError::task_execution_failed("plan_revision_send_failed"))?
+    }
+
     /// Answer a permission card as the person looking at it.
     pub async fn respond_permission(
         &self,

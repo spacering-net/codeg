@@ -76,6 +76,11 @@ interface ConversationShellProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
   onCancel: () => void
   onRespondPermission: (requestId: string, optionId: string) => void
+  /** Codex plan revision. Omitted only by a surface that cannot host one. */
+  onRequestPlanChanges?: (
+    requestId: string,
+    feedback: string
+  ) => void | Promise<void>
   onAnswerQuestion: (answer: string) => void
   onAnswerAskQuestion: (
     questionId: string,
@@ -188,6 +193,7 @@ export function ConversationShell({
   onSend,
   onCancel,
   onRespondPermission,
+  onRequestPlanChanges,
   onAnswerQuestion,
   onAnswerAskQuestion,
   onAnswerPlanApproval,
@@ -274,6 +280,7 @@ export function ConversationShell({
         <PermissionDialog
           permission={pendingPermission}
           onRespond={onRespondPermission}
+          onRequestPlanChanges={onRequestPlanChanges}
           agentType={agentType}
         />
       </MarkdownImageProvider>

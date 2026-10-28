@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest"
 import {
   aliasToolInputKeys,
   claudeCodeMarksSubagent,
+  CODEX_PLAN_REVIEW_ID_PREFIX,
   codexMarksPlanReview,
   extractClaudeCodeMetaTitle,
   extractClaudeCodeSkillName,
   inferLiveToolName,
+  isCodexPlanReviewPermission,
   normalizeToolName,
   PARENT_TOOL_CALL_META_KEY,
   toolCallMovedToBackground,
@@ -1320,6 +1322,47 @@ describe("inferLiveToolName codex plan_review marker", () => {
     expect(codexMarksPlanReview(null)).toBe(false)
     expect(codexMarksPlanReview({ codex: { subagent: true } })).toBe(false)
     expect(codexMarksPlanReview({ codex: { kind: "plan_review" } })).toBe(true)
+  })
+
+  it("recognises a Codex plan review by marker or by a non-empty plan-review id", () => {
+    expect(CODEX_PLAN_REVIEW_ID_PREFIX).toBe("plan-review:")
+    expect(
+      isCodexPlanReviewPermission("codex", {
+        title: "Something else entirely",
+        kind: "other",
+        toolCallId: "cmd-1",
+        _meta: { codex: { kind: "plan_review", planItemId: "item-7" } },
+      })
+    ).toBe(true)
+    // 2.0.0 drops the marker. The id plus switch_mode is the remaining signal;
+    // the question in the title is not consulted.
+    expect(
+      isCodexPlanReviewPermission("codex", {
+        title: "Approve the shell?",
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+      })
+    ).toBe(true)
+    expect(
+      isCodexPlanReviewPermission("codex", {
+        kind: "switch_mode",
+        toolCallId: "plan-review:",
+      })
+    ).toBe(false)
+    expect(
+      isCodexPlanReviewPermission("claude_code", {
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+        _meta: { codex: { kind: "plan_review" } },
+      })
+    ).toBe(false)
+    expect(
+      isCodexPlanReviewPermission("codex", {
+        title: "Implement this plan?",
+        kind: "execute",
+        toolCallId: "cmd-9",
+      })
+    ).toBe(false)
   })
 
   it("still lets a real input shape win over the marker", () => {

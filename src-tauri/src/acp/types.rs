@@ -45,6 +45,8 @@ pub struct PromptCapabilitiesInfo {
 /// and by `ToolCallState.images` for snapshot recovery.
 pub type ToolCallImageInfo = crate::models::message::ImageData;
 
+pub use crate::acp::plan_revision::PlanRevisionReceipt;
+
 /// 所有 ACP 事件统一通过此 envelope 发出。
 /// `seq` 用于前端去重锚点（Phase 0 占位 0，Phase 1 起严格递增）。
 /// `connection_id` 上提到顶层，配合 `#[serde(flatten)]` 让 JSON 保持平铺：

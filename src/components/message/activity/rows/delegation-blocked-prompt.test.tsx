@@ -67,6 +67,7 @@ const store = {
   subscribeActiveKey: () => () => {},
 }
 const respondPermission = vi.fn()
+const requestPlanChanges = vi.fn()
 const answerQuestion = vi.fn()
 const answerPlanApproval = vi.fn()
 vi.mock("@/contexts/acp-connections-context", async () => {
@@ -79,6 +80,7 @@ vi.mock("@/contexts/acp-connections-context", async () => {
     useOptionalConnectionStore: () => store,
     useAcpActions: () => ({
       respondPermission,
+      requestPlanChanges,
       answerQuestion,
       answerPlanApproval,
     }),
@@ -241,6 +243,7 @@ describe("delegation status checks — answering a parked sub-agent (#973)", () 
     connections.clear()
     storeCallbacks = []
     respondPermission.mockReset()
+    requestPlanChanges.mockReset()
     answerQuestion.mockReset()
     answerPlanApproval.mockReset()
   })
@@ -434,6 +437,39 @@ describe("delegation status checks — answering a parked sub-agent (#973)", () 
     expect(screen.getByText("checked")).toBeInTheDocument()
     // It opened only for the decision, so it closes with it.
     expect(screen.getByRole("button", { expanded: false })).toBeInTheDocument()
+    // Clearing the card is not the task finishing. The poll still says the
+    // sub-agent is running; only the live "awaiting approval" goes away.
+    expect(screen.queryByText("done")).not.toBeInTheDocument()
+  })
+
+  it("clears the old approval into a revision, then shows the next plan again", () => {
+    bindingFor(TASK, CHILD)
+    connections.set(CHILD, childState({ pendingPermission: PERMISSION }))
+    renderCard([blockedPoll(TASK)])
+    expect(screen.getByText("awaiting approval")).toBeInTheDocument()
+
+    // The revision was claimed: this request's card goes, the task does not.
+    act(() => {
+      connections.set(CHILD, childState())
+      notifyStore()
+    })
+    expect(screen.queryByTestId("permission-dialog")).not.toBeInTheDocument()
+    expect(screen.queryByText("done")).not.toBeInTheDocument()
+    expect(screen.getByText("checked")).toBeInTheDocument()
+
+    act(() => {
+      connections.set(
+        CHILD,
+        childState({
+          pendingPermission: { ...PERMISSION, request_id: "req-next" },
+        })
+      )
+      notifyStore()
+    })
+    expect(screen.getByText("awaiting approval")).toBeInTheDocument()
+    expect(screen.getByTestId("permission-dialog")).toHaveTextContent(
+      "permission req-next"
+    )
   })
 
   it("keeps the poll's word when this window holds no live sub-agent", () => {
@@ -631,6 +667,7 @@ describe("status checks of one transcript — one prompt per task", () => {
     connections.clear()
     storeCallbacks = []
     respondPermission.mockReset()
+    requestPlanChanges.mockReset()
     answerQuestion.mockReset()
     answerPlanApproval.mockReset()
   })

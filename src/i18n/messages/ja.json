@@ -3676,7 +3676,20 @@
         "changeScopeUser": "ユーザー設定に保存",
         "changeScopeProject": "プロジェクト設定に保存",
         "changeScopeProjectLocal": "ローカルプロジェクト設定に保存",
-        "changeScopePersistent": "永続的に保存"
+        "changeScopePersistent": "永続的に保存",
+        "planFeedbackLabel": "プランへの修正意見",
+        "planFeedbackPlaceholder": "Codex にこのプランのどこを直してほしいですか？",
+        "planFeedbackHint": "Codex はこのセッションのまま、この意見をもとにプランを改訂します。委譲は終了しません。",
+        "planFeedbackSubmit": "プランの修正を依頼",
+        "planFeedbackCancel": "編集をキャンセル",
+        "planRejectOnly": "拒否するだけ（続行しない）",
+        "planFeedbackEmpty": "送信する前に、修正してほしい内容を入力してください。",
+        "planFeedbackTooLong": "意見が長すぎます。16,384 文字以内にしてください。",
+        "planFeedbackNotReview": "このリクエストは Codex の plan レビューではありません。",
+        "planFeedbackConnectionMissing": "Codex のセッションは接続されていません。",
+        "planFeedbackNotPending": "この plan レビューはもう待機していません。",
+        "planFeedbackAlreadyDecided": "この plan レビューにはすでに回答済みです。",
+        "planFeedbackSendFailed": "修正意見を送れませんでした。下書きはそのまま残っています。"
       },
       "questionDialog": {
         "title": "エージェントが質問しています",

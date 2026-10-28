@@ -67,6 +67,12 @@ export type AppErrorCode =
   | "task_execution_failed"
   | (string & {})
 
+/** Backend accepted a Codex plan-revision request. Not "the plan changed". */
+export interface PlanChangesReceipt {
+  requestId: string
+  status: "accepted"
+}
+
 export interface AppCommandError {
   code: AppErrorCode
   message: string

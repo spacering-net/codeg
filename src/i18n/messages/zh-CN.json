@@ -3676,7 +3676,20 @@
         "changeScopeUser": "保存到用户设置",
         "changeScopeProject": "保存到项目设置",
         "changeScopeProjectLocal": "保存到本地项目设置",
-        "changeScopePersistent": "永久保存"
+        "changeScopePersistent": "永久保存",
+        "planFeedbackLabel": "对计划的修改意见",
+        "planFeedbackPlaceholder": "希望 Codex 如何修改这份计划？",
+        "planFeedbackHint": "Codex 会留在本次会话里，按这条意见修订计划。这不会结束本次委派。",
+        "planFeedbackSubmit": "请求修改计划",
+        "planFeedbackCancel": "取消编辑",
+        "planRejectOnly": "仅拒绝，不继续",
+        "planFeedbackEmpty": "发送前请写下需要修改的内容。",
+        "planFeedbackTooLong": "意见过长，请控制在 16,384 个字符以内。",
+        "planFeedbackNotReview": "这个请求不是 Codex 的 plan 评审。",
+        "planFeedbackConnectionMissing": "Codex 会话已断开。",
+        "planFeedbackNotPending": "这次 plan 评审已不再等待。",
+        "planFeedbackAlreadyDecided": "这次 plan 评审已经作答。",
+        "planFeedbackSendFailed": "修改意见没有发送成功，草稿仍保留在这里。"
       },
       "questionDialog": {
         "title": "代理正在提问",

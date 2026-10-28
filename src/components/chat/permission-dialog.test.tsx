@@ -471,6 +471,243 @@ describe("PermissionDialog", () => {
     expect(screen.getByText("What each option grants")).toBeInTheDocument()
   })
 
+  it("keeps an ordinary Allow click immediate", () => {
+    const onRespond = vi.fn()
+    const onRequestPlanChanges = vi.fn()
+    const permission: PendingPermission = {
+      request_id: "req-plain",
+      tool_call: {
+        title: "Implement this plan?",
+        kind: "execute",
+        toolCallId: "cmd-1",
+      },
+      options: baseOptions,
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        onRequestPlanChanges={onRequestPlanChanges}
+        agentType="codex"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }))
+    expect(onRespond).toHaveBeenCalledWith("req-plain", "allow")
+    expect(onRequestPlanChanges).not.toHaveBeenCalled()
+  })
+
+  it("opens Codex plan feedback on No and sends it only after a note", async () => {
+    const onRespond = vi.fn()
+    const onRequestPlanChanges = vi.fn().mockResolvedValue(undefined)
+    const permission: PendingPermission = {
+      request_id: "req-plan",
+      tool_call: {
+        title: "Need a decision",
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+        _meta: { codex: { kind: "plan_review", planItemId: "item-7" } },
+      },
+      options: [
+        {
+          option_id: "implement_plan",
+          name: "Yes",
+          kind: "allow_once",
+        },
+        { option_id: "revise_plan", name: "No", kind: "reject_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        onRequestPlanChanges={onRequestPlanChanges}
+        agentType="codex"
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "No" }))
+    expect(onRespond).not.toHaveBeenCalled()
+    expect(onRequestPlanChanges).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole("button", { name: "Request plan changes" })
+    ).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText("Changes to the plan"), {
+      target: { value: "   " },
+    })
+    expect(
+      screen.getByRole("button", { name: "Request plan changes" })
+    ).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText("Changes to the plan"), {
+      target: { value: "  Split the migration.  " },
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request plan changes" })
+    )
+    expect(onRequestPlanChanges).toHaveBeenCalledTimes(1)
+    expect(onRequestPlanChanges).toHaveBeenCalledWith(
+      "req-plan",
+      "Split the migration."
+    )
+    expect(onRespond).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request plan changes" })
+    )
+    expect(onRequestPlanChanges).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Request plan changes" })
+      ).not.toBeDisabled()
+    })
+  })
+
+  it("ends the delegation only from the secondary reject", () => {
+    const onRespond = vi.fn()
+    const onRequestPlanChanges = vi.fn()
+    const permission: PendingPermission = {
+      request_id: "req-plan",
+      tool_call: {
+        title: "Unrelated heading",
+        kind: "other",
+        toolCallId: "cmd-2",
+        _meta: { codex: { kind: "plan_review", planItemId: "item-7" } },
+      },
+      options: [
+        {
+          option_id: "implement_plan",
+          name: "Yes",
+          kind: "allow_once",
+        },
+        { option_id: "revise_plan", name: "No", kind: "reject_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        onRequestPlanChanges={onRequestPlanChanges}
+        agentType="codex"
+      />
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reject only, don't continue" })
+    )
+    expect(onRespond).toHaveBeenCalledWith("req-plan", "revise_plan")
+    expect(onRequestPlanChanges).not.toHaveBeenCalled()
+  })
+
+  it("closes the editor without rejecting the plan", () => {
+    const onRespond = vi.fn()
+    const onRequestPlanChanges = vi.fn()
+    const permission: PendingPermission = {
+      request_id: "req-plan",
+      tool_call: {
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-9",
+      },
+      options: [
+        { option_id: "implement_plan", name: "Yes", kind: "allow_once" },
+        { option_id: "revise_plan", name: "No", kind: "reject_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        onRequestPlanChanges={onRequestPlanChanges}
+        agentType="codex"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "No" }))
+    fireEvent.change(screen.getByLabelText("Changes to the plan"), {
+      target: { value: "Keep the draft" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Cancel editing" }))
+    expect(onRespond).not.toHaveBeenCalled()
+    expect(onRequestPlanChanges).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "No" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "No" }))
+    expect(screen.getByLabelText("Changes to the plan")).toHaveValue(
+      "Keep the draft"
+    )
+  })
+
+  it("keeps the draft when sending plan changes fails", async () => {
+    const onRequestPlanChanges = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          JSON.stringify({
+            code: "task_execution_failed",
+            message: "plan_revision_send_failed",
+            detail: "plan_revision_send_failed",
+          })
+        )
+      )
+    const permission: PendingPermission = {
+      request_id: "req-plan",
+      tool_call: {
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+      },
+      options: [
+        { option_id: "implement_plan", name: "Yes", kind: "allow_once" },
+        { option_id: "revise_plan", name: "No", kind: "reject_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={() => {}}
+        onRequestPlanChanges={onRequestPlanChanges}
+        agentType="codex"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "No" }))
+    fireEvent.change(screen.getByLabelText("Changes to the plan"), {
+      target: { value: "Rename the column" },
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request plan changes" })
+    )
+    expect(
+      await screen.findByText(
+        "Could not send the plan changes. Your note is still here."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText("Changes to the plan")).toHaveValue(
+      "Rename the column"
+    )
+  })
+
+  it("leaves another agent's plan-shaped permission on the plain buttons", () => {
+    const onRespond = vi.fn()
+    const permission: PendingPermission = {
+      request_id: "req-grok",
+      tool_call: {
+        title: "Implement this plan?",
+        kind: "switch_mode",
+        toolCallId: "plan-review:item-7",
+      },
+      options: baseOptions,
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        onRequestPlanChanges={() => {}}
+        agentType="grok"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }))
+    expect(onRespond).toHaveBeenCalledWith("req-grok", "reject")
+    expect(
+      screen.queryByRole("button", { name: "Reject only, don't continue" })
+    ).not.toBeInTheDocument()
+  })
+
   it("ignores option metadata that is absent or of an unknown version", () => {
     const permission: PendingPermission = {
       request_id: "req-nochanges",

@@ -51,6 +51,7 @@ vi.mock("@/contexts/acp-connections-context", () => {
     setConfigOption: () => {},
     cancel: () => {},
     respondPermission: () => {},
+    requestPlanChanges: () => {},
     answerQuestion: () => {},
     reapplyConfig: () => {},
     dismissConfigStale: () => {},

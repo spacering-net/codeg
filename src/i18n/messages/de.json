@@ -3676,7 +3676,20 @@
         "changeScopeUser": "In Benutzereinstellungen gespeichert",
         "changeScopeProject": "In Projekteinstellungen gespeichert",
         "changeScopeProjectLocal": "In lokalen Projekteinstellungen gespeichert",
-        "changeScopePersistent": "Dauerhaft gespeichert"
+        "changeScopePersistent": "Dauerhaft gespeichert",
+        "planFeedbackLabel": "Änderungen am Plan",
+        "planFeedbackPlaceholder": "Was soll Codex an diesem Plan ändern?",
+        "planFeedbackHint": "Codex bleibt in dieser Sitzung und überarbeitet den Plan anhand deiner Notiz. Die Delegation endet dadurch nicht.",
+        "planFeedbackSubmit": "Planänderungen anfordern",
+        "planFeedbackCancel": "Bearbeitung abbrechen",
+        "planRejectOnly": "Nur ablehnen, nicht fortsetzen",
+        "planFeedbackEmpty": "Schreib vor dem Senden, was sich ändern soll.",
+        "planFeedbackTooLong": "Die Notiz ist zu lang. Höchstens 16.384 Zeichen.",
+        "planFeedbackNotReview": "Diese Anfrage ist keine Codex-Planprüfung.",
+        "planFeedbackConnectionMissing": "Die Codex-Sitzung ist nicht mehr verbunden.",
+        "planFeedbackNotPending": "Diese Planprüfung wartet nicht mehr.",
+        "planFeedbackAlreadyDecided": "Diese Planprüfung wurde bereits beantwortet.",
+        "planFeedbackSendFailed": "Die Änderungen konnten nicht gesendet werden. Deine Notiz bleibt erhalten."
       },
       "questionDialog": {
         "title": "Agent stellt eine Frage",

@@ -56,6 +56,7 @@ const stubs = vi.hoisted(() => {
       setConfigOption: vi.fn(),
       cancel: vi.fn(),
       respondPermission: vi.fn(),
+      requestPlanChanges: vi.fn(),
       modes: null,
       configOptions: null,
       hasCachedSelectors: false,

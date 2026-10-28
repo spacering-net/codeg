@@ -48,6 +48,8 @@ use crate::acp::cursor_ext::{
     CursorTaskRequest, CursorUpdateTodosRequest,
 };
 use crate::acp::error::AcpError;
+use crate::acp::plan_revision::{PlanRevisionReceipt, RevisionStatus};
+use crate::app_error::AppCommandError;
 use crate::acp::file_system_runtime::{
     FileSystemRuntime, FileSystemRuntimeError, FsAccessPolicy, FS_POLICY_ENV,
 };
@@ -74,6 +76,14 @@ use crate::parsers::COMPACTION_SUMMARY_META_KEY;
 use crate::web::event_bridge::{
     emit_with_state, emit_with_state_built, emit_with_state_gated, EventEmitter,
 };
+
+#[path = "plan_revision_permission.rs"]
+mod plan_revision_permission;
+use plan_revision_permission::{fail_plan_revisions, request_plan_changes};
+
+#[cfg(test)]
+#[path = "plan_revision_tests.rs"]
+mod plan_revision_tests;
 
 /// Injected into the agent process only when the user has opted in — see
 /// [`force_command_color_enabled`] for why it is not a default.
@@ -1283,6 +1293,11 @@ pub enum SteerOutcome {
 
 /// Commands sent from Tauri command handlers to the ACP connection loop.
 pub enum ConnectionCommand {
+    RequestPlanChanges {
+        request_id: String,
+        feedback: String,
+        reply: oneshot::Sender<Result<PlanRevisionReceipt, AppCommandError>>,
+    },
     Prompt {
         blocks: Vec<PromptInputBlock>,
         /// Pre-projected cross-client user-message broadcast (`message_id` +
@@ -3123,6 +3138,7 @@ struct QueuedPermission {
 /// been moved into its publish.
 struct Parked<R> {
     responder: R,
+    codex_plan_review: bool,
     /// Empty when the card names no tool call.
     tool_call_id: String,
     options: Vec<PermissionOptionInfo>,
@@ -3207,6 +3223,7 @@ enum Departure {
 /// this mutex while already holding a `SessionState` guard.
 struct PermissionQueue<R = PendingPermission> {
     responders: HashMap<String, Parked<R>>,
+    decided: HashSet<String>,
     /// The card currently published to clients. `None` = nothing on screen.
     showing: Option<String>,
     waiting: VecDeque<QueuedPermission>,
@@ -3238,6 +3255,7 @@ impl<R> Default for PermissionQueue<R> {
     fn default() -> Self {
         Self {
             responders: HashMap::new(),
+            decided: HashSet::new(),
             showing: None,
             waiting: VecDeque::new(),
             detached: Vec::new(),
@@ -3254,6 +3272,18 @@ impl<R: PermissionResponder> PermissionQueue<R> {
             card.request_id.clone(),
             Parked {
                 responder,
+                // Retain only recognition, not a second potentially large
+                // rawInput/plan payload. The connection's agent is checked at claim.
+                codex_plan_review: codex_plan_review_meta(
+                    AgentType::Codex,
+                    &crate::acp::session_state::extract_tool_call_id(&card.tool_call),
+                    card.tool_call.get("kind").and_then(serde_json::Value::as_str)
+                        == Some("switch_mode"),
+                    card.tool_call
+                        .get("_meta")
+                        .and_then(serde_json::Value::as_object),
+                )
+                .is_some(),
                 tool_call_id: crate::acp::session_state::extract_tool_call_id(&card.tool_call),
                 options: card.options.clone(),
             },
@@ -3315,6 +3345,7 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     /// it was the one on screen. `None` when the id is not ours.
     fn take(&mut self, request_id: &str) -> Option<(Parked<R>, Departure)> {
         let pending = self.responders.remove(request_id)?;
+        self.decided.insert(request_id.to_string());
         if self.showing.as_deref() == Some(request_id) {
             let next = self.promote_next();
             self.showing = next.as_ref().map(|c| c.request_id.clone());
@@ -3370,7 +3401,8 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     /// the `detached` ones — dropping their abort senders lets each bridged
     /// task clear its own surface.
     fn drain(&mut self) -> Option<String> {
-        for (_, parked) in self.responders.drain() {
+        for (id, parked) in self.responders.drain() {
+            self.decided.insert(id);
             parked.responder.respond_cancelled();
         }
         self.waiting.clear();
@@ -3526,6 +3558,17 @@ async fn resolve_permission(
     origin: PermissionAnswerOrigin,
 ) {
     let mut queue = perms.lock().await;
+    resolve_permission_locked(&mut queue, state, emitter, request_id, option_id, origin).await;
+}
+
+async fn resolve_permission_locked(
+    queue: &mut PermissionQueue,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    request_id: String,
+    option_id: String,
+    origin: PermissionAnswerOrigin,
+) {
     let resolved = queue.resolve(&request_id, option_id.clone());
     if !resolved.answered {
         return;
@@ -3752,7 +3795,14 @@ async fn drain_permissions_then_emit(
 ) {
     let mut queue = perms.lock().await;
     drain_permissions_locked(&mut queue, state, emitter).await;
-    emit_with_state(state, emitter, follow_up).await;
+    emit_with_state_built(state, emitter, |s| {
+        if matches!(&follow_up, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "end_turn") {
+            s.plan_revisions.bind_boundary(s.event_seq + 1);
+        } else if matches!(&follow_up, AcpEvent::TurnComplete { .. }) {
+            s.plan_revisions.abort_pending();
+        }
+        Some(follow_up)
+    }).await;
 }
 
 /// Shared body of the two drains above. Emits the compensating
@@ -11056,12 +11106,13 @@ async fn handle_permission_request(
     // is already in the transcript (codex emits the plan as an
     // `agent_message_chunk` before this) and the permission card renders it from
     // the request's own `rawInput.plan` — a third copy would be noise.
-    if let Some(review_meta) = codex_plan_review_meta(
+    let review_meta = codex_plan_review_meta(
         agent_type,
         &req.tool_call.tool_call_id.to_string(),
         matches!(req.tool_call.fields.kind, Some(ToolKind::SwitchMode)),
         req.meta.as_ref(),
-    ) {
+    );
+    if let Some(review_meta) = &review_meta {
         emit_with_state(
             state,
             emitter,
@@ -11074,7 +11125,7 @@ async fn handle_permission_request(
                 raw_input: None,
                 raw_output: None,
                 locations: None,
-                meta: Some(serde_json::Value::Object(review_meta)),
+                meta: Some(serde_json::Value::Object(review_meta.clone())),
                 images: None,
             },
         )
@@ -11103,6 +11154,7 @@ async fn handle_permission_request(
         .collect();
 
     let mut tool_call_value = serde_json::to_value(&req.tool_call).unwrap_or_default();
+    preserve_plan_review_meta(&mut tool_call_value, review_meta.as_ref());
 
     // Point a MiniMax Code card at the call it gates, not at the agent's own
     // permission id (see `minimax_gated_tool_call_id`).
@@ -14067,9 +14119,14 @@ async fn run_conversation_loop(
     // own needs a turn to have started it, and background work cannot outlive
     // the agent process this loop's connection owns.
     let mut prompted = false;
+    let mut revision_prompt = None;
+    let mut revision_request_id: Option<String> = None;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
+            if let Some(cmd) = revision_prompt.take() {
+                break Some(cmd);
+            }
             tokio::select! {
                 biased;
                 cmd = cmd_rx.recv() => break cmd,
@@ -14079,7 +14136,10 @@ async fn run_conversation_loop(
                     // is gone, so the loop goes with it.
                     let dispatch = match update {
                         Ok(dispatch) => fix_usage_update_nulls(dispatch),
-                        Err(e) => return Err(defer_to_connection_report(e).await),
+                        Err(e) => {
+                            fail_plan_revisions(state, emitter, agent_type, &e.to_string()).await;
+                            return Err(defer_to_connection_report(e).await);
+                        }
                     };
                     let h = emitter.clone();
                     let st = Arc::clone(state);
@@ -14188,6 +14248,7 @@ async fn run_conversation_loop(
                 user_message,
                 internal_suffix,
             }) => {
+                let active_revision_id = revision_request_id.take();
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
                 // consumed: the transcript record this prompt becomes must
@@ -14450,7 +14511,10 @@ async fn run_conversation_loop(
                             // is gone, and so is any answer to this prompt.
                             let dispatch = match update {
                                 Ok(dispatch) => fix_usage_update_nulls(dispatch),
-                                Err(e) => return Err(defer_to_connection_report(e).await),
+                                Err(e) => {
+                                    fail_plan_revisions(state, emitter, agent_type, &e.to_string()).await;
+                                    return Err(defer_to_connection_report(e).await);
+                                }
                             };
                             let h = emitter.clone();
                             let st = Arc::clone(state);
@@ -14619,6 +14683,9 @@ async fn run_conversation_loop(
                             }
                         }
                         prompt_result = &mut prompt_response => {
+                            if let Err(error) = &prompt_result {
+                                fail_plan_revisions(state, emitter, agent_type, &error.to_string()).await;
+                            }
                             // A rejected prompt is a TURN failure, not a dead
                             // connection: the agent answered, so it is still
                             // there, and the session it answered about is still
@@ -14816,14 +14883,38 @@ async fn run_conversation_loop(
                             // explained by the AIR banner, so synthesizing an
                             // "empty" toast on top would misdiagnose a dead
                             // connection as "the agent produced nothing".
+                            let revising = state.read().await.plan_revisions.has_accepted();
                             let (reason_str, empty_report) = if terminal_failure
                                 .as_ref()
                                 .is_some_and(|record| record.severity == "error")
                             {
+                                // A failed revision must not settle its task
+                                // successfully just because AIR disguises the
+                                // terminal failure as end_turn. Other prompts
+                                // retain their existing stop-reason mapping.
+                                let reason = if (revising || active_revision_id.is_some())
+                                    && raw_reason_str == "end_turn"
+                                {
+                                    "rejected"
+                                } else {
+                                    raw_reason_str
+                                };
+                                (reason, None)
+                            } else if revising && raw_reason_str == "end_turn" {
+                                // The review may be the only output of this
+                                // physical turn. Its accepted feedback is not
+                                // an empty-response failure.
                                 (raw_reason_str, None)
                             } else {
                                 finish_turn_reason(&probe, raw_reason_str, stderr_tail)
                             };
+                            let failed = reason_str != "end_turn" || terminal_failure
+                                .as_ref().is_some_and(|r| r.severity == "error");
+                            if failed {
+                                fail_plan_revisions(state, emitter, agent_type, reason_str).await;
+                            } else if let Some(id) = &active_revision_id {
+                                state.write().await.plan_revisions.finish(id, RevisionStatus::Delivered);
+                            }
                             if let Some(err_event) =
                                 turn_failure_error_event(reason_str, agent_type, empty_report.as_ref())
                             {
@@ -14876,6 +14967,18 @@ async fn run_conversation_loop(
                                 },
                             )
                             .await;
+                            if !failed {
+                                if let Some(revision) = state.write().await.plan_revisions.take_next() {
+                                    revision_request_id = Some(revision.request_id);
+                                    revision_prompt = Some(ConnectionCommand::Prompt {
+                                        blocks: vec![PromptInputBlock::Text { text: revision.feedback.clone() }],
+                                        user_message: Some((uuid::Uuid::new_v4().to_string(), vec![
+                                            UserMessageBlock::Text { text: revision.feedback },
+                                        ])),
+                                        internal_suffix: Vec::new(),
+                                    });
+                                }
+                            }
                             // `TurnComplete` has just taken any
                             // `ask_user_question` card off every client, so
                             // decline a question still parked on this
@@ -14939,6 +15042,10 @@ async fn run_conversation_loop(
                         }
                         cmd = cmd_rx.recv() => {
                             match cmd {
+                                Some(ConnectionCommand::RequestPlanChanges { request_id, feedback, reply }) => {
+                                    let result = request_plan_changes(perms, state, emitter, request_id, feedback).await;
+                                    let _ = reply.send(result);
+                                }
                                 Some(ConnectionCommand::RespondPermission {
                                     request_id,
                                     option_id,
@@ -15151,6 +15258,7 @@ async fn run_conversation_loop(
                                     );
                                 }
                                 Some(ConnectionCommand::Cancel) => {
+                                    state.write().await.plan_revisions.abort_pending();
                                     // Send CancelNotification to agent to stop the current turn
                                     let _ = cx.send_notification_to(
                                         Agent,
@@ -15260,6 +15368,7 @@ async fn run_conversation_loop(
                                     break;
                                 }
                                 Some(ConnectionCommand::Disconnect) | None => {
+                                    state.write().await.plan_revisions.abort_pending();
                                     tracing::info!(
                                         "[ACP] disconnect requested during prompting; connection_id={conn_id}"
                                     );
@@ -15310,6 +15419,10 @@ async fn run_conversation_loop(
                     },
                 )
                 .await;
+            }
+            Some(ConnectionCommand::RequestPlanChanges { request_id, feedback, reply }) => {
+                let result = request_plan_changes(perms, state, emitter, request_id, feedback).await;
+                let _ = reply.send(result);
             }
             Some(ConnectionCommand::RespondPermission {
                 request_id,
@@ -18610,6 +18723,25 @@ async fn settle_codex_subagent_launch(
         |s| s.active_tool_calls.contains_key(&launch_id),
     )
     .await;
+}
+
+/// Keep the recognized request marker on the permission payload and snapshot.
+fn preserve_plan_review_meta(
+    tool_call: &mut serde_json::Value,
+    review_meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    let Some(codex) = review_meta.and_then(|m| m.get("codex")) else {
+        return;
+    };
+    if let Some(obj) = tool_call.as_object_mut() {
+        let meta = obj.entry("_meta").or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        meta.as_object_mut()
+            .expect("object above")
+            .insert("codex".into(), codex.clone());
+    }
 }
 
 /// The `_meta` to seed codex's Plan-mode review card with, when a
@@ -26573,6 +26705,29 @@ mod tests {
         // A non-string `kind` must not be coerced into a match.
         let numeric = meta_map(serde_json::json!({ "codex": { "kind": 1 } }));
         assert!(!is_review(AgentType::Codex, "cmd-1", Some(&numeric)));
+    }
+
+    #[test]
+    fn codex_plan_review_pending_metadata_keeps_legacy_and_modern_identity() {
+        let legacy = meta_map(serde_json::json!({
+            "codex": { "kind": "plan_review", "planItemId": "legacy" }
+        }));
+        for (id, switch_mode, meta) in [
+            ("legacy-id", false, Some(&legacy)),
+            ("plan-review:modern", true, None),
+        ] {
+            let recognized = codex_plan_review_meta(AgentType::Codex, id, switch_mode, meta);
+            let mut tool_call = serde_json::json!({
+                "toolCallId": id, "_meta": { "otherProducer": { "keep": true } }
+            });
+            preserve_plan_review_meta(&mut tool_call, recognized.as_ref());
+            assert_eq!(tool_call["_meta"]["codex"]["kind"], "plan_review");
+            assert_eq!(tool_call["_meta"]["otherProducer"]["keep"], true);
+        }
+        let mut ordinary = serde_json::json!({"title": "Implement this plan?", "kind": "switch_mode"});
+        let excluded = codex_plan_review_meta(AgentType::Codex, "ordinary", true, None);
+        preserve_plan_review_meta(&mut ordinary, excluded.as_ref());
+        assert!(ordinary.get("_meta").is_none());
     }
 
     #[test]
