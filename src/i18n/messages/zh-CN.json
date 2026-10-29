@@ -4261,6 +4261,7 @@
         "cardResultPending": "结果尚未返回"
       },
       "asyncTasks": {
+        "title": "后台任务",
         "openOutput": "输出",
         "stop": "停止",
         "tokens": "{count} tokens",

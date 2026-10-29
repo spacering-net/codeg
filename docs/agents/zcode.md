@@ -1,6 +1,6 @@
 # ZCode
 
-Codeg connects to [official ZCode](https://github.com/zai-org/ZCode) through the community [zcode-acp-server](https://github.com/william0wang/zcode-acp) bridge. The bundled registry pins the bridge to `0.76.3`.
+Codeg connects to [official ZCode](https://github.com/zai-org/ZCode) through the community [zcode-acp-server](https://github.com/william0wang/zcode-acp) bridge. The bundled registry pins the bridge to `0.78.0`.
 
 ## Setup
 
@@ -14,6 +14,8 @@ Codeg discovers the official desktop bundle or the `zcode` command on PATH, and 
 Codeg runs the bridge and the official CLI on that same Node. The bridge would otherwise move itself to Bun 1.4 or newer when it finds one; set `ZCODE_ACP_RUNTIME` in the agent environment to choose its runtime yourself.
 
 The bridge reuses ZCode's existing authentication. Codeg does not copy credentials or create legacy ZCode configuration files. Sign-in errors should be resolved in official ZCode; the agent stderr diagnostics show startup failures.
+
+From bridge 0.78.0 a GLM Coding Plan key added in the ZCode desktop app under Settings → Model Provider ("Use API key") also works. Instead of signing in to the desktop app, you can run `zcode-acp setup --provider zai` (or `--provider bigmodel`) in a terminal and enter an individual Coding Plan key. The bridge keeps that key in `~/.zcode/v2/acp-accounts.json`, or under `ZCODE_HOME` when that is set, so run the setup with the same `ZCODE_HOME` as ZCode's environment in Codeg. It does not change the desktop app's settings. Reconnect the conversation afterwards.
 
 ZCode Start Plan accounts cannot run through the bridge. Their model requests need a captcha that only the ZCode desktop app can solve, so each prompt fails with a message saying so. GLM Coding Plan providers are not affected.
 

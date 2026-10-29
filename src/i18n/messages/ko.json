@@ -4261,6 +4261,7 @@
         "cardResultPending": "결과가 아직 반환되지 않았습니다"
       },
       "asyncTasks": {
+        "title": "백그라운드 작업",
         "openOutput": "출력",
         "stop": "중지",
         "tokens": "{count} 토큰",

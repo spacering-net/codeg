@@ -4,6 +4,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronRightIcon } from "lucide-react"
 
 import type { ToolApproval } from "@/lib/activity/approval"
+import { rowIdentity } from "@/lib/activity/build-activity"
 import type { StepStatus } from "@/lib/activity/types"
 import { cn } from "@/lib/utils"
 import { useActivityRender } from "./activity-context"
@@ -57,6 +58,8 @@ export function ActivityRow({
   title,
   className,
   headerClassName,
+  motionKey,
+  motionSelf = false,
 }: {
   stepKey: string
   status?: StepStatus
@@ -87,6 +90,13 @@ export function ActivityRow({
   title?: string
   className?: string
   headerClassName?: string
+  /** What the row stands for as the reply changes shape (`ReplyMotion`):
+   *  its step, unless the row is something else that shares that step's key —
+   *  a group, keyed by its first member. */
+  motionKey?: string
+  /** The row fades in by itself (late): the reply's motion leaves its
+   *  arrival alone. */
+  motionSelf?: boolean
 }) {
   const detailId = useId()
   const open = expandable && expanded
@@ -155,6 +165,10 @@ export function ActivityRow({
     variant === "main" ? "text-sm leading-6" : "text-[0.8125rem] leading-6",
     headerClassName
   )
+  // The header on its own, for the reply's motion: a new group fades its
+  // header in while the command it took in glides out from under it.
+  const ownMotionKey = motionKey ?? rowIdentity(stepKey)
+  const headerMotionKey = `${ownMotionKey}:head`
 
   return (
     <li
@@ -165,6 +179,8 @@ export function ActivityRow({
       data-marker={markerKind}
       data-status={status}
       data-step-key={stepKey}
+      data-motion-key={ownMotionKey}
+      data-motion-self={motionSelf ? "" : undefined}
       // As the last row it runs the rail beside its open panel, down to the
       // end mark (globals.css).
       data-body={panel ? "" : undefined}
@@ -188,11 +204,16 @@ export function ActivityRow({
           aria-controls={open ? detailId : undefined}
           title={title}
           onClick={() => onExpandedChange?.(!open)}
+          data-motion-key={headerMotionKey}
         >
           {header}
         </button>
       ) : (
-        <div className={headerClass} title={title}>
+        <div
+          className={headerClass}
+          title={title}
+          data-motion-key={headerMotionKey}
+        >
           {header}
         </div>
       )}
@@ -246,15 +267,26 @@ export function RowChevron({
 }
 
 /**
- * Whether a group is still going, for its foot: a member runs, or the reply
- * is still being written with the group its last row, where the next step may
- * join it — the foot turns from the group's first command to its last rather
- * than flickering between commands. Not while the agent waits on the user.
+ * Where a group stands in its reply. `current`: the reply is still being
+ * written with the group its last row, where the next step may join it.
+ * `going`: its foot turns — while it is current and the agent is not waiting
+ * on the user — from the group's first command to its last rather than
+ * flickering between commands. Folded while current, its running member shows
+ * under its header, so the step under way is never hidden.
+ *
+ * Once the reply has moved past it — a row follows, or the answer does — or
+ * is done, nothing joins it: a member still running there (a command moved to
+ * the background, a call going on beside the steps after it) says so on its
+ * own row, inside the group, and the foot is the row that folds the group.
  */
-export function useGroupGoing(live: boolean, followed: boolean): boolean {
+export function useGroupPlace(followed: boolean): {
+  current: boolean
+  going: boolean
+} {
   const { isStreaming } = useActivityRender()
   const { awaitingUser } = useActivityLive()
-  return !awaitingUser && (live || (isStreaming && !followed))
+  const current = isStreaming && !followed
+  return { current, going: current && !awaitingUser }
 }
 
 /** The foot an open group's members end on (see `TimelineFoot`). */
@@ -267,6 +299,8 @@ export interface MembersFoot {
   what: string
   /** Folds the group. */
   onFold: () => void
+  /** The group's key: its foot's, as the reply changes shape (`ReplyMotion`). */
+  motionScope: string
 }
 
 /**
@@ -298,6 +332,7 @@ export function ActivityMembers({
           working={foot.working}
           what={foot.what}
           onFold={(control) => foldRow(control, foot.onFold)}
+          motionScope={foot.motionScope}
         />
       ) : null}
     </ul>

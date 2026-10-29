@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils"
 import { ReadImagePreview } from "../../read-image-preview"
 import { SearchResultsOutput } from "../../search-results-output"
 import { useActivityRender } from "../activity-context"
-import { ActivityMembers, ActivityRow, useGroupGoing } from "../activity-row"
+import { ActivityMembers, ActivityRow, useGroupPlace } from "../activity-row"
 import { DetailBox } from "../detail-box"
 import { useDisclosure } from "../disclosure-store"
 import { FileHeader } from "../file-header"
@@ -98,9 +98,10 @@ function useExploreSummary(steps: ToolStep[]): string {
 /**
  * "Explored · 3 files, 1 search": a run of reads and searches. Folded unless a
  * member failed without being redone. Open, its members end on a foot that
- * turns while the run is still going, then folds it. While the run is live
- * and folded, the member that is running shows under the header, so the
- * current step is never hidden.
+ * turns while more may join the run, then folds it. Folded while the run is
+ * the reply's last row, the member that is running shows under the header,
+ * so the current step is never hidden; once the reply has moved past, a
+ * member still running stays inside.
  */
 export const ExploreGroupRow = memo(function ExploreGroupRow({
   groupKey,
@@ -130,14 +131,15 @@ export const ExploreGroupRow = memo(function ExploreGroupRow({
   })
   const status = awaited ? "awaiting" : given
   const live = status === "running" || status === "pending"
-  const going = useGroupGoing(live, followed)
+  const { current, going } = useGroupPlace(followed)
   const liveStep = open
     ? null
-    : (awaited ?? (live ? lastLiveTool(steps) : null))
+    : (awaited ?? (current && live ? lastLiveTool(steps) : null))
 
   return (
     <ActivityRow
       stepKey={groupKey}
+      motionKey={`group:${groupKey}`}
       status={status}
       marker={
         <RailIcon
@@ -173,6 +175,7 @@ export const ExploreGroupRow = memo(function ExploreGroupRow({
           foot={{
             working: going,
             after: "dot",
+            motionScope: groupKey,
             what: summary,
             onFold: () => setOpen(false),
           }}

@@ -76,6 +76,10 @@ pub struct FsAccessPolicy {
     read_roots: Vec<PathBuf>,
     /// Roots a write may land in. Empty ⇒ unrestricted.
     write_roots: Vec<PathBuf>,
+    /// Kimi Code's `sessions` directories, where a plan file that does not
+    /// exist yet reads as empty instead of failing (see [`is_kimi_plan_file`]).
+    /// Empty for every other agent, and under `strict`.
+    kimi_sessions_roots: Vec<PathBuf>,
 }
 
 impl FsAccessPolicy {
@@ -86,6 +90,7 @@ impl FsAccessPolicy {
         Self {
             read_roots: roots.clone(),
             write_roots: roots,
+            kimi_sessions_roots: Vec::new(),
         }
     }
 
@@ -94,6 +99,7 @@ impl FsAccessPolicy {
         Self {
             read_roots: Vec::new(),
             write_roots: Vec::new(),
+            kimi_sessions_roots: Vec::new(),
         }
     }
 
@@ -121,6 +127,7 @@ impl FsAccessPolicy {
         Self {
             read_roots: Vec::new(),
             write_roots,
+            kimi_sessions_roots: kimi_sessions_roots(agent_type, runtime_env),
         }
     }
 
@@ -140,7 +147,10 @@ impl FsAccessPolicy {
                 Self::permissive(workspace_root, agent_type, runtime_env)
             }
             Some("strict") => Self::strict(workspace_root),
-            Some("unrestricted") => Self::unrestricted(),
+            Some("unrestricted") => Self {
+                kimi_sessions_roots: kimi_sessions_roots(agent_type, runtime_env),
+                ..Self::unrestricted()
+            },
             Some(other) => {
                 tracing::warn!(
                     "[ACP] unrecognized {FS_POLICY_ENV}={other:?}; falling back to \"default\""
@@ -275,6 +285,96 @@ fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String
         .iter()
         .filter_map(|slot| resolve_root_slot(slot, runtime_env))
         .collect()
+}
+
+/// `<KIMI_CODE_HOME>/sessions` (else `~/.kimi-code/sessions`) for the Kimi Code
+/// a connection launches, resolved like its write root; empty for every other
+/// agent.
+///
+/// Kimi Code keeps a session's plan in
+/// `<sessions>/<workdir>/<session>/agents/<agent>/plans/<id>.md`, and in plan
+/// mode it reads that file before every model request and every tool call. No
+/// way into plan mode creates it: the model writes it, with the Write tool,
+/// once it has a plan. Through codeg's `fs/read_text_file` the read of a plan
+/// not written yet fails with a JSON-RPC error, and Kimi takes only a local
+/// `ENOENT` for "no plan yet" (`isMissingFileError` in its plan service,
+/// 2.3.3 and 2.4.0), so the error fails the call instead. The model never gets
+/// the plan file's path, its first tool call ends the turn with no reply, and
+/// plan mode cannot start. A missing plan file therefore reads as empty here,
+/// which is what Kimi reads from its own disk.
+fn kimi_sessions_roots(
+    agent_type: AgentType,
+    runtime_env: &BTreeMap<String, String>,
+) -> Vec<PathBuf> {
+    if agent_type != AgentType::KimiCode {
+        return Vec::new();
+    }
+    agent_data_roots(agent_type, runtime_env)
+        .into_iter()
+        .map(|home| home.join("sessions"))
+        .collect()
+}
+
+/// Whether `path` names a Kimi Code plan file under one of `sessions_roots`
+/// (see [`kimi_sessions_roots`]).
+///
+/// Kimi names the path through its home as it sees it, which may be another
+/// spelling of codeg's root (macOS hands out `/var/…` for `/private/var/…`), so
+/// the canonical forms of the plan's folder and of the root are compared too.
+/// Only the folder is canonicalized: the plan file itself does not exist yet.
+fn is_kimi_plan_file(path: &Path, sessions_roots: &[PathBuf]) -> bool {
+    if sessions_roots.is_empty() {
+        return false;
+    }
+    if sessions_roots
+        .iter()
+        .any(|root| kimi_plan_file_below(path, root))
+    {
+        return true;
+    }
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    let Ok(dir) = std::fs::canonicalize(dir) else {
+        return false;
+    };
+    let canonical = dir.join(name);
+    sessions_roots.iter().any(|root| {
+        std::fs::canonicalize(root).is_ok_and(|root| kimi_plan_file_below(&canonical, &root))
+    })
+}
+
+/// `<workdir>/<session>/agents/<agent>/plans/<id>.md` below `sessions_root`,
+/// with nothing else on the path. Kimi names each plan after three heroes
+/// joined by hyphens (`iron-man-thor-hulk`, with `-<8 hex digits>` added on a
+/// collision), so a plan id is lowercase letters, digits and hyphens with at
+/// least one hyphen. The `AGENTS.md` / `agents.md` files Kimi looks for in the
+/// same folder after a write are not plans, and keep their not-found answer.
+fn kimi_plan_file_below(path: &Path, sessions_root: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(sessions_root) else {
+        return false;
+    };
+    let parts: Vec<&std::ffi::OsStr> = rest
+        .components()
+        .map_while(|component| match component {
+            Component::Normal(part) => Some(part),
+            _ => None,
+        })
+        .collect();
+    let [_workdir, _session, agents, _agent, plans, file] = parts.as_slice() else {
+        return false;
+    };
+    if rest.components().count() != parts.len() || *agents != "agents" || *plans != "plans" {
+        return false;
+    }
+    file.to_str()
+        .and_then(|name| name.strip_suffix(".md"))
+        .is_some_and(|id| {
+            id.contains('-')
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 /// One independently-relocatable directory belonging to an agent.
@@ -790,8 +890,9 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // 0.209.1), so its `~/.trae` never needs to be a write root either.
         // Command Code is the same case: codeg's transcript is its history,
         // and its tools never go through `fs/*` (verified against 1.84.0,
-        // 1.86.3 and 1.88.0). So is MiniMax Code: its tools run in-process and it sends
-        // codeg no `fs/*` or `terminal/*` request (verified against 0.7.0).
+        // 1.86.3, 1.88.0 and 1.88.1). So is MiniMax Code: its tools run
+        // in-process and it sends codeg no `fs/*` or `terminal/*` request
+        // (verified against 0.7.0).
         AgentType::DeepSeekOfficial
         | AgentType::Custom(_)
         | AgentType::ZCode
@@ -866,8 +967,7 @@ impl FileSystemRuntime {
         let path_for_log = path.clone();
 
         let response = run_blocking_with_timeout("fs/read_text_file", move || {
-            read_text_file_impl(&path, line, limit, &policy.read_roots)
-                .map(ReadTextFileResponse::new)
+            read_text_file_impl(&path, line, limit, &policy).map(ReadTextFileResponse::new)
         })
         .await;
 
@@ -948,11 +1048,22 @@ fn read_text_file_impl(
     path: &Path,
     line: Option<u32>,
     limit: Option<u32>,
-    read_roots: &[PathBuf],
+    policy: &FsAccessPolicy,
 ) -> Result<String, FileSystemRuntimeError> {
-    ensure_path_allowed(path, read_roots, false)?;
+    ensure_path_allowed(path, &policy.read_roots, false)?;
 
-    let metadata = std::fs::metadata(path).map_err(|err| map_io_error("read", path, err))?;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        // A Kimi Code plan the model has not written yet, which Kimi itself
+        // reads as empty; see `kimi_sessions_roots`.
+        Err(err)
+            if err.kind() == ErrorKind::NotFound
+                && is_kimi_plan_file(path, &policy.kimi_sessions_roots) =>
+        {
+            return Ok(String::new());
+        }
+        Err(err) => return Err(map_io_error("read", path, err)),
+    };
     if metadata.len() > FS_MAX_FILE_SIZE_BYTES {
         return Err(FileSystemRuntimeError::InvalidParams(format!(
             "file too large for fs/read_text_file ({} bytes, limit {} bytes)",
@@ -1250,6 +1361,7 @@ mod tests {
         FsAccessPolicy {
             read_roots: Vec::new(),
             write_roots: vec![canonical_root(workspace)],
+            kimi_sessions_roots: Vec::new(),
         }
     }
 
@@ -1483,6 +1595,214 @@ mod tests {
 
         let _ = fs::remove_dir_all(workspace);
         let _ = fs::remove_dir_all(grok_home);
+    }
+
+    /// A Kimi Code plans folder as Kimi lays it out, and the plan file in it
+    /// that the model has not written yet.
+    fn kimi_plan_layout(kimi_home: &Path) -> (PathBuf, PathBuf) {
+        let plans = kimi_home
+            .join("sessions")
+            .join("wd_my-app_0c1f9d2e4b7a")
+            .join("session_6f1d2c3b-0a9e-4c8d-9b7a-1e2f3a4b5c6d")
+            .join("agents")
+            .join("main")
+            .join("plans");
+        fs::create_dir_all(&plans).expect("create kimi plans dir");
+        let plan = plans.join("iron-man-thor-hulk.md");
+        (plans, plan)
+    }
+
+    fn kimi_env(kimi_home: &Path) -> BTreeMap<String, String> {
+        BTreeMap::from([(
+            "KIMI_CODE_HOME".to_string(),
+            kimi_home.to_string_lossy().to_string(),
+        )])
+    }
+
+    async fn read_error(runtime: &FileSystemRuntime, path: &Path) -> String {
+        match runtime
+            .read_text_file(ReadTextFileRequest::new("sid", path))
+            .await
+        {
+            Ok(response) => panic!(
+                "{} must still fail to read, got {:?}",
+                path.display(),
+                response.content
+            ),
+            Err(error) => invalid_params(error),
+        }
+    }
+
+    /// Kimi Code reads its plan file before every model request and tool call
+    /// in plan mode, and takes only a local `ENOENT` for "no plan yet". The
+    /// error codeg answered a missing file with failed the call, so plan mode
+    /// never got past its first tool call (see `kimi_sessions_roots`).
+    #[tokio::test(flavor = "current_thread")]
+    async fn kimi_plan_not_written_yet_reads_empty() {
+        let workspace = temp_workspace();
+        let kimi_home = temp_workspace();
+        let (plans, plan) = kimi_plan_layout(&kimi_home);
+        let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+            &workspace,
+            AgentType::KimiCode,
+            &kimi_env(&kimi_home),
+        ));
+
+        let response = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &plan))
+            .await
+            .expect("a plan Kimi has not written yet reads as empty");
+        assert_eq!(response.content, "");
+        assert!(!plan.exists(), "reading the plan must not create it");
+
+        // The same folder named through its canonical path (macOS hands the
+        // temp dir out as `/var/…`, which canonicalizes to `/private/var/…`).
+        let canonical_plan = fs::canonicalize(&plans)
+            .expect("canonical plans dir")
+            .join("captain-america-ant-man-thor-1a2b3c4d.md");
+        let response = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &canonical_plan))
+            .await
+            .expect("the canonical spelling of a plan path matches too");
+        assert_eq!(response.content, "");
+
+        // Once the model writes the plan, it reads back as usual.
+        runtime
+            .write_text_file(WriteTextFileRequest::new("sid", &plan, "# Plan\n"))
+            .await
+            .expect("kimi must be able to write its own plan file");
+        let response = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &plan))
+            .await
+            .expect("read the written plan");
+        assert_eq!(response.content, "# Plan\n");
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(kimi_home);
+    }
+
+    /// Only a missing PLAN reads as empty: every other missing file keeps its
+    /// error, including the `AGENTS.md` lookups Kimi makes in the plans folder
+    /// after a write, the same layout for another agent, and Kimi under the
+    /// `strict` policy, which confines reads to the workspace.
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_a_missing_kimi_plan_reads_empty() {
+        let workspace = temp_workspace();
+        let kimi_home = temp_workspace();
+        let (plans, plan) = kimi_plan_layout(&kimi_home);
+        let session_dir = plans
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .expect("session dir")
+            .to_path_buf();
+        let kimi = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+            &workspace,
+            AgentType::KimiCode,
+            &kimi_env(&kimi_home),
+        ));
+
+        for path in [
+            plans.join("AGENTS.md"),
+            plans.join("agents.md"),
+            plans.join(".kimi-code").join("AGENTS.md"),
+            plans.join("notes.md"),
+            plans.join("Iron-Man-Thor-Hulk.md"),
+            plans.join("iron-man-thor-hulk.txt"),
+            plans.join("archive").join("iron-man-thor-hulk.md"),
+            session_dir
+                .join("agents")
+                .join("main")
+                .join("notes")
+                .join("iron-man-thor-hulk.md"),
+            session_dir
+                .join("tasks")
+                .join("main")
+                .join("plans")
+                .join("iron-man-thor-hulk.md"),
+            session_dir.join("plans").join("iron-man-thor-hulk.md"),
+            kimi_home.join("plans").join("iron-man-thor-hulk.md"),
+            workspace.join("iron-man-thor-hulk.md"),
+        ] {
+            let message = read_error(&kimi, &path).await;
+            assert!(message.contains("failed to read"), "{message}");
+        }
+
+        let grok = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+            &workspace,
+            AgentType::Grok,
+            &kimi_env(&kimi_home),
+        ));
+        let message = read_error(&grok, &plan).await;
+        assert!(message.contains("failed to read"), "{message}");
+
+        let mut strict_env = kimi_env(&kimi_home);
+        strict_env.insert(FS_POLICY_ENV.to_string(), "strict".to_string());
+        let strict = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
+            &workspace,
+            AgentType::KimiCode,
+            &strict_env,
+        ));
+        read_error(&strict, &plan).await;
+
+        // `unrestricted` lifts the path gates but keeps the plan answer.
+        let mut open_env = kimi_env(&kimi_home);
+        open_env.insert(FS_POLICY_ENV.to_string(), "unrestricted".to_string());
+        let open = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
+            &workspace,
+            AgentType::KimiCode,
+            &open_env,
+        ));
+        let response = open
+            .read_text_file(ReadTextFileRequest::new("sid", &plan))
+            .await
+            .expect("unrestricted keeps the missing-plan answer");
+        assert_eq!(response.content, "");
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(kimi_home);
+    }
+
+    /// `KIMI_CODE_HOME` through a link: Kimi may name the plan by the real
+    /// path while codeg resolved the link, or the other way round.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn kimi_plan_through_a_linked_home_reads_empty() {
+        let workspace = temp_workspace();
+        let real_home = temp_workspace();
+        let links = temp_workspace();
+        let linked_home = links.join("kimi-home");
+        std::os::unix::fs::symlink(&real_home, &linked_home).expect("link the kimi home");
+        let (real_plans, _) = kimi_plan_layout(&real_home);
+        let relative_plans = real_plans
+            .strip_prefix(&real_home)
+            .expect("plans under the home")
+            .to_path_buf();
+
+        for (codeg_home, kimi_path) in [
+            (&linked_home, real_plans.join("hulk-thor-wasp.md")),
+            (
+                &real_home,
+                linked_home.join(&relative_plans).join("hulk-thor-wasp.md"),
+            ),
+        ] {
+            let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+                &workspace,
+                AgentType::KimiCode,
+                &kimi_env(codeg_home),
+            ));
+            let response = runtime
+                .read_text_file(ReadTextFileRequest::new("sid", &kimi_path))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{} must read as empty: {error:?}", kimi_path.display())
+                });
+            assert_eq!(response.content, "");
+        }
+
+        for dir in [workspace, real_home, links] {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     /// End-to-end on the REAL default policy, which is what catches root
@@ -2119,6 +2439,7 @@ mod tests {
         let runtime = FileSystemRuntime::with_policy(FsAccessPolicy {
             read_roots: Vec::new(),
             write_roots: vec![canonical_root(&workspace)],
+            kimi_sessions_roots: Vec::new(),
         });
         assert!(runtime
             .write_text_file(WriteTextFileRequest::new(

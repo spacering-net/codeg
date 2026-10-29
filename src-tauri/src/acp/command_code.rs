@@ -11,7 +11,7 @@
 //! stored, which is how a reopened conversation keeps its context.
 //!
 //! Everything here was verified against `command-code 1.84.0`, and again
-//! against 1.86.3 and 1.88.0, with an isolated `HOME`:
+//! against 1.86.3, 1.88.0 and 1.88.1, with an isolated `HOME`:
 //!
 //! * Everything lives in `.commandcode` under the home directory (`HOME`, else
 //!   `USERPROFILE`), with no variable to relocate it: `auth.json`,

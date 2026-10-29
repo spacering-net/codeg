@@ -22,9 +22,10 @@ import type { StepStatus } from "@/lib/activity/types"
 import { describeStdinChars } from "@/lib/shell-session-tool"
 import { cn } from "@/lib/utils"
 import { useActivityRender } from "../activity-context"
-import { ActivityMembers, ActivityRow, useGroupGoing } from "../activity-row"
+import { ActivityMembers, ActivityRow, useGroupPlace } from "../activity-row"
 import { CopyAction, DetailBox, DetailScroll } from "../detail-box"
 import { useDisclosure } from "../disclosure-store"
+import { SlideSlot } from "../../slide-slot"
 import { RailIcon } from "../rail-icon"
 import {
   GROUP_ICON,
@@ -483,6 +484,11 @@ function CommandDetail({
   )
 }
 
+/** A running command's last lines show once it has had output for this long:
+ *  one that prints as it ends (some agents hand a command's output over only
+ *  with its last update) never opens a gap under its row only to close it. */
+const LIVE_TAIL_AFTER_MS = 500
+
 /** The last few lines of a running command, under its folded row. */
 function LiveTail({ text }: { text: string }) {
   const tail = useMemo(() => {
@@ -494,7 +500,7 @@ function LiveTail({ text }: { text: string }) {
   return (
     <pre
       aria-hidden="true"
-      className="mt-0.5 overflow-hidden whitespace-pre-wrap break-all font-mono text-2xs leading-4 text-muted-foreground/70 [animation:tool-content-fade_200ms_ease-out_500ms_both]"
+      className="mt-0.5 overflow-hidden whitespace-pre-wrap break-all font-mono text-2xs leading-4 text-muted-foreground/70"
       dir="ltr"
     >
       {tail}
@@ -550,6 +556,13 @@ export const CommandRow = memo(function CommandRow({
     !!scriptMeta?.outputMissing ||
     !!scriptMeta?.sharedWith.length
   const elapsed = useLiveElapsed(step.key, live)
+  // How long the running command has had output to show, counted like its
+  // clock: per step, so a row the virtual list brings back shows its tail as
+  // it stands instead of opening it again.
+  const outputAge = useLiveElapsed(
+    `${step.key}:output`,
+    live && output !== null
+  )
   const clock =
     elapsed !== null && elapsed >= LIVE_CLOCK_AFTER_MS
       ? formatClock(elapsed)
@@ -587,7 +600,20 @@ export const CommandRow = memo(function CommandRow({
           <ToolFigure tool={tool} />
         ))
       }
-      addon={live && !open && output ? <LiveTail text={output.text} /> : null}
+      addon={
+        // Slides open under the row and shut when the command is done,
+        // holding its last lines as it closes.
+        <SlideSlot
+          show={
+            !open &&
+            output !== null &&
+            outputAge !== null &&
+            outputAge >= LIVE_TAIL_AFTER_MS
+          }
+        >
+          {output ? <LiveTail text={output.text} /> : null}
+        </SlideSlot>
+      }
       detail={() => (
         <CommandDetail step={step} output={output} commandCut={commandCut} />
       )}
@@ -605,9 +631,12 @@ export const CommandRow = memo(function CommandRow({
  * is still going. A reply that is done folds them all. A failed member keeps
  * it open no more than a passing one does — the header counts the failures in
  * red — and what the reader chose stands. Open, its commands end on a foot
- * that turns while the group is still going, then folds it (`Collapse 3
- * commands`). Folded while live, the member waiting on the user or running
- * shows under the header.
+ * that turns while more may join the group, then folds it (`Collapse 3
+ * commands`) — even with a command moved to the background still running in
+ * it, which its own row shows. Folded, the member waiting on the user shows
+ * under the header, and so does the one running while the group is the
+ * reply's last row; once the reply has moved past, a member still running
+ * stays inside.
  */
 export const CommandGroupRow = memo(function CommandGroupRow({
   groupKey,
@@ -631,16 +660,17 @@ export const CommandGroupRow = memo(function CommandGroupRow({
   const status = awaited ? "awaiting" : given
   const live = status === "running" || status === "pending"
   const ended = followed && !live && !awaited
-  const going = useGroupGoing(live, followed)
+  const { current, going } = useGroupPlace(followed)
   const [open, setOpen] = useDisclosure(`group:${groupKey}`, {
     defaultOpen: isStreaming && !ended,
   })
-  // Folded, the member that needs the user — or else the one running — shows
-  // under the header, so the current step is never hidden.
+  // Folded, the member that needs the user — or else, while the group is the
+  // reply's current row, the one running — shows under the header, so the
+  // current step is never hidden.
   const liveStep = open
     ? null
     : (awaited ??
-      (live
+      (current && live
         ? ([...steps]
             .reverse()
             .find(
@@ -652,6 +682,7 @@ export const CommandGroupRow = memo(function CommandGroupRow({
   return (
     <ActivityRow
       stepKey={groupKey}
+      motionKey={`group:${groupKey}`}
       status={status}
       marker={
         <RailIcon
@@ -685,6 +716,7 @@ export const CommandGroupRow = memo(function CommandGroupRow({
           foot={{
             working: going,
             after: "ring",
+            motionScope: groupKey,
             what: t("header.commands", { count: steps.length }),
             onFold: () => setOpen(false),
           }}

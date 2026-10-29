@@ -35,6 +35,32 @@ function glyphViewBox(icon: ActivityIcon, size: "md" | "sm"): string {
 }
 
 /**
+ * Sets a turning element's turn to the clock's, so every one is at the same
+ * angle at the same moment, however long it has been in the page. The ring
+ * at the foot of the steps is not one element for the life of a reply — it
+ * moves from under the prose to the foot of the rail, into a group and out,
+ * and the pending reply's gives way to the reply's own — and each new one
+ * starting its turn from the top made the arc jump back as it took over.
+ *
+ * A ref, so it runs as the element is attached, before the page is drawn and
+ * the animation starts; and one function for the module's life, so React does
+ * not call it again on every render — moving the delay of a turn already
+ * running would jump it.
+ */
+function turnInStep(periodMs: number) {
+  return (element: HTMLElement | null) => {
+    if (element && typeof performance !== "undefined") {
+      element.style.animationDelay = `${-(performance.now() % periodMs)}ms`
+    }
+  }
+}
+
+/** One turn of `animate-spin`. */
+const turningRingInStep = turnInStep(1000)
+/** One turn of a running step's arc (`[animation-duration:1.5s]`). */
+const runningArcInStep = turnInStep(1500)
+
+/**
  * Ring colour by status, quiet by default: a finished step fades back to a
  * faint grey divider (`--activity-ring-done`), and only a failure (red) or
  * something waiting on the user (amber) takes a colour. A running step is
@@ -123,6 +149,7 @@ export function RailIcon({
       {status === "running" ? (
         <span
           aria-hidden="true"
+          ref={runningArcInStep}
           className="absolute inset-0 animate-spin rounded-full border-[1.25px] border-transparent border-t-activity-ring-live [animation-duration:1.5s] motion-reduce:animate-none"
         />
       ) : null}
@@ -156,17 +183,27 @@ export function TurningRing({ className }: { className?: string }) {
   return (
     <span aria-hidden="true" className={cn("relative block", className)}>
       <span className="absolute inset-0 rounded-full border-[0.5px] border-activity-ring" />
-      <span className="absolute inset-0 animate-spin rounded-full border-[1.25px] border-transparent border-t-activity-ring-live motion-reduce:animate-none" />
+      <span
+        ref={turningRingInStep}
+        className="absolute inset-0 animate-spin rounded-full border-[1.25px] border-transparent border-t-activity-ring-live motion-reduce:animate-none"
+      />
     </span>
   )
 }
 
 /** The turning mark on its own, under a live reply whose steps are folded
- *  away, not written yet, or not a list it can fold (see `TurningRing`):
- *  placed for a 1.5rem slot, its centre on the rail's line. */
+ *  away, or whose words have no step yet to put them on a rail (see
+ *  `TurningRing`): placed for a 1.5rem slot, its centre on the rail's line.
+ *  The same mark, for the reply's motion, as the ring at the foot of its
+ *  steps. */
 export function WorkingMark() {
   return (
-    <div aria-hidden="true" className="relative h-6" data-marker="working">
+    <div
+      aria-hidden="true"
+      className="relative h-6"
+      data-marker="working"
+      data-motion-key="working"
+    >
       <TurningRing className="absolute start-0.5 top-1 size-4" />
     </div>
   )

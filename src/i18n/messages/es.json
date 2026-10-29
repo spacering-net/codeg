@@ -4261,6 +4261,7 @@
         "cardResultPending": "El resultado aún no ha llegado"
       },
       "asyncTasks": {
+        "title": "Tareas en segundo plano",
         "openOutput": "Salida",
         "stop": "Detener",
         "tokens": "{count} tokens",

@@ -21,6 +21,7 @@ import { useActivityLive } from "./activity/activity-live-context"
 import { openDisclosures } from "./activity/disclosure-store"
 import { useFoldBack } from "./activity/fold-back"
 import { WorkingMark } from "./activity/rail-icon"
+import { ReplyMotion } from "./reply-motion"
 
 export interface SplitAssistantTurnParts {
   progress: AdaptedContentPart[]
@@ -81,6 +82,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   roundOpen = true,
   onRoundOpenChange,
   foldEpoch = 0,
+  pending = false,
 }: {
   parts: AdaptedContentPart[]
   durationMs?: number | null
@@ -94,6 +96,11 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   onRoundOpenChange?: (open: boolean) => void
   /** Bumped by `message-list-view` on every user send. */
   foldEpoch?: number
+  /** Not a reply yet: what stands in the thread between a send and the
+   *  agent's first word — the reply's header and turning ring, where the
+   *  reply will draw them, so it takes over without a jump (see
+   *  `ReplyMotion`'s handoff). */
+  pending?: boolean
 }) {
   const tElapsed = useTranslations("Folder.chat.liveTurnStats")
   const split = useMemo(() => splitAssistantTurnParts(parts), [parts])
@@ -130,20 +137,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
 
   const open = currentRound ? roundOpen : localOpen
 
-  // The unfold animation belongs to a real closed→open TOGGLE, never to a mount
-  // that starts open. This component remounts while staying open: the
-  // authoritative detail refetch renames the turn, and the virtualizer
-  // recycles any row scrolled past its overscan buffer. Without this gate each
-  // of those replays a 200ms unfold, so a finished reply appears to collapse
-  // and re-open by itself — precisely the behaviour the round model exists to
-  // prevent.
-  //
-  // Only the ENTER side is gated. The exit animation must always run: it is
-  // what unmounts the content (see the presence check in `instant-collapsible`).
-  const [openMark, setOpenMark] = useState({ open, animateEnter: false })
-  if (openMark.open !== open) setOpenMark({ open, animateEnter: open })
-  const animateEnter = openMark.open === open && openMark.animateEnter
-
   const handleOpenChange = useCallback(
     (next: boolean) => {
       if (currentRound) {
@@ -174,6 +167,29 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // reply is then an explicit choice; the round settling re-applies the rule.
   const foldable =
     split.progress.length > 0 && (!completed || hasVisibleAnswer(split.answer))
+  // What is drawn: a reply that cannot fold shows its steps whatever `open`
+  // says.
+  const bodyOpen = foldable ? open : true
+
+  // The unfold animation belongs to a real closed→open TOGGLE, never to a mount
+  // that starts open. This component remounts while staying open: the
+  // authoritative detail refetch renames the turn, and the virtualizer
+  // recycles any row scrolled past its overscan buffer. Without this gate each
+  // of those replays a 200ms unfold, so a finished reply appears to collapse
+  // and re-open by itself — precisely the behaviour the round model exists to
+  // prevent. Read from what is drawn, so `open` moving under a reply that
+  // cannot fold (its failure link opening it) unfolds nothing.
+  //
+  // Only the ENTER side is gated. The exit animation must always run: it is
+  // what unmounts the content (see the presence check in `instant-collapsible`).
+  const [openMark, setOpenMark] = useState({
+    open: bodyOpen,
+    animateEnter: false,
+  })
+  if (openMark.open !== bodyOpen) {
+    setOpenMark({ open: bodyOpen, animateEnter: bodyOpen })
+  }
+  const animateEnter = openMark.open === bodyOpen && openMark.animateEnter
 
   // Streamdown's incomplete-markdown repair (remend) may only run on text that
   // is still being written. On settled text it appends a closer after spans
@@ -183,11 +199,22 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // turn, so they all get the same answer.
   const isStreaming = !completed
 
+  // While the agent is still at it, the prose after its last step is one more
+  // step, not yet the answer: on the rail, as prose between steps is, with the
+  // turning ring under it. Until the reply ends there is no telling an aside
+  // ("Checking the tests next.") from its closing words; drawn as the answer,
+  // the words being written sat under the ring, cut off from the steps they
+  // follow, until the next call pulled them up into the steps. Once the reply
+  // is done its closing prose is lifted out under the steps as the answer.
+  // Folded, there is no rail to put it on: it stays under the header, as the
+  // answer does.
+  const proseOnRail = isStreaming && foldable && open
+
   const bodyId = useId()
   const turnRef = useRef<HTMLDivElement | null>(null)
   const activity = useMemo(
-    () => buildActivity(parts, { isStreaming }),
-    [parts, isStreaming]
+    () => buildActivity(parts, { isStreaming, keepAnswer: proseOnRail }),
+    [parts, isStreaming, proseOnRail]
   )
   // The header's red "N failed": open the turn at the first failure nothing
   // redid — the row, and the group it is folded into.
@@ -195,7 +222,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   const jumpToFailure = useCallback(() => {
     if (!failureKey) return
     openDisclosures(disclosureKeysFor(activity.items, failureKey))
-    if (!open) handleOpenChange(true)
+    if (!bodyOpen) handleOpenChange(true)
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         const escaped = CSS.escape(failureKey)
@@ -206,17 +233,23 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
           ?.scrollIntoView({ block: "center", behavior: "smooth" })
       })
     )
-  }, [activity, failureKey, open, handleOpenChange])
+  }, [activity, failureKey, bodyOpen, handleOpenChange])
 
   // An open fold's steps end on a foot. While its agent is at work — not
   // while it waits on the user to answer a permission request — that is the
-  // turning ring; otherwise a row that folds the steps away, saying what it
-  // folds: `Collapse 14 steps · 3m 34s`. A live reply with no foot in view
-  // (its steps folded, none yet, or none it can fold) ends on the turning
-  // mark under whatever does end it instead.
+  // turning ring, under whatever it is writing; otherwise a row that folds
+  // the steps away, saying what it folds: `Collapse 14 steps · 3m 34s`. A
+  // reply with nothing in it yet — no step, no words — is that list with its
+  // foot alone: the turning ring hangs under the header on the rail from it,
+  // where the first step will go, and the steps join above it. A live reply
+  // with no foot in view (its steps folded, or words but no step it can
+  // fold) ends on the turning mark under whatever does end it instead.
   const { awaitingUser } = useActivityLive()
   const working = isStreaming && !awaitingUser
-  const footShown = foldable && open && activity.items.length > 0
+  const unstarted =
+    working && activity.items.length === 0 && !hasVisibleAnswer(split.answer)
+  const footShown =
+    bodyOpen && (unstarted || (foldable && activity.items.length > 0))
   const tActivity = useTranslations("Folder.chat.activity")
   const headerRef = useRef<HTMLDivElement | null>(null)
   const foldBack = useFoldBack()
@@ -227,7 +260,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     () => ({
       // Only while the steps are open: folding, they stay in view as they
       // slide shut, and the mark under the reply has taken over by then.
-      working: working && open,
+      working: working && bodyOpen,
       what:
         [steps > 0 ? tActivity("header.steps", { count: steps }) : null, took]
           .filter(Boolean)
@@ -243,7 +276,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
           fold: () => handleOpenChange(false),
         }),
     }),
-    [working, open, steps, took, tActivity, foldBack, handleOpenChange]
+    [working, bodyOpen, steps, took, tActivity, foldBack, handleOpenChange]
   )
 
   const header = (
@@ -265,96 +298,112 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
       }
     />
   )
-  if (!foldable) {
-    // Parsers leave empty placeholder turns between tool exchanges;
-    // `mergeConsecutiveAssistantTurns` only swallows them mid-run, so a lone
-    // one reaches here with nothing in it at all. It has no content for a
-    // header to head — heading it would turn an invisible turn into a visible
-    // empty one. Settled turns only: a live reply's header is the point, even
-    // before its first token lands.
-    const blank =
-      completed &&
-      split.progress.length === 0 &&
-      !hasVisibleAnswer(split.answer)
-    if (blank) {
-      return (
-        <ContentPartsRenderer
-          parts={parts}
-          role="assistant"
-          isStreaming={isStreaming}
-        />
-      )
-    }
-    // A reply that is all process — stopped on a tool call, or ended on a card
-    // that is its answer — shows its rows as an open fold does: hung under the
-    // header, with nothing between them; the header's failure link looks for
-    // its row in here. A reply with no steps has none, its answer under the
-    // header.
+  // Parsers leave empty placeholder turns between tool exchanges;
+  // `mergeConsecutiveAssistantTurns` only swallows them mid-run, so a lone one
+  // reaches here with nothing in it at all. It has no content for a header to
+  // head — heading it would turn an invisible turn into a visible empty one.
+  // Settled turns only: a live reply's header is the point, even before its
+  // first token lands.
+  const blank =
+    completed && split.progress.length === 0 && !hasVisibleAnswer(split.answer)
+  if (blank) {
     return (
-      <div ref={turnRef} className="space-y-3">
-        <div>
-          {header}
-          <ActivityParts model={activity} isStreaming={isStreaming} headed />
-        </div>
-        {split.answer.length > 0 && (
-          <ContentPartsRenderer
-            parts={split.answer}
-            role="assistant"
-            isStreaming={isStreaming}
-          />
-        )}
-        {working ? <WorkingMark /> : null}
-      </div>
+      <ContentPartsRenderer
+        parts={parts}
+        role="assistant"
+        isStreaming={isStreaming}
+      />
     )
   }
+
+  // One tree for every shape the reply takes, so its header and its steps
+  // stay the same elements as it changes shape: the first step arriving under
+  // prose that had no rail, the reply ending with nothing to fold. A reply
+  // that cannot fold — all process (stopped on a tool call, or ended on a card
+  // that is its answer), or no steps at all — shows its rows as an open fold
+  // does, hung under the header, its answer under them; the header's failure
+  // link looks for its row in here.
+  const answerShown = split.answer.length > 0 && !proseOnRail
+  // What moves the layout (see `ReplyMotion`): not the words of the prose
+  // being written, which only lengthen it.
+  const shape = [
+    foldable,
+    proseOnRail,
+    completed,
+    working,
+    footShown,
+    answerShown,
+    activity.items.length,
+    activity.summary.steps,
+  ].join("|")
   return (
-    <div ref={turnRef} className="space-y-4">
-      <Collapsible
-        className="w-full"
-        open={open}
-        onOpenChange={handleOpenChange}
+    <ReplyMotion
+      shape={shape}
+      live={isStreaming}
+      open={bodyOpen}
+      rootRef={turnRef}
+      handoff={pending ? "give" : "take"}
+    >
+      <div
+        ref={turnRef}
+        className={foldable ? "space-y-4" : "space-y-3"}
+        // The newest reply (globals.css): its blocks are laid out at once
+        // rather than when scrolled near, so none of them is drawn first at a
+        // placeholder height while it is written or as it settles.
+        data-reply-current={isStreaming || currentRound ? "" : undefined}
       >
-        {header}
-        {/* Folded: what can outlive the turn — a delegation or sub-agent
-            still running — stays in view under the header. */}
-        {!open ? (
-          <ActivityParts
-            model={activity}
-            isStreaming={isStreaming}
-            pinnedOnly
-            headed
-          />
-        ) : null}
-        {/* `reply-fold-body` (globals.css) slides the body open and shut on a
-            grid track. The div is the clipped grid item — it must stay a
-            single child, and the spacing has to live INSIDE it (the headed
-            list's own, under the header) or the closed track never reaches
-            zero. */}
-        <CollapsibleContent
-          id={bodyId}
-          className={cn(
-            "reply-fold-body w-full outline-none",
-            animateEnter && "reply-fold-enter"
-          )}
+        <Collapsible
+          className="w-full"
+          open={bodyOpen}
+          onOpenChange={handleOpenChange}
         >
-          <div>
+          {header}
+          {/* Folded: what can outlive the turn — a delegation or sub-agent
+              still running — stays in view under the header. */}
+          {!bodyOpen ? (
             <ActivityParts
               model={activity}
               isStreaming={isStreaming}
-              foot={foot}
+              pinnedOnly
               headed
             />
+          ) : null}
+          {/* `reply-fold-body` (globals.css) slides the body open and shut on
+              a grid track. The div is the clipped grid item — it must stay a
+              single child, and the spacing has to live INSIDE it (the headed
+              list's own, under the header) or the closed track never reaches
+              zero. */}
+          <CollapsibleContent
+            id={bodyId}
+            className={cn(
+              "reply-fold-body w-full outline-none",
+              animateEnter && "reply-fold-enter"
+            )}
+          >
+            <div>
+              <ActivityParts
+                model={activity}
+                isStreaming={isStreaming}
+                foot={foldable || unstarted ? foot : undefined}
+                headed
+              />
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+        {answerShown ? (
+          // Keyed as the prose it was on the rail (`prose:<its index in the
+          // reply>`), so the closing words glide off the rail into place when
+          // the reply ends.
+          <div data-motion-key={`prose:${split.progress.length}`}>
+            <ContentPartsRenderer
+              parts={split.answer}
+              role="assistant"
+              isStreaming={isStreaming}
+            />
           </div>
-        </CollapsibleContent>
-      </Collapsible>
-      {split.answer.length > 0 && (
-        <ContentPartsRenderer
-          parts={split.answer}
-          role="assistant"
-          isStreaming={isStreaming}
-        />
-      )}
-      {working && !footShown ? <WorkingMark /> : null}
-    </div>
+        ) : null}
+        {working && !footShown ? <WorkingMark /> : null}
+      </div>
+    </ReplyMotion>
   )
 })

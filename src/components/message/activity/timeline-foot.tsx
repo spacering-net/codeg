@@ -35,12 +35,19 @@ export function TimelineFoot({
   working,
   what,
   onFold,
+  motionScope,
 }: {
   variant?: "main" | "child"
   /** The marker of the members above it: a dot's dashed segment reaches
    *  further into the next row than a ring's, so the foot starts that much
    *  lower (globals.css). */
   after?: "ring" | "dot"
+  /** Whose foot this is, as the reply changes shape (`ReplyMotion`): `""`
+   *  for the reply's own, a group's key for its members'. The turning ring
+   *  and the fold row are told apart — the ring glides down as steps join,
+   *  the row that replaces it fades in where it lands. None for a list
+   *  nested in a step. */
+  motionScope?: string
 } & ActivityFoot) {
   const t = useTranslations("Folder.chat.activity")
   const main = variant === "main"
@@ -48,6 +55,12 @@ export function TimelineFoot({
   // Only a group's members set the foot lower; a reply's prose dots reach no
   // further into the next row than its rings.
   const afterDot = !main && after === "dot" ? "dot" : undefined
+  const motionKey = (what: "working" | "foot") =>
+    motionScope === undefined
+      ? undefined
+      : motionScope
+        ? `${what}:${motionScope}`
+        : what
   if (working) {
     return (
       <li
@@ -55,6 +68,7 @@ export function TimelineFoot({
         className={cn(row, "h-7")}
         data-marker="working"
         data-after={afterDot}
+        data-motion-key={motionKey("working")}
       >
         <TurningRing
           className={cn(
@@ -66,7 +80,12 @@ export function TimelineFoot({
     )
   }
   return (
-    <li className={row} data-marker="foot" data-after={afterDot}>
+    <li
+      className={row}
+      data-marker="foot"
+      data-after={afterDot}
+      data-motion-key={motionKey("foot")}
+    >
       {/* The whole row is the control, the ring in it: the button reaches
           back over the marker column, and the ring sits in that column. */}
       <button

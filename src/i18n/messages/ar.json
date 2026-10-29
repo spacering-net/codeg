@@ -4261,6 +4261,7 @@
         "cardResultPending": "لم تصل النتيجة بعد"
       },
       "asyncTasks": {
+        "title": "مهام الخلفية",
         "openOutput": "المخرجات",
         "stop": "إيقاف",
         "tokens": "{count} رمز",

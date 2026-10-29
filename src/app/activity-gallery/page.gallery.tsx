@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { Message, MessageContent } from "@/components/ai-elements/message"
+import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
 import { SessionDetailsInsights } from "@/components/layout/session-details-insights"
 import { CompletedTurnContent } from "@/components/message/completed-turn-content"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
@@ -51,7 +52,7 @@ import {
   toolResult,
   toolUse,
 } from "@/lib/activity/__fixtures__/mockup-turn"
-import type { MessageTurn } from "@/lib/types"
+import type { AsyncTaskRecord, MessageTurn } from "@/lib/types"
 import { publishTranscriptInsights } from "@/stores/transcript-insights-store"
 
 const params =
@@ -814,6 +815,40 @@ const COMMANDS_LIVE_TURN: MessageTurn = {
   ],
 }
 
+/** A command group the reply has gone on past, with one of its commands moved
+ *  to the background and still running (codex's `asyncTasks.backgrounded`:
+ *  the call that launched it never settles). */
+const BACKGROUND_GROUP_TURN: MessageTurn = {
+  id: "turn-background-group",
+  role: "assistant",
+  timestamp: "2026-10-29T08:00:00Z",
+  blocks: [
+    toolUse("bg1", "Bash", {
+      command:
+        "cat package.json && cat app/page.tsx && cat app/globals.css && cat components/neon-demo.tsx",
+    }),
+    toolResult("bg1", '{\n  "name": "web",\n  "private": true\n}'),
+    toolUse(
+      "bg2",
+      "Bash",
+      { command: "git status --short && find .. -name AGENTS.md -print" },
+      { jetbrains: { air: { asyncTasks: { backgrounded: true } } } }
+    ),
+    toolResult(
+      "bg2",
+      [
+        "../codeg-task-423/AGENTS.md",
+        "../codeg-dev-0630/AGENTS.md",
+        "find: ../.Trashes: Operation not permitted",
+      ].join("\n")
+    ),
+    {
+      type: "thinking",
+      text: "**Considering design options**\n\nThe page needs a calmer palette.",
+    },
+  ],
+}
+
 /** Every Markdown block a reply carries, the wide ones wider than the column. */
 const MARKDOWN_TURN: MessageTurn = {
   id: "turn-markdown",
@@ -976,6 +1011,121 @@ function StreamScenario() {
     }
   }, [beat])
   return <ScenarioView scenario={scenario} />
+}
+
+/**
+ * The strip of background tasks over the transcript (`?view=async-tasks`):
+ * `&tasks=` of them still running (default 6) — shells with an output and a
+ * stop, a monitor that offers neither, a workflow on a phase, a turn the agent
+ * started on its own — over the reference reply, in a pane as tall as a chat
+ * column (`&height=`, default 640).
+ */
+const ASYNC_TASK_KINDS: AsyncTaskRecord[] = [
+  {
+    task_id: "bg-loops",
+    name: "Run fixed-file loops then original-failure checks",
+    task_type: "shell",
+    description: "for f in $(cat fixed.txt); do pnpm vitest run $f; done",
+    show_in_transcript: false,
+    can_stop: true,
+    state: "running",
+    output_file_path: "/tmp/codeg-gallery/bg-loops.output",
+  },
+  {
+    task_id: "bg-monitor",
+    name: "t3 verification: fixed-run failures, original-failure tallies, completion",
+    task_type: "monitor",
+    description: "t3 verification",
+    show_in_transcript: true,
+    can_stop: false,
+    state: "running",
+  },
+  {
+    task_id: "bg-wait",
+    name: "Wait until fixed-file verification loops finish",
+    task_type: "shell",
+    description: "until [ -f done.flag ]; do sleep 5; done",
+    show_in_transcript: false,
+    can_stop: true,
+    state: "running",
+    output_file_path: "/tmp/codeg-gallery/bg-wait.output",
+  },
+  {
+    task_id: "bg-workflow",
+    name: "deep-research",
+    task_type: "workflow",
+    description: "Survey the runners",
+    show_in_transcript: true,
+    can_stop: true,
+    state: "running",
+    phase: "Research",
+    current_agent: "researcher-2",
+  },
+  {
+    task_id: "bg-turn",
+    name: "Claude is working",
+    task_type: "turn",
+    description: 'Background command "pnpm build" completed (exit code 0)',
+    show_in_transcript: false,
+    can_stop: true,
+    state: "running",
+  },
+  {
+    task_id: "bg-paused",
+    name: "Wait until the whole verification job finishes",
+    task_type: "shell",
+    description: "wait $(cat job.pid)",
+    show_in_transcript: false,
+    can_stop: true,
+    state: "paused",
+    output_file_path: "/tmp/codeg-gallery/bg-paused.output",
+  },
+]
+
+function AsyncTasksScenario() {
+  const count = Number(params.get("tasks") ?? 6)
+  const height = Number(params.get("height") ?? 640)
+  const tasks = useMemo(
+    () =>
+      Array.from({ length: count }, (_, i) => {
+        const kind = ASYNC_TASK_KINDS[i % ASYNC_TASK_KINDS.length]!
+        return { ...kind, task_id: `${kind.task_id}-${i}` }
+      }),
+    [count]
+  )
+  const reply = useMemo(
+    () => adaptMessageTurn(MOCKUP_ASSISTANT_TURN, MOCKUP_ADAPTER_TEXT),
+    []
+  )
+  const [roundOpen, setRoundOpen] = useState(false)
+  return (
+    <div
+      id="gallery-root"
+      data-scenario="async-tasks"
+      className="mx-auto flex w-full max-w-[48rem] flex-col overflow-hidden border-x border-border"
+      style={{ height }}
+    >
+      <AsyncTaskStrip
+        tasks={tasks}
+        onStop={async () => true}
+        agentName="Claude Code"
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <Message from="assistant">
+          <MessageContent>
+            <CompletedTurnContent
+              parts={reply.content}
+              durationMs={MOCKUP_ASSISTANT_TURN.duration_ms}
+              completed
+              currentRound
+              roundOpen={roundOpen}
+              onRoundOpenChange={setRoundOpen}
+            />
+          </MessageContent>
+        </Message>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -1154,6 +1304,13 @@ const SCENARIOS: Scenario[] = [
     live: true,
     inProgress: ["k3"],
   },
+  {
+    id: "background-group",
+    title: "A command moved to the background, the reply gone on past it",
+    turn: BACKGROUND_GROUP_TURN,
+    live: true,
+    inProgress: ["bg2"],
+  },
   { id: "markdown", title: "Markdown", turn: MARKDOWN_TURN },
 ]
 
@@ -1215,6 +1372,8 @@ export default function ActivityGalleryPage() {
           <div className="chat-motion-scope min-h-screen bg-background text-foreground">
             {view === "nav" ? (
               <NavScenario />
+            ) : view === "async-tasks" ? (
+              <AsyncTasksScenario />
             ) : (
               <div
                 id="gallery-root"

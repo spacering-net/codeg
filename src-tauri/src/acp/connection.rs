@@ -7492,10 +7492,10 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     //
     // Command Code joins it for the same reason: `command-code acp` loads
     // `~/.commandcode/mcp.json` and starts what `session/new` carries as well
-    // (verified against 1.84.0, 1.86.3 and 1.88.0, a server from each source
-    // in one session's tool list), and a name on both sides keeps the file's
-    // copy, as its docs say and 1.88.0 showed live. codeg's MCP settings UI
-    // manages that file.
+    // (verified against 1.84.0, 1.86.3, 1.88.0 and 1.88.1, a server from each
+    // source in one session's tool list), and a name on both sides keeps the
+    // file's copy, as its docs say and 1.88.0 and 1.88.1 showed live. codeg's
+    // MCP settings UI manages that file.
     //
     // OpenCode joins it: 2.x loads `mcp.servers` from its own config, which
     // codeg's MCP settings UI manages, and turns each server `session/new`
@@ -11794,7 +11794,7 @@ async fn set_session_config_option_inner(
 ) -> Result<Vec<SessionConfigOption>, agent_client_protocol::Error> {
     // Of the two ACP mode requests, only session/set_mode refreshes the
     // bridge's plan-enabled mirror; set_config_option("mode") keeps reporting
-    // "plan" while that mirror is set (bridge 0.69.2 through 0.76.3). Send
+    // "plan" while that mirror is set (bridge 0.69.2 through 0.78.0). Send
     // set_mode first for mode changes, then read the config response; the
     // initial-mode gate still requires an exact confirmation before prompt.
     if agent_type == AgentType::ZCode && config_id == "mode" {
@@ -13221,6 +13221,116 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
     }
 }
 
+/// How long after the answer to a prompt that a Stop cancelled codeg holds
+/// CodeBuddy's next prompt.
+///
+/// CodeBuddy (2.171.0 through 2.177.1) answers a `session/prompt` that starts
+/// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
+/// does not run the prompt or keep it in its history (`isCancelBarrierActive`
+/// in its ACP view). It arms that barrier while it handles the cancel, before
+/// it answers the cancelled prompt, so a prompt sent this long after that
+/// answer always starts past it; the extra 100 ms covers the trip to the
+/// agent. Without the hold, the queued message codeg sends the moment a Stop
+/// ends the turn was answered `cancelled` and lost.
+const CODEBUDDY_CANCEL_BARRIER: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// How long a prompt held for [`CODEBUDDY_CANCEL_BARRIER`] waits for the
+/// cancelled prompt's answer before it goes ahead without one. The barrier is
+/// long over by then; this only bounds the hold when CodeBuddy never answers.
+const CODEBUDDY_CANCEL_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A Stop codeg sent CodeBuddy mid-turn, kept until the next prompt has waited
+/// out its barrier (see [`CODEBUDDY_CANCEL_BARRIER`]).
+struct CodeBuddyCancel {
+    cancelled_at: tokio::time::Instant,
+    /// When the cancelled prompt was answered, from the task that awaits it.
+    answered: oneshot::Receiver<tokio::time::Instant>,
+}
+
+/// A prompt held back until CodeBuddy's cancel barrier has passed. The idle
+/// loop keeps reading the agent while it waits, so the cancelled turn's last
+/// frames still land there instead of in this prompt's turn.
+struct HeldPrompt {
+    command: ConnectionCommand,
+    cancel: CodeBuddyCancel,
+    /// When the prompt may go, once known. Kept here because the loop drops
+    /// the waiting future whenever it reads an update, and the answer can be
+    /// received only once.
+    release_at: Option<tokio::time::Instant>,
+}
+
+/// What the idle loop does with a command it just received.
+enum Admitted {
+    /// Run it now.
+    Run(Option<ConnectionCommand>),
+    /// A prompt to hold until CodeBuddy's cancel barrier has passed.
+    Held(HeldPrompt),
+}
+
+/// Only a prompt is held, and only the first one after a Stop: the hold
+/// consumes the pending cancel.
+fn hold_for_codebuddy_cancel(
+    command: Option<ConnectionCommand>,
+    pending: &mut Option<CodeBuddyCancel>,
+) -> Admitted {
+    match command {
+        Some(command @ ConnectionCommand::Prompt { .. }) => match pending.take() {
+            Some(cancel) => Admitted::Held(HeldPrompt {
+                command,
+                cancel,
+                release_at: None,
+            }),
+            None => Admitted::Run(Some(command)),
+        },
+        other => Admitted::Run(other),
+    }
+}
+
+/// Resolves when `held` may be sent: [`CODEBUDDY_CANCEL_BARRIER`] after the
+/// cancelled prompt's answer, or as soon as it is clear none will come.
+async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
+    let release_at = match held.release_at {
+        Some(at) => at,
+        None => {
+            let give_up = held.cancel.cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT;
+            let at = match tokio::time::timeout_at(give_up, &mut held.cancel.answered).await {
+                Ok(Ok(answered_at)) => answered_at + CODEBUDDY_CANCEL_BARRIER,
+                // The task holding the cancelled prompt ended without an answer,
+                // or the answer is overdue: in both cases the barrier, armed
+                // when CodeBuddy took the cancel, has already passed.
+                Ok(Err(_)) | Err(_) => tokio::time::Instant::now(),
+            };
+            held.release_at = Some(at);
+            at
+        }
+    };
+    tokio::time::sleep_until(release_at).await;
+}
+
+/// CodeBuddy's stop reason for a prompt codeg did not cancel.
+///
+/// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
+/// 2.177.1) answers the next prompt it runs `cancelled` even though that
+/// prompt ran to the end: its forwarding keeps the session's aborted signal
+/// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
+/// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
+/// gets here, as the Cancel arm ends that turn itself, so this one finished.
+fn codebuddy_stop_reason(
+    agent_type: AgentType,
+    reason: StopReason,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> StopReason {
+    let finished = meta
+        .and_then(|meta| meta.get("codebuddy.ai/finishReason"))
+        .and_then(serde_json::Value::as_str)
+        == Some("stop");
+    if agent_type == AgentType::CodeBuddy && reason == StopReason::Cancelled && finished {
+        StopReason::EndTurn
+    } else {
+        reason
+    }
+}
+
 /// Classify a `session/load` failure into a stable frontend `code` when the
 /// historical session cannot be restored — either the agent has no record of
 /// it (`ResourceNotFound`, -32002) or the agent process/session died mid-load.
@@ -13496,7 +13606,7 @@ fn prompt_rejection_is_terminal(e: &agent_client_protocol::Error) -> bool {
 /// Kimi Code 2.3.0's refusal of a prompt on a session another process wrote
 /// since this connection opened it: -32600 with `data.code: "session.stale"`
 /// and "Session was updated by another client. Close and reopen the session,
-/// then retry." (the same body through 2.3.3). Its error table marks the code
+/// then retry." (the same body through 2.4.0). Its error table marks the code
 /// not retryable, and every later prompt on the connection answers the same,
 /// while a new process loads the session with the other process's turns and
 /// prompts normally. The writer is whoever held the session lock in between
@@ -14067,12 +14177,30 @@ async fn run_conversation_loop(
     // own needs a turn to have started it, and background work cannot outlive
     // the agent process this loop's connection owns.
     let mut prompted = false;
+    // A Stop codeg sent CodeBuddy mid-turn, and the prompt held back until its
+    // barrier has passed (see `CODEBUDDY_CANCEL_BARRIER`).
+    let mut codebuddy_cancel: Option<CodeBuddyCancel> = None;
+    let mut held_prompt: Option<HeldPrompt> = None;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
             tokio::select! {
                 biased;
-                cmd = cmd_rx.recv() => break cmd,
+                () = async {
+                    match held_prompt.as_mut() {
+                        Some(held) => wait_out_codebuddy_cancel(held).await,
+                        None => std::future::pending().await,
+                    }
+                }, if held_prompt.is_some() => {
+                    break held_prompt.take().map(|held| held.command);
+                }
+                // Not while a prompt is held: what comes after it waits its turn.
+                cmd = cmd_rx.recv(), if held_prompt.is_none() => {
+                    match hold_for_codebuddy_cancel(cmd, &mut codebuddy_cancel) {
+                        Admitted::Run(cmd) => break cmd,
+                        Admitted::Held(held) => held_prompt = Some(held),
+                    }
+                }
                 update = session.read_update() => {
                     // An `Err` is the session's router going away, not one bad
                     // message (see `AgentSession::read_update`): the connection
@@ -14162,8 +14290,8 @@ async fn run_conversation_loop(
                     }
                 }
             }
-            // Reached only on the update arm (the command arm breaks out), so
-            // `session` is free again here.
+            // Reached on the update arm, or right after a prompt was held (the
+            // other arms break out), so `session` is free again here.
             for (config_id, value_id) in std::mem::take(&mut config_drift_to_reassert) {
                 tracing::info!(
                     "[ACP] re-asserting '{config_id}'='{value_id}' — the agent reverted it \
@@ -14794,7 +14922,11 @@ async fn run_conversation_loop(
                                 )
                                 .await;
                             }
-                            let reason = response.stop_reason;
+                            let reason = codebuddy_stop_reason(
+                                agent_type,
+                                response.stop_reason,
+                                response.meta.as_ref(),
+                            );
                             if !tracked_terminal_tool_calls.is_empty() {
                                 poll_tracked_terminal_tool_calls(
                                     terminal_runtime.as_ref(),
@@ -15156,6 +15288,7 @@ async fn run_conversation_loop(
                                         Agent,
                                         CancelNotification::new(sid.clone()),
                                     );
+                                    let cancelled_at = tokio::time::Instant::now();
                                     // Also terminate any command runtimes created for this
                                     // session so cancellation does not hang on long-running
                                     // terminal tools.
@@ -15253,9 +15386,23 @@ async fn run_conversation_loop(
                                     // request instead would make the runtime send
                                     // `$/cancel_request` on top of the
                                     // `session/cancel` above — a second
-                                    // cancellation of the same turn.
+                                    // cancellation of the same turn. For
+                                    // CodeBuddy the answer also times the hold
+                                    // on the next prompt (see
+                                    // `CODEBUDDY_CANCEL_BARRIER`).
+                                    let answered = (agent_type == AgentType::CodeBuddy).then(|| {
+                                        let (answered, answer) = oneshot::channel();
+                                        codebuddy_cancel = Some(CodeBuddyCancel {
+                                            cancelled_at,
+                                            answered: answer,
+                                        });
+                                        answered
+                                    });
                                     tokio::spawn(async move {
                                         let _ = prompt_response.await;
+                                        if let Some(answered) = answered {
+                                            let _ = answered.send(tokio::time::Instant::now());
+                                        }
                                     });
                                     break;
                                 }
@@ -46408,6 +46555,297 @@ mod tests {
                 ]
             );
             assert!(history.turns[3].usage.is_none());
+            lp.shutdown().await;
+        })
+        .await;
+    }
+
+    fn prompt_command(text: &str) -> ConnectionCommand {
+        ConnectionCommand::Prompt {
+            blocks: vec![PromptInputBlock::Text { text: text.into() }],
+            user_message: None,
+            internal_suffix: Vec::new(),
+        }
+    }
+
+    fn held_after_stop(answer: oneshot::Receiver<tokio::time::Instant>) -> HeldPrompt {
+        HeldPrompt {
+            command: prompt_command("two"),
+            cancel: CodeBuddyCancel {
+                cancelled_at: tokio::time::Instant::now(),
+                answered: answer,
+            },
+            release_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_first_prompt_after_a_codebuddy_stop_is_held() {
+        let (_answered, answer) = oneshot::channel();
+        let mut pending = Some(CodeBuddyCancel {
+            cancelled_at: tokio::time::Instant::now(),
+            answered: answer,
+        });
+        // Other commands go through and leave the Stop pending.
+        assert!(matches!(
+            hold_for_codebuddy_cancel(Some(ConnectionCommand::Cancel), &mut pending),
+            Admitted::Run(Some(ConnectionCommand::Cancel))
+        ));
+        assert!(matches!(
+            hold_for_codebuddy_cancel(None, &mut pending),
+            Admitted::Run(None)
+        ));
+        assert!(pending.is_some());
+        // The first prompt is held and takes the Stop with it…
+        assert!(matches!(
+            hold_for_codebuddy_cancel(Some(prompt_command("two")), &mut pending),
+            Admitted::Held(HeldPrompt {
+                command: ConnectionCommand::Prompt { .. },
+                release_at: None,
+                ..
+            })
+        ));
+        assert!(pending.is_none());
+        // …so the one after it goes straight through.
+        assert!(matches!(
+            hold_for_codebuddy_cancel(Some(prompt_command("three")), &mut pending),
+            Admitted::Run(Some(ConnectionCommand::Prompt { .. }))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_codebuddy_prompt_goes_once_the_cancel_barrier_has_passed() {
+        let (answered, answer) = oneshot::channel();
+        let mut held = held_after_stop(answer);
+        let start = tokio::time::Instant::now();
+        let answer_after = std::time::Duration::from_millis(30);
+        tokio::spawn(async move {
+            tokio::time::sleep(answer_after).await;
+            let _ = answered.send(tokio::time::Instant::now());
+        });
+        // The idle loop drops this wait whenever it reads an update; the answer
+        // can be received only once, so the release time it gave must stick.
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            wait_out_codebuddy_cancel(&mut held),
+        )
+        .await
+        .is_err());
+        let release = start + answer_after + CODEBUDDY_CANCEL_BARRIER;
+        assert_eq!(held.release_at, Some(release));
+        wait_out_codebuddy_cancel(&mut held).await;
+        assert_eq!(tokio::time::Instant::now(), release);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_codebuddy_prompt_goes_at_once_when_no_answer_can_come() {
+        let (answered, answer) = oneshot::channel::<tokio::time::Instant>();
+        drop(answered);
+        let mut held = held_after_stop(answer);
+        let start = tokio::time::Instant::now();
+        wait_out_codebuddy_cancel(&mut held).await;
+        assert_eq!(tokio::time::Instant::now(), start);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_codebuddy_prompt_stops_waiting_for_an_answer_that_never_comes() {
+        let (_answered, answer) = oneshot::channel::<tokio::time::Instant>();
+        let mut held = held_after_stop(answer);
+        let cancelled_at = held.cancel.cancelled_at;
+        wait_out_codebuddy_cancel(&mut held).await;
+        assert_eq!(
+            tokio::time::Instant::now(),
+            cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT
+        );
+    }
+
+    #[test]
+    fn codebuddy_cancelled_answer_for_a_finished_run_ends_the_turn() {
+        let meta = |value: serde_json::Value| value.as_object().cloned();
+        // The first prompt CodeBuddy runs after a Stop that caught a permission
+        // request, as 2.177.1 answers it.
+        let finished = meta(serde_json::json!({
+            "codebuddy.ai/finishReason": "stop",
+            "codebuddy.ai/outcome": "CANCELLED",
+        }));
+        assert_eq!(
+            codebuddy_stop_reason(
+                AgentType::CodeBuddy,
+                StopReason::Cancelled,
+                finished.as_ref()
+            ),
+            StopReason::EndTurn
+        );
+        // A real cancel, and a prompt the cancel barrier dropped, carry no
+        // finish reason; a run cut short carries another one.
+        for meta in [
+            None,
+            meta(serde_json::json!({"codebuddy.ai/outcome": "CANCELLED"})),
+            meta(serde_json::json!({"codebuddy.ai/finishReason": null})),
+            meta(serde_json::json!({"codebuddy.ai/finishReason": "length"})),
+        ] {
+            assert_eq!(
+                codebuddy_stop_reason(AgentType::CodeBuddy, StopReason::Cancelled, meta.as_ref()),
+                StopReason::Cancelled
+            );
+        }
+        // Other agents and other stop reasons are left alone.
+        assert_eq!(
+            codebuddy_stop_reason(
+                AgentType::ClaudeCode,
+                StopReason::Cancelled,
+                finished.as_ref()
+            ),
+            StopReason::Cancelled
+        );
+        assert_eq!(
+            codebuddy_stop_reason(
+                AgentType::CodeBuddy,
+                StopReason::MaxTokens,
+                finished.as_ref()
+            ),
+            StopReason::MaxTokens
+        );
+    }
+
+    /// CodeBuddy answers a prompt that starts within 500 ms of a Stop with
+    /// `cancelled` and never runs it. codeg's message queue sends the next
+    /// message the moment a Stop ends the turn, so that prompt is held until
+    /// the cancelled prompt's answer plus the barrier, while the idle loop
+    /// keeps reading the cancelled turn's last frames.
+    #[tokio::test]
+    async fn codebuddy_holds_the_prompt_after_a_stop_until_its_cancel_barrier_passes() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let mut lp = CustomLoop::start_for(
+                AgentType::CodeBuddy,
+                vec![vec![custom_text("working, ")], vec![custom_text("second")]],
+            )
+            .await;
+            lp.open_turn("one", "working, ").await;
+            lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            let stopped = lp
+                .until("cancelled", |e| {
+                    matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+                })
+                .await;
+            // The queued message, sent as soon as the Stop ended the turn.
+            lp.state.write().await.turn_in_flight = true;
+            lp.cmd_tx.send(prompt_command("two")).await.unwrap();
+            let prompting = |e: &AcpEvent| {
+                matches!(
+                    e,
+                    AcpEvent::StatusChanged {
+                        status: ConnectionStatus::Prompting
+                    }
+                )
+            };
+            // While it is held, the idle loop still reads the agent.
+            lp.agent_sends(vec![custom_text("late tail"), grok_barrier()]);
+            let read = lp.until_barrier().await;
+            assert!(!lp.seen[stopped..read].iter().any(prompting));
+            // The cancelled prompt has not been answered yet, so it stays held.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            lp.agent_sends(vec![grok_barrier()]);
+            let read = lp.until_barrier().await;
+            assert!(!lp.seen[stopped..read].iter().any(prompting));
+
+            let answered = std::time::Instant::now();
+            lp.respond.notify_one();
+            lp.until_text("second").await;
+            assert!(
+                answered.elapsed() >= CODEBUDDY_CANCEL_BARRIER,
+                "sent {:?} after the cancelled prompt's answer",
+                answered.elapsed()
+            );
+            lp.close_turn().await;
+            assert!(matches!(
+                lp.seen.last(),
+                Some(AcpEvent::TurnComplete { stop_reason, .. }) if stop_reason == "end_turn"
+            ));
+            lp.shutdown().await;
+        })
+        .await;
+    }
+
+    /// A Stop that arrives while a prompt is held waits for it: the prompt then
+    /// goes out and is stopped, instead of the Stop going to an idle session
+    /// and the held prompt running anyway.
+    #[tokio::test]
+    async fn codebuddy_stop_during_the_hold_stops_the_held_prompt() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let mut lp = CustomLoop::start_for(
+                AgentType::CodeBuddy,
+                vec![vec![custom_text("working, ")], vec![custom_text("second")]],
+            )
+            .await;
+            lp.open_turn("one", "working, ").await;
+            lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            lp.until("the first stop", |e| {
+                matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+            })
+            .await;
+            lp.state.write().await.turn_in_flight = true;
+            lp.cmd_tx.send(prompt_command("two")).await.unwrap();
+            lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            lp.respond.notify_one();
+            let prompting = lp
+                .until("the held prompt", |e| {
+                    matches!(
+                        e,
+                        AcpEvent::StatusChanged {
+                            status: ConnectionStatus::Prompting
+                        }
+                    )
+                })
+                .await;
+            let stopped = lp
+                .until("the second stop", |e| {
+                    matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+                })
+                .await;
+            assert!(stopped > prompting);
+            lp.shutdown().await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_finished_codebuddy_run_answered_cancelled_ends_its_turn() {
+        use agent_client_protocol::schema::v1::PromptResponse;
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let answered = |finish: Option<&str>| {
+                let mut response = PromptResponse::new(StopReason::Cancelled);
+                let mut meta = serde_json::Map::new();
+                meta.insert("codebuddy.ai/outcome".into(), "CANCELLED".into());
+                if let Some(finish) = finish {
+                    meta.insert("codebuddy.ai/finishReason".into(), finish.into());
+                }
+                response.meta = Some(meta);
+                response
+            };
+            let mut lp = CustomLoop::start_with_responses(
+                AgentType::CodeBuddy,
+                vec![vec![custom_text("done")], vec![custom_text("cut")]],
+                vec![answered(Some("stop")), answered(None)],
+            )
+            .await;
+            for (prompt, text, end) in [("one", "done", "end_turn"), ("two", "cut", "cancelled")] {
+                lp.run_turn(prompt, text).await;
+                assert!(
+                    matches!(
+                        lp.seen.last(),
+                        Some(AcpEvent::TurnComplete { stop_reason, .. }) if stop_reason == end
+                    ),
+                    "{prompt}: {:?}",
+                    lp.seen.last()
+                );
+            }
             lp.shutdown().await;
         })
         .await;

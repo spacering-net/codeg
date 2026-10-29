@@ -141,13 +141,15 @@ const STOPPED_ON_FAILURE: MessageTurn = {
   ],
 }
 
-/** A declaration in globals.css, by its rule's selector (whitespace folded). */
+/** A declaration in globals.css, by one of its rule's selectors (whitespace
+ *  folded). */
 function globalsDecl(selector: string, prop: string): string | undefined {
   let value: string | undefined
   postcss
     .parse(readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8"))
     .walkRules((rule) => {
-      if (rule.selector.replace(/\s+/g, " ") !== selector) return
+      const listed = rule.selectors.map((one) => one.replace(/\s+/g, " "))
+      if (!listed.includes(selector)) return
       rule.walkDecls(prop, (decl) => {
         value = decl.value
       })
@@ -427,12 +429,11 @@ describe("activity timeline: the reference turn", () => {
     expect(header.querySelector("span[aria-hidden='true'].flex-1")).toBeNull()
   })
 
-  it("fills the header with the steps' secondary grey, its words in inks that read on it", () => {
-    // The bubble's `--secondary` is tinted in the coloured presets (pink under
-    // red, peach under orange); the capsule is a translucent wash of the grey
-    // the steps' secondary words are set in, grey in every preset. The
-    // summary and the time take the stronger muted ink and a failure the
-    // stronger red, both keeping 4.5:1 on it.
+  it("fills the header like the user's bubble, its words in inks that read on it", () => {
+    // The capsule takes the bubble's fill, tinted with it in the coloured
+    // presets; pointed at, the same colour a step toward the foreground, not
+    // another grey. The summary and the time take the stronger muted ink and
+    // a failure the stronger red, both keeping 4.5:1 on it, hovered too.
     renderSettled(partsOf(MOCKUP_ASSISTANT_TURN))
     const header = activityHeader()
     const classes = header.className.split(/\s+/)
@@ -461,27 +462,53 @@ describe("activity timeline: the reference turn", () => {
         tokens.set(`${rule.selector} ${decl.prop}`, flat(decl.value))
       })
     })
-    const wash = (share: number) =>
-      `color-mix(in oklab, var(--activity-secondary) ${share}%, transparent)`
-    // A light wash, a deeper one on a dark page; hovered, a step deeper in
-    // either.
-    expect(tokens.get(":root --activity-capsule")).toBe(wash(12))
-    expect(tokens.get(":root --activity-capsule-hover")).toBe(wash(18))
-    expect(tokens.get(".dark --activity-capsule")).toBe(wash(24))
-    expect(tokens.get(".dark --activity-capsule-hover")).toBe(wash(32))
-    // Translucent already: over a background image the same wash, with the
-    // bubble's ring.
-    expect(tokens.has('[data-workspace-bg="on"] --activity-capsule')).toBe(
-      false
+    // The bubble's own fill (`bg-secondary` on it), in either theme — the
+    // dark one has no capsule of its own; hovered, 6% toward the foreground,
+    // which darkens it on a light page and lights it on a dark one.
+    expect(tokens.get(":root --activity-capsule")).toBe("var(--secondary)")
+    expect(tokens.get(":root --activity-capsule-hover")).toBe(
+      "color-mix(in oklab, var(--secondary), var(--foreground) 6%)"
+    )
+    expect(tokens.has(".dark --activity-capsule")).toBe(false)
+    expect(tokens.has(".dark --activity-capsule-hover")).toBe(false)
+    // Over a background image the bubble's translucent tint and ring, word
+    // for word; hovered, the tint a step toward the foreground at the same
+    // translucency, so the image still shows through it.
+    const bubble = (prop: string) =>
+      flat(
+        globalsDecl('[data-workspace-bg="on"] .is-user .ws-msg-secondary', prop)
+      )
+    expect(tokens.get('[data-workspace-bg="on"] --activity-capsule')).toBe(
+      bubble("background-color")
     )
     expect(
-      globalsDecl('[data-workspace-bg="on"] .activity-capsule', "box-shadow")
+      tokens.get('[data-workspace-bg="on"] --activity-capsule-hover')
     ).toBe(
-      globalsDecl(
-        '[data-workspace-bg="on"] .is-user .ws-msg-secondary',
-        "box-shadow"
-      )
+      "color-mix(in oklab, color-mix(in oklab, var(--muted), var(--foreground) 12%) calc(var(--ws-msg-alpha) * 100%), transparent)"
     )
+    expect(
+      flat(
+        globalsDecl('[data-workspace-bg="on"] .activity-capsule', "box-shadow")
+      )
+    ).toBe(bubble("box-shadow"))
+    // An engine with no color-mix drops every mixed fill: the capsule keeps
+    // the bubble's there too (the bubble's own tint is dropped with it), and
+    // holds it under the pointer.
+    const fallback = new Map<string, string>()
+    css.walkAtRules("supports", (at) => {
+      if (!at.params.startsWith("not")) return
+      at.walkRules((rule) =>
+        rule.walkDecls(/^--activity-capsule/, (decl) => {
+          fallback.set(`${rule.selector} ${decl.prop}`, flat(decl.value))
+        })
+      )
+    })
+    expect(Object.fromEntries(fallback)).toEqual({
+      ":root --activity-capsule-hover": "var(--secondary)",
+      ":root --activity-capsule-danger": "var(--tone-danger)",
+      '[data-workspace-bg="on"] --activity-capsule': "var(--secondary)",
+      '[data-workspace-bg="on"] --activity-capsule-hover': "var(--secondary)",
+    })
     expect(tokens.get(":root --activity-capsule-danger")).toBe(
       "color-mix(in oklab, var(--tone-danger) 85%, var(--foreground))"
     )
@@ -748,15 +775,17 @@ describe("activity timeline: failures", () => {
     expect(within(row).getByText(/Type error/)).toBeTruthy()
   })
 
-  it("leaves the failure link and a text selection to themselves", () => {
+  it("leaves the failure link to itself, and folds with text selected elsewhere", () => {
     renderSettled(partsOf(FAILURE))
     fireEvent.click(screen.getByText("1 failed"))
     expect(foldControl()).toHaveAttribute("aria-expanded", "true")
+    // Nothing in the capsule can be selected, so a press on it leaves a
+    // selection made elsewhere as it was: that is no reason not to fold.
     vi.spyOn(window, "getSelection").mockReturnValue({
-      toString: () => "1 failed",
+      toString: () => "It does not build.",
     } as Selection)
     fireEvent.click(activityHeader().querySelector(".activity-mono")!)
-    expect(foldControl()).toHaveAttribute("aria-expanded", "true")
+    expect(foldControl()).toHaveAttribute("aria-expanded", "false")
   })
 
   it("brings the failure into view in a reply that cannot fold", () => {
@@ -782,16 +811,28 @@ describe("activity timeline: failures", () => {
 
 describe("activity timeline: a live turn", () => {
   it("shows the running command with the tail of its output", () => {
-    renderTurn(
-      <CurrentRound
-        parts={partsOf(MOCKUP_LIVE_TURN, true, ["l3"])}
-        completed={false}
-      />
-    )
-    expect(screen.getByText("Working")).toBeTruthy()
+    vi.useFakeTimers()
+    try {
+      renderTurn(
+        <CurrentRound
+          parts={partsOf(MOCKUP_LIVE_TURN, true, ["l3"])}
+          completed={false}
+        />
+      )
+      expect(screen.getByText("Working")).toBeTruthy()
+      const row = rowOf("Run web unit tests")
+      expect(row.getAttribute("data-status")).toBe("running")
+      // The tail opens under the row once the command has run a moment: one
+      // that is over at once never opens a gap under its row.
+      expect(within(row).queryByText(/lib\/state\.test\.ts/)).toBeNull()
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+      expect(within(row).getByText(/lib\/state\.test\.ts/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
     const row = rowOf("Run web unit tests")
-    expect(row.getAttribute("data-status")).toBe("running")
-    expect(within(row).getByText(/lib\/state\.test\.ts/)).toBeTruthy()
     // Its label shimmers while it runs, as a running row's verb does.
     expect(within(row).getByText("Command")).toHaveClass("activity-shimmer")
     expect(within(row).getByText("Run web unit tests")).toHaveClass(
@@ -1010,23 +1051,32 @@ describe("activity timeline: where the rail ends", () => {
       globalsDecl(".activity-timeline[data-headed]", "padding-top")
     )
     expect(head + 0.25).toBeCloseTo(1.75 - 1.5 + gap + 0.25)
-    // The first row's rail starts at the capsule's edge and stops as a
-    // segment does: 0.125rem above a ring, or where a dot's incoming one
-    // stops (prose can come first).
-    const rail =
-      ".activity-timeline[data-headed] > .activity-item:first-child::after"
+    // The list draws the rail up to the capsule, from its own top edge, and
+    // stops it as a row's segment stops: 0.125rem above the first ring.
+    const rail = ".activity-timeline[data-headed]::before"
     const top = remOf(globalsDecl(rail, "top"))
+    const end = top + remOf(globalsDecl(rail, "height"))
     expect(globalsDecl(rail, "content")).toBe('""')
-    expect(top).toBeCloseTo(-head)
-    expect(top + remOf(globalsDecl(rail, "height"))).toBeCloseTo(0.25 - 0.125)
+    expect(top).toBeCloseTo(0)
+    expect(end).toBeCloseTo(head + 0.25 - 0.125)
+    // Prose first: its dot's incoming segment, the one a dot gets under any
+    // segment, takes the rail on from where the list's stops.
     const dotRail =
       '.activity-timeline[data-headed] > .activity-item[data-marker="dot"]:first-child::after'
     const incoming =
       '.activity-item[data-marker="dot"]:not(:first-child)::after'
-    expect(top + remOf(globalsDecl(dotRail, "height"))).toBeCloseTo(
-      remOf(globalsDecl(incoming, "top")) +
-        remOf(globalsDecl(incoming, "height"))
-    )
+    for (const prop of ["content", "top", "height", "inset-inline-start"]) {
+      expect(globalsDecl(dotRail, prop)).toBe(globalsDecl(incoming, prop))
+    }
+    expect(head + remOf(globalsDecl(dotRail, "top"))).toBeCloseTo(end)
+    // The first row draws none of its own up there: the two would overlap,
+    // and the translucent rail would darken where they do.
+    expect(
+      globalsDecl(
+        ".activity-timeline[data-headed] > .activity-item:first-child::after",
+        "content"
+      )
+    ).toBeUndefined()
     const column = globalsDecl(".activity-item::before", "inset-inline-start")
     expect(column).toBeTruthy()
     expect(globalsDecl(rail, "inset-inline-start")).toBe(column)
@@ -1150,6 +1200,71 @@ describe("activity timeline: where the rail ends", () => {
     const classes = foldOf(list()).className.split(/\s+/)
     expect(classes).toContain("py-0.5")
     expect(classes).toContain("leading-6")
+  })
+
+  it("stands the reply's list under the header before its first step, the rail running down to the turning ring", () => {
+    renderTurn(<CurrentRound parts={[]} completed={false} />)
+    expect(list()).toHaveAttribute("data-headed")
+    // The list is its foot alone: the ring where the first step will go, the
+    // one turning mark in the reply.
+    const working = workingOf(list())!
+    expect([...list().children]).toEqual([working])
+    expect(document.querySelectorAll('[data-marker="working"]')).toHaveLength(1)
+    // Nothing to read in it yet: no list for a screen reader either.
+    expect(list()).toHaveAttribute("aria-hidden", "true")
+    // Hung as a step would be: nothing but the list's own padding under the
+    // capsule, and the rail from it stopping 0.125rem above the ring.
+    expect(spacingBetween(activityHeader(), list())).toEqual([])
+    const head = remOf(
+      globalsDecl(".activity-timeline[data-headed]", "padding-top")
+    )
+    const rail = ".activity-timeline[data-headed]::before"
+    const end =
+      remOf(globalsDecl(rail, "top")) + remOf(globalsDecl(rail, "height"))
+    const ring = working.firstElementChild!
+    expect(ring.getAttribute("class")!.split(/\s+/)).toContain("top-1")
+    expect(head + 0.25 - end).toBeCloseTo(0.125)
+  })
+
+  it("keeps that list and its ring as the first step joins above the ring", async () => {
+    const live = (parts: AdaptedContentPart[]) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <StaticConnectionStoreProvider store={STORE}>
+          <StaticDelegationProvider value={DELEGATION}>
+            <StaticWorkspaceActionsProvider value={WORKSPACE}>
+              <CurrentRound parts={parts} completed={false} />
+            </StaticWorkspaceActionsProvider>
+          </StaticDelegationProvider>
+        </StaticConnectionStoreProvider>
+      </NextIntlClientProvider>
+    )
+    const view = render(live([]))
+    const standing = list()
+    const working = workingOf(standing)!
+
+    view.rerender(
+      live([
+        {
+          type: "tool-call",
+          toolCallId: "first",
+          toolName: "Read",
+          input: JSON.stringify({ file_path: "/r/README.md" }),
+          state: "input-available",
+        },
+      ])
+    )
+
+    // The same list, the rail from the header with it; the same ring, under
+    // the step that joined above it.
+    expect(list()).toBe(standing)
+    expect(workingOf(standing)).toBe(working)
+    const first = standing.firstElementChild!
+    expect(first).toBe(rowOf("/r/README.md"))
+    expect(first.nextElementSibling).toBe(working)
+    expect(standing).not.toHaveAttribute("aria-hidden")
+    // Its segment grows down to the ring, as a later step's does.
+    await act(async () => {})
+    expect(first).toHaveAttribute("data-rail-enter")
   })
 
   it("ends an open group's members on a row that folds the group", () => {

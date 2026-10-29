@@ -9651,13 +9651,13 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // Command Code loads `<id>/SKILL.md` bundles — found recursively, never
         // a flat `<id>.md` — from `~/.commandcode/skills` and the shared
         // `~/.agents/skills` store, plus `.commandcode/skills` and
-        // `.agents/skills` in the project. Verified against 1.84.0, 1.86.3 and
-        // 1.88.0 by planting one skill in each candidate directory: exactly
-        // those four reached the session's commands, while `.claude/skills`
-        // (project and user) and the flat file were ignored. The Command Code
-        // directory leads so linking targets it without touching the shared
-        // store (the TRAE CLI ordering); on a name clash Command Code prefers
-        // it too.
+        // `.agents/skills` in the project. Verified against 1.84.0, 1.86.3,
+        // 1.88.0 and 1.88.1 by planting one skill in each candidate directory:
+        // exactly those four reached the session's commands, while
+        // `.claude/skills` (project and user) and the flat file were ignored.
+        // The Command Code directory leads so linking targets it without
+        // touching the shared store (the TRAE CLI ordering); on a name clash
+        // Command Code prefers it too.
         AgentType::CommandCode => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOnly,
             global_dirs: vec![

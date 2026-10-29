@@ -32,13 +32,20 @@
  * once — its outcome belongs to the transcript, and a permanent list of
  * finished jobs would grow all session. Terminal rows stay in the reducer table
  * as the ids later corrections revise; see `lib/async-tasks.ts`.
+ *
+ * Every row it holds is room the transcript under it loses, so the strip
+ * stays small however much runs: past one task it opens on a header — what it
+ * lists and how many — that folds the list away to that one line, and the
+ * list itself stops a little past three rows and scrolls. One task is a single
+ * row, with nothing to fold.
  */
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useId, useMemo, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Activity,
   Bot,
+  ChevronDown,
   FileText,
   Loader2,
   PauseCircle,
@@ -48,6 +55,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { cn } from "@/lib/utils"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
@@ -58,6 +66,11 @@ import {
   liveAsyncTasks,
 } from "@/lib/async-tasks"
 import type { AsyncTaskRecord } from "@/lib/types"
+
+/** A line of the strip, its header's too: 2rem tall whether it carries buttons
+ *  or not, so the list's height says how many rows it holds and its cap cuts
+ *  through a row. */
+const ROW_BOX = "flex min-h-8 items-center gap-2 px-4 py-1 text-xs"
 
 /** The adapter's friendly `taskType` vocabulary. An unmapped future type keeps
  *  the generic glyph rather than rendering nothing. */
@@ -81,36 +94,109 @@ export function AsyncTaskStrip({
    *  Without it that row keeps the adapter's own (English) name. */
   agentName?: string
 }) {
+  const t = useTranslations("Folder.chat.asyncTasks")
+  // Kept while the conversation is on screen — the strip stays mounted while
+  // its tasks come and go — so a list folded away stays folded as more start.
+  const [open, setOpen] = useState(true)
+  const listId = useId()
+  // The tasks with a stop on its way. Held here, not by their rows: a row
+  // unmounts while the list is folded away, and back in view before the
+  // adapter has answered it must not offer the stop again.
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(NO_TASKS)
+  const stop = useCallback(
+    async (taskId: string) => {
+      if (!onStop) return
+      setStopping((prev) => new Set(prev).add(taskId))
+      try {
+        await onStop(taskId)
+      } finally {
+        // Deliberately NOT left latched on success. The row disappears when
+        // the task's terminal state arrives on the wire, which is the real
+        // confirmation; keeping the button disabled on a `false` verdict (the
+        // adapter declined) would strand the user with no way to try again.
+        setStopping((prev) => {
+          const next = new Set(prev)
+          next.delete(taskId)
+          return next
+        })
+      }
+    },
+    [onStop]
+  )
   const live = liveAsyncTasks(tasks)
   if (live.length === 0) return null
 
+  // One task is a row of its own, with nothing to fold. The list keeps its
+  // place either way, so a row stays the same row as tasks come and go.
+  const several = live.length > 1
   return (
     <div className="border-b border-border bg-muted/30">
-      {live.map((task) => (
-        <AsyncTaskRow
-          key={task.task_id}
-          task={task}
-          onStop={onStop}
-          agentName={agentName}
-        />
-      ))}
+      {several ? (
+        // A row like the rows under it: as tall, the chevron over their
+        // icons.
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          onClick={() => setOpen(!open)}
+          className={cn(
+            ROW_BOX,
+            "group/strip w-full min-w-0 cursor-pointer text-start outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50"
+          )}
+        >
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground transition-transform group-hover/strip:text-foreground",
+              !open && "-rotate-90 rtl:rotate-90"
+            )}
+          />
+          <span className="min-w-0 truncate font-medium text-muted-foreground group-hover/strip:text-foreground">
+            {t("title")}
+          </span>
+          <span className="shrink-0 text-muted-foreground tabular-nums">
+            {live.length}
+          </span>
+        </button>
+      ) : null}
+      {open || !several ? (
+        // Three rows and half of the next (rows are 2rem) — a row cut
+        // through says the list goes on — then it scrolls.
+        <ScrollArea className="max-h-28">
+          <div id={listId}>
+            {live.map((task) => (
+              <AsyncTaskRow
+                key={task.task_id}
+                task={task}
+                onStop={onStop ? stop : undefined}
+                stopping={stopping.has(task.task_id)}
+                agentName={agentName}
+              />
+            ))}
+          </div>
+        </ScrollArea>
+      ) : null}
     </div>
   )
 }
 
+const NO_TASKS: ReadonlySet<string> = new Set()
+
 function AsyncTaskRow({
   task,
   onStop,
+  stopping,
   agentName,
 }: {
   task: AsyncTaskRecord
-  onStop?: (taskId: string) => Promise<boolean>
+  onStop?: (taskId: string) => void
+  /** A stop for this task is on its way. */
+  stopping: boolean
   agentName?: string
 }) {
   const t = useTranslations("Folder.chat.asyncTasks")
   const locale = useLocale()
   const { openFilePreview } = useWorkspaceActions()
-  const [stopping, setStopping] = useState(false)
   const paused = task.state === "paused"
   const Icon = TASK_ICONS[task.task_type] ?? Activity
   // A turn the agent runs with no prompt open (see AUTONOMOUS_TURN_TASK_TYPE):
@@ -155,18 +241,9 @@ function AsyncTaskRow({
     void openFilePreview(task.output_file_path)
   }, [openFilePreview, task.output_file_path])
 
-  const handleStop = useCallback(async () => {
+  const handleStop = useCallback(() => {
     if (!onStop || stopping) return
-    setStopping(true)
-    try {
-      await onStop(task.task_id)
-    } finally {
-      // Deliberately NOT left latched on success. The row disappears when the
-      // task's terminal state arrives on the wire, which is the real
-      // confirmation; keeping the button disabled on a `false` verdict (the
-      // adapter declined) would strand the user with no way to try again.
-      setStopping(false)
-    }
+    onStop(task.task_id)
   }, [onStop, stopping, task.task_id])
 
   // The meta line is the "is this making progress" evidence: where a
@@ -187,7 +264,7 @@ function AsyncTaskRow({
   ).filter(Boolean) as string[]
 
   return (
-    <div className="flex items-center gap-2 px-4 py-1.5 text-xs">
+    <div className={ROW_BOX}>
       {paused ? (
         <PauseCircle
           aria-hidden="true"
@@ -236,7 +313,7 @@ function AsyncTaskRow({
               "h-6 gap-1 px-2 text-xs",
               "text-muted-foreground hover:text-destructive"
             )}
-            onClick={() => void handleStop()}
+            onClick={handleStop}
           >
             {stopping ? (
               <Loader2 aria-hidden="true" className="size-3 animate-spin" />

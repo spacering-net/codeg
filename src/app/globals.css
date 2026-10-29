@@ -1021,23 +1021,19 @@
     var(--muted-foreground) 85%,
     transparent
   );
-  /* 「执行过程」头部胶囊的底：步骤次要文字的那种灰（--activity-secondary）淡铺一层，
-     亮色 12%、暗色 24%（暗底上要多一点才同样看得出），悬停各深一档。是灰、不带主题
-     色调：彩色预设的 --secondary（用户气泡）偏粉、偏橙，胶囊不跟它。本身半透明，叠在
-     背景图上也是这一层灰，另加细线（见 [data-workspace-bg="on"] .activity-capsule）。
-     胶囊里的次要文字用 --activity-muted-strong，12 套预设明暗下都 ≥ 4.9:1。 */
-  --activity-capsule: color-mix(
-    in oklab,
-    var(--activity-secondary) 12%,
-    transparent
-  );
+  /* 「执行过程」头部胶囊的底：同用户消息气泡（bg-secondary），彩色预设下跟气泡一样带
+     主题色调。悬停是同一种颜色向前景色收 6%（亮色加深、暗色提亮），不换成别的灰；再深
+     胶囊里的次要文字就不到 4.5:1 了。开图时同气泡一样转半透明，见
+     [data-workspace-bg="on"]。胶囊里的次要文字用 --activity-muted-strong，12 套预设明暗
+     下静止 ≥ 5.3:1、悬停 ≥ 4.6:1。 */
+  --activity-capsule: var(--secondary);
   --activity-capsule-hover: color-mix(
     in oklab,
-    var(--activity-secondary) 18%,
-    transparent
+    var(--secondary),
+    var(--foreground) 6%
   );
-  /* 胶囊里「N 次失败」的红：--destructive 在亮色白底上只有约 4.7:1，铺了灰就跌破 4.5，
-     向前景色收 15%（暗色下是提亮），胶囊静止和悬停时都 ≥ 5.1:1。 */
+  /* 胶囊里「N 次失败」的红：--destructive 在气泡底上只有约 4.3:1，向前景色收 15%
+     （暗色下是提亮），胶囊静止和悬停时都 ≥ 4.9:1。 */
   --activity-capsule-danger: color-mix(
     in oklab,
     var(--tone-danger) 85%,
@@ -1070,16 +1066,6 @@
 }
 
 .dark {
-  --activity-capsule: color-mix(
-    in oklab,
-    var(--activity-secondary) 24%,
-    transparent
-  );
-  --activity-capsule-hover: color-mix(
-    in oklab,
-    var(--activity-secondary) 32%,
-    transparent
-  );
   --tone-success: oklch(0.74 0.15 150);
   --tone-danger-surface: color-mix(
     in oklab,
@@ -1435,8 +1421,24 @@
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
-/* 「执行过程」头部胶囊（元素自带 bg-activity-capsule）：底色令牌本来就是半透明的灰，开图
-   不换，只像用户消息气泡（上面的 .is-user .ws-msg-secondary）一样加一圈 inset 细线。 */
+/* 「执行过程」头部胶囊（元素自带 bg-activity-capsule）：开图时同用户消息气泡（上面的
+   .is-user .ws-msg-secondary）——同一句半透明 --muted 加 inset 细线。悬停在同样的透明度上
+   向前景色收一档：叠在图上的那一层深 6%（--muted 收 12%、只铺一半），同关图时一样是加深，
+   图照样透出来。改的是令牌、不是 background-color：直接写 unlayered 的 background-color 会
+   盖掉元素上的 hover:bg-activity-capsule-hover，开图就没了悬停反馈。 */
+[data-workspace-bg="on"] {
+  --activity-capsule: color-mix(
+    in oklch,
+    var(--muted) calc(var(--ws-msg-alpha) * 100%),
+    transparent
+  );
+  --activity-capsule-hover: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--muted), var(--foreground) 12%)
+      calc(var(--ws-msg-alpha) * 100%),
+    transparent
+  );
+}
 [data-workspace-bg="on"] .activity-capsule {
   box-shadow: inset 0 0 0 1px var(--border);
 }
@@ -1596,16 +1598,17 @@
 /* 老引擎无 color-mix 时回落到主题 --border（仍随主题，至少不崩）。消息细线 --ws-msg-border 同理：
    不回落的话，消息里的 --border 会是一句作废的 color-mix，边框退成 currentColor 的黑线。 */
 @supports not (background: color-mix(in oklch, white, transparent)) {
-  /* 「执行过程」胶囊同理：令牌作废的话底色是透明的，退回 --secondary（明暗都跟主题；
-     写在 .dark 之后，同权重后写的生效）。 */
+  /* 「执行过程」胶囊同理：令牌作废的话底色是透明的，退回气泡的 --secondary（气泡在这里
+     也是它，开图那句 color-mix 被丢掉了），悬停不再变深。 */
   :root {
-    --activity-capsule: var(--secondary);
     --activity-capsule-hover: var(--secondary);
     --activity-capsule-danger: var(--tone-danger);
   }
   [data-workspace-bg="on"] {
     --ws-chrome-border: var(--border);
     --ws-msg-border: var(--border);
+    --activity-capsule: var(--secondary);
+    --activity-capsule-hover: var(--secondary);
   }
 }
 /* 组合式 utility（无 base 规则）：挂在已带 border-* / border-border* 的 chrome 元素上，开图时用加强色
@@ -2251,10 +2254,13 @@
   content: none;
 }
 
-/* The incoming segment of a dot row: the previous row's segment stops 0.125rem
-   into this one (it was sized for a ring at 0.25rem); this fills the rest of
-   the way down to the dot. */
-.activity-item[data-marker="dot"]:not(:first-child)::after {
+/* The incoming segment of a dot row: the segment above it — the previous
+   row's, or the one a list under the header runs down from it (below) — stops
+   0.125rem into this one (it was sized for a ring at 0.25rem); this fills the
+   rest of the way down to the dot. */
+.activity-item[data-marker="dot"]:not(:first-child)::after,
+.activity-timeline[data-headed]
+  > .activity-item[data-marker="dot"]:first-child::after {
   content: "";
   position: absolute;
   inset-inline-start: calc(0.625rem - 0.5px);
@@ -2267,26 +2273,24 @@
 /* A reply's list under its header capsule (`data-headed`, set by the turn).
    It starts a row's gap plus 0.25rem below the capsule — as if the capsule's
    edge were the bottom of a ring on a row before it — so the first ring sits
-   as far under the capsule (1rem) as a ring under the one before. The first
-   row's rail runs up to that edge: down to 0.125rem above its ring, or, when
-   prose comes first, into its dot as a dot's incoming segment does. */
+   as far under the capsule (1rem) as a ring under the one before. The rail
+   runs up to that edge as that row's segment would, down to 0.125rem above
+   the first ring — or, when prose comes first, on into its dot by the dot's
+   incoming segment. The list draws it, not its first row: it stands while
+   rows join, the first one too — a reply with nothing in it yet is this list
+   with its foot alone, the turning ring where the first step will go. */
 .activity-timeline[data-headed] {
   padding-top: calc(var(--activity-gap) + 0.25rem);
 }
 
-.activity-timeline[data-headed] > .activity-item:first-child::after {
+.activity-timeline[data-headed]::before {
   content: "";
   position: absolute;
   inset-inline-start: calc(0.625rem - 0.5px);
-  top: calc(-1 * (var(--activity-gap) + 0.25rem));
+  top: 0;
   height: calc(var(--activity-gap) + 0.375rem);
   width: 1px;
   background: var(--activity-rail);
-}
-
-.activity-timeline[data-headed]
-  > .activity-item[data-marker="dot"]:first-child::after {
-  height: calc(var(--activity-gap) + 0.875rem);
 }
 
 /* Rows inside an expanded group: indented into the content column, with a
@@ -2361,9 +2365,9 @@
    the part past its line grows, the clip let out from where the segment
    stopped. The rows one join touched take their turn top to bottom (the hook
    holds each one's growth back a little longer), so the rail draws down
-   through them. The rail up to the header stands as it is: a first row that
-   joins takes over the one already drawn. Transform and clip only, so no row
-   changes size under the virtual list. */
+   through them. The rail up to the header is the list's own and stands as
+   it is. Transform and clip only, so no row changes size under the virtual
+   list. */
 @keyframes activity-rail-grow {
   from {
     transform: scaleY(0);
@@ -2613,6 +2617,169 @@
 .activity-ansi
   :is([style^="color: rgb(0, 187, 187)"], [style^="color: rgb(85, 255, 255)"]) {
   color: var(--ansi-cyan) !important;
+}
+
+/* ===== Chat motion (the conversation view; `@/lib/chat-motion`) =====
+   What arrives while the reader is watching eases in; what is already there
+   when they arrive stays put. Every rule here plays only without a
+   reduced-motion preference, and the "Chat animations" switch below drops all
+   of it. Script-driven motion (`ReplyMotion`, the reply's layout as it changes
+   shape) asks the same two questions before it plays. */
+
+/* Something that arrives fades in, rising a few pixels: a reply's stats row
+   and its changed files as it finishes (`useArrivedOnCompletion`).
+   `chat-enter-late` waits a beat first — the pending reply, after the
+   message that was just sent — and `chat-enter-rise` comes from further
+   down: that message. Each is put on its element once, as it mounts, so the
+   virtual list bringing an element back never replays it; filled backwards
+   only, so once played it leaves nothing applied to the element. */
+@keyframes chat-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes chat-enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-enter {
+    animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .chat-enter-late {
+    animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) 120ms backwards;
+  }
+
+  .chat-enter-rise {
+    animation: chat-enter-rise 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+}
+
+/* A slot that slides open as its content arrives and shut as it goes
+   (`SlideSlot`): a running command's last lines, the running turn's figures
+   over the composer. On a grid track like the reply's own fold, so nothing
+   reads layout; its content is clipped only while it moves. With no
+   animation the slot opens and shuts at once. */
+.slide-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.slide-slot > * {
+  min-height: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .slide-slot[data-motion] > * {
+    overflow: hidden;
+  }
+
+  .slide-slot[data-motion="enter"] {
+    animation: slide-slot-open 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .slide-slot[data-motion="leave"] {
+    animation: slide-slot-close 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+}
+
+@keyframes slide-slot-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@keyframes slide-slot-close {
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* The prose being written (`MarkdownText`), as it arrives: every character
+   Streamdown wraps for it (`[data-sd-animate]`) fades in, a chunk's
+   characters one after another (`--sd-delay`), and a block that is not words
+   — a code block, a table, a rule, an image — fades in whole. A transition
+   from the starting style rather than Streamdown's keyframes, which its next
+   render re-times to nothing mid-fade; and a starting style applies only to
+   an element's first style, so what was already written when the fade was
+   armed (`data-word-fade`, a frame after the text mounted) stays as it is. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-word-fade] [data-sd-animate],
+  [data-word-fade]
+    :is(
+      [data-streamdown="code-block"],
+      [data-streamdown="table-wrapper"],
+      hr,
+      img
+    ) {
+    transition: opacity 320ms ease-out var(--sd-delay, 0ms);
+  }
+
+  @starting-style {
+    [data-word-fade] [data-sd-animate],
+    [data-word-fade]
+      :is(
+        [data-streamdown="code-block"],
+        [data-streamdown="table-wrapper"],
+        hr,
+        img
+      ) {
+      opacity: 0;
+    }
+  }
+}
+
+/* A reply's Markdown spaces its blocks with `space-y-4` and drops the outer
+   margins of the first and last (`MessageResponse`, Streamdown's own root).
+   While the text streams, Streamdown wraps each block in a `display:
+   contents` box carrying its direction (`div[dir]` with no `data-streamdown`
+   — settled, a code block is a top-level `div[dir]` too, but one of
+   Streamdown's own, so marked), so those rules land on the boxes —
+   which take no margins — and the blocks ran together until the reply
+   settled, then spread apart all at once. The blocks inside the boxes get
+   the same spacing here, in the same layer and at the same weight as
+   `space-y-4` (none), so a block's own margins win as they do settled.
+   Matched by `dir`, never by the box's inline style: a selector on `style`
+   re-styles the whole subtree of every element whose inline style changes,
+   and the transcript's change on every streamed token. */
+@layer utilities {
+  :where(.chat-markdown > div[dir]:not([data-streamdown]):not(:last-child) > *),
+  :where(
+    .chat-markdown
+      > div[dir]:not([data-streamdown]):last-child
+      > :not(:last-child)
+  ) {
+    margin-block-start: 0;
+    margin-block-end: calc(var(--spacing) * 4);
+  }
+
+  .chat-markdown > div[dir]:not([data-streamdown]):first-child > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > div[dir]:not([data-streamdown]):last-child > :last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Streamdown lays a code block out only once it is scrolled near (inline
+   `content-visibility: auto`), at a 200px stand-in height until then — and
+   "near" is decided a frame late, so even a block in plain view is drawn
+   200px tall for a frame first. In the reply being written, or the one just
+   written (`data-reply-current`), that frame lurched everything under a new
+   code block, the turning ring and the scroll with it, as the block appeared
+   and again as the reply settled. There every code block is laid out at
+   once; history keeps the deferral. */
+[data-reply-current] [data-streamdown="code-block"] {
+  content-visibility: visible !important;
 }
 
 /* Settings → Appearance → "Chat animations" off. <html> carries
