@@ -42,14 +42,24 @@ export function fileToSuggestion(
  * anchor: the backend derives the delegation reminder from it at send time, so
  * nothing has to travel out-of-band alongside the prompt.
  */
-export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
+export function agentToSuggestion(
+  agent: AcpAgentInfo,
+  account?: { id: string; name: string }
+): SuggestionItem {
+  const name = agent.name || getAgentLabel(agent.agent_type)
   return {
     reference: {
       refType: "agent",
-      id: agent.agent_type,
-      label: agent.name || getAgentLabel(agent.agent_type),
-      uri: `codeg://agent/${agent.agent_type}`,
-      meta: { agentType: agent.agent_type, available: agent.available },
+      id: account
+        ? `${agent.agent_type}?account=${account.id}`
+        : agent.agent_type,
+      label: account ? `${name} · ${account.name}` : name,
+      uri: `codeg://agent/${agent.agent_type}${account ? `?account=${encodeURIComponent(account.id)}` : ""}`,
+      meta: {
+        agentType: agent.agent_type,
+        available: agent.available,
+        ...(account ? { agentAccountId: account.id } : {}),
+      },
     },
     detail: agent.description || null,
     keywords: agent.agent_type,

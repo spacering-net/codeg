@@ -439,6 +439,33 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
     Box::new(RouteSanitized(inner))
 }
 
+/// Select an account's native transcript store without mutating process-wide
+/// environment variables. Two accounts can be read concurrently.
+pub fn build_account_parser(agent: AgentType, home: Option<&std::path::Path>, env: &AgentEnv) -> Result<Box<dyn AgentParser>, ParseError> {
+    let Some(home) = home else { return Ok(build_agent_parser(agent, env)); };
+    let spec = crate::acp::agent_accounts::layout(agent)
+        .ok_or_else(|| ParseError::InvalidData(format!("{agent} does not support isolated accounts")))?;
+    let base = spec.transcript_dir(home);
+    let inner: Box<dyn AgentParser> = match agent {
+        AgentType::ClaudeCode => Box::new(claude::ClaudeParser::with_base_dir(base)),
+        AgentType::Codex => Box::new(codex::CodexParser::with_base_dir(base)),
+        AgentType::Grok => Box::new(grok::GrokParser::with_base_dir(base)),
+        AgentType::Gemini => Box::new(gemini::GeminiParser::with_base_dir(base)),
+        AgentType::OpenCode => Box::new(opencode::OpenCodeParser::with_account_home(home)),
+        AgentType::Hermes => Box::new(hermes::HermesParser::with_base_dir(base)),
+        AgentType::CodeBuddy => Box::new(codebuddy::CodeBuddyParser::with_base_dir(base)),
+        AgentType::Cline => Box::new(cline::ClineParser::with_base_dir(base)),
+        AgentType::KimiCode => Box::new(kimi_code::KimiCodeParser::with_base_dir(base)),
+        AgentType::Pi => Box::new(pi::PiParser::with_base_dir(base)),
+        AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::with_account_home(home)),
+        AgentType::Qoder => Box::new(qoder::QoderParser::with_base_dir(base)),
+        AgentType::Antigravity => Box::new(antigravity::AntigravityParser::with_base_dir(base)),
+        AgentType::Cursor => Box::new(cursor::CursorParser::with_base_dir(base)),
+        _ => return Err(ParseError::InvalidData("Unsupported account parser".into())),
+    };
+    Ok(Box::new(RouteSanitized(inner)))
+}
+
 /// A parser wrapped the way [`build_agent_parser`] wraps every one, for tests
 /// that build their parser over a fixture directory.
 #[cfg(test)]
@@ -526,6 +553,12 @@ fn sanitize_summary(summary: &mut ConversationSummary) {
         // straddle the cut and survive `sanitize_text`, which only removes whole
         // frames. Anything from a leftover marker on is truncated frame.
         crate::acp::agent_mentions::cut_at_route_frame_marker(title);
+        // The first native prompt after a handoff is an internal context seed.
+        // A parser may already have clipped it, so titles only need its prefix.
+        if let Some(at) = title.find(crate::acp::handoff::BRIEFING_MARKER) {
+            title.truncate(at);
+            *title = title.trim_end().to_string();
+        }
         if title.trim().is_empty() {
             summary.title = None;
         }

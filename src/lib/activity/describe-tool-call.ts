@@ -16,6 +16,7 @@ import { CODEX_SCRIPT_TOOL_NAME } from "@/lib/codex-code-mode"
 import { isCodegMcpWorkbenchTool } from "@/lib/codeg-mcp-tool"
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
+import { isAgentHandoffMeta } from "@/lib/agent-handoff"
 import {
   isCodeModeDelegationCall,
   isDelegateToAgentToolName,
@@ -96,6 +97,7 @@ const TODO_TOOLS = new Set([
 
 /** Which row a tool call gets, before any of its payload is read. */
 export function toolStepKind(part: AdaptedToolCallPart): ToolStepKind {
+  if (isAgentHandoffMeta(part.meta)) return "handoff"
   if (isContextCompactionMeta(part.meta)) return "compaction"
   const name = normalizeToolName(part.toolName).toLowerCase()
   // opencode 2.x code-mode routes MCP calls through the built-in `execute`

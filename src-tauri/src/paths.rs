@@ -174,6 +174,12 @@ pub fn codeg_turn_timings_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(TURN_TIMINGS_DIR_NAME))
 }
 
+/// Conversation handoff copies follow the same persisted home/data-directory
+/// precedence as Codeg's own transcripts, including container deployments.
+pub fn codeg_conversation_context_root() -> PathBuf {
+    codeg_acp_transcripts_root().with_file_name("conversation-context")
+}
+
 /// Root directory for codeg's own ACP transcripts (see
 /// `crate::acp_transcript`) — the raw `session/update` stream and outgoing
 /// prompts recorded for **custom ACP agents**, which have no codeg-side

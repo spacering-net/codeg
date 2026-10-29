@@ -336,6 +336,8 @@ function ToolStepView({ step: given }: { step: ToolStep }) {
   const step = useLiveToolStep(given)
   const { tool, part } = step
   switch (tool.kind) {
+    case "handoff":
+      return renderPart(part, step.key)
     case "read":
     case "search":
     case "glob":

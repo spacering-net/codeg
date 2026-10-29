@@ -14,6 +14,7 @@ import { buildActivity } from "@/lib/activity/build-activity"
 import type { ActivityModel } from "@/lib/activity/types"
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import { contextCompactionSummary } from "@/lib/context-compaction"
+import { isAgentHandoffMeta } from "@/lib/agent-handoff"
 import {
   findHtmlFileMentions,
   hasCodexVisualizeRef,
@@ -25,6 +26,7 @@ import { useChatMotion } from "@/hooks/use-chat-motion"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { ActivityTimeline } from "./activity/activity-timeline"
 import type { ActivityFoot } from "./activity/timeline-foot"
+import { AgentHandoffCard } from "./agent-handoff-card"
 import { CodegMcpToolCard } from "./codeg-mcp-tool-card"
 import { CodexVisualizeCard } from "./codex-visualize-card"
 import { CollabAgentCard } from "./collab-agent-card"
@@ -238,6 +240,9 @@ const HostedToolCall = memo(function HostedToolCall({
 }: {
   part: ToolCallPart
 }) {
+  if (isAgentHandoffMeta(part.meta)) {
+    return <AgentHandoffCard meta={part.meta} />
+  }
   if (isContextCompactionMeta(part.meta)) {
     return (
       <ContextCompactionCard

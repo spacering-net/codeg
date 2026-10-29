@@ -58,6 +58,7 @@ export type ToolStepKind =
   | "feedback"
   | "workbench"
   | "compaction"
+  | "handoff"
   | "completion"
 
 export const EXPLORE_KINDS: ReadonlySet<ToolStepKind> = new Set([

@@ -77,6 +77,12 @@ pub const MANAGED_SECTIONS: &[ManagedSection] = &[
         live_path: |_| crate::paths::codeg_acp_transcripts_root(),
     },
     ManagedSection {
+        id: "conversation-context",
+        kind: SectionKind::Dir,
+        policy: SectionPolicy::AlwaysReplace,
+        live_path: |_| crate::paths::codeg_conversation_context_root(),
+    },
+    ManagedSection {
         // Per-turn wall-clock spans for agents whose native store has no
         // timestamps (Cursor). Without it a restored history shows no durations.
         id: "turn-timings",

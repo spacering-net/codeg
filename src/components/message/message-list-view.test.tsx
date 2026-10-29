@@ -8,6 +8,7 @@ import {
   extractDelegationSources,
   extractMessageDelegationSources,
   groupDelegationSources,
+  handoffOnlyMeta,
   hoistedCompaction,
   isForkPointUnnamed,
   markThreadTail,
@@ -320,6 +321,94 @@ describe("mergeConsecutiveAssistantTurns", () => {
       assistantItem("b"),
     ])
     expect(merged.map((it) => it.kind)).toEqual(["turn", "compaction", "turn"])
+  })
+
+  it("does not fold an agent-handoff divider into the surrounding replies", () => {
+    // The previous agent's last reply, the seam, the new agent's first reply:
+    // two assistant turns that would otherwise merge into one bubble, with
+    // the handoff read as part of the old agent's answer.
+    const handoff: ThreadItem = {
+      key: "persisted-handoff-0",
+      kind: "handoff",
+      meta: {
+        "codeg.handoff": { version: 1, from: "claude_code", to: "codex" },
+      },
+    }
+    const merged = mergeConsecutiveAssistantTurns([
+      assistantItem("a"),
+      handoff,
+      assistantItem("b"),
+    ])
+    expect(merged.map((it) => it.kind)).toEqual(["turn", "handoff", "turn"])
+  })
+})
+
+describe("handoffOnlyMeta", () => {
+  const handoffMeta = {
+    "codeg.handoff": { version: 1, from: "claude_code", to: "codex" },
+  }
+
+  it("hoists a group that is nothing but the handoff tool call", () => {
+    const group: ResolvedMessageGroup = {
+      id: "handoff-0",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "  " },
+        {
+          type: "tool-call",
+          toolCallId: "handoff-0",
+          toolName: "agent_handoff",
+          state: "output-available",
+          input: null,
+          output: null,
+          meta: handoffMeta,
+        },
+      ],
+      resources: [],
+      images: [],
+    }
+    expect(handoffOnlyMeta(group)).toBe(handoffMeta)
+  })
+
+  it("leaves real replies, user turns and compaction dividers alone", () => {
+    const withText: ResolvedMessageGroup = {
+      id: "a",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "done" },
+        {
+          type: "tool-call",
+          toolCallId: "handoff-0",
+          toolName: "agent_handoff",
+          state: "output-available",
+          input: null,
+          output: null,
+          meta: handoffMeta,
+        },
+      ],
+      resources: [],
+      images: [],
+    }
+    expect(handoffOnlyMeta(withText)).toBeNull()
+    expect(handoffOnlyMeta({ ...withText, role: "user" })).toBeNull()
+    const compaction: ResolvedMessageGroup = {
+      id: "c",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          toolCallId: "cb1",
+          toolName: "context_compaction",
+          state: "output-available",
+          input: null,
+          output: null,
+          meta: { contextCompaction: { version: 1 } },
+        },
+      ],
+      resources: [],
+      images: [],
+    }
+    expect(handoffOnlyMeta(compaction)).toBeNull()
   })
 })
 
