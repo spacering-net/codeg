@@ -121,6 +121,56 @@ function emptySources(
 const itemsOf = (groups: SuggestionGroup[], kind: ReferenceKind) =>
   groups.find((g) => g.kind === kind)?.items ?? []
 
+it("offers explicit native account targets while preserving legacy custom mentions", () => {
+  const sources = emptySources({
+    agents: [
+      {
+        ...makeAgent("claude_code", { name: "Claude Code" }),
+        named_accounts: [
+          { id: "work", name: "Work" },
+          { id: "personal", name: "Personal" },
+        ],
+      },
+      {
+        ...makeAgent("codex", { name: "Codex" }),
+        named_accounts: [{ id: "codex-work", name: "Work" }],
+      },
+      makeAgent("custom:claude-code-2", { name: "Claude Code 2" }),
+      {
+        ...makeAgent("grok", { enabled: false }),
+        named_accounts: [{ id: "hidden", name: "Work" }],
+      },
+    ],
+  })
+  const items = itemsOf(
+    buildReferenceGroups("", sources, {
+      ...DEFAULT_GROUP_LABELS,
+      defaultAccount: "Standard",
+    }),
+    "agent"
+  )
+  expect(items.map((item) => item.reference.label)).toEqual([
+    "Claude Code · Standard",
+    "Claude Code · Work",
+    "Claude Code · Personal",
+    "Codex · Standard",
+    "Codex · Work",
+    "Claude Code 2",
+  ])
+  expect(items[0].reference.uri).toBe(
+    "codeg://agent/claude_code?account=default"
+  )
+  expect(items[5].reference.uri).toBe("codeg://agent/custom:claude-code-2")
+  expect(
+    itemsOf(buildReferenceGroups("work", sources), "agent").map(
+      (item) => item.reference.meta
+    )
+  ).toMatchObject([
+    { agentType: "claude_code", agentAccountId: "work" },
+    { agentType: "codex", agentAccountId: "codex-work" },
+  ])
+})
+
 // --- pure builder -----------------------------------------------------------
 
 describe("buildReferenceGroups", () => {

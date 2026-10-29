@@ -18,6 +18,7 @@ import {
   Cpu,
   DatabaseBackup,
   Folder,
+  Info,
   MoreHorizontal,
   RefreshCw,
   RotateCcw,
@@ -40,8 +41,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Progress } from "@/components/ui/progress"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
+import { SubscriptionQuotaPanel } from "@/components/token-usage/subscription-quota-panel"
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { formatFolderLabelWithAlias } from "@/lib/folder-display"
 import {
@@ -764,6 +771,8 @@ export function TokenUsagePage() {
                 })
               : t("apiListEstimate", { amount: formatUsd(cost.usd) })
           hint = `${sessions} · ${estimate}`
+        } else {
+          hint = `${sessions} · ${t("apiListUnpriced")}`
         }
       }
       return {
@@ -1084,44 +1093,47 @@ export function TokenUsagePage() {
       )}
 
       {isEmpty ? (
-        /* First run. With the toolbar withheld there is nothing above it and
-           nothing to scroll, so the call to action takes the whole canvas —
-           same shape as the Tasks board's empty state — instead of hanging in
-           a dashed box pinned under the title bar. */
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-          {error && (
-            <p className="max-w-md rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-              {t("loadFailed")}: {error}
-            </p>
-          )}
-          <ChartNoAxesColumn
-            className="size-10 text-muted-foreground/40"
-            aria-hidden="true"
-          />
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium">{t("emptyTitle")}</p>
-            <p className="max-w-sm text-xs text-muted-foreground">
-              {t("emptyHint")}
-            </p>
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="mx-auto w-full max-w-6xl p-4">
+            <SubscriptionQuotaPanel />
           </div>
-          {/* Full, not incremental. On a genuine first run the two do the same
+          <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
+            {error && (
+              <p className="max-w-md rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                {t("loadFailed")}: {error}
+              </p>
+            )}
+            <ChartNoAxesColumn
+              className="size-10 text-muted-foreground/40"
+              aria-hidden="true"
+            />
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-medium">{t("emptyTitle")}</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                {t("emptyHint")}
+              </p>
+            </div>
+            {/* Full, not incremental. On a genuine first run the two do the same
               work (nothing is stamped yet, so everything is stale), but they
               part ways in the state where an empty fact table sits behind
               up-to-date stamps — a first pass that pinned every conversation at
               zero, a restore, a wipe. There an incremental pass skips
               everything and this button becomes a no-op, and with the toolbar
               withheld the ⋯ menu's rebuild entry isn't there to escape with. */}
-          <Button
-            type="button"
-            size="sm"
-            className="gap-1.5"
-            disabled={syncing}
-            onClick={() => void runSync("full")}
-          >
-            <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
-            {t("emptyAction")}
-          </Button>
-        </div>
+            <Button
+              type="button"
+              size="sm"
+              className="gap-1.5"
+              disabled={syncing}
+              onClick={() => void runSync("full")}
+            >
+              <RefreshCw
+                className={cn("size-3.5", syncing && "animate-spin")}
+              />
+              {t("emptyAction")}
+            </Button>
+          </div>
+        </ScrollArea>
       ) : (
         /* Scrolled cards slide under a soft fade below the toolbar — the same
            clip-fade treatment as collapsed chat messages, faded in only once
@@ -1141,6 +1153,7 @@ export function TokenUsagePage() {
                 off the cards once the viewport clears the cap. */}
             <div className="px-4 pb-4">
               <div className="mx-auto w-full max-w-6xl space-y-4">
+                <SubscriptionQuotaPanel />
                 {error && (
                   <p className="rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                     {t("loadFailed")}: {error}
@@ -1188,19 +1201,42 @@ export function TokenUsagePage() {
                             </div>
                             {apiEstimate && (
                               <div className="mt-2 text-sm text-muted-foreground">
-                                <span title={t("apiListEstimateHint")}>
-                                  {apiEstimate.unpricedTokens > 0
-                                    ? t("apiListEstimatePartial", {
-                                        amount: formatUsd(apiEstimate.usd),
-                                        percent: coveragePercent(
-                                          apiEstimate.pricedTokens,
-                                          apiEstimate.unpricedTokens
-                                        ),
-                                      })
-                                    : t("apiListEstimate", {
-                                        amount: formatUsd(apiEstimate.usd),
-                                      })}
-                                </span>
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded text-left hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    >
+                                      <span>
+                                        {apiEstimate.unpricedTokens > 0
+                                          ? t("apiListEstimatePartial", {
+                                              amount: formatUsd(
+                                                apiEstimate.usd
+                                              ),
+                                              percent: coveragePercent(
+                                                apiEstimate.pricedTokens,
+                                                apiEstimate.unpricedTokens
+                                              ),
+                                            })
+                                          : t("apiListEstimate", {
+                                              amount: formatUsd(
+                                                apiEstimate.usd
+                                              ),
+                                            })}
+                                      </span>
+                                      <Info
+                                        className="size-3.5 shrink-0"
+                                        aria-hidden
+                                      />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent
+                                    align="start"
+                                    className="w-80 max-w-[calc(100vw-2rem)] text-xs leading-relaxed"
+                                  >
+                                    {t("apiListEstimateHint")}
+                                  </PopoverContent>
+                                </Popover>
                               </div>
                             )}
                             {archetype && totals.total_tokens > 0 && (

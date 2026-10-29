@@ -51,9 +51,8 @@ impl HermesParser {
         }
     }
 
-    /// Test-only constructor that points the parser at a fixture directory
+    /// Explicit-root constructor for an account or fixture directory
     /// containing a `state.db` SQLite file.
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }

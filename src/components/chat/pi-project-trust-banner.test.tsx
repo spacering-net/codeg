@@ -109,6 +109,43 @@ describe("PiProjectTrustBanner", () => {
     ).toBeInTheDocument()
   })
 
+  it("saves and reconnects with the selected native account and saved session", async () => {
+    const user = userEvent.setup()
+    mockConnection.value.status = null
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PiProjectTrustBanner
+          contextKey="tab-1"
+          agentType="pi"
+          workingDir="/repo"
+          agentAccountId="account-work"
+          conversationId={41}
+          sessionId="saved-session"
+        />
+      </NextIntlClientProvider>
+    )
+    await user.click(await screen.findByRole("button", { name: copy.review }))
+    await user.click(await screen.findByRole("button", { name: copy.trust }))
+    await waitFor(() =>
+      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith(
+        "/repo",
+        true,
+        "account-work"
+      )
+    )
+    expect(api.acpPiProjectTrustState).toHaveBeenCalledWith(
+      "/repo",
+      "account-work"
+    )
+    expect(mockConnection.value.connect).toHaveBeenCalledWith(
+      "pi",
+      "/repo",
+      "saved-session",
+      41,
+      "account-work"
+    )
+  })
+
   it("stays silent when the repo ships no trust-gated resources", async () => {
     api.acpPiProjectTrustState.mockResolvedValue({
       ...undecidedWithExtension(),
@@ -211,7 +248,10 @@ describe("PiProjectTrustBanner", () => {
     resolveA(undecidedWithExtension())
 
     await waitFor(() =>
-      expect(api.acpPiProjectTrustState).toHaveBeenCalledWith("/other")
+      expect(api.acpPiProjectTrustState).toHaveBeenCalledWith(
+        "/other",
+        undefined
+      )
     )
     expect(screen.queryByText(copy.title)).not.toBeInTheDocument()
   })
@@ -247,7 +287,11 @@ describe("PiProjectTrustBanner", () => {
     await user.click(await screen.findByRole("button", { name: copy.trust }))
 
     await waitFor(() =>
-      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith("/repo", true)
+      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith(
+        "/repo",
+        true,
+        undefined
+      )
     )
     expect(mockConnection.value.reapplyConfig).toHaveBeenCalled()
   })
@@ -262,7 +306,11 @@ describe("PiProjectTrustBanner", () => {
     await user.click(await screen.findByRole("button", { name: copy.decline }))
 
     await waitFor(() =>
-      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith("/repo", false)
+      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith(
+        "/repo",
+        false,
+        undefined
+      )
     )
     expect(mockConnection.value.reapplyConfig).not.toHaveBeenCalled()
   })
@@ -278,7 +326,11 @@ describe("PiProjectTrustBanner", () => {
     await user.click(await screen.findByRole("button", { name: copy.revoke }))
 
     await waitFor(() =>
-      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith("/repo", null)
+      expect(api.acpPiSetProjectTrust).toHaveBeenCalledWith(
+        "/repo",
+        null,
+        undefined
+      )
     )
     expect(mockConnection.value.reapplyConfig).toHaveBeenCalled()
   })
@@ -294,7 +346,10 @@ describe("PiProjectTrustBanner", () => {
     )
 
     await waitFor(() =>
-      expect(api.acpPiAcknowledgeProjectTrust).toHaveBeenCalledWith("/repo")
+      expect(api.acpPiAcknowledgeProjectTrust).toHaveBeenCalledWith(
+        "/repo",
+        undefined
+      )
     )
     expect(api.acpPiSetProjectTrust).not.toHaveBeenCalled()
   })
@@ -313,7 +368,13 @@ describe("PiProjectTrustBanner", () => {
     )
 
     await waitFor(() =>
-      expect(mockConnection.value.connect).toHaveBeenCalledWith("pi", "/repo")
+      expect(mockConnection.value.connect).toHaveBeenCalledWith(
+        "pi",
+        "/repo",
+        undefined,
+        undefined,
+        undefined
+      )
     )
     expect(mockConnection.value.reapplyConfig).not.toHaveBeenCalled()
   })

@@ -9,6 +9,29 @@ import {
 } from "./reference-uri"
 
 describe("parseCodegReferenceUri", () => {
+  it("keeps explicit Default separate from an unqualified agent and rejects malformed accounts", () => {
+    expect(
+      parseCodegReferenceUri(
+        "codeg://agent/codex?account=default",
+        "@Codex · Default"
+      )?.meta
+    ).toEqual({
+      agentType: "codex",
+      agentAccountId: "default",
+    })
+    expect(
+      parseCodegReferenceUri("codeg://agent/codex", "@Codex")?.meta
+    ).toEqual({ agentType: "codex" })
+    for (const suffix of [
+      "?account=",
+      "?account=work&account=personal",
+      "?account=../../home",
+    ]) {
+      expect(
+        parseCodegReferenceUri(`codeg://agent/codex${suffix}`, "@Codex")
+      ).toBeNull()
+    }
+  })
   it("returns null for non-reference schemes", () => {
     expect(parseCodegReferenceUri("https://example.com", "x")).toBeNull()
     expect(parseCodegReferenceUri("data:text/plain,abc", "x")).toBeNull()
