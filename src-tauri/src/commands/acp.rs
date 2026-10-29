@@ -4377,8 +4377,10 @@ fn grok_config_permission_mode(config_toml: &str) -> Option<String> {
 /// global `~/.grok/config.toml` `[ui].permission_mode` (legacy-migrated by
 /// `parse_grok_settings`). Best-effort: a missing/unreadable/`default` config
 /// yields `None`, so the default preserves codeg's ability to prompt for approvals.
-pub(crate) fn grok_launch_permission_mode() -> Option<String> {
-    load_grok_config_toml_raw().and_then(|raw| grok_config_permission_mode(&raw))
+pub(crate) fn grok_launch_permission_mode(runtime_env: &BTreeMap<String, String>) -> Option<String> {
+    let path = runtime_env.get("GROK_HOME").filter(|v| !v.is_empty()).map(|home| PathBuf::from(home).join("config.toml"))
+        .unwrap_or_else(|| crate::parsers::grok::resolve_grok_home_dir().join("config.toml"));
+    fs::read_to_string(path).ok().and_then(|raw| grok_config_permission_mode(&raw))
 }
 
 /// Map a `~/.codex/config.toml` sandbox/approval pair onto the `INITIAL_AGENT_MODE`
@@ -4549,8 +4551,10 @@ fn codex_initial_agent_mode(settings: &CodexSandboxSettings) -> Option<&'static 
 /// The `INITIAL_AGENT_MODE` value codex-acp's launch should carry, derived from
 /// the global `~/.codex/config.toml`. Best-effort: a missing/unreadable/
 /// unmappable config yields `None`, leaving codex-acp's default preset in place.
-pub(crate) fn codex_launch_initial_agent_mode() -> Option<String> {
-    let raw = load_codex_config_toml_raw()?;
+pub(crate) fn codex_launch_initial_agent_mode(runtime_env: &BTreeMap<String, String>) -> Option<String> {
+    let path = runtime_env.get("CODEX_HOME").filter(|v| !v.is_empty()).map(|home| PathBuf::from(home).join("config.toml"))
+        .unwrap_or_else(codex_config_toml_path);
+    let raw = fs::read_to_string(path).ok()?;
     let settings = parse_codex_sandbox_settings(&raw);
     codex_initial_agent_mode(&settings).map(str::to_string)
 }
@@ -6505,9 +6509,10 @@ fn pi_project_trust_state_at(
 pub(crate) fn pi_project_trust_launch_block(
     cwd: &Path,
     runtime_env: &BTreeMap<String, String>,
+    account_home: Option<&Path>,
 ) -> Option<String> {
     let trust_file = pi_agent_dir_in_workspace(runtime_env, cwd).join("trust.json");
-    let state = pi_project_trust_state_at(&trust_file, &pi_trust_ack_path(), cwd);
+    let state = pi_project_trust_state_at(&trust_file, &pi_account_trust_ack_path(account_home), cwd);
     if state.resources.is_empty() || state.decision != Some(true) || state.acknowledged {
         return None;
     }
@@ -6587,6 +6592,25 @@ pub(crate) async fn acp_antigravity_login_start_core(
     method_id: String,
 ) -> Result<crate::acp::antigravity_login::AntigravityLoginStart, AcpError> {
     let runtime_env = antigravity_runtime_env(db).await?;
+    crate::acp::antigravity_login::start(&runtime_env, method_id.trim()).await
+}
+
+pub(crate) async fn acp_antigravity_account_login_start_core(
+    db: &AppDatabase,
+    method_id: String,
+    account_id: Option<String>,
+) -> Result<crate::acp::antigravity_login::AntigravityLoginStart, AcpError> {
+    let Some(id) = account_id else { return acp_antigravity_login_start_core(db, method_id).await; };
+    let account = crate::db::service::agent_account_service::resolve(&db.conn, AgentType::Antigravity, &id)
+        .await.map_err(|e| AcpError::protocol(e.to_string()))?;
+    let mut runtime_env = antigravity_runtime_env(db).await?;
+    for key in crate::acp::agent_accounts::credential_env_keys(AgentType::Antigravity) {
+        runtime_env.insert(key.into(), String::new());
+    }
+    let home = Path::new(&account.home_dir);
+    crate::acp::agent_accounts::apply_native_account_env(AgentType::Antigravity, home, &mut runtime_env);
+    runtime_env.extend(crate::acp::agent_accounts::isolation_env(AgentType::Antigravity, home).map_err(AcpError::protocol)?);
+    runtime_env.insert("AGY_AUTH_METHOD".into(), method_id.trim().into());
     crate::acp::antigravity_login::start(&runtime_env, method_id.trim()).await
 }
 
@@ -6698,19 +6722,33 @@ pub(crate) async fn acp_antigravity_sign_out_core(
     ))
 }
 
+fn pi_account_trust_ack_path(home: Option<&Path>) -> PathBuf {
+    home.map(|home| home.join(".codeg-project-trust.json")).unwrap_or_else(pi_trust_ack_path)
+}
+
+async fn pi_trust_paths_for_account(db: &AppDatabase, workspace: &str, account_id: Option<&str>) -> Result<(PathBuf, PathBuf), AcpError> {
+    if let Some(id) = account_id {
+        let account = crate::db::service::agent_account_service::resolve(&db.conn, AgentType::Pi, id)
+            .await.map_err(|e| AcpError::protocol(e.to_string()))?;
+        let home = Path::new(&account.home_dir);
+        return Ok((home.join("trust.json"), pi_account_trust_ack_path(Some(home))));
+    }
+    Ok((pi_agent_dir_in_workspace(&pi_runtime_env_from_db(db).await?, Path::new(workspace)).join("trust.json"), pi_trust_ack_path()))
+}
+
 pub(crate) async fn acp_pi_project_trust_state_core(
     db: &AppDatabase,
     workspace: String,
+    agent_account_id: Option<String>,
 ) -> Result<PiProjectTrustState, AcpError> {
     // Not trimmed, for the same reason as the write path: a directory name may
     // legitimately start or end with a space, and the state must describe the
     // exact folder the caller named.
     let cwd = Path::new(&workspace);
-    let trust_file =
-        pi_agent_dir_in_workspace(&pi_runtime_env_from_db(db).await?, cwd).join("trust.json");
+    let (trust_file, ack_file) = pi_trust_paths_for_account(db, &workspace, agent_account_id.as_deref()).await?;
     Ok(pi_project_trust_state_at(
         &trust_file,
-        &pi_trust_ack_path(),
+        &ack_file,
         cwd,
     ))
 }
@@ -6718,9 +6756,10 @@ pub(crate) async fn acp_pi_project_trust_state_core(
 /// Record that the user has seen and kept an existing trust grant, so the launch
 /// gate stops blocking this folder. Writes only codeg's own record — pi's
 /// `trust.json` is untouched, because the grant itself is not changing.
-pub(crate) async fn acp_pi_acknowledge_project_trust_core(workspace: String) -> Result<(), AcpError> {
+pub(crate) async fn acp_pi_acknowledge_project_trust_core(db: &AppDatabase, workspace: String, agent_account_id: Option<String>) -> Result<(), AcpError> {
+    let (_, ack_file) = pi_trust_paths_for_account(db, &workspace, agent_account_id.as_deref()).await?;
     tokio::task::spawn_blocking(move || {
-        pi_set_trust_acknowledged_at(&pi_trust_ack_path(), Path::new(&workspace), true)
+        pi_set_trust_acknowledged_at(&ack_file, Path::new(&workspace), true)
     })
     .await
     .map_err(|e| AcpError::protocol(format!("trust acknowledgement task failed: {e}")))?
@@ -6745,11 +6784,11 @@ pub(crate) async fn acp_pi_set_project_trust_core(
     db: &AppDatabase,
     workspace: String,
     trusted: Option<bool>,
+    agent_account_id: Option<String>,
 ) -> Result<(), AcpError> {
     // The same file the launch gate reads for this workspace — anchored in it
     // when the agent dir is relative (see `pi_agent_dir_in_workspace`).
-    let path = pi_agent_dir_in_workspace(&pi_runtime_env_from_db(db).await?, Path::new(&workspace))
-        .join("trust.json");
+    let (path, ack_file) = pi_trust_paths_for_account(db, &workspace, agent_account_id.as_deref()).await?;
     // The write takes pi's file lock and can sleep on contention, so keep it off
     // the async worker. NOTE: `workspace` is NOT trimmed — leading/trailing
     // spaces are legal in a directory name, and silently trimming them would key
@@ -6761,7 +6800,7 @@ pub(crate) async fn acp_pi_set_project_trust_core(
         // acknowledged by construction and must not re-block the launch. A
         // declined or revoked one drops the record, so a future grant gets
         // disclosed again instead of riding on a stale "already seen".
-        pi_set_trust_acknowledged_at(&pi_trust_ack_path(), cwd, trusted == Some(true))
+        pi_set_trust_acknowledged_at(&ack_file, cwd, trusted == Some(true))
     })
     .await
     .map_err(|e| AcpError::protocol(format!("trust write task failed: {e}")))?
@@ -7384,7 +7423,7 @@ async fn query_pi_model_catalog(
 
 pub async fn list_pi_model_catalog_core(db: &AppDatabase, data_dir: &Path) -> PiModelCatalog {
     let Ok(runtime_env) =
-        build_runtime_env_for_agent(db, AgentType::Pi, None, data_dir, true).await
+        build_runtime_env_for_agent(db, AgentType::Pi, None, data_dir, true, None).await
     else {
         return PiModelCatalog::unavailable(PiCatalogStatus::Failed);
     };
@@ -10857,7 +10896,7 @@ pub async fn acp_cursor_list_models(
 
 /// Primary env var keys for each agent type: (api_base_url, api_key, model).
 /// Shared by runtime env resolution, model-provider cascade, and config patching.
-fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'static str) {
+pub(crate) fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'static str) {
     match agent_type {
         AgentType::ClaudeCode => (
             "ANTHROPIC_BASE_URL",
@@ -11623,7 +11662,195 @@ pub(crate) async fn build_session_runtime_env(
     session_id: Option<&str>,
     data_dir: &Path,
 ) -> Result<BTreeMap<String, String>, AcpError> {
-    build_runtime_env_for_agent(db, agent_type, session_id, data_dir, false).await
+    build_runtime_env_for_agent(db, agent_type, session_id, data_dir, false, None).await
+}
+
+pub(crate) async fn build_account_session_runtime_env(
+    db: &AppDatabase,
+    agent_type: AgentType,
+    session_id: Option<&str>,
+    data_dir: &Path,
+    account_id: Option<&str>,
+) -> Result<BTreeMap<String, String>, AcpError> {
+    account_runtime_env(db, agent_type, session_id, data_dir, account_id, true).await
+}
+
+/// The launch environment for `account_id` (Default when `None`). Only a launch
+/// passes `sync_home`: bringing the account's MCP servers and skills in line
+/// with the shared ones writes into the folder its running CLIs also write, so
+/// a mere comparison (the staleness check) must leave the folder alone.
+async fn account_runtime_env(
+    db: &AppDatabase,
+    agent_type: AgentType,
+    session_id: Option<&str>,
+    data_dir: &Path,
+    account_id: Option<&str>,
+    sync_home: bool,
+) -> Result<BTreeMap<String, String>, AcpError> {
+    let Some(id) = account_id else {
+        return build_session_runtime_env(db, agent_type, session_id, data_dir).await;
+    };
+    let account = crate::db::service::agent_account_service::resolve(&db.conn, agent_type, id)
+        .await.map_err(|e| AcpError::protocol(e.to_string()))?;
+    let home = Path::new(&account.home_dir);
+    if let Some(reason) = crate::acp::agent_accounts::unsupported_reason(agent_type) {
+        return Err(AcpError::protocol(reason));
+    }
+    if sync_home {
+        crate::commands::mcp::sync_native_account_mcp(agent_type, home)
+            .map_err(|e| AcpError::protocol(e.to_string()))?;
+        crate::acp::account_skills::sync(agent_type, home).map_err(AcpError::protocol)?;
+    }
+    let mut env = build_runtime_env_for_agent(db, agent_type, session_id, data_dir, false, Some(home)).await?;
+    let isolation = crate::acp::agent_accounts::isolation_env_with_base(agent_type, home, &env)
+        .map_err(AcpError::protocol)?;
+    env.extend(isolation);
+    env.insert(crate::acp::agent_accounts::ACCOUNT_ENV.into(), account.id);
+    env.insert(crate::acp::agent_accounts::ACCOUNT_HOME_ENV.into(), account.home_dir);
+    Ok(env)
+}
+
+#[cfg(test)]
+mod native_account_launch_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn native_account_discovery_does_not_guess_default_when_the_row_is_gone() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let manager = ConnectionManager::new();
+        manager.insert_test_connection("default-owner", AgentType::Codex, None, EventEmitter::Noop).await;
+        let state = manager.get_state("default-owner").await.unwrap();
+        state.write().await.external_id = Some("shared-native-session".into());
+        assert!(acp_find_connection_for_account_core(&manager, 999, Some("shared-native-session"), AgentType::Codex, None).await.unwrap().is_some());
+        assert!(acp_find_connection_for_saved_conversation_core(&manager, &db, 999, Some("shared-native-session"), AgentType::Codex).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn native_pi_accounts_keep_trust_decisions_and_acknowledgements_separate() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let workspace = data.path().join("project");
+        fs::create_dir_all(workspace.join(".pi/extensions")).unwrap();
+        fs::write(workspace.join(".pi/extensions/fixture.js"), "// fixture, never executed").unwrap();
+        let a = crate::db::service::agent_account_service::create(&db.conn, data.path(), AgentType::Pi, "A", None).await.unwrap();
+        let b = crate::db::service::agent_account_service::create(&db.conn, data.path(), AgentType::Pi, "B", None).await.unwrap();
+        let a_home = Path::new(&a.home_dir);
+        let b_home = Path::new(&b.home_dir);
+        pi_write_trust_decision_at(&b_home.join("trust.json"), &workspace, Some(true)).unwrap();
+        let old_b = fs::read(b_home.join("trust.json")).unwrap();
+        let cwd = workspace.to_string_lossy().into_owned();
+        acp_pi_set_project_trust_core(&db, cwd.clone(), Some(true), Some(a.id.clone())).await.unwrap();
+        let a_state = acp_pi_project_trust_state_core(&db, cwd.clone(), Some(a.id.clone())).await.unwrap();
+        let b_state = acp_pi_project_trust_state_core(&db, cwd.clone(), Some(b.id.clone())).await.unwrap();
+        assert!(a_state.acknowledged);
+        assert!(!b_state.acknowledged);
+        assert_eq!(a_state.decision, Some(true));
+        let a_env = crate::acp::agent_accounts::isolation_env(AgentType::Pi, a_home).unwrap();
+        let b_env = crate::acp::agent_accounts::isolation_env(AgentType::Pi, b_home).unwrap();
+        assert!(pi_project_trust_launch_block(&workspace, &a_env, Some(a_home)).is_none());
+        assert!(pi_project_trust_launch_block(&workspace, &b_env, Some(b_home)).is_some());
+        acp_pi_acknowledge_project_trust_core(&db, cwd.clone(), Some(b.id)).await.unwrap();
+        assert_eq!(fs::read(b_home.join("trust.json")).unwrap(), old_b);
+        assert!(pi_project_trust_launch_block(&workspace, &b_env, Some(b_home)).is_none());
+        crate::db::service::agent_account_service::remove(&db.conn, &a.id).await.unwrap();
+        assert!(acp_pi_project_trust_state_core(&db, cwd, Some(a.id)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn native_accounts_scrub_default_provider_keys_but_read_their_own_config() {
+        use crate::db::service::agent_setting_service::{AgentDefaultInput, AgentSettingsUpdate};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().unwrap();
+        for &agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            if crate::acp::agent_accounts::unsupported_reason(agent).is_some() { continue; }
+            let Some(layout) = crate::acp::agent_accounts::layout(agent) else { continue; };
+            let home = dir.path().join(agent.as_wire().as_ref());
+            std::fs::create_dir_all(layout.config_dir(&home)).unwrap();
+            agent_setting_service::ensure_defaults(&db.conn, &[AgentDefaultInput { agent_type: agent, registry_id: agent.as_wire().into_owned(), default_sort_order: 0 }]).await.unwrap();
+            let inherited: BTreeMap<_, _> = crate::acp::agent_accounts::credential_env_keys(agent).into_iter().map(|key| (key, "default-account-value")).collect();
+            agent_setting_service::update(&db.conn, agent, AgentSettingsUpdate { enabled: true, env_json: Some(serde_json::to_string(&inherited).unwrap()), model_provider_id: None }).await.unwrap();
+            let env = build_runtime_env_for_agent(&db, agent, None, dir.path(), false, Some(&home)).await.unwrap();
+            for key in inherited.keys() { assert_ne!(env.get(*key).map(String::as_str), Some("default-account-value"), "{agent}: {key}"); }
+            if agent == AgentType::ClaudeCode {
+                std::fs::write(home.join("settings.json"), r#"{"env":{"ANTHROPIC_API_KEY":"own-account-value"}}"#).unwrap();
+                let env = build_runtime_env_for_agent(&db, agent, None, dir.path(), false, Some(&home)).await.unwrap();
+                assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("own-account-value"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_account_models_do_not_inherit_a_default_provider_binding() {
+        use crate::db::service::agent_setting_service::{AgentDefaultInput, AgentSettingsUpdate};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let agent = AgentType::ClaudeCode;
+        agent_setting_service::ensure_defaults(&db.conn, &[AgentDefaultInput { agent_type: agent, registry_id: "claude".into(), default_sort_order: 0 }]).await.unwrap();
+        let provider = crate::db::service::model_provider_service::create(&db.conn, "Fixture".into(), "https://api.example.test".into(), "fixture-provider-key".into(), "claude_code".into(), None).await.unwrap();
+        let env_json = r#"{"ANTHROPIC_DEFAULT_SONNET_MODEL":"family-model", "ANTHROPIC_PROFILE":"ambient-profile"}"#;
+        for binding in [None, Some(provider.id)] {
+            agent_setting_service::update(&db.conn, agent, AgentSettingsUpdate { enabled: true, env_json: Some(env_json.into()), model_provider_id: binding }).await.unwrap();
+            let env = build_runtime_env_for_agent(&db, agent, None, dir.path(), false, Some(dir.path())).await.unwrap();
+            assert_eq!(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").map(String::as_str), Some(if binding.is_some() { "" } else { "family-model" }));
+            assert_eq!(env.get("ANTHROPIC_PROFILE").map(String::as_str), Some(""));
+        }
+        std::fs::write(dir.path().join("settings.json"), r#"{"env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"own-model"}}"#).unwrap();
+        let env = build_runtime_env_for_agent(&db, agent, None, dir.path(), false, Some(dir.path())).await.unwrap();
+        assert_eq!(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").map(String::as_str), Some("own-model"));
+    }
+
+    #[tokio::test]
+    async fn native_codex_account_drops_default_json_config_overrides() {
+        use crate::db::service::agent_setting_service::{AgentDefaultInput, AgentSettingsUpdate};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let named = data.path().join("named");
+        fs::create_dir_all(&named).unwrap();
+        agent_setting_service::ensure_defaults(&db.conn, &[AgentDefaultInput {
+            agent_type: AgentType::Codex, registry_id: "codex".into(), default_sort_order: 0,
+        }]).await.unwrap();
+        let default_config = r#"{"model_provider":"default-only","thread_unload_delay_secs":900}"#;
+        agent_setting_service::update(&db.conn, AgentType::Codex, AgentSettingsUpdate {
+            enabled: true,
+            env_json: Some(serde_json::json!({"CODEX_CONFIG":default_config}).to_string()),
+            model_provider_id: None,
+        }).await.unwrap();
+        let default_env = build_runtime_env_for_agent(&db, AgentType::Codex, None, data.path(), false, None).await.unwrap();
+        assert_eq!(default_env.get("CODEX_CONFIG").map(String::as_str), Some(default_config));
+        let named_env = build_runtime_env_for_agent(&db, AgentType::Codex, None, data.path(), false, Some(&named)).await.unwrap();
+        assert_eq!(named_env.get("CODEX_CONFIG").map(String::as_str), Some(""));
+    }
+
+    #[tokio::test]
+    async fn native_claude_accounts_do_not_inherit_the_default_gateway_picker() {
+        use crate::acp::claude_model_picker::{decode, LAUNCH_KEY};
+        use crate::db::service::agent_setting_service::{AgentDefaultInput, AgentSettingsUpdate};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let home = data.path().join("named");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("settings.json"), r#"{"env":{"ANTHROPIC_BASE_URL":"https://named.example.com","ANTHROPIC_API_KEY":"named-fixture-key"}}"#).unwrap();
+        agent_setting_service::ensure_defaults(&db.conn, &[AgentDefaultInput {
+            agent_type: AgentType::ClaudeCode,
+            registry_id: "claude-code".into(),
+            default_sort_order: 0,
+        }]).await.unwrap();
+        agent_setting_service::update(&db.conn, AgentType::ClaudeCode, AgentSettingsUpdate {
+            enabled: true,
+            env_json: Some(serde_json::json!({
+                "ANTHROPIC_BASE_URL": "https://default.example.com",
+                (LAUNCH_KEY): "[\"injected-default-model\"]",
+            }).to_string()),
+            model_provider_id: None,
+        }).await.unwrap();
+        store_claude_model_picker(&["default-only-model".to_string()], &db.conn).await.unwrap();
+
+        let default_env = build_runtime_env_for_agent(&db, AgentType::ClaudeCode, None, data.path(), false, None).await.unwrap();
+        assert_eq!(decode(default_env.get(LAUNCH_KEY).unwrap()), vec!["default-only-model"]);
+        let named_env = build_runtime_env_for_agent(&db, AgentType::ClaudeCode, None, data.path(), false, Some(&home)).await.unwrap();
+        assert_eq!(named_env.get("ANTHROPIC_BASE_URL").map(String::as_str), Some("https://named.example.com"));
+        assert!(!named_env.contains_key(LAUNCH_KEY));
+    }
 }
 
 /// Settings may inspect Pi's local model catalog while the agent is disabled.
@@ -11635,6 +11862,7 @@ pub(crate) async fn build_runtime_env_for_agent(
     session_id: Option<&str>,
     data_dir: &Path,
     allow_disabled: bool,
+    account_home: Option<&Path>,
 ) -> Result<BTreeMap<String, String>, AcpError> {
     let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
         .await
@@ -11649,12 +11877,40 @@ pub(crate) async fn build_runtime_env_for_agent(
         )));
     }
 
-    let local_config_json = load_agent_local_config_json(agent_type);
+    let local_config_json = match account_home {
+        Some(home) if agent_type == AgentType::Cline => load_cline_provider_settings_at(&home.join("settings/providers.json"))
+            .and_then(|config| serde_json::to_string(&serde_json::Value::Object(config)).ok()),
+        Some(home) => crate::acp::agent_accounts::layout(agent_type).and_then(|layout| {
+            let filename = if agent_type == AgentType::OpenCode { "opencode.json" } else { "settings.json" };
+            std::fs::read_to_string(layout.config_dir(home).join(filename)).ok()
+        }),
+        None => load_agent_local_config_json(agent_type),
+    };
     let mut runtime_env =
         build_runtime_env_from_setting(agent_type, setting.as_ref(), local_config_json.as_deref());
-    apply_model_provider_env(agent_type, setting.as_ref(), &mut runtime_env, &db.conn).await;
-    if agent_type == AgentType::ClaudeCode {
-        apply_claude_model_picker_env(setting.as_ref(), &mut runtime_env, &db.conn).await;
+    if account_home.is_none() {
+        apply_model_provider_env(agent_type, setting.as_ref(), &mut runtime_env, &db.conn).await;
+        if agent_type == AgentType::ClaudeCode {
+            apply_claude_model_picker_env(setting.as_ref(), &mut runtime_env, &db.conn).await;
+        }
+    } else {
+        runtime_env.remove(crate::acp::claude_model_picker::LAUNCH_KEY);
+        // A saved credential on the default agent must never override this
+        // account's own native sign-in, including inherited shell variables.
+        for key in crate::acp::agent_accounts::credential_env_keys(agent_type) {
+            runtime_env.insert(key.into(), String::new());
+        }
+        if setting.as_ref().and_then(|s| s.model_provider_id).is_some() {
+            // A provider's model aliases belong to that provider. Preserve
+            // ordinary family preferences when no provider supplied them.
+            for key in parse_provider_model(agent_type, None).into_keys() {
+                runtime_env.insert(key, String::new());
+            }
+        }
+        runtime_env.extend(build_runtime_env_from_setting(agent_type, None, local_config_json.as_deref()));
+        if let Some(home) = account_home {
+            crate::acp::agent_accounts::apply_native_account_env(agent_type, home, &mut runtime_env);
+        }
     }
     // `apply_model_provider_env` writes this agent's generic credential trio —
     // for cline that is `CLINE_BASE_URL`/`CLINE_API_KEY`/`CLINE_MODEL` — so a
@@ -11695,7 +11951,7 @@ pub(crate) async fn build_runtime_env_for_agent(
 /// the env a settings save recomputes, so counting it would mark every session
 /// stale on the first save, for good.
 fn is_volatile_fingerprint_key(key: &str) -> bool {
-    key == "OPENCLAW_RESET_SESSION" || key == crate::cli_run::CLI_CALLER_ENV
+    matches!(key, "OPENCLAW_RESET_SESSION" | crate::acp::agent_accounts::ACCOUNT_ENV | crate::acp::agent_accounts::ACCOUNT_HOME_ENV) || key == crate::cli_run::CLI_CALLER_ENV
 }
 
 /// Fingerprint the effective config a spawned agent process is locked to: the
@@ -11710,6 +11966,14 @@ pub(crate) fn fingerprint_config(
     agent_type: AgentType,
     runtime_env: &BTreeMap<String, String>,
 ) -> String {
+    fingerprint_account_config(agent_type, runtime_env, None)
+}
+
+pub(crate) fn fingerprint_account_config(
+    agent_type: AgentType,
+    runtime_env: &BTreeMap<String, String>,
+    account_home: Option<&Path>,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     // BTreeMap iterates in sorted key order → deterministic across calls.
@@ -11723,6 +11987,23 @@ pub(crate) fn fingerprint_config(
         hasher.update([0u8]);
     }
     hasher.update(b"\x01native\x01");
+    if let Some(home) = account_home {
+        if let Some(layout) = crate::acp::agent_accounts::layout(agent_type) {
+            let config = layout.config_dir(home);
+            // Credentials refresh independently of configuration and must never
+            // make a running session appear stale.
+            for name in ["settings.json", "config.toml", "config.yaml", "opencode.json", "opencode.jsonc", "cli-config.json", "mcp.json"] {
+                if let Ok(raw) = std::fs::read(config.join(name)) {
+                    hasher.update(name.as_bytes());
+                    hasher.update(raw);
+                }
+            }
+        }
+        if let Ok(mcp) = crate::commands::mcp::shared_servers_for_account(agent_type) {
+            if let Ok(raw) = serde_json::to_vec(&mcp) { hasher.update(raw); }
+        }
+        return format!("{:x}", hasher.finalize());
+    }
     if let Some(native) = load_agent_local_config_json(agent_type) {
         hasher.update(native.as_bytes());
     }
@@ -11792,19 +12073,28 @@ pub(crate) async fn refresh_config_staleness(
     agent_types: &[AgentType],
     kind: ConfigStaleKind,
 ) -> usize {
-    let mut fresh: HashMap<AgentType, String> = HashMap::new();
-    for &agent_type in agent_types {
-        if fresh.contains_key(&agent_type) {
-            continue;
+    let mut profiles: HashMap<(AgentType, Option<String>), String> = HashMap::new();
+    let mut fresh: HashMap<String, String> = HashMap::new();
+    for connection in manager.list_connections().await {
+        if !agent_types.contains(&connection.agent_type) { continue; }
+        let Some(state) = manager.get_state(&connection.id).await else { continue; };
+        let (id, home) = { let state = state.read().await; (state.agent_account_id.clone(), state.account_home.clone()) };
+        let key = (connection.agent_type, id.clone());
+        if !profiles.contains_key(&key) {
+            let computed = if id.is_none() {
+                compute_session_config_fingerprint(db, connection.agent_type, data_dir).await
+            } else {
+                account_runtime_env(db, connection.agent_type, None, data_dir, id.as_deref(), false).await
+                    .map(|env| fingerprint_account_config(connection.agent_type, &env, home.as_deref()))
+            };
+            if let Ok(fp) = computed { profiles.insert(key.clone(), fp); }
         }
-        if let Ok(fp) = compute_session_config_fingerprint(db, agent_type, data_dir).await {
-            fresh.insert(agent_type, fp);
-        }
+        if let Some(fp) = profiles.get(&key) { fresh.insert(connection.id, fp.clone()); }
     }
     if fresh.is_empty() {
         return 0;
     }
-    manager.refresh_connection_staleness(&fresh, kind).await
+    manager.refresh_connection_staleness_by_connection(&fresh, kind).await
 }
 
 /// `acp_update_agent_env_core` followed by a staleness refresh. Shared by the
@@ -11860,6 +12150,8 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
 #[allow(clippy::too_many_arguments)]
 pub async fn acp_connect(
     agent_type: AgentType,
+    agent_account_id: Option<String>,
+    conversation_id: Option<i32>,
     working_dir: Option<String>,
     session_id: Option<String>,
     preferred_mode_id: Option<String>,
@@ -11879,8 +12171,13 @@ pub async fn acp_connect(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let runtime_env =
-        build_session_runtime_env(&db, agent_type, session_id.as_deref(), &app_data_dir).await?;
+    let connect_barrier = manager.lock_for_connect().await;
+    let account_id = crate::db::service::agent_account_service::connection_account(
+        &db.conn, agent_type, agent_account_id, conversation_id,
+    ).await.map_err(|e| AcpError::protocol(e.to_string()))?;
+    let runtime_env = build_account_session_runtime_env(
+        &db, agent_type, session_id.as_deref(), &app_data_dir, account_id.as_deref(),
+    ).await?;
 
     // Guard: the session page must never trigger a download or install.
     // If the agent isn't ready, return SdkNotInstalled here so the frontend
@@ -11889,7 +12186,8 @@ pub async fn acp_connect(
 
     let emitter = EventEmitter::Tauri(app_handle);
     manager
-        .spawn_agent(
+        .spawn_agent_with_connect_barrier(
+            &connect_barrier,
             agent_type,
             working_dir,
             session_id,
@@ -12193,11 +12491,22 @@ pub async fn acp_get_session_snapshot_by_conversation(
 /// connection by `external_id` and the frontend would mis-tag it as a locally
 /// owned connection, tearing it down (killing the real owner's agent) on tab
 /// close. Discovering it here lets the second client attach as a viewer.
+#[cfg(test)]
 pub(crate) async fn acp_find_connection_for_conversation_core(
     manager: &ConnectionManager,
     conversation_id: i32,
     session_id: Option<&str>,
     agent_type: AgentType,
+) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
+    acp_find_connection_for_account_core(manager, conversation_id, session_id, agent_type, None).await
+}
+
+pub(crate) async fn acp_find_connection_for_account_core(
+    manager: &ConnectionManager,
+    conversation_id: i32,
+    session_id: Option<&str>,
+    agent_type: AgentType,
+    account_id: Option<&str>,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
     let connection_id = match manager
         .find_connection_by_conversation_id(conversation_id)
@@ -12210,7 +12519,7 @@ pub(crate) async fn acp_find_connection_for_conversation_core(
         None => match session_id {
             Some(sid) if !sid.is_empty() => {
                 match manager
-                    .find_connection_by_external_id(sid, agent_type)
+                    .find_connection_by_external_id_for_account(sid, agent_type, account_id)
                     .await
                 {
                     Some(id) => id,
@@ -12226,6 +12535,9 @@ pub(crate) async fn acp_find_connection_for_conversation_core(
         return Ok(None);
     };
     let s = state.read().await;
+    if s.agent_account_id.as_deref() != account_id {
+        return Ok(None);
+    }
     // Discovery means "a LIVE connection a viewer can attach to". Teardown
     // writes a terminal status onto the state BEFORE the cleanup hook removes
     // the map entry (see `acp/connection.rs`), and `find_connection_by_
@@ -12246,6 +12558,25 @@ pub(crate) async fn acp_find_connection_for_conversation_core(
     }))
 }
 
+pub(crate) async fn acp_find_connection_for_saved_conversation_core(
+    manager: &ConnectionManager,
+    db: &AppDatabase,
+    conversation_id: i32,
+    session_id: Option<&str>,
+    agent_type: AgentType,
+) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
+    let account_id = match crate::db::service::agent_account_service::connection_account(
+        &db.conn, agent_type, None, Some(conversation_id),
+    ).await {
+        Ok(account_id) => account_id,
+        // Discovery is read-only and historically returns null for a missing
+        // conversation. Do not turn a missing binding into a Default lookup.
+        Err(crate::db::error::DbError::NotFound(_)) => return Ok(None),
+        Err(error) => return Err(AcpError::protocol(error.to_string())),
+    };
+    acp_find_connection_for_account_core(manager, conversation_id, session_id, agent_type, account_id.as_deref()).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_find_connection_for_conversation(
@@ -12253,9 +12584,11 @@ pub async fn acp_find_connection_for_conversation(
     session_id: Option<String>,
     agent_type: AgentType,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
-    acp_find_connection_for_conversation_core(
+    acp_find_connection_for_saved_conversation_core(
         &manager,
+        &db,
         conversation_id,
         session_id.as_deref(),
         agent_type,
@@ -13388,8 +13721,9 @@ pub async fn acp_validate_pi_command(command: String) -> Result<PiCommandValidat
 pub async fn acp_pi_project_trust_state(
     db: tauri::State<'_, AppDatabase>,
     workspace: String,
+    agent_account_id: Option<String>,
 ) -> Result<PiProjectTrustState, AcpError> {
-    acp_pi_project_trust_state_core(&db, workspace).await
+    acp_pi_project_trust_state_core(&db, workspace, agent_account_id).await
 }
 
 /// Project the saved Antigravity auth choice into the server's settings file,
@@ -13408,8 +13742,9 @@ pub async fn acp_sync_antigravity_settings(
 pub async fn acp_antigravity_login_start(
     db: tauri::State<'_, AppDatabase>,
     method_id: String,
+    account_id: Option<String>,
 ) -> Result<crate::acp::antigravity_login::AntigravityLoginStart, AcpError> {
-    acp_antigravity_login_start_core(&db, method_id).await
+    acp_antigravity_account_login_start_core(&db, method_id, account_id).await
 }
 
 /// Complete a browser-free Antigravity sign-in from the address the user's
@@ -13448,16 +13783,17 @@ pub async fn acp_pi_set_project_trust(
     db: tauri::State<'_, AppDatabase>,
     workspace: String,
     trusted: Option<bool>,
+    agent_account_id: Option<String>,
 ) -> Result<(), AcpError> {
-    acp_pi_set_project_trust_core(&db, workspace, trusted).await
+    acp_pi_set_project_trust_core(&db, workspace, trusted, agent_account_id).await
 }
 
 /// Record that the user reviewed an existing grant and chose to keep it, which
 /// clears the launch gate for that folder. Does not change pi's trust store.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_pi_acknowledge_project_trust(workspace: String) -> Result<(), AcpError> {
-    acp_pi_acknowledge_project_trust_core(workspace).await
+pub async fn acp_pi_acknowledge_project_trust(db: tauri::State<'_, AppDatabase>, workspace: String, agent_account_id: Option<String>) -> Result<(), AcpError> {
+    acp_pi_acknowledge_project_trust_core(&db, workspace, agent_account_id).await
 }
 
 /// List every decision in pi's `trust.json` so the settings page can review and
@@ -13497,7 +13833,7 @@ pub async fn acp_open_hermes_setup_terminal(kind: String) -> Result<(), AcpError
 }
 
 #[cfg(feature = "tauri-runtime")]
-fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), AcpError> {
+pub(crate) fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), AcpError> {
     use std::process::Command;
     // Reject control characters: a newline breaks out of the macOS AppleScript
     // string literal (and would corrupt the cmd/shell line elsewhere), turning a
@@ -17560,7 +17896,7 @@ mod tests {
         temp_env::with_var(
             "CODEG_HOME",
             Some(codeg_home.to_string_lossy().to_string()),
-            || pi_project_trust_launch_block(cwd, &pi_env_for(agent_dir)),
+            || pi_project_trust_launch_block(cwd, &pi_env_for(agent_dir), None),
         )
     }
 
@@ -17998,12 +18334,12 @@ mod tests {
         );
         lookup_failed(acp_pi_list_trust_entries_core(&db).await.unwrap_err());
         lookup_failed(
-            acp_pi_set_project_trust_core(&db, "/tmp/pi-db-error".into(), Some(true))
+            acp_pi_set_project_trust_core(&db, "/tmp/pi-db-error".into(), Some(true), None)
                 .await
                 .unwrap_err(),
         );
         lookup_failed(
-            acp_pi_project_trust_state_core(&db, "/tmp/pi-db-error".into())
+            acp_pi_project_trust_state_core(&db, "/tmp/pi-db-error".into(), None)
                 .await
                 .unwrap_err(),
         );
@@ -18176,7 +18512,7 @@ mod tests {
         let blocked = temp_env::with_var(
             "CODEG_HOME",
             Some(tmp.path().join("codeg-home").to_string_lossy().to_string()),
-            || pi_project_trust_launch_block(&ws, &env),
+            || pi_project_trust_launch_block(&ws, &env, None),
         );
         assert!(
             blocked.is_some(),

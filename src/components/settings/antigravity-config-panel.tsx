@@ -239,10 +239,11 @@ type PendingLogin = Extract<AntigravityLoginStart, { alreadySignedIn: false }>
  * IS on the machine where that port is listening — performs the redirect their
  * browser could not. See `src-tauri/src/acp/antigravity_login.rs`.
  */
-function HeadlessSignIn({
+export function HeadlessSignIn({
   method,
   disabled,
   needsSave,
+  accountId,
 }: {
   method: AntigravityAuthMethod
   disabled: boolean
@@ -250,6 +251,7 @@ function HeadlessSignIn({
    *  backend signs in with the persisted environment, so consenting now would
    *  only fail at license resolution afterwards. */
   needsSave: boolean
+  accountId?: string
 }) {
   const t = useTranslations("AcpAgentSettings")
   const [pending, setPending] = useState<PendingLogin | null>(null)
@@ -320,7 +322,9 @@ function HeadlessSignIn({
     setOutcome(null)
     setRedirect("")
     try {
-      const started = await acpAntigravityLoginStart(startedFor)
+      const started = accountId
+        ? await acpAntigravityLoginStart(startedFor, accountId)
+        : await acpAntigravityLoginStart(startedFor)
       if (!stillOurs(startedFor)) {
         // The panel closed, or the user picked a different method, while the
         // agent was starting up. The handle never reached state, so neither
@@ -360,7 +364,7 @@ function HeadlessSignIn({
     } finally {
       if (mountedRef.current) setBusy(false)
     }
-  }, [method, stillOurs, t])
+  }, [method, stillOurs, t, accountId])
 
   const finish = useCallback(async () => {
     if (!pending) return

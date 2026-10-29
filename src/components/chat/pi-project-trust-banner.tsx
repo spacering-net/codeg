@@ -78,6 +78,7 @@ import { cn } from "@/lib/utils"
 
 /** Trust state plus the directory whose probe produced it. */
 type Probed = {
+  accountId: string | null
   /** The `workingDir` this was fetched for — NOT the canonical path the backend
    *  resolved, which can differ (`/tmp` vs `/private/tmp`). Compared against the
    *  tab's current directory so a decision can never be written for a folder the
@@ -90,6 +91,9 @@ export function PiProjectTrustBanner({
   contextKey,
   agentType,
   workingDir,
+  agentAccountId,
+  conversationId,
+  sessionId,
 }: {
   contextKey: string
   /** The tab's selected agent. Taken from the tab rather than the connection:
@@ -98,6 +102,9 @@ export function PiProjectTrustBanner({
   agentType: AgentType | null
   /** The tab's working directory, for the same reason. */
   workingDir: string | undefined
+  agentAccountId?: string | null
+  conversationId?: number
+  sessionId?: string
 }) {
   const t = useTranslations("Folder.chat.piProjectTrust")
   const { status, isViewer, isDelegationChild, reapplyConfig, connect } =
@@ -125,16 +132,16 @@ export function PiProjectTrustBanner({
     const issuedAt = generation.current
     const requestedFor = workingDir
     try {
-      const state = await acpPiProjectTrustState(requestedFor)
+      const state = await acpPiProjectTrustState(requestedFor, agentAccountId)
       if (generation.current !== issuedAt) return
-      setProbed({ requestedFor, state })
+      setProbed({ requestedFor, accountId: agentAccountId ?? null, state })
     } catch {
       // Read-only probe: if it fails we simply don't prompt. Never surface a
       // toast here — it would fire on every reconnect for a transient error.
       if (generation.current !== issuedAt) return
       setProbed(null)
     }
-  }, [eligible, workingDir])
+  }, [eligible, workingDir, agentAccountId])
 
   useEffect(() => {
     // Invalidate anything in flight for the previous workspace before deciding
@@ -150,7 +157,10 @@ export function PiProjectTrustBanner({
   // (not just at fetch time) closes the window where the folder changed while the
   // dialog sat open.
   const current =
-    probed && eligible && probed.requestedFor === workingDir
+    probed &&
+    eligible &&
+    probed.requestedFor === workingDir &&
+    probed.accountId === (agentAccountId ?? null)
       ? probed.state
       : null
 
@@ -179,7 +189,13 @@ export function PiProjectTrustBanner({
     }
     if (!agentType || !workingDir) return false
     try {
-      await connect(agentType, workingDir)
+      await connect(
+        agentType,
+        workingDir,
+        sessionId,
+        conversationId,
+        agentAccountId
+      )
       return true
     } catch {
       // The gate may still refuse (another unacknowledged grant, e.g. from an
@@ -197,7 +213,7 @@ export function PiProjectTrustBanner({
       // The backend keeps codeg's acknowledgement in step with the verdict: a
       // grant counts as answered, a decline or revoke clears the record so a
       // later grant is disclosed again instead of riding on a stale "seen".
-      await acpPiSetProjectTrust(current.workspace, trusted)
+      await acpPiSetProjectTrust(current.workspace, trusted, agentAccountId)
       setDialogOpen(false)
 
       if (trusted === false) {
@@ -235,7 +251,7 @@ export function PiProjectTrustBanner({
     if (!current || actionDisabled) return
     setApplying(true)
     try {
-      await acpPiAcknowledgeProjectTrust(current.workspace)
+      await acpPiAcknowledgeProjectTrust(current.workspace, agentAccountId)
       setDialogOpen(false)
       await applyToPi()
       await refresh()

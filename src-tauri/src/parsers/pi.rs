@@ -353,7 +353,6 @@ impl PiParser {
     /// fixtures). The agent dir is taken to be its parent — pi's default
     /// `<agent dir>/sessions` layout — so a fixture can place `models.json`
     /// next to the sessions folder and nothing reaches the real `~/.pi`.
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         let agent_dir = base_dir
             .parent()

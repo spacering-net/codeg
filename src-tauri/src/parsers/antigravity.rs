@@ -556,7 +556,6 @@ impl AntigravityParser {
 
     /// Construct a parser pointed at an explicit `conversations/` directory
     /// (test fixtures).
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }

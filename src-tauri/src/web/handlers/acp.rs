@@ -68,6 +68,8 @@ pub async fn acp_env_diagnostics(
 #[serde(rename_all = "camelCase")]
 pub struct AcpConnectParams {
     pub agent_type: AgentType,
+    pub agent_account_id: Option<String>,
+    pub conversation_id: Option<i32>,
     pub working_dir: Option<String>,
     pub session_id: Option<String>,
     #[serde(default)]
@@ -83,11 +85,16 @@ pub async fn acp_connect(
     let db = &state.db;
     let manager = &state.connection_manager;
 
-    let runtime_env = acp_commands::build_session_runtime_env(
+    let connect_barrier = manager.lock_for_connect().await;
+    let account_id = crate::db::service::agent_account_service::connection_account(
+        &db.conn, params.agent_type, params.agent_account_id, params.conversation_id,
+    ).await.map_err(AppCommandError::from)?;
+    let runtime_env = acp_commands::build_account_session_runtime_env(
         db,
         params.agent_type,
         params.session_id.as_deref(),
         &state.data_dir,
+        account_id.as_deref(),
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -101,7 +108,8 @@ pub async fn acp_connect(
 
     let emitter = state.emitter.clone();
     let connection_id = manager
-        .spawn_agent(
+        .spawn_agent_with_connect_barrier(
+            &connect_barrier,
             params.agent_type,
             params.working_dir,
             params.session_id,
@@ -628,8 +636,9 @@ pub async fn acp_find_connection_for_conversation(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpFindConnectionForConversationParams>,
 ) -> Result<Json<Option<crate::acp::ConversationConnectionInfo>>, AppCommandError> {
-    let info = acp_commands::acp_find_connection_for_conversation_core(
+    let info = acp_commands::acp_find_connection_for_saved_conversation_core(
         &state.connection_manager,
+        &state.db,
         params.conversation_id,
         params.session_id.as_deref(),
         params.agent_type,
@@ -1022,13 +1031,14 @@ pub async fn acp_sync_antigravity_settings(
 #[serde(rename_all = "camelCase")]
 pub struct AcpAntigravityLoginStartParams {
     pub method_id: String,
+    pub account_id: Option<String>,
 }
 
 pub async fn acp_antigravity_login_start(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpAntigravityLoginStartParams>,
 ) -> Result<Json<crate::acp::antigravity_login::AntigravityLoginStart>, AppCommandError> {
-    let result = acp_commands::acp_antigravity_login_start_core(&state.db, params.method_id)
+    let result = acp_commands::acp_antigravity_account_login_start_core(&state.db, params.method_id, params.account_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
@@ -1078,13 +1088,14 @@ pub async fn acp_antigravity_sign_out(
 #[serde(rename_all = "camelCase")]
 pub struct AcpPiProjectTrustStateParams {
     pub workspace: String,
+    pub agent_account_id: Option<String>,
 }
 
 pub async fn acp_pi_project_trust_state(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPiProjectTrustStateParams>,
 ) -> Result<Json<acp_commands::PiProjectTrustState>, AppCommandError> {
-    let result = acp_commands::acp_pi_project_trust_state_core(&state.db, params.workspace)
+    let result = acp_commands::acp_pi_project_trust_state_core(&state.db, params.workspace, params.agent_account_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
@@ -1094,6 +1105,7 @@ pub async fn acp_pi_project_trust_state(
 #[serde(rename_all = "camelCase")]
 pub struct AcpPiSetProjectTrustParams {
     pub workspace: String,
+    pub agent_account_id: Option<String>,
     /// `null` clears codeg's entry for this exact folder (revoke), rather than
     /// recording a verdict — matching the command's `Option<bool>`.
     #[serde(default)]
@@ -1104,7 +1116,7 @@ pub async fn acp_pi_set_project_trust(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPiSetProjectTrustParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_pi_set_project_trust_core(&state.db, params.workspace, params.trusted)
+    acp_commands::acp_pi_set_project_trust_core(&state.db, params.workspace, params.trusted, params.agent_account_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
@@ -1114,12 +1126,14 @@ pub async fn acp_pi_set_project_trust(
 #[serde(rename_all = "camelCase")]
 pub struct AcpPiAcknowledgeProjectTrustParams {
     pub workspace: String,
+    pub agent_account_id: Option<String>,
 }
 
 pub async fn acp_pi_acknowledge_project_trust(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPiAcknowledgeProjectTrustParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_pi_acknowledge_project_trust_core(params.workspace)
+    acp_commands::acp_pi_acknowledge_project_trust_core(&state.db, params.workspace, params.agent_account_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
@@ -1484,6 +1498,22 @@ pub async fn acp_list_custom_agents(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpLoginExtraAgentParams {
+    pub registry_id: String,
+}
+
+pub async fn acp_login_extra_agent(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpLoginExtraAgentParams>,
+) -> Result<Json<custom_agent_commands::ExtraSlotLoginResult>, AppCommandError> {
+    let result = custom_agent_commands::acp_login_extra_agent_core(&params.registry_id, &state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
 /// Wrapper matching the Tauri command's single `params` argument — the shared
 /// frontend client sends the same body to both runtimes.
 #[derive(Deserialize)]
@@ -1641,5 +1671,64 @@ mod tests {
         };
         assert!(text.contains(r#"{"agentType":"antigravity"}"#));
         assert!(!text.contains("codex"));
+    }
+}
+#[cfg(test)]
+mod extra_slot_login_api_tests {
+    use super::*;
+    use axum_test::TestServer;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn isolated_sign_in_round_trips_through_the_authenticated_http_api() {
+        // The registry is process-wide; keep its test guard outside the async runtime.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
+        struct ClearRegistry;
+        impl Drop for ClearRegistry {
+            fn drop(&mut self) { crate::acp::custom_registry::hydrate(&[]); }
+        }
+        let _clear = ClearRegistry;
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let data = tempfile::tempdir().unwrap();
+        let static_dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join("auth.json");
+        std::fs::write(&auth, b"untouched-account-file").unwrap();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let state = Arc::new(AppState::new_for_test(db, data.path().to_path_buf()));
+        let router = crate::web::router::build_router(
+            state,
+            "test-login-token".into(),
+            static_dir.path().to_path_buf(),
+            Arc::new(crate::web::shutdown::ShutdownSignal::new()),
+        );
+        let server = TestServer::new(router).unwrap();
+        server.post("/api/acp_login_extra_agent")
+            .json(&json!({"registryId": "codex-login-test"})).await.assert_status_unauthorized();
+        let saved = server.post("/api/acp_save_custom_agent")
+            .add_header("authorization", "Bearer test-login-token")
+            .json(&json!({"params": {
+                "registryId": "codex-login-test", "name": "Work", "version": "1.0.0",
+                "distributionKind": "npx", "spec": {"npx": {
+                    "package": "@agentclientprotocol/codex-acp@1.0.0", "cmd": "codex-acp",
+                    "env": {"CODEX_HOME": home.path().display().to_string()}
+                }}
+            }})).await;
+        saved.assert_status_ok();
+        let listed = server.post("/api/acp_list_custom_agents")
+            .add_header("authorization", "Bearer test-login-token").json(&json!({})).await;
+        listed.assert_status_ok();
+        let rows: Value = listed.json();
+        assert_eq!(rows[0]["isolatedLogin"]["key"], "CODEX_HOME");
+        let login = server.post("/api/acp_login_extra_agent")
+            .add_header("authorization", "Bearer test-login-token")
+            .json(&json!({"registryId": "codex-login-test"})).await;
+        login.assert_status_ok();
+        let result: Value = login.json();
+        assert_eq!(result["home"], home.path().display().to_string());
+        assert_eq!(result["launched"], false);
+        assert!(!result["command"].as_str().unwrap().is_empty());
+        assert_eq!(std::fs::read(auth).unwrap(), b"untouched-account-file");
+        });
     }
 }
