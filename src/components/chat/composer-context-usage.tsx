@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useSyncExternalStore } from "react"
+import { useCallback, useSyncExternalStore, type ReactNode } from "react"
 import { Coins } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useConnectionStore } from "@/contexts/acp-connections-context"
@@ -24,6 +24,11 @@ const ICON_CENTER = 8
 const ICON_VIEWBOX = 16
 const ICON_CIRCUMFERENCE = 2 * Math.PI * ICON_RADIUS
 
+type TokenRow = {
+  key: "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+  value: number
+}
+
 /**
  * Context-window usage circle (+ token breakdown popover) shown in the row below
  * the composer. Scoped to its own conversation via `tabId`: the live context
@@ -31,8 +36,7 @@ const ICON_CIRCUMFERENCE = 2 * Math.PI * ICON_RADIUS
  * token breakdown from that conversation's own runtime-store session stats — so
  * every loaded/tiled composer shows its own context, not the active one's.
  */
-export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
-  const t = useTranslations("Folder.statusBar.tokens")
+function useComposerUsage(tabId: string | null) {
   const store = useConnectionStore()
   // This tab's own conversation → its per-conversation session stats, read
   // straight from the runtime store where every panel already keeps them (keyed
@@ -120,17 +124,26 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
 
   const dashOffset = ICON_CIRCUMFERENCE * (1 - (contextPercent ?? 0) / 100)
 
-  const rows: {
-    key: "input" | "output" | "cacheRead" | "cacheWrite" | "total"
-    value: number
-  }[] = []
+  // Cache counters arrive as one capability: when both are zero, providers
+  // that omit cache accounting are indistinguishable from an idle cache. Once
+  // either counter is positive, the other zero is meaningful (for example, a
+  // first-turn cache write with no read hit yet).
+  const hasCacheActivity =
+    hasUsage &&
+    usage.cache_read_input_tokens + usage.cache_creation_input_tokens > 0
+
+  const rows: TokenRow[] = []
   if (hasUsage) {
     rows.push(
       { key: "input", value: usage.input_tokens },
-      { key: "output", value: usage.output_tokens },
-      { key: "cacheRead", value: usage.cache_read_input_tokens },
-      { key: "cacheWrite", value: usage.cache_creation_input_tokens }
+      { key: "output", value: usage.output_tokens }
     )
+    if (hasCacheActivity) {
+      rows.push(
+        { key: "cacheRead", value: usage.cache_read_input_tokens },
+        { key: "cacheWrite", value: usage.cache_creation_input_tokens }
+      )
+    }
   }
   if (total != null) {
     rows.push({ key: "total", value: total })
@@ -148,9 +161,6 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
   // Rendering a confident `0.0%` for the latter is worse than rendering
   // nothing. A session with writes but no reads yet is genuinely 0% and still
   // shows.
-  const hasCacheActivity =
-    hasUsage &&
-    usage.cache_read_input_tokens + usage.cache_creation_input_tokens > 0
   const cacheHit = hasCacheActivity
     ? cacheHitRatio(
         usage.input_tokens,
@@ -159,10 +169,138 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
       )
     : null
 
+  return {
+    cacheHit,
+    contextMax,
+    contextPercent,
+    contextUsed,
+    dashOffset,
+    hasContext,
+    hasTokenSection,
+    hasUsage,
+    rows,
+    total,
+  }
+}
+
+type ComposerUsage = ReturnType<typeof useComposerUsage>
+
+function TokenUsagePopoverContent({
+  align,
+  usage,
+}: {
+  align: "center" | "end"
+  usage: ComposerUsage
+}) {
+  const t = useTranslations("Folder.statusBar.tokens")
+  const {
+    cacheHit,
+    contextMax,
+    contextPercent,
+    contextUsed,
+    hasContext,
+    hasTokenSection,
+    hasUsage,
+    rows,
+  } = usage
+
+  return (
+    <PopoverContent side="top" align={align} className="w-56 gap-2 p-3 text-xs">
+      {hasContext || cacheHit != null ? (
+        <div
+          className={`space-y-1 ${
+            hasUsage ? "mb-0.5 border-b border-border pb-0.5" : ""
+          }`}
+        >
+          {hasContext ? (
+            <>
+              <div className="flex items-center justify-between gap-2 text-xs font-medium whitespace-nowrap">
+                <span>{t("contextWindow")}</span>
+                <span className="tabular-nums shrink-0">
+                  {formatContextWindowPercent(contextPercent)}
+                </span>
+              </div>
+              <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="absolute inset-y-0 left-0 bg-foreground/70"
+                  style={{ width: `${contextPercent ?? 0}%` }}
+                />
+              </div>
+              {/* Dropped entirely rather than shown as "--": an agent can
+                  state its occupancy as a percentage without ever naming the
+                  two token counts behind it (qoder does exactly that once it
+                  has redacted them), and a labelled row with nothing in it
+                  reads as a figure that failed to load rather than one that
+                  was never reported. */}
+              {contextUsed != null && contextMax != null ? (
+                <div className="flex items-center justify-between text-xs leading-none text-muted-foreground">
+                  <span>{t("usedMax")}</span>
+                  <span className="tabular-nums">
+                    {`${formatTokenCount(contextUsed)} / ${formatTokenCount(contextMax)}`}
+                  </span>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {/* Sits with the context figures rather than under the token
+              breakdown: it is a ratio, not a token count. */}
+          {cacheHit != null ? (
+            <div className="flex items-center justify-between gap-2 text-xs leading-none text-muted-foreground">
+              <span className="whitespace-nowrap">{t("cacheHit")}</span>
+              <span className="tabular-nums shrink-0">
+                {formatPercent(cacheHit, CACHE_HIT_RATE_DIGITS)}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {hasTokenSection ? (
+        <>
+          <div className="mb-0 mt-0.5 text-xs leading-none font-medium">
+            {t("tokenUsage")}
+          </div>
+          <div className="space-y-0">
+            {rows.map((row) => (
+              <div
+                key={row.key}
+                className={`flex items-center justify-between py-0.5 text-xs leading-none ${
+                  row.key === "total"
+                    ? "mt-0.5 border-t border-border pt-0.5 font-medium"
+                    : "text-muted-foreground"
+                }`}
+              >
+                <span>{t(row.key)}</span>
+                <span className="tabular-nums">
+                  {formatTokenCount(row.value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </PopoverContent>
+  )
+}
+
+/**
+ * Compact context-window indicator at the trailing edge of the composer row.
+ * The new persistent token summary intentionally does not replace this: the
+ * context ring and connection state remain stable, familiar controls.
+ */
+function ComposerContextUsageView({ usage }: { usage: ComposerUsage }) {
+  const t = useTranslations("Folder.statusBar.tokens")
+  const {
+    contextMax,
+    contextPercent,
+    contextUsed,
+    dashOffset,
+    hasContext,
+    hasTokenSection,
+    total,
+  } = usage
+
   if (!hasContext && !hasTokenSection) return null
 
-  // Native hover hint mirroring the popover's headline (the popover stays for
-  // the full breakdown on click).
   const triggerTitle = hasContext
     ? contextUsed != null && contextMax != null
       ? `${t("contextWindow")}: ${formatContextWindowPercent(contextPercent)} (${formatTokenCount(contextUsed)} / ${formatTokenCount(contextMax)})`
@@ -174,7 +312,7 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
       <PopoverTrigger asChild>
         <button
           title={triggerTitle}
-          className="flex items-center gap-1 hover:text-foreground transition-colors"
+          className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           {hasContext ? (
             <>
@@ -219,81 +357,89 @@ export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" className="w-56 gap-2 p-3 text-xs">
-        {hasContext || cacheHit != null ? (
-          <div
-            className={`space-y-1 ${
-              hasUsage ? "mb-0.5 border-b border-border pb-0.5" : ""
-            }`}
-          >
-            {hasContext ? (
-              <>
-                <div className="flex items-center justify-between gap-2 text-xs font-medium whitespace-nowrap">
-                  <span>{t("contextWindow")}</span>
-                  <span className="tabular-nums shrink-0">
-                    {formatContextWindowPercent(contextPercent)}
-                  </span>
-                </div>
-                <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="absolute inset-y-0 left-0 bg-foreground/70"
-                    style={{ width: `${contextPercent ?? 0}%` }}
-                  />
-                </div>
-                {/* Dropped entirely rather than shown as "--": an agent can
-                    state its occupancy as a percentage without ever naming the
-                    two token counts behind it (qoder does exactly that once it
-                    has redacted them), and a labelled row with nothing in it
-                    reads as a figure that failed to load rather than one that
-                    was never reported. */}
-                {contextUsed != null && contextMax != null ? (
-                  <div className="flex items-center justify-between text-xs leading-none text-muted-foreground">
-                    <span>{t("usedMax")}</span>
-                    <span className="tabular-nums">
-                      {`${formatTokenCount(contextUsed)} / ${formatTokenCount(contextMax)}`}
-                    </span>
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-            {/* Sits with the context figures rather than under the token
-                breakdown: it is a ratio, not a count, and a rule of its own
-                above it only fenced off a single line. */}
-            {cacheHit != null ? (
-              <div className="flex items-center justify-between gap-2 text-xs leading-none text-muted-foreground">
-                <span className="whitespace-nowrap">{t("cacheHit")}</span>
-                <span className="tabular-nums shrink-0">
-                  {formatPercent(cacheHit, CACHE_HIT_RATE_DIGITS)}
-                </span>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {hasTokenSection ? (
-          <>
-            <div className="mb-0 mt-0.5 text-xs leading-none font-medium">
-              {t("tokenUsage")}
-            </div>
-            <div className="space-y-0">
-              {rows.map((row) => (
-                <div
-                  key={row.key}
-                  className={`flex items-center justify-between py-0.5 text-xs leading-none ${
-                    row.key === "total"
-                      ? "mt-0.5 border-t border-border pt-0.5 font-medium"
-                      : "text-muted-foreground"
-                  }`}
-                >
-                  <span>{t(row.key)}</span>
-                  <span className="tabular-nums">
-                    {formatTokenCount(row.value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : null}
-      </PopoverContent>
+      <TokenUsagePopoverContent align="end" usage={usage} />
     </Popover>
   )
+}
+
+/**
+ * Persistent, conversation-scoped token summary centered below the composer.
+ * Container queries keep the row informative in a wide panel and reduce it to
+ * a single no-wrap headline in a narrow/tiled panel without moving either edge.
+ */
+function ComposerTokenSummaryView({ usage }: { usage: ComposerUsage }) {
+  const t = useTranslations("Folder.statusBar.tokens")
+  const { cacheHit, hasTokenSection, rows, total } = usage
+
+  if (!hasTokenSection || total == null) return null
+
+  const detailRows = rows.filter(
+    (row) =>
+      row.value > 0 &&
+      (row.key === "input" || row.key === "output" || row.key === "cacheRead")
+  )
+  const label = `${t("tokenUsage")}: ${formatTokenCount(total)}`
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          aria-label={label}
+          title={label}
+          className="inline-flex h-4 max-w-full min-w-0 items-center overflow-hidden whitespace-nowrap tabular-nums transition-colors hover:text-foreground"
+        >
+          <span className="inline-flex min-w-0 items-center gap-1.5 @[40rem]:hidden">
+            <span>{`${formatTokenCount(total)} ${t("tokenUnitShort")}`}</span>
+            {cacheHit != null ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{`${t("cacheHit")} ${formatPercent(cacheHit, CACHE_HIT_RATE_DIGITS)}`}</span>
+              </>
+            ) : null}
+          </span>
+          <span className="hidden min-w-0 items-center gap-2 @[40rem]:inline-flex">
+            <span>{`${t("total")} ${formatTokenCount(total)}`}</span>
+            {detailRows.map((row) => (
+              <span
+                key={row.key}
+              >{`${t(row.key)} ${formatTokenCount(row.value)}`}</span>
+            ))}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <TokenUsagePopoverContent align="center" usage={usage} />
+    </Popover>
+  )
+}
+
+export function ComposerContextUsage({ tabId }: { tabId: string | null }) {
+  const usage = useComposerUsage(tabId)
+  return <ComposerContextUsageView usage={usage} />
+}
+
+export function ComposerTokenSummary({ tabId }: { tabId: string | null }) {
+  const usage = useComposerUsage(tabId)
+  return <ComposerTokenSummaryView usage={usage} />
+}
+
+/**
+ * Supplies both status-row indicators from one conversation snapshot. The
+ * render prop lets the caller keep the summary centered and the context ring
+ * trailing without installing duplicate store/connection subscriptions.
+ */
+export function ComposerUsageIndicators({
+  tabId,
+  children,
+}: {
+  tabId: string | null
+  children: (indicators: {
+    context: ReactNode
+    summary: ReactNode
+  }) => ReactNode
+}) {
+  const usage = useComposerUsage(tabId)
+  return children({
+    context: <ComposerContextUsageView usage={usage} />,
+    summary: <ComposerTokenSummaryView usage={usage} />,
+  })
 }

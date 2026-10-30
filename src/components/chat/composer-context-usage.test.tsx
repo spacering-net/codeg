@@ -20,7 +20,11 @@ vi.mock("@/stores/conversation-runtime-store", () => ({
   useConversationRuntimeStore: vi.fn(),
 }))
 
-import { ComposerContextUsage } from "./composer-context-usage"
+import {
+  ComposerContextUsage,
+  ComposerTokenSummary,
+  ComposerUsageIndicators,
+} from "./composer-context-usage"
 import { useTabStore } from "@/contexts/tab-context"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 
@@ -159,6 +163,179 @@ function renderStats(stats: SessionStats | null) {
     </NextIntlClientProvider>
   )
 }
+
+function renderSummary(
+  stats: SessionStats | null,
+  options: {
+    conversationId?: number
+    runtimeConversationId?: number
+    runtimeStats?: SessionStats | null
+  } = {}
+) {
+  const conversationId = options.conversationId ?? 7
+  const tabs: TabSlice = {
+    tabs: [
+      {
+        id: "tab-1",
+        kind: "conversation",
+        conversationId,
+        runtimeConversationId: options.runtimeConversationId,
+      },
+    ],
+  }
+  const byConversationId = new Map([[conversationId, { sessionStats: stats }]])
+  if (options.runtimeConversationId != null) {
+    byConversationId.set(options.runtimeConversationId, {
+      sessionStats: options.runtimeStats ?? null,
+    })
+  }
+  const runtime: RuntimeSlice = { byConversationId }
+  mockTabs.mockImplementation((sel: (s: TabSlice) => unknown) => sel(tabs))
+  mockRuntime.mockImplementation((sel: (s: RuntimeSlice) => unknown) =>
+    sel(runtime)
+  )
+  return render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <ComposerTokenSummary tabId="tab-1" />
+    </NextIntlClientProvider>
+  )
+}
+
+describe("ComposerTokenSummary", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("keeps total, input, output, cache read, and cache hit visible", async () => {
+    renderSummary({
+      total_usage: usage({
+        input_tokens: 1_000,
+        output_tokens: 500,
+        cache_creation_input_tokens: 1_000,
+        cache_read_input_tokens: 8_000,
+      }),
+      total_tokens: 10_500,
+      total_duration_ms: 0,
+    } as SessionStats)
+
+    const summary = screen.getByRole("button", {
+      name: `${copy.tokenUsage}: 10.5K`,
+    })
+    expect(summary).toHaveTextContent(`10.5K ${copy.tokenUnitShort}`)
+    expect(summary).toHaveTextContent(`${copy.input} 1K`)
+    expect(summary).toHaveTextContent(`${copy.output} 500`)
+    expect(summary).toHaveTextContent(`${copy.cacheRead} 8K`)
+    expect(summary).toHaveTextContent(`${copy.cacheHit} 80.0%`)
+    expect(summary.innerHTML).toContain("@[40rem]:hidden")
+    expect(summary.innerHTML).toContain("@[40rem]:inline-flex")
+
+    await userEvent.click(summary)
+    expect(valueFor(copy.cacheWrite)).toBe("1K")
+    expect(valueFor(copy.total)).toBe("10.5K")
+  })
+
+  it("omits counters that the agent did not report instead of showing zero", async () => {
+    renderSummary({
+      total_usage: usage({ input_tokens: 2_803, output_tokens: 19 }),
+      total_tokens: 2_822,
+      total_duration_ms: 0,
+    } as SessionStats)
+
+    const summary = screen.getByRole("button", {
+      name: `${copy.tokenUsage}: 2.8K`,
+    })
+    expect(summary).toHaveTextContent(`${copy.input} 2.8K`)
+    expect(summary).toHaveTextContent(`${copy.output} 19`)
+    expect(summary).not.toHaveTextContent(copy.cacheRead)
+    expect(summary).not.toHaveTextContent(copy.cacheHit)
+
+    await userEvent.click(summary)
+    expect(screen.queryByText(copy.cacheRead)).not.toBeInTheDocument()
+    expect(screen.queryByText(copy.cacheWrite)).not.toBeInTheDocument()
+    expect(screen.queryByText(copy.cacheHit)).not.toBeInTheDocument()
+  })
+
+  it("uses the tab's runtime conversation without leaking stale persisted stats", () => {
+    renderSummary(
+      {
+        total_usage: usage({ input_tokens: 99_000 }),
+        total_tokens: 99_000,
+        total_duration_ms: 0,
+      } as SessionStats,
+      {
+        runtimeConversationId: 11,
+        runtimeStats: {
+          total_usage: usage({ input_tokens: 1_200, output_tokens: 34 }),
+          total_tokens: 1_234,
+          total_duration_ms: 0,
+        } as SessionStats,
+      }
+    )
+
+    const summary = screen.getByRole("button", {
+      name: `${copy.tokenUsage}: 1.2K`,
+    })
+    expect(summary).toHaveTextContent(`${copy.input} 1.2K`)
+    expect(summary).not.toHaveTextContent("99K")
+  })
+
+  it("renders nothing when token usage is unavailable", () => {
+    renderSummary({
+      total_usage: usage(),
+      total_tokens: 0,
+      total_duration_ms: 0,
+    } as SessionStats)
+
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
+  })
+})
+
+describe("ComposerUsageIndicators", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("shares one conversation subscription across both status indicators", () => {
+    const tabs: TabSlice = {
+      tabs: [{ id: "tab-1", kind: "conversation", conversationId: 7 }],
+    }
+    const runtime: RuntimeSlice = {
+      byConversationId: new Map([
+        [
+          7,
+          {
+            sessionStats: {
+              total_usage: usage({ input_tokens: 1_000, output_tokens: 20 }),
+              total_tokens: 1_020,
+              total_duration_ms: 0,
+            } as SessionStats,
+          },
+        ],
+      ]),
+    }
+    mockTabs.mockImplementation((sel: (s: TabSlice) => unknown) => sel(tabs))
+    mockRuntime.mockImplementation((sel: (s: RuntimeSlice) => unknown) =>
+      sel(runtime)
+    )
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ComposerUsageIndicators tabId="tab-1">
+          {({ context, summary }) => (
+            <>
+              {summary}
+              {context}
+            </>
+          )}
+        </ComposerUsageIndicators>
+      </NextIntlClientProvider>
+    )
+
+    expect(screen.getAllByRole("button")).toHaveLength(2)
+    expect(mockTabs).toHaveBeenCalledTimes(1)
+    expect(mockRuntime).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe("ComposerContextUsage zeroed counters", () => {
   beforeEach(() => {
