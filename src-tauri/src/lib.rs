@@ -366,6 +366,50 @@ mod tauri_app {
         });
     }
 
+    /// URL the `main` window opens with.
+    ///
+    /// With `CODEG_STATIC_DIR` set, the built-in web server serves that
+    /// directory and the window loads it over HTTP, so a frontend rebuild
+    /// takes effect without recompiling Rust. But only once the server
+    /// actually holds a port: a failed bind (e.g. a port collision) leaves
+    /// `WebServerState::running_port` at 0, and `http://127.0.0.1:0` is not
+    /// a page. On that failure — or on a URL that will not parse — fall back
+    /// to the bundled assets and log an actionable error.
+    fn resolve_main_window_url(
+        workspace_path: String,
+        external_dir_set: bool,
+        running_port: u16,
+    ) -> tauri::WebviewUrl {
+        let mut fallback = workspace_path;
+        if external_dir_set && running_port > 0 {
+            let path = if fallback.starts_with('/') {
+                fallback.clone()
+            } else {
+                format!("/{fallback}")
+            };
+            let external = format!("http://127.0.0.1:{running_port}{path}");
+            match external.parse() {
+                Ok(url) => {
+                    tracing::info!("[WEB] Desktop window loading from external dir: {external}");
+                    return tauri::WebviewUrl::External(url);
+                }
+                Err(err) => {
+                    tracing::error!(
+                        "[WEB] Invalid CODEG_STATIC_DIR window URL {external}: {err}; \
+                         opening the bundled UI instead."
+                    );
+                    fallback = path;
+                }
+            }
+        } else if external_dir_set {
+            tracing::error!(
+                "[WEB] CODEG_STATIC_DIR is set but the web server is not listening \
+                 (port bind failed?); opening the bundled UI instead."
+            );
+        }
+        tauri::WebviewUrl::App(fallback.into())
+    }
+
     /// Chromium command line WebView2 appends to its own when launching.
     #[cfg(target_os = "windows")]
     const WEBVIEW2_ARGS_ENV: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
@@ -1424,7 +1468,29 @@ mod tauri_app {
                             notify_web_auto_start_failed(app.handle(), port, &err);
                         }
                     }
-                    Ok(_) => {}
+                    Ok(config) => {
+                        // `CODEG_STATIC_DIR` forces the web server on so the
+                        // desktop window can load from an external directory.
+                        if web::external_static_dir().is_some() {
+                            let ws = app.state::<web::WebServerState>();
+                            if let Err(err) =
+                                tauri::async_runtime::block_on(web::do_start_web_server_tauri(
+                                    app.handle().clone(),
+                                    &ws,
+                                    config.port,
+                                    None,
+                                    config.token,
+                                ))
+                            {
+                                tracing::error!("[WEB] CODEG_STATIC_DIR force-start failed: {err}");
+                                notify_web_auto_start_failed(
+                                    app.handle(),
+                                    config.port.unwrap_or(web::DEFAULT_WEB_SERVICE_PORT),
+                                    &err,
+                                );
+                            }
+                        }
+                    }
                     Err(err) => tracing::error!("[WEB] failed to load auto-start config: {err}"),
                 }
 
@@ -1580,7 +1646,11 @@ mod tauri_app {
                 // actions still bring it up, and so do the Dock and a second
                 // launch once no other workspace is open or on its way back.
                 if app.get_webview_window("main").is_none() {
-                    let url = tauri::WebviewUrl::App(workspace_path.into());
+                    let url = resolve_main_window_url(
+                        workspace_path,
+                        web::external_static_dir().is_some(),
+                        app.state::<web::WebServerState>().running_port(),
+                    );
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                         .title("Codeg")
                         .inner_size(1260.0, 860.0)
@@ -2461,6 +2531,52 @@ mod tauri_app {
                 }
                 _ => {}
             });
+    }
+
+    #[cfg(test)]
+    mod main_window_url_tests {
+        use super::resolve_main_window_url;
+        use std::path::Path;
+
+        fn external(url: tauri::WebviewUrl) -> Option<String> {
+            match url {
+                tauri::WebviewUrl::External(u) => Some(u.to_string()),
+                tauri::WebviewUrl::App(_) => None,
+                _ => None,
+            }
+        }
+
+        #[test]
+        fn external_dir_with_live_port_loads_the_served_url() {
+            let url = resolve_main_window_url("/?folder=1".into(), true, 3129);
+            assert_eq!(
+                external(url).as_deref(),
+                Some("http://127.0.0.1:3129/?folder=1")
+            );
+        }
+
+        #[test]
+        fn missing_leading_slash_is_normalized_for_the_external_url() {
+            let url = resolve_main_window_url("?folder=1".into(), true, 3129);
+            assert_eq!(
+                external(url).as_deref(),
+                Some("http://127.0.0.1:3129/?folder=1")
+            );
+        }
+
+        #[test]
+        fn port_bind_failure_falls_back_to_the_bundled_app_url() {
+            // A failed bind leaves `running_port` at 0; the window must open
+            // the embedded assets, not `http://127.0.0.1:0/`.
+            let url = resolve_main_window_url("/?folder=1".into(), true, 0);
+            assert!(matches!(url, tauri::WebviewUrl::App(p) if p == Path::new("/?folder=1")));
+        }
+
+        #[test]
+        fn no_external_dir_keeps_the_bundled_app_url_even_with_a_server() {
+            let url = resolve_main_window_url("/".into(), false, 3129);
+            assert!(matches!(url, tauri::WebviewUrl::App(p) if p == Path::new("/")));
+        }
     }
 }
 
