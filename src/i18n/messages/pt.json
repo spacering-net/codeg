@@ -2423,6 +2423,7 @@
       "toggleTerminal": "Alternar terminal",
       "toggleAuxPanel": "Alternar painel auxiliar",
       "search": "Buscar",
+      "openTabs": "Abas abertas",
       "openSettings": "Abrir configurações",
       "backToConversations": "Voltar às conversas",
       "withShortcut": "{label} (atalho: {shortcut})"

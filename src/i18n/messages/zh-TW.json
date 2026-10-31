@@ -2423,6 +2423,7 @@
       "toggleTerminal": "切換終端",
       "toggleAuxPanel": "切換輔助面板",
       "search": "搜尋",
+      "openTabs": "開啟的分頁",
       "openSettings": "打開設定",
       "backToConversations": "返回會話",
       "withShortcut": "{label}（{shortcut}）"

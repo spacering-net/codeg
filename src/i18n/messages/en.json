@@ -2423,6 +2423,7 @@
       "toggleTerminal": "Toggle Terminal",
       "toggleAuxPanel": "Toggle Auxiliary Panel",
       "search": "Search",
+      "openTabs": "Open tabs",
       "openSettings": "Open Settings",
       "backToConversations": "Back to Conversations",
       "withShortcut": "{label} ({shortcut})"

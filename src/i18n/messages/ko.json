@@ -2423,6 +2423,7 @@
       "toggleTerminal": "터미널 전환",
       "toggleAuxPanel": "보조 패널 전환",
       "search": "검색",
+      "openTabs": "열린 탭",
       "openSettings": "설정 열기",
       "backToConversations": "대화로 돌아가기",
       "withShortcut": "{label} ({shortcut} 단축키)"
