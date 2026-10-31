@@ -7644,5 +7644,12 @@
         "probeFailed": "Der integrierte Browser konnte nicht bestätigen, dass er den entfernten Host über den Tunnel erreicht. Versuche es gleich noch einmal."
       }
     }
+  },
+  "ChatProcessSettings": {
+    "title": "Chat-Prozessdetails",
+    "description": "Legt fest, wann Skills, Befehle und Werkzeugaufrufe eingeklappt werden. Abschließende Antworten bleiben sichtbar; Details lassen sich manuell öffnen. Fehler und ausstehende Interaktionen bleiben sichtbar.",
+    "current": "Aktuelles Verhalten beibehalten",
+    "after-completion": "Nach Abschluss einklappen",
+    "always": "Standardmäßig immer einklappen"
   }
 }

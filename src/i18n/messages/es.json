@@ -7644,5 +7644,12 @@
         "probeFailed": "El navegador integrado no pudo confirmar que llega al host remoto a través del túnel. Vuelve a intentarlo en un momento."
       }
     }
+  },
+  "ChatProcessSettings": {
+    "title": "Detalles del proceso del chat",
+    "description": "Controla cuándo se contraen las habilidades, los comandos y las llamadas a herramientas. Las respuestas finales permanecen visibles y los detalles se pueden expandir manualmente. Los errores y las interacciones pendientes siguen visibles.",
+    "current": "Mantener el comportamiento actual",
+    "after-completion": "Contraer al finalizar",
+    "always": "Contraer siempre por defecto"
   }
 }

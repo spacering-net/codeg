@@ -7644,5 +7644,12 @@
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
     }
+  },
+  "ChatProcessSettings": {
+    "title": "Chat process details",
+    "description": "Control when skills, commands and tool calls are collapsed. Final answers remain visible, and details can be expanded manually. Errors and pending interactions stay visible.",
+    "current": "Keep current behavior",
+    "after-completion": "Collapse after completion",
+    "always": "Always collapse by default"
   }
 }

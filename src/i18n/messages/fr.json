@@ -7644,5 +7644,12 @@
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
     }
+  },
+  "ChatProcessSettings": {
+    "title": "Détails du processus de discussion",
+    "description": "Choisissez quand replier les compétences, commandes et appels aux outils. Les réponses finales restent visibles et les détails peuvent être dépliés manuellement. Les erreurs et les interactions en attente restent visibles.",
+    "current": "Conserver le comportement actuel",
+    "after-completion": "Replier après la fin",
+    "always": "Toujours replier par défaut"
   }
 }

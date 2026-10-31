@@ -4,6 +4,7 @@ import packageJson from "./package.json"
 
 const isProd = process.env.NODE_ENV === "production"
 const internalHost = process.env.TAURI_DEV_HOST || "localhost"
+const internalPort = process.env.PORT || "3000"
 const withNextIntl = createNextIntlPlugin({
   requestConfig: "./src/i18n/request.ts",
   experimental: {
@@ -48,7 +49,7 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
-  assetPrefix: isProd ? undefined : `http://${internalHost}:3000`,
+  assetPrefix: isProd ? undefined : `http://${internalHost}:${internalPort}`,
 }
 
 export default withNextIntl(nextConfig)

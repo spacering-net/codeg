@@ -7644,5 +7644,12 @@
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
     }
+  },
+  "ChatProcessSettings": {
+    "title": "Detalhes do processo do chat",
+    "description": "Define quando recolher habilidades, comandos e chamadas de ferramentas. As respostas finais permanecem visíveis e os detalhes podem ser expandidos manualmente. Erros e interações pendentes continuam visíveis.",
+    "current": "Manter o comportamento atual",
+    "after-completion": "Recolher após a conclusão",
+    "always": "Sempre recolher por padrão"
   }
 }
