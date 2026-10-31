@@ -30,9 +30,11 @@
 //!       - a cancel — MCP-side (`notifications/cancelled` →
 //!         [`DelegationBroker::cancel_by_external_handle`]), child-side
 //!         ([`DelegationBroker::cancel_by_child_connection`]), parent-side
-//!         ([`DelegationBroker::cancel_by_parent`] /
-//!         [`DelegationBroker::cancel_by_parent_turn`]), or the LLM's own
-//!         [`DelegationBroker::cancel_task_by_id`].
+//!         connection teardown ([`DelegationBroker::cancel_by_parent`]), or
+//!         the LLM's own [`DelegationBroker::cancel_task_by_id`]. A parent
+//!         TURN ending (cleanly or not) no longer cancels anything — it
+//!         detaches ([`DelegationBroker::detach_parent_turn`]) and the
+//!         children keep running.
 //!
 //! v1 is explicitly one-shot — no session reuse. The one exception is
 //! [`DelegationBroker::resume_delegation`]: an INTERRUPTED task (canceled, or
@@ -367,10 +369,10 @@ struct PendingCalls {
 ///   * `cancel_by_child_connection` — a freshly-spawned child connection dying
 ///     before its first prompt is answered. Keyed by `child_connection_id`.
 ///
-/// Parent-side cancels (`cancel_by_parent` / `cancel_by_parent_turn`) are
+/// Parent-side connection teardown (`cancel_by_parent`) is
 /// covered symmetrically by the `inflight` registry: `handle_request` registers
 /// each setup at entry, and `mark_inflight_canceled_for_parent` runs in the SAME
-/// lock acquisition that drains the parked `calls`. A parent cancel landing
+/// lock acquisition that drains the parked `calls`. A teardown landing
 /// while a child is still mid-setup therefore flags the in-flight record, and
 /// `handle_request` observes the flag at its next checkpoint (or atomically at
 /// park) and tears the child down itself — it is no longer left to the child's
@@ -808,8 +810,8 @@ fn canceled_outcome(child_conversation_id: i32, reason: &str) -> DelegationOutco
 /// The duration is captured ONCE here and returned so the slow teardown
 /// (parent-card meta, report) reuses the exact value recorded into the
 /// completed-cache, rather than recomputing `started_at.elapsed()` later — which
-/// would inflate it for the backgrounded `cancel_by_parent_turn` teardown and
-/// disagree with the `get_delegation_status` / `cancel_delegation` cards.
+/// would inflate it for the backgrounded teardown and disagree with the
+/// `get_delegation_status` / `cancel_delegation` cards.
 fn drain_and_record_canceled(
     inner: &mut PendingInner,
     keys: Vec<String>,
@@ -3514,34 +3516,40 @@ impl DelegationBroker {
         self.finalize_parent_cancel(drained).await;
     }
 
-    /// Cascade-cancel every pending delegation owned by `parent_connection_id`
-    /// for a **turn/prompt cancel** where the parent connection STAYS ALIVE
-    /// (a non-`end_turn` turn end, or a user Cancel between/within prompts).
+    /// Turn-scoped **detach** for a parent turn that just ended without
+    /// consuming its results — a user interrupt/Cancel, or any non-`end_turn`
+    /// turn exit. The dying turn's tool-call bookkeeping is separated, but its
+    /// RUNNING CHILDREN ARE LEFT ALONE: delegated children are background work
+    /// by the `delegate_to_agent` contract, the completed-cache outlives the
+    /// turn, and the next turn's `get_delegation_status` collects their
+    /// results — exactly the semantics an `end_turn` already has.
     ///
-    /// The fast, turn-scoped part — tombstoning the tool_call tracker and
-    /// removing this parent's parked calls — runs SYNCHRONOUSLY: the caller
-    /// awaits it before the connection loop accepts the next prompt, so it can't
-    /// race a next-turn registration and tombstone/cancel that turn's legitimate
-    /// entries (the safety the `drop_tool_calls_for_parent` invariant relies
-    /// on). Only the slow child teardown (meta/emit + spawner `cancel` /
-    /// `disconnect`, which can block on slow agents) is backgrounded, so the
-    /// user-visible Cancel path stays responsive.
+    /// This replaces the old cascade-cancel, which conflated "stop the
+    /// parent's generation" with "kill its fan-out": on 2026-10-31 one
+    /// coordinator lost seven children (~1.2 h of child time) to owner
+    /// interrupts as mild as a mid-run progress question, each kill followed
+    /// by a hand-written "the cancel was an interruption, not a business
+    /// decision" recovery delegation.
     ///
-    /// RETAINS the parent's `consumed` tool_call memory (and tombstones the
-    /// cancelled turn's unclaimed `pending` ids into it): dropping it would let
-    /// a host re-emit of an already-handled `tool_call_id` re-register and
-    /// mis-bind the next same-key delegation on this live connection — see
-    /// `drop_tool_calls_for_parent`.
-    pub async fn cancel_by_parent_turn(&self, parent_connection_id: &str) {
-        let drained = self
-            .drain_for_parent_cancel(parent_connection_id, true)
+    /// What this does: tombstone the cancelled turn's unclaimed `pending`
+    /// tool_call ids into `consumed` (RETAINING the consumed memory — dropping
+    /// it would let a host re-emit of an already-handled `tool_call_id`
+    /// re-register and mis-bind the next same-key delegation on this live
+    /// connection; see `drop_tool_calls_for_parent`). Synchronous by nature —
+    /// the caller awaits it before the connection loop accepts the next
+    /// prompt, so it can't race a next-turn registration.
+    ///
+    /// What still kills children: `cancel_delegation` (the per-task tool), a
+    /// parent CONNECTION teardown ([`Self::cancel_by_parent`]), the agent's own
+    /// `notifications/cancelled` for a still-in-setup delegation call
+    /// ([`Self::cancel_by_external_handle`]), and the child's own terminal
+    /// turn. A mid-setup delegation whose host never cancels its MCP call
+    /// completes into the completed-cache with its task_id unacknowledged —
+    /// wasted, but bounded (the child is one-shot) and no worse than the same
+    /// race on an `end_turn`.
+    pub async fn detach_parent_turn(&self, parent_connection_id: &str) {
+        self.drop_tool_calls_for_parent(parent_connection_id, true)
             .await;
-        // The fast drain above already ran inline (scoped to the just-ended
-        // turn); background only the slow child teardown.
-        let broker = self.clone();
-        tokio::spawn(async move {
-            broker.finalize_parent_cancel(drained).await;
-        });
     }
 
     /// Fast, lock-guarded part of a parent cancel: drop/tombstone this parent's
@@ -7380,7 +7388,7 @@ mod tests {
         // already-claimed id (e.g. a terminal status-flip) re-registers as fresh
         // `pending` and the next same-key delegation mis-binds to it — the
         // dead-card/wrong-child class this correlation machinery exists to
-        // prevent. `cancel_by_parent_turn` retains `consumed`, so the re-emit
+        // prevent. `detach_parent_turn` retains `consumed`, so the re-emit
         // stays rejected by the Tier-1 consumed check.
         let broker = DelegationBroker::new(
             Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
@@ -7397,8 +7405,8 @@ mod tests {
                 .as_deref(),
             Some("tc-A"),
         );
-        // Turn cancel — parent still alive.
-        broker.cancel_by_parent_turn("p1").await;
+        // Turn detach — parent still alive.
+        broker.detach_parent_turn("p1").await;
         // Host re-emits the now-consumed id with the same key.
         broker
             .register_pending_tool_call_with_key("p1", "tc-A".into(), Some(task_key("task A")))
@@ -7425,7 +7433,7 @@ mod tests {
         broker
             .register_pending_tool_call_with_key("p1", "tc-B".into(), Some(task_key("task B")))
             .await;
-        broker.cancel_by_parent_turn("p1").await;
+        broker.detach_parent_turn("p1").await;
         assert!(
             broker
                 .take_matching_tool_call("p1", &task_key("task B"))
@@ -7450,7 +7458,7 @@ mod tests {
         broker
             .register_pending_tool_call_with_key("p1", "tc-X".into(), Some(task_key("task X")))
             .await;
-        broker.cancel_by_parent_turn("p1").await;
+        broker.detach_parent_turn("p1").await;
         // Late re-emit of the cancelled turn's unclaimed id (same key).
         broker
             .register_pending_tool_call_with_key("p1", "tc-X".into(), Some(task_key("task X")))
@@ -7489,13 +7497,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_by_parent_turn_drains_synchronously_then_tears_down_child() {
-        // The turn cancel must (a) drop the tracker + remove parked calls
+    async fn turn_detach_tombstones_the_tracker_but_keeps_the_delegation_alive() {
+        // A turn-scoped detach must (a) drop the tracker's unclaimed ids
         // SYNCHRONOUSLY — before the connection loop could accept the next
-        // prompt — so a delayed cancel can't tombstone/cancel a NEXT turn's
-        // entries (the invariant `drop_tool_calls_for_parent` relies on); and
-        // (b) still fully tear the child down (backgrounded), resolving the
-        // awaiting `handle_request` as canceled exactly once.
+        // prompt — so a delayed detach can't tombstone a NEXT turn's entries
+        // (the invariant `drop_tool_calls_for_parent` relies on); and (b) leave
+        // the turn's delegation RUNNING: the parked call is not drained, the
+        // child is neither canceled nor disconnected, and the driver still
+        // resolves normally when the child completes. A 2026-10-31 run lost
+        // seven children to the old cascade here — this is the regression
+        // test for that conflation of "stop the parent" with "kill its
+        // fan-out".
         let mock = Arc::new(MockSpawner::new());
         mock.queue_spawn(Ok("child-1".into())).await;
         mock.queue_send(Ok(7)).await;
@@ -7511,6 +7523,7 @@ mod tests {
         while broker.pending_count().await == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+        let call_id = broker.peek_first_pending_call_id().await;
         // ...plus a separate unclaimed keyed tracker entry on the same parent.
         broker
             .register_pending_tool_call_with_key(
@@ -7520,31 +7533,48 @@ mod tests {
             )
             .await;
 
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.detach_parent_turn("parent-conn").await;
 
-        // (a) Synchronously — no sleep: the parked call is removed and the
-        // tracker entry is dropped (tombstoned), so neither can leak into a
-        // next-turn registration that the backgrounded teardown might clobber.
-        assert_eq!(
-            broker.pending_count().await,
-            0,
-            "parked call must be drained synchronously by the turn cancel"
-        );
+        // (a) Synchronously — no sleep: the tracker entry is dropped
+        // (tombstoned), so it cannot leak into a next-turn registration.
         assert!(
             broker
                 .take_matching_tool_call("parent-conn", &task_key("task Z"))
                 .await
                 .is_none(),
-            "tracker pending must be dropped synchronously by the turn cancel"
+            "tracker pending must be dropped synchronously by the turn detach"
         );
 
-        // (b) The backgrounded child teardown still resolves the driver as
-        // canceled and tears the child down exactly once.
+        // (b) The delegation survives: still registered, still parked — and
+        // completing it later resolves the driver normally, with the child
+        // torn down exactly once by the COMPLETION, never by a cancel.
+        assert_eq!(
+            broker.pending_count().await,
+            1,
+            "the turn's parked delegation must survive a turn detach"
+        );
+        assert!(mock.cancels.lock().await.is_empty());
+        assert!(mock.disconnects.lock().await.is_empty());
+
+        let call_id = call_id.expect("parked call id");
+        broker
+            .complete_call(
+                &call_id,
+                DelegationOutcome::Ok(DelegationSuccess {
+                    text: "done".into(),
+                    child_conversation_id: 7,
+                    child_agent_type: AgentType::Codex,
+                    turn_count: 1,
+                    duration_ms: 10,
+                    token_usage: None,
+                }),
+            )
+            .await;
         match driver.await.unwrap() {
-            DelegationOutcome::Err { code, .. } => assert_eq!(code, "canceled"),
-            other => panic!("expected canceled, got {other:?}"),
+            DelegationOutcome::Ok(success) => assert_eq!(success.text, "done"),
+            other => panic!("expected the delegation to complete normally, got {other:?}"),
         }
-        assert_eq!(mock.cancels.lock().await.as_slice(), &["child-1"]);
+        assert!(mock.cancels.lock().await.is_empty());
         assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-1"]);
     }
 
@@ -8256,7 +8286,7 @@ mod tests {
         assert_eq!(broker.inflight_count().await, 1);
         assert_eq!(broker.reserved_child_count().await, 0, "not reserved yet");
 
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.cancel_by_parent("parent-conn").await;
         let _ = release.send(());
 
         match driver.await.unwrap() {
@@ -8304,7 +8334,7 @@ mod tests {
         assert_eq!(broker.inflight_count().await, 1);
         assert_eq!(broker.pending_count().await, 0, "not parked yet");
 
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.cancel_by_parent("parent-conn").await;
         let _ = release.send(());
 
         match driver.await.unwrap() {
@@ -8389,7 +8419,7 @@ mod tests {
                 }),
             )
             .await;
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.cancel_by_parent("parent-conn").await;
         let _ = release.send(());
 
         assert!(matches!(driver.await.unwrap(), DelegationOutcome::Ok(_)));
@@ -8429,7 +8459,7 @@ mod tests {
         // Parent cancels FIRST (earlier arrival stamp); the child completes
         // afterward (later stamp) — first-terminal-wins judges the cancel the
         // winner and discards the late completion.
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.cancel_by_parent("parent-conn").await;
         broker
             .complete_call(
                 &call_id,
@@ -8499,7 +8529,7 @@ mod tests {
         broker
             .cancel_by_child_connection("cF", Some("boom detail"))
             .await;
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.cancel_by_parent("parent-conn").await;
         let _ = release.send(());
 
         match driver.await.unwrap() {
@@ -8585,7 +8615,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         // Wrong-parent cancel — a no-op for this setup.
-        broker.cancel_by_parent_turn("some-other-parent").await;
+        broker.cancel_by_parent("some-other-parent").await;
         let _ = release.send(());
 
         // It must park normally; resolve it via its child completion.
@@ -9196,7 +9226,7 @@ mod tests {
         }
         assert_eq!(broker.inflight_count().await, 1);
 
-        broker.cancel_by_parent_turn("parent-conn").await;
+        broker.cancel_by_parent("parent-conn").await;
         let _ = release.send(());
 
         match driver.await.unwrap() {
