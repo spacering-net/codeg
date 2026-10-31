@@ -394,6 +394,13 @@ pub struct ConversationsBulkChanged {
 /// webview and every WebSocket client.
 pub const TABS_CHANGED_EVENT: &str = "tabs://changed";
 
+/// Global side-channel announcing a message-queue change for a given owner
+/// (conversation). Mirrors [`CONVERSATION_CHANGED_EVENT`]: a single
+/// [`emit_event`] reaches the Tauri webview and every WebSocket client, so the
+/// "send later" queue — which is persisted in the DB and edited from any window
+/// or web client — converges across all of them. Payload: [`MessageQueueChange`].
+pub const MESSAGE_QUEUE_CHANGED_EVENT: &str = "message-queue://changed";
+
 /// Payload for the [`TABS_CHANGED_EVENT`] side-channel. Carries the full
 /// conversation-bound tab set (a snapshot, not a delta) so every client
 /// converges idempotently — matching the full-replacement save semantics.
@@ -410,6 +417,19 @@ pub struct TabsChanged {
     pub version: i64,
     pub origin: String,
     pub tabs: Vec<crate::models::OpenedTab>,
+}
+
+/// Payload for [`MESSAGE_QUEUE_CHANGED_EVENT`]. Carries the full queue for the
+/// owner so every client replaces its local copy idempotently (last-writer-wins).
+///
+/// `origin` is the client id that made the change; that client ignores its own
+/// echo so a concurrent local mutation is never clobbered by the broadcast it
+/// triggered.
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageQueueChange {
+    pub owner_id: String,
+    pub origin: String,
+    pub items: Vec<crate::models::MessageQueueItem>,
 }
 
 /// Global side-channel for cross-client automation list + run sync. Mirrors

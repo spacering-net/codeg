@@ -4752,6 +4752,32 @@ export interface QuickMessage {
   updated_at: string
 }
 
+// Persisted message-queue (the "send later" queue). `draft_json` is the
+// serialized PromptDraft; fields are snake_case because the Rust side serializes
+// command returns and event payloads without camelCase conversion.
+export interface PersistedQueueItem {
+  id: string
+  draft_json: string
+  mode_id: string | null
+  adopt_send_time_mode: boolean
+}
+
+// Shape accepted by `message_queue_save`. camelCase because both the Tauri
+// command (nested arg) and the axum web handler (JSON body) expect it.
+export interface MessageQueueSaveItem {
+  id: string
+  draftJson: string
+  modeId: string | null
+  adoptSendTimeMode: boolean
+}
+
+// Payload of the `message-queue://changed` broadcast (snake_case on the wire).
+export interface MessageQueueChangedPayload {
+  owner_id: string
+  origin: string
+  items: PersistedQueueItem[]
+}
+
 export interface GitStatusEntry {
   status: string
   file: string

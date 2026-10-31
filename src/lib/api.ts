@@ -3948,6 +3948,22 @@ export async function quickMessagesReorder(ids: number[]): Promise<void> {
   return getTransport().call("quick_messages_reorder", { ids })
 }
 
+// Persisted, multi-client-synced message queue (the "send later" queue).
+
+export async function messageQueueList(
+  ownerId: string
+): Promise<PersistedQueueItem[]> {
+  return getTransport().call("message_queue_list", { ownerId })
+}
+
+export async function messageQueueSave(
+  ownerId: string,
+  items: MessageQueueSaveItem[],
+  origin: string
+): Promise<void> {
+  return getTransport().call("message_queue_save", { ownerId, items, origin })
+}
+
 // Token usage dashboard
 
 export async function tokenUsageReport(

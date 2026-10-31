@@ -1701,6 +1701,15 @@ pub fn build_router_with_proxy_auth(
             "/quick_messages_reorder",
             post(handlers::quick_messages::quick_messages_reorder),
         )
+        // ─── Message Queue ───
+        .route(
+            "/message_queue_list",
+            post(handlers::message_queue::message_queue_list),
+        )
+        .route(
+            "/message_queue_save",
+            post(handlers::message_queue::message_queue_save),
+        )
         // ─── Automations ───
         .route(
             "/automation_list",

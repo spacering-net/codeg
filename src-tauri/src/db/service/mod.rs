@@ -14,6 +14,7 @@ pub mod folder_link_service;
 pub mod folder_service;
 pub mod import_service;
 pub mod model_provider_service;
+pub mod message_queue_service;
 pub mod quick_message_service;
 pub mod remote_workspace_connection_service;
 pub mod sender_context_service;
