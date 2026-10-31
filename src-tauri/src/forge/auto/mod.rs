@@ -497,7 +497,7 @@ impl AutoProcessor {
             .ok_or("this folder has no recognizable forge remote (origin)")?;
         if !remote.supported {
             return Err(format!(
-                "{} is not a host codeg can read — only GitHub, GitLab and Gitea are supported",
+                "{} is not a host codeg can read — only GitHub, GitLab, Gitea and CNB are supported",
                 remote.server_host
             ));
         }
@@ -842,6 +842,9 @@ async fn list_open_items(
         }
         ForgeProvider::Gitea => {
             forge_core::gitea::list_open_items(auth, owner_repo, issues, pulls, since, from).await
+        }
+        ForgeProvider::Cnb => {
+            forge_core::cnb::list_open_items(auth, owner_repo, issues, pulls, since, from).await
         }
     }
 }

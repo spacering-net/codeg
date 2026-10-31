@@ -382,6 +382,10 @@
     "giteaDescription": "認証用の Gitea（および Forgejo）アカウントを管理します。トークンはローカルに保存されます。",
     "giteaTokenHint": "Gitea → Settings → Applications で write:repository、write:issue、read:user スコープ付きのアクセストークンを作成してください。",
     "giteaNoAccounts": "Gitea アカウントがまだありません",
+    "cnbTitle": "CNB アカウント",
+    "cnbDescription": "認証用の CNB（cnb.cool）アカウントを管理します。トークンはローカルに保存されます。",
+    "cnbTokenHint": "CNB の「個人設定 → アクセストークン」で、account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw、repo-code:r のスコープを付けてアクセストークンを作成してください。account-profile:r がないと CNB はトークンの持ち主を返さないため、アカウントを追加できません。",
+    "cnbNoAccounts": "CNB アカウントはまだありません",
     "noAccounts": "GitHub アカウントが設定されていません。",
     "addAccount": "アカウントを追加",
     "serverUrl": "サーバー URL",
@@ -6956,7 +6960,7 @@
     "noRemote": "このフォルダには認識できるリモート（origin）がありません",
     "errors": {
       "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
-      "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
+      "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea、CNB にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo、CNB インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
       "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。"
     },
     "addAccount": "アカウントを追加",

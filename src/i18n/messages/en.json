@@ -382,6 +382,10 @@
     "giteaDescription": "Manage Gitea (and Forgejo) accounts for authentication. Tokens are stored locally.",
     "giteaTokenHint": "Create an access token with the write:repository, write:issue and read:user scopes under Gitea → Settings → Applications.",
     "giteaNoAccounts": "No Gitea account yet",
+    "cnbTitle": "CNB accounts",
+    "cnbDescription": "Manage CNB (cnb.cool) accounts for authentication. Tokens are stored locally.",
+    "cnbTokenHint": "Create an access token under CNB → Personal settings → Access tokens with the account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw and repo-code:r scopes. Without account-profile:r, CNB will not say which user the token belongs to, and the account cannot be added.",
+    "cnbNoAccounts": "No CNB account yet",
     "noAccounts": "No GitHub accounts configured.",
     "addAccount": "Add Account",
     "serverUrl": "Server URL",
@@ -6956,7 +6960,7 @@
     "noRemote": "This folder has no recognizable forge remote (origin)",
     "errors": {
       "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository.",
-      "unsupportedHost": "The repository panel supports GitHub, GitLab and Gitea only, and {host} is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea or Forgejo instance, add an account for it under Settings → Version Control.",
+      "unsupportedHost": "The repository panel supports GitHub, GitLab, Gitea and CNB only, and {host} is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea, Forgejo or CNB instance, add an account for it under Settings → Version Control.",
       "wrongForge": "{host} is a {provider}, not the forge codeg had it classified as. The detection has been corrected — reload to retry."
     },
     "addAccount": "Add an account",

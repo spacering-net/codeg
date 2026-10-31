@@ -90,6 +90,7 @@ import {
   forgeChangeFiles,
   forgeCreateComment,
   forgeIdentity,
+  forgeIssueDetail,
   forgeListComments,
   forgeMergeChange,
   forgeMergeOptions,
@@ -2208,6 +2209,8 @@ function MergeBox({
  */
 function Conversation({
   row,
+  description,
+  descriptionPending = false,
   folderId,
   identity,
   onCommentPosted,
@@ -2216,6 +2219,12 @@ function Conversation({
   viewportEl,
 }: {
   row: ForgeIssueRow
+  /** The item's description. Passed in rather than read off `row` because a
+   *  CNB issue's list row carries none — it comes from its own read, see
+   *  [`useIssueBody`]. */
+  description: string | null
+  /** That read is still out — see [`useIssueBody`]. */
+  descriptionPending?: boolean
   folderId: number | null
   /** Who a comment from here would be signed as — see [`useForgeIdentity`]. */
   identity: ForgeIdentity | null
@@ -2231,7 +2240,7 @@ function Conversation({
   viewportEl: HTMLElement | null
 }) {
   const t = useTranslations("Forge")
-  const body = row.body?.trim()
+  const body = description?.trim()
   return (
     <>
       {/* The description is the first thing said about the item, so it sits in
@@ -2246,7 +2255,10 @@ function Conversation({
           label={row.author ?? undefined}
         />
         <div className={RAIL_BODY}>
-          {body ? (
+          {/* Nothing at all while the description is still being read: "no
+              description" is a CLAIM, and making it before the answer arrives
+              would flash that sentence over every issue that has one. */}
+          {descriptionPending ? null : body ? (
             // The forge's own Markdown, through the same renderer the chat
             // uses — headings, task lists, tables, fenced code and images all
             // come out as the author wrote them, and link clicks go through
@@ -2323,10 +2335,64 @@ function Conversation({
  * rather than a local guess — see `forge_create_comment_core` and
  * `forge_set_item_state_core`.
  */
+/**
+ * The description of an issue whose LIST row carries none.
+ *
+ * CNB's issue list omits `body` entirely (its pull list carries one), so the
+ * first paint has nothing to draw where the description goes. One read, paid
+ * when the panel opens — the same trade the comment thread makes, and for the
+ * same reason: a list page holds thirty items whose reader opens at most one.
+ * Scoped to that forge by the caller; every other one ships the body on the
+ * row and never asks.
+ *
+ * `pending` is its own state rather than "body is null", because the two
+ * answer different questions — "the forge has not said yet" and "the forge
+ * says there is nothing" — and only the second may draw the empty-state line.
+ */
+function useIssueBody(
+  folderId: number | null,
+  row: ForgeIssueRow | null,
+  enabled: boolean
+): { body: string | null; pending: boolean } {
+  const [read, setRead] = useState<{ key: string; body: string | null } | null>(
+    null
+  )
+  const key = row != null ? `${row.is_pr ? "pr" : "issue"}-${row.number}` : null
+  const onRow = row?.body ?? null
+  const wanted = enabled && row != null && !row.is_pr && onRow == null
+  const number = row?.number ?? null
+
+  useEffect(() => {
+    if (!wanted || key == null || number == null || folderId == null) return
+    let live = true
+    forgeIssueDetail(folderId, number)
+      .then((full) => {
+        if (live) setRead({ key, body: full.body ?? null })
+      })
+      .catch(() => {
+        // The panel keeps drawing — the thread below reports its own failures.
+        // Falling back to "no description" is the honest cost of one failed
+        // read: the alternative is an empty slot that never fills.
+        if (live) setRead({ key, body: null })
+      })
+    return () => {
+      live = false
+    }
+    // `onRow` is a dependency so a row that ARRIVES with a body — a list
+    // refresh, or a write the page adopted — retires the read instead of
+    // leaving a second copy to disagree with it.
+  }, [wanted, folderId, key, number, onRow])
+
+  if (!wanted) return { body: onRow, pending: false }
+  if (read?.key !== key) return { body: null, pending: true }
+  return { body: read.body, pending: false }
+}
+
 export function ForgeIssueDetailSheet({
   row,
   link,
   folderId,
+  issueBodyOnDemand = false,
   onOpenChange,
   onStart,
   onRowUpdated,
@@ -2342,6 +2408,12 @@ export function ForgeIssueDetailSheet({
    *  repository from this folder's own remote). `null` while no folder is
    *  resolved, which costs the thread and nothing else. */
   folderId: number | null
+  /**
+   * This forge's ISSUE list rows carry no description, so the panel reads the
+   * item itself when it opens (see [`useIssueBody`]). Set only for CNB; the
+   * others serve the body with the row.
+   */
+  issueBodyOnDemand?: boolean
   onOpenChange: (open: boolean) => void
   /** Opens the page's trigger dialog on this item. */
   onStart: () => void
@@ -2416,6 +2488,9 @@ export function ForgeIssueDetailSheet({
     change?.folderId ?? null,
     change?.number ?? null
   )
+  /** An ISSUE's description when the list did not bring one — CNB only (see
+   *  [`useIssueBody`]); a no-op everywhere else. */
+  const issueBody = useIssueBody(folderId, row, issueBodyOnDemand)
   /**
    * A change there is still something to land. A merged one is done, and
    * neither forge will merge a closed change — the box would be an offer to
@@ -2706,6 +2781,7 @@ export function ForgeIssueDetailSheet({
             >
               <Conversation
                 row={row}
+                description={row.body ?? null}
                 folderId={folderId}
                 identity={identity}
                 onCommentPosted={onCommentPosted}
@@ -2764,6 +2840,8 @@ export function ForgeIssueDetailSheet({
           >
             <Conversation
               row={row}
+              description={issueBody.body}
+              descriptionPending={issueBody.pending}
               folderId={folderId}
               identity={identity}
               onCommentPosted={onCommentPosted}

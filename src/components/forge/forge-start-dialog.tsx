@@ -37,11 +37,13 @@ import type {
   WorkTask,
 } from "@/lib/types"
 
-/** GitLab calls it a merge request, and a dialog that promises a pull request
- *  and then opens a merge request reads like the wrong tool answered. */
+/** GitLab and CNB call it a merge request, and a dialog that promises a pull
+ *  request and then opens a merge request reads like the wrong tool answered. */
 function descriptionKey(isPr: boolean, provider: ForgeProviderId) {
   if (!isPr) return "dialogDescription"
-  return provider === "gitlab" ? "dialogDescriptionMr" : "dialogDescriptionPr"
+  return provider === "gitlab" || provider === "cnb"
+    ? "dialogDescriptionMr"
+    : "dialogDescriptionPr"
 }
 
 /** The kind's scenario menu, default first — the server enforces the same

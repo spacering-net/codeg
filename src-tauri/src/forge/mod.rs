@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod auto;
+pub mod cnb;
 pub mod deliver;
 pub mod envelope;
 pub mod gitea;
@@ -33,6 +34,12 @@ pub enum ForgeProvider {
     /// this variant makes. Nothing downstream distinguishes them, and inventing
     /// a fourth variant would only split one credential store in two.
     Gitea,
+    /// CNB (cnb.cool) — Tencent's code hosting platform. Its API is its own:
+    /// the REST base is a SEPARATE host (`api.cnb.cool`), authentication is a
+    /// `Bearer` token, and the wire shapes are neither GitHub's nor Gitea's.
+    /// It does borrow GitHub's `refs/pull/<n>/head` namespace, which is what
+    /// lets a proposed change's head be fetched without adding a remote.
+    Cnb,
 }
 
 impl ForgeProvider {
@@ -41,6 +48,7 @@ impl ForgeProvider {
             ForgeProvider::GitHub => "github",
             ForgeProvider::GitLab => "gitlab",
             ForgeProvider::Gitea => "gitea",
+            ForgeProvider::Cnb => "cnb",
         }
     }
 
@@ -52,6 +60,7 @@ impl ForgeProvider {
             "github" => Ok(ForgeProvider::GitHub),
             "gitlab" => Ok(ForgeProvider::GitLab),
             "gitea" => Ok(ForgeProvider::Gitea),
+            "cnb" => Ok(ForgeProvider::Cnb),
             other => Err(ForgeError::Invalid(format!("unknown provider: {other}"))),
         }
     }
@@ -64,6 +73,7 @@ impl ForgeProvider {
             ForgeProvider::GitHub => "GitHub",
             ForgeProvider::GitLab => "GitLab",
             ForgeProvider::Gitea => "Gitea",
+            ForgeProvider::Cnb => "CNB",
         }
     }
 
@@ -76,6 +86,9 @@ impl ForgeProvider {
         match self {
             ForgeProvider::GitHub | ForgeProvider::Gitea => "pull request",
             ForgeProvider::GitLab => "merge request",
+            // CNB's own UI and API documentation call it a 合并请求 / merge
+            // request, even though the REST path is `/pulls`.
+            ForgeProvider::Cnb => "merge request",
         }
     }
 
@@ -93,7 +106,9 @@ impl ForgeProvider {
     /// check out a Gitea fork's head without adding a remote.
     pub fn change_head_ref(self, number: i64) -> String {
         match self {
-            ForgeProvider::GitHub | ForgeProvider::Gitea => format!("refs/pull/{number}/head"),
+            ForgeProvider::GitHub | ForgeProvider::Gitea | ForgeProvider::Cnb => {
+                format!("refs/pull/{number}/head")
+            }
             ForgeProvider::GitLab => format!("refs/merge-requests/{number}/head"),
         }
     }
@@ -139,6 +154,15 @@ impl ForgeProvider {
                     ForgeItemKind::Change => "pulls",
                 };
                 format!("{origin}/{owner_repo}/{segment}/{number}")
+            }
+            ForgeProvider::Cnb => {
+                // The `/-/` separator, as on GitLab — CNB nests both
+                // collections under it and uses `pulls` for the change.
+                let segment = match kind {
+                    ForgeItemKind::Issue => "issues",
+                    ForgeItemKind::Change => "pulls",
+                };
+                format!("{origin}/{owner_repo}/-/{segment}/{number}")
             }
         }
     }
@@ -209,10 +233,10 @@ pub enum ForgeError {
     /// The host is not one codeg can read: nothing is configured for it and its
     /// name claims none of the forges. Distinct from [`ForgeError::NoAccount`]
     /// because the advice differs — "add a GitHub account for bitbucket.org"
-    /// is advice that cannot work, while "only GitHub, GitLab and Gitea are
-    /// supported" is the actual answer (with adding an account still the way
+    /// is advice that cannot work, while "only GitHub, GitLab, Gitea and CNB
+    /// are supported" is the actual answer (with adding an account still the way
     /// in for a self-hosted instance under an unrelated name).
-    #[error("unsupported forge host {host}: only GitHub, GitLab and Gitea are supported")]
+    #[error("unsupported forge host {host}: only GitHub, GitLab, Gitea and CNB are supported")]
     UnsupportedHost { host: String },
     /// The host answered in a way only the OTHER forge answers — codeg had it
     /// classified wrong and now knows better. Recoverable by construction: the
@@ -1801,6 +1825,10 @@ pub fn web_origin(auth: &ResolvedAuth) -> String {
     let base = auth.api_base.trim_end_matches('/');
     if base == "https://api.github.com" {
         return "https://github.com".to_string();
+    }
+    // CNB's API lives on its own host, with the web UI a bare label away.
+    if base == "https://api.cnb.cool" {
+        return "https://cnb.cool".to_string();
     }
     match ["/api/v3", "/api/v4", "/api/v1"]
         .iter()

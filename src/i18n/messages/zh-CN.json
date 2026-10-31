@@ -382,6 +382,10 @@
     "giteaDescription": "管理用于身份验证的 Gitea（及 Forgejo）账号。令牌存储在本地。",
     "giteaTokenHint": "在 Gitea → Settings → Applications 中创建带 write:repository、write:issue 和 read:user 权限的访问令牌。",
     "giteaNoAccounts": "还没有 Gitea 账号",
+    "cnbTitle": "CNB 账号",
+    "cnbDescription": "管理用于身份验证的 CNB（cnb.cool）账号。令牌存储在本地。",
+    "cnbTokenHint": "在 CNB 的「个人设置 → 访问令牌」中创建访问令牌，勾选 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 和 repo-code:r 权限。缺少 account-profile:r 时，CNB 不会返回令牌所属用户，账号将无法添加。",
+    "cnbNoAccounts": "还没有 CNB 账号",
     "noAccounts": "暂无 GitHub 账号。",
     "addAccount": "添加账号",
     "serverUrl": "服务器地址",
@@ -6956,7 +6960,7 @@
     "noRemote": "该文件夹没有可识别的代码托管远端（origin）",
     "errors": {
       "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
-      "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab 和 Gitea，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 实例，请在「设置 → 版本控制」中为它添加账号。",
+      "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab、Gitea 和 CNB，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 实例，请在「设置 → 版本控制」中为它添加账号。",
       "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。"
     },
     "addAccount": "添加账号",

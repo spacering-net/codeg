@@ -382,6 +382,10 @@
     "giteaDescription": "إدارة حسابات Gitea (و Forgejo) للمصادقة. يتم تخزين الرموز محليًا.",
     "giteaTokenHint": "أنشئ رمز وصول بنطاقات write:repository و write:issue و read:user من Gitea → Settings → Applications.",
     "giteaNoAccounts": "لا يوجد حساب Gitea بعد",
+    "cnbTitle": "حسابات CNB",
+    "cnbDescription": "أدر حسابات CNB (cnb.cool) للمصادقة. تُخزَّن الرموز محليًا.",
+    "cnbTokenHint": "أنشئ رمز وصول من CNB ← الإعدادات الشخصية ← رموز الوصول مع النطاقات account-profile:r و repo-issue:rw و repo-pr:rw و repo-notes:rw و repo-code:r. بدون account-profile:r لن يخبر CNB عن المستخدم الذي يخصه الرمز، ولن يمكن إضافة الحساب.",
+    "cnbNoAccounts": "لا يوجد حساب CNB بعد",
     "noAccounts": "لا توجد حسابات GitHub مكوّنة.",
     "addAccount": "إضافة حساب",
     "serverUrl": "عنوان الخادم",
@@ -6956,7 +6960,7 @@
     "noRemote": "لا يحتوي هذا المجلد على remote معروف (origin)",
     "errors": {
       "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع.",
-      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab و Gitea فقط، و{host} لا يُعرَف كأي منها. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab أو Gitea أو Forgejo، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
+      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab و Gitea و CNB فقط، و{host} لا يُعرَف كأي منها. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab أو Gitea أو Forgejo أو CNB، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
       "wrongForge": "{host} هو {provider}، وليس المنصة التي كان مصنّفًا ضمنها. تم تصحيح الاكتشاف — أعد التحميل للمحاولة مجددًا."
     },
     "addAccount": "إضافة حساب",

@@ -194,7 +194,7 @@ function pillSelectClass(compact: boolean): string {
   )
 }
 
-/** The four orders GitHub and GitLab can honour, in the order they are offered.
+/** The four orders the workbench offers, in the order they are offered.
  *  `as const` so the label keys stay literal and next-intl can check them. */
 const SORT_OPTIONS = [
   { value: "newest", labelKey: "sortNewest" },
@@ -215,6 +215,31 @@ const SORT_OPTIONS = [
  *  `belongsOnPage` keeps placing a new issue where it will actually appear. */
 function canSort(provider: ForgeProviderId | undefined): boolean {
   return provider !== "gitea"
+}
+
+/** The orders this forge can actually honour.
+ *
+ *  CNB's `order_by` takes `created_at`, `-created_at` and `-updated_at` — but
+ *  no ASCENDING updated order, so `least_recently_updated` is not offered
+ *  there rather than shown and ignored. Everything else gets all four. */
+function sortOptionsFor(provider: ForgeProviderId | undefined) {
+  if (provider === "cnb") {
+    return SORT_OPTIONS.filter((o) => o.value !== "least_recently_updated")
+  }
+  return SORT_OPTIONS
+}
+
+/** Whether the CURRENT TAB can be filtered by free text.
+ *
+ *  CNB's OpenAPI takes a `keyword` on issues only — its merge-request list has
+ *  no such parameter. A search box there would be a control whose input is
+ *  dropped on the floor, so it is not shown. Everything else searches both
+ *  tabs. */
+function supportsSearch(
+  provider: ForgeProviderId | undefined,
+  tab: ForgeTab
+): boolean {
+  return !(provider === "cnb" && tab === "prs")
 }
 
 /** The raw thrown value, boxed. Boxed for two reasons: `setState` would CALL a
@@ -1051,6 +1076,25 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     return () => clearTimeout(handle)
   }, [searchInput, search])
 
+  // A tab that cannot be searched must not keep a query it cannot apply: the
+  // box is gone, so text left behind would either do nothing (a list that
+  // ignores what the control says) or come back as a filter the moment the
+  // other tab is reopened, with no visible reason for it.
+  useEffect(() => {
+    if (supportsSearch(remote?.provider, tab)) return
+    setSearchInput("")
+    setSearch("")
+  }, [remote?.provider, tab])
+
+  // Same rule for the order: a forge that cannot honour the current one (a
+  // folder switch from GitLab to CNB, say) falls back to the default rather
+  // than leaving the select showing a choice its list no longer contains.
+  useEffect(() => {
+    if (sortOptionsFor(remote?.provider).some((o) => o.value === sort)) return
+    setPage(1)
+    setSort("newest")
+  }, [remote?.provider, sort])
+
   // A different repository has a different label vocabulary, so a selection
   // made against the old one would filter by labels that may not exist here.
   // Derived during render rather than in an effect: this has to catch the
@@ -1465,7 +1509,12 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     }
   }, [error, tRoot])
 
-  const changeNounKey = remote?.provider === "gitlab" ? "tabMrs" : "tabPrs"
+  // GitLab and CNB call the same thing a merge request; GitHub and Gitea a
+  // pull request.
+  const changeNounKey =
+    remote?.provider === "gitlab" || remote?.provider === "cnb"
+      ? "tabMrs"
+      : "tabPrs"
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1580,41 +1629,43 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
               pills after it narrow whatever it caught. A whole row to itself
               on a phone (`w-full` forces the wrap) — sharing one would leave
               too little of it to read back what you typed. */}
-          <InputGroup
-            className={cn(
-              "w-full rounded-full",
-              embedded ? "h-7" : "h-8 sm:w-64"
-            )}
-          >
-            <InputGroupAddon align="inline-start">
-              <Search className="size-3.5" aria-hidden />
-            </InputGroupAddon>
-            <InputGroupInput
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape" && searchInput !== "") {
-                  e.preventDefault()
-                  setSearchInput("")
-                }
-              }}
-              placeholder={t("searchPlaceholder")}
-              aria-label={t("searchPlaceholder")}
-              className={embedded ? "h-7 text-xs" : "h-8 text-[0.8125rem]"}
-            />
-            {searchInput !== "" ? (
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton
-                  size="icon-xs"
-                  aria-label={t("clearSearch")}
-                  title={t("clearSearch")}
-                  onClick={() => setSearchInput("")}
-                >
-                  <X className="size-3" />
-                </InputGroupButton>
+          {supportsSearch(remote?.provider, tab) ? (
+            <InputGroup
+              className={cn(
+                "w-full rounded-full",
+                embedded ? "h-7" : "h-8 sm:w-64"
+              )}
+            >
+              <InputGroupAddon align="inline-start">
+                <Search className="size-3.5" aria-hidden />
               </InputGroupAddon>
-            ) : null}
-          </InputGroup>
+              <InputGroupInput
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && searchInput !== "") {
+                    e.preventDefault()
+                    setSearchInput("")
+                  }
+                }}
+                placeholder={t("searchPlaceholder")}
+                aria-label={t("searchPlaceholder")}
+                className={embedded ? "h-7 text-xs" : "h-8 text-[0.8125rem]"}
+              />
+              {searchInput !== "" ? (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label={t("clearSearch")}
+                    title={t("clearSearch")}
+                    onClick={() => setSearchInput("")}
+                  >
+                    <X className="size-3" />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              ) : null}
+            </InputGroup>
+          ) : null}
 
           {/* Was a button whose LABEL changed on click, which reads equally as
               "you are here" and "go here". Named options remove the guess —
@@ -1695,7 +1746,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                {SORT_OPTIONS.map((option) => (
+                {sortOptionsFor(remote?.provider).map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {t(option.labelKey)}
                   </SelectItem>
@@ -1817,6 +1868,9 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
         // list was fetched with, so a folder switch (which closes the panel —
         // see the reset effect above) cannot leave the two disagreeing.
         folderId={effectiveFolderId}
+        // CNB's issue list carries no description; the panel reads the item
+        // itself when it opens. Every other forge ships the body with the row.
+        issueBodyOnDemand={remote?.provider === "cnb"}
         onOpenChange={(open) => {
           if (!open) setDetailRow(null)
         }}

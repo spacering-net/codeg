@@ -382,6 +382,10 @@
     "giteaDescription": "Gestiona las cuentas de Gitea (y Forgejo) para autenticación. Los tokens se almacenan localmente.",
     "giteaTokenHint": "Crea un token de acceso con los ámbitos write:repository, write:issue y read:user en Gitea → Settings → Applications.",
     "giteaNoAccounts": "Aún no hay ninguna cuenta de Gitea",
+    "cnbTitle": "Cuentas de CNB",
+    "cnbDescription": "Gestiona cuentas de CNB (cnb.cool) para la autenticación. Los tokens se guardan localmente.",
+    "cnbTokenHint": "Crea un token de acceso en CNB → Configuración personal → Tokens de acceso con los permisos account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw y repo-code:r. Sin account-profile:r, CNB no indica a qué usuario pertenece el token y la cuenta no se puede añadir.",
+    "cnbNoAccounts": "Aún no hay ninguna cuenta de CNB",
     "noAccounts": "No hay cuentas de GitHub configuradas.",
     "addAccount": "Añadir cuenta",
     "serverUrl": "URL del servidor",
@@ -6956,7 +6960,7 @@
     "noRemote": "Esta carpeta no tiene un remoto reconocible (origin)",
     "errors": {
       "noAccount": "No hay ninguna cuenta de {provider} configurada para {host}. Añade una en Configuración → Control de versiones para cargar este repositorio.",
-      "unsupportedHost": "El panel del repositorio solo admite GitHub, GitLab y Gitea, y {host} no se reconoce como ninguno de ellos. Si es una instancia autoalojada de GitHub Enterprise, GitLab, Gitea o Forgejo, añade una cuenta para ella en Configuración → Control de versiones.",
+      "unsupportedHost": "El panel del repositorio solo admite GitHub, GitLab, Gitea y CNB, y {host} no se reconoce como ninguno de ellos. Si es una instancia autoalojada de GitHub Enterprise, GitLab, Gitea, Forgejo o CNB, añade una cuenta para ella en Configuración → Control de versiones.",
       "wrongForge": "{host} es un {provider}, no la forja con la que estaba clasificado. La detección se ha corregido: vuelve a cargar para reintentar."
     },
     "addAccount": "Añadir una cuenta",

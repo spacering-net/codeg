@@ -220,7 +220,7 @@ pub struct HostProfile {
     /// `(github, host, owner/repo)` triple that no GitHub API can answer, and
     /// the panel used to report that as an account or API failure. Whoever is
     /// about to spend a request on a host checks this first and says "only
-    /// GitHub, GitLab and Gitea are supported" instead.
+    /// GitHub, GitLab, Gitea and CNB are supported" instead.
     ///
     /// Deliberately OPTIMISTIC about a configured host, and the reason is that
     /// a provider-less account is ambiguous by construction. Two flows write
@@ -358,6 +358,13 @@ pub fn provider_from_host_name(server_host: &str) -> Option<ForgeProvider> {
     }
     if names("gitea") || names("forgejo") {
         return Some(ForgeProvider::Gitea);
+    }
+    // `cnb.cool` and its `api.cnb.cool` API host. The label is `cnb`, so a
+    // host like `cnb.example.com` would match too — there is no other
+    // platform that spells it that way, and the alternative is falling back
+    // to GitHub, which cannot answer a single CNB request.
+    if names("cnb") {
+        return Some(ForgeProvider::Cnb);
     }
     None
 }
@@ -702,11 +709,22 @@ fn api_base_for(provider: ForgeProvider, host: &str, server_url: &str) -> String
     if provider == ForgeProvider::GitHub && host == "github.com" {
         return "https://api.github.com".to_string();
     }
+    // CNB serves its OpenAPI from a dedicated host, not under the web origin:
+    // `cnb.cool` is the UI and `api.cnb.cool` is the API. Anything else is
+    // treated as an install that mounts the API under `/api`.
+    if provider == ForgeProvider::Cnb {
+        return if host == "cnb.cool" {
+            "https://api.cnb.cool".to_string()
+        } else {
+            format!("{}/api", server_origin(host, server_url))
+        };
+    }
     let origin = server_origin(host, server_url);
     match provider {
         ForgeProvider::GitHub => format!("{origin}/api/v3"),
         ForgeProvider::GitLab => format!("{origin}/api/v4"),
         ForgeProvider::Gitea => format!("{origin}/api/v1"),
+        ForgeProvider::Cnb => unreachable!("handled above"),
     }
 }
 

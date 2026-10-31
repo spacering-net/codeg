@@ -382,6 +382,10 @@
     "giteaDescription": "管理用於身份驗證的 Gitea（及 Forgejo）帳號。權杖儲存在本機。",
     "giteaTokenHint": "在 Gitea → Settings → Applications 中建立具備 write:repository、write:issue 與 read:user 權限的存取權杖。",
     "giteaNoAccounts": "還沒有 Gitea 帳號",
+    "cnbTitle": "CNB 帳號",
+    "cnbDescription": "管理用於身分驗證的 CNB（cnb.cool）帳號。權杖儲存在本機。",
+    "cnbTokenHint": "在 CNB 的「個人設定 → 存取權杖」中建立存取權杖，勾選 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 與 repo-code:r 權限。缺少 account-profile:r 時，CNB 不會回傳權杖所屬使用者，帳號將無法新增。",
+    "cnbNoAccounts": "還沒有 CNB 帳號",
     "noAccounts": "尚未設定 GitHub 帳號。",
     "addAccount": "新增帳號",
     "serverUrl": "伺服器網址",
@@ -6956,7 +6960,7 @@
     "noRemote": "該資料夾沒有可識別的程式碼託管遠端（origin）",
     "errors": {
       "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。",
-      "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab 與 Gitea，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
+      "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab、Gitea 與 CNB，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
       "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。"
     },
     "addAccount": "新增帳號",

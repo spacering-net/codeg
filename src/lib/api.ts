@@ -2199,6 +2199,14 @@ export async function validateGiteaToken(
   return getTransport().call("validate_gitea_token", { serverUrl, token })
 }
 
+/** CNB is its own API dialect: `https://api.cnb.cool` with a `Bearer` token. */
+export async function validateCnbToken(
+  serverUrl: string,
+  token: string
+): Promise<GitHubTokenValidation> {
+  return getTransport().call("validate_cnb_token", { serverUrl, token })
+}
+
 export async function updateGitHubAccounts(
   settings: GitHubAccountsSettings
 ): Promise<GitHubAccountsSettings> {
@@ -6256,6 +6264,24 @@ export async function forgeListIssues(
       perPage: query.perPage ?? DEFAULT_FORGE_PAGE_SIZE,
       accountId: query.accountId ?? null,
     },
+  })
+}
+
+/** One issue, read in full — its description included.
+ *
+ *  CNB's issue LIST omits the body (its pull list carries one), so the detail
+ *  panel asks for the item itself the moment it opens — one request, paid only
+ *  for the item somebody is reading, the same trade the comment thread makes.
+ *  No other forge takes this path: their list rows already carry the body. */
+export async function forgeIssueDetail(
+  folderId: number,
+  number: number,
+  accountId?: string | null
+): Promise<ForgeIssueRow> {
+  return getTransport().call("forge_issue_detail", {
+    folderId,
+    number,
+    accountId: accountId ?? null,
   })
 }
 

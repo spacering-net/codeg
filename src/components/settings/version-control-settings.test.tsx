@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
   validateGitHubToken: vi.fn(),
   validateGitLabToken: vi.fn(),
   validateGiteaToken: vi.fn(),
+  validateCnbToken: vi.fn(),
   getAccountToken: vi.fn(),
   deleteAccountToken: vi.fn(),
   saveAccountToken: vi.fn(),

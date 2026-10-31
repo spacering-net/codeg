@@ -433,7 +433,7 @@ describe("ForgePage on a host that is neither forge", () => {
 
     expect(
       await screen.findByText(
-        "The repository panel supports GitHub, GitLab and Gitea only, and gitee.com is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea or Forgejo instance, add an account for it under Settings → Version Control."
+        "The repository panel supports GitHub, GitLab, Gitea and CNB only, and gitee.com is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea, Forgejo or CNB instance, add an account for it under Settings → Version Control."
       )
     ).toBeInTheDocument()
     // No request is worth spending on a host no credential of ours fits — not

@@ -382,6 +382,10 @@
     "giteaDescription": "Gérez les comptes Gitea (et Forgejo) pour l'authentification. Les jetons sont stockés localement.",
     "giteaTokenHint": "Créez un jeton d'accès avec les portées write:repository, write:issue et read:user dans Gitea → Settings → Applications.",
     "giteaNoAccounts": "Aucun compte Gitea pour l'instant",
+    "cnbTitle": "Comptes CNB",
+    "cnbDescription": "Gérez les comptes CNB (cnb.cool) pour l'authentification. Les jetons sont stockés localement.",
+    "cnbTokenHint": "Créez un jeton d'accès dans CNB → Paramètres personnels → Jetons d'accès avec les portées account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw et repo-code:r. Sans account-profile:r, CNB n'indique pas à quel utilisateur appartient le jeton et le compte ne peut pas être ajouté.",
+    "cnbNoAccounts": "Aucun compte CNB pour l'instant",
     "noAccounts": "Aucun compte GitHub configuré.",
     "addAccount": "Ajouter un compte",
     "serverUrl": "URL du serveur",
@@ -6956,7 +6960,7 @@
     "noRemote": "Ce dossier n'a pas de remote reconnaissable (origin)",
     "errors": {
       "noAccount": "Aucun compte {provider} n'est configuré pour {host}. Ajoutez-en un dans Paramètres → Contrôle de version pour charger ce dépôt.",
-      "unsupportedHost": "Le panneau du dépôt ne prend en charge que GitHub, GitLab et Gitea, et {host} n'est reconnu comme aucun d'entre eux. S'il s'agit d'une instance auto-hébergée de GitHub Enterprise, GitLab, Gitea ou Forgejo, ajoutez-y un compte dans Paramètres → Contrôle de version.",
+      "unsupportedHost": "Le panneau du dépôt ne prend en charge que GitHub, GitLab, Gitea et CNB, et {host} n'est reconnu comme aucun d'entre eux. S'il s'agit d'une instance auto-hébergée de GitHub Enterprise, GitLab, Gitea, Forgejo ou CNB, ajoutez-y un compte dans Paramètres → Contrôle de version.",
       "wrongForge": "{host} est un {provider}, et non la forge sous laquelle il était classé. La détection a été corrigée — rechargez pour réessayer."
     },
     "addAccount": "Ajouter un compte",

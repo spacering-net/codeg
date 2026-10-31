@@ -618,7 +618,35 @@ pub async fn forge_list_issues_core(
         ForgeProvider::GitHub => forge::github::list_issues(&auth, &request).await?,
         ForgeProvider::GitLab => forge::gitlab::list_issues(&auth, &request).await?,
         ForgeProvider::Gitea => forge::gitea::list_issues(&auth, &request).await?,
+        ForgeProvider::Cnb => forge::cnb::list_issues(&auth, &request).await?,
     })
+}
+
+/// One issue, read in full — for the description its list row does not carry.
+///
+/// Only CNB needs this: its issue list omits `body` (its pull list carries
+/// one), so the panel asks for the item itself the moment it opens, the same
+/// way it asks for the comment thread. Every other forge ships the body on the
+/// row and never calls this, which is why no other arm is implemented — one
+/// arriving is a wiring mistake and says so rather than returning a row that
+/// looks like an issue with no description.
+pub async fn forge_issue_detail_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    number: i64,
+    account_id: Option<String>,
+) -> Result<forge::ForgeIssueRow, AppCommandError> {
+    let (remote, auth) = resolve_folder_repo(db, folder_id, account_id.as_deref()).await?;
+    match remote.provider {
+        ForgeProvider::Cnb => {
+            Ok(forge::cnb::issue_detail(&auth, &remote.owner_repo, number).await?)
+        }
+        other => Err(ForgeError::Invalid(format!(
+            "{} serves the issue body with its list rows; only CNB needs a detail read",
+            other.display_name()
+        ))
+        .into()),
+    }
 }
 
 /// One tab's item count under a set of filters — a badge on the workbench's
@@ -651,6 +679,7 @@ pub async fn forge_tab_count_core(
         ForgeProvider::GitHub => forge::github::list_issues(&auth, &request).await,
         ForgeProvider::GitLab => forge::gitlab::list_issues(&auth, &request).await,
         ForgeProvider::Gitea => forge::gitea::list_issues(&auth, &request).await,
+        ForgeProvider::Cnb => forge::cnb::list_issues(&auth, &request).await,
     };
     Ok(listed.ok().and_then(|page| page.trustworthy_count()))
 }
@@ -692,6 +721,12 @@ pub async fn forge_list_comments_core(
         ForgeProvider::Gitea => {
             forge::gitea::list_comments(&auth, &remote.owner_repo, number, page, per_page).await?
         }
+        // CNB keeps issues and merge requests in separate collections, so the
+        // kind picks the endpoint exactly as it does on GitLab.
+        ForgeProvider::Cnb => {
+            forge::cnb::list_comments(&auth, &remote.owner_repo, kind, number, page, per_page)
+                .await?
+        }
     })
 }
 
@@ -728,6 +763,9 @@ pub async fn forge_create_comment_core(
         ForgeProvider::Gitea => {
             forge::gitea::create_comment(&auth, &remote.owner_repo, number, &body).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::create_comment(&auth, &remote.owner_repo, kind, number, &body).await?
+        }
     })
 }
 
@@ -755,6 +793,9 @@ pub async fn forge_set_item_state_core(
         ForgeProvider::Gitea => {
             forge::gitea::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
+        }
     })
 }
 
@@ -779,6 +820,9 @@ pub async fn forge_create_issue_core(
         }
         ForgeProvider::Gitea => {
             forge::gitea::create_issue(&auth, &remote.owner_repo, &resolved).await?
+        }
+        ForgeProvider::Cnb => {
+            forge::cnb::create_issue(&auth, &remote.owner_repo, &resolved).await?
         }
     })
 }
@@ -807,6 +851,9 @@ pub async fn forge_change_detail_core(
         ForgeProvider::Gitea => {
             forge::gitea::change_detail(&auth, &remote.owner_repo, number).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::change_detail(&auth, &remote.owner_repo, number).await?
+        }
     })
 }
 
@@ -834,6 +881,10 @@ pub async fn forge_change_files_core(
         }
         ForgeProvider::Gitea => {
             forge::gitea::list_change_files(&auth, &remote.owner_repo, number, page, per_page)
+                .await?
+        }
+        ForgeProvider::Cnb => {
+            forge::cnb::list_change_files(&auth, &remote.owner_repo, number, page, per_page)
                 .await?
         }
     })
@@ -876,6 +927,7 @@ pub async fn forge_merge_options_core(
         ForgeProvider::GitHub => forge::github::merge_options(&auth, &remote.owner_repo).await?,
         ForgeProvider::GitLab => forge::gitlab::merge_options(&auth, &remote.owner_repo).await?,
         ForgeProvider::Gitea => forge::gitea::merge_options(&auth, &remote.owner_repo).await?,
+        ForgeProvider::Cnb => forge::cnb::merge_options(&auth, &remote.owner_repo).await?,
     })
 }
 
@@ -909,6 +961,9 @@ pub async fn forge_merge_change_core(
         ForgeProvider::Gitea => {
             forge::gitea::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
+        }
     })
 }
 
@@ -926,6 +981,7 @@ pub async fn forge_list_labels_core(
         ForgeProvider::GitHub => forge::github::list_labels(&auth, &remote.owner_repo).await?,
         ForgeProvider::GitLab => forge::gitlab::list_labels(&auth, &remote.owner_repo).await?,
         ForgeProvider::Gitea => forge::gitea::list_labels(&auth, &remote.owner_repo).await?,
+        ForgeProvider::Cnb => forge::cnb::list_labels(&auth, &remote.owner_repo).await?,
     })
 }
 
@@ -1027,6 +1083,9 @@ pub async fn create_forge_task(
             }
             ForgeProvider::Gitea => {
                 forge::gitea::get_pull(&auth, &owner_repo, source.number).await?
+            }
+            ForgeProvider::Cnb => {
+                forge::cnb::get_pull(&auth, &owner_repo, source.number).await?
             }
         };
         // Refused here, at the only moment the user can still choose something
@@ -1295,6 +1354,17 @@ pub async fn forge_list_issues(
     query: ListFilters,
 ) -> Result<ForgeIssueList, AppCommandError> {
     forge_list_issues_core(&db, folder_id, query).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_issue_detail(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    number: i64,
+    account_id: Option<String>,
+) -> Result<forge::ForgeIssueRow, AppCommandError> {
+    forge_issue_detail_core(&db, folder_id, number, account_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

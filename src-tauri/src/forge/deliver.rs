@@ -29,8 +29,8 @@ use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
 use super::{
-    gitea, github, gitlab, urlencode_query, web_origin, DeliveryTarget, ForgeError, ForgeItemKind,
-    ForgeProvider,
+    cnb, gitea, github, gitlab, urlencode_query, web_origin, DeliveryTarget, ForgeError,
+    ForgeItemKind, ForgeProvider,
 };
 use crate::app_error::AppCommandError;
 
@@ -373,6 +373,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::Gitea => {
                 gitea::find_pulls(&auth, ctx.owner_repo, head_branch).await
             }
+            ForgeProvider::Cnb => cnb::find_pulls(&auth, ctx.owner_repo, head_branch).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -389,6 +390,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
                 gitlab::create_merge_request(&auth, ctx.owner_repo, req).await
             }
             ForgeProvider::Gitea => gitea::create_pull(&auth, ctx.owner_repo, req).await,
+            ForgeProvider::Cnb => cnb::create_pull(&auth, ctx.owner_repo, req).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -401,6 +403,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
                 gitlab::get_merge_request(&auth, ctx.owner_repo, number).await
             }
             ForgeProvider::Gitea => gitea::get_pull(&auth, ctx.owner_repo, number).await,
+            ForgeProvider::Cnb => cnb::get_pull(&auth, ctx.owner_repo, number).await,
         }
         .map_err(|e| e.to_string())
     }
@@ -417,7 +420,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
             .await
             .map_err(|e| e.message)?
             .ok_or_else(|| {
-                "this project has no `origin` remote on GitHub, GitLab or Gitea to deliver to"
+                "this project has no `origin` remote on GitHub, GitLab, Gitea or CNB to deliver to"
                     .to_string()
             })?;
         if !remote.supported {
@@ -485,6 +488,9 @@ impl ForgeDeliveryApi for ForgeDelivery {
             // No kind here either: a pull request is an issue at Gitea, exactly
             // as at GitHub, and one collection serves both.
             ForgeProvider::Gitea => gitea::create_comment(&auth, ctx.owner_repo, number, body)
+                .await
+                .map(|comment| comment.html_url.unwrap_or_default()),
+            ForgeProvider::Cnb => cnb::create_comment(&auth, ctx.owner_repo, kind, number, body)
                 .await
                 .map(|comment| comment.html_url.unwrap_or_default()),
         }
@@ -775,6 +781,9 @@ fn with_credentials(cmd: &mut tokio::process::Command, ctx: &DeliveryCtx<'_>, au
                 match ctx.provider {
                     ForgeProvider::GitHub | ForgeProvider::Gitea => "x-access-token",
                     ForgeProvider::GitLab => "oauth2",
+                    // CNB's git server accepts the access token as the
+                    // password; its own credential helper sends the account name.
+                    ForgeProvider::Cnb => "cnb",
                 }
             } else {
                 auth.username.trim()

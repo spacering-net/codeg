@@ -181,6 +181,15 @@ pub async fn validate_gitea_token(
     Ok(Json(result))
 }
 
+/// CNB's OpenAPI lives on its own host and takes a `Bearer` token; the
+/// response shape is CNB's own (`username`/`nickname`/`avatar`).
+pub async fn validate_cnb_token(
+    Json(params): Json<ValidateGitHubTokenParams>,
+) -> Result<Json<GitHubTokenValidation>, AppCommandError> {
+    let result = vc_commands::validate_cnb_token(params.server_url, params.token).await?;
+    Ok(Json(result))
+}
+
 // ---------------------------------------------------------------------------
 // Keyring token management
 // ---------------------------------------------------------------------------
