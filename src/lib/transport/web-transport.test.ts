@@ -87,6 +87,64 @@ function connectReady() {
 }
 
 const ok200 = () => ({ status: 200, ok: true, json: async () => ({}) })
+
+describe("额度接口与统一认证的兼容性", () => {
+  it.each([true, false])(
+    "GET 请求保留代理认证头（令牌存在：%s）",
+    async (hasToken) => {
+      if (!hasToken) localStorage.removeItem("codeg_token")
+      fetchMock.mockResolvedValue({ ...ok200(), text: async () => "{}" })
+      const t = new WebTransport("http://localhost")
+
+      await t.call(
+        "get_agent_quota",
+        {},
+        {
+          webPath: "/api/quota/codex",
+          webMethod: "GET",
+        }
+      )
+
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe("http://localhost/api/quota/codex")
+      expect(init.method).toBe("GET")
+      expect(init.body).toBeUndefined()
+      expect(init.headers).not.toHaveProperty("Content-Type")
+      expect(init.headers["X-Requested-With"]).toBe("XMLHttpRequest")
+      if (hasToken) expect(init.headers.Authorization).toBe("Bearer tok")
+      else expect(init.headers).not.toHaveProperty("Authorization")
+      t.destroy()
+    }
+  )
+
+  it("刷新额度保留 POST 请求体和统一认证头", async () => {
+    fetchMock.mockResolvedValue({ ...ok200(), text: async () => "{}" })
+    const t = new WebTransport("http://localhost")
+
+    await t.call(
+      "refresh_agent_quota",
+      {},
+      {
+        webPath: "/api/quota/codex",
+        webMethod: "POST",
+      }
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost/api/quota/codex",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      })
+    )
+    t.destroy()
+  })
+})
 // Codeg's own 401 carries its bearer challenge (`web/auth.rs`); a 401 from an
 // identity-aware proxy in front of it carries the proxy's challenge instead.
 const resp401 = () => ({

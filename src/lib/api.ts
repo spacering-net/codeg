@@ -22,6 +22,7 @@ import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
+  AgentQuotaInfo,
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
@@ -6574,6 +6575,28 @@ export async function forgeSettingsSet(
   settings: ForgePanelSettings | null
 ): Promise<ForgeSettingsStore> {
   return getTransport().call("forge_settings_set", { folderId, settings })
+}
+
+// ─── Agent Quota ─────────────────────────────────────────────────────────────
+
+export async function getAgentQuota(
+  agentType: string
+): Promise<AgentQuotaInfo | null> {
+  return getTransport().call<AgentQuotaInfo | null>(
+    "get_agent_quota",
+    { agentType },
+    { webPath: `/api/quota/${agentType}`, webMethod: "GET" }
+  )
+}
+
+export async function refreshAgentQuota(
+  agentType: string
+): Promise<AgentQuotaInfo | null> {
+  return getTransport().call<AgentQuotaInfo | null>(
+    "refresh_agent_quota",
+    { agentType },
+    { webPath: `/api/quota/${agentType}`, webMethod: "POST" }
+  )
 }
 
 /** Where auto-processing stands for one folder: the last scan's report, the
