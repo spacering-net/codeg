@@ -81,7 +81,7 @@ pub fn spawn_daily_report_scheduler(
 
                 let send_result = manager.send_to_channel(ch.id, &message).await;
                 let (status, error_detail) = match &send_result {
-                    Ok(_) => ("sent", None),
+                    Ok(outcome) => (outcome.status_str(), None),
                     Err(e) => ("failed", Some(e.to_string())),
                 };
 
