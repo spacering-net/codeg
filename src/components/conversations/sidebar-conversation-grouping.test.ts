@@ -1502,7 +1502,7 @@ describe("selectRecentConversationsWithReuse", () => {
     expect(out).toEqual([])
   })
 
-  it("mixes folder and chat conversations, newest first, excluding pinned", () => {
+  it("keeps pinned conversations, newest first, alongside unpinned ones", () => {
     const folderConv = conv(1, 10)
     const chatConv = conv(2, 99, { kind: "chat" }) // higher id → later created_at
     const pinned = conv(3, 10, { pinned_at: new Date(5000).toISOString() })
@@ -1512,8 +1512,42 @@ describe("selectRecentConversationsWithReuse", () => {
       open,
       []
     )
-    // Pinned lives in its own section; the other two interleave by recency.
-    expect(out.map((c) => c.id)).toEqual([2, 1])
+    // Pinning is a bookmark, not a retirement: the row stays in the activity
+    // list (its Recent copy) as well as the Pinned section, so a user who pins
+    // something does not lose it from the one list they scan by time.
+    expect(out.map((c) => c.id)).toEqual([3, 2, 1])
+  })
+
+  it("admits a pinned conversation even when its folder is closed", () => {
+    // The Pinned section ignores folder reachability (a pin is an explicit
+    // "keep this handy"), so Recent must agree rather than disagree about the
+    // row the user deliberately kept.
+    const pinnedInClosedFolder = conv(1, 77, {
+      pinned_at: new Date(5000).toISOString(),
+    })
+    const unpinnedInClosedFolder = conv(2, 77)
+    const out = selectRecentConversationsWithReuse(
+      [pinnedInClosedFolder, unpinnedInClosedFolder],
+      true,
+      open,
+      []
+    )
+    expect(out.map((c) => c.id)).toEqual([1])
+  })
+
+  it("keeps a pinned conversation visible even when completed ones are hidden", () => {
+    const pinnedDone = conv(1, 10, {
+      status: "completed",
+      pinned_at: new Date(5000).toISOString(),
+    })
+    const unpinnedDone = conv(2, 10, { status: "completed" })
+    const out = selectRecentConversationsWithReuse(
+      [pinnedDone, unpinnedDone],
+      false,
+      open,
+      []
+    )
+    expect(out.map((c) => c.id)).toEqual([1])
   })
 
   it("drops folder conversations whose folder is closed, but never chats", () => {
