@@ -680,6 +680,7 @@ export async function acpUpdateAgentConfig(
   agentType: AgentType,
   params: {
     config_json?: string | null
+    system_instructions_content?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
     /** The config.toml text the draft was loaded from: a key codeg manages
@@ -708,6 +709,7 @@ export async function acpUpdateAgentConfig(
   return getTransport().call("acp_update_agent_config", {
     agentType,
     configJson: params.config_json ?? null,
+    systemInstructionsContent: params.system_instructions_content ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
     codexConfigTomlBaseline: params.codex_config_toml_baseline ?? null,

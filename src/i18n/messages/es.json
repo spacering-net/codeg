@@ -763,6 +763,12 @@
     "emptyNoAgent": "No hay agentes disponibles.",
     "configManagement": "Gestión de configuración",
     "envVars": "Variables de entorno",
+    "systemInstructions": {
+      "label": "Instrucciones del sistema",
+      "hint": "Configura las instrucciones globales del sistema para este agente y guárdalas en su archivo global de instrucciones.",
+      "placeholder": "Introduce instrucciones globales del sistema en formato Markdown, como definiciones de roles, directrices y normas de programación...",
+      "filePath": "Ruta del archivo"
+    },
     "hostTools": {
       "label": "Dejar que el agente gestione archivos y comandos",
       "description": "codeg deja de atender el acceso a archivos y los comandos de terminal, de modo que el agente los ejecuta en su propio proceso, donde sí se aplican su sandbox y sus reglas de permisos. También se desactiva la delegación a otros agentes, ya que devolvería ese mismo trabajo a codeg. codeg no añade ningún sandbox propio, así que actívalo solo si el agente tiene uno configurado."
@@ -890,6 +896,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "Guardar instrucciones del sistema",
       "dragSort": "Arrastrar para reordenar",
       "dragSortAgent": "Arrastrar para reordenar {name}",
       "refreshCheck": "Actualizar comprobación",
@@ -1607,6 +1614,8 @@
       "authRecoveredStructured": "auth.json es inválido; se restableció a configuración estructurada"
     },
     "toasts": {
+      "systemInstructionsSaved": "Instrucciones del sistema guardadas",
+      "saveSystemInstructionsFailed": "No se pudieron guardar las instrucciones del sistema",
       "agentActionCompleted": "{name} {action} completado",
       "agentActionFailed": "{name} {action} falló",
       "localVersion": "Versión local: {version}",

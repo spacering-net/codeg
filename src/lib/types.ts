@@ -3924,6 +3924,8 @@ export interface AcpAgentInfo {
   host_tools_agent_mode: boolean
   config_json: string | null
   config_file_path: string | null
+  system_instructions_file_path?: string | null
+  system_instructions_content?: string | null
   codex_auth_json: string | null
   codex_config_toml: string | null
   /** Compact structured codex model-catalog source (the custom-model list),

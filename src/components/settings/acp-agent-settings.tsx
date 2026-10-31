@@ -237,6 +237,7 @@ type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number]
 interface AgentDraft {
   enabled: boolean
   envText: string
+  systemInstructionsText: string
   configText: string
   apiBaseUrl: string
   apiKey: string
@@ -3921,6 +3922,7 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
   return {
     enabled: agent.enabled,
     envText,
+    systemInstructionsText: agent.system_instructions_content ?? "",
     configText,
     apiBaseUrl:
       agent.agent_type === "hermes"
@@ -4887,6 +4889,9 @@ export function AcpAgentSettings() {
   const [savingConfig, setSavingConfig] = useState<
     Partial<Record<AgentType, boolean>>
   >({})
+  const [savingInstructions, setSavingInstructions] = useState<
+    Partial<Record<AgentType, boolean>>
+  >({})
   const [modelProviders, setModelProviders] = useState<ModelProviderInfo[]>([])
   const [uninstallConfirmAgent, setUninstallConfirmAgent] =
     useState<AcpAgentInfo | null>(null)
@@ -5378,11 +5383,46 @@ export function AcpAgentSettings() {
     [reportAffectedSessions]
   )
 
+  const persistSystemInstructions = useCallback(
+    async (agentType: AgentType, content: string) => {
+      setSavingInstructions((prev) => ({ ...prev, [agentType]: true }))
+      try {
+        const affected = await acpUpdateAgentConfig(agentType, {
+          system_instructions_content: content,
+        })
+        reportAffectedSessions(affected)
+        setAgents((prev) =>
+          prev.map((agent) =>
+            agent.agent_type === agentType
+              ? {
+                  ...agent,
+                  system_instructions_content: content,
+                }
+              : agent
+          )
+        )
+        toast.success(t("toasts.systemInstructionsSaved"), {
+          description: t("toasts.configSavedHint"),
+        })
+      } catch (err) {
+        console.error("[Settings] save system instructions failed:", err)
+        const message = toErrorMessage(err)
+        toast.error(t("toasts.saveSystemInstructionsFailed"), {
+          description: message,
+        })
+      } finally {
+        setSavingInstructions((prev) => ({ ...prev, [agentType]: false }))
+      }
+    },
+    [reportAffectedSessions, t]
+  )
+
   const persistConfig = useCallback(
     async (
       agentType: AgentType,
       configText: string,
       options?: {
+        systemInstructionsText?: string
         codexAuthJsonText?: string
         codexConfigTomlText?: string
         codexConfigTomlBaseline?: string
@@ -5434,6 +5474,10 @@ export function AcpAgentSettings() {
       try {
         const affected = await acpUpdateAgentConfig(agentType, {
           config_json: configForPersist || null,
+          system_instructions_content:
+            typeof options?.systemInstructionsText === "string"
+              ? options.systemInstructionsText
+              : null,
           codex_auth_json:
             typeof codexAuthJsonText === "string" ? codexAuthJsonText : null,
           codex_config_toml:
@@ -5462,6 +5506,10 @@ export function AcpAgentSettings() {
               ? {
                   ...agent,
                   config_json: normalizedConfig || null,
+                  system_instructions_content:
+                    typeof options?.systemInstructionsText === "string"
+                      ? options.systemInstructionsText
+                      : agent.system_instructions_content,
                   codex_auth_json:
                     typeof codexAuthJsonText === "string"
                       ? codexAuthJsonText
@@ -6284,6 +6332,9 @@ export function AcpAgentSettings() {
     : false
   const selectedIsSavingConfig = selectedAgent
     ? Boolean(savingConfig[selectedAgent.agent_type])
+    : false
+  const selectedIsSavingInstructions = selectedAgent
+    ? Boolean(savingInstructions[selectedAgent.agent_type])
     : false
   const selectedAgentKind = selectedAgent?.agent_type ?? null
 
@@ -8884,6 +8935,63 @@ export function AcpAgentSettings() {
                     </Button>
                   </div>
                 </div>
+
+                {selectedAgent.system_instructions_file_path && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-medium">
+                        {t("systemInstructions.label")}
+                      </label>
+                      <span
+                        className="text-2xs text-muted-foreground truncate max-w-[65%]"
+                        title={selectedAgent.system_instructions_file_path}
+                      >
+                        {selectedAgent.system_instructions_file_path}
+                      </span>
+                    </div>
+                    <p className="text-2xs text-muted-foreground">
+                      {t("systemInstructions.hint")}
+                    </p>
+                    <div className="relative group">
+                      <Textarea
+                        value={selectedDraft.systemInstructionsText}
+                        onChange={(event) => {
+                          updateSelectedDraft((current) => ({
+                            ...current,
+                            systemInstructionsText: event.target.value,
+                          }))
+                        }}
+                        placeholder={t("systemInstructions.placeholder")}
+                        className="min-h-32 font-mono text-xs"
+                        disabled={selectedIsSavingInstructions}
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        disabled={selectedIsSavingInstructions}
+                        onClick={() =>
+                          persistSystemInstructions(
+                            selectedAgent.agent_type,
+                            selectedDraft.systemInstructionsText
+                          )
+                        }
+                      >
+                        {selectedIsSavingInstructions ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            {t("actions.saving")}
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-3.5 w-3.5" />
+                            {t("actions.saveSystemInstructions")}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {selectedAgent.agent_type === "codex" ? (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
@@ -13055,7 +13163,11 @@ base_url = "https://api.openai.com/v1"`}
                             .then(() =>
                               persistConfig(
                                 selectedAgent.agent_type,
-                                configToSave
+                                configToSave,
+                                {
+                                  systemInstructionsText:
+                                    selectedDraft.systemInstructionsText,
+                                }
                               )
                             )
                             .then(async () => {

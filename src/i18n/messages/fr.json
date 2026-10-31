@@ -763,6 +763,12 @@
     "emptyNoAgent": "Aucun agent disponible.",
     "configManagement": "Gestion de configuration",
     "envVars": "Variables d'environnement",
+    "systemInstructions": {
+      "label": "Instructions système",
+      "hint": "Configurez les instructions système globales de cet agent et enregistrez-les dans son fichier global d’instructions.",
+      "placeholder": "Saisissez les instructions système globales au format Markdown, par exemple des définitions de rôles, des directives et des normes de programmation...",
+      "filePath": "Chemin du fichier"
+    },
     "hostTools": {
       "label": "Laisser l'agent gérer les fichiers et les commandes",
       "description": "codeg cesse d'assurer l'accès aux fichiers et les commandes de terminal : l'agent les exécute dans son propre processus, là où son bac à sable et ses règles d'autorisation s'appliquent réellement. La délégation à d'autres agents est également désactivée, car elle ferait repasser le même travail par codeg. codeg n'ajoute aucun bac à sable, n'activez donc ceci que si l'agent en a un configuré."
@@ -890,6 +896,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "Enregistrer les instructions système",
       "dragSort": "Glisser pour réordonner",
       "dragSortAgent": "Glisser pour réordonner {name}",
       "refreshCheck": "Actualiser la vérification",
@@ -1607,6 +1614,8 @@
       "authRecoveredStructured": "auth.json est invalide ; réinitialisé en configuration structurée"
     },
     "toasts": {
+      "systemInstructionsSaved": "Instructions système enregistrées",
+      "saveSystemInstructionsFailed": "Échec de l’enregistrement des instructions système",
       "agentActionCompleted": "{name} {action} terminé",
       "agentActionFailed": "{name} {action} échoué",
       "localVersion": "Version locale : {version}",

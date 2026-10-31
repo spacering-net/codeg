@@ -763,6 +763,12 @@
     "emptyNoAgent": "暂无可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "环境变量",
+    "systemInstructions": {
+      "label": "系统级提示词",
+      "hint": "配置该 Agent 的全局指令/系统提示词，保存后写入其全局提示词文件。",
+      "placeholder": "输入全局系统提示词（Markdown 格式，如角色设定、工作原则、代码规范等）...",
+      "filePath": "文件路径"
+    },
     "hostTools": {
       "label": "由 Agent 自行处理文件与命令",
       "description": "codeg 不再代为提供文件访问和终端命令，改由 Agent 在自己的进程中执行——只有这样它自带的沙箱与权限规则才会生效。同时会关闭向其他 Agent 委托，否则同样的操作又会绕回 codeg 执行。codeg 本身不提供沙箱，因此请仅在 Agent 已配置沙箱时开启。"
@@ -902,6 +908,7 @@
       "installGuide": "安装指南",
       "uninstalling": "卸载中...",
       "saveEnvVars": "保存环境变量",
+      "saveSystemInstructions": "保存系统级提示词",
       "saving": "保存中...",
       "saveGrokConfig": "保存 Grok 配置",
       "saveCodexConfig": "保存 Codex 配置",
@@ -1617,6 +1624,8 @@
       "saveAgentOrderFailed": "保存 Agent 排序失败",
       "saveAgentSwitchFailed": "保存 Agent 开关失败",
       "saveEnvFailed": "保存环境变量失败",
+      "systemInstructionsSaved": "系统级提示词已保存",
+      "saveSystemInstructionsFailed": "保存系统级提示词失败",
       "grokSaved": "Grok 配置已保存",
       "saveGrokNativeFailed": "保存 Grok 原生配置失败",
       "saveGrokApiKeyFailed": "设置已保存，但 API Key 未能保存",

@@ -763,6 +763,12 @@
     "emptyNoAgent": "暫無可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "環境變數",
+    "systemInstructions": {
+      "label": "系統級提示詞",
+      "hint": "設定此 Agent 的全域系統級提示詞，並儲存至其全域指令檔案。",
+      "placeholder": "輸入全域系統提示詞（Markdown 格式，例如角色定義、行為準則、程式碼規範等）...",
+      "filePath": "檔案路徑"
+    },
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",
       "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。同時會關閉向其他 Agent 委派，否則同樣的操作又會繞回 codeg 執行。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。"
@@ -890,6 +896,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "儲存系統級提示詞",
       "dragSort": "拖拽排序",
       "dragSortAgent": "拖拽排序 {name}",
       "refreshCheck": "刷新檢測",
@@ -1607,6 +1614,8 @@
       "authRecoveredStructured": "auth.json 格式無效，已重置為結構化配置"
     },
     "toasts": {
+      "systemInstructionsSaved": "系統級提示詞已儲存",
+      "saveSystemInstructionsFailed": "儲存系統級提示詞失敗",
       "agentActionCompleted": "{name}{action}完成",
       "agentActionFailed": "{name}{action}失敗",
       "localVersion": "本地版本：{version}",

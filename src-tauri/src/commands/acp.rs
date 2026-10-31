@@ -9223,6 +9223,70 @@ fn qoder_settings_json_path() -> PathBuf {
     crate::parsers::qoder::resolve_qoder_config_dir().join("settings.json")
 }
 
+
+pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<PathBuf> {
+    match agent_type {
+        AgentType::ClaudeCode => Some(home_dir_or_default().join(".claude").join("CLAUDE.md")),
+        AgentType::Codex => Some(crate::parsers::codex::resolve_codex_home_dir().join("AGENTS.md")),
+        AgentType::Gemini => Some(crate::parsers::gemini::resolve_gemini_base_dir().join("GEMINI.md")),
+        AgentType::OpenCode => Some(
+            crate::acp::opencode_config::config_dir()
+                .unwrap_or_else(|| home_dir_or_default().join(".config").join("opencode"))
+                .join("AGENTS.md"),
+        ),
+        AgentType::Antigravity => Some(crate::parsers::antigravity::resolve_gemini_home().join("GEMINI.md")),
+        AgentType::Cline => Some(home_dir_or_default().join(".cline").join("AGENTS.md")),
+        AgentType::Hermes => Some(crate::parsers::hermes::resolve_hermes_home_dir().join("AGENTS.md")),
+        AgentType::CodeBuddy => Some(crate::parsers::codebuddy::resolve_codebuddy_config_dir().join("AGENTS.md")),
+        AgentType::KimiCode => Some(crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("AGENTS.md")),
+        AgentType::Pi => Some(crate::parsers::pi::resolve_pi_agent_dir().join("AGENTS.md")),
+        AgentType::Grok => Some(crate::parsers::grok::resolve_grok_home_dir().join("AGENTS.md")),
+        AgentType::Cursor => Some(crate::parsers::cursor::resolve_cursor_config_dir().join("AGENTS.md")),
+        AgentType::DeepSeek => Some(home_dir_or_default().join(".dsh").join("AGENTS.md")),
+        AgentType::Qoder => Some(crate::parsers::qoder::resolve_qoder_config_dir().join("AGENTS.md")),
+        AgentType::Kiro => Some(crate::parsers::kiro::resolve_kiro_home_dir().join("AGENTS.md")),
+        AgentType::Trae => Some(crate::acp::trae::resolve_trae_home_dir().join("AGENTS.md")),
+        AgentType::CommandCode => Some(crate::acp::command_code::command_code_home_dir().join("AGENTS.md")),
+        AgentType::ZCode => Some(inherited_node_home_dir().join(".zcode").join("AGENTS.md")),
+        AgentType::MiniMaxCode => Some(home_dir_or_default().join(".minimax-code").join("AGENTS.md")),
+        AgentType::OpenClaw => Some(home_dir_or_default().join(".openclaw").join("AGENTS.md")),
+        AgentType::Custom(id) => {
+            crate::acp::custom_registry::skills_decl(id)
+                .dir
+                .map(PathBuf::from)
+                .or_else(|| Some(home_dir_or_default().join(format!(".{}", id))))
+                .map(|p| p.join("AGENTS.md"))
+        }
+    }
+}
+
+pub(crate) fn load_agent_system_instructions(agent_type: AgentType) -> (Option<String>, Option<String>) {
+    let path = agent_system_instructions_path(agent_type);
+    let path_str = path.as_ref().map(|p| p.display().to_string());
+    let content = path.and_then(|p| fs::read_to_string(p).ok());
+    (path_str, content)
+}
+
+pub(crate) fn persist_agent_system_instructions(agent_type: AgentType, content: Option<&str>) -> Result<(), AcpError> {
+    let Some(path) = agent_system_instructions_path(agent_type) else {
+        return Ok(());
+    };
+    if let Some(text) = content {
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    AcpError::protocol(format!("failed to create instructions directory {}: {e}", parent.display()))
+                })?;
+            }
+        }
+        fs::write(&path, text).map_err(|e| {
+            AcpError::protocol(format!("failed to write instructions file {}: {e}", path.display()))
+        })?;
+    }
+    Ok(())
+}
+
+
 pub(crate) fn load_agent_local_config_json(agent_type: AgentType) -> Option<String> {
     if agent_type == AgentType::Codex {
         return load_codex_local_config_json();
@@ -12534,6 +12598,8 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         } else {
             (local_config_json, None)
         };
+        let (system_instructions_file_path, system_instructions_content) =
+            load_agent_system_instructions(agent_type);
         let grok_config_toml = if agent_type == AgentType::Grok {
             load_grok_config_toml_raw()
         } else {
@@ -12608,6 +12674,8 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             config_json,
             config_file_path: agent_local_config_path(agent_type)
                 .map(|path| path.display().to_string()),
+            system_instructions_file_path,
+            system_instructions_content,
             codex_auth_json,
             codex_config_toml,
             codex_sandbox_settings,
@@ -12976,6 +13044,7 @@ pub async fn acp_update_agent_env(
 pub(crate) async fn acp_update_agent_config_core(
     agent_type: AgentType,
     config_json: Option<String>,
+    system_instructions_content: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -12988,6 +13057,9 @@ pub(crate) async fn acp_update_agent_config_core(
     db: &AppDatabase,
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
+    if let Some(instructions) = system_instructions_content.as_deref() {
+        persist_agent_system_instructions(agent_type, Some(instructions))?;
+    }
     let config_json = config_json.and_then(|raw| {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -13137,6 +13209,7 @@ pub(crate) async fn acp_update_agent_config_core(
 pub(crate) async fn acp_update_agent_config_and_refresh(
     agent_type: AgentType,
     config_json: Option<String>,
+    system_instructions_content: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13154,6 +13227,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
     acp_update_agent_config_core(
         agent_type,
         config_json,
+        system_instructions_content,
         codex_auth_json,
         codex_config_toml,
         codex_config_toml_baseline,
@@ -13176,6 +13250,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
 pub async fn acp_update_agent_config(
     agent_type: AgentType,
     config_json: Option<String>,
+    system_instructions_content: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13198,6 +13273,7 @@ pub async fn acp_update_agent_config(
     acp_update_agent_config_and_refresh(
         agent_type,
         config_json,
+        system_instructions_content,
         codex_auth_json,
         codex_config_toml,
         codex_config_toml_baseline,
@@ -23204,5 +23280,30 @@ model = "gpt"
             Some(&serde_json::json!({ "apiProvider": "deepseek", "apiKey": "sk" }).to_string()),
         );
         assert_eq!(env.get("CLINE_PROVIDER").map(String::as_str), Some("cline-pass"));
+    }
+
+    #[test]
+    fn test_agent_system_instructions_paths() {
+        assert!(agent_system_instructions_path(AgentType::ClaudeCode).unwrap().ends_with("CLAUDE.md"));
+        assert!(agent_system_instructions_path(AgentType::CodeBuddy).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Gemini).unwrap().ends_with("GEMINI.md"));
+        assert!(agent_system_instructions_path(AgentType::Antigravity).unwrap().ends_with("GEMINI.md"));
+        assert!(agent_system_instructions_path(AgentType::Codex).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::OpenCode).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Cline).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Hermes).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Grok).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Cursor).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::DeepSeek).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Qoder).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Kiro).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Trae).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::CommandCode).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::ZCode).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::MiniMaxCode).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::KimiCode).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Pi).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::OpenClaw).unwrap().ends_with("AGENTS.md"));
+        assert!(agent_system_instructions_path(AgentType::Custom("my-bot")).unwrap().ends_with("AGENTS.md"));
     }
 }
