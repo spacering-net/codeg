@@ -328,6 +328,7 @@ export const TabItem = memo(function TabItem({
           >
             <ConversationStatusDot
               status={tab.status as ConversationStatus | undefined}
+              unread={tab.hasUnread}
             />
             <span
               className={cn(
