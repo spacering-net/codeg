@@ -477,6 +477,14 @@ pub struct ConnectionManager {
     /// touch the same map. At most one per connection (the agent is blocked in
     /// its `exit_plan_mode` call) — no cap, no cumulative growth.
     pending_plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApprovalEntry>>>,
+    /// In-flight `render_page` calls WITH `awaitAnswer`, awaiting the user's
+    /// submit on the page, keyed by the globally-unique `page_id`. The listener
+    /// parks on the receiver; the answer / cancel path resolves (and removes)
+    /// the matching sender. Shared across `clone_ref` clones so the
+    /// listener-facing `register_render_page` and the command-facing
+    /// `answer_render_page` touch the same map. At most one per connection (the
+    /// agent is blocked in the tool call) — no cap, no cumulative growth.
+    pending_render_pages: Arc<Mutex<HashMap<String, PendingRenderPageEntry>>>,
 }
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
@@ -486,6 +494,16 @@ struct PendingQuestionEntry {
     parent_connection_id: String,
     questions: Vec<QuestionSpec>,
     sender: tokio::sync::oneshot::Sender<QuestionOutcome>,
+}
+
+/// A parked awaiting-answer `render_page` awaiting the user's submit. The
+/// `sender` resolves the blocked listener round-trip; `title` is retained so
+/// `answer_render_page` can normalize the answer (blank summary → title)
+/// without a `SessionState` read (race-free).
+struct PendingRenderPageEntry {
+    parent_connection_id: String,
+    title: String,
+    sender: tokio::sync::oneshot::Sender<crate::acp::render_page::RenderPageOutcome>,
 }
 
 /// A parked Grok `exit_plan_mode` approval awaiting the user's decision. The
@@ -524,6 +542,7 @@ impl ConnectionManager {
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            pending_render_pages: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -541,6 +560,7 @@ impl ConnectionManager {
             probe_locks: self.probe_locks.clone(),
             pending_questions: self.pending_questions.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
+            pending_render_pages: self.pending_render_pages.clone(),
         }
     }
 
@@ -594,6 +614,7 @@ impl ConnectionManager {
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            pending_render_pages: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -3943,6 +3964,182 @@ impl ConnectionManager {
         }
     }
 
+    /// Register an awaiting-answer `render_page` on `conn_id`, broadcast
+    /// `RenderPageRequest` (so every attached client arms its card, and a
+    /// mid-turn attach recovers the state from the snapshot), and return the
+    /// receiver the blocked listener awaits. `None` when the connection is gone
+    /// (nothing to show) OR when one is already pending on it (the agent is
+    /// blocked in a single tool call; a second would orphan the first). Mirrors
+    /// [`Self::register_question`].
+    pub async fn register_render_page(
+        &self,
+        conn_id: &str,
+        title: String,
+        html: String,
+    ) -> Option<crate::acp::render_page::RegisteredRenderPage> {
+        // Defense-in-depth, as in `register_question`: refuse to broadcast an
+        // oversized document straight into the event payload and the snapshot.
+        if crate::acp::render_page::validate_page(&title, &html).is_err() {
+            return None;
+        }
+        let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
+        let page_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        {
+            let mut reg = self.pending_render_pages.lock().await;
+            if reg.values().any(|e| e.parent_connection_id == conn_id) {
+                return None;
+            }
+            reg.insert(
+                page_id.clone(),
+                PendingRenderPageEntry {
+                    parent_connection_id: conn_id.to_string(),
+                    title: title.clone(),
+                    sender: tx,
+                },
+            );
+        }
+        // Ungated emit: the agent is blocked in the tool call, so the answerable
+        // card must arm regardless of any turn-flag timing.
+        emit_with_state(
+            &state,
+            &emitter,
+            AcpEvent::RenderPageRequest {
+                page_id: page_id.clone(),
+                title,
+                html,
+            },
+        )
+        .await;
+        // Teardown event-ordering race, mirroring `register_question`: a
+        // `cancel_render_pages_by_parent` sweep may have drained the entry
+        // between the insert and the emit; the compensating Resolved keeps no
+        // client holding an armed card with no live backend waiter.
+        if self
+            .compensate_if_render_page_drained(&page_id, &state, &emitter)
+            .await
+        {
+            return None;
+        }
+        Some(crate::acp::render_page::RegisteredRenderPage {
+            page_id,
+            answer_rx: rx,
+        })
+    }
+
+    /// Returns `true` — after emitting a clearing `RenderPageResolved` — when
+    /// `page_id` is no longer pending, i.e. a teardown sweep drained it in the
+    /// window after its `RenderPageRequest` was broadcast. Mirrors
+    /// [`Self::compensate_if_question_drained`].
+    async fn compensate_if_render_page_drained(
+        &self,
+        page_id: &str,
+        state: &std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>,
+        emitter: &EventEmitter,
+    ) -> bool {
+        if self.pending_render_pages.lock().await.contains_key(page_id) {
+            return false;
+        }
+        emit_with_state(
+            state,
+            emitter,
+            AcpEvent::RenderPageResolved {
+                page_id: page_id.to_string(),
+            },
+        )
+        .await;
+        true
+    }
+
+    /// Resolve a pending awaiting-answer page with the user's submission (from
+    /// any client). Removes the one-shot atomically (first answer wins; a
+    /// duplicate / already-resolved id is an idempotent no-op), normalizes the
+    /// answer into the self-describing outcome, and broadcasts
+    /// `RenderPageResolved` so every client flips the card to its inert
+    /// answered/declined state. Routing uses the entry's stored parent
+    /// connection, so a stale `conn_id` from the caller can't misroute.
+    pub async fn answer_render_page(
+        &self,
+        conn_id: &str,
+        page_id: &str,
+        answer: crate::acp::render_page::RenderPageAnswer,
+    ) -> Result<(), AcpError> {
+        let _ = conn_id;
+        let entry = self.pending_render_pages.lock().await.remove(page_id);
+        let Some(entry) = entry else {
+            // Already answered / canceled / gone elsewhere — idempotent success.
+            return Ok(());
+        };
+        let outcome = crate::acp::render_page::build_render_outcome(&entry.title, &answer);
+        // Ignore a dropped receiver: the listener may have abandoned the wait
+        // (peer-close) at the same instant; the resolved-event below still arms
+        // the card off.
+        let _ = entry.sender.send(outcome);
+        if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
+        {
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::RenderPageResolved {
+                    page_id: page_id.to_string(),
+                },
+            )
+            .await;
+        }
+        Ok(())
+    }
+
+    /// Cancel a single pending rendered page (see [`Self::cancel_question`] for
+    /// the same shape). Dropping the sender unblocks the listener with a
+    /// declined outcome; the resolved broadcast disarms the card.
+    pub async fn cancel_render_page(&self, conn_id: &str, page_id: &str) {
+        let _ = conn_id;
+        let removed = self.pending_render_pages.lock().await.remove(page_id);
+        let Some(entry) = removed else {
+            return;
+        };
+        if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
+        {
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::RenderPageResolved {
+                    page_id: page_id.to_string(),
+                },
+            )
+            .await;
+        }
+    }
+
+    /// Cancel every awaiting-answer page parked on a connection that is tearing
+    /// down (the turn ended, the user stopped it, or the companion's socket
+    /// closed). Mirrors [`Self::cancel_questions_by_parent`]: drain under the
+    /// lock, emit outside it.
+    pub async fn cancel_render_pages_by_parent(&self, conn_id: &str) {
+        let drained: Vec<String> = {
+            let mut reg = self.pending_render_pages.lock().await;
+            let ids: Vec<String> = reg
+                .iter()
+                .filter(|(_, e)| e.parent_connection_id == conn_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &ids {
+                reg.remove(id);
+            }
+            ids
+        };
+        if drained.is_empty() {
+            return;
+        }
+        // Best-effort card disarm; the connection may already be out of the map
+        // on the disconnect path, so tolerate `None`.
+        if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
+            for page_id in drained {
+                emit_with_state(&state, &emitter, AcpEvent::RenderPageResolved { page_id }).await;
+            }
+        }
+    }
+
     /// Register a pending Grok `exit_plan_mode` approval on `conn_id`, broadcast
     /// `PlanApprovalRequest` (so every attached client renders the card and a
     /// mid-turn attach recovers it from the snapshot), and return the receiver
@@ -4548,6 +4745,42 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
     async fn cancel_questions_by_parent(&self, parent_connection_id: &str) {
         self.manager
             .cancel_questions_by_parent(parent_connection_id)
+            .await
+    }
+}
+
+/// Production impl of [`crate::acp::render_page::SessionRenderPageAccess`] for
+/// the `render_page` tool bridge. Registers / cancels the parent connection's
+/// awaiting-answer page by delegating to `ConnectionManager`. Mirrors
+/// `ConnectionManagerQuestionLookup` so the listener stays unit-testable with an
+/// in-memory stub.
+#[derive(Clone)]
+pub struct ConnectionManagerRenderPageLookup {
+    pub manager: Arc<ConnectionManager>,
+}
+
+#[async_trait::async_trait]
+impl crate::acp::render_page::SessionRenderPageAccess for ConnectionManagerRenderPageLookup {
+    async fn register_render_page(
+        &self,
+        parent_connection_id: &str,
+        title: String,
+        html: String,
+    ) -> Option<crate::acp::render_page::RegisteredRenderPage> {
+        self.manager
+            .register_render_page(parent_connection_id, title, html)
+            .await
+    }
+
+    async fn cancel_render_page(&self, parent_connection_id: &str, page_id: &str) {
+        self.manager
+            .cancel_render_page(parent_connection_id, page_id)
+            .await
+    }
+
+    async fn cancel_render_pages_by_parent(&self, parent_connection_id: &str) {
+        self.manager
+            .cancel_render_pages_by_parent(parent_connection_id)
             .await
     }
 }

@@ -11,11 +11,14 @@ interface UserResourceLinksProps {
 /**
  * The attachment summary row shown beneath a user message: one grey chip per
  * attached file — and for what the built-in browser handed over, one per page
- * it came from, the badge in the prose saying what was taken. This is the
- * original (pre-rich-composer) attachment style — a plain, non-interactive list
- * that complements the inline file badges now kept in the message prose
- * (markdown-link → ReferenceBadge). Images are handled separately as
- * thumbnails.
+ * it came from; an embedded attachment from the browser shows ONLY here (its
+ * prose badge is moved out, not copied, so the same thing is not listed
+ * twice). A page ANNOTATION is the opposite case: its badge stays in the
+ * prose and opens its report in place, so it never reaches this row. This is
+ * the original (pre-rich-composer) attachment style — a plain,
+ * non-interactive list that complements the inline file badges now kept in
+ * the message prose (markdown-link → ReferenceBadge). Images are handled
+ * separately as thumbnails.
  */
 export function UserResourceLinks({
   resources,

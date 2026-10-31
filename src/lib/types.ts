@@ -1677,6 +1677,30 @@ export interface PlanApprovalAnswer {
   feedback?: string | null
 }
 
+// --- render_page (mirror of Rust `crate::acp::render_page`) ---
+
+/** Awaiting-answer `render_page` on the session (mirror of
+ *  `PendingRenderPageState`). The agent is blocked until the user submits on
+ *  the page or dismisses the card. `html` doubles as the identity an in-place
+ *  tool card matches against to know it is the live, answerable one. */
+export interface PendingRenderPageState {
+  page_id: string
+  title: string
+  html: string
+  created_at: string
+}
+
+/** The user's submission to `acp_answer_render_page` (mirror of Rust
+ *  `RenderPageAnswer`). `summary` is the page's few-word recap (what the
+ *  page's script passed to `codeg.render.submit`, or the card's fallback);
+ *  `data` is the JSON the page submitted; `declined` is set when the user
+ *  dismissed the card without answering. camelCase on the wire. */
+export interface RenderPageAnswer {
+  summary?: string | null
+  data?: unknown
+  declined: boolean
+}
+
 export interface SessionModeInfo {
   id: string
   name: string
@@ -3398,6 +3422,27 @@ export type AcpEvent =
       approval_id: string
     }
   /**
+   * An agent called `render_page` with `awaitAnswer`: the self-contained HTML
+   * page is live and the agent is blocked on an answer submitted on it.
+   * Broadcast so every client renders the pinned page card above the input;
+   * also captured in the snapshot for mid-turn attach. Only awaiting pages
+   * broadcast — a show-only page never reaches the wire as an event.
+   */
+  | {
+      type: "render_page_request"
+      page_id: string
+      title: string
+      html: string
+    }
+  /**
+   * A pending rendered page was answered (from any client) or canceled (tool
+   * call aborted / connection drained). Clients clear the matching card.
+   */
+  | {
+      type: "render_page_resolved"
+      page_id: string
+    }
+  /**
    * The agent's effective settings (env vars / model provider / native config)
    * changed AFTER this connection spawned, so the running process is still on
    * its launch-time config. The frontend shows a "restart to apply" banner.
@@ -3776,6 +3821,9 @@ export interface LiveSessionSnapshot {
   /** Awaiting-decision Grok `exit_plan_mode` approval, recoverable on mid-turn
    *  attach. Absent (omitted) when no approval is pending. */
   pending_plan_approval?: PendingPlanApprovalState | null
+  /** Awaiting-answer `render_page`, recoverable on mid-turn attach. Absent
+   *  (omitted) when no page is awaiting an answer. */
+  pending_render_page?: PendingRenderPageState | null
   /** In-flight user prompt for the current turn — lets a client attaching
    *  mid-turn render the user turn. Absent (omitted) when no turn is in flight. */
   pending_user_message?: {

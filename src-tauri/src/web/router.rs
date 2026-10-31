@@ -117,6 +117,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::question::set_question_settings),
         )
         .route(
+            "/get_render_page_settings",
+            post(handlers::render_page::get_render_page_settings),
+        )
+        .route(
+            "/set_render_page_settings",
+            post(handlers::render_page::set_render_page_settings),
+        )
+        .route(
             "/get_session_info_settings",
             post(handlers::session_info::get_session_info_settings),
         )
@@ -1044,6 +1052,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/acp_answer_question",
             post(handlers::acp::acp_answer_question),
+        )
+        .route(
+            "/acp_answer_render_page",
+            post(handlers::acp::acp_answer_render_page),
         )
         .route(
             "/acp_answer_plan_approval",

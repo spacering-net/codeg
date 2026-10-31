@@ -47,6 +47,7 @@ pub mod preflight;
 pub mod prompt_hydration;
 pub mod provider_models;
 pub mod question;
+pub mod render_page;
 pub mod registry;
 pub mod remote_registry;
 pub(crate) mod reported_usage;

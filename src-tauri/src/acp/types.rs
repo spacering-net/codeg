@@ -892,6 +892,26 @@ pub enum AcpEvent {
     /// canceled (the connection drained). Carries only the `approval_id`; clients
     /// clear the matching card. Idempotent on apply.
     PlanApprovalResolved { approval_id: String },
+    /// An agent called the `render_page` MCP tool WITH `awaitAnswer`: a finished
+    /// HTML page the user can interact with, whose submit (or dismissal) the
+    /// blocked tool call waits on. Broadcast so every client viewing this
+    /// conversation marks the matching in-place page card as answerable, and
+    /// captured into `SessionState.pending_render_page` so a client attaching
+    /// mid-turn recovers it from the snapshot. Clients match this event's page
+    /// to its card by `html` equality (the tool call's input carries the same
+    /// document; at most one page per connection can wait at a time). Only
+    /// awaiting pages get an event — a show-only page is a plain card rendered
+    /// straight from the tool input, live and on replay alike.
+    RenderPageRequest {
+        page_id: String,
+        title: String,
+        html: String,
+    },
+    /// A previously-pending rendered page was answered (from any client) or
+    /// canceled (the tool call was aborted / the turn ended / the user chose to
+    /// answer in chat). Carries only the `page_id`; clients flip the matching
+    /// card to its inert state. Idempotent on apply.
+    RenderPageResolved { page_id: String },
     /// The agent's effective settings (env vars / model provider / native config
     /// files) changed AFTER this connection was spawned, so the running process
     /// is still using its launch-time config. Emitted by

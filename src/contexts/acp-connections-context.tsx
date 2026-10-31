@@ -35,6 +35,7 @@ import {
   acpRespondPermission,
   acpAnswerQuestion,
   acpAnswerPlanApproval,
+  acpAnswerRenderPage,
   acpDisconnect,
   acpTouchConnection,
   acpGetSessionSnapshot,
@@ -70,6 +71,8 @@ import type {
   QuestionAnswer,
   PendingPlanApprovalState,
   PlanApprovalAnswer,
+  PendingRenderPageState,
+  RenderPageAnswer,
   SessionConfigKindInfo,
   SessionConfigOptionInfo,
   SessionFailureRecord,
@@ -376,6 +379,12 @@ export interface ConnectionState {
    *  blocked on). Set from a `plan_approval_request` event or a snapshot's
    *  `pending_plan_approval`; cleared on `plan_approval_resolved` or turn end. */
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** Awaiting-answer `render_page` (the codeg-mcp blocking page). Set from a
+   *  `render_page_request` event or a snapshot's `pending_render_page`; cleared
+   *  on `render_page_resolved` or turn end. The pinned card renders this page
+   *  and the in-place tool card matches its `html` against it to know which
+   *  one is live. */
+  pendingRenderPage: PendingRenderPageState | null
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failure table (see `lib/session-failures.ts` for the
    *  merge/settle contract). Retained resolved — entries double as per-id
@@ -751,6 +760,18 @@ type Action =
       /** When present, only clear if the current approval_id matches (guards a
        *  late `plan_approval_resolved` from wiping a freshly-raised approval). */
       approvalId?: string
+    }
+  | {
+      type: "SET_RENDER_PAGE"
+      contextKey: string
+      pendingRenderPage: PendingRenderPageState
+    }
+  | {
+      type: "CLEAR_RENDER_PAGE"
+      contextKey: string
+      /** When present, only clear if the current page_id matches (guards a
+       *  late `render_page_resolved` from wiping a freshly-raised page). */
+      pageId?: string
     }
   | { type: "SESSION_STARTED"; contextKey: string; sessionId: string }
   | {
@@ -1943,6 +1964,7 @@ function connectionsReducer(
         pendingQuestion: null,
         pendingAskQuestion: null,
         pendingPlanApproval: null,
+        pendingRenderPage: null,
         claudeApiRetry: null,
         sessionFailures: [],
         toolApprovals: EMPTY_TOOL_APPROVALS,
@@ -2009,6 +2031,7 @@ function connectionsReducer(
         pendingQuestion: null,
         pendingAskQuestion: null,
         pendingPlanApproval: null,
+        pendingRenderPage: null,
         claudeApiRetry: null,
         sessionFailures: [],
         toolApprovals: EMPTY_TOOL_APPROVALS,
@@ -2208,6 +2231,7 @@ function connectionsReducer(
         pendingPermission: hydratedPendingPermission,
         pendingAskQuestion: action.patch.pendingAskQuestion,
         pendingPlanApproval: action.patch.pendingPlanApproval,
+        pendingRenderPage: action.patch.pendingRenderPage,
         pendingUserMessage: action.patch.pendingUserMessage,
         promptCapabilities: mergedPromptCapabilities,
         selectorsReady: mergedSelectorsReady,
@@ -2320,6 +2344,8 @@ function connectionsReducer(
         // Likewise a blocked exit_plan_mode approval — cleared via
         // `plan_approval_resolved` normally; this is the turn-end safety net.
         updated.pendingPlanApproval = null
+        // Same safety net for an awaiting-answer `render_page`.
+        updated.pendingRenderPage = null
       }
       // Keep a stopped turn for the reports that close its cards (see
       // `ConnectionState.cancelledTurn`). Keyed on the message, so ending the
@@ -2852,6 +2878,34 @@ function connectionsReducer(
       next.set(action.contextKey, {
         ...conn,
         pendingPlanApproval: null,
+      })
+      return next
+    }
+
+    case "SET_RENDER_PAGE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        pendingRenderPage: action.pendingRenderPage,
+      })
+      return next
+    }
+
+    case "CLEAR_RENDER_PAGE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if (
+        action.pageId !== undefined &&
+        conn.pendingRenderPage?.page_id !== action.pageId
+      ) {
+        return state
+      }
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        pendingRenderPage: null,
       })
       return next
     }
@@ -3500,6 +3554,13 @@ export interface AcpActionsValue {
     contextKey: string,
     approvalId: string,
     answer: PlanApprovalAnswer
+  ): Promise<void>
+  /** Submit the answer the user sent from an awaiting `render_page` (or a
+   *  dismissal). Resolves the parked tool call and clears the card. */
+  answerRenderPage(
+    contextKey: string,
+    pageId: string,
+    answer: RenderPageAnswer
   ): Promise<void>
   /** Pause or clear the session's active Codex goal (codex-acp #293). */
   goalControl(contextKey: string, action: "pause" | "clear"): Promise<void>
@@ -5368,6 +5429,34 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "CLEAR_PLAN_APPROVAL",
             contextKey,
             approvalId: e.approval_id,
+          })
+          break
+        case "render_page_request":
+          // Agent called `render_page` with `awaitAnswer`: the page is live and
+          // the agent is blocked on an answer submitted on it. Flush queued
+          // streaming first, then raise the pinned page card above the input.
+          // (No OS notification arm: like `plan_approval_request` — adding one
+          // means a new NotifyEventId through prefs, sounds and ten locales,
+          // and the page card itself is the prompt.)
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "SET_RENDER_PAGE",
+            contextKey,
+            pendingRenderPage: {
+              page_id: e.page_id,
+              title: e.title,
+              html: e.html,
+              created_at: new Date().toISOString(),
+            },
+          })
+          break
+        case "render_page_resolved":
+          // The page was answered (this or another window) or canceled. Matched
+          // by page_id so a stale event can't wipe a fresh one.
+          dispatch({
+            type: "CLEAR_RENDER_PAGE",
+            contextKey,
+            pageId: e.page_id,
           })
           break
         case "background_activity": {
@@ -8193,6 +8282,31 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [dispatch]
   )
 
+  const answerRenderPage = useCallback(
+    async (contextKey: string, pageId: string, answer: RenderPageAnswer) => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) {
+        // Throw, don't silently return: the page card awaits this and holds a
+        // disabled in-flight state until it resolves. A silent resolve would
+        // leave the card stuck; the throw routes to its retryable error.
+        throw new Error(
+          `[AcpConnections] answerRenderPage: no connection for ${contextKey}`
+        )
+      }
+      try {
+        lastActivityRef.current.set(contextKey, Date.now())
+        await acpAnswerRenderPage(conn.connectionId, pageId, answer)
+        // Optimistically clear; the backend also broadcasts
+        // render_page_resolved (idempotent on the matched id).
+        dispatch({ type: "CLEAR_RENDER_PAGE", contextKey, pageId })
+      } catch (e) {
+        console.error("[AcpConnections] answerRenderPage failed:", e)
+        throw e
+      }
+    },
+    [dispatch]
+  )
+
   const attachDelegationChild = useCallback(
     (args: {
       connectionId: string
@@ -8348,6 +8462,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       respondPermission,
       answerQuestion,
       answerPlanApproval,
+      answerRenderPage,
       setActiveKey,
       touchActivity,
       registerOpenTabKeys,
@@ -8376,6 +8491,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       respondPermission,
       answerQuestion,
       answerPlanApproval,
+      answerRenderPage,
       setActiveKey,
       touchActivity,
       registerOpenTabKeys,

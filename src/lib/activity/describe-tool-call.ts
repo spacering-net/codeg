@@ -124,6 +124,8 @@ export function toolStepKind(part: AdaptedToolCallPart): ToolStepKind {
       return "delegation-cancel"
     case "question":
       return "question"
+    case "render_page":
+      return "render-page"
     case "check_user_feedback":
       return "feedback"
     case "attempt_completion":

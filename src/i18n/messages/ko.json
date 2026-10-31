@@ -4067,6 +4067,7 @@
           "background": "백그라운드 작업",
           "plan": "계획",
           "question": "질문",
+          "renderPage": "페이지",
           "image": "이미지",
           "goal": "목표",
           "other": "단계"
@@ -4174,6 +4175,28 @@
         "awaiting": "답변을 기다리는 중…",
         "declined": "이 질문을 건너뛰었습니다 — 에이전트가 자체 판단으로 진행했습니다.",
         "noSelection": "선택 없음"
+      },
+      "renderPage": {
+        "title": "페이지",
+        "waitingHint": "페이지에서 답변해 주세요.",
+        "annotate": "페이지에 주석",
+        "annotateStop": "주석 종료",
+        "annotateElement": "요소",
+        "annotateRegion": "영역",
+        "annotateDraw": "그리기",
+        "annotatePlaceholder": "메모 (선택)",
+        "annotateSend": "보내기",
+        "annotateCancel": "취소",
+        "annotateChip": "페이지 주석{n}",
+        "dismiss": "답변 없이 닫기",
+        "submitError": "답변을 보내지 못했습니다. 다시 시도해 주세요."
+      },
+      "renderPageResult": {
+        "title": "페이지",
+        "awaiting": "답변을 기다리는 중…",
+        "declined": "이 페이지를 닫았습니다 — 에이전트가 자체 판단으로 진행했습니다.",
+        "answeredLabel": "답변:",
+        "noSummary": "페이지에서 답변됨"
       },
       "configStale": {
         "agentConfigTitle": "에이전트 설정이 업데이트되었습니다",
@@ -5507,6 +5530,11 @@
       "label": "사용자에게 질문",
       "short": "판단이 애매하면 먼저 물어보게 합니다.",
       "hint": "에이전트가 작업을 멈추고 대화 입력창 위에 표시되는 객관식 질문을 할 수 있습니다. 답변(또는 건너뛰기)할 때까지 에이전트는 대기합니다."
+    },
+    "render": {
+      "label": "페이지 렌더링",
+      "short": "에이전트가 채팅에 대화형 페이지를 그리도록 합니다.",
+      "hint": "에이전트가 대화 안에 독립적인 작은 페이지(양식, 선택지, 비교표 등)를 그릴 수 있습니다. 페이지에서 답변 제출을 기다린 뒤 계속하거나, 표시만 할 수도 있습니다. 표시된 페이지에 주석을 달 수도 있습니다 — 요소 지정, 영역 표시, 자유 메모 — 주석 보고서가 프롬프트로 에이전트에게 전달됩니다."
     },
     "sessions": {
       "label": "세션 정보 가져오기",

@@ -4067,6 +4067,7 @@
           "background": "Tâche en arrière-plan",
           "plan": "Plan",
           "question": "Question",
+          "renderPage": "Page",
           "image": "Image",
           "goal": "Objectif",
           "other": "Étape"
@@ -4174,6 +4175,28 @@
         "awaiting": "En attente de ta réponse…",
         "declined": "Tu as ignoré cette question — l’agent a utilisé son propre jugement.",
         "noSelection": "Aucune sélection"
+      },
+      "renderPage": {
+        "title": "Page",
+        "waitingHint": "Réponds sur la page.",
+        "annotate": "Annoter la page",
+        "annotateStop": "Quitter l’annotation",
+        "annotateElement": "Élément",
+        "annotateRegion": "Zone",
+        "annotateDraw": "Dessin",
+        "annotatePlaceholder": "Note (facultatif)",
+        "annotateSend": "Envoyer",
+        "annotateCancel": "Annuler",
+        "annotateChip": "Annotation de page {n}",
+        "dismiss": "Fermer sans répondre",
+        "submitError": "Envoi de la réponse impossible. Réessaie."
+      },
+      "renderPageResult": {
+        "title": "Page",
+        "awaiting": "En attente de ta réponse…",
+        "declined": "Tu as ignoré cette page — l’agent a utilisé son propre jugement.",
+        "answeredLabel": "Réponse :",
+        "noSummary": "Répondu sur la page"
       },
       "configStale": {
         "agentConfigTitle": "Paramètres de l'agent mis à jour",
@@ -5507,6 +5530,11 @@
       "label": "Poser une question à l'utilisateur",
       "short": "Laisse l'agent vous consulter avant de décider.",
       "hint": "Permet aux agents de s'interrompre et de vous poser une question à choix multiples affichée au-dessus de la zone de saisie de la conversation. L'agent attend votre réponse (ou que vous ignoriez)."
+    },
+    "render": {
+      "label": "Rendre une page",
+      "short": "Laisse l'agent dessiner une page interactive dans le chat.",
+      "hint": "Permet aux agents de dessiner une petite page autonome dans la conversation — formulaires, choix, comparatifs. La page peut attendre votre réponse avant que l'agent continue, ou seulement s'afficher. Vous pouvez aussi annoter la page affichée — un élément, une zone, une note à main levée — et le rapport d’annotation revient à l’agent comme instruction."
     },
     "sessions": {
       "label": "Obtenir les infos de session",

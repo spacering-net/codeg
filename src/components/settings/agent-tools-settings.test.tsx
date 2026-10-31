@@ -7,6 +7,8 @@ vi.mock("@/lib/api", () => ({
   setFeedbackSettings: vi.fn(),
   getQuestionSettings: vi.fn(),
   setQuestionSettings: vi.fn(),
+  getRenderPageSettings: vi.fn(),
+  setRenderPageSettings: vi.fn(),
   getSessionInfoSettings: vi.fn(),
   setSessionInfoSettings: vi.fn(),
   getBrowserToolsSettings: vi.fn(),
@@ -53,11 +55,13 @@ import {
   getChatAuthoringSettings,
   getFeedbackSettings,
   getQuestionSettings,
+  getRenderPageSettings,
   getSessionInfoSettings,
   setBrowserToolsSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
   setQuestionSettings,
+  setRenderPageSettings,
   setSessionInfoSettings,
 } from "@/lib/api"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
@@ -70,6 +74,8 @@ const mockGetFeedback = vi.mocked(getFeedbackSettings)
 const mockSetFeedback = vi.mocked(setFeedbackSettings)
 const mockGetQuestion = vi.mocked(getQuestionSettings)
 const mockSetQuestion = vi.mocked(setQuestionSettings)
+const mockGetRender = vi.mocked(getRenderPageSettings)
+const mockSetRender = vi.mocked(setRenderPageSettings)
 const mockGetSessionInfo = vi.mocked(getSessionInfoSettings)
 const mockSetSessionInfo = vi.mocked(setSessionInfoSettings)
 const mockGetBrowser = vi.mocked(getBrowserToolsSettings)
@@ -83,6 +89,7 @@ const mockSetComputer = vi.mocked(setComputerToolsEnabled)
 const LABELS = {
   feedback: "Live Feedback",
   question: "Ask user question",
+  render: "Render page",
   sessionInfo: "Get session info",
   browserTools: "Read and drive the built-in browser",
   browserEval: "Run code in the built-in browser",
@@ -118,6 +125,7 @@ function primeBackend(
   overrides: {
     feedback?: boolean
     question?: boolean
+    render?: boolean
     sessionInfo?: boolean
     browserTools?: boolean
     browserEval?: boolean
@@ -129,6 +137,7 @@ function primeBackend(
   const {
     feedback = false,
     question = true,
+    render = true,
     sessionInfo = true,
     browserTools = false,
     browserEval = false,
@@ -138,6 +147,7 @@ function primeBackend(
   } = overrides
   mockGetFeedback.mockResolvedValue({ enabled: feedback })
   mockGetQuestion.mockResolvedValue({ enabled: question })
+  mockGetRender.mockResolvedValue({ enabled: render })
   mockGetSessionInfo.mockResolvedValue({ enabled: sessionInfo })
   mockGetBrowser.mockResolvedValue({
     enabled: browserTools,
@@ -149,6 +159,7 @@ function primeBackend(
   })
   mockSetFeedback.mockImplementation(async (next) => next)
   mockSetQuestion.mockImplementation(async (next) => next)
+  mockSetRender.mockImplementation(async (next) => next)
   mockSetSessionInfo.mockImplementation(async (next) => next)
   mockSetBrowser.mockImplementation(async (next) => next)
   mockSetChat.mockImplementation(async (next) => next)
@@ -199,6 +210,10 @@ describe("AgentToolsSettingsSection", () => {
       "data-state",
       "checked"
     )
+    expect(screen.getByLabelText(LABELS.render)).toHaveAttribute(
+      "data-state",
+      "checked"
+    )
     expect(screen.getByLabelText(LABELS.sessionInfo)).toHaveAttribute(
       "data-state",
       "unchecked"
@@ -228,6 +243,7 @@ describe("AgentToolsSettingsSection", () => {
     // The other three endpoints hold values this panel never touched; writing
     // them back would republish state the user didn't ask to change.
     expect(mockSetFeedback).not.toHaveBeenCalled()
+    expect(mockSetRender).not.toHaveBeenCalled()
     expect(mockSetSessionInfo).not.toHaveBeenCalled()
     expect(mockSetChat).not.toHaveBeenCalled()
   })

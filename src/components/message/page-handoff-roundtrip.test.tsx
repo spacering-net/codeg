@@ -24,8 +24,9 @@ import { parseUserMessageSegments } from "./user-message-segments"
  * display text — another once the conversation is opened again — from the
  * agent's own record, which keeps the block the agent read and nothing of the
  * badge — and a third on another client and in a custom agent's history, from
- * codeg's own projection of the prompt. They all have to read the same: in the
- * bubble, the badge the composer showed; under it, the site it came from.
+ * codeg's own projection of the prompt. They all have to read the same: the
+ * attachment appears once, as the site chip under the bubble — its prose
+ * badge is moved out of the sentence, not kept there alongside the chip.
  */
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -278,9 +279,12 @@ describe("a page handed to a conversation, sent and read back", () => {
       it(`reads ${handoff.kind} ${asked} the same every way`, () => {
         const { t, text } = setup()
         const label = handoff.label(t)
+        // One display on every path: no badge in the prose, the page's chip
+        // under it, and the sender's question (or the plain attachment
+        // placeholder when nothing was typed) as the whole bubble.
         const expected = {
-          badges: [label],
-          prose,
+          badges: [],
+          prose: prose || "已附加资源",
           chips: ["www.google.com"],
           images: 1,
         }
@@ -300,8 +304,11 @@ describe("a page handed to a conversation, sent and read back", () => {
 
   it("names the marked-up screenshot in the person's language", () => {
     const { text } = setup()
-    expect(rendered(fromClaude(text, HANDOFFS[0].block, "")).badges).toEqual([
-      "带标注的截图",
-    ])
+    // The kind's localized name lived in the badge; with the badge moved out
+    // of the prose, nothing language-dependent is left to render — the chip
+    // is the site, which reads the same in every language.
+    const renderedMessage = rendered(fromClaude(text, HANDOFFS[0].block, ""))
+    expect(renderedMessage.badges).toEqual([])
+    expect(renderedMessage.chips).toEqual(["www.google.com"])
   })
 })

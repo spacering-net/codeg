@@ -1195,6 +1195,7 @@ mod tauri_app {
                         socket_path,
                         feedback_config,
                         question_config,
+                        render_config,
                         session_info_config,
                         chat_authoring_config,
                         browser_tools_config,
@@ -1208,6 +1209,7 @@ mod tauri_app {
                     app.manage(tokens.clone());
                     app.manage(feedback_config.clone());
                     app.manage(question_config.clone());
+                    app.manage(render_config.clone());
                     app.manage(session_info_config.clone());
                     app.manage(chat_authoring_config.clone());
                     app.manage(browser_tools_config.clone());
@@ -1226,6 +1228,7 @@ mod tauri_app {
                     let db_for_init = db_conn.clone();
                     let feedback_for_init = feedback_config.clone();
                     let question_for_init = question_config.clone();
+                    let render_for_init = render_config.clone();
                     let session_info_for_init = session_info_config.clone();
                     let chat_authoring_for_init = chat_authoring_config.clone();
                     let browser_tools_for_init = browser_tools_config.clone();
@@ -1244,6 +1247,11 @@ mod tauri_app {
                         crate::commands::question::apply_persisted_question_config(
                             &db_for_init,
                             &question_for_init,
+                        )
+                        .await;
+                        crate::commands::render_page::apply_persisted_render_config(
+                            &db_for_init,
+                            &render_for_init,
                         )
                         .await;
                         crate::commands::session_info::apply_persisted_session_info_config(
@@ -1303,6 +1311,11 @@ mod tauri_app {
                         ),
                         std::sync::Arc::new(
                             crate::acp::manager::ConnectionManagerQuestionLookup {
+                                manager: std::sync::Arc::new(cm_state.clone_ref()),
+                            },
+                        ),
+                        std::sync::Arc::new(
+                            crate::acp::manager::ConnectionManagerRenderPageLookup {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
                             },
                         ),
@@ -2098,6 +2111,8 @@ mod tauri_app {
                 feedback_commands::submit_session_feedback,
                 question_commands::get_question_settings,
                 question_commands::set_question_settings,
+                crate::commands::render_page::get_render_page_settings,
+                crate::commands::render_page::set_render_page_settings,
                 session_info_commands::get_session_info_settings,
                 session_info_commands::set_session_info_settings,
                 chat_authoring_commands::get_chat_authoring_settings,
@@ -2153,6 +2168,7 @@ mod tauri_app {
                 acp_commands::acp_stop_async_task,
                 acp_commands::acp_respond_permission,
                 acp_commands::acp_answer_question,
+                acp_commands::acp_answer_render_page,
                 acp_commands::acp_answer_plan_approval,
                 acp_commands::acp_disconnect,
                 acp_commands::acp_touch_connection,

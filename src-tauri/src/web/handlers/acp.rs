@@ -548,6 +548,26 @@ pub async fn acp_answer_question(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpAnswerRenderPageParams {
+    pub connection_id: String,
+    pub page_id: String,
+    pub answer: crate::acp::render_page::RenderPageAnswer,
+}
+
+pub async fn acp_answer_render_page(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpAnswerRenderPageParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let manager = &state.connection_manager;
+    manager
+        .answer_render_page(&params.connection_id, &params.page_id, params.answer)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpAnswerPlanApprovalParams {
     pub connection_id: String,
     pub approval_id: String,

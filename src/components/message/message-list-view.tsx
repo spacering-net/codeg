@@ -107,6 +107,10 @@ import {
   type ViewportTop,
 } from "@/components/message/virtualized-message-thread"
 import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
+import {
+  RenderPageAnnotateContext,
+  RenderPageQuoteContext,
+} from "@/components/message/render-page-quote"
 import type { MessageNavEntry } from "@/components/message/conversation-message-nav"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import {
@@ -194,6 +198,14 @@ interface MessageListViewProps {
    * copy alone. MUST be referentially stable.
    */
   onQuoteSelection?: (text: string) => void
+  /**
+   * Send a finished `render_page` annotation session (picked elements, boxed
+   * regions, freehand marks, note) to the conversation composer, as formatted
+   * text. Provided to replayed pages on the same terms as `onQuoteSelection`;
+   * omitted on read-only surfaces, which then offer no annotate entry.
+   * MUST be referentially stable.
+   */
+  onAnnotatePage?: (text: string) => void
   /**
    * Ask a question about a text selection made in this transcript: the host
    * opens a new conversation on the same agent and sends the quoted selection
@@ -1430,6 +1442,7 @@ export function MessageListView({
   insightsInSidebar = false,
   userTurnHeader = null,
   onQuoteSelection,
+  onAnnotatePage,
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
@@ -2250,13 +2263,24 @@ export function MessageListView({
 
   return (
     <MarkdownImageProvider rootPath={resolvedImageRoot}>
-      <ModelLabelProvider value={modelLabel}>
-        <DelegationStatusIndexProvider value={delegationStatusIndex}>
-          <KnownInvocationsProvider value={knownInvocations}>
-            {thread}
-          </KnownInvocationsProvider>
-        </DelegationStatusIndexProvider>
-      </ModelLabelProvider>
+      {/* A `render_page` replayed in the transcript gets the same quote
+          handler the selection bubble over ordinary text gets, so marking up
+          a shown page sends text to the same composer. */}
+      {/* A `render_page` replayed in the transcript gets the same quote
+          handler the selection bubble over ordinary text gets, and an
+          annotation handler next to it, so marking up a shown page sends
+          text to the same composer. */}
+      <RenderPageAnnotateContext.Provider value={onAnnotatePage ?? null}>
+        <RenderPageQuoteContext.Provider value={onQuoteSelection ?? null}>
+          <ModelLabelProvider value={modelLabel}>
+            <DelegationStatusIndexProvider value={delegationStatusIndex}>
+              <KnownInvocationsProvider value={knownInvocations}>
+                {thread}
+              </KnownInvocationsProvider>
+            </DelegationStatusIndexProvider>
+          </ModelLabelProvider>
+        </RenderPageQuoteContext.Provider>
+      </RenderPageAnnotateContext.Provider>
     </MarkdownImageProvider>
   )
 }

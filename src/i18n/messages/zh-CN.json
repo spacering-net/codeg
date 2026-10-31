@@ -4067,6 +4067,7 @@
           "background": "后台任务",
           "plan": "计划",
           "question": "提问",
+          "renderPage": "页面",
           "image": "图片",
           "goal": "目标",
           "other": "步骤"
@@ -4174,6 +4175,28 @@
         "awaiting": "等待你的回答…",
         "declined": "你已忽略此问题 — 代理已自行判断。",
         "noSelection": "未选择"
+      },
+      "renderPage": {
+        "title": "页面",
+        "waitingHint": "请在页面上作答。",
+        "annotate": "在页面上标注",
+        "annotateStop": "退出标注",
+        "annotateElement": "元素",
+        "annotateRegion": "区域",
+        "annotateDraw": "绘制",
+        "annotatePlaceholder": "批注（可选）",
+        "annotateSend": "发送",
+        "annotateCancel": "取消",
+        "annotateChip": "页面标注{n}",
+        "dismiss": "关闭且不作答",
+        "submitError": "回答发送失败，请重试。"
+      },
+      "renderPageResult": {
+        "title": "页面",
+        "awaiting": "等待你的回答…",
+        "declined": "你已关闭此页面 — 代理已自行判断。",
+        "answeredLabel": "回答：",
+        "noSummary": "已在页面上作答"
       },
       "configStale": {
         "agentConfigTitle": "智能体配置已更新",
@@ -5507,6 +5530,11 @@
       "label": "向用户提问",
       "short": "让智能体拿不准时先问你。",
       "hint": "允许智能体暂停并向你提出多选问题，问题会显示在会话输入框上方。智能体会一直等待，直到你作答（或跳过）。"
+    },
+    "render": {
+      "label": "渲染页面",
+      "short": "让智能体在会话里绘制可交互页面。",
+      "hint": "允许智能体在会话中绘制一个小型自包含页面——表单、选项、对比图。页面可以等你提交回答后智能体再继续，也可以只做展示。 还可以在展示的页面上标注——点选元素、圈选区域、随手画一笔，标注报告会作为你的指令回传给智能体。"
     },
     "sessions": {
       "label": "获取会话信息",

@@ -34,7 +34,11 @@ import {
 } from "./context-compaction-card"
 import { GeneratedImagesBlock } from "./generated-images-block"
 import { HtmlFilePreviews } from "./html-file-previews"
-import { PlainTextWithBadges } from "./plain-text-with-badges"
+import {
+  AnnotationReportProvider,
+  PlainTextWithBadges,
+} from "./plain-text-with-badges"
+import { annotationRefsIn } from "./user-message-segments"
 import { PlanMarkdownCard } from "./plan-mode-card"
 import { ResumedDelegationCard } from "./resumed-delegation-card"
 import { TurnErrorPart } from "./turn-error-part"
@@ -428,14 +432,34 @@ export const ContentPartsRenderer = memo(function ContentPartsRenderer({
   role,
   isStreaming = false,
 }: ContentPartsRendererProps) {
+  // Every annotation report this bubble holds, whichever part it sits in —
+  // an agent's record keeps the block away from the badge that opens it.
+  const annotationReports = useMemo(
+    () =>
+      new Set(
+        role === "user"
+          ? parts.flatMap((part) =>
+              part.type === "text" ? annotationRefsIn(part.text) : []
+            )
+          : []
+      ),
+    [parts, role]
+  )
   // Anything the agent produced is drawn as its activity. A "tool" turn (a
   // viewer that passes the transcript's roles through) is agent output too.
   if (role !== "user" && role !== "system") {
     return <AssistantActivity parts={parts} isStreaming={isStreaming} />
   }
+  const body = parts.map((part, i) =>
+    renderPart(part, `${i}`, role, isStreaming)
+  )
+  if (role !== "user") {
+    return <div className="space-y-4">{body}</div>
+  }
+  // One user bubble shares its open annotation reports across its parts.
   return (
-    <div className="space-y-4">
-      {parts.map((part, i) => renderPart(part, `${i}`, role, isStreaming))}
-    </div>
+    <AnnotationReportProvider reports={annotationReports}>
+      <div className="space-y-4">{body}</div>
+    </AnnotationReportProvider>
   )
 })

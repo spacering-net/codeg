@@ -2993,6 +2993,8 @@ pub async fn spawn_agent_connection(
             // companion's ask socket to close (which a reparented/hard-killed
             // agent may never do); the dropped sender declines the tool cleanly.
             inj.questions.cancel_questions_by_parent(&conn_id).await;
+            // Same reclaim for a parked `render_page` answer.
+            inj.renders.cancel_render_pages_by_parent(&conn_id).await;
             // Likewise reclaim a parked Grok `exit_plan_mode` approval; the
             // dropped sender replies disconnect so grok keeps plan mode active.
             inj.plan_approvals
@@ -7729,6 +7731,10 @@ pub struct DelegationInjection {
     /// of the three is on, and the companion's `--features` lists `ask` to expose
     /// the `ask_user_question` tool.
     pub ask: crate::acp::question::QuestionRuntimeConfig,
+    /// Hot-swappable "is render-page enabled?" flag. Read at injection time
+    /// alongside the others so `codeg-mcp` is injected when ANY is on, and the
+    /// companion's `--features` lists `render` to expose the `render_page` tool.
+    pub render: crate::acp::render_page::RenderPageRuntimeConfig,
     /// Hot-swappable "is get-session-info enabled?" flag. Read at injection time
     /// alongside the other three so `codeg-mcp` is injected when ANY of the four
     /// is on, and the companion's `--features` lists `sessions` to expose the
@@ -7757,6 +7763,11 @@ pub struct DelegationInjection {
     /// the delegation `broker.cancel_by_parent` cleanup. Shares the same backing
     /// `ConnectionManager` as the listener's question lookup.
     pub questions: Arc<dyn crate::acp::question::SessionQuestionAccess>,
+    /// Rendered-page registry handle for the teardown cascade — the awaiting-
+    /// answer half of `render_page` parks a listener round-trip exactly like a
+    /// pending ask, so the same sweeps (`run_connection` cleanup guard, turn
+    /// exit, steer, cancel) call `cancel_render_pages_by_parent` through this.
+    pub renders: Arc<dyn crate::acp::render_page::SessionRenderPageAccess>,
     /// Plan-approval registry handle for Grok's `exit_plan_mode` ext bridge.
     /// Unlike delegation / ask / feedback this is NOT a codeg-mcp feature — it is
     /// Grok's native plan mode — so it has no runtime on/off flag and is always
@@ -7855,6 +7866,10 @@ struct CompanionFeatureFlags {
     delegation: bool,
     feedback: bool,
     ask: bool,
+    /// `render_page`, gated by its own setting. Its own flag, not folded into
+    /// `ask`: the ask card and the agent-authored page are different effects on
+    /// the user's chat, and settings describe effects.
+    render: bool,
     sessions: bool,
     /// Per-spawn (task-engine launches only), not a settings toggle — on its own
     /// it still injects the companion so a task session always has its reporting
@@ -7901,6 +7916,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     }
     if flags.ask {
         features.push("ask");
+    }
+    if flags.render {
+        features.push("render");
     }
     if flags.sessions {
         features.push("sessions");
@@ -8041,6 +8059,7 @@ where
         delegation: delegation_enabled,
         feedback: feedback_enabled,
         ask: injection.ask.is_enabled().await,
+        render: injection.render.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
         tasks: groups.tasks,
         result: groups.result,
@@ -8073,7 +8092,7 @@ where
         tracing::warn!(
             "[delegation][WARN] codeg-mcp companion binary not found (checked CODEG_MCP_BIN, \
              exe sibling, and PATH); skipping delegate_to_agent / check_user_feedback / \
-             ask_user_question / get_session_info tool injection for connection \
+             ask_user_question / render_page / get_session_info tool injection for connection \
              {parent_connection_id}. Reinstall codeg or set CODEG_MCP_BIN to fix."
         );
         return None;
@@ -8352,7 +8371,14 @@ async fn run_connection(
     // pre-bridge rendering.
     let native_ask_access = delegation_injection
         .as_ref()
-        .map(|inj| (Arc::clone(&inj.questions), inj.ask.clone()));
+        .map(|inj| {
+            (
+                Arc::clone(&inj.questions),
+                inj.ask.clone(),
+                Arc::clone(&inj.renders),
+                inj.render.clone(),
+            )
+        });
     let grok_ask_conn_id = connection_id.clone();
     // Grok `exit_plan_mode` bridge access — always wired in production (native
     // plan mode, no feature flag). `None` only on the test paths that spin up
@@ -8429,7 +8455,7 @@ async fn run_connection(
                     // An approval gating codeg's OWN ask tool is a dialog asking
                     // permission to show a dialog; allow it so the user sees only
                     // the interactive question card (see
-                    // `codeg_ask_auto_allow_option`).
+                    // `codeg_dialog_auto_allow_option`).
                     let responder =
                         match try_auto_allow_codeg_ask(&perm_ask_access, &req, responder).await {
                             Ok(()) => return Ok(()),
@@ -9974,6 +10000,18 @@ struct GrokExitPlanModeRequest(serde_json::Value);
 #[serde(transparent)]
 struct CodexElicitationRequest(serde_json::Value);
 
+/// The interactive-question plumbing a native bridge (grok's
+/// `_x.ai/ask_user_question`, codex's `elicitation/create`, the render_page
+/// mirror) needs: the shared question and render-page access handles, each with
+/// its runtime toggle. Carried as `Option` so a connection built without them
+/// keeps the pre-bridge fallback behavior.
+type NativeAskAccess = (
+    Arc<dyn crate::acp::question::SessionQuestionAccess>,
+    crate::acp::question::QuestionRuntimeConfig,
+    Arc<dyn crate::acp::render_page::SessionRenderPageAccess>,
+    crate::acp::render_page::RenderPageRuntimeConfig,
+);
+
 /// Bridge grok's native `_x.ai/ask_user_question` ext request into codeg's
 /// interactive question card. Grok blocks on the reply, so codeg registers the
 /// questions through the shared [`crate::acp::question::SessionQuestionAccess`] —
@@ -9984,17 +10022,14 @@ struct CodexElicitationRequest(serde_json::Value);
 /// back to its inert fire-and-forget rendering — exactly the pre-bridge behavior,
 /// so no path here can regress it.
 async fn handle_grok_ask_user_question(
-    access: &Option<(
-        Arc<dyn crate::acp::question::SessionQuestionAccess>,
-        crate::acp::question::QuestionRuntimeConfig,
-    )>,
+    access: &Option<NativeAskAccess>,
     connection_id: &str,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
     req: GrokAskUserQuestionRequest,
     responder: Responder<serde_json::Value>,
 ) {
-    let Some((questions, ask_cfg)) = access else {
+    let Some((questions, ask_cfg, ..)) = access else {
         let _ = responder.respond_with_internal_error("ask_user_question bridge unavailable");
         return;
     };
@@ -10083,13 +10118,26 @@ async fn handle_grok_ask_user_question(
 /// only gating codeg's OWN `ask_user_question` companion tool, or `None` to
 /// leave the request on the ordinary approval-card path.
 ///
+/// Which of codeg-mcp's own dialog tools a permission request is gating:
+/// [`crate::acp::question::is_codeg_ask_tool_name`] and
+/// [`crate::acp::render_page::is_codeg_render_tool_name`] each answer for one.
+/// The distinction matters for the kill switch below — each tool is only
+/// auto-allowed while ITS feature is on, since each is only exposed to the
+/// agent while it is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CodegDialogTool {
+    Ask,
+    Render,
+}
+
 /// An agent whose permission mode consults the user before every MCP tool call
 /// (claude-agent-acp's default) gates the ask tool too, so asking the user a
 /// question used to cost TWO dialogs: a raw "run mcp__codeg-mcp__ask_user_question?"
 /// approval dumping the questions as JSON, and only after "Yes" the real
 /// interactive card. The first one carries no decision the second doesn't — see
 /// [`crate::acp::question::is_codeg_ask_tool_name`] for why answering it is the
-/// user's consent either way.
+/// user's consent either way. `render_page` is in the same boat: the page (and
+/// for a waiting page the answer card) IS the dialog.
 ///
 /// The tool is identified by NAME, read from the two places a host puts it:
 /// `toolCall.title` (claude-agent-acp's `toolInfoFromToolUse` falls through to
@@ -10103,12 +10151,38 @@ async fn handle_grok_ask_user_question(
 /// durable permission rule into the user's own agent settings — a decision that
 /// outlives this turn and this connection, so it stays theirs to make. With no
 /// such option (an agent that offers only "always"), `None` keeps today's card.
-fn codeg_ask_auto_allow_option(req: &RequestPermissionRequest) -> Option<String> {
-    codeg_tool_auto_allow_option(req, crate::acp::question::is_codeg_ask_tool_name)
+fn codeg_dialog_auto_allow_option(
+    req: &RequestPermissionRequest,
+) -> Option<(CodegDialogTool, String)> {
+    let permission_title = crate::acp::air_contract::permission_record(req.meta.as_ref())
+        .and_then(|p| p.get("title"))
+        .and_then(serde_json::Value::as_str);
+    let titles = [req.tool_call.fields.title.as_deref(), permission_title];
+    let kind = if titles
+        .into_iter()
+        .flatten()
+        .any(crate::acp::question::is_codeg_ask_tool_name)
+    {
+        CodegDialogTool::Ask
+    } else if titles
+        .into_iter()
+        .flatten()
+        .any(crate::acp::render_page::is_codeg_render_tool_name)
+    {
+        CodegDialogTool::Render
+    } else {
+        return None;
+    };
+    let option_id = req
+        .options
+        .iter()
+        .find(|opt| opt.kind == PermissionOptionKind::AllowOnce)
+        .map(|opt| opt.option_id.to_string())?;
+    Some((kind, option_id))
 }
 
 /// The `allow_once` option of a request gating the codeg-mcp tool `is_tool`
-/// names, as [`codeg_ask_auto_allow_option`] reads it.
+/// names, as [`codeg_submit_auto_allow_option`] reads it.
 fn codeg_tool_auto_allow_option(
     req: &RequestPermissionRequest,
     is_tool: fn(&str) -> bool,
@@ -10123,10 +10197,12 @@ fn codeg_tool_auto_allow_option(
     if !is_it {
         return None;
     }
-    req.options
+    let option_id = req
+        .options
         .iter()
         .find(|opt| opt.kind == PermissionOptionKind::AllowOnce)
-        .map(|opt| opt.option_id.to_string())
+        .map(|opt| opt.option_id.to_string())?;
+    Some(option_id)
 }
 
 /// The option that allows a request gating `submit_result` — on a connection
@@ -10168,41 +10244,42 @@ async fn try_auto_allow_codeg_submit(
     Ok(())
 }
 
-/// Answer a permission request that is merely gating codeg's own ask tool, so
-/// the interactive question card is the only thing the user ever sees.
+/// Answer a permission request that is merely gating one of codeg's own dialog
+/// tools, so the interactive card is the only thing the user ever sees.
 ///
 /// `Err(responder)` hands the request back for the ordinary permission path —
 /// the outcome for every other tool, and the deliberate fallback whenever the
-/// auto-allow cannot be taken (the ask feature is off, or the agent offered no
-/// allow-once option).
-// `result_large_err`: agent-client-protocol's `Responder` (since 2.x) is past
-// clippy's size limit, but this `Err` is the responder handed back once per
-// permission request, not an error bubbled through `?` — boxing it would only
-// add an allocation.
+/// auto-allow cannot be taken (the tool's own feature is off, or the agent
+/// offered no allow-once option).
+// `result_large_err`: agent-client-protocol 2.x's `Responder` is past clippy's
+// size limit, but this `Err` is the responder handed back once per permission
+// request, not an error bubbled through `?` — boxing it would only add an
+// allocation.
 #[allow(clippy::result_large_err)]
 async fn try_auto_allow_codeg_ask(
-    access: &Option<(
-        Arc<dyn crate::acp::question::SessionQuestionAccess>,
-        crate::acp::question::QuestionRuntimeConfig,
-    )>,
+    access: &Option<NativeAskAccess>,
     req: &RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
 ) -> Result<(), Responder<RequestPermissionResponse>> {
-    let Some(option_id) = codeg_ask_auto_allow_option(req) else {
+    let Some((kind, option_id)) = codeg_dialog_auto_allow_option(req) else {
         return Err(responder);
     };
-    // Same kill switch as the ask tool itself (and as `try_bridge_pi_select_ask`):
-    // with the feature off codeg-mcp never exposed `ask_user_question`, so a
-    // request naming it is not the tool this shortcut is allowed to speak for.
-    let Some((_, ask_cfg)) = access else {
+    // Same kill switch as each tool itself (and as `try_bridge_pi_select_ask`):
+    // with the feature off codeg-mcp never exposed the tool, so a request
+    // naming it is not the tool this shortcut is allowed to speak for.
+    let Some((_, ask_cfg, _, render_cfg)) = access else {
         return Err(responder);
     };
-    if !ask_cfg.is_enabled().await {
+    let (tool_name, enabled) = match kind {
+        CodegDialogTool::Ask => ("ask_user_question", ask_cfg.is_enabled().await),
+        CodegDialogTool::Render => ("render_page", render_cfg.is_enabled().await),
+    };
+    if !enabled {
         return Err(responder);
     }
     tracing::debug!(
-        "[ACP] auto-allowing the permission request for codeg's own ask_user_question tool \
-         (option {option_id}); the interactive question card is the actual prompt"
+        "[ACP] auto-allowing the permission request for codeg's own {tool_name} tool \
+         (option {option_id}); the interactive card is the actual prompt"
     );
     let _ = responder.respond(RequestPermissionResponse::new(
         RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id)),
@@ -10236,10 +10313,7 @@ async fn try_auto_allow_codeg_ask(
 // Same `Err` hand-back as `try_auto_allow_codeg_ask`; see its allow note.
 #[allow(clippy::result_large_err)]
 async fn try_bridge_pi_select_ask(
-    access: &Option<(
-        Arc<dyn crate::acp::question::SessionQuestionAccess>,
-        crate::acp::question::QuestionRuntimeConfig,
-    )>,
+    access: &Option<NativeAskAccess>,
     connection_id: &str,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -10255,7 +10329,7 @@ async fn try_bridge_pi_select_ask(
     if !tool_call_id.starts_with(crate::acp::question::PI_EXTENSION_UI_ID_PREFIX) {
         return Err(responder);
     }
-    let Some((questions, ask_cfg)) = access else {
+    let Some((questions, ask_cfg, ..)) = access else {
         return Err(responder);
     };
     // Same kill switch as the codeg-mcp ask tool: when the feature is off, the
@@ -10399,10 +10473,7 @@ async fn try_bridge_pi_select_ask(
 // Same `Err` hand-back as `try_auto_allow_codeg_ask`; see its allow note.
 #[allow(clippy::result_large_err)]
 async fn try_bridge_antigravity_ask(
-    access: &Option<(
-        Arc<dyn crate::acp::question::SessionQuestionAccess>,
-        crate::acp::question::QuestionRuntimeConfig,
-    )>,
+    access: &Option<NativeAskAccess>,
     connection_id: &str,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -10416,7 +10487,7 @@ async fn try_bridge_antigravity_ask(
     {
         return Err(responder);
     }
-    let Some((questions, ask_cfg)) = access else {
+    let Some((questions, ask_cfg, ..)) = access else {
         return Err(responder);
     };
     // Same kill switch as the codeg-mcp ask tool and every other native ask
@@ -10620,10 +10691,7 @@ async fn handle_grok_exit_plan_mode(
 /// dispatch loop, reply in Cursor's option-id envelope. Early returns use
 /// `skipped` so the agent continues instead of hanging on `-32601`.
 async fn handle_cursor_ask_question(
-    access: &Option<(
-        Arc<dyn crate::acp::question::SessionQuestionAccess>,
-        crate::acp::question::QuestionRuntimeConfig,
-    )>,
+    access: &Option<NativeAskAccess>,
     connection_id: &str,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -10638,7 +10706,7 @@ async fn handle_cursor_ask_question(
     // doubles as "the user dismissed the card", and an agent that can't tell
     // that apart from "this host never showed it" will proceed as if the user
     // had a say. The reason text is structural — never any of the payload.
-    let Some((questions, ask_cfg)) = access else {
+    let Some((questions, ask_cfg, ..)) = access else {
         let _ = responder.respond(crate::acp::cursor_ext::cursor_ask_skip_response_with_reason(
             "the host's question bridge is unavailable; the user was not asked",
         ));
@@ -10797,10 +10865,7 @@ fn handle_cursor_generate_image(
 #[allow(clippy::too_many_arguments)]
 async fn handle_elicitation_request(
     cx: &ConnectionTo<Agent>,
-    access: &Option<(
-        Arc<dyn crate::acp::question::SessionQuestionAccess>,
-        crate::acp::question::QuestionRuntimeConfig,
-    )>,
+    access: &Option<NativeAskAccess>,
     perms: &PendingPermissions,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -10938,7 +11003,7 @@ async fn handle_elicitation_request(
         // Question-style (codex `request_user_input`, generic MCP forms):
         // bridge into the same ask card as the codeg-mcp ask tool.
         crate::acp::question::ElicitationPlan::Questions(questions) => {
-            let Some((question_access, ask_cfg)) = access else {
+            let Some((question_access, ask_cfg, ..)) = access else {
                 let _ = responder.respond(unanswered());
                 return;
             };
@@ -15157,6 +15222,11 @@ async fn run_conversation_loop(
                             // background.
                             if let Some(inj) = delegation_injection {
                                 inj.questions.cancel_questions_by_parent(conn_id).await;
+                                // `render_page` answers ride the same MCP call
+                                // channel, so they get the same turn-exit sweep.
+                                inj.renders
+                                    .cancel_render_pages_by_parent(conn_id)
+                                    .await;
                             }
                             // Cascade-cancel any pending delegations whenever
                             // the parent's turn ended for a reason other than
@@ -15351,6 +15421,11 @@ async fn run_conversation_loop(
                                     // decline beside the steer.
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
+                                        // A parked `render_page` answer is
+                                        // dropped by the redirect too.
+                                        inj.renders
+                                            .cancel_render_pages_by_parent(conn_id)
+                                            .await;
                                     }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
@@ -15501,14 +15576,19 @@ async fn run_conversation_loop(
                                         // Cancel keeps the connection alive. Without
                                         // this the entry lingers, and the
                                         // one-pending-per-connection guard in
-                                        // `register_{question,plan_approval}` then
-                                        // silently rejects the NEXT one on this
-                                        // connection (its card never shows). Idempotent
-                                        // with the cleanup-guard drain (empty map ->
-                                        // no-op); the dropped sender declines the tool /
-                                        // replies disconnect, exactly like the
-                                        // permission drain above.
+                                        // `register_{question,plan_approval,render_page}`
+                                        // then silently rejects the NEXT one on
+                                        // this connection (its card never
+                                        // shows). Idempotent with the
+                                        // cleanup-guard drain (empty map ->
+                                        // no-op); the dropped sender declines
+                                        // the tool / replies disconnect,
+                                        // exactly like the permission drain
+                                        // above.
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
+                                        inj.renders
+                                            .cancel_render_pages_by_parent(conn_id)
+                                            .await;
                                         inj.plan_approvals
                                             .cancel_plan_approvals_by_parent(conn_id)
                                             .await;
@@ -23745,8 +23825,8 @@ async fn close_grok_agent_turn(
     true
 }
 
-/// Answer, declined, a question or plan approval an agent-initiated turn is
-/// parked on, once codeg has ended that turn early (Stop, or a prompt that has
+/// Answer, declined, a question, rendered-page answer or plan approval an
+/// agent-initiated turn is parked on, once codeg has ended that turn early (Stop, or a prompt that has
 /// to run next). Both cards close with the turn, so nothing could ever answer
 /// them, and Grok would stay blocked — holding the one-per-connection slot
 /// every later ask needs, and, when a prompt is queued behind the turn, that
@@ -23757,6 +23837,7 @@ async fn cancel_grok_agent_turn_asks(
 ) {
     if let Some(inj) = delegation_injection {
         inj.questions.cancel_questions_by_parent(conn_id).await;
+        inj.renders.cancel_render_pages_by_parent(conn_id).await;
         inj.plan_approvals
             .cancel_plan_approvals_by_parent(conn_id)
             .await;
@@ -26746,6 +26827,28 @@ mod tests {
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
     }
 
+    /// Render-page access the connection tests can hand to the widened ask /
+    /// permission tuples without exercising them: registers nothing, so a
+    /// waiting page never appears and nothing needs canceling.
+    #[derive(Default)]
+    struct NoopRenderPages;
+
+    #[async_trait::async_trait]
+    impl crate::acp::render_page::SessionRenderPageAccess for NoopRenderPages {
+        async fn register_render_page(
+            &self,
+            _parent_connection_id: &str,
+            _title: String,
+            _html: String,
+        ) -> Option<crate::acp::render_page::RegisteredRenderPage> {
+            None
+        }
+
+        async fn cancel_render_page(&self, _parent_connection_id: &str, _page_id: &str) {}
+
+        async fn cancel_render_pages_by_parent(&self, _parent_connection_id: &str) {}
+    }
+
     /// codex abandons a `request_user_input` it stops waiting for — its
     /// `autoResolutionMs` expired, or the turn was interrupted — with
     /// `$/cancel_request`. The question card must go at once (it used to wait
@@ -26768,10 +26871,12 @@ mod tests {
         ask_config
             .set(crate::acp::question::QuestionConfig { enabled: true })
             .await;
-        let access: Option<(
-            Arc<dyn crate::acp::question::SessionQuestionAccess>,
-            crate::acp::question::QuestionRuntimeConfig,
-        )> = Some((questions.clone(), ask_config));
+        let access: Option<NativeAskAccess> = Some((
+            questions.clone(),
+            ask_config,
+            Arc::new(NoopRenderPages),
+            crate::acp::render_page::RenderPageRuntimeConfig::new(),
+        ));
 
         let agent = tokio::spawn(Agent.builder().connect_with(
             agent_end,
@@ -29142,15 +29247,18 @@ mod tests {
     }
 
     #[test]
-    fn codeg_ask_auto_allow_option_picks_allow_once_for_codegs_own_ask_tool() {
-        let req = claude_mcp_permission_request(
-            "mcp__codeg-mcp__ask_user_question",
-            claude_permission_options(),
-        );
-        assert_eq!(
-            codeg_ask_auto_allow_option(&req).as_deref(),
-            Some("allow-once")
-        );
+    fn codeg_dialog_auto_allow_option_picks_allow_once_for_codegs_own_dialog_tools() {
+        for (tool, kind) in [
+            ("mcp__codeg-mcp__ask_user_question", CodegDialogTool::Ask),
+            ("mcp__codeg-mcp__render_page", CodegDialogTool::Render),
+        ] {
+            let req = claude_mcp_permission_request(tool, claude_permission_options());
+            assert_eq!(
+                codeg_dialog_auto_allow_option(&req),
+                Some((kind, "allow-once".to_string())),
+                "{tool}"
+            );
+        }
         // The title alone is enough: an agent that sends no request-level
         // `_meta.permission` block still gets the shortcut.
         let mut bare = claude_mcp_permission_request(
@@ -29159,23 +29267,24 @@ mod tests {
         );
         bare.meta = None;
         assert_eq!(
-            codeg_ask_auto_allow_option(&bare).as_deref(),
-            Some("allow-once")
+            codeg_dialog_auto_allow_option(&bare).map(|(kind, _)| kind),
+            Some(CodegDialogTool::Ask)
         );
     }
 
     #[test]
-    fn codeg_ask_auto_allow_option_leaves_every_other_approval_on_the_card() {
+    fn codeg_dialog_auto_allow_option_leaves_every_other_approval_on_the_card() {
         // Another server's ask tool: approving it is the user's call, not
         // codeg's, even though the tool half of the name matches.
         for foreign in [
             "mcp__other-server__ask_user_question",
+            "mcp__other-server__render_page",
             "mcp__codeg-mcp__delegate_to_agent",
             "Bash",
         ] {
             let req = claude_mcp_permission_request(foreign, claude_permission_options());
             assert!(
-                codeg_ask_auto_allow_option(&req).is_none(),
+                codeg_dialog_auto_allow_option(&req).is_none(),
                 "{foreign} must keep its approval card"
             );
         }
@@ -29196,7 +29305,7 @@ mod tests {
                 ),
             ],
         );
-        assert!(codeg_ask_auto_allow_option(&always_only).is_none());
+        assert!(codeg_dialog_auto_allow_option(&always_only).is_none());
     }
 
     /// `submit_result` is answered by the same rule as the ask tool — codeg's
@@ -42971,12 +43080,15 @@ mod tests {
             agent_availability,
             feedback: crate::acp::feedback::FeedbackRuntimeConfig::new(),
             ask: crate::acp::question::QuestionRuntimeConfig::new(),
+            render: crate::acp::render_page::RenderPageRuntimeConfig::new(),
             sessions: crate::acp::session_info::SessionInfoRuntimeConfig::new(),
             authoring: crate::acp::chat_authoring::ChatAuthoringRuntimeConfig::new(),
             browser: crate::acp::browser_tools::BrowserToolsRuntimeConfig::new(),
             computer: crate::acp::computer_tools::ComputerToolsRuntimeConfig::new(),
             questions: Arc::new(TestNoQuestions)
                 as Arc<dyn crate::acp::question::SessionQuestionAccess>,
+            renders: Arc::new(NoopRenderPages)
+                as Arc<dyn crate::acp::render_page::SessionRenderPageAccess>,
             plan_approvals: Arc::new(TestNoPlanApprovals)
                 as Arc<dyn crate::acp::plan_approval::SessionPlanApprovalAccess>,
         }
@@ -43191,6 +43303,8 @@ mod tests {
         assert_eq!(only(|f| f.feedback = true), Some("feedback".to_string()));
         // Ask only — likewise injects the companion on its own.
         assert_eq!(only(|f| f.ask = true), Some("ask".to_string()));
+        // Render only — same, on its own flag.
+        assert_eq!(only(|f| f.render = true), Some("render".to_string()));
         // Sessions only — likewise injects the companion on its own.
         assert_eq!(only(|f| f.sessions = true), Some("sessions".to_string()));
         // Per-spawn tasks group: injects alone.
@@ -43213,6 +43327,7 @@ mod tests {
                 delegation: true,
                 feedback: true,
                 ask: true,
+                render: true,
                 sessions: true,
                 tasks: true,
                 result: true,
@@ -43225,7 +43340,7 @@ mod tests {
                 computer_clipboard: true,
             }),
             Some(
-                "delegation,feedback,ask,sessions,tasks,result,automations,taskboard,browser,\
+                "delegation,feedback,ask,render,sessions,tasks,result,automations,taskboard,browser,\
                  browser_eval,computer,computer_launch,computer_clipboard"
                     .to_string()
             )
@@ -48203,8 +48318,12 @@ mod tests {
             config
                 .set(crate::acp::question::QuestionConfig { enabled })
                 .await;
-            let access: Option<(Arc<dyn crate::acp::question::SessionQuestionAccess>, _)> =
-                Some((Arc::new(AntigravityTestAnswer { decline }), config));
+            let access: Option<NativeAskAccess> = Some((
+                Arc::new(AntigravityTestAnswer { decline }),
+                config,
+                Arc::new(NoopRenderPages),
+                crate::acp::render_page::RenderPageRuntimeConfig::new(),
+            ));
             let agent = tokio::spawn(Agent.builder().connect_with(
                 agent_end,
                 async move |cx: ConnectionTo<Client>| {
@@ -48529,10 +48648,12 @@ mod tests {
         ask_config
             .set(crate::acp::question::QuestionConfig { enabled: true })
             .await;
-        let access: Option<(
-            Arc<dyn crate::acp::question::SessionQuestionAccess>,
-            crate::acp::question::QuestionRuntimeConfig,
-        )> = Some((Arc::new(AnswersFirstOption), ask_config));
+        let access: Option<NativeAskAccess> = Some((
+            Arc::new(AnswersFirstOption),
+            ask_config,
+            Arc::new(NoopRenderPages),
+            crate::acp::render_page::RenderPageRuntimeConfig::new(),
+        ));
 
         let agent = tokio::spawn(Agent.builder().connect_with(
             agent_end,

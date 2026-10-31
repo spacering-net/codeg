@@ -313,6 +313,17 @@ pub struct SessionState {
     /// by `approval_id`.
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
 
+    /// The agent's in-flight `render_page` call WITH `awaitAnswer` (the page
+    /// awaiting the user's submit). Set by `RenderPageRequest`, cleared by a
+    /// matching `RenderPageResolved` (and defensively on `TurnComplete` /
+    /// `UserMessage`). Carried on `to_snapshot()` so a client attaching mid-turn
+    /// knows WHICH rendered-page card is the live, answerable one — the card
+    /// itself renders from the tool call's input, so the event and the snapshot
+    /// only carry the answerable flag plus the identity fields. At most one is
+    /// pending (the agent is blocked in the tool call); the backend's
+    /// `pending_render_pages` registry keys the answer one-shot.
+    pub pending_render_page: Option<crate::acp::render_page::PendingRenderPageState>,
+
     /// In-flight (running) sub-agent delegations keyed by `parent_tool_use_id`.
     /// `DelegationStarted` inserts; `DelegationCompleted` removes. UNLIKE
     /// `active_tool_calls`, NOT cleared on `TurnComplete` (an async delegation
@@ -889,6 +900,7 @@ impl SessionState {
             permission_matched_calls: BTreeSet::new(),
             pending_permission: None,
             pending_question: None,
+            pending_render_page: None,
             pending_plan_approval: None,
             active_delegations: BTreeMap::new(),
             feedback: Vec::new(),
@@ -1308,6 +1320,27 @@ impl SessionState {
                     self.pending_plan_approval = None;
                 }
             }
+            AcpEvent::RenderPageRequest {
+                page_id,
+                title,
+                html,
+            } => {
+                self.pending_render_page = Some(crate::acp::render_page::PendingRenderPageState {
+                    page_id: page_id.clone(),
+                    title: title.clone(),
+                    html: html.clone(),
+                    created_at: Utc::now(),
+                });
+            }
+            AcpEvent::RenderPageResolved { page_id } => {
+                // Same id-match guard as the question / plan-approval clears.
+                if matches!(
+                    &self.pending_render_page,
+                    Some(p) if p.page_id == *page_id,
+                ) {
+                    self.pending_render_page = None;
+                }
+            }
             AcpEvent::TurnComplete { stop_reason, .. } => {
                 // Diagnostic only (no behavior change): pairs with the
                 // StatusChanged log above. This is the ACTUAL point the turn
@@ -1449,6 +1482,10 @@ impl SessionState {
                 // responder is drained by the connection's teardown/cancel path;
                 // this just keeps the snapshot honest if the turn settles first.
                 self.pending_plan_approval = None;
+                // And a blocked `render_page` answer: the awaiting tool call is
+                // declined by the same turn-exit sweeps; the page card itself
+                // stays in the transcript, only its answerable state ends here.
+                self.pending_render_page = None;
                 self.status = ConnectionStatus::Connected;
             }
             AcpEvent::UserMessage { message_id, blocks } => {
@@ -1486,6 +1523,10 @@ impl SessionState {
                 // queued prompt sent instead of answering) must not leave a dead
                 // approval in the snapshot for a mid-turn attach to render.
                 self.pending_plan_approval = None;
+                // Same for a stale awaiting page (a prompt sent past it is the
+                // user choosing to answer in chat — see the answer command's
+                // decline-on-supersede note).
+                self.pending_render_page = None;
                 // Starting a prompt past an active AIR failure acknowledges it
                 // — settle EVERYTHING, mirroring the frontend reducer's
                 // prompt-start settle so a client hydrating mid-turn doesn't
@@ -2054,6 +2095,15 @@ impl SessionState {
                 title,
             });
         }
+        if let Some(r) = self.pending_render_page.as_ref() {
+            // The page's own title IS the label — already a one-line heading by
+            // construction (extraction collapses whitespace and caps at 120).
+            return Some(BlockedOn {
+                kind: BlockedKind::RenderPage,
+                request_id: r.page_id.clone(),
+                title: Some(truncate_one_line(r.title.trim(), max_chars)),
+            });
+        }
         None
     }
 
@@ -2424,6 +2474,7 @@ impl SessionState {
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
             pending_plan_approval: self.pending_plan_approval.clone(),
+            pending_render_page: self.pending_render_page.clone(),
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
             feedback: self.feedback.clone(),
@@ -2524,6 +2575,13 @@ pub struct LiveSessionSnapshot {
     /// pre-feature shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
+    /// The agent's in-flight awaiting-answer `render_page` (see
+    /// `SessionState.pending_render_page`). `#[serde(default)]` so older
+    /// payloads deserialize; `skip_serializing_if` keeps the common no-page case
+    /// off the wire so every snapshot stays byte-identical with the
+    /// pre-feature shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_render_page: Option<crate::acp::render_page::PendingRenderPageState>,
     /// The in-flight user prompt for the current turn (see
     /// `SessionState.pending_user_message`). `#[serde(default)]` so older
     /// payloads still deserialize; `skip_serializing_if` so the no-pending case

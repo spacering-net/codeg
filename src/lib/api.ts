@@ -78,6 +78,7 @@ import type {
   LiveSessionSnapshot,
   FeedbackItem,
   QuestionAnswer,
+  RenderPageAnswer,
   PlanApprovalAnswer,
   AcpAgentInfo,
   AcpAgentStatus,
@@ -453,6 +454,25 @@ export async function acpAnswerQuestion(
   return getTransport().call("acp_answer_question", {
     connectionId,
     questionId,
+    answer,
+  })
+}
+
+/**
+ * Submit the user's answer to an awaiting `render_page` (the page's
+ * `codeg.render.submit(data, summary)` payload, or a dismissal). Resolves the
+ * parked tool call on the backend (and clears the card on every client via the
+ * `render_page_resolved` event). Idempotent: answering an already-resolved /
+ * unknown `pageId` is a no-op success.
+ */
+export async function acpAnswerRenderPage(
+  connectionId: string,
+  pageId: string,
+  answer: RenderPageAnswer
+): Promise<void> {
+  return getTransport().call("acp_answer_render_page", {
+    connectionId,
+    pageId,
     answer,
   })
 }
@@ -5750,6 +5770,23 @@ export async function setQuestionSettings(
   settings: QuestionSettings
 ): Promise<QuestionSettings> {
   return getTransport().call("set_question_settings", { settings })
+}
+
+// ─── Render-page settings ──────────────────────────────────────────────────
+
+/** Mirror of Rust `RenderPageSettings` (default ON). */
+export interface RenderPageSettings {
+  enabled: boolean
+}
+
+export async function getRenderPageSettings(): Promise<RenderPageSettings> {
+  return getTransport().call("get_render_page_settings")
+}
+
+export async function setRenderPageSettings(
+  settings: RenderPageSettings
+): Promise<RenderPageSettings> {
+  return getTransport().call("set_render_page_settings", { settings })
 }
 
 // ─── Get-session-info settings ─────────────────────────────────────────────

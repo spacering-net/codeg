@@ -54,6 +54,11 @@ pub struct AppState {
     /// the question settings command on save. Populated at startup by
     /// `apply_persisted_question_config`.
     pub question_config: crate::acp::question::QuestionRuntimeConfig,
+    /// Hot-swappable render-page (`render_page`) enable flag. Shared with the
+    /// `DelegationInjection` so MCP injection reads it, and updated by the
+    /// render-page settings command on save. Populated at startup by
+    /// `apply_persisted_render_config`.
+    pub render_config: crate::acp::render_page::RenderPageRuntimeConfig,
     /// Hot-swappable get-session-info (`get_session_info`) enable flag. Shared
     /// with the `DelegationInjection` so MCP injection reads it, and updated by
     /// the session-info settings command on save. Populated at startup by
@@ -131,6 +136,7 @@ pub fn default_chat_channel_manager() -> ChatChannelManager {
 /// The listener task is _not_ spawned here — callers spawn it after they
 /// own an `Arc<AppState>` (or the relevant pieces) so the listener can
 /// borrow the long-lived state without circular Arc shenanigans.
+#[allow(clippy::type_complexity)]
 pub fn build_delegation_stack(
     connection_manager: &ConnectionManager,
     db_conn: sea_orm::DatabaseConnection,
@@ -141,6 +147,7 @@ pub fn build_delegation_stack(
     PathBuf,
     crate::acp::feedback::FeedbackRuntimeConfig,
     crate::acp::question::QuestionRuntimeConfig,
+    crate::acp::render_page::RenderPageRuntimeConfig,
     crate::acp::session_info::SessionInfoRuntimeConfig,
     crate::acp::chat_authoring::ChatAuthoringRuntimeConfig,
     crate::acp::browser_tools::BrowserToolsRuntimeConfig,
@@ -198,6 +205,7 @@ pub fn build_delegation_stack(
     let socket_path = default_socket_path(&std::env::temp_dir());
     let feedback = crate::acp::feedback::FeedbackRuntimeConfig::new();
     let ask = crate::acp::question::QuestionRuntimeConfig::new();
+    let render = crate::acp::render_page::RenderPageRuntimeConfig::new();
     let sessions = crate::acp::session_info::SessionInfoRuntimeConfig::new();
     let authoring = crate::acp::chat_authoring::ChatAuthoringRuntimeConfig::new();
     let browser = crate::acp::browser_tools::BrowserToolsRuntimeConfig::new();
@@ -212,6 +220,7 @@ pub fn build_delegation_stack(
         agent_availability,
         feedback: feedback.clone(),
         ask: ask.clone(),
+        render: render.clone(),
         sessions: sessions.clone(),
         authoring: authoring.clone(),
         browser: browser.clone(),
@@ -221,6 +230,10 @@ pub fn build_delegation_stack(
         questions: Arc::new(crate::acp::manager::ConnectionManagerQuestionLookup {
             manager: Arc::new(connection_manager.clone_ref()),
         }) as Arc<dyn crate::acp::question::SessionQuestionAccess>,
+        // Same pattern for a parked `render_page` answer.
+        renders: Arc::new(crate::acp::manager::ConnectionManagerRenderPageLookup {
+            manager: Arc::new(connection_manager.clone_ref()),
+        }) as Arc<dyn crate::acp::render_page::SessionRenderPageAccess>,
         // Grok `exit_plan_mode` bridge — always wired (native plan mode, no
         // feature flag), same backing manager as the question lookup.
         plan_approvals: Arc::new(crate::acp::manager::ConnectionManagerPlanApprovalLookup {
@@ -229,7 +242,7 @@ pub fn build_delegation_stack(
     });
 
     (
-        broker, tokens, socket_path, feedback, ask, sessions, authoring, browser, computer,
+        broker, tokens, socket_path, feedback, ask, render, sessions, authoring, browser, computer,
     )
 }
 
@@ -266,6 +279,7 @@ impl AppState {
             delegation_socket_path,
             feedback_config,
             question_config,
+            render_config,
             session_info_config,
             chat_authoring_config,
             browser_tools_config,
@@ -293,6 +307,7 @@ impl AppState {
             delegation_socket_path,
             feedback_config,
             question_config,
+            render_config,
             session_info_config,
             chat_authoring_config,
             browser_tools_config,

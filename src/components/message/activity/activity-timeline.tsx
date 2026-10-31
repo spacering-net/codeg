@@ -13,6 +13,7 @@ import type {
 import { ActivityRenderProvider, useActivityRender } from "./activity-context"
 import { GOAL_ICON, IMAGE_ICON, toolIcon } from "./step-visuals"
 import { AskQuestionResultCard } from "../ask-question-result-card"
+import { RenderPageResultCard } from "../render-page-result-card"
 import { CODEG_MCP_TOOL_ICONS, CodegMcpToolCard } from "../codeg-mcp-tool-card"
 import { GoalRunPart, GoalToolCallPart } from "../goal-tool-call"
 import { isCodegMcpWorkbenchTool } from "@/lib/codeg-mcp-tool"
@@ -397,6 +398,23 @@ function ToolStepView({ step: given }: { step: ToolStep }) {
           />
         </HostedRow>
       )
+    case "render-page":
+      return (
+        <HostedRow
+          stepKey={step.key}
+          icon={toolIcon(tool)}
+          status={tool.status}
+          kindLabel={t("kind.renderPage")}
+          inset={false}
+        >
+          <RenderPageResultCard
+            input={part.input ?? null}
+            output={part.output ?? null}
+            errorText={part.errorText ?? null}
+            state={part.state}
+          />
+        </HostedRow>
+      )
     case "workbench": {
       const name = tool.toolName.toLowerCase()
       if (isCodegMcpWorkbenchTool(name)) {
@@ -458,6 +476,8 @@ function hostedKindKey(kind: string) {
       return "kind.delegation" as const
     case "question":
       return "kind.question" as const
+    case "render-page":
+      return "kind.renderPage" as const
     case "plan-mode":
       return "kind.plan" as const
     case "goal":

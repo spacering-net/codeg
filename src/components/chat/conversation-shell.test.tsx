@@ -57,6 +57,9 @@ vi.mock("@/components/chat/plan-approval-card", async () => {
     },
   }
 })
+vi.mock("@/components/chat/render-page-card", () => ({
+  RenderPageCard: () => null,
+}))
 
 import { ConversationShell } from "./conversation-shell"
 
@@ -72,6 +75,7 @@ function renderShell(extra: Partial<ShellProps> = {}) {
     pendingQuestion: null,
     pendingAskQuestion: null,
     pendingPlanApproval: null,
+    pendingRenderPage: null,
     onFocus: noop,
     onSend: noop,
     onCancel: noop,
@@ -79,6 +83,7 @@ function renderShell(extra: Partial<ShellProps> = {}) {
     onAnswerQuestion: noop,
     onAnswerAskQuestion: noop,
     onAnswerPlanApproval: noop,
+    onAnswerRenderPage: noop,
     ...extra,
   } as unknown as ShellProps
   return render(

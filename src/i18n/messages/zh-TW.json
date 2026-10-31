@@ -4067,6 +4067,7 @@
           "background": "背景任務",
           "plan": "計畫",
           "question": "提問",
+          "renderPage": "頁面",
           "image": "圖片",
           "goal": "目標",
           "other": "步驟"
@@ -4174,6 +4175,28 @@
         "awaiting": "等待你的回答…",
         "declined": "你已略過此問題 — 代理已自行判斷。",
         "noSelection": "未選擇"
+      },
+      "renderPage": {
+        "title": "頁面",
+        "waitingHint": "請在頁面上作答。",
+        "annotate": "在頁面上標註",
+        "annotateStop": "退出標註",
+        "annotateElement": "元素",
+        "annotateRegion": "區域",
+        "annotateDraw": "繪製",
+        "annotatePlaceholder": "批註（選填）",
+        "annotateSend": "傳送",
+        "annotateCancel": "取消",
+        "annotateChip": "頁面標註{n}",
+        "dismiss": "關閉且不作答",
+        "submitError": "回答發送失敗，請重試。"
+      },
+      "renderPageResult": {
+        "title": "頁面",
+        "awaiting": "等待你的回答…",
+        "declined": "你已關閉此頁面 — 代理已自行判斷。",
+        "answeredLabel": "回答：",
+        "noSummary": "已在頁面上作答"
       },
       "configStale": {
         "agentConfigTitle": "智能體設定已更新",
@@ -5507,6 +5530,11 @@
       "label": "向使用者提問",
       "short": "讓代理拿不準時先問你。",
       "hint": "允許智能體暫停並向你提出多選問題，問題會顯示在對話輸入框上方。智能體會一直等待，直到你作答（或略過）。"
+    },
+    "render": {
+      "label": "渲染頁面",
+      "short": "讓代理在對話裡繪製可互動頁面。",
+      "hint": "允許智能體在對話中繪製一個小型自包含頁面——表單、選項、對比圖。頁面可以等你提交回答後智能體再繼續，也可以只做展示。 也可以在顯示出來的頁面上標註——點選元素、圈選區域、隨手畫一筆，標註報告會作為你的指令回傳給代理。"
     },
     "sessions": {
       "label": "取得工作階段資訊",

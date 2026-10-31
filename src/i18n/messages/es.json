@@ -4067,6 +4067,7 @@
           "background": "Tarea en segundo plano",
           "plan": "Plan",
           "question": "Pregunta",
+          "renderPage": "Página",
           "image": "Imagen",
           "goal": "Objetivo",
           "other": "Paso"
@@ -4174,6 +4175,28 @@
         "awaiting": "Esperando tu respuesta…",
         "declined": "Descartaste esto: el agente usó su propio criterio.",
         "noSelection": "Sin selección"
+      },
+      "renderPage": {
+        "title": "Página",
+        "waitingHint": "Responde en la página.",
+        "annotate": "Anotar la página",
+        "annotateStop": "Dejar de anotar",
+        "annotateElement": "Elemento",
+        "annotateRegion": "Región",
+        "annotateDraw": "Dibujo",
+        "annotatePlaceholder": "Nota (opcional)",
+        "annotateSend": "Enviar",
+        "annotateCancel": "Cancelar",
+        "annotateChip": "Anotación de página {n}",
+        "dismiss": "Cerrar sin responder",
+        "submitError": "No se pudo enviar tu respuesta. Inténtalo de nuevo."
+      },
+      "renderPageResult": {
+        "title": "Página",
+        "awaiting": "Esperando tu respuesta…",
+        "declined": "Descartaste esto: el agente usó su propio criterio.",
+        "answeredLabel": "Respuesta:",
+        "noSummary": "Respondido en la página"
       },
       "configStale": {
         "agentConfigTitle": "Configuración del agente actualizada",
@@ -5507,6 +5530,11 @@
       "label": "Preguntar al usuario",
       "short": "Deja que el agente te consulte antes de decidir.",
       "hint": "Permite que los agentes se detengan y te hagan una pregunta de opción múltiple que aparece encima del cuadro de entrada de la conversación. El agente espera hasta que respondas (u omitas)."
+    },
+    "render": {
+      "label": "Renderizar página",
+      "short": "Deja que el agente dibuje una página interactiva en el chat.",
+      "hint": "Permite que los agentes dibujen una página pequeña y autónoma en el chat: formularios, opciones, comparativas. La página puede esperar a que envíes una respuesta antes de que el agente continúe, o solo mostrarse. También puedes marcar una página mostrada: un elemento, una región, una nota a mano alzada; el informe de marcado vuelve al agente como tu indicación."
     },
     "sessions": {
       "label": "Obtener información de sesión",

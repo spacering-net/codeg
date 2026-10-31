@@ -70,6 +70,22 @@ impl SessionQuestionAccess for NoQuestions {
     async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
 }
 
+/// No-op render-page access — this e2e suite exercises delegation, not pages.
+struct NoRenders;
+#[async_trait]
+impl codeg_lib::acp::render_page::SessionRenderPageAccess for NoRenders {
+    async fn register_render_page(
+        &self,
+        _parent_connection_id: &str,
+        _title: String,
+        _html: String,
+    ) -> Option<codeg_lib::acp::render_page::RegisteredRenderPage> {
+        None
+    }
+    async fn cancel_render_page(&self, _parent_connection_id: &str, _page_id: &str) {}
+    async fn cancel_render_pages_by_parent(&self, _parent_connection_id: &str) {}
+}
+
 /// No-op session-info access — this e2e suite never drives `get_session_info`.
 struct NoSessionInfo;
 #[async_trait]
@@ -212,6 +228,7 @@ async fn end_to_end_named_pipe_happy_path() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(NoQuestions) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
@@ -320,6 +337,7 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(NoQuestions) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,

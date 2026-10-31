@@ -4067,6 +4067,7 @@
           "background": "Hintergrundaufgabe",
           "plan": "Plan",
           "question": "Frage",
+          "renderPage": "Seite",
           "image": "Bild",
           "goal": "Ziel",
           "other": "Schritt"
@@ -4174,6 +4175,28 @@
         "awaiting": "Warten auf deine Antwort…",
         "declined": "Du hast dies verworfen – der Agent hat nach eigenem Ermessen entschieden.",
         "noSelection": "Keine Auswahl"
+      },
+      "renderPage": {
+        "title": "Seite",
+        "waitingHint": "Antworte auf der Seite.",
+        "annotate": "Seite annotieren",
+        "annotateStop": "Annotation beenden",
+        "annotateElement": "Element",
+        "annotateRegion": "Bereich",
+        "annotateDraw": "Zeichnung",
+        "annotatePlaceholder": "Notiz (optional)",
+        "annotateSend": "Senden",
+        "annotateCancel": "Abbrechen",
+        "annotateChip": "Seitenannotation {n}",
+        "dismiss": "Schließen ohne Antwort",
+        "submitError": "Antwort konnte nicht gesendet werden. Bitte erneut versuchen."
+      },
+      "renderPageResult": {
+        "title": "Seite",
+        "awaiting": "Warten auf deine Antwort…",
+        "declined": "Du hast dies verworfen – der Agent hat nach eigenem Ermessen entschieden.",
+        "answeredLabel": "Antwort:",
+        "noSummary": "Auf der Seite beantwortet"
       },
       "configStale": {
         "agentConfigTitle": "Agent-Einstellungen aktualisiert",
@@ -5507,6 +5530,11 @@
       "label": "Benutzer fragen",
       "short": "Lässt den Agenten vor einer Entscheidung nachfragen.",
       "hint": "Erlaubt Agenten, anzuhalten und dir eine Multiple-Choice-Frage zu stellen, die über dem Eingabefeld der Unterhaltung erscheint. Der Agent wartet, bis du antwortest (oder überspringst)."
+    },
+    "render": {
+      "label": "Seite rendern",
+      "short": "Lässt den Agenten eine interaktive Seite im Chat zeichnen.",
+      "hint": "Erlaubt Agenten, eine kleine eigenständige Seite im Chat zu zeichnen – Formulare, Optionen, Vergleiche. Eine Seite kann auf deine Antwort warten, bevor der Agent fortfährt, oder nur anzeigen. Du kannst eine gezeigte Seite auch markieren – Element, Bereich, Freihandnotiz – und der Markierungsbericht geht als Eingabe an den Agenten zurück."
     },
     "sessions": {
       "label": "Sitzungsinformationen abrufen",

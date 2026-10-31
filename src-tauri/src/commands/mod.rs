@@ -73,6 +73,7 @@ pub mod quick_messages;
 pub mod remote_proxy;
 #[cfg(feature = "tauri-runtime")]
 pub mod remote_workspace;
+pub mod render_page;
 pub mod science;
 pub mod session_info;
 pub mod system_settings;

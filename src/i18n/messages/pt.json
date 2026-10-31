@@ -4067,6 +4067,7 @@
           "background": "Tarefa em segundo plano",
           "plan": "Plano",
           "question": "Pergunta",
+          "renderPage": "Página",
           "image": "Imagem",
           "goal": "Objetivo",
           "other": "Etapa"
@@ -4174,6 +4175,28 @@
         "awaiting": "Aguardando sua resposta…",
         "declined": "Você ignorou isto — o agente usou o próprio julgamento.",
         "noSelection": "Sem seleção"
+      },
+      "renderPage": {
+        "title": "Página",
+        "waitingHint": "Responda na página.",
+        "annotate": "Anotar a página",
+        "annotateStop": "Parar de anotar",
+        "annotateElement": "Elemento",
+        "annotateRegion": "Região",
+        "annotateDraw": "Desenho",
+        "annotatePlaceholder": "Nota (opcional)",
+        "annotateSend": "Enviar",
+        "annotateCancel": "Cancelar",
+        "annotateChip": "Anotação de página {n}",
+        "dismiss": "Fechar sem responder",
+        "submitError": "Não foi possível enviar sua resposta. Tente novamente."
+      },
+      "renderPageResult": {
+        "title": "Página",
+        "awaiting": "Aguardando sua resposta…",
+        "declined": "Você ignorou isto — o agente usou o próprio julgamento.",
+        "answeredLabel": "Resposta:",
+        "noSummary": "Respondido na página"
       },
       "configStale": {
         "agentConfigTitle": "Configurações do agente atualizadas",
@@ -5507,6 +5530,11 @@
       "label": "Perguntar ao usuário",
       "short": "Deixa o agente perguntar antes de decidir.",
       "hint": "Permite que os agentes pausem e façam uma pergunta de múltipla escolha que aparece acima da caixa de entrada da conversa. O agente aguarda até você responder (ou pular)."
+    },
+    "render": {
+      "label": "Renderizar página",
+      "short": "Deixa o agente desenhar uma página interativa no chat.",
+      "hint": "Permite que os agentes desenhem uma página pequena e autossuficiente no chat — formulários, opções, comparações. A página pode esperar sua resposta antes de o agente continuar, ou apenas exibir. Você também pode marcar uma página exibida — elemento, região, rabisco — e o relatório de marcação volta ao agente como seu pedido."
     },
     "sessions": {
       "label": "Obter informações da sessão",

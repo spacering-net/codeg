@@ -55,6 +55,9 @@ export type ToolStepKind =
   | "goal"
   | "plan-mode"
   | "question"
+  // codeg-mcp `render_page`: the in-stream record of a page the agent drew;
+  // its own card, like the ask tool's.
+  | "render-page"
   | "feedback"
   | "workbench"
   | "compaction"

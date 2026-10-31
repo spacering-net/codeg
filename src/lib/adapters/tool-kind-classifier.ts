@@ -21,6 +21,7 @@ const CREATE_GOAL_SUFFIX_RE = /[^a-z0-9]create_goal$/
 const UPDATE_GOAL_SUFFIX_RE = /[^a-z0-9]update_goal$/
 const ASK_USER_QUESTION_SUFFIX_RE = /[^a-z0-9]ask_user_question$/
 const CHECK_USER_FEEDBACK_SUFFIX_RE = /[^a-z0-9]check_user_feedback$/
+const RENDER_PAGE_SUFFIX_RE = /[^a-z0-9]render_page$/
 
 /**
  * The codeg-mcp workbench companions, which own `CodegMcpToolCard` (and, for
@@ -79,7 +80,12 @@ export function isAgentLikeToolName(toolName: string): boolean {
     // codeg-mcp check_user_feedback — owns the timeline's feedback row. The
     // no-op polls are dropped upstream by `dropHiddenFeedbackChecks`, so only
     // received-feedback checks reach here.
-    name === "check_user_feedback"
+    name === "check_user_feedback" ||
+    // codeg-mcp render_page — owns the RenderPageResultCard, same standalone
+    // treatment as `question`. The bare form is the canonical name (live path);
+    // the suffix RE below covers the historical host-prefixed forms, since this
+    // runs pre-normalize.
+    name === "render_page"
   )
     return true
   if (DELEGATE_TO_AGENT_SUFFIX_RE.test(name)) return true
@@ -89,6 +95,7 @@ export function isAgentLikeToolName(toolName: string): boolean {
   if (UPDATE_GOAL_SUFFIX_RE.test(name)) return true
   if (ASK_USER_QUESTION_SUFFIX_RE.test(name)) return true
   if (CHECK_USER_FEEDBACK_SUFFIX_RE.test(name)) return true
+  if (RENDER_PAGE_SUFFIX_RE.test(name)) return true
   if (CODEG_MCP_WORKBENCH_NAMES.has(name)) return true
   if (CODEG_MCP_WORKBENCH_SUFFIX_RE.test(name)) return true
   return false

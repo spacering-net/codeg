@@ -33,7 +33,8 @@ use crate::acp::delegation::transport::{
     BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
     BrokerComputerSnapshotRequest,
     BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
-    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
+    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRenderRequest,
+    BrokerRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
     BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
     BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
@@ -151,6 +152,10 @@ pub struct DelegationListener {
     /// Registers / cancels the blocking `ask_user_question` tool's pending
     /// questions. Same `tokens` registry and parent-connection scoping.
     pub questions: Arc<dyn SessionQuestionAccess>,
+    /// Registers / cancels the blocking `render_page` tool's awaiting-answer
+    /// pages. Same shape and scoping as `questions` — the page is a question
+    /// whose answer is whatever JSON the page's own script composes.
+    pub renders: Arc<dyn crate::acp::render_page::SessionRenderPageAccess>,
     /// Resolves a referenced session for the `get_session_info` tool. Unlike the
     /// other arms this is NOT parent-scoped — it looks any non-deleted session up
     /// by its codeg conversation id (still token-gated against an invalid caller).
@@ -189,6 +194,7 @@ impl DelegationListener {
         parent_lookup: Arc<dyn ParentSessionLookup>,
         feedback: Arc<dyn SessionFeedbackAccess>,
         questions: Arc<dyn SessionQuestionAccess>,
+        renders: Arc<dyn crate::acp::render_page::SessionRenderPageAccess>,
         session_info: Arc<dyn SessionInfoAccess>,
         tasks: Arc<dyn WorkTaskToolAccess>,
         authoring: Arc<dyn ChatAuthoringAccess>,
@@ -202,6 +208,7 @@ impl DelegationListener {
             parent_lookup,
             feedback,
             questions,
+            renders,
             session_info,
             tasks,
             authoring,
@@ -569,6 +576,59 @@ impl DelegationListener {
                 write_frame(conn, &resp).await?;
                 return Ok(());
             }
+            BrokerMessage::Render(req) => {
+                // The awaiting-answer half of `render_page`: park on the user's
+                // submit, racing peer-close exactly like `Ask` above (same
+                // reasons, same teardown-window re-check). A show-only page
+                // never sends this message, so every `Render` here means "arm
+                // the card and wait". Bad token, gone connection, or a
+                // connection that already has a waiting page yields an
+                // unanswered outcome so the LLM proceeds.
+                let Some(parent_conn_id) = self.render_target(&req).await else {
+                    write_frame(conn, &render_declined_response()?).await?;
+                    return Ok(());
+                };
+                let Some(reg) = self
+                    .renders
+                    .register_render_page(&parent_conn_id, req.title, req.html)
+                    .await
+                else {
+                    write_frame(conn, &render_declined_response()?).await?;
+                    return Ok(());
+                };
+                let page_id = reg.page_id;
+                let mut answer_rx = reg.answer_rx;
+                // Teardown-window re-check, mirroring the Ask arm: the token is
+                // revoked before `cancel_render_pages_by_parent` sweeps, so a
+                // token that is now gone means teardown started between lookup
+                // and insert.
+                if self.tokens.lookup(&req.token).await.is_none() {
+                    self.renders
+                        .cancel_render_page(&parent_conn_id, &page_id)
+                        .await;
+                    write_frame(conn, &render_declined_response()?).await?;
+                    return Ok(());
+                }
+                let mut probe = [0u8; 1];
+                let outcome = tokio::select! {
+                    biased;
+                    ans = &mut answer_rx => ans.ok(),
+                    _ = conn.read(&mut probe) => {
+                        self.renders
+                            .cancel_render_page(&parent_conn_id, &page_id)
+                            .await;
+                        return Ok(());
+                    }
+                };
+                let resp = match outcome {
+                    Some(o) => render_response(&o)?,
+                    // Sender dropped without sending (teardown drain): surface
+                    // an unanswered outcome so the tool returns cleanly.
+                    None => render_declined_response()?,
+                };
+                write_frame(conn, &resp).await?;
+                return Ok(());
+            }
             BrokerMessage::SessionInfo(req) => {
                 // Read-only resolution (DB + a bounded transcript parse). No
                 // peer-close race needed: unlike Status/Ask this never blocks on
@@ -859,6 +919,13 @@ impl DelegationListener {
     /// caller's parent connection id. `None` on an invalid token — the LLM gets
     /// a `declined` outcome (proceed with judgment), and we don't leak which.
     async fn ask_target(&self, req: &BrokerAskRequest) -> Option<String> {
+        let entry = self.tokens.lookup(&req.token).await?;
+        Some(entry.parent_connection_id)
+    }
+
+    /// Resolve the `Render` arm's parent connection from the per-launch token
+    /// (same scoping as [`Self::ask_target`]).
+    async fn render_target(&self, req: &BrokerRenderRequest) -> Option<String> {
         let entry = self.tokens.lookup(&req.token).await?;
         Some(entry.parent_connection_id)
     }
@@ -1384,6 +1451,16 @@ fn ask_response(outcome: &QuestionOutcome) -> std::io::Result<BrokerResponse> {
     })
 }
 
+/// Serialize a resolved [`RenderPageOutcome`] into a [`BrokerResponse`] for the
+/// `Render` arm — the companion renders it into the `render_page` tool result.
+fn render_response(outcome: &crate::acp::render_page::RenderPageOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
 /// Serialize a resolved [`SessionInfo`] into a [`BrokerResponse`] for the
 /// `SessionInfo` arm — the companion renders it into the `get_session_info`
 /// tool result.
@@ -1563,6 +1640,18 @@ fn ask_declined_response() -> std::io::Result<BrokerResponse> {
     ask_response(&QuestionOutcome {
         answers: Vec::new(),
         declined: true,
+    })
+}
+
+/// The unanswered counterpart for the `Render` arm (bad token / gone parent /
+/// already a waiting page / teardown drain / peer-close): `answered: false`
+/// carrying the decline note, so the agent proceeds with its own judgment.
+fn render_declined_response() -> std::io::Result<BrokerResponse> {
+    render_response(&crate::acp::render_page::RenderPageOutcome {
+        answered: false,
+        summary: String::new(),
+        data: serde_json::Value::Null,
+        note: Some(crate::acp::render_page::DECLINED_NOTE.to_string()),
     })
 }
 
@@ -1862,6 +1951,53 @@ mod tests {
         }
     }
 
+    /// In-memory rendered-page stub, mirroring `StubQuestion`: register mints a
+    /// sequential id and stashes the answer sender; cancel removes it. Lets the
+    /// listener's `Render` arm be driven without a real `ConnectionManager`.
+    #[derive(Default)]
+    struct StubRender {
+        pending: tokio::sync::Mutex<
+            HashMap<String, oneshot::Sender<crate::acp::render_page::RenderPageOutcome>>,
+        >,
+        registered: tokio::sync::Mutex<Vec<(String, String, String)>>,
+        canceled: tokio::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl crate::acp::render_page::SessionRenderPageAccess for StubRender {
+        async fn register_render_page(
+            &self,
+            parent_connection_id: &str,
+            title: String,
+            html: String,
+        ) -> Option<crate::acp::render_page::RegisteredRenderPage> {
+            let page_id = format!("r-{}", self.registered.lock().await.len() + 1);
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().await.insert(page_id.clone(), tx);
+            self.registered
+                .lock()
+                .await
+                .push((parent_connection_id.to_string(), title, html));
+            Some(crate::acp::render_page::RegisteredRenderPage {
+                page_id,
+                answer_rx: rx,
+            })
+        }
+        async fn cancel_render_page(&self, _parent_connection_id: &str, page_id: &str) {
+            self.pending.lock().await.remove(page_id);
+            self.canceled.lock().await.push(page_id.to_string());
+        }
+        async fn cancel_render_pages_by_parent(&self, _parent_connection_id: &str) {
+            self.pending.lock().await.clear();
+        }
+    }
+    impl StubRender {
+        async fn answer(&self, page_id: &str, outcome: crate::acp::render_page::RenderPageOutcome) {
+            if let Some(tx) = self.pending.lock().await.remove(page_id) {
+                let _ = tx.send(outcome);
+            }
+        }
+    }
+
     /// In-memory session-info stub. Records every `(session_id, max_messages)` it
     /// was asked to resolve and returns a seeded outcome — `found` sessions echo
     /// their id, unknown ids return `not_found`. Default knows about no sessions.
@@ -2076,6 +2212,7 @@ mod tests {
             Arc::new(StaticParentLookup(parent_conversation)),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -2101,6 +2238,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             feedback,
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -2127,6 +2265,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             questions,
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -2152,6 +2291,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             session_info,
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -2179,6 +2319,7 @@ mod tests {
             Arc::new(StaticParentLookup(parent_conversation)),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             authoring,
@@ -2205,6 +2346,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -3512,6 +3654,162 @@ mod tests {
         assert!(questions.registered.lock().await.is_empty());
     }
 
+    // -- render_page over the listener --------------------------------------
+
+    /// Build a listener whose render-page access is the given stub, so render
+    /// tests can register/answer pages and assert the round-trip. Delegation,
+    /// feedback and question pieces are minimal.
+    fn make_render_listener(
+        tokens: Arc<TokenRegistry>,
+        renders: Arc<StubRender>,
+    ) -> Arc<DelegationListener> {
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(Some(1))),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            renders,
+            Arc::new(StubSessionInfo::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
+        )
+    }
+
+    fn render_msg(token: &str) -> BrokerMessage {
+        BrokerMessage::Render(BrokerRenderRequest {
+            token: token.into(),
+            title: "Theme picker".into(),
+            html: "<h1>pick</h1>".into(),
+        })
+    }
+
+    /// A `Render` registers the page, parks, and — once the user submits on the
+    /// card — writes the full `{answered, summary, data}` envelope back over
+    /// the same socket (show-only pages never send this message, so the whole
+    /// arm is the await-answer half of the tool).
+    #[tokio::test]
+    async fn render_registers_then_answer_resolves_response() {
+        let renders = Arc::new(StubRender::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let listener = make_render_listener(tokens, renders.clone());
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        write_frame(&mut client, &render_msg("tok")).await.unwrap();
+
+        // The server must be parked until a submit arrives — no response yet.
+        let early = tokio::time::timeout(Duration::from_millis(40), async {
+            read_frame::<_, BrokerResponse>(&mut client).await
+        })
+        .await;
+        assert!(early.is_err(), "render must block until the user answers");
+
+        // Wait for the stub to record the registration, then answer it.
+        while renders.registered.lock().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            renders.registered.lock().await[0],
+            (
+                "parent-conn".to_string(),
+                "Theme picker".to_string(),
+                "<h1>pick</h1>".to_string()
+            )
+        );
+        renders
+            .answer(
+                "r-1",
+                crate::acp::render_page::RenderPageOutcome {
+                    answered: true,
+                    summary: "go with B".into(),
+                    data: serde_json::json!({ "choice": "b" }),
+                    note: None,
+                },
+            )
+            .await;
+
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+        assert_eq!(resp.outcome["answered"], true);
+        assert_eq!(resp.outcome["summary"], "go with B");
+        assert_eq!(resp.outcome["data"]["choice"], "b");
+        // An answered outcome carries no note (the field is skip-serialized).
+        assert!(resp.outcome.get("note").is_none());
+    }
+
+    /// A dismissed page closes the tool call's socket; the listener observes the
+    /// peer-close, cancels the pending page, and returns without writing.
+    #[tokio::test]
+    async fn render_peer_close_cancels_page() {
+        let renders = Arc::new(StubRender::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let listener = make_render_listener(tokens, renders.clone());
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move { listener.serve_one(&mut server).await });
+        write_frame(&mut client, &render_msg("tok")).await.unwrap();
+
+        // Let the server park inside the wait.
+        while renders.registered.lock().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Companion cancels: drop the request socket.
+        drop(client);
+
+        let result = tokio::time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("serve_one must return after peer close");
+        result.unwrap().unwrap();
+        assert_eq!(renders.canceled.lock().await.as_slice(), &["r-1".to_string()]);
+    }
+
+    /// An invalid token never registers a page and returns an unanswered
+    /// outcome (the LLM proceeds with its own judgment).
+    #[tokio::test]
+    async fn render_invalid_token_declined() {
+        let renders = Arc::new(StubRender::default());
+        let listener = make_render_listener(Arc::new(TokenRegistry::default()), renders.clone());
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        write_frame(&mut client, &render_msg("bad-token"))
+            .await
+            .unwrap();
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+        assert_eq!(resp.outcome["answered"], false);
+        assert!(renders.registered.lock().await.is_empty());
+    }
+
     // -- browser tools ------------------------------------------------------
 
     async fn browser_tokens() -> Arc<TokenRegistry> {
@@ -4120,6 +4418,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -4505,6 +4804,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            Arc::new(StubRender::default()),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),

@@ -1,8 +1,11 @@
-import { render } from "@testing-library/react"
+import { fireEvent, render } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import { KnownInvocationsProvider } from "./known-invocations-context"
-import { PlainTextWithBadges } from "./plain-text-with-badges"
+import {
+  AnnotationReportProvider,
+  PlainTextWithBadges,
+} from "./plain-text-with-badges"
 
 const badge = (c: HTMLElement, kind: string) =>
   c.querySelector(`[data-reference-badge][data-ref-type='${kind}']`)
@@ -223,5 +226,89 @@ describe("PlainTextWithBadges", () => {
       expect(quotes(container)).toHaveLength(0)
       expect(container.textContent).toBe("2 > 1 is true")
     })
+  })
+})
+
+describe("annotation badges", () => {
+  const TAGGED =
+    '[标注1 - 太远了](codeg://embedded/uid-1)改一下\n<annotation ref="codeg://embedded/uid-1" label="标注1 - 太远了">Comment: 太远了\n</annotation>'
+
+  it("opens the report under the bubble when the badge is clicked", async () => {
+    const { container, queryByTestId } = render(
+      <AnnotationReportProvider>
+        <PlainTextWithBadges text={TAGGED} />
+      </AnnotationReportProvider>
+    )
+    expect(queryByTestId("annotation-report")).toBeNull()
+    const button = container.querySelector("button")
+    expect(button).not.toBeNull()
+    fireEvent.click(button!)
+    expect(queryByTestId("annotation-report")?.textContent).toContain(
+      "Comment: 太远了"
+    )
+    fireEvent.click(button!)
+    expect(queryByTestId("annotation-report")).toBeNull()
+  })
+
+  it("leaves a badge without a report in this message inert", () => {
+    const { container } = render(
+      <AnnotationReportProvider>
+        <PlainTextWithBadges text="[标注9 - x](codeg://embedded/uid-9)" />
+      </AnnotationReportProvider>
+    )
+    // No tag in this message: the badge is not a button — its report has not
+    // reached the transcript yet (the optimistic turn before re-read).
+    expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("leads the bubble with the badges a re-read stored under the prose", () => {
+    // The wire puts the context block (hence its badge line) AFTER the typed
+    // prose; the composer showed the badges first. Re-read must recompose:
+    // badges inline at the front, prose after, no blank runs left behind.
+    const { container } = render(
+      <AnnotationReportProvider>
+        <PlainTextWithBadges
+          text={
+            "这儿\n\n[页面标注1 - 美化](codeg://embedded/uid-a)\n\n" +
+            '<annotation ref="codeg://embedded/uid-a" label="页面标注1 - 美化">Comment: 美化</annotation>'
+          }
+        />
+      </AnnotationReportProvider>
+    )
+    expect(container.textContent?.startsWith("页面标注1 - 美化这儿")).toBe(true)
+    expect(container.textContent).not.toContain("\n")
+  })
+
+  it("keeps messages without an annotation report in wire order", () => {
+    // Hoist only fires where a report exists; a plain file badge must not
+    // jump out of its sentence.
+    const { container } = render(
+      <PlainTextWithBadges text="open [app.ts](file:///repo/app.ts) first" />
+    )
+    expect(container.textContent).toBe("open app.ts first")
+  })
+
+  it("opens a report held by a sibling part of the same message", () => {
+    // The renderer splits one message into one part per content block, so the
+    // badge and the `<annotation>` tag typically land in different parts. The
+    // provider knows every ref the whole message carries, so the badge is
+    // still a button and the click still finds the report next door.
+    const { container, queryByTestId } = render(
+      <AnnotationReportProvider reports={["codeg://embedded/uid-b"]}>
+        <PlainTextWithBadges text="[页面标注2 - 改颜色](codeg://embedded/uid-b)" />
+        <PlainTextWithBadges
+          text={
+            '<annotation ref="codeg://embedded/uid-b" label="页面标注2 - 改颜色">Comment: 改颜色</annotation>'
+          }
+        />
+      </AnnotationReportProvider>
+    )
+    expect(queryByTestId("annotation-report")).toBeNull()
+    const button = container.querySelector("button")
+    expect(button).not.toBeNull()
+    fireEvent.click(button!)
+    expect(queryByTestId("annotation-report")?.textContent).toContain(
+      "Comment: 改颜色"
+    )
   })
 })

@@ -352,3 +352,34 @@ describe("parseUserMessageSegments", () => {
     })
   })
 })
+
+describe("parseUserMessageSegments — annotation tags", () => {
+  it("cuts an annotation tag out of the prose as its own segment", () => {
+    expect(
+      parseUserMessageSegments(
+        'fix it <annotation ref="codeg://embedded/x" label="标注1 - a [b](c)">Comment: 太远了\n- Text: [x](y)\n</annotation>thanks'
+      )
+    ).toEqual([
+      { kind: "text", text: "fix it " },
+      {
+        kind: "annotation",
+        ref: "codeg://embedded/x",
+        label: "标注1 - a [b](c)",
+        body: "Comment: 太远了\n- Text: [x](y)\n",
+      },
+      { kind: "text", text: "thanks" },
+    ])
+  })
+
+  it("keeps an escaped closer and quoted attribute inside", () => {
+    const [segment] = parseUserMessageSegments(
+      '<annotation ref="r" label="say &quot;hi&quot;">before <\/annotation after</annotation>'
+    )
+    expect(segment).toEqual({
+      kind: "annotation",
+      ref: "r",
+      label: 'say "hi"',
+      body: "before </annotation after",
+    })
+  })
+})

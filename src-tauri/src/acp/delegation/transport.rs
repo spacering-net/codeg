@@ -188,6 +188,21 @@ pub struct BrokerAskRequest {
     pub questions: Vec<QuestionSpec>,
 }
 
+/// Show the user a finished HTML page and BLOCK until they answer on it. Backs
+/// the `render_page` MCP tool WITH `awaitAnswer` (a show-only page never sends
+/// this message — the companion answers it locally). Authenticated by the same
+/// per-launch `token`; the listener resolves the parent connection from it,
+/// registers the page (broadcasting the answerable-card event to every attached
+/// client), and parks the response until the user submits on the page (or the
+/// tool call is canceled, detected via peer-close on this connection). The
+/// companion has already validated sizes and normalized the title.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerRenderRequest {
+    pub token: String,
+    pub title: String,
+    pub html: String,
+}
+
 /// Resolve a session the user referenced (`codeg://session/<id>`) into its
 /// metadata + stats, optionally with its recent messages. Backs the
 /// `get_session_info` MCP tool. Authenticated by the same per-launch `token`; the
@@ -445,6 +460,7 @@ pub enum BrokerMessage {
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
+    Render(BrokerRenderRequest),
     SessionInfo(BrokerSessionRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
@@ -722,6 +738,17 @@ pub async fn client_ask_round_trip(
     req: &BrokerAskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::Ask(req.clone())).await
+}
+
+/// Dispatch an awaiting-answer `render_page` request and BLOCK reading the
+/// response until the user submits on the page (or the page is canceled). Same
+/// held-open-socket shape as [`client_ask_round_trip`]. Returns a
+/// `{ answered, summary, data, note }` envelope.
+pub async fn client_render_round_trip(
+    socket_path: &str,
+    req: &BrokerRenderRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::Render(req.clone())).await
 }
 
 /// Dispatch a `get_session_info` request and read back the serialized

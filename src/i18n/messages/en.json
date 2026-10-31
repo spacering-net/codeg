@@ -4067,6 +4067,7 @@
           "background": "Background task",
           "plan": "Plan",
           "question": "Question",
+          "renderPage": "Page",
           "image": "Image",
           "goal": "Goal",
           "other": "Step"
@@ -4174,6 +4175,28 @@
         "awaiting": "Waiting for your answer…",
         "declined": "You dismissed this — the agent used its own judgment.",
         "noSelection": "No selection"
+      },
+      "renderPage": {
+        "title": "Page",
+        "waitingHint": "Answer on the page.",
+        "annotate": "Annotate the page",
+        "annotateStop": "Stop annotating",
+        "annotateElement": "Element",
+        "annotateRegion": "Region",
+        "annotateDraw": "Draw",
+        "annotatePlaceholder": "Note (optional)",
+        "annotateSend": "Send",
+        "annotateCancel": "Cancel",
+        "annotateChip": "Page annotation {n}",
+        "dismiss": "Close without answering",
+        "submitError": "Couldn't send your answer. Please try again."
+      },
+      "renderPageResult": {
+        "title": "Page",
+        "awaiting": "Waiting for your answer…",
+        "declined": "You dismissed this — the agent used its own judgment.",
+        "answeredLabel": "Answer:",
+        "noSummary": "Answered on the page"
       },
       "configStale": {
         "agentConfigTitle": "Agent settings updated",
@@ -5507,6 +5530,11 @@
       "label": "Ask user question",
       "short": "Let the agent ask you before it decides.",
       "hint": "Let agents pause and ask you a multiple-choice question that appears above the conversation input box. The agent waits until you answer (or skip)."
+    },
+    "render": {
+      "label": "Render page",
+      "short": "Let the agent draw an interactive page in the chat.",
+      "hint": "Let agents draw a small self-contained page in the chat — forms, choices, comparisons. A page can wait for you to submit an answer on it before the agent continues, or just show. You can also mark up a shown page — an element, a region, a freehand note — and the marked-up report goes back to the agent as your prompt."
     },
     "sessions": {
       "label": "Get session info",

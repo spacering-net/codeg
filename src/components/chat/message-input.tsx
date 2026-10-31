@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
+import { stripAnnotationLabel } from "@/lib/adapters/ai-elements-adapter"
 import { Button } from "@/components/ui/button"
 import {
   BookOpenText,
@@ -101,7 +102,10 @@ import {
   serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
 import { textToInlineContent } from "@/components/chat/composer/plain-text-content"
-import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
+import {
+  buildEmbeddedReferenceUri,
+  isEmbeddedReferenceUri,
+} from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
   blankLineAfter,
@@ -161,6 +165,16 @@ export type ComposerInjectContent =
        *   is about to write.
        */
       mode?: "replace" | "append"
+    }
+  | {
+      /**
+       * A finished `render_page` annotation session: the formatted report
+       * rides in as one deletable chip (the same embedded-resource badge a
+       * browser-page handoff uses), not as loose prose in the draft. An
+       * agent that takes no embedded context gets the text appended as a
+       * trailing block instead.
+       */
+      annotation: { text: string; label: string }
     }
   | {
       /**
@@ -413,6 +427,16 @@ export function MessageInput({
   useEffect(() => {
     knownInvocationsRef.current = knownInvocations
   }, [knownInvocations])
+  // The inject effect must not list the attachment machinery or the agent's
+  // capability flags as deps — their identity shifts across renders, and a
+  // re-run of this effect would re-inject the same payload. Read them late,
+  // at the frame the injection actually runs.
+  const attachRef = useRef<typeof attach | null>(null)
+  const embeddedContextRef = useRef(promptCapabilities.embedded_context)
+  useEffect(() => {
+    attachRef.current = attach
+    embeddedContextRef.current = promptCapabilities.embedded_context
+  })
   const { shortcuts } = useShortcutSettings()
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
@@ -763,6 +787,41 @@ export function MessageInput({
             { append: true }
           )
           setComposerEmpty(isComposerEmpty(editor))
+        }
+      } else if ("annotation" in payload) {
+        if (handle) {
+          const { text, label } = payload.annotation
+          const editor = handle.getEditor()
+          if (embeddedContextRef.current && editor && attachRef.current) {
+            // One deletable chip whose bytes live in `embeddedPayloadsRef`
+            // until send — the same path a browser-page handoff takes, so the
+            // draft keeps its shape and the transcript renders the badge back.
+            attachRef.current.insertFileReferences(
+              [
+                {
+                  name: label,
+                  realBlock: {
+                    type: "resource",
+                    uri: buildEmbeddedReferenceUri(),
+                    mime_type: "text/markdown",
+                    text,
+                    blob: null,
+                  },
+                },
+              ],
+              {}
+            )
+          } else {
+            // An agent that takes no embedded context gets the report as a
+            // trailing prose block rather than nothing — minus the internal
+            // `Label:` line, which names a badge this path will never show.
+            const existing = editor ? serializeDocToText(editor.state.doc) : ""
+            handle.focus()
+            handle.insertTextAtCursor(
+              `${blankLineAfter(existing)}${stripAnnotationLabel(text)}\n\n`
+            )
+          }
+          setComposerEmpty(false)
         }
       } else if (handle) {
         if (payload.mode === "append") {

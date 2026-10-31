@@ -11,12 +11,41 @@ import {
 } from "@/lib/reference-link"
 
 /**
- * One render unit of a user message: a run of literal prose, or a resolved
- * reference to show as an inline badge.
+ * One render unit of a user message: a run of literal prose, a resolved
+ * reference to show as an inline badge, or a page annotation's report — the
+ * prompt written when the person marked up a page, shown collapsed under the
+ * badge that stands for it.
  */
 export type UserMessageSegment =
   | { kind: "text"; text: string }
   | { kind: "reference"; attrs: ReferenceAttrs }
+  | { kind: "annotation"; ref: string; label: string; body: string }
+
+/** The tag `liftEmbeddedContext` rewrites an annotation's context block
+ *  into: one attribute pair, then the report verbatim (with `</` in it
+ *  escaped so it cannot close the tag early). */
+const ANNOTATION_RE =
+  /<annotation ref="([^"]*)" label="([^"]*)">([\s\S]*?)<\/annotation>/g
+
+function unescapeAttr(value: string): string {
+  return value
+    .split("&quot;")
+    .join('"')
+    .split("&lt;")
+    .join("<")
+    .split("&amp;")
+    .join("&")
+}
+
+/** The refs of the annotation tags one text carries (fragment off), for a
+ *  bubble-wide lookup: a badge in another part of the same message opens the
+ *  report this text holds. */
+export function annotationRefsIn(text: string): string[] {
+  ANNOTATION_RE.lastIndex = 0
+  return [...text.matchAll(ANNOTATION_RE)].map(
+    (match) => (match[1] ?? "").split("#")[0]
+  )
+}
 
 /**
  * Only these schemes become badges. A `[label](https://…)` a user typed is NOT a
@@ -108,6 +137,34 @@ export function parseUserMessageSegments(
 ): UserMessageSegment[] {
   const known = options?.knownInvocations
   const out: UserMessageSegment[] = []
+  // The annotation pass runs first: its body is the prompt's report, and the
+  // `[label](dest)` shapes inside it (an element's HTML, an attribute list)
+  // are the page's, not the sender's — they must not become badges.
+  ANNOTATION_RE.lastIndex = 0
+  let cursor = 0
+  for (const match of text.matchAll(ANNOTATION_RE)) {
+    const start = match.index ?? 0
+    if (start > cursor) {
+      pushLinkSegments(text.slice(cursor, start), out, known)
+    }
+    out.push({
+      kind: "annotation",
+      ref: match[1],
+      label: unescapeAttr(match[2]),
+      body: match[3].split("<\\/annotation").join("</annotation"),
+    })
+    cursor = start + match[0].length
+  }
+  if (cursor < text.length) pushLinkSegments(text.slice(cursor), out, known)
+  return out
+}
+
+/** The two passes over ordinary prose (link tokens, then invocation tokens). */
+function pushLinkSegments(
+  text: string,
+  out: UserMessageSegment[],
+  known: KnownInvocations | undefined
+): void {
   for (const token of tokenizeReferenceLinks(text)) {
     if (token.type === "link") {
       const destination = unwrapReferenceDestination(token.destination)
@@ -127,5 +184,4 @@ export function parseUserMessageSegments(
     }
     pushProseSegments(token.value, out, known)
   }
-  return out
 }

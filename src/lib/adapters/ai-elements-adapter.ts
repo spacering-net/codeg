@@ -49,6 +49,7 @@ import {
 import { referenceToMarkdown } from "@/components/chat/composer/reference-text"
 import {
   embeddedReferenceUriFor,
+  isEmbeddedReferenceUri,
   refOfEmbeddedReferenceUri,
 } from "@/components/chat/composer/reference-uri"
 
@@ -1057,12 +1058,17 @@ function stripBlockedMentions(
 
 /** Apply the per-scheme rule to ONE Markdown link, mutating `resources`. Returns
  *  the text to keep in place of the link: the original `match` for an inline-kept
- *  ref (file / codeg / non-resource link), or "" for a moved-out `@mention`. */
+ *  ref (file / codeg / non-resource link), or "" for a moved-out `@mention`.
+ *  `source`/`at` locate the link in the prose it was tokenized from, so the
+ *  move-out branches can honor a code fence the way {@link liftEmbeddedContext}
+ *  does — quoted wire text is quoted, not consumed. */
 function handleMarkdownLink(
   match: string,
   label: string,
   uri: string,
-  resources: UserResourceDisplay[]
+  resources: UserResourceDisplay[],
+  source: string,
+  at: number
 ): string {
   const normalizedLabel = label.trim()
   // Unwrap a CommonMark angle-bracket destination (`<uri>`) — and decode the
@@ -1078,26 +1084,27 @@ function handleMarkdownLink(
   // (The `@`-prefixed agent link `[@label](codeg://agent/…)` would otherwise be
   // caught by `hasMentionLabel` below.)
   if (normalizedUri.toLowerCase().startsWith("codeg:")) {
-    // A `codeg://embedded/…` ref is a path-less pasted attachment — still an
-    // attached file, so it is COPIED to the row too (kept inline as its inert
-    // badge). Other codeg refs are not attachments: inline only.
+    // A `codeg://embedded/…` link is a pasted or annotated attachment. A
+    // page the built-in browser handed over is MOVED out of the prose into
+    // the chip row: the site under the bubble says all it needs to say, and
+    // showing it twice reads as a bug. A page ANNOTATION goes the other way:
+    // its badge (`标注2 - …`) stays in the prose where it was attached, and
+    // the report rides after it as an `<annotation>` tag (see
+    // {@link liftEmbeddedContext}) so clicking the badge can show the prompt
+    // in place — a summary-row chip would say less than the badge already
+    // does.
     if (normalizedUri.toLowerCase().startsWith("codeg://embedded/")) {
-      // One whose uri carries the ref of the block behind it — a page the
-      // built-in browser handed over — is listed by that ref, as the page it
-      // came from: the badge in the prose already says what it is, and this is
-      // the chip the same message gets when it is read back from the agent's
-      // record, which knows the block and not the badge.
       const ref = refOfEmbeddedReferenceUri(normalizedUri)
-      addResource(
-        resources,
-        ref
-          ? embeddedChip(ref)
-          : {
-              name: unescapeReferenceLabel(normalizedLabel) || "attachment",
-              uri: normalizedUri,
-              mime_type: null,
-            }
-      )
+      if (!ref || isEmbeddedReferenceUri(ref)) return match
+      // A quoted hand-off link (fence, or any position a person pasted the
+      // wire text to show) keeps its literal shape; deleting it would rewrite
+      // the quotation.
+      if (insideFence(source, at)) return match
+      const chip = embeddedChip(ref)
+      if (!resources.some((item) => item.uri === chip.uri)) {
+        addResource(resources, chip)
+      }
+      return ""
     }
     return match
   }
@@ -1134,8 +1141,8 @@ function handleMarkdownLink(
  * the built-in browser's "send to chat", a pasted file with no path on disk).
  *
  * The composer never shows that text to the person who wrote it — an embedded
- * attachment is a badge in the prose and a chip under the bubble — so a turn
- * that read as one line while it was being sent came back, once the history
+ * attachment is one chip under the bubble — so a turn that read as one line
+ * while it was being sent came back, once the history
  * was re-read from the agent, as a screenful of page dump with a "show more"
  * under it. Same message, two renderings, and the unreadable one is the one
  * that lasts.
@@ -1188,11 +1195,32 @@ function insideFence(text: string, index: number): boolean {
  * A block that has never been near the browser (a pasted file with no path on
  * disk) is named by its ref, which for that is its file name.
  */
+/** The name a page annotation's report carries for its chip (the composer
+ *  writes this line; without it a re-read message could only name the chip
+ *  after its random ref). First line only — the same position the tag writer
+ *  strips it from, so a `Label:` line quoted INSIDE a report neither names
+ *  the chip nor survives into the opened report. */
+function annotationLabelOf(body: string): string {
+  return body.match(/^Label: ([^\r\n]+)/)?.[1]?.trim() ?? ""
+}
+
+/** A report minus its internal `Label:` line, for a path that shows the
+ *  report as prose (an agent that takes no embedded block gets the report
+ *  appended to the draft — the line names the tag, not the message). */
+export function stripAnnotationLabel(body: string): string {
+  return body.replace(/^Label: [^\r\n]*\r?\n?/, "")
+}
+
 function embeddedContextName(
   ref: string,
   body: string,
   nameHandoff: AdapterMessageText["pageHandoffName"]
 ): string {
+  // A page annotation carries the name its badge wore right in the report
+  // (the composer writes the line); the transcript persists nothing else of
+  // the label, and without it the chip would read as the random uri.
+  const label = annotationLabelOf(body)
+  if (label) return label
   const handoff = readPageHandoffBlock(body)
   return handoff ? nameHandoff(handoff) : embeddedRefName(ref)
 }
@@ -1231,17 +1259,29 @@ function embeddedRefName(uri: string): string {
  */
 function embeddedChip(ref: string): UserResourceDisplay {
   const site = webSiteOf(ref)
-  return site
-    ? {
-        name: site.host,
-        uri: embeddedReferenceUriFor(site.origin),
-        mime_type: null,
-      }
-    : {
-        name: embeddedRefName(ref),
-        uri: embeddedReferenceUriFor(ref),
-        mime_type: null,
-      }
+  if (site) {
+    return {
+      name: site.host,
+      uri: embeddedReferenceUriFor(site.origin),
+      mime_type: null,
+    }
+  }
+  // A ref that is itself an embedded display uri (an annotation's, minted at
+  // the composer) names its chip directly — re-wrapping it would encode the
+  // scheme a second time and break the match with the badge standing for the
+  // same attachment.
+  if (isEmbeddedReferenceUri(ref)) {
+    return {
+      name: embeddedRefName(ref),
+      uri: ref,
+      mime_type: null,
+    }
+  }
+  return {
+    name: embeddedRefName(ref),
+    uri: embeddedReferenceUriFor(ref),
+    mime_type: null,
+  }
 }
 
 /** The host (with its port) and origin of an http(s) address, or null. */
@@ -1274,25 +1314,54 @@ function embeddedBadge(name: string, ref: string): string {
   })
 }
 
-/** Lift each embedded context block out of the prose and onto the chip row,
- *  the way the composer showed it when the message was written. */
+/** Rewrite each embedded context block out of the prose: a page the built-in
+ *  browser handed over becomes a chip on the summary row; a page ANNOTATION
+ *  becomes an inline `<annotation>` tag carrying its label and its whole
+ *  report, which the message renderer shows collapsed under the badge the
+ *  tag belongs to. */
 function liftEmbeddedContext(
   text: string,
   resources: UserResourceDisplay[]
 ): string {
   return text.replace(
     EMBEDDED_CONTEXT_RE,
-    (match: string, ref: string, _body: string, offset: number) => {
+    (match: string, ref: string, body: string, offset: number) => {
       const uri = ref.trim()
-      // A block naming nothing leaves nothing to put on a chip, and dropping
+      // A block naming nothing leaves nothing to show, and dropping
       // it would be deleting content with no trace of it anywhere. Left in
       // place — as is one inside a code fence, which is a person quoting the
       // shape rather than an agent reporting a prompt.
       if (!uri || insideFence(text, offset)) return match
+      // An annotation's ref is its own random embedded uri; a hand-off names
+      // the real page address it was taken from.
+      if (isEmbeddedReferenceUri(uri)) {
+        return annotationTag(uri, body)
+      }
       addResource(resources, embeddedChip(uri))
       return ""
     }
   )
+}
+
+/** The inline tag an annotation block becomes, and its parsing counterpart
+ *  lives in `user-message-segments`. The body is escaped so it cannot close
+ *  the tag early; the label cannot break out of its attribute. */
+export function annotationTag(ref: string, body: string): string {
+  const label = annotationLabelOf(body) || embeddedRefName(ref)
+  const attr = label
+    .split("&")
+    .join("&amp;")
+    .split('"')
+    .join("&quot;")
+    .split("<")
+    .join("&lt;")
+  // The label line names the tag itself; repeating it inside the report the
+  // badge opens would show the same words twice.
+  const inner = (body ?? "")
+    .replace(/^Label: [^\r\n]*\r?\n?/, "")
+    .split("</annotation")
+    .join("<\\/annotation")
+  return `<annotation ref="${ref}" label="${attr}">${inner}</annotation>`
 }
 
 /**
@@ -1347,8 +1416,14 @@ function detachGluedStandIns(
     let before = text.slice(cursor, start)
     if (ref && before.endsWith(ref) && !insideFence(text, start)) {
       before = before.slice(0, before.length - ref.length)
-      const name = embeddedContextName(ref, match[2] ?? "", nameHandoff)
-      badges.push(embeddedBadge(name, ref))
+      // An annotation's address is put back as its badge (the badge lives in
+      // the prose, next to the words it annotates). A hand-off's is simply
+      // dropped: that attachment reads as the site's chip under the bubble,
+      // and the block lifted from it carries the page's facts.
+      if (isEmbeddedReferenceUri(ref)) {
+        const name = embeddedContextName(ref, match[2] ?? "", nameHandoff)
+        badges.push(embeddedBadge(name, ref))
+      }
     }
     out += before + match[0]
     cursor = start + match[0].length
@@ -1371,16 +1446,23 @@ export function extractUserResourcesFromText(text: string): {
   // contain an `@…[blocked…]` pattern and be mutated before extraction. The link
   // segments are handled verbatim by `handleMarkdownLink`.
   let out = ""
+  // `tokens.map(raw-or-value).join("")` rebuilds `prose` verbatim, so running
+  // lengths give each link its true offset for the fence check.
+  let offset = 0
   for (const token of tokenizeReferenceLinks(prose)) {
+    const consumed = token.type === "link" ? token.raw : token.value
     out +=
       token.type === "link"
         ? handleMarkdownLink(
             token.raw,
             token.label,
             token.destination,
-            resources
+            resources,
+            prose,
+            offset
           )
         : stripBlockedMentions(token.value, resources)
+    offset += consumed.length
   }
 
   return {
@@ -1399,7 +1481,6 @@ function splitUserTextAndResources(
   const resources: UserResourceDisplay[] = []
   const nextParts: AdaptedContentPart[] = []
   const attachments = embeddedAttachmentNames(parts, text.pageHandoffName)
-  const badges: string[] = []
 
   for (const part of parts) {
     if (part.type !== "text") {
@@ -1418,9 +1499,14 @@ function splitUserTextAndResources(
     if (name) {
       source = embeddedBadge(name, ref)
     } else {
-      const glued = detachGluedStandIns(part.text, text.pageHandoffName)
-      badges.push(...glued.badges)
-      source = glued.text
+      // A glued stand-in is detached so the address the person never typed
+      // does not read as prose; an annotation's rebuilt badge goes back at the
+      // front (its place among the words), a hand-off's stays dropped (the
+      // site's chip shows it).
+      const detached = detachGluedStandIns(part.text, text.pageHandoffName)
+      source = detached.badges.length
+        ? `${detached.badges.join(" ")}${detached.text}`
+        : detached.text
     }
     const extracted = extractUserResourcesFromText(source)
     if (extracted.resources.length > 0) {
@@ -1430,32 +1516,16 @@ function splitUserTextAndResources(
       for (const resource of extracted.resources)
         addResource(resources, resource)
       if (extracted.text.length === 0) continue
-      if (name) badges.push(extracted.text)
-      else nextParts.push({ type: "text", text: extracted.text })
+      if (!name) nextParts.push({ type: "text", text: extracted.text })
     } else {
+      // Compared against the PART, not the source: the extraction may have
+      // rewritten a source the detacher left untouched (a block becoming its
+      // inline tag), and the rewrite must survive.
       nextParts.push(
-        source === part.text ? part : { type: "text", text: extracted.text }
+        extracted.text === part.text
+          ? part
+          : { type: "text", text: extracted.text }
       )
-    }
-  }
-
-  // The badges go in FRONT of the prose, and on the same line as it.
-  //
-  // Not because the record says so — it cannot. Whatever the person did, the
-  // composer appends an embedded attachment's block after everything they
-  // typed (`message-input`'s `buildDraft`), so the stand-in's position in the
-  // message is an artifact of sending and says nothing about where the badge
-  // stood. What does say something is how these messages come about: the page
-  // is picked in the browser, which puts the badge in an empty composer, and
-  // the question is typed after it. So that is where it is put back.
-  if (badges.length > 0) {
-    const first = nextParts.findIndex((part) => part.type === "text")
-    const prose = first >= 0 ? nextParts[first] : null
-    const line = badges.join(" ")
-    if (prose && prose.type === "text") {
-      nextParts[first] = { type: "text", text: `${line} ${prose.text}` }
-    } else {
-      nextParts.unshift({ type: "text", text: line })
     }
   }
 

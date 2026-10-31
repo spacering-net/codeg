@@ -158,6 +158,12 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   check_user_feedback: "check_user_feedback",
   "mcp__codeg-mcp__check_user_feedback": "check_user_feedback",
   mcp__codeg__check_user_feedback: "check_user_feedback",
+  // codeg-mcp rendered-page tool (server prefix varies by host; the suffix
+  // rule in `normalizeToolName` covers the other separators). Its own
+  // canonical name — the in-place card in `content-parts-renderer` keys on it.
+  render_page: "render_page",
+  "mcp__codeg-mcp__render_page": "render_page",
+  mcp__codeg__render_page: "render_page",
   // OpenCode
   // OpenCode 2 renamed `apply_patch` to `patch` (the edit tool its `gpt-*`
   // models get instead of edit/write) and `task` to `subagent`
@@ -521,6 +527,10 @@ function inferFromInput(
   // stream resolves to "question" before the tool result arrives.
   if (hasAnyKey(parsed, ["question", "questions"])) return "question"
 
+  // `awaitAnswer` is the codeg-mcp `render_page` payload's own key — the live
+  // stream resolves to "render_page" before the tool result arrives.
+  if (hasAnyKey(parsed, ["awaitAnswer"])) return "render_page"
+
   // `subagent_type` is the Claude Code Task shape; `subagentType` is Cursor's
   // task tool (a protobuf-es oneof object on the live wire).
   if (hasAnyKey(parsed, ["subagent_type", "subagentType"])) {
@@ -668,6 +678,11 @@ function normalizeUncached(toolName: string): string {
   // catches the unprefixed form, so collapse every separator here. Note the
   // freeform matcher below intentionally does NOT catch the underscore form.
   if (/[^a-z0-9]ask_user_question$/.test(canonical)) return "question"
+
+  // codeg-mcp rendered-page tool. Same host-prefix story as the ask tool
+  // above (`mcp__<server>__render_page`, `<server>/render_page`, …) — collapse
+  // every separator to the canonical name the in-place card dispatches on.
+  if (/[^a-z0-9]render_page$/.test(canonical)) return "render_page"
 
   // codeg-mcp live-feedback poll. Same host-prefix story as the delegation tools
   // (`mcp__<server>__check_user_feedback`, `<server>/check_user_feedback`, …) —

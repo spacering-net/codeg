@@ -2118,8 +2118,7 @@ const MARKED_SCREENSHOT_BLOCK = [
 const GOOGLE_URI = "codeg://embedded/https%3A%2F%2Fwww.google.com%2F"
 /** …and the one the chip for the site it came from is keyed by. */
 const GOOGLE_SITE = "codeg://embedded/https%3A%2F%2Fwww.google.com"
-/** The same pair for linux.do. */
-const LINUX_DO_URI = "codeg://embedded/https%3A%2F%2Flinux.do%2F"
+/** The same chip key for linux.do. */
 const LINUX_DO_SITE = "codeg://embedded/https%3A%2F%2Flinux.do"
 
 describe("extractUserResourcesFromText — codeg references stay inline", () => {
@@ -2279,20 +2278,107 @@ describe("extractUserResourcesFromText — codeg references stay inline", () => 
     expect(text).toBe("raw <file:///x/@foo [blocked].txt> ok")
   })
 
-  it("chips a codeg://embedded attachment while keeping its inert badge inline", () => {
+  it("keeps a codeg://embedded badge in the prose", () => {
     const { text, resources } = extractUserResourcesFromText(
       "here [report.pdf](codeg://embedded/abc-123) ok"
     )
-    expect(resources).toEqual([
-      { name: "report.pdf", uri: "codeg://embedded/abc-123", mime_type: null },
-    ])
+    // An annotation's badge stays where it was attached — it is the handle
+    // that opens the report — and nothing goes to the summary row.
+    expect(resources).toEqual([])
     expect(text).toBe("here [report.pdf](codeg://embedded/abc-123) ok")
   })
 
+  it("leaves a quoted embedded site link inside a code fence alone", () => {
+    // Outside a fence this link is moved out to a site chip; a person pasting
+    // the wire shape into a fence is quoting the text, so it must survive
+    // verbatim with nothing lifted.
+    const input = [
+      "the badge serialized as:",
+      "```",
+      `[linux.do](${GOOGLE_URI})`,
+      "```",
+    ].join("\n")
+    const { text, resources } = extractUserResourcesFromText(input)
+    expect(resources).toEqual([])
+    expect(text).toBe(input)
+  })
+
+  // The annotation shape: the block's ref is the minted embedded uri itself
+  // (a bare id no one would type). The block becomes an inline
+  // `<annotation …>` tag named by the report's Label line, and the badge the
+  // display text persisted stands beside it as the handle that opens it.
+  it("rewrites an annotation block into the inline tag the badge opens", () => {
+    const block = [
+      "",
+      '<context ref="codeg://embedded/9f3c-42-dead">',
+      "Label: 页面标注1 - make the button",
+      "The user annotated the page below your request.",
+      "Comment: make the button blue",
+      "</context>",
+    ].join("\n")
+    const { text, resources } = extractUserResourcesFromText(
+      `fix it [页面标注1 - make the button](codeg://embedded/9f3c-42-dead)${block}`
+    )
+    expect(resources).toEqual([])
+    expect(text).toContain(
+      "[页面标注1 - make the button](codeg://embedded/9f3c-42-dead)"
+    )
+    expect(text).toContain(
+      '<annotation ref="codeg://embedded/9f3c-42-dead" label="页面标注1 - make the button">'
+    )
+    expect(text).toContain("Comment: make the button blue")
+    // The label rides the tag once; the report body does not repeat it.
+    expect(text).not.toContain("Label:")
+  })
+
+  // The same message read back from the agent's own record, which keeps
+  // neither the display text nor the badge: only the bare address and the
+  // block. The address is put back as the badge (named by the report's Label
+  // line), and the block becomes the tag the badge opens.
+  it("names a re-read annotation badge from the report's label line", () => {
+    const ref = "codeg://embedded/d6e8e6c4-ef61-400d-bc51-600c2110aaaa"
+    const adapted = adaptMessageTurn(
+      {
+        id: "user-0",
+        role: "user",
+        blocks: [
+          { type: "text", text: "fix it" },
+          { type: "text", text: ref },
+          {
+            type: "text",
+            text: [
+              "",
+              `<context ref="${ref}">`,
+              "Label: 页面标注1 - 这一块和上面太远了",
+              "The user annotated the page below your request.",
+              "Comment: 这一块和上面太远了",
+              "</context>",
+            ].join("\n"),
+          },
+        ],
+        timestamp: "2026-09-24T00:00:00.000Z",
+      },
+      {
+        attachedResources: "Attached resources",
+        toolCallFailed: "Tool failed",
+        pageHandoffName,
+      }
+    )
+    const joined = adapted.content
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n")
+    expect(adapted.userResources ?? []).toEqual([])
+    // The bare address came back as the badge the Label line names, and the
+    // block as the tag that badge opens — nothing in the summary row.
+    expect(joined).toContain("[页面标注1 - 这一块和上面太远了]")
+    expect(joined).toContain(`<annotation ref="${ref}"`)
+    expect(joined).toContain("Comment: 这一块和上面太远了")
+  })
+
   // The composer's badge for something the built-in browser handed over
-  // carries the page's address. The badge still says what was sent; the chip
-  // under the bubble says where from — the chip this message gets when it is
-  // read back from the agent's record, whatever the badge is called.
+  // carries the page's address. The badge is dropped from the prose — the chip
+  // under the bubble is the one display an embedded attachment gets, and it is
+  // keyed by the page the attachment came from.
   it("lists a page's badge under the page it came from", () => {
     const badge = `[Marked-up screenshot](${GOOGLE_URI}#4f1c-uuid)`
     const { text, resources } = extractUserResourcesFromText(
@@ -2301,17 +2387,18 @@ describe("extractUserResourcesFromText — codeg references stay inline", () => 
     expect(resources).toEqual([
       { name: "www.google.com", uri: GOOGLE_SITE, mime_type: null },
     ])
-    expect(text).toBe(`${badge} what is this`)
+    expect(text).toBe("what is this")
   })
 
   // Two things taken from one page are two badges, and one page under them.
   it("lists two badges from one page under it once", () => {
-    const { resources } = extractUserResourcesFromText(
+    const { text, resources } = extractUserResourcesFromText(
       `[Page screenshot](${GOOGLE_URI}#a) [div#logo](${GOOGLE_URI}#b)`
     )
     expect(resources).toEqual([
       { name: "www.google.com", uri: GOOGLE_SITE, mime_type: null },
     ])
+    expect(text).toBe("")
   })
 
   // The chip is the site, so two pages of one site are one chip — two chips
@@ -2374,7 +2461,8 @@ describe("extractUserResourcesFromText — codeg references stay inline", () => 
       `what is this post${PAGE_BLOCK}`
     )
     // Listed under the page it came from, as the composer's badge for it is,
-    // and carrying the same inert display uri that badge carries.
+    // carrying the same inert display uri — and the block's own text, so the
+    // chip can expand to what was actually sent.
     expect(resources).toEqual([
       {
         name: "linux.do",
@@ -2526,8 +2614,8 @@ describe("adaptMessageTurn — user reference resources", () => {
   // The shape a browser hand-off actually comes back in: the prose, the bare
   // page address the ACP adapter wrote where the badge was, and the embedded
   // block as its own trailing text block. All three are one attachment, and
-  // the composer showed it as one badge — named after what was picked — with
-  // its page as the one chip under the message.
+  // it reads as one chip under the message — named after its page, expanding
+  // to the block's own text — with nothing of it left in the prose.
   it("shows a handed-over page the way the composer did", () => {
     const adapted = adaptMessageTurn(
       {
@@ -2550,12 +2638,12 @@ describe("adaptMessageTurn — user reference resources", () => {
         mime_type: null,
       },
     ])
-    // One part, and it reads the way the composer did: the badge, then the
-    // question. No bare address left in the prose, and no page dump.
+    // One part, the question alone. No badge in the prose, no bare address,
+    // and no page dump.
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: "[a.title.raw-link.raw-topic-link](codeg://embedded/https%3A%2F%2Flinux.do%2F) what is this post",
+        text: "what is this post",
       },
     ])
   })
@@ -2610,23 +2698,26 @@ describe("adaptMessageTurn — user reference resources", () => {
       msgText
     )
 
-    const uri = "codeg://embedded/https%3A%2F%2Flinux.do%2Ft%2Ftopic%2F1"
     // The site alone: the path is on the page, not what the chip is for.
     expect(adapted.userResources).toEqual([
-      { name: "linux.do", uri: LINUX_DO_SITE, mime_type: null },
+      {
+        name: "linux.do",
+        uri: LINUX_DO_SITE,
+        mime_type: null,
+      },
     ])
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: `[Page screenshot](${uri}) what does this look like`,
+        text: `what does this look like`,
       },
     ])
   })
 
   // The report this came from: a marked-up screenshot sent on its own read as
   // "Marked-up screenshot" while it was being sent and as the page's address
-  // once the conversation was opened again. The bubble says what was sent and
-  // the chip under it where from, both times.
+  // once the conversation was opened again. An embedded attachment now shows
+  // as one chip under the bubble in both readings, expanding to its text.
   it("shows a marked-up screenshot in the bubble and its page under it", () => {
     const adapted = adaptMessageTurn(
       {
@@ -2642,11 +2733,16 @@ describe("adaptMessageTurn — user reference resources", () => {
       msgText
     )
 
+    // Nothing but the attachment: the prose falls back to its label.
     expect(adapted.content).toEqual([
-      { type: "text", text: `[Marked-up screenshot](${GOOGLE_URI})` },
+      { type: "text", text: "Attached resources" },
     ])
     expect(adapted.userResources).toEqual([
-      { name: "www.google.com", uri: GOOGLE_SITE, mime_type: null },
+      {
+        name: "www.google.com",
+        uri: GOOGLE_SITE,
+        mime_type: null,
+      },
     ])
     expect(adapted.userImages).toHaveLength(1)
   })
@@ -2680,10 +2776,7 @@ describe("adaptMessageTurn — user reference resources", () => {
       msgText
     )
 
-    const uri = "codeg://embedded/http%3A%2F%2F127.0.0.1%3A3000%2F"
-    expect(adapted.content).toEqual([
-      { type: "text", text: `[2 console errors](${uri}) why` },
-    ])
+    expect(adapted.content).toEqual([{ type: "text", text: `why` }])
     // A local server's site keeps its port: it is what tells two apart.
     expect(adapted.userResources).toEqual([
       {
@@ -2696,8 +2789,9 @@ describe("adaptMessageTurn — user reference resources", () => {
 
   // codex-acp writes the stand-in and the block as ONE text input, and codex
   // joins text inputs with nothing between them: the page's address ends up
-  // glued to the last word the person typed.
-  it("takes the address codex glues onto the prose back out as the badge", () => {
+  // glued to the last word the person typed. It comes back out, and lands on
+  // the chip row — not as a badge re-born in the prose.
+  it("takes the address codex glues onto the prose back out", () => {
     const adapted = adaptMessageTurn(
       {
         id: "u8",
@@ -2716,7 +2810,7 @@ describe("adaptMessageTurn — user reference resources", () => {
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: `[Marked-up screenshot](${GOOGLE_URI}) what is this`,
+        text: `what is this`,
       },
     ])
     expect(adapted.userResources).toEqual([
@@ -2741,7 +2835,8 @@ describe("adaptMessageTurn — user reference resources", () => {
     )
 
     expect(adapted.content).toEqual([
-      { type: "text", text: `[Marked-up screenshot](${GOOGLE_URI})` },
+      // Nothing of the attachment is left to say: the placeholder names it.
+      { type: "text", text: "Attached resources" },
     ])
   })
 
@@ -2766,13 +2861,15 @@ describe("adaptMessageTurn — user reference resources", () => {
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: `[Marked-up screenshot](${GOOGLE_URI}) see https://www.google.com/`,
+        text: `see https://www.google.com/`,
       },
     ])
   })
 
   // A screenshot and an element taken from one page arrive as two stand-ins
-  // for one address. Each is the badge it was — not both the first one.
+  // for one address. Each consumes one name — neither lands on the other's —
+  // and both leave the prose: an embedded attachment shows once, as the page
+  // chip under the message.
   it("keeps the names of two things taken from one page apart", () => {
     const screenshot = [
       "",
@@ -2802,7 +2899,7 @@ describe("adaptMessageTurn — user reference resources", () => {
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: `[Page screenshot](${LINUX_DO_URI}) [a.title.raw-link.raw-topic-link](${LINUX_DO_URI}) compare`,
+        text: `compare`,
       },
     ])
     expect(adapted.userResources).toEqual([
@@ -2838,7 +2935,7 @@ describe("adaptMessageTurn — user reference resources", () => {
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: "[Page screenshot](codeg://embedded/http%3A%2F%2Fx.test%2F)",
+        text: "Attached resources",
       },
     ])
     expect(adapted.userResources).toEqual([
@@ -2868,7 +2965,7 @@ describe("adaptMessageTurn — user reference resources", () => {
     expect(adapted.content).toEqual([
       {
         type: "text",
-        text: "[a.title.raw-link.raw-topic-link](codeg://embedded/https%3A%2F%2Flinux.do%2F) https://linux.do/",
+        text: "https://linux.do/",
       },
     ])
   })

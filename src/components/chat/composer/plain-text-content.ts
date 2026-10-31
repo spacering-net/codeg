@@ -1,6 +1,7 @@
 import type { JSONContent } from "@tiptap/core"
 
 import { parseUserMessageSegments } from "@/components/message/user-message-segments"
+import { annotationTag } from "@/lib/adapters/ai-elements-adapter"
 import {
   NO_KNOWN_INVOCATIONS,
   type KnownInvocations,
@@ -80,6 +81,17 @@ export function textToHydratedInlineContent(
   for (const segment of segments) {
     if (segment.kind === "text") {
       out.push(...textToInlineContent(segment.text))
+    } else if (segment.kind === "annotation") {
+      // A re-edited sent message carries its annotation reports back into the
+      // composer: verbatim tag text, not a badge — the composer has no report
+      // panel to open.
+      out.push({
+        type: "text",
+        text: annotationTag(
+          segment.ref,
+          `Label: ${segment.label}\n${segment.body}`
+        ),
+      })
     } else if (isSendDroppedReference(segment.attrs)) {
       out.push({ type: "text", text: referenceToMarkdown(segment.attrs) })
     } else {

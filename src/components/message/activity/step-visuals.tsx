@@ -4,6 +4,7 @@ import { useCallback } from "react"
 import { useTranslations } from "next-intl"
 import {
   ActivityIcon as MonitorIcon,
+  AppWindowIcon,
   ArchiveIcon,
   BotIcon,
   BrainIcon,
@@ -108,6 +109,8 @@ export function toolIcon(tool: ToolDescriptor): ActivityIcon {
       return MapIcon
     case "question":
       return MessageCircleQuestionMarkIcon
+    case "render-page":
+      return AppWindowIcon
     case "feedback":
       return MessagesSquareIcon
     case "workbench":

@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   Bubbles,
   CalendarClock,
   Code2,
@@ -39,6 +40,7 @@ type AgentToolCopy =
   | "delegation"
   | "feedback"
   | "ask"
+  | "render"
   | "sessions"
   | "browser"
   | "browserEval"
@@ -89,6 +91,15 @@ export const AGENT_TOOL_GROUPS: Record<
     short: "ask.short",
     hint: "ask.hint",
     icon: HelpCircle,
+  },
+  // The sibling of `ask`: same gate, same answer channel, same parked tool
+  // call — the difference is the agent draws the page the answer comes back
+  // from instead of listing options.
+  render: {
+    label: "render.label",
+    short: "render.short",
+    hint: "render.hint",
+    icon: AppWindow,
   },
   sessions: {
     label: "sessions.label",
