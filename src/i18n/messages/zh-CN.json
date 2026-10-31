@@ -2425,7 +2425,9 @@
       "search": "搜索",
       "openSettings": "打开设置",
       "backToConversations": "返回会话",
-      "withShortcut": "{label}（{shortcut}）"
+      "withShortcut": "{label}（{shortcut}）",
+      "toggleBrowserPanel": "切换浏览器面板",
+      "newBrowserTab": "新建浏览器标签页"
     },
     "statusBar": {
       "connection": {

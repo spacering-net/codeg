@@ -2425,7 +2425,9 @@
       "search": "بحث",
       "openSettings": "فتح الإعدادات",
       "backToConversations": "العودة إلى المحادثات",
-      "withShortcut": "{label} (اختصار: {shortcut})"
+      "withShortcut": "{label} (اختصار: {shortcut})",
+      "toggleBrowserPanel": "تبديل لوحة المتصفح",
+      "newBrowserTab": "علامة تبويب متصفح جديدة"
     },
     "statusBar": {
       "connection": {
@@ -3807,9 +3809,9 @@
         "resumeReasonLabel": "سبب الاستئناف",
         "detailTitle": "محادثة الوكيل الفرعي",
         "detailDescription": "عرض للقراءة فقط لمحادثة الوكيل الفرعي المُفوَّض.",
-        "waitForResult": "في انتظار نتيجة المهمة \u2066{task}\u2069",
+        "waitForResult": "في انتظار نتيجة المهمة ⁦{task}⁩",
         "waitForResultNoTask": "في انتظار نتيجة المهمة",
-        "cancelTask": "جارٍ إلغاء المهمة \u2066{task}\u2069",
+        "cancelTask": "جارٍ إلغاء المهمة ⁦{task}⁩",
         "cancelTaskNoTask": "جارٍ إلغاء المهمة",
         "resultPageOf": "{current} / {total}",
         "prevResult": "النتيجة السابقة",
@@ -3968,7 +3970,7 @@
           "monitor": "مراقبة",
           "networkAccess": "الوصول إلى الشبكة",
           "codexScript": "نص برمجي",
-          "background": "في الخلفية · \u2066#{id}\u2069",
+          "background": "في الخلفية · ⁦#{id}⁩",
           "backgroundShort": "في الخلفية",
           "sessionWait": "انتظار",
           "sessionTerminate": "إيقاف",

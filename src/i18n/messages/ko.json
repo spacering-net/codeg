@@ -2425,7 +2425,9 @@
       "search": "검색",
       "openSettings": "설정 열기",
       "backToConversations": "대화로 돌아가기",
-      "withShortcut": "{label} ({shortcut} 단축키)"
+      "withShortcut": "{label} ({shortcut} 단축키)",
+      "toggleBrowserPanel": "브라우저 패널 전환",
+      "newBrowserTab": "새 브라우저 탭"
     },
     "statusBar": {
       "connection": {

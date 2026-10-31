@@ -2,6 +2,7 @@
 
 import { useCallback } from "react"
 import {
+  Globe,
   Menu,
   PanelRight,
   Search,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { openSettingsWindow } from "@/lib/api"
+import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
 import { isDesktop } from "@/lib/platform"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
@@ -20,6 +22,10 @@ import { useSearchDialog } from "@/contexts/search-dialog-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
+import {
+  useOptionalWorkspaceActions,
+  useOptionalWorkspaceView,
+} from "@/contexts/workspace-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { WorkbenchRouteChromeActions } from "@/components/workbench/workbench-content"
@@ -50,6 +56,8 @@ export function FolderTitleBar() {
   const { isOpen: sidebarOpen, toggle } = useSidebarContext()
   const { isOpen: auxPanelOpen, toggle: toggleAuxPanel } = useAuxPanelContext()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
+  const workspaceView = useOptionalWorkspaceView()
+  const workspaceActions = useOptionalWorkspaceActions()
   const { setOpen: setSearchOpen } = useSearchDialog()
   const { activeFolder } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
@@ -57,6 +65,22 @@ export function FolderTitleBar() {
   const { isConversations, openConversations } = useWorkbenchRoute()
   const { isMac } = usePlatform()
   const showMacInset = isMac && isDesktop()
+
+  const hasTabs = workspaceView?.mode === "fusion"
+  const isBrowserPanelOpen = hasTabs && !workspaceView?.conversationMaximized
+
+  const handleToggleBrowser = useCallback(() => {
+    if (!workspaceActions || !workspaceView) return
+    if (workspaceView.mode === "conversation") {
+      workspaceActions.openBrowserTab(BLANK_PAGE_URL)
+    } else {
+      workspaceActions.toggleConversationMaximized()
+    }
+  }, [workspaceActions, workspaceView])
+
+  const browserButtonTitle = !hasTabs
+    ? tTitleBar("newBrowserTab")
+    : tTitleBar("toggleBrowserPanel")
 
   const handleOpenSettings = useCallback(() => {
     openSettingsWindow().catch((err) => {
@@ -129,7 +153,7 @@ export function FolderTitleBar() {
       </div>
       {/* Empty middle is a full-height window-drag region. */}
       <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
-      {/* Right cluster: terminal + aux + settings — the same controls the
+      {/* Right cluster: terminal + browser + aux + settings — the same controls the
           desktop RightEdgeChrome shows, now as direct buttons (no ⋯ menu),
           plus the active full-page route's own page-level controls. The way OUT
           of such a route is the breadcrumb at the head of its title (the route
@@ -153,6 +177,20 @@ export function FolderTitleBar() {
               aria-label={tTitleBar("toggleTerminal")}
             >
               <SquareTerminal className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "h-8 w-8 shrink-0",
+                isBrowserPanelOpen && "bg-accent"
+              )}
+              onClick={handleToggleBrowser}
+              disabled={!activeFolder && !isChatMode}
+              title={browserButtonTitle}
+              aria-label={browserButtonTitle}
+            >
+              <Globe className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"

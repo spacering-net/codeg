@@ -2425,7 +2425,9 @@
       "search": "Rechercher",
       "openSettings": "Ouvrir les paramètres",
       "backToConversations": "Retour aux conversations",
-      "withShortcut": "{label} (raccourci : {shortcut})"
+      "withShortcut": "{label} (raccourci : {shortcut})",
+      "toggleBrowserPanel": "Basculer le panneau du navigateur",
+      "newBrowserTab": "Nouvel onglet de navigateur"
     },
     "statusBar": {
       "connection": {
