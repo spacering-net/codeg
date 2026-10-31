@@ -43,6 +43,7 @@ fn default_enabled(agent_type: AgentType) -> bool {
             | AgentType::Grok
             | AgentType::Cursor
             | AgentType::DeepSeek
+            | AgentType::DeepSeekOfficial
             | AgentType::Qoder
             | AgentType::Antigravity
             | AgentType::Kiro

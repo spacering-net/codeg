@@ -256,7 +256,7 @@ pub fn current_platform() -> &'static str {
     }
 }
 
-/// The twenty built-in agents. Excludes user-registered custom agents — use
+/// The twenty-one built-in agents. Excludes user-registered custom agents — use
 /// [`all_acp_agents`] for the live set.
 pub fn builtin_acp_agents() -> Vec<AgentType> {
     vec![
@@ -273,6 +273,7 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
         AgentType::Grok,
         AgentType::Cursor,
         AgentType::DeepSeek,
+        AgentType::DeepSeekOfficial,
         AgentType::Qoder,
         AgentType::Antigravity,
         AgentType::Kiro,
@@ -283,7 +284,7 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
     ]
 }
 
-/// Every agent codeg can currently drive: the twenty built-ins followed by
+/// Every agent codeg can currently drive: the twenty-one built-ins followed by
 /// the user's registered custom ACP agents (sorted by id).
 pub fn all_acp_agents() -> Vec<AgentType> {
     let mut agents = builtin_acp_agents();
@@ -306,6 +307,8 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::Grok => "grok-build",
         AgentType::Cursor => "cursor",
         AgentType::DeepSeek => "deepseek-acp",
+        // Avoid taking over existing custom:dsh registrations.
+        AgentType::DeepSeekOfficial => "codeg-deepseek-official",
         AgentType::Qoder => "qoder-cli",
         AgentType::Antigravity => "antigravity-acp",
         AgentType::Kiro => "kiro-cli",
@@ -344,6 +347,7 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "grok-build" => Some(AgentType::Grok),
         "cursor" => Some(AgentType::Cursor),
         "deepseek-acp" => Some(AgentType::DeepSeek),
+        "codeg-deepseek-official" => Some(AgentType::DeepSeekOfficial),
         "qoder-cli" => Some(AgentType::Qoder),
         "antigravity-acp" => Some(AgentType::Antigravity),
         "kiro-cli" => Some(AgentType::Kiro),
@@ -5889,6 +5893,23 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 node_required: Some("22.0.0"),
             },
         },
+        AgentType::DeepSeekOfficial => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "DeepSeek Harness (Official ACP)",
+            description: "First-party DSH automation ACP over stdio",
+            // The native profile supports ACP session/new, list, resume, close,
+            // prompts, config options and MCP, but not session/load or fork.
+            // Keep its Codeg ACP transcripts separate from deepseek-acp logs.
+            distribution: AgentDistribution::Npx {
+                version: "0.2.1-rc.4",
+                package: "@deepseek-ai/dsh@0.2.1-rc.4",
+                cmd: "dsh",
+                args: &["--profile", "acp"],
+                env: &[],
+                node_required: Some("24.9.0"),
+            },
+        },
         AgentType::DeepSeek => AcpAgentMeta {
             agent_type,
             supports_mcp: true,
@@ -7348,6 +7369,21 @@ mod tests {
             "deepseek-acp@0.9.0",
             Some("22.0.0"),
         );
+        assert_npx_version(
+            AgentType::DeepSeekOfficial,
+            "0.2.1-rc.4",
+            "@deepseek-ai/dsh@0.2.1-rc.4",
+            Some("24.9.0"),
+        );
+        match get_agent_meta(AgentType::DeepSeekOfficial).distribution {
+            AgentDistribution::Npx { cmd, args, .. } => {
+                assert_eq!(cmd, "dsh");
+                assert_eq!(args, &["--profile", "acp"]);
+            }
+            other => panic!("expected official DSH npx distribution, got {other:?}"),
+        }
+        assert!(get_agent_meta(AgentType::DeepSeekOfficial).supports_mcp);
+        assert_eq!(from_registry_id("codeg-deepseek-official"), Some(AgentType::DeepSeekOfficial));
         assert_npx_version(
             AgentType::Qoder,
             "1.1.81",

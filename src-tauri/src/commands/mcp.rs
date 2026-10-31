@@ -3707,6 +3707,11 @@ pub fn read_servers_for_agent_type(
         // unlike Kimi/Grok/Cursor, DeepSeek must stay OFF the forward skip
         // list in `connection.rs` or these servers never arrive.
         AgentType::DeepSeek => read_deepseek_servers(),
+        // The official DSH profile is a separate agent with no Codeg-managed
+        // MCP store yet. Do not inherit the community bridge's assignments
+        // from `$DSH_HOME/mcp.json`; the collaboration companion is injected
+        // separately over the ACP wire.
+        AgentType::DeepSeekOfficial => Ok(BTreeMap::new()),
         AgentType::ZCode => read_zcode_servers(),
         // Qoder reads MCP servers from its own settings.json `mcpServers`
         // (gemini-schema settings file) at startup — see the Qoder section
@@ -8447,6 +8452,36 @@ mod tests {
                 "{key} is listed but its validator rejects a well-formed value"
             );
         }
+    }
+
+    #[test]
+    fn deepseek_official_does_not_read_legacy_mcp_assignments() {
+        use crate::models::agent::AgentType;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        let raw = json!({"mcpServers": {
+            "legacy-only": {"command": "legacy-mcp", "env": {"TOKEN": "fixture"}}
+        }})
+        .to_string();
+        fs::write(&path, &raw).unwrap();
+
+        temp_env::with_var("DSH_HOME", Some(dir.path()), || {
+            let legacy = read_servers_for_agent_type(AgentType::DeepSeek).unwrap();
+            assert_eq!(legacy["legacy-only"]["command"], "legacy-mcp");
+            assert!(read_servers_for_agent_type(AgentType::DeepSeekOfficial)
+                .unwrap()
+                .is_empty());
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+
+            // An unrelated malformed legacy store must not affect official DSH.
+            fs::write(&path, "{broken").unwrap();
+            assert!(read_servers_for_agent_type(AgentType::DeepSeek).is_err());
+            assert!(read_servers_for_agent_type(AgentType::DeepSeekOfficial)
+                .unwrap()
+                .is_empty());
+            assert_eq!(fs::read_to_string(&path).unwrap(), "{broken");
+        });
     }
 
     #[test]
