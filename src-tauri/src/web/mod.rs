@@ -4,6 +4,7 @@ pub mod browser_tunnel;
 pub mod compression;
 pub mod event_bridge;
 pub mod handlers;
+pub mod instance_name;
 pub mod port_probe;
 pub mod proxy_auth;
 pub mod router;
