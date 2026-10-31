@@ -248,6 +248,18 @@ pub struct PendingUserMessage {
     pub blocks: Vec<crate::acp::types::UserMessageBlock>,
 }
 
+/// A classified strict `session/load` failure, recorded on the state so the
+/// connection manager can turn the aborted session-start wait into a typed
+/// error for the delegation broker. See `SessionLoadPolicy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionLoadFailure {
+    /// Wire-stable classification: `resource_not_found`, `session_unavailable`,
+    /// `session_archived`, `session_busy`, or `session_unavailable` when the
+    /// agent gave nothing more specific.
+    pub code: String,
+    pub message: String,
+}
+
 /// 后端权威的会话状态。每个 AgentConnection 持有一个 Arc<RwLock<SessionState>>。
 ///
 /// 字段范围：仅当前 turn 的 in-flight 数据 + 元信息 + 协商出的能力。
@@ -407,6 +419,13 @@ pub struct SessionState {
     /// `quietStartup` setting suppressed the prelude at the source.
     /// Backend-internal — not serialized.
     pub pi_startup_banner: Option<String>,
+
+    /// Why a STRICT delegation-continue `session/load` failed, for the
+    /// connection manager's strict wait to read after the session-start signal
+    /// aborts. `None` for every ordinary (fallback-to-new) launch: those
+    /// report the failure through `AcpEvent::SessionLoadFailed` and continue.
+    /// Backend-internal — not serialized.
+    pub session_load_failure: Option<SessionLoadFailure>,
 
     /// Config-option values codeg asserted while establishing this session
     /// (`apply_preferred_session_options`) and the agent confirmed — the user's
@@ -902,6 +921,7 @@ impl SessionState {
             grok_catalog_broadcast: None,
             kiro_reasoning: None,
             pi_startup_banner: None,
+            session_load_failure: None,
             asserted_config_values: BTreeMap::new(),
             agent_chosen_config_values: BTreeMap::new(),
             env_pinned_config_option_ids: Vec::new(),

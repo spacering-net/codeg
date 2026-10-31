@@ -290,6 +290,39 @@ pub fn build_delegation_meta(
     task_id: Option<&str>,
     assistant: Option<&crate::acp::delegation::types::AssistantRef>,
 ) -> serde_json::Value {
+    build_delegation_meta_with_lineage(
+        status,
+        child_connection_id,
+        child_conversation_id,
+        error_code,
+        text_preview,
+        duration_ms,
+        task_preview,
+        task_id,
+        None,
+        None,
+        assistant,
+    )
+}
+
+/// [`build_delegation_meta`] plus the round's position in its chain: the task
+/// this round continues (`source_task_id`) and the round that continues it
+/// (`successor_task_id`). A continue card draws both; the first round of a
+/// session carries neither.
+#[allow(clippy::too_many_arguments)]
+pub fn build_delegation_meta_with_lineage(
+    status: &str,
+    child_connection_id: Option<&str>,
+    child_conversation_id: Option<i32>,
+    error_code: Option<&str>,
+    text_preview: Option<&str>,
+    duration_ms: Option<u64>,
+    task_preview: Option<&str>,
+    task_id: Option<&str>,
+    source_task_id: Option<&str>,
+    successor_task_id: Option<&str>,
+    assistant: Option<&crate::acp::delegation::types::AssistantRef>,
+) -> serde_json::Value {
     let mut inner = serde_json::Map::new();
     inner.insert(
         "status".to_string(),
@@ -352,6 +385,22 @@ pub fn build_delegation_meta(
     if let Some(id) = task_id {
         inner.insert(
             "task_id".to_string(),
+            serde_json::Value::String(id.to_string()),
+        );
+    }
+    // Chain position, on every write for the same replace-wholesale reason.
+    // Only a continue round names a source; only a refused continue names a
+    // successor (and that report never writes meta at all), so in practice a
+    // live card carries `source_task_id` and leaves the successor empty.
+    if let Some(id) = source_task_id {
+        inner.insert(
+            "source_task_id".to_string(),
+            serde_json::Value::String(id.to_string()),
+        );
+    }
+    if let Some(id) = successor_task_id {
+        inner.insert(
+            "successor_task_id".to_string(),
             serde_json::Value::String(id.to_string()),
         );
     }

@@ -234,13 +234,14 @@ function findDelegationArgs(
 // opencode code-mode (`execute`) payloads
 //
 // opencode 2.x runs MCP tools through its built-in `execute` tool: the model
-// writes `tools["codeg-mcp"].delegate_to_agent({…})` as JS source packed into
-// a `{code: "…"}` raw input. These helpers recognize such a payload and read
+// writes `tools["codeg-mcp"].delegate_to_agent({…})` or
+// `tools["codeg-mcp"].continue_delegation({…})` as JS source packed into a
+// `{code: "…"}` raw input. These helpers recognize such a payload and read
 // the argument values back out of the JS source — the same structural scanner
 // as `acp/lifecycle.rs` (`code_mode_call_span` and friends), so the backend's
 // registration decision and the frontend's card classification can never
 // disagree about what counts as a delegation call. Like the Rust side, the
-// scanner is STRICT: `tools` must reach `delegate_to_agent(` through a real
+// scanner is STRICT: `tools` must reach the method `(` through a real
 // accessor, strings/templates/comments are skipped (a task text *quoting* a
 // call is not a call), and every ambiguity degrades to "unreadable" rather
 // than a guessed value — spread / computed-key / escaped-quoted-key syntax
@@ -415,27 +416,46 @@ const CODE_MODE_BRANCH_KEYWORDS = [
   "function",
 ]
 
-/** The first `delegate_to_agent(` call reached via a `tools` accessor: the
- *  `(open, close)` of its argument list, and whether those arguments may be
- *  read as the delegation's — it is the only call site in a scan that
- *  reached the end of the script, or it provably runs before any other (at
- *  brace depth 0, outside any parameter list or destructuring pattern, with
- *  nothing before it that branches, defers or hides code in a `${…}`).
- *  `null` past the scan cap, on unbalanced input before the call, with no
- *  such call, or when a `/` that is no comment precedes the call: a regex
- *  literal is indistinguishable from division here, and its body can carry
- *  the quote or backtick that desynchronizes everything after it. Mirrors
- *  `code_mode_call_site` in `acp/lifecycle.rs`. */
-function codeModeCallSite(
-  code: string
-): { open: number; close: number; readable: boolean } | null {
+/** The methods a code-mode script can use to start a delegation. A
+ *  `continue_delegation` is a new round (new task id), not a resume. */
+const CODE_MODE_DELEGATION_METHODS = [
+  "delegate_to_agent",
+  "continue_delegation",
+] as const
+
+type CodeModeDelegationMethod = (typeof CODE_MODE_DELEGATION_METHODS)[number]
+
+type CodeModeCallSite = {
+  open: number
+  close: number
+  readable: boolean
+  method: CodeModeDelegationMethod
+}
+
+/** The first delegation call reached via a `tools` accessor: the `(open,
+ *  close)` of its argument list, which method it called, and whether those
+ *  arguments may be read as the delegation's — it is the only call site in a
+ *  scan that reached the end of the script, or it provably runs before any
+ *  other (at brace depth 0, outside any parameter list or destructuring
+ *  pattern, with nothing before it that branches, defers or hides code in a
+ *  `${…}`). `null` past the scan cap, on unbalanced input before the call,
+ *  with no such call, or when a `/` that is no comment precedes the call: a
+ *  regex literal is indistinguishable from division here, and its body can
+ *  carry the quote or backtick that desynchronizes everything after it.
+ *  Mirrors `code_mode_call_site` in `acp/lifecycle.rs`, extended to the
+ *  continue method the same way. */
+function codeModeCallSite(code: string): CodeModeCallSite | null {
   if (utf8LengthExceeds(code, CODE_MODE_MAX_CODE_BYTES)) return null
   let i = 0
   let depth = 0
   // The `(` / `[` groups open at `i`, innermost last.
   const groups: string[] = []
   let branched = false
-  let first: { open: number; close: number } | null = null
+  let first: {
+    open: number
+    close: number
+    method: CodeModeDelegationMethod
+  } | null = null
   let runsFirst = false
   // How many groups enclosing the first site have yet to close; each must
   // close as a call, a grouping or an array — not as an arrow's parameter
@@ -508,9 +528,9 @@ function codeModeCallSite(
         }
       }
       if (isJsWordAt(code, i, "tools")) {
-        const open = codeModeToolsCallOpen(code, i)
-        if (open !== null) {
-          const close = matchingParen(code, open)
+        const found = codeModeToolsCallOpen(code, i)
+        if (found !== null) {
+          const close = matchingParen(code, found.open)
           if (close === null) {
             if (first === null) return null
             counted = false
@@ -518,7 +538,7 @@ function codeModeCallSite(
           }
           sites += 1
           if (first === null) {
-            first = { open, close }
+            first = { open: found.open, close, method: found.method }
             runsFirst = depth === 0 && !branched
             enclosing = groups.length
           }
@@ -536,11 +556,15 @@ function codeModeCallSite(
   return {
     open: first.open,
     close: first.close,
+    method: first.method,
     readable: provable || (sites === 1 && counted),
   }
 }
 
-function codeModeToolsCallOpen(code: string, toolsAt: number): number | null {
+function codeModeToolsCallOpen(
+  code: string,
+  toolsAt: number
+): { open: number; method: CodeModeDelegationMethod } | null {
   let i = toolsAt + "tools".length
   i = skipJsWsAndComments(code, i)
   const c = code[i]
@@ -566,9 +590,12 @@ function codeModeToolsCallOpen(code: string, toolsAt: number): number | null {
   } else {
     return null
   }
-  if (!isJsWordAt(code, i, "delegate_to_agent")) return null
-  i = skipJsWsAndComments(code, i + "delegate_to_agent".length)
-  return code[i] === "(" ? i : null
+  const method = CODE_MODE_DELEGATION_METHODS.find((name) =>
+    isJsWordAt(code, i, name)
+  )
+  if (!method) return null
+  i = skipJsWsAndComments(code, i + method.length)
+  return code[i] === "(" ? { open: i, method } : null
 }
 
 function matchingParen(code: string, open: number): number | null {
@@ -876,7 +903,7 @@ function templateLiteralTextEnd(
  *  card renders exactly when the backend registers the call. */
 function codeModeCallOf(parsed: unknown): {
   code: string
-  site: { open: number; close: number; readable: boolean }
+  site: CodeModeCallSite
 } | null {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null
@@ -890,8 +917,15 @@ function codeModeCallOf(parsed: unknown): {
 /** The argument keys the scanner reads; a bare one not followed by `:` is a
  *  SHORTHAND property (or a variable in value position) — either way its
  *  value is a runtime value, and a shorthand after an explicit spelling
- *  overrides it. */
-const CODE_MODE_ARG_KEYS = ["agent_type", "task", "working_dir", "assistant_id"]
+ *  overrides it. `continue_delegation` adds `task_id` (the previous round's
+ *  source id) — still not the new task id the ack mints. */
+const CODE_MODE_ARG_KEYS = [
+  "agent_type",
+  "task",
+  "working_dir",
+  "assistant_id",
+  "task_id",
+]
 
 /** Conservative pre-pass over the argument region: `false` when the region
  *  contains syntax whose effect the scanner cannot evaluate. Spread
@@ -976,7 +1010,10 @@ function readAssistantIdValue(code: string, at: number): string | null {
  *  unknown and the card renders the generic task row — correlation goes
  *  through the tool_call id binding, not these values, so unlike the backend
  *  key there is nothing to mint wrong. Readable values become card content;
- *  unreadable ones (interpolation, unknown escapes) stay `null` per field. */
+ *  unreadable ones (interpolation, unknown escapes) stay `null` per field.
+ *
+ *  A `continue_delegation` reads only `task` and `task_id`. The latter is the
+ *  previous round's source id, never this card's task id. */
 function parseCodeModeInput(parsed: unknown): ParsedInput | null {
   const call = codeModeCallOf(parsed)
   if (call === null) return null
@@ -993,10 +1030,14 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
   ) {
     return EMPTY_PARSED_INPUT
   }
+  const taskAt = codeModeFindKey(code, start, close, "task")
+  const task = taskAt !== null ? objectTaskValue(code, taskAt) : null
+  if (site.method === "continue_delegation") {
+    return { ...EMPTY_PARSED_INPUT, task }
+  }
   const assistantAt = codeModeFindKey(code, start, close, "assistant_id")
   const agentAt = codeModeFindKey(code, start, close, "agent_type")
   const workingAt = codeModeFindKey(code, start, close, "working_dir")
-  const taskAt = codeModeFindKey(code, start, close, "task")
   return {
     agentType:
       agentAt !== null
@@ -1006,9 +1047,56 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
       assistantAt !== null
         ? coerceAssistantId(readAssistantIdValue(code, assistantAt))
         : null,
-    task: taskAt !== null ? objectTaskValue(code, taskAt) : null,
+    task,
     workingDir: workingAt !== null ? objectStringValue(code, workingAt) : null,
   }
+}
+
+/** The new task text a code-mode `continue_delegation` carries, or `null`. */
+export function parseCodeModeContinueTask(
+  raw: string | null | undefined
+): string | null {
+  if (!raw) return null
+  const parsed = parseInput(raw)
+  return isCodeModeContinueInput(raw) ? parsed.task : null
+}
+
+function isCodeModeContinueInput(raw: string): boolean {
+  if (!raw.includes('"code"')) return false
+  try {
+    return (
+      codeModeCallOf(JSON.parse(raw))?.site.method === "continue_delegation"
+    )
+  } catch {
+    return false
+  }
+}
+
+/** The previous round's task id a code-mode `continue_delegation` names, or
+ *  `null` when the payload is not that call or the value can't be read. Never
+ *  the new task id. */
+export function parseCodeModeContinueSourceTaskId(
+  raw: string | null | undefined
+): string | null {
+  if (!raw || typeof raw !== "string" || !raw.includes('"code"')) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const call = codeModeCallOf(parsed)
+  if (call === null || call.site.method !== "continue_delegation") return null
+  const { code, site } = call
+  if (
+    !site.readable ||
+    !codeModeSingleObjectArgument(code, site.open, site.close) ||
+    !codeModeArgsTransparent(code, site.open + 1, site.close)
+  ) {
+    return null
+  }
+  const at = codeModeFindKey(code, site.open + 1, site.close, "task_id")
+  return at === null ? null : objectStringValue(code, at)
 }
 
 /**
@@ -1666,6 +1754,25 @@ export function isDelegateToAgentToolName(name: string): boolean {
 }
 
 /**
+ * Whether a tool name denotes `continue_delegation`: a new round on an
+ * existing child session. Same host spellings as `delegate_to_agent`. It is
+ * not a resume — the call mints its own task id and its own card.
+ */
+export function isContinueDelegationToolName(name: string): boolean {
+  const lower = name.toLowerCase()
+  return (
+    lower === "continue_delegation" ||
+    /[^a-z0-9]continue_delegation$/.test(lower)
+  )
+}
+
+/** A tool that starts a delegation card: a cold `delegate_to_agent`, or a
+ *  `continue_delegation` that opens the next round. */
+export function isDelegationStartToolName(name: string): boolean {
+  return isDelegateToAgentToolName(name) || isContinueDelegationToolName(name)
+}
+
+/**
  * Resolve the card status from the live binding / persisted meta / parsed tool
  * output, in priority order.
  *
@@ -1693,9 +1800,16 @@ export function resolveDelegationStatus({
    *  call reported it (`taskEnding`). */
   ended?: { status: "ok" | "err" } | null
 }): DelegationCardStatus {
-  // A child awaiting a decision is blocked until the user acts; surface it
-  // over the plain running state so the card cues opening "查看会话".
-  if (childAwaitingUser) return "waiting"
+  // Waiting belongs to the run that is actually parked. A later round on the
+  // same child session can share (or replace) the connection the finished
+  // card still names; its permission/question/plan must not flip that card
+  // back to waiting. With no binding and no meta yet, the child being
+  // blocked is still the only signal this card has.
+  const active =
+    binding?.status === "running" ||
+    (!binding && parsedMeta?.status === "running") ||
+    (!binding && !parsedMeta)
+  if (childAwaitingUser && active) return "waiting"
   if (binding) return binding.status
   if (parsedMeta) return parsedMeta.status
   if (state === "output-error" || errorText) return "err"

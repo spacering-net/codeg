@@ -6,6 +6,15 @@ pub enum AcpError {
     SpawnFailed(String),
     #[error("connection not found: {0}")]
     ConnectionNotFound(String),
+    /// A STRICT `session/load` (delegation continue) failed. Unlike the
+    /// ordinary launch path — which classifies the failure for the UI and opens
+    /// a fresh `session/new` so a user's historical conversation still opens —
+    /// a continue must never silently start a different, empty session. The
+    /// caller receives the classification (`resource_not_found`,
+    /// `session_unavailable`, `session_archived`, `session_busy`, …) and the
+    /// agent's own message.
+    #[error("session load failed ({code}): {message}")]
+    SessionLoadFailed { code: String, message: String },
     #[error("ACP protocol error: {0}")]
     Protocol(String),
     #[error("agent process exited unexpectedly")]
@@ -143,6 +152,7 @@ impl AcpError {
             Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
             Self::AgentAuthRequired(_) => Some("agent_auth_required"),
             Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
+            Self::SessionLoadFailed { .. } => Some("session_load_failed"),
             Self::Protocol(_) => None,
         }
     }

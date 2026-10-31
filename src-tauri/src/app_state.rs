@@ -172,14 +172,17 @@ pub fn build_delegation_stack(
     }) as Arc<dyn ConnectionSpawner>;
     let depth_lookup =
         Arc::new(DbDepthLookup { db: db_arc.clone() }) as Arc<dyn ConversationDepthLookup>;
-    let agent_availability = Arc::new(crate::acp::connection::DbAgentAvailabilityLookup {
-        db: db_arc.clone(),
-    })
-        as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
-    let assistants = Arc::new(crate::acp::delegation::assistants::DbAssistantLookup {
-        db: db_arc.clone(),
-    }) as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
-    let status_lookup = Arc::new(DbChildStatusLookup { db: db_arc }) as Arc<dyn ChildStatusLookup>;
+    let agent_availability =
+        Arc::new(crate::acp::connection::DbAgentAvailabilityLookup { db: db_arc.clone() })
+            as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
+    let assistants =
+        Arc::new(crate::acp::delegation::assistants::DbAssistantLookup { db: db_arc.clone() })
+            as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
+    let status_lookup =
+        Arc::new(DbChildStatusLookup { db: db_arc.clone() }) as Arc<dyn ChildStatusLookup>;
+    let ledger = Arc::new(
+        crate::db::service::delegation_task_service::DbDelegationTaskLedger { db: db_arc },
+    ) as Arc<dyn crate::acp::delegation::types::DelegationTaskLedger>;
     let meta_writer = Arc::new(ConnectionManagerMetaWriter {
         manager: cm_arc.clone(),
     }) as Arc<dyn DelegationMetaWriter>;
@@ -191,6 +194,7 @@ pub fn build_delegation_stack(
     let broker = Arc::new(
         DelegationBroker::with_writers(spawner, depth_lookup, meta_writer, event_emitter)
             .with_status_lookup(status_lookup)
+            .with_ledger(ledger)
             .with_live_reply_lookup(live_reply_lookup)
             .with_assistants(assistants),
     );
@@ -229,7 +233,15 @@ pub fn build_delegation_stack(
     });
 
     (
-        broker, tokens, socket_path, feedback, ask, sessions, authoring, browser, computer,
+        broker,
+        tokens,
+        socket_path,
+        feedback,
+        ask,
+        sessions,
+        authoring,
+        browser,
+        computer,
     )
 }
 

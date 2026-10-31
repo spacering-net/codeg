@@ -14,6 +14,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::error::DbError;
+use crate::db::service::delegation_task_service::{
+    DelegationTaskRecord, NewDelegationTask, TerminalUpdate,
+};
 use crate::models::AgentType;
 
 /// Per-agent defaults applied when codeg-mcp spawns a subagent on behalf of a
@@ -234,12 +238,105 @@ pub struct ResumeDelegationRequest {
     pub external_handle: Option<String>,
 }
 
+/// Everything the broker needs to open the NEXT round of work on a delegated
+/// session. `task_id` names the round being followed; everything else about
+/// the run — agent, working directory, ACP session, assistant snapshot —
+/// comes off that round's ledger row, never from the caller. The tool has no
+/// `agent_type` / `working_dir` / `assistant_id` on purpose: a continuation
+/// must resume the session that exists, not start a different one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContinueDelegationRequest {
+    pub parent_connection_id: String,
+    pub parent_conversation_id: i32,
+    /// The `continue_delegation` call's own parent-side ACP tool id. Empty
+    /// when the host announced the MCP call without one; the listener then
+    /// claims the id it observed through the lifecycle, and falls back to a
+    /// synthetic placeholder.
+    #[serde(default)]
+    pub parent_tool_use_id: String,
+    /// The previous round's task id.
+    pub task_id: String,
+    /// The complete new task text. Stored verbatim (after the ledger's bounded
+    /// preview) and hashed with SHA-256 for idempotency — never rewritten,
+    /// prefixed or wrapped in the resume continuation frame.
+    pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_handle: Option<String>,
+}
+
+/// Wire-stable `continue_delegation` refusal codes. They ship to the parent
+/// LLM and to card badges, so they are additive only.
+pub mod continue_error {
+    /// The source still has an active run.
+    pub const TASK_RUNNING: &str = "task_running";
+    /// The source is a stale `running` round with no live connection. Resume
+    /// it first; it cannot be continued directly.
+    pub const SOURCE_NOT_TERMINAL: &str = "source_not_terminal";
+    /// Unknown task, or one owned by another parent. Deliberately opaque.
+    pub const UNKNOWN: &str = "unknown";
+    /// The source already has a successor created from different task text.
+    pub const CONTINUATION_CONFLICT: &str = "continuation_conflict";
+    /// Only the latest round of a chain may open a successor.
+    pub const TASK_NOT_LATEST: &str = "task_not_latest";
+    /// The source has no ACP session id. Continue never falls back to
+    /// `session/new`.
+    pub const SESSION_ID_MISSING: &str = "session_id_missing";
+    /// The source's working directory cannot be recovered.
+    pub const SESSION_CWD_MISSING: &str = "session_cwd_missing";
+    /// `session/load` failed. `detail` carries the classification
+    /// (`resource_not_found`, `session_unavailable`, `session_archived`, …).
+    pub const SESSION_LOAD_FAILED: &str = "session_load_failed";
+    /// Another live connection already owns the session. Never preempted.
+    pub const SESSION_BUSY: &str = "session_busy";
+    pub const SPAWN_FAILED: &str = "spawn_failed";
+    pub const SEND_FAILED: &str = "send_failed";
+}
+
+/// The broker's persistence port for the delegation task ledger. Defined as a
+/// trait so the broker's unit tests can run against an in-memory ledger and
+/// production can use the SeaORM implementation without either knowing the
+/// other.
+#[async_trait::async_trait]
+pub trait DelegationTaskLedger: Send + Sync {
+    async fn insert(&self, task: NewDelegationTask) -> Result<(), DbError>;
+    async fn find(&self, task_id: &str) -> Option<DelegationTaskRecord>;
+    async fn successor_of(&self, source_task_id: &str) -> Option<DelegationTaskRecord>;
+    async fn finish(&self, task_id: &str, update: TerminalUpdate);
+    /// Return a task's own row to `running` for a resume of the SAME task id.
+    /// Default: no-op, so test doubles that never resume keep compiling.
+    async fn reopen(&self, _task_id: &str) {}
+    /// Drop a continue round that never sent a prompt, releasing its
+    /// one-successor slot for a retry. Default: no-op.
+    async fn discard(&self, _task_id: &str) {}
+}
+
+/// Default ledger — every lookup is a miss, every write a no-op. Used by the
+/// broker's short constructors so tests that predate the ledger keep working.
+#[derive(Default)]
+pub struct NoopDelegationTaskLedger;
+
+#[async_trait::async_trait]
+impl DelegationTaskLedger for NoopDelegationTaskLedger {
+    async fn insert(&self, _task: NewDelegationTask) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    async fn find(&self, _task_id: &str) -> Option<DelegationTaskRecord> {
+        None
+    }
+
+    async fn successor_of(&self, _source_task_id: &str) -> Option<DelegationTaskRecord> {
+        None
+    }
+
+    async fn finish(&self, _task_id: &str, _update: TerminalUpdate) {}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationSuccess {
     pub text: String,
@@ -465,6 +562,16 @@ pub struct DelegationTaskReport {
     /// tool, or the session it ran in is no longer in memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<DelegationProgress>,
+    /// The round this task continues, on a `continue_delegation` result. A
+    /// normal continuation names the previous task id; an idempotent replay
+    /// names it too; a conflict leaves `task_id` empty and names BOTH the
+    /// requested source and the successor that already exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_task_id: Option<String>,
+    /// The successor already created from this source, when a continue request
+    /// is refused because one exists. Never set on the new task itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor_task_id: Option<String>,
 }
 
 impl DelegationTaskReport {
@@ -530,10 +637,20 @@ mod target_tests {
 
     #[test]
     fn a_present_but_invalid_assistant_id_never_falls_back_to_the_agent() {
-        for bad in [json!(0), json!(-1), json!(1.5), json!("abc"), json!("3a"), json!(true), json!(3_000_000_000_i64)] {
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("abc"),
+            json!("3a"),
+            json!(true),
+            json!(3_000_000_000_i64),
+        ] {
             assert!(
                 matches!(
-                    delegation_target_from_args(&json!({"assistant_id": bad, "agent_type": "codex"})),
+                    delegation_target_from_args(
+                        &json!({"assistant_id": bad, "agent_type": "codex"})
+                    ),
                     Err(DelegationTargetError::InvalidAssistantId(_))
                 ),
                 "{bad} must not resolve"
@@ -592,7 +709,8 @@ mod tests {
         ];
         for (err, expected) in cases {
             let display = err.to_string();
-            let DelegationOutcome::Err { code, message, .. } = DelegationOutcome::from_err(err, None)
+            let DelegationOutcome::Err { code, message, .. } =
+                DelegationOutcome::from_err(err, None)
             else {
                 panic!("from_err must produce an Err outcome");
             };

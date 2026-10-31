@@ -108,6 +108,24 @@ describe("toolStepKind", () => {
       { task_id: "t" },
       "delegation-resume",
     ],
+    // A continue is a new delegation row, never a resume of the old task.
+    [
+      "mcp__codeg-mcp__continue_delegation",
+      { task_id: "old", task: "next" },
+      "delegation",
+    ],
+    [
+      "codeg-mcp/continue_delegation",
+      { task_id: "old", task: "next" },
+      "delegation",
+    ],
+    [
+      "execute",
+      {
+        code: 'await tools["codeg-mcp"].continue_delegation({ task_id: "old", task: `next` })',
+      },
+      "delegation",
+    ],
     ["mcp__codeg-mcp__check_user_feedback", {}, "feedback"],
     ["mcp__codeg-mcp__task_progress", {}, "workbench"],
     // codex
@@ -136,6 +154,18 @@ describe("toolStepKind", () => {
   ]
   it.each(cases)("%s → %s", (name, input, expected) => {
     expect(toolStepKind(call(name, input))).toBe(expected)
+  })
+
+  it("keeps a continue without a tool call id off the resume card", () => {
+    expect(
+      toolStepKind(
+        call(
+          "continue_delegation",
+          { task_id: "old", task: "next" },
+          { toolCallId: "" }
+        )
+      )
+    ).toBe("workbench")
   })
 
   it("routes a compaction marker regardless of the tool name", () => {

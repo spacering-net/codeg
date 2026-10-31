@@ -114,6 +114,7 @@ function childConnWith(pending: Record<string, unknown>) {
 function delegation(
   props: {
     id?: string
+    toolName?: string
     input?: string | null
     output?: string | null
     state?: Extract<AdaptedContentPart, { type: "tool-call" }>["state"]
@@ -123,7 +124,7 @@ function delegation(
   return {
     type: "tool-call",
     toolCallId: props.id ?? "pt-1",
-    toolName: "mcp__codeg-mcp__delegate_to_agent",
+    toolName: props.toolName ?? "mcp__codeg-mcp__delegate_to_agent",
     input: props.input ?? null,
     state: props.state ?? "input-available",
     output: props.output ?? null,
@@ -798,6 +799,214 @@ describe("delegation row: its checks", () => {
     expect(delegationRow).toHaveTextContent(
       "Checked all four; one path is missing."
     )
+  })
+})
+
+describe("delegation row: a continued round", () => {
+  const OLD = "oldtask1"
+  const NEXT = "newtask2"
+  const continuedInput = JSON.stringify({
+    task_id: OLD,
+    task: "write the follow-up",
+  })
+  const continuedAck = JSON.stringify({
+    content: [{ type: "text", text: `Continued. task_id=${NEXT}` }],
+    structuredContent: {
+      task_id: NEXT,
+      status: "running",
+      child_conversation_id: 99,
+    },
+  })
+
+  function check(
+    id: string,
+    taskId: string,
+    report: Record<string, unknown>
+  ): AdaptedContentPart {
+    return {
+      type: "delegation-status-group",
+      polls: [
+        {
+          type: "tool-call",
+          toolCallId: id,
+          toolName: "get_delegation_status",
+          input: JSON.stringify({ task_ids: [taskId] }),
+          output: JSON.stringify({ task_id: taskId, ...report }),
+          state: "output-available",
+        },
+      ],
+    }
+  }
+
+  it("draws a new card beside the old one, with the minted task id", () => {
+    mockedHook.mockImplementation((parentToolUseId) => ({
+      binding:
+        parentToolUseId === "pt-old"
+          ? bindingOf({
+              parentToolUseId: "pt-old",
+              status: "ok",
+              task: "first round",
+              taskId: OLD,
+              childConversationId: 40,
+            })
+          : parentToolUseId === "pt-next"
+            ? bindingOf({
+                parentToolUseId: "pt-next",
+                status: "running",
+                task: "write the follow-up",
+                taskId: NEXT,
+                childConversationId: 99,
+                childConnectionId: "c-next",
+              })
+            : undefined,
+      detail: null,
+      loading: false,
+      error: null,
+    }))
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ContentPartsRenderer
+          parts={[
+            delegation({
+              id: "pt-old",
+              input: JSON.stringify({
+                agent_type: "codex",
+                task: "first round",
+              }),
+              output: JSON.stringify({
+                task_id: OLD,
+                status: "completed",
+                child_conversation_id: 40,
+              }),
+              state: "output-available",
+            }),
+            check("poll-old", OLD, {
+              status: "completed",
+              text: "first round done",
+            }),
+            delegation({
+              id: "pt-next",
+              toolName: "mcp__codeg-mcp__continue_delegation",
+              input: continuedInput,
+              output: continuedAck,
+              state: "output-available",
+            }),
+            check("poll-next", NEXT, {
+              status: "running",
+              progress: { steps: 2, marks: ["ok", "ok"] },
+            }),
+          ]}
+          role="assistant"
+        />
+      </NextIntlClientProvider>
+    )
+    const rows = [...document.querySelectorAll("li")]
+    expect(rows).toHaveLength(4)
+    expect(rows[0]).toHaveTextContent(`#${OLD.slice(0, 8)}`)
+    expect(rows[0]).toHaveTextContent("done")
+    expect(rows[0]).not.toHaveTextContent("continued")
+    expect(rows[0]).toHaveTextContent("first round done")
+    expect(rows[2]).toHaveTextContent(`#${NEXT.slice(0, 8)}`)
+    expect(rows[2]).toHaveTextContent("continued")
+    expect(rows[2]).toHaveTextContent("write the follow-up")
+    expect(rows[2]).toHaveTextContent("2 steps")
+    expect(rows[2]).not.toHaveTextContent(`#${OLD.slice(0, 8)}`)
+    expect(
+      document.querySelector('[data-testid="resumed-delegation-card"]')
+    ).toBeNull()
+  })
+
+  it("keeps the finished card done while the new round waits", () => {
+    mockedHook.mockImplementation((parentToolUseId) => ({
+      binding:
+        parentToolUseId === "pt-old"
+          ? bindingOf({
+              parentToolUseId: "pt-old",
+              status: "ok",
+              taskId: OLD,
+              childConnectionId: "c-shared",
+              childConversationId: 40,
+            })
+          : bindingOf({
+              parentToolUseId: "pt-next",
+              status: "running",
+              task: "write the follow-up",
+              taskId: NEXT,
+              childConnectionId: "c-shared",
+              childConversationId: 99,
+            }),
+      detail: null,
+      loading: false,
+      error: null,
+    }))
+    mockChildConnection = childConnWith({
+      connectionId: "c-shared",
+      pendingPermission: {
+        request_id: "req-next",
+        tool_call: { title: "Run bash", kind: "execute" },
+        options: [{ id: "approve", label: "Approve", kind: "allow_once" }],
+      },
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ContentPartsRenderer
+          parts={[
+            delegation({
+              id: "pt-old",
+              state: "output-available",
+              output: JSON.stringify({ task_id: OLD, status: "completed" }),
+              meta: {
+                "codeg.delegation": {
+                  status: "completed",
+                  task_id: OLD,
+                  child_connection_id: "c-shared",
+                  child_conversation_id: 40,
+                },
+              },
+            }),
+            delegation({
+              id: "pt-next",
+              toolName: "continue_delegation",
+              input: continuedInput,
+              output: continuedAck,
+              state: "output-available",
+            }),
+          ]}
+          role="assistant"
+        />
+      </NextIntlClientProvider>
+    )
+    const [oldRow, nextRow] = [...document.querySelectorAll("li")]
+    expect(oldRow).toHaveTextContent("done")
+    expect(oldRow).not.toHaveTextContent("awaiting approval")
+    expect(nextRow).toHaveTextContent("awaiting approval")
+    expect(nextRow).toHaveAttribute("data-status", "awaiting")
+  })
+
+  it("does not paint the source id when the continue failed to mint one", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ContentPartsRenderer
+          parts={[
+            delegation({
+              id: "pt-next",
+              toolName: "continue_delegation",
+              input: continuedInput,
+              output: JSON.stringify({
+                status: "failed",
+                error_code: "task_running",
+                message: "the previous task is still running",
+              }),
+              state: "output-error",
+            }),
+          ]}
+          role="assistant"
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.queryByText(`#${OLD.slice(0, 8)}`)).not.toBeInTheDocument()
+    expect(screen.getByText("task still running")).toBeInTheDocument()
+    expect(screen.getByText("write the follow-up")).toBeInTheDocument()
   })
 })
 

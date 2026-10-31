@@ -362,6 +362,7 @@ pub(crate) async fn handle_event(
                 forward_turn_complete_to_broker(
                     db_conn,
                     b.as_ref(),
+                    &envelope.connection_id,
                     cid,
                     stop_reason.as_str(),
                     last_text,
@@ -476,6 +477,7 @@ pub(crate) async fn handle_event(
 async fn forward_turn_complete_to_broker(
     db_conn: &DatabaseConnection,
     broker: &DelegationBroker,
+    connection_id: &str,
     conversation_id: i32,
     stop_reason: &str,
     last_text: Option<String>,
@@ -490,11 +492,22 @@ async fn forward_turn_complete_to_broker(
             return;
         }
     };
-    let call_id = match row.delegation_call_id.clone() {
-        Some(id) => id,
-        None => return, // not a delegation child; nothing to do.
+    // The live round first. A continuation shares this conversation row, whose
+    // `delegation_call_id` still names the first round; settling that id would
+    // drop the successor's TurnComplete on the floor. Resolved once: the row's
+    // parent tool id belongs to the first round, so only the row fallback needs
+    // that guard. A continuation carries its own on the running task.
+    let routed_by_connection = broker
+        .call_id_for_child_connection(connection_id)
+        .await;
+    let call_id = match &routed_by_connection {
+        Some(id) => id.clone(),
+        None => match row.delegation_call_id.clone() {
+            Some(id) => id,
+            None => return, // not a delegation child; nothing to do.
+        },
     };
-    if row.parent_tool_use_id.is_none() {
+    if routed_by_connection.is_none() && row.parent_tool_use_id.is_none() {
         tracing::info!(
             "[delegation][lifecycle] conversation {conversation_id} has \
              delegation_call_id but no parent_tool_use_id; dropping"

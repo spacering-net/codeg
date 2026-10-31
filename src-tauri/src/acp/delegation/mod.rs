@@ -64,6 +64,7 @@ pub const DELEGATE_TOOL_REWRITE_TITLE: &str = "codeg-mcp__delegate_to_agent";
 pub const STATUS_TOOL_REWRITE_TITLE: &str = "codeg-mcp__get_delegation_status";
 pub const CANCEL_TOOL_REWRITE_TITLE: &str = "codeg-mcp__cancel_delegation";
 pub const RESUME_TOOL_REWRITE_TITLE: &str = "codeg-mcp__resume_delegation";
+pub const CONTINUE_TOOL_REWRITE_TITLE: &str = "codeg-mcp__continue_delegation";
 
 /// Whether a host's name for a tool is codeg-mcp's own `tool`, in whatever
 /// spelling the host composed it — `mcp__codeg-mcp__ask_user_question` from

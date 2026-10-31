@@ -110,6 +110,11 @@ describe("Arabic keeps a task id one left-to-right token", () => {
       "#14be49e7",
     ],
     ["Folder.chat.delegation.cancelTask", { task: "#14be49e7" }, "#14be49e7"],
+    [
+      "Folder.chat.codegMcpTool.continueDelegation",
+      { task: "#c0ffee01" },
+      "#c0ffee01",
+    ],
   ] as const)("%s", (key, values, id) => {
     expect(t(key as never, values as never)).toContain(`\u2066${id}\u2069`)
   })

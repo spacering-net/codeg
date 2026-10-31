@@ -311,6 +311,36 @@ describe("buildMessageNavEntries", () => {
     expect(entries[0].subAgents[0].input).toBe(input)
   })
 
+  it("lists a continue_delegation the outline shows started a new round", () => {
+    const entries = buildMessageNavEntries({
+      earlierTurns: [
+        user("turn-0", "first"),
+        delegations("turn-1", [
+          { id: "started", meta: DELEGATION_META },
+          {
+            id: "continued",
+            name: "mcp__codeg-mcp__continue_delegation",
+            meta: {
+              "codeg.delegation": {
+                status: "running",
+                task_id: "new-task",
+                child_conversation_id: 8,
+              },
+            },
+          },
+        ]),
+      ],
+      earlierUserCount: 1,
+      loadedTurns: [],
+      threadIndexByTurnId: new Map(),
+    })
+    expect(entries[0].subAgents.map((s) => s.parentToolUseId)).toEqual([
+      "started",
+      "continued",
+    ])
+    expect(entries[0].subAgents[1].taskIdHint).toBeUndefined()
+  })
+
   it("collects a round's sub-agents across the window start", () => {
     const entries = buildMessageNavEntries({
       earlierTurns: [

@@ -2,8 +2,8 @@
 
 /**
  * Inline card for the codeg-mcp *workbench* companion tools — `get_session_info`,
- * `task_progress`, `task_complete`, `create_automation`, `create_work_task` and
- * `resume_delegation`.
+ * `task_progress`, `task_complete`, `create_automation`, `create_work_task`,
+ * `resume_delegation` and, only as a fallback, `continue_delegation`.
  *
  * One collapsed line framed around what the agent was actually doing ("读取会话
  * #2122", "进度：tests passing", "任务完成 · 成功"), with a status badge and an
@@ -28,6 +28,7 @@ import {
   CircleAlert,
   CircleCheckBig,
   ClipboardList,
+  IterationCcw,
   RotateCcw,
   Signpost,
 } from "lucide-react"
@@ -72,6 +73,7 @@ export const CODEG_MCP_TOOL_ICONS: Record<
   create_automation: CalendarClock,
   create_work_task: ClipboardList,
   resume_delegation: RotateCcw,
+  continue_delegation: IterationCcw,
 }
 
 /** The panel's Markdown blocks: the report and the result share one look,
@@ -164,6 +166,15 @@ export function CodegMcpToolCard({
         return model.detail
           ? t("resumeDelegation", { task: model.detail })
           : t("resumeDelegationNoId")
+      case "continue_delegation": {
+        // The minted id, when the ack carried one, is the task this card is
+        // about. Otherwise the headline must not dress the source id up as
+        // the new one — the panel names that source separately.
+        const task = model.continuedTaskId
+        return task
+          ? t("continueDelegation", { task })
+          : t("continueDelegationNoId")
+      }
     }
   }, [t, tool, model])
 
@@ -171,7 +182,12 @@ export function CodegMcpToolCard({
   const isError = model.status === "err"
   const isRunning = model.status === "running"
   const resultText = model.resultText?.trim() ?? ""
-  const prompt = model.prompt?.trim() ?? ""
+  const prompt =
+    tool === "continue_delegation" ? "" : (model.prompt?.trim() ?? "")
+  const continuedTask =
+    tool === "continue_delegation" ? (model.prompt?.trim() ?? "") : ""
+  const sourceTaskId =
+    tool === "continue_delegation" ? (model.sourceTaskId ?? "") : ""
   // The progress message / completion summary, which the row cuts off at one
   // line — the panel is where it can be read whole.
   const report =
@@ -184,7 +200,12 @@ export function CodegMcpToolCard({
   // worth reading in full, and both arrive with the arguments, long before any
   // result. Past that, anything that came back is worth a look.
   const expandable =
-    resultText !== "" || prompt !== "" || report !== "" || ack !== null
+    resultText !== "" ||
+    prompt !== "" ||
+    continuedTask !== "" ||
+    sourceTaskId !== "" ||
+    report !== "" ||
+    ack !== null
 
   // `title` restores the full text on hover: a long progress message or task
   // summary is CSS-truncated here, and the panel below has to be opened to
@@ -297,6 +318,31 @@ export function CodegMcpToolCard({
           {/* The instruction the automation / board task will run. Shown as
               plain pre-wrapped text, NOT Markdown: it is an argument the user
               is auditing, so it must read exactly as it was sent. */}
+          {sourceTaskId !== "" && (
+            <div>
+              <div className="mb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t("continueSourceTask")}
+              </div>
+              <div dir="ltr" className="font-mono break-all text-xs">
+                {sourceTaskId}
+              </div>
+            </div>
+          )}
+          {continuedTask !== "" && (
+            <div>
+              <div className="mb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t("continueTask")}
+              </div>
+              <ScrollArea className="max-h-40 rounded-md bg-muted/40">
+                <div
+                  dir="auto"
+                  className="whitespace-pre-wrap break-words px-2 py-1.5 text-xs text-foreground/90"
+                >
+                  {continuedTask}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
           {prompt !== "" && (
             <div>
               <div className="mb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">

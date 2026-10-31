@@ -20,7 +20,11 @@ import { useTruncation } from "@/hooks/use-truncation"
 import { previewLine } from "@/lib/activity/format"
 import type { ActivityStep, StepStatus } from "@/lib/activity/types"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
-import { delegateCallTaskId } from "@/lib/delegation-card"
+import {
+  delegateCallTaskId,
+  isContinueDelegationToolName,
+} from "@/lib/delegation-card"
+import { normalizeToolName } from "@/lib/tool-call-normalization"
 import {
   buildDelegationTaskRows,
   deriveBadge,
@@ -62,6 +66,7 @@ export const DelegationRow = memo(function DelegationRow({
   step: ToolStep
 }) {
   const t = useTranslations("Folder.chat.activity")
+  const tDelegation = useTranslations("Folder.chat.delegation")
   const statusText = useStatusText()
   const { pinnedOnly } = useActivityRender()
   const { part } = step
@@ -186,6 +191,11 @@ export const DelegationRow = memo(function DelegationRow({
               dir="ltr"
             >
               #{model.taskId.slice(0, 8)}
+            </span>
+          ) : null}
+          {isContinueDelegationToolName(normalizeToolName(part.toolName)) ? (
+            <span className="shrink-0 text-[0.6875rem] text-activity-secondary">
+              {tDelegation("continued")}
             </span>
           ) : null}
           {progress && progress.steps > 0 ? (

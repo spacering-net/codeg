@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ContentPartsRenderer } from "./content-parts-renderer"
 import { ResumedDelegationCard } from "./resumed-delegation-card"
 import enMessages from "@/i18n/messages/en.json"
 import type { DelegationBinding } from "@/contexts/delegation-context"
@@ -75,6 +76,54 @@ const PERSISTED_ACK = JSON.stringify({
   message: `Delegation resumed. task_id=${TASK_ID} (unchanged). Call get_delegation_status with this id in the task_ids array.`,
   status: "running",
   task_id: TASK_ID,
+})
+
+describe("continue_delegation stays off the resume card", () => {
+  beforeEach(() => {
+    mockedSubSession.mockReset()
+    mockedSubSession.mockReturnValue({
+      binding: undefined,
+      detail: null,
+      loading: false,
+      error: null,
+    })
+  })
+
+  it("renders a new delegation row for a successful continue", () => {
+    const next = "c0ffee01-1111-2222-3333-444444444444"
+    renderWithIntl(
+      <ContentPartsRenderer
+        role="assistant"
+        parts={[
+          {
+            type: "tool-call",
+            toolCallId: "tu-continue",
+            toolName: "continue_delegation",
+            input: JSON.stringify({
+              task_id: TASK_ID,
+              task: "write the follow-up",
+            }),
+            state: "output-available",
+            output: JSON.stringify({
+              task_id: next,
+              status: "running",
+              agent_type: "codex",
+              child_conversation_id: 11,
+            }),
+          },
+        ]}
+      />
+    )
+    expect(
+      screen.queryByTestId("resumed-delegation-card")
+    ).not.toBeInTheDocument()
+    expect(screen.queryByTitle("Resumed")).not.toBeInTheDocument()
+    expect(screen.getByText("continued")).toBeInTheDocument()
+    expect(screen.getByText(`#${next.slice(0, 8)}`)).toBeInTheDocument()
+    expect(
+      screen.queryByText(`#${TASK_ID.slice(0, 8)}`)
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe("ResumedDelegationCard", () => {

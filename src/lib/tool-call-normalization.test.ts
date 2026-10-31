@@ -238,6 +238,33 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
     ).toBe("delegate_to_agent")
   })
 
+  it("resolves continue_delegation from meta and title, not as a resume", () => {
+    for (const candidate of [
+      "mcp__codeg-mcp__continue_delegation",
+      "codeg-mcp/continue_delegation",
+      "continue_delegation",
+    ]) {
+      expect(
+        inferLiveToolName({
+          title: "MCP: tool",
+          kind: "other",
+          rawInput: JSON.stringify({
+            task_id: "old-task",
+            task: "next round",
+          }),
+          meta: { claudeCode: { toolName: candidate } },
+        })
+      ).toBe("continue_delegation")
+      expect(
+        inferLiveToolName({
+          title: candidate,
+          kind: "other",
+          rawInput: JSON.stringify({ task_id: "old-task" }),
+        })
+      ).toBe("continue_delegation")
+    }
+  })
+
   it("keeps input-shape priority for calls without delegation meta", () => {
     // A generic "MCP: tool" call WITHOUT the broker meta must stay generic —
     // the delegation resolution is scoped to the codeg-minted marker.
@@ -712,6 +739,36 @@ describe("normalizeToolName collapses delegate_to_agent across hosts", () => {
     expect(normalizeToolName("xdelegate_to_agent")).not.toBe(
       "delegate_to_agent"
     )
+  })
+})
+
+describe("normalizeToolName collapses continue_delegation across hosts", () => {
+  it.each([
+    "continue_delegation",
+    "mcp__codeg-mcp__continue_delegation",
+    "mcp__codeg-delegate__continue_delegation",
+    "mcp__codeg__continue_delegation",
+    "codeg-mcp/continue_delegation",
+    "codeg-delegate/continue_delegation",
+    "codeg-delegate.continue_delegation",
+    "codeg-delegate:continue_delegation",
+    "codeg_delegate__continue_delegation",
+  ])("%s -> continue_delegation", (input) => {
+    expect(normalizeToolName(input)).toBe("continue_delegation")
+  })
+
+  it("does not match a suffix without a separator", () => {
+    expect(normalizeToolName("xcontinue_delegation")).not.toBe(
+      "continue_delegation"
+    )
+  })
+
+  it("does not collapse continue into resume or delegate", () => {
+    expect(normalizeToolName("continue_delegation")).not.toBe(
+      "resume_delegation"
+    )
+    expect(normalizeToolName("resume_delegation")).toBe("resume_delegation")
+    expect(normalizeToolName("delegate_to_agent")).toBe("delegate_to_agent")
   })
 })
 

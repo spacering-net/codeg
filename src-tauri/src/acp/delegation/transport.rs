@@ -154,6 +154,15 @@ pub struct BrokerResumeTaskRequest {
     pub external_handle: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerContinueTaskRequest {
+    pub token: String,
+    pub task_id: String,
+    pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_handle: Option<String>,
+}
+
 /// Pull the pending live-feedback notes for the parent session. Backs the
 /// `check_user_feedback` MCP tool. Authenticated by the same per-launch
 /// `token`; the listener resolves the parent connection from it and scopes the
@@ -442,6 +451,7 @@ pub enum BrokerMessage {
     Status(BrokerStatusRequest),
     CancelTask(BrokerCancelTaskRequest),
     ResumeTask(BrokerResumeTaskRequest),
+    ContinueTask(BrokerContinueTaskRequest),
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -688,6 +698,13 @@ pub async fn client_resume_task_round_trip(
     req: &BrokerResumeTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::ResumeTask(req.clone())).await
+}
+
+pub async fn client_continue_task_round_trip(
+    socket_path: &str,
+    req: &BrokerContinueTaskRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ContinueTask(req.clone())).await
 }
 
 /// Dispatch a `check_user_feedback` query and read back the

@@ -11,8 +11,8 @@ use sea_orm::{
 };
 
 use crate::acp::connection::{
-    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SetterOutcome,
-    SteerOutcome,
+    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction,
+    SessionLoadPolicy, SetterOutcome, SteerOutcome,
 };
 use crate::acp::agent_mentions::strip_route_separator_from_prompt;
 use crate::acp::error::AcpError;
@@ -741,6 +741,40 @@ impl ConnectionManager {
             preferred_mode_id,
             preferred_config_values,
             None,
+            SessionLoadPolicy::FallbackToNew,
+        )
+        .await
+    }
+
+    /// Like [`Self::spawn_agent_with_outcome`], but choosing whether a failed
+    /// `session/load` may fall back to a brand-new agent session. Delegation
+    /// continue passes [`SessionLoadPolicy::StrictDelegationContinue`]: the
+    /// source round's session IS the task's context, so a silent `session/new`
+    /// would answer with an empty session under the requested id.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_agent_with_outcome_policy(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        session_load_policy: SessionLoadPolicy,
+    ) -> Result<SpawnOutcome, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            None,
+            session_load_policy,
         )
         .await
     }
@@ -770,6 +804,7 @@ impl ConnectionManager {
             preferred_mode_id,
             preferred_config_values,
             Some(seed),
+            SessionLoadPolicy::FallbackToNew,
         )
         .await
         .map(|outcome| outcome.connection_id)
@@ -787,6 +822,7 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
         cli_root: Option<crate::cli_run::RootSeed>,
+        session_load_policy: SessionLoadPolicy,
     ) -> Result<SpawnOutcome, AcpError> {
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
@@ -863,7 +899,7 @@ impl ConnectionManager {
         // installs the SessionStarted dedup signal on the state, registers
         // a cleanup hook, and returns the rx half of the signal. Any spawn
         // failure short-circuits before we touch the rx wait.
-        let session_started_rx = spawn_agent_connection(
+        let driver = spawn_agent_connection(
             connection_id.clone(),
             agent_type,
             working_dir,
@@ -877,17 +913,57 @@ impl ConnectionManager {
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
             cli_root,
+            session_load_policy,
         )
         .await?;
+
+        // Strict delegation-continue waits for the handshake even without a
+        // dedup lock: only a `SessionStarted` proves the source session was
+        // actually loaded. Any other outcome means the round cannot run, and
+        // the connection must not linger as a half-open session.
+        let mut session_started = Some(driver.session_started);
+        if session_load_policy == SessionLoadPolicy::StrictDelegationContinue {
+            let timeout = self.spawn_handshake_timeout;
+            let (outcome, elapsed) =
+                wait_for_session_started(session_started.take().expect("fresh spawn signal"), timeout)
+                    .await;
+            tracing::info!(
+                "[ACP] strict_load_wait connection_id={} session_id={} outcome={} \
+                 elapsed_ms={} timeout_ms={}",
+                connection_id,
+                session_id_for_log.as_deref().unwrap_or(""),
+                outcome.as_str(),
+                elapsed.as_millis(),
+                timeout.as_millis(),
+            );
+            if outcome != HandshakeWaitOutcome::Ready {
+                let failure = driver.state.read().await.session_load_failure.clone();
+                let _ = self.disconnect(&connection_id).await;
+                return Err(match failure {
+                    Some(failure) => AcpError::SessionLoadFailed {
+                        code: failure.code,
+                        message: failure.message,
+                    },
+                    None => AcpError::SessionLoadFailed {
+                        code: "session_unavailable".to_string(),
+                        message: format!(
+                            "session/load did not complete ({} after {} ms)",
+                            outcome.as_str(),
+                            elapsed.as_millis()
+                        ),
+                    },
+                });
+            }
+        }
 
         // When dedup is active, hold the lock until the agent's
         // SessionStarted has applied (so external_id is populated for the
         // next waiter), aborted (connection died), or the timeout fires.
         // Logged on every wait so production can audit real-world handshake
         // latencies and tune `CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS`.
-        if dedup_lock.is_some() {
+        if let (true, Some(session_started)) = (dedup_lock.is_some(), session_started) {
             let timeout = self.spawn_handshake_timeout;
-            let (outcome, elapsed) = wait_for_session_started(session_started_rx, timeout).await;
+            let (outcome, elapsed) = wait_for_session_started(session_started, timeout).await;
             tracing::info!(
                 "[ACP] dedup_wait connection_id={} session_id={} outcome={} \
                  elapsed_ms={} timeout_ms={}",
@@ -4411,6 +4487,111 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             connection_id: outcome.connection_id,
             reused: outcome.reused,
         })
+    }
+
+    async fn spawn_for_continue(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        external_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<crate::acp::delegation::spawner::ResumedSpawn, crate::acp::delegation::spawner::SpawnerError>
+    {
+        use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
+        // Same parent inheritance as every other delegation spawn: the child
+        // must stream to the parent's emitter and window.
+        let (emitter, owner_window, parent_working_dir) = {
+            let conns = self.manager.connections.lock().await;
+            let parent = conns.get(parent_connection_id).ok_or_else(|| {
+                SpawnerError::Spawn(format!(
+                    "parent connection {parent_connection_id} not found"
+                ))
+            })?;
+            let pwd = {
+                let s = parent.state.read().await;
+                s.working_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+            };
+            (
+                parent.emitter.clone(),
+                parent.owner_window_label.clone(),
+                pwd,
+            )
+        };
+        let effective_working_dir = working_dir.or(parent_working_dir);
+        let runtime_env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            self.data_dir.as_path(),
+        )
+        .await
+        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+
+        // Strict load: a failure is reported, never papered over with a fresh
+        // session — see `SessionLoadPolicy`.
+        let outcome = self
+            .manager
+            .spawn_agent_with_outcome_policy(
+                agent_type,
+                effective_working_dir,
+                Some(external_session_id.to_string()),
+                runtime_env,
+                owner_window,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+                SessionLoadPolicy::StrictDelegationContinue,
+            )
+            .await
+            .map_err(|e| match e {
+                AcpError::SessionLoadFailed { code, message } => {
+                    SpawnerError::SessionLoad { code, message }
+                }
+                other => SpawnerError::Spawn(other.to_string()),
+            })?;
+        // A REUSED connection belongs to whoever was already driving that
+        // session; it must not inherit this run's CLI tag (the broker refuses
+        // the round instead — see `session_busy`).
+        if !outcome.reused {
+            self.manager
+                .inherit_cli_run_tag(parent_connection_id, &outcome.connection_id)
+                .await;
+        }
+        Ok(ResumedSpawn {
+            connection_id: outcome.connection_id,
+            reused: outcome.reused,
+        })
+    }
+
+    async fn send_continue_prompt(
+        &self,
+        conn_id: &str,
+        task: String,
+        folder_id: i32,
+        child_conversation_id: i32,
+        brief: Option<String>,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        use crate::acp::delegation::spawner::SpawnerError;
+        // Adopt the child's existing row, like resume: the row keeps its
+        // original linkage, which is exactly what must not change on continue.
+        // The prompt is the caller's complete new task — no continuation frame.
+        self.manager
+            .send_prompt_linked_with_suffix(
+                &self.db,
+                conn_id,
+                vec![PromptInputBlock::Text { text: task }],
+                Some(folder_id),
+                Some(child_conversation_id),
+                None,
+                brief_suffix(brief),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| SpawnerError::Send(e.to_string()))
     }
 
     async fn send_resume_prompt(

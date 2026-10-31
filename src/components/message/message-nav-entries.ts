@@ -2,6 +2,7 @@ import type { MessageNavEntry } from "@/components/message/conversation-message-
 import type { DelegationCardSource } from "@/hooks/use-delegation-card-model"
 import {
   isCodeModeDelegationCall,
+  isContinueDelegationToolName,
   isDelegateToAgentToolName,
   parseDelegationMeta,
 } from "@/lib/delegation-card"
@@ -126,6 +127,7 @@ function outlineTurnSubAgents(
     const name = normalizeToolName(block.tool_name)
     if (
       !isDelegateToAgentToolName(name) &&
+      !isContinueDelegationToolName(name) &&
       !isCodeModeDelegationCall(name, block.input_preview)
     ) {
       continue

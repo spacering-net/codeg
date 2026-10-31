@@ -177,6 +177,22 @@ export function ErrorLabel({ code }: { code?: string }) {
       return <>{t("assistants_unsupported")}</>
     case "assistant_support_unknown":
       return <>{t("assistant_support_unknown")}</>
+    case "task_running":
+      return <>{t("task_running")}</>
+    case "source_not_terminal":
+      return <>{t("source_not_terminal")}</>
+    case "continuation_conflict":
+      return <>{t("continuation_conflict")}</>
+    case "task_not_latest":
+      return <>{t("task_not_latest")}</>
+    case "session_id_missing":
+      return <>{t("session_id_missing")}</>
+    case "session_cwd_missing":
+      return <>{t("session_cwd_missing")}</>
+    case "session_load_failed":
+      return <>{t("session_load_failed")}</>
+    case "session_busy":
+      return <>{t("session_busy")}</>
     default:
       return <>{t("default")}</>
   }

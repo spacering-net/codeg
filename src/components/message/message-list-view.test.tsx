@@ -572,6 +572,34 @@ describe("extractDelegationSources", () => {
   // one contains no `delegate_to_agent` call at all (the original is in an
   // earlier turn), so without this arm a resumed sub-agent would be missing
   // from the overlay for its whole second run.
+  it("collects a continue_delegation as its own start, without a task hint", () => {
+    const input = JSON.stringify({
+      task_id: "old-task",
+      task: "write the follow-up",
+    })
+    const output = JSON.stringify({
+      structuredContent: { task_id: "new-task", status: "running" },
+    })
+    const sources = extractDelegationSources([
+      toolCall("tu-old", "delegate_to_agent", '{"task":"first"}'),
+      {
+        ...toolCall("tu-next", "mcp__codeg-mcp__continue_delegation", input),
+        output,
+        meta: {
+          "codeg.delegation": { status: "running", task_id: "new-task" },
+        },
+      },
+    ])
+    expect(sources).toHaveLength(2)
+    expect(sources[1]).toMatchObject({
+      parentToolUseId: "tu-next",
+      input,
+      output,
+    })
+    expect(sources[1].taskIdHint).toBeUndefined()
+    expect(sources[0].parentToolUseId).toBe("tu-old")
+  })
+
   it("collects a resume_delegation call keyed by the task id in its arguments", () => {
     const sources = extractDelegationSources([
       toolCall("tu-resume", "resume_delegation", '{"task_id":"task-abc"}'),
@@ -701,6 +729,49 @@ describe("extractMessageDelegationSources", () => {
   })
 
   // That round put the sub-agent back to work, wherever it was started.
+  it("lists a continue beside the delegate it follows, by call id", () => {
+    const { byUserTurnId } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [
+        delegate("tu-1", {
+          output: JSON.stringify({ task_id: "task-1", status: "completed" }),
+        }),
+        {
+          type: "tool-call",
+          toolCallId: "tu-next",
+          toolName: "continue_delegation",
+          input: JSON.stringify({
+            task_id: "task-1",
+            task: "write the follow-up",
+          }),
+          state: "output-available",
+          output: JSON.stringify({
+            task_id: "task-2",
+            status: "running",
+          }),
+        },
+        {
+          type: "tool-call",
+          toolCallId: "tu-next",
+          toolName: "continue_delegation",
+          input: JSON.stringify({
+            task_id: "task-1",
+            task: "write the follow-up",
+          }),
+          state: "output-available",
+          output: JSON.stringify({
+            task_id: "task-2",
+            status: "running",
+            text: "later copy",
+          }),
+        },
+      ]),
+    ])
+    expect(ids(byUserTurnId.get("u1"))).toEqual(["tu-1", "tu-next"])
+    expect(byUserTurnId.get("u1")?.[1].taskIdHint).toBeUndefined()
+    expect(byUserTurnId.get("u1")?.[1].output).toContain("later copy")
+  })
+
   it("lists a resume under the message whose round issued it", () => {
     const { byUserTurnId } = extractMessageDelegationSources([
       message("u1"),

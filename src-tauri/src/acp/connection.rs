@@ -53,7 +53,7 @@ use crate::acp::file_system_runtime::{
 };
 use crate::acp::host_tools_policy::{HostToolsPolicy, HOST_TOOLS_ENV};
 use crate::acp::registry::{self, AgentDistribution};
-use crate::acp::session_state::SessionState;
+use crate::acp::session_state::{SessionLoadFailure, SessionState};
 use crate::acp::stderr_tail::{summarize_parser_error, StderrTail, TailScope};
 use crate::acp::terminal_runtime::{
     TerminalRuntime, TerminalRuntimeError, TerminalShellRuntimeConfig,
@@ -2704,6 +2704,34 @@ const ACP_CONNECTION_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// exits (timeout, error, or clean disconnect), so the manager never
 /// leaks stale entries after a connection tears down.
 #[allow(clippy::too_many_arguments)]
+/// How the connection establishes an existing agent session.
+///
+/// The default is and stays [`Self::FallbackToNew`]: a user opening a
+/// historical conversation must still get a usable session when the agent
+/// forgot it. [`Self::StrictDelegationContinue`] is the delegation-only
+/// exception — a `continue_delegation` runs a NEW round on an EXISTING
+/// session, so silently opening an empty one would lose the whole point of
+/// continuing it. The policy is passed per launch, never made a global
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionLoadPolicy {
+    /// Classify the failure for the UI, then open a fresh `session/new` and
+    /// link the histories (long-standing behavior for every ordinary open).
+    FallbackToNew,
+    /// Fail closed: report the classified failure and never send
+    /// `session/new`.
+    StrictDelegationContinue,
+}
+
+/// What `spawn_agent_connection` hands its caller: the session-start signal
+/// (as before) plus the state it created, so a strict launch can read the
+/// classified load failure recorded there after that signal aborts.
+pub struct SpawnDriver {
+    pub session_started: tokio::sync::oneshot::Receiver<()>,
+    pub state: Arc<RwLock<SessionState>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn spawn_agent_connection(
     connection_id: String,
     agent_type: AgentType,
@@ -2718,7 +2746,8 @@ pub async fn spawn_agent_connection(
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
     cli_root: Option<crate::cli_run::RootSeed>,
-) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
+    session_load_policy: SessionLoadPolicy,
+) -> Result<SpawnDriver, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
     let launch_cwd = resolve_working_dir(working_dir.as_deref());
     // Create the authoritative session state up front. Subsequent emit_with_state
@@ -2973,6 +3002,7 @@ pub async fn spawn_agent_connection(
             host_tools,
             claude_projects_dir,
             stderr_tail,
+            session_load_policy,
         )
         .await;
 
@@ -3056,7 +3086,10 @@ pub async fn spawn_agent_connection(
         )));
     }
 
-    Ok(session_started_rx)
+    Ok(SpawnDriver {
+        session_started: session_started_rx,
+        state: session_state,
+    })
 }
 
 /// The agent request a permission card answers. `Acp` is a real ACP
@@ -8289,6 +8322,8 @@ async fn run_connection(
     // callback installed by `build_agent`. Read only when a turn ends without
     // agent output, to attach evidence to the synthesized error.
     stderr_tail: Arc<StderrTail>,
+    // Strict delegation-continue launches never fall back to `session/new`.
+    session_load_policy: SessionLoadPolicy,
 ) -> Result<(), AcpError> {
     let pending_perms: PendingPermissions =
         Arc::new(tokio::sync::Mutex::new(PermissionQueue::default()));
@@ -9565,6 +9600,46 @@ async fn run_connection(
                         .await
                     }
                     Err(e) => {
+                        // Strict delegation-continue launches have exactly one
+                        // way forward: load the source round's session. A
+                        // failed load must never reach the `session/new`
+                        // fallback below — that would answer the caller with a
+                        // silently empty session wearing the requested id.
+                        // Record the classified reason on the state so the
+                        // manager can surface a typed error once the
+                        // session-start wait unwinds.
+                        if session_load_policy == SessionLoadPolicy::StrictDelegationContinue {
+                            let code = classify_session_load_error(&e)
+                                .unwrap_or("session_unavailable");
+                            let err_str = e.to_string();
+                            tracing::warn!(
+                                "[ACP] strict session/load failed ({err_str}); refusing to open a \
+                                 new session (code={code})"
+                            );
+                            state.write().await.session_load_failure = Some(SessionLoadFailure {
+                                code: code.to_string(),
+                                message: err_str.clone(),
+                            });
+                            emit_with_state(
+                                &state,
+                                &emitter_clone,
+                                AcpEvent::SessionLoadFailed {
+                                    session_id: sid.clone(),
+                                    message: err_str,
+                                    code: code.to_string(),
+                                },
+                            )
+                            .await;
+                            emit_with_state(
+                                &state,
+                                &emitter_clone,
+                                AcpEvent::StatusChanged {
+                                    status: ConnectionStatus::Error,
+                                },
+                            )
+                            .await;
+                            return Ok(());
+                        }
                         // session/load failed. Classify it: an unrecoverable
                         // historical session — the agent has no record of it
                         // (ResourceNotFound, -32002) or the agent process/session
@@ -34811,6 +34886,7 @@ mod tests {
                         // Watched only for a Claude launch.
                         cwd.join("claude-projects"),
                         Arc::new(StderrTail::new()),
+                        SessionLoadPolicy::FallbackToNew,
                     ));
                     let _ = ended_tx.send(ended);
                 })

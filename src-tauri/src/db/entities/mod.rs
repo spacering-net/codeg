@@ -13,6 +13,7 @@ pub mod conversation;
 pub mod conversation_tag;
 pub mod conversation_tag_link;
 pub mod custom_agent;
+pub mod delegation_task;
 pub mod folder;
 pub mod folder_command;
 pub mod folder_group;

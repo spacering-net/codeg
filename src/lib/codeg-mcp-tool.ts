@@ -12,6 +12,11 @@
  * (`not_resumable`, unknown task): there is no sub-agent to draw then, only a
  * reason to read.
  *
+ * `continue_delegation` is the other exception. A call that carries a tool id
+ * is a new delegation row (`DelegationRow`); this parser is only the fallback
+ * when that row has nothing to bind to. Its `task_id` argument is the
+ * PREVIOUS round's source id, never the new task id the ack mints.
+ *
  * The delegation trio (`delegate_to_agent` / `get_delegation_status` /
  * `cancel_delegation`), `ask_user_question` and `check_user_feedback` each own a
  * richer, purpose-built card; these five had none, so they fell through to the
@@ -32,6 +37,11 @@
  */
 
 import { extractEmbeddedJsonObject } from "@/lib/embedded-json"
+import {
+  parseCodeModeContinueSourceTaskId,
+  parseCodeModeContinueTask,
+  parseDelegateTaskId,
+} from "@/lib/delegation-card"
 import { peelMcpResultEnvelope } from "@/lib/mcp-result-envelope"
 import type { ToolCallState } from "@/lib/adapters/ai-elements-adapter"
 
@@ -48,6 +58,7 @@ export const CODEG_MCP_WORKBENCH_TOOLS = [
   "create_automation",
   "create_work_task",
   "resume_delegation",
+  "continue_delegation",
 ] as const
 
 export type CodegMcpWorkbenchTool = (typeof CODEG_MCP_WORKBENCH_TOOLS)[number]
@@ -113,6 +124,17 @@ export interface CodegMcpToolModel {
    * would be visible nowhere.
    */
   reason: string | null
+  /**
+   * `continue_delegation` only: the previous round's task id, taken from the
+   * call's `task_id` argument. Never the new task id. `null` otherwise.
+   */
+  sourceTaskId: string | null
+  /**
+   * `continue_delegation` only: the task id the ack minted for this round.
+   * `null` when the call failed before minting one, and for every other tool.
+   * While set, `detail` is this id rather than `sourceTaskId`.
+   */
+  continuedTaskId: string | null
   /**
    * `task_progress` / `task_complete` only: the ack, read from whichever half
    * of the result the host kept. `null` for every other tool, while the call is
@@ -251,6 +273,13 @@ const ARG_SPECS: Record<
     // `task_id` alone identifies the payload; the optional `reason` never
     // appears without it.
     fields: ["task_id"],
+    detail: (args) => str(args, "task_id"),
+  },
+  continue_delegation: {
+    // Either argument identifies the payload. `detail` stays the SOURCE task
+    // id — the previous round — and `prompt` holds the new task text. The
+    // minted task id, when the ack carries one, replaces `detail` below.
+    fields: ["task_id", "task"],
     detail: (args) => str(args, "task_id"),
   },
 }
@@ -422,15 +451,33 @@ export function parseCodegMcpToolCall(params: {
     params.tool === "create_automation" || params.tool === "create_work_task"
   const reporting =
     params.tool === "task_progress" || params.tool === "task_complete"
+  const continuing = params.tool === "continue_delegation"
   const ack = reporting && !isError ? readTaskAck(params.output) : null
   const resultText = ack ? null : parseResultText(params.output)
+  // A successful continue mints a new task id. Prefer that over the source
+  // id in the arguments; a failure that minted none must keep showing the
+  // source id as the source, never as if it were the new task.
+  const continuedTaskId = continuing
+    ? parseDelegateTaskId(params.output, params.errorText)
+    : null
+  const sourceTaskId =
+    continuing && args
+      ? (str(args, "task_id") ??
+        parseCodeModeContinueSourceTaskId(params.input))
+      : null
+  const continuedTask = continuing
+    ? ((args ? str(args, "task") : null) ??
+      parseCodeModeContinueTask(params.input))
+    : null
 
   return {
-    detail: args ? spec.detail(args) : null,
+    detail: continuedTaskId ?? (args ? spec.detail(args) : sourceTaskId),
     verdict: params.tool === "task_complete" ? parseVerdict(args) : null,
-    prompt: authoring && args ? str(args, "prompt") : null,
+    prompt: (authoring && args ? str(args, "prompt") : null) ?? continuedTask,
     reason:
       params.tool === "resume_delegation" && args ? str(args, "reason") : null,
+    sourceTaskId: continuing ? sourceTaskId : null,
+    continuedTaskId,
     ack,
     resultText: isError ? (params.errorText?.trim() ?? resultText) : resultText,
     status: isError

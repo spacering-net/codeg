@@ -50,6 +50,11 @@ pub enum SpawnerError {
     Disconnect(String),
     #[error("cancel failed: {0}")]
     Cancel(String),
+    /// A strict `session/load` refused: the source round's session could not
+    /// be reopened. `code` is the classified reason (`resource_not_found`,
+    /// `session_unavailable`, `session_archived`, `session_busy`, …).
+    #[error("session load failed ({code}): {message}")]
+    SessionLoad { code: String, message: String },
 }
 
 /// Result of [`ConnectionSpawner::spawn_for_resume`]: the connection now
@@ -156,6 +161,43 @@ pub trait ConnectionSpawner: Send + Sync {
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<ResumedSpawn, SpawnerError>;
 
+    /// Re-spawn a connection for a `continue_delegation` round: load the ACP
+    /// session of the round being followed, STRICTLY. Unlike
+    /// [`Self::spawn_for_resume`] a failed load must never fall back to
+    /// `session/new` — an empty session answering under the source's identity
+    /// would silently lose every bit of context the round exists to continue.
+    /// Reports the failure as [`SpawnerError::SessionLoad`].
+    ///
+    /// `reused` carries the same meaning as for resume: the manager handed
+    /// back a connection someone else is driving, which the broker must not
+    /// disconnect — and must not send a prompt through.
+    async fn spawn_for_continue(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        external_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<ResumedSpawn, SpawnerError>;
+
+    /// Send a continue round's task into the child's EXISTING conversation row
+    /// (`child_conversation_id`, in `folder_id`), on the connection that
+    /// loaded its session.
+    ///
+    /// The prompt is the user's FULL new task — never the resume
+    /// "continue the ORIGINAL task" frame — because a continue round carries
+    /// genuinely new work. `brief` rides it as an internal suffix exactly as
+    /// it rides every other delegation prompt.
+    async fn send_continue_prompt(
+        &self,
+        conn_id: &str,
+        task: String,
+        folder_id: i32,
+        child_conversation_id: i32,
+        brief: Option<String>,
+    ) -> Result<(), SpawnerError>;
+
     /// Send the resume continuation prompt into the child's EXISTING
     /// conversation row (`child_conversation_id`, in `folder_id`). Unlike
     /// [`Self::send_prompt_linked_for_delegation`] this adopts the row instead
@@ -220,6 +262,14 @@ pub mod mock {
         pub resume_send_results: Mutex<VecDeque<Result<(), SpawnerError>>>,
         pub resume_spawn_args: Mutex<Vec<ResumeSpawnCallArgs>>,
         pub resume_send_args: Mutex<Vec<ResumeSendCallArgs>>,
+        /// Queued results for `spawn_for_continue` / `send_continue_prompt`;
+        /// recorded calls land in `continue_spawn_args` / `continue_send_args`.
+        /// Kept apart from the resume queues so a test staging both can't
+        /// cross-consume.
+        pub continue_spawn_results: Mutex<VecDeque<Result<ResumedSpawn, SpawnerError>>>,
+        pub continue_send_results: Mutex<VecDeque<Result<(), SpawnerError>>>,
+        pub continue_spawn_args: Mutex<Vec<ContinueSpawnCallArgs>>,
+        pub continue_send_args: Mutex<Vec<ContinueSendCallArgs>>,
         /// Conversation ids `has_live_connection_for_conversation` answers
         /// `true` for. Empty (default) = no live child connections.
         pub live_conversations: Mutex<Vec<i32>>,
@@ -265,6 +315,25 @@ pub mod mock {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ContinueSpawnCallArgs {
+        pub parent_connection_id: String,
+        pub agent_type: AgentType,
+        pub working_dir: Option<String>,
+        pub external_session_id: String,
+        pub preferred_mode_id: Option<String>,
+        pub preferred_config_values: BTreeMap<String, String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ContinueSendCallArgs {
+        pub conn_id: String,
+        pub task: String,
+        pub folder_id: i32,
+        pub child_conversation_id: i32,
+        pub brief: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ResumeSendCallArgs {
         pub conn_id: String,
         pub prompt: String,
@@ -302,6 +371,14 @@ pub mod mock {
 
         pub async fn queue_resume_send(&self, r: Result<(), SpawnerError>) {
             self.resume_send_results.lock().await.push_back(r);
+        }
+
+        pub async fn queue_continue_spawn(&self, r: Result<ResumedSpawn, SpawnerError>) {
+            self.continue_spawn_results.lock().await.push_back(r);
+        }
+
+        pub async fn queue_continue_send(&self, r: Result<(), SpawnerError>) {
+            self.continue_send_results.lock().await.push_back(r);
         }
 
         /// Mark `conversation_id` as having a live connection, so
@@ -402,6 +479,66 @@ pub mod mock {
                 .pop_front()
                 .unwrap_or_else(|| {
                     Err(SpawnerError::Spawn("no queued resume spawn result".into()))
+                })
+        }
+
+        async fn spawn_for_continue(
+            &self,
+            parent_connection_id: &str,
+            agent_type: AgentType,
+            working_dir: Option<String>,
+            external_session_id: &str,
+            preferred_mode_id: Option<String>,
+            preferred_config_values: BTreeMap<String, String>,
+        ) -> Result<ResumedSpawn, SpawnerError> {
+            self.continue_spawn_args
+                .lock()
+                .await
+                .push(ContinueSpawnCallArgs {
+                    parent_connection_id: parent_connection_id.to_string(),
+                    agent_type,
+                    working_dir,
+                    external_session_id: external_session_id.to_string(),
+                    preferred_mode_id,
+                    preferred_config_values,
+                });
+            self.continue_spawn_results
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(SpawnerError::Spawn(
+                        "no queued continue spawn result".into(),
+                    ))
+                })
+        }
+
+        async fn send_continue_prompt(
+            &self,
+            conn_id: &str,
+            task: String,
+            folder_id: i32,
+            child_conversation_id: i32,
+            brief: Option<String>,
+        ) -> Result<(), SpawnerError> {
+            self.continue_send_args
+                .lock()
+                .await
+                .push(ContinueSendCallArgs {
+                    conn_id: conn_id.to_string(),
+                    task,
+                    folder_id,
+                    child_conversation_id,
+                    brief,
+                });
+            self.continue_send_results
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(SpawnerError::Send(
+                        "no queued continue send result".into(),
+                    ))
                 })
         }
 

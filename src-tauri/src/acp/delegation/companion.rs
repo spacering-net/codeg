@@ -317,7 +317,8 @@ impl CompanionFeatures {
             "delegate_to_agent"
             | "get_delegation_status"
             | "cancel_delegation"
-            | "resume_delegation" => self.delegation,
+            | "resume_delegation"
+            | "continue_delegation" => self.delegation,
             _ => false,
         }
     }
@@ -1050,6 +1051,25 @@ async fn build_tools_call_spawn(
                 render_task_report,
             )
             .await
+        }
+        "continue_delegation" => {
+            let task_id = arguments.get("task_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+            let task = arguments.get("task").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty());
+            let (Some(task_id), Some(task)) = (task_id, task) else {
+                return LineAction::Respond(err(id, -32602, "continue_delegation requires non-empty task_id and task"));
+            };
+            let req = crate::acp::delegation::transport::BrokerContinueTaskRequest {
+                token: ctx.token.clone(),
+                task_id: task_id.to_string(),
+                task: task.to_string(),
+                external_handle: Some(uuid::Uuid::new_v4().to_string()),
+            };
+            let external_handle = req.external_handle.clone();
+            let socket = ctx.socket_path.clone();
+            let round_trip = Box::pin(async move {
+                crate::acp::delegation::transport::client_continue_task_round_trip(&socket, &req).await
+            });
+            register_and_spawn(inflight, id, external_handle, round_trip, render_task_report).await
         }
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {

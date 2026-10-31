@@ -1,7 +1,7 @@
 [
   {
     "name": "delegate_to_agent",
-    "description": "Hand off a self-contained sub-task to a separate local AI agent that runs in its own session. ASYNCHRONOUS: returns a task_id right away and the sub-agent keeps working in the background — this call never blocks. So you can fan out several delegations at once and keep working, then collect the results with get_delegation_status by passing the task_ids array (one id to poll a single task, or many at once to poll the whole fan-out in one call) — or stop one early with cancel_delegation(task_id). The sub-agent CANNOT see this conversation, your open files, or earlier turns — it starts cold, so `task` must carry everything it needs. Best for independent, parallelizable work you can describe up front; not for steps that need your ongoing back-and-forth. RECOGNIZING AN EXPLICIT DELEGATION REQUEST: the user can name a sub-agent directly in their message — it appears as `@AgentName` or as a Markdown link `[@AgentName](codeg://agent/<agent_type>)`. Such a mention IS an explicit instruction to delegate the associated work to that agent, even when the user never names this tool. If the message names several agents, make one call per agent, each carrying that agent's slice of the work.",
+    "description": "Hand off a self-contained sub-task to a separate local AI agent that runs in its own session. ASYNCHRONOUS: returns a task_id right away and the sub-agent keeps working in the background — this call never blocks. So you can fan out several delegations at once and keep working, then collect the results with get_delegation_status by passing the task_ids array (one id to poll a single task, or many at once to poll the whole fan-out in one call) — or stop one early with cancel_delegation(task_id). The sub-agent CANNOT see this conversation, your open files, or earlier turns — it starts cold, so `task` must carry everything it needs. Best for independent, parallelizable work you can describe up front; not for steps that need your ongoing back-and-forth. RECOGNIZING AN EXPLICIT DELEGATION REQUEST: the user can name a sub-agent directly in their message — it appears as `@AgentName` or as a Markdown link `[@AgentName](codeg://agent/<agent_type>)`. Such a mention IS an explicit instruction to delegate the associated work to that agent, even when the user never names this tool. If the message names several agents, make one call per agent, each carrying that agent's slice of the work. For follow-up work, a changed direction, or rework on an existing result, you MUST use continue_delegation with the returned task_id; do not call delegate_to_agent again.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -42,6 +42,28 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        }
+      }
+    }
+  },
+  {
+    "name": "continue_delegation",
+    "description": "Start a new round of work on the latest delegated task, reusing its existing child session and context. This creates a new task_id; it does not resume or overwrite the source task.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "task"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "The source task_id returned by delegate_to_agent or continue_delegation."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The complete new task for the next round."
         }
       }
     }
@@ -117,7 +139,7 @@
   },
   {
     "name": "ask_user_question",
-    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered \u2014 including picking a recommended option or telling you to proceed \u2014 act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
+    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered — including picking a recommended option or telling you to proceed — act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
     "inputSchema": {
       "type": "object",
       "required": [

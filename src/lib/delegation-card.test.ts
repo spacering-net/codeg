@@ -6,7 +6,10 @@ import {
   isAffirmedResume,
   isCodeModeDelegationCall,
   isCodeModeDelegationInput,
+  isContinueDelegationToolName,
+  isDelegateToAgentToolName,
   isRefusedResume,
+  parseCodeModeContinueSourceTaskId,
   parseDelegateTaskId,
   parseDelegationMeta,
   parseInput,
@@ -1091,5 +1094,114 @@ describe("resolveDelegationStatus and a later check", () => {
         ended: { status: "ok" },
       })
     ).toBe("waiting")
+  })
+
+  it("does not reopen a finished card when the shared child is waiting", () => {
+    const finished = {
+      status: "ok" as const,
+      childConnectionId: "child-1",
+      childConversationId: 7,
+      taskId: "old-task",
+    }
+    expect(
+      resolveDelegationStatus({
+        ...base,
+        binding: {
+          parentConnectionId: "p",
+          parentToolUseId: "old-call",
+          agentType: "codex",
+          task: "first round",
+          errorCode: undefined,
+          assistantId: null,
+          assistantName: null,
+          ...finished,
+        },
+        childAwaitingUser: true,
+      })
+    ).toBe("ok")
+    expect(
+      resolveDelegationStatus({
+        ...base,
+        parsedMeta: parseDelegationMeta({
+          "codeg.delegation": { status: "completed", task_id: "old-task" },
+        }),
+        childAwaitingUser: true,
+      })
+    ).toBe("ok")
+  })
+
+  it("still waits when the current binding is the run that is parked", () => {
+    expect(
+      resolveDelegationStatus({
+        ...base,
+        binding: {
+          parentConnectionId: "p",
+          parentToolUseId: "new-call",
+          childConnectionId: "child-2",
+          childConversationId: 7,
+          agentType: "codex",
+          status: "running",
+          task: "next round",
+          taskId: "new-task",
+          assistantId: null,
+          assistantName: null,
+        },
+        childAwaitingUser: true,
+      })
+    ).toBe("waiting")
+  })
+})
+
+describe("continue_delegation identity", () => {
+  it.each([
+    "continue_delegation",
+    "mcp__codeg-mcp__continue_delegation",
+    "codeg-mcp/continue_delegation",
+    "codeg-mcp.continue_delegation",
+    "codeg-mcp:continue_delegation",
+  ])("recognizes %s without treating it as a cold delegate", (name) => {
+    expect(isContinueDelegationToolName(name)).toBe(true)
+    expect(isDelegateToAgentToolName(name)).toBe(false)
+  })
+
+  it("reads the new task text and not the source id as a task id", () => {
+    const raw = JSON.stringify({
+      task_id: "old-task",
+      task: "write the follow-up",
+    })
+    expect(parseInput(raw).task).toBe("write the follow-up")
+    expect(parseDelegateTaskId(raw, null)).toBe("old-task")
+    const ack = JSON.stringify({
+      content: [{ type: "text", text: "Continued. task_id=new-task" }],
+      structuredContent: { task_id: "new-task", status: "running" },
+    })
+    expect(parseDelegateTaskId(ack, null)).toBe("new-task")
+  })
+})
+
+describe("code-mode continue_delegation", () => {
+  const call =
+    'await tools["codeg-mcp"].continue_delegation({ task_id: "old-task", task: `follow up\\nnext` })'
+
+  it("recognizes the call and reads task plus the source task id", () => {
+    const raw = JSON.stringify({ code: call })
+    expect(isCodeModeDelegationInput(raw)).toBe(true)
+    expect(isCodeModeDelegationCall("bash", raw)).toBe(true)
+    expect(parseInput(raw)).toEqual({
+      agentType: null,
+      assistantId: null,
+      task: "follow up\nnext",
+      workingDir: null,
+    })
+    expect(parseCodeModeContinueSourceTaskId(raw)).toBe("old-task")
+  })
+
+  it("does not treat a quoted continue call as a tool call", () => {
+    const raw = JSON.stringify({
+      code: 'const note = "tools[\\"codeg-mcp\\"].continue_delegation({ task_id: \\"old\\" })"',
+    })
+    expect(isCodeModeDelegationInput(raw)).toBe(false)
+    expect(parseCodeModeContinueSourceTaskId(raw)).toBeNull()
+    expect(parseInput(raw).task).toBeNull()
   })
 })

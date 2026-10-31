@@ -59,6 +59,7 @@ import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { parseResumeTaskId } from "@/lib/codeg-mcp-tool"
 import {
   isCodeModeDelegationCall,
+  isContinueDelegationToolName,
   isDelegateToAgentToolName,
   isRefusedResume,
   parseDelegateTaskId,
@@ -503,8 +504,12 @@ function collectDelegationSources(
       // `code` string, so the tool name alone can't classify them.
       if (
         isDelegateToAgentToolName(name) ||
+        isContinueDelegationToolName(name) ||
         isCodeModeDelegationCall(name, part.input ?? null)
       ) {
+        // A continue is a NEW start: its own tool call, its own task text,
+        // and — once the ack lands — its own task id. No `taskIdHint`: the
+        // argument `task_id` is the previous round's source, not this card's.
         out.push({
           parentToolUseId: part.toolCallId,
           input: part.input ?? null,

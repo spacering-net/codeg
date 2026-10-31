@@ -139,6 +139,12 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   "mcp__codeg-mcp__delegate_to_agent": "delegate_to_agent",
   "mcp__codeg-delegate__delegate_to_agent": "delegate_to_agent",
   mcp__codeg__delegate_to_agent: "delegate_to_agent",
+  // A new round on the same child session. Its own tool, not a resume: the
+  // ack mints a new task id and the card is a new delegation row.
+  continue_delegation: "continue_delegation",
+  "mcp__codeg-mcp__continue_delegation": "continue_delegation",
+  "mcp__codeg-delegate__continue_delegation": "continue_delegation",
+  mcp__codeg__continue_delegation: "continue_delegation",
   get_delegation_status: "get_delegation_status",
   cancel_delegation: "cancel_delegation",
   resume_delegation: "resume_delegation",
@@ -647,6 +653,8 @@ function normalizeUncached(toolName: string): string {
   // name after any non-alphanumeric separator so every form collapses to
   // the same canonical name the renderer dispatches on.
   if (/[^a-z0-9]delegate_to_agent$/.test(canonical)) return "delegate_to_agent"
+  if (/[^a-z0-9]continue_delegation$/.test(canonical))
+    return "continue_delegation"
   if (/[^a-z0-9]get_delegation_status$/.test(canonical))
     return "get_delegation_status"
   if (/[^a-z0-9]cancel_delegation$/.test(canonical)) return "cancel_delegation"
@@ -695,6 +703,7 @@ function normalizeUncached(toolName: string): string {
 // `{task_id}` (generic "task" tool).
 const DELEGATION_COMPANION_TOOLS: ReadonlySet<string> = new Set([
   "delegate_to_agent",
+  "continue_delegation",
   "get_delegation_status",
   "cancel_delegation",
   "resume_delegation",

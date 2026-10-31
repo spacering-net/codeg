@@ -18,6 +18,7 @@ import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
 import {
   isCodeModeDelegationCall,
+  isContinueDelegationToolName,
   isDelegateToAgentToolName,
 } from "@/lib/delegation-card"
 import {
@@ -165,6 +166,12 @@ export function toolStepKind(part: AdaptedToolCallPart): ToolStepKind {
   }
   if (isDelegateToAgentToolName(name)) {
     return part.toolCallId ? "delegation" : "generic"
+  }
+  if (isContinueDelegationToolName(name)) {
+    // A continue with its own tool call id is a new delegation row, never a
+    // resume of the previous task. Without an id there is no live binding to
+    // draw, so the workbench card states the source id and the new task.
+    return part.toolCallId ? "delegation" : "workbench"
   }
   if (name === "resume_delegation") {
     return part.toolCallId ? "delegation-resume" : "workbench"
