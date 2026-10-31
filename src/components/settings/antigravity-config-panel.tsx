@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
@@ -51,6 +51,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { AcpAgentInfo, LeakedTempScan } from "@/lib/types"
+import { AntigravityAccountManager } from "@/components/settings/antigravity-account-manager"
 
 /** codeg-side knob recording the chosen auth method. The agent reads NOTHING
  * from it — its auth intent comes from `auth.type` in
@@ -1273,6 +1274,13 @@ export function AntigravityConfigPanel({
             without them just burns an attempt. `disabled` rather than hidden:
             the section explains the headless problem, which is exactly what a
             user who cannot complete the flow needs to read. */}
+        {usesBrowserSignIn(method) ? (
+          <AntigravityAccountManager
+            disabled={busy}
+            method={method}
+          />
+        ) : null}
+
         {usesBrowserSignIn(method) ? (
           <HeadlessSignIn
             disabled={busy || persistedIncomplete !== null}

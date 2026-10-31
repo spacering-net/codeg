@@ -10,6 +10,12 @@ vi.mock("@/lib/api", () => ({
   acpAntigravitySignOut: vi.fn(),
   acpScanLeakedTemp: vi.fn(),
   acpReclaimLeakedTemp: vi.fn(),
+  acpAntigravityListAccounts: vi.fn().mockResolvedValue({ activeAccountId: null, accounts: [] }),
+  acpAntigravitySwitchAccount: vi.fn(),
+  acpAntigravityDeleteAccount: vi.fn(),
+  acpAntigravityAddAccountStart: vi.fn(),
+  acpAntigravityCheckPendingLogin: vi.fn(),
+  acpAntigravityGetQuota: vi.fn(),
 }))
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
