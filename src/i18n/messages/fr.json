@@ -3635,6 +3635,17 @@
         "notInstalled": "Non installé",
         "moreAgents": "Plus d'agents ({count})"
       },
+      "subsessions": {
+        "title": "Sous-conversations",
+        "trigger": "Sous-conversations ({count})",
+        "loading": "Chargement des sous-conversations…",
+        "loadError": "Impossible de charger les sous-conversations.",
+        "retry": "Réessayer",
+        "empty": "Aucune sous-conversation pour le moment.",
+        "untitled": "Tâche sans titre",
+        "view": "Voir",
+        "viewSession": "Voir la conversation de {agent} : {title}"
+      },
       "subAgentOverlay": {
         "title": "Sous-agents",
         "collapsedSummary": "Sous-agents {count}",

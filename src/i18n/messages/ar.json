@@ -3635,6 +3635,17 @@
         "notInstalled": "غير مثبّت",
         "moreAgents": "وكلاء إضافيون ({count})"
       },
+      "subsessions": {
+        "title": "المحادثات الفرعية",
+        "trigger": "المحادثات الفرعية ({count})",
+        "loading": "جارٍ تحميل المحادثات الفرعية…",
+        "loadError": "تعذّر تحميل المحادثات الفرعية.",
+        "retry": "إعادة المحاولة",
+        "empty": "لا توجد محادثات فرعية بعد.",
+        "untitled": "مهمة بلا عنوان",
+        "view": "عرض",
+        "viewSession": "عرض محادثة {agent}: {title}"
+      },
       "subAgentOverlay": {
         "title": "الوكلاء الفرعيون",
         "collapsedSummary": "الوكلاء الفرعيون {count}",

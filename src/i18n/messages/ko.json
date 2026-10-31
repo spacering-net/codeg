@@ -3635,6 +3635,17 @@
         "notInstalled": "설치되지 않음",
         "moreAgents": "에이전트 더 보기 ({count})"
       },
+      "subsessions": {
+        "title": "하위 대화",
+        "trigger": "하위 대화 ({count})",
+        "loading": "하위 대화 불러오는 중…",
+        "loadError": "하위 대화를 불러올 수 없습니다.",
+        "retry": "다시 시도",
+        "empty": "하위 대화가 아직 없습니다.",
+        "untitled": "제목 없는 작업",
+        "view": "보기",
+        "viewSession": "{agent} 대화 보기: {title}"
+      },
       "subAgentOverlay": {
         "title": "서브 에이전트",
         "collapsedSummary": "서브 에이전트 {count}",
