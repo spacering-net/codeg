@@ -50,4 +50,5 @@ pub mod version_control;
 pub mod web_server;
 pub mod work_task;
 pub mod workspace_files;
+pub mod workspace_search;
 pub mod workspace_state;

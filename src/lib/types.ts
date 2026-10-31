@@ -4935,6 +4935,39 @@ export interface WorkspaceFileEntry {
   kind: "file" | "dir"
 }
 
+/** One matching line from `search_workspace_content`. */
+export interface WorkspaceContentSearchLine {
+  /** 1-based line number. */
+  line: number
+  /** The line without indentation, cut around the first match (`…` marks a cut). */
+  preview: string
+  /** Highlighted `[start, end)` ranges in `preview`, in UTF-16 code units. */
+  ranges: [number, number][]
+}
+
+export interface WorkspaceContentSearchFile {
+  /** Path relative to the workspace root, always forward-slashed. */
+  path: string
+  name: string
+  matches: WorkspaceContentSearchLine[]
+}
+
+/** Result of `search_workspace_content` (mirrors `ContentSearchResult`). */
+export interface WorkspaceContentSearchResult {
+  files: WorkspaceContentSearchFile[]
+  /** Matching lines returned across all files. */
+  result_count: number
+  /** More lines matched than were returned. */
+  truncated: boolean
+  /** The walk stopped at the backend's file limit. */
+  file_limit_reached: boolean
+  /** A newer search with the same key (or a cancel) stopped this one. */
+  cancelled: boolean
+  files_searched: number
+  /** Binary files and files over the size limit. */
+  files_skipped: number
+}
+
 /**
  * A directory the user symlinked into a workspace folder, turning one root into
  * a multi-folder workspace. `name` is the subdirectory the link occupies inside

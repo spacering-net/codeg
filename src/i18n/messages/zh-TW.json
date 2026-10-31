@@ -3121,6 +3121,32 @@
       "newConversation": "新增會話"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "搜尋此資料夾",
+        "placeholderNames": "依名稱搜尋檔案",
+        "placeholderContents": "在檔案內容中搜尋",
+        "clear": "清除搜尋",
+        "searchContents": "搜尋檔案內容",
+        "matchCase": "區分大小寫",
+        "useRegex": "使用規則運算式",
+        "resultsLabel": "搜尋結果",
+        "searching": "正在搜尋…",
+        "noResults": "沒有結果",
+        "nameSummary": "{count} 個結果",
+        "contentSummary": "{results} 個結果 · {files} 個檔案",
+        "showingFirst": "僅顯示前 {count} 個結果",
+        "fileLimitReached": "已在 {count} 個檔案後停止",
+        "skippedFiles": "已略過 {count} 個二進位或過大的檔案",
+        "errors": {
+          "emptyQuery": "請輸入要搜尋的內容",
+          "queryTooLong": "搜尋內容超過 {max} 個字元",
+          "invalidPattern": "規則運算式無效",
+          "invalidRoot": "無法搜尋此資料夾的路徑",
+          "rootNotFound": "此資料夾已不存在",
+          "invalidSearchKey": "搜尋失敗",
+          "failed": "搜尋失敗"
+        }
+      },
       "workspace": "工作區",
       "retry": "重試",
       "git": "Git",

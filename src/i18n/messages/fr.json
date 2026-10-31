@@ -3121,6 +3121,32 @@
       "newConversation": "Nouvelle conversation"
     },
     "fileTreeTab": {
+      "search": {
+        "ariaLabel": "Rechercher dans ce dossier",
+        "placeholderNames": "Rechercher des fichiers par nom",
+        "placeholderContents": "Rechercher dans le contenu des fichiers",
+        "clear": "Effacer la recherche",
+        "searchContents": "Rechercher dans les fichiers",
+        "matchCase": "Respecter la casse",
+        "useRegex": "Utiliser une expression régulière",
+        "resultsLabel": "Résultats de recherche",
+        "searching": "Recherche…",
+        "noResults": "Aucun résultat",
+        "nameSummary": "{count, plural, one {# résultat} other {# résultats}}",
+        "contentSummary": "{results, plural, one {# résultat} other {# résultats}} dans {files, plural, one {# fichier} other {# fichiers}}",
+        "showingFirst": "Affichage des {count} premiers résultats",
+        "fileLimitReached": "arrêtée après {count} fichiers",
+        "skippedFiles": "{count, plural, one {# fichier binaire ou trop volumineux ignoré} other {# fichiers binaires ou trop volumineux ignorés}}",
+        "errors": {
+          "emptyQuery": "Saisissez un texte à rechercher",
+          "queryTooLong": "La recherche dépasse {max} caractères",
+          "invalidPattern": "Expression régulière non valide",
+          "invalidRoot": "Le chemin de ce dossier ne peut pas être parcouru",
+          "rootNotFound": "Ce dossier n’existe plus",
+          "invalidSearchKey": "La recherche a échoué",
+          "failed": "La recherche a échoué"
+        }
+      },
       "workspace": "Espace de travail",
       "retry": "Réessayer",
       "git": "Git",
