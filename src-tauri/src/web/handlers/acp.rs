@@ -766,6 +766,18 @@ pub async fn acp_qoder_auth_status(
     ))
 }
 
+/// The account's remaining Qoder credits, as `null` when the CLI holds no
+/// usable credential or the lookup failed (the card then shows no credits,
+/// never an error).
+pub async fn acp_qoder_quota(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<QoderProbeParams>,
+) -> Result<Json<Option<crate::acp::types::QoderQuota>>, AppCommandError> {
+    Ok(Json(
+        acp_commands::acp_qoder_quota_core(&state.db, params.personal_access_token).await,
+    ))
+}
+
 /// Optional live API key from the Cursor settings form, forwarded so the
 /// `status` / `models` probes test what's on screen (empty ⇒ browser-login).
 #[derive(Deserialize, Default)]
