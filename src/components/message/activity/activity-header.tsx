@@ -116,12 +116,15 @@ export const ActivityHeader = memo(function ActivityHeader({
 
   // The whole header folds and unfolds the reply; its label is the control
   // for the keyboard and screen readers. A press on a button inside (that
-  // label, the failure link) is the button's own, and one that ends a text
-  // selection is not a toggle.
+  // label, the failure link) is the button's own. Nothing in the capsule can
+  // be selected (`select-none`): a quick second press selected a word in it,
+  // which raised the transcript's copy bubble and kept the press from
+  // toggling. So a press here never makes a selection, and one made elsewhere
+  // is left as it is — no reason not to toggle. (A drag that starts outside
+  // and ends here sends its click to an element the two share, not here.)
   const onHeaderClick = toggle
     ? (event: MouseEvent<HTMLDivElement>) => {
         if ((event.target as Element | null)?.closest("button")) return
-        if (window.getSelection()?.toString()) return
         toggle.onToggle()
       }
     : undefined
@@ -129,12 +132,16 @@ export const ActivityHeader = memo(function ActivityHeader({
   return (
     <div
       ref={ref}
-      // `activity-capsule`: a translucent wash of the steps' secondary grey,
-      // grey in every theme, with a ring over a workspace background image
-      // (globals.css). A block, not inline: no line box around it adds room
-      // under it, so what follows starts at its bottom edge.
+      // The same capsule in every shape of the reply, the pending one's too
+      // (`ReplyMotion`).
+      data-motion-key="header"
+      // `activity-capsule`: filled like the user's message bubble, over a
+      // workspace background image too — translucent there, with its ring —
+      // and a step deeper in the same colour when pointed at (globals.css).
+      // A block, not inline: no line box around it adds room under it, so
+      // what follows starts at its bottom edge.
       className={cn(
-        "activity-capsule flex h-8 w-fit max-w-full min-w-0 items-center gap-2 rounded-full bg-activity-capsule px-4 text-xs transition-colors",
+        "activity-capsule flex h-8 w-fit max-w-full min-w-0 select-none items-center gap-2 rounded-full bg-activity-capsule px-4 text-xs transition-colors",
         toggle && "group/row cursor-pointer hover:bg-activity-capsule-hover"
       )}
       onClick={onHeaderClick}

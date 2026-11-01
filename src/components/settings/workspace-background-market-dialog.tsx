@@ -70,7 +70,7 @@ function MarketCard({
   const t = useTranslations("AppearanceSettings.workspaceBackground.market")
   const thumb = useProxiedBackgroundThumb(wallpaper.thumbUrl)
   const resolution = formatMarketResolution(wallpaper)
-  // 超出后端 16 MiB / 40 Mpx 上限的图点了必失败，且重试永远不会成功 ——
+  // 超出后端 64 MiB / 100 Mpx 上限的图点了必失败，且重试永远不会成功 ——
   // 与其发一条「请重试」的假建议，不如在卡片上就说清楚。
   const blocker = marketWallpaperBlocker(wallpaper)
   const blockerHint =

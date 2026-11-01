@@ -21,6 +21,7 @@ import {
   buildKnownInvocations,
   commandToReference,
   diskSkillTrigger,
+  skillMarkedCommands,
   skillsForMenu,
   skillToReference,
   type InvocationPrefix,
@@ -57,6 +58,9 @@ export interface ComposerInvocations {
   /** True only when the menu is open AND has at least one item to show. */
   isOpen: boolean
   commands: AvailableCommandInfo[]
+  /** The commands the rows show as skills (`skillMarkedCommands`), read off
+   *  the full list so the filter never moves the icon column. */
+  skillCommands: ReadonlySet<string>
   skills: AgentSkillItem[]
   /** The trigger `skills` are listed and inserted under (`$` for Codex, `/`
    *  for Antigravity), or null for an agent whose skills come as commands. */
@@ -161,6 +165,11 @@ export function useComposerInvocations({
     [availableCommands, skillTrigger, skills]
   )
 
+  const skillCommands = useMemo(
+    () => skillMarkedCommands(availableCommands),
+    [availableCommands]
+  )
+
   const count = commands.length + matchedSkills.length
   // Clamp on read so a shrinking filtered list never points past the end (avoids
   // a clamping effect / set-state-in-effect).
@@ -255,6 +264,7 @@ export function useComposerInvocations({
   return {
     isOpen: open && count > 0,
     commands,
+    skillCommands,
     skills: matchedSkills,
     skillTrigger,
     knownInvocations,
@@ -408,7 +418,11 @@ export function ComposerInvocationsPopup({
               inv.selectCommand(cmd)
             }}
           >
-            <CommandOptionLabel command={cmd} />
+            <CommandOptionLabel
+              command={cmd}
+              skill={inv.skillCommands.has(cmd.name)}
+              kindColumn={inv.skillCommands.size > 0}
+            />
           </button>
         ))}
         {inv.skills.map((skill, i) => {

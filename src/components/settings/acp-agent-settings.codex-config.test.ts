@@ -225,12 +225,14 @@ describe("codexWebsocketSwitchApplies", () => {
   })
 
   // codex keeps its built-in entry whatever `[model_providers.<id>]` says, and
-  // the Bedrock ids reject the whole config over a `supports_websockets`.
+  // the Bedrock ids and `gcp` reject the whole config over a
+  // `supports_websockets`.
   it("is off when the active provider is one of codex's built-ins", () => {
     for (const id of [
       "openai",
       "amazon-bedrock",
       "amazon-bedrock-runtime",
+      "gcp",
       "ollama",
       "lmstudio",
     ]) {

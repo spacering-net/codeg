@@ -294,8 +294,8 @@ export async function acpConnect(
  * would blow axum's 2 MiB `DefaultBodyLimit` and 413 the send.
  *
  * `shouldStrip` is false on a local desktop workspace (Tauri IPC has no body
- * limit and there is no uploads dir to hydrate from), so those blocks pass
- * through byte-identical. Under `shouldStrip`, a `file://` uri on an image
+ * limit, and an image there is never uploaded to be hydrated back), so those
+ * blocks pass through byte-identical. Under `shouldStrip`, a `file://` uri on an image
  * block can only have come from an upload — every web/remote attach path
  * routes through `/upload_attachment` first — so uri presence is the marker.
  * Pure; exported for tests.
@@ -4512,8 +4512,10 @@ export function isEmptyAttachmentError(err: unknown): boolean {
 // page was served from. Desktop + remote workspace: routes through the Rust
 // `remote_upload_attachment` command, because the webview's `fetch` can't
 // hit a plain `http://` remote (mixed-content rules block secure-context
-// requests). Returns the server-side absolute path so the caller can attach
-// it as a `file://` ResourceLink — identical shape on both transports.
+// requests). Local desktop: there is no server, so `save_pasted_attachment`
+// keeps the bytes in this machine's own uploads directory. Returns the
+// absolute path so the caller can attach it as a `file://` ResourceLink —
+// identical shape on every transport.
 export async function uploadAttachment(
   file: File,
   sessionId?: string | null
@@ -4537,6 +4539,18 @@ export async function uploadAttachment(
       "remote_upload_attachment",
       {
         connectionId: remoteId,
+        fileName: file.name,
+        mimeType: file.type || null,
+        sessionId: sessionId ?? null,
+        dataBase64: arrayBufferToBase64(buf),
+      }
+    )
+  }
+  if (isDesktop()) {
+    const buf = await file.arrayBuffer()
+    return getShellTransport().call<UploadAttachmentResult>(
+      "save_pasted_attachment",
+      {
         fileName: file.name,
         mimeType: file.type || null,
         sessionId: sessionId ?? null,

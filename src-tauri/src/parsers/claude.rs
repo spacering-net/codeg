@@ -3005,19 +3005,49 @@ fn user_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
     }
 
     if let Some(arr) = content.as_array() {
+        // Whether the item just read was a text block that became the last of
+        // `blocks`: the only text a document block can be the stand-in for.
+        let mut after_text = false;
         for item in arr {
+            let follows_text = std::mem::replace(&mut after_text, false);
             let block_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match block_type {
                 "text" => {
                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                         if let Some(cleaned) = strip_system_tags(text) {
                             blocks.push(ContentBlock::Text { text: cleaned });
+                            after_text = true;
                         }
                     }
                 }
                 "image" => {
                     if let Some(image_block) = extract_claude_user_image(item) {
                         blocks.push(image_block);
+                    }
+                }
+                "document" => {
+                    // claude-agent-acp 0.99.0 (#1460) sends a PDF that came as
+                    // a blob resource as a document block, right after the link
+                    // it writes for the resource (`formatUriAsLink`). The PDF
+                    // itself has no block of its own here, so that link becomes
+                    // the attachment the prompt is shown with live, by the same
+                    // rule (`project_user_prompt_block`). Left as it was, a
+                    // pasted PDF read back as a bare `clipboard://…` address.
+                    // Only a PDF (the one document type the adapter sends) and
+                    // only the text block right before it.
+                    let is_pdf = item
+                        .get("source")
+                        .and_then(|source| source.get("media_type"))
+                        .and_then(|media_type| media_type.as_str())
+                        == Some("application/pdf");
+                    if follows_text && is_pdf {
+                        if let Some(ContentBlock::Text { text }) = blocks.last_mut() {
+                            if let Some(shown) =
+                                bare_adapter_link(text).and_then(pdf_attachment_text)
+                            {
+                                *text = shown;
+                            }
+                        }
                     }
                 }
                 "tool_result" | "server_tool_result" => {
@@ -3046,6 +3076,61 @@ fn user_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
     }
 
     blocks
+}
+
+/// claude-agent-acp's `formatUriAsLink`, the text it writes into a user record
+/// for a resource or a resource link in the prompt: `[@name](uri)` for a
+/// `file://` or `zed://` uri, named after its last path segment, and the bare
+/// uri for anything else (a web page, a pasted file's `clipboard://` uri).
+pub(crate) fn claude_uri_link(uri: &str) -> String {
+    let named = |rest: &str| {
+        let name = rest
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(rest);
+        format!("[@{name}]({uri})")
+    };
+    if let Some(path) = uri.strip_prefix("file://") {
+        named(path)
+    } else if uri.starts_with("zed://") {
+        named(uri)
+    } else {
+        uri.to_string()
+    }
+}
+
+/// `text` as a uri when it is exactly the bare link [`claude_uri_link`] writes
+/// for one: a uri that is not a `file://` or `zed://` one, such as a pasted
+/// file's `clipboard://` uri. A `[@name](uri)` link is left alone; the
+/// transcript already reads it back as the named attachment.
+fn bare_adapter_link(text: &str) -> Option<String> {
+    let text = text.trim();
+    // A scheme (RFC 3986: a letter, then letters, digits, `+`, `-`, `.`), then
+    // `://`, and no whitespace anywhere.
+    let scheme = text.split_once("://")?.0;
+    let is_uri = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && !text.chars().any(char::is_whitespace);
+    (is_uri && claude_uri_link(text) == text).then(|| text.to_string())
+}
+
+/// What the live user turn shows for a PDF sent as a blob resource, by the
+/// rule every surface shares ([`crate::acp::types::project_user_prompt_block`]).
+fn pdf_attachment_text(uri: String) -> Option<String> {
+    use crate::acp::types::{project_user_prompt_block, PromptInputBlock, UserTurnBlock};
+    let block = PromptInputBlock::Resource {
+        uri,
+        mime_type: Some("application/pdf".to_string()),
+        text: None,
+        blob: Some(String::new()),
+    };
+    match project_user_prompt_block(&block) {
+        UserTurnBlock::Text { text } => Some(text),
+        UserTurnBlock::Image { .. } => None,
+    }
 }
 
 /// The conversation title a user message gives: from its first text block.
@@ -8961,6 +9046,118 @@ mod tests {
             ContentBlock::Image { data, mime_type, uri }
             if data == "QUJDREVGRw==" && mime_type == "image/jpeg" && uri.is_none()
         ));
+    }
+
+    /// A PDF pasted into the composer reaches Claude through claude-agent-acp
+    /// 0.99.0 as the resource's link and a document block (from a real
+    /// transcript, the typed text first as the composer sends it). Read back,
+    /// it shows the attachment the live turn shows for the same prompt.
+    #[test]
+    fn a_pdf_blob_reads_back_as_the_attachment_the_live_turn_shows() {
+        use crate::acp::types::{user_blocks_from_prompt, PromptInputBlock, UserMessageBlock};
+        let uri = "clipboard://report.pdf-1";
+        let value = json!({
+            "message": {
+                "content": [
+                    {"type": "text", "text": "what is in the attachment?"},
+                    {"type": "text", "text": uri},
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+                    }
+                ]
+            }
+        });
+        let live = user_blocks_from_prompt(&[
+            PromptInputBlock::Text {
+                text: "what is in the attachment?".into(),
+            },
+            PromptInputBlock::Resource {
+                uri: uri.into(),
+                mime_type: Some("application/pdf".into()),
+                text: None,
+                blob: Some("JVBERi0xLjQK".into()),
+            },
+        ]);
+        let live_texts: Vec<&str> = live
+            .iter()
+            .map(|block| match block {
+                UserMessageBlock::Text { text } => text.as_str(),
+                UserMessageBlock::Image { .. } => panic!("no image in this prompt"),
+            })
+            .collect();
+
+        let blocks = extract_user_content(&value);
+        let texts: Vec<&str> = blocks
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => text.as_str(),
+                other => panic!("unexpected block {other:?}"),
+            })
+            .collect();
+        assert_eq!(texts, live_texts);
+        assert_ne!(
+            texts[1], uri,
+            "the bare address no longer stands in the prose"
+        );
+    }
+
+    /// Only the adapter's bare link right before a document is rewritten. Its
+    /// `[@name](uri)` link for a file already reads back as the named
+    /// attachment; prose and a link with no document after it stay as written.
+    #[test]
+    fn only_the_adapters_bare_link_before_a_document_is_read_as_its_attachment() {
+        let doc = json!({
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+        });
+        let read = |content: serde_json::Value| -> Vec<String> {
+            extract_user_content(&json!({"message": {"content": content}}))
+                .into_iter()
+                .map(|block| match block {
+                    ContentBlock::Text { text } => text,
+                    other => panic!("unexpected block {other:?}"),
+                })
+                .collect()
+        };
+
+        for kept in [
+            "[@a.pdf](file:///docs/a.pdf)",
+            "file:///docs/a.pdf",
+            "summarize this PDF",
+            "see https://example.com/a b.pdf",
+        ] {
+            assert_eq!(
+                read(json!([{"type": "text", "text": kept}, doc])),
+                vec![kept.to_string()]
+            );
+        }
+        assert_eq!(
+            read(json!([{"type": "text", "text": "clipboard://report.pdf-1"}])),
+            vec!["clipboard://report.pdf-1".to_string()]
+        );
+        // A document with no text before it adds nothing.
+        assert!(read(json!([doc])).is_empty());
+        // The adapter sends only PDFs as documents, and writes the link right
+        // before one: a text document, or a link with another block between it
+        // and the document (one that reads back as nothing included), is not
+        // its stand-in.
+        let text_doc = json!({
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": "notes"}
+        });
+        assert_eq!(
+            read(json!([{"type": "text", "text": "clipboard://notes.txt-1"}, text_doc])),
+            vec!["clipboard://notes.txt-1".to_string()]
+        );
+        assert_eq!(
+            read(json!([
+                {"type": "text", "text": "clipboard://report.pdf-1"},
+                {"type": "text", "text": "<system-reminder>noted</system-reminder>"},
+                doc
+            ])),
+            vec!["clipboard://report.pdf-1".to_string()]
+        );
     }
 
     #[test]

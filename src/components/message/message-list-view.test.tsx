@@ -385,8 +385,29 @@ describe("mergeConsecutiveAssistantTurns merged-run cache", () => {
     expect(second.group).toBe(first.group)
     expect(second.group.parts).toBe(first.group.parts)
     expect(second.sourceTurns).toBe(first.sourceTurns)
-    expect(first.key).toBe("merged-persisted-a1-0")
+    expect(first.key).toBe("persisted-a1-0")
     expect(first.group.id).toBe("a1")
+  })
+
+  it("keeps a reply's row as it grows from one turn to two", () => {
+    // The agent answers its first tool mid-reply: the reply that was one turn
+    // becomes a run of two. Keyed apart, the virtual list re-mounted the
+    // whole reply at that moment.
+    const cache: MergedAssistantRunCache = new WeakMap()
+    const g1 = makeGroup("assistant", "a1")
+    const g2 = makeGroup("assistant", "a2")
+    const user = makeUserItem("u1", 0)
+
+    const [, alone] = mergeConsecutiveAssistantTurns(
+      [user, makeItem(g1, 1)],
+      cache
+    )
+    const [, run] = mergeConsecutiveAssistantTurns(
+      [user, makeItem(g1, 1), makeItem(g2, 2)],
+      cache
+    )
+
+    expect(run.key).toBe(alone.key)
   })
 
   it("rebuilds a run whose member changed without touching a neighboring run", () => {

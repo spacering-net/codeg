@@ -117,6 +117,7 @@ import {
   buildKnownInvocations,
   commandToReference,
   diskSkillTrigger,
+  skillMarkedCommands,
   skillsForMenu,
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
@@ -994,6 +995,12 @@ export function MessageInput({
     () => availableCommands ?? [],
     [availableCommands]
   )
+  // Read off the full list, not the filtered one, so typing never moves the
+  // rows' icon column in or out.
+  const skillCommandNames = useMemo(
+    () => skillMarkedCommands(slashCommands),
+    [slashCommands]
+  )
   const filteredSlashCommands = useMemo(() => {
     if (!slashMenuOpen || slashCommands.length === 0) return []
     if (slashTriggerChar !== "/") return []
@@ -1316,20 +1323,26 @@ export function MessageInput({
     if (disabled) return
     const editor = editorRef.current?.getEditor()
     if (!editor) return
-    let text = ""
     // The async clipboard read can be blocked at call time even though the API
     // exists (denied permission, browser policy), so track that: with the native
     // menu (and its Paste) suppressed to show this one, a silent failure would
     // leave the user with no feedback and no fallback.
     let readBlocked = false
-    try {
-      text = (await navigator.clipboard.readText()) ?? ""
-    } catch {
-      // Permission denied / unsupported / no activation — fall through to the
-      // image path (a textless clipboard may still hold a screenshot).
-      readBlocked = true
-      text = ""
-    }
+    // Started before anything is awaited, so it still runs inside the gesture.
+    const textRead = (async () => {
+      try {
+        return (await navigator.clipboard.readText()) ?? ""
+      } catch {
+        // Permission denied / unsupported / no activation — fall through to the
+        // image path (a textless clipboard may still hold a screenshot).
+        readBlocked = true
+        return ""
+      }
+    })()
+    // Files copied in Finder / Explorer reach the text API only as their
+    // names: attach the files themselves instead, as a keyboard paste does.
+    if (await attach.appendClipboardFiles()) return
+    const text = await textRead
     if (text) {
       // Route through ProseMirror's own text paste so newlines, marks and the
       // editor's paste pipeline behave exactly like a keyboard paste.
@@ -2022,7 +2035,11 @@ export function MessageInput({
                   handleSlashSelect(cmd)
                 }}
               >
-                <CommandOptionLabel command={cmd} />
+                <CommandOptionLabel
+                  command={cmd}
+                  skill={skillCommandNames.has(cmd.name)}
+                  kindColumn={skillCommandNames.size > 0}
+                />
               </button>
             ))}
             {filteredSlashSkills.map((skill, i) => {

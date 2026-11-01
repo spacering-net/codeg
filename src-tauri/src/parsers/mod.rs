@@ -7,6 +7,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod codex_code_mode;
 mod codex_desktop_attachments;
+mod codex_file_citations;
 pub mod cursor;
 pub mod deepseek;
 pub mod gemini;
@@ -1208,8 +1209,12 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
             // `effective_context_window_percent: 95`. gpt-6 shares that profile
             // byte for byte (see `resources/codex/bundled-catalog.json`), so it
             // rides the same lane rather than falling through to `None` and
-            // leaving those sessions with no context meter at all.
-            if normalized.starts_with("gpt-5") || normalized.starts_with("gpt-6") {
+            // leaving those sessions with no context meter at all. The one
+            // exception is GPT-6.1 Terra (codex 0.165): `context_window:
+            // 500000` at the same 95%.
+            if normalized.starts_with("gpt-6.1-terra") {
+                Some(475_000)
+            } else if normalized.starts_with("gpt-5") || normalized.starts_with("gpt-6") {
                 Some(258_000)
             } else if normalized.starts_with("gpt-4o")
                 || normalized.starts_with("gpt-4.1")
@@ -2610,6 +2615,19 @@ mod tests {
         );
         assert_eq!(
             infer_context_window_max_tokens(Some("gpt-5.6-sol")),
+            Some(258_000)
+        );
+        // …bar GPT-6.1 Terra, whose catalog window is 500K at the same 95%.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.1-terra")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("openai/gpt-6.1-terra")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.1-sol")),
             Some(258_000)
         );
         // Kimi's k3 family is the 1M lane; k2.x stays on 256K. The provider

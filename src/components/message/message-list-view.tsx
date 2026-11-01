@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
 } from "react"
 import {
   isLiveTurnId,
@@ -40,6 +41,7 @@ import {
 } from "@/lib/adapters/ai-elements-adapter"
 import { TurnStats } from "./turn-stats"
 import { LiveTurnStats } from "./live-turn-stats"
+import { SlideSlot } from "./slide-slot"
 import { ModelLabelProvider } from "./model-label-context"
 import { KnownInvocationsProvider } from "./known-invocations-context"
 import { DelegationStatusIndexProvider } from "./delegation-status-index-context"
@@ -99,7 +101,7 @@ import type {
   MessageTurn,
   PlanEntryInfo,
 } from "@/lib/types"
-import { copyTextToClipboard } from "@/lib/utils"
+import { cn, copyTextToClipboard } from "@/lib/utils"
 import {
   VirtualizedMessageThread,
   type ViewportTop,
@@ -1032,7 +1034,11 @@ export function mergeConsecutiveAssistantTurns(
 
       const merged: AssistantTurnItem = {
         ...last,
-        key: `merged-${first.key}`,
+        // The run is drawn where its first turn was, and it stays that row: a
+        // reply goes from one turn to two the moment the agent answers its
+        // first tool, mid-stream, and a key of its own for the merged run
+        // re-mounted the whole reply right then.
+        key: first.key,
         isResponseComplete: buffer.every((it) => it.isResponseComplete),
         // Concatenate every sub-turn's raw turns so the artifacts card sees all
         // file edits across the merged reply, not just the last sub-turn.
@@ -1236,6 +1242,10 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
 }) {
+  // A message the user has just sent rises into the thread. Decided once, as
+  // it mounts on its way (`dimmed`): the virtual list bringing a stored one
+  // back never replays it.
+  const [risesIn] = useState(dimmed && group.role === "user")
   if (group.role === "system") {
     // A failed turn's line is the agent's account of the failure, not a
     // message the system sent: it closes the round in place, unboxed.
@@ -1253,8 +1263,15 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   const forkPointUnnamed = isForkPointUnnamed(forkPoint, isThreadTail)
 
   return (
-    <div className={dimmed ? "opacity-70" : undefined}>
-      <Message from={group.role}>
+    // Dimmed while the message is on its way (not yet stored); it brightens
+    // into place rather than at once.
+    <div
+      className={cn("transition-opacity duration-300", dimmed && "opacity-70")}
+    >
+      <Message
+        from={group.role}
+        className={risesIn ? "chat-enter-rise" : undefined}
+      >
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
         ) : null}
@@ -1323,19 +1340,50 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   )
 })
 
-const PendingTypingIndicator = memo(function PendingTypingIndicator() {
+/** No parts yet: the reply the pending one stands for has said nothing. */
+const NO_PARTS: AdaptedContentPart[] = []
+
+/**
+ * What stands in the thread between a send and the first thing the agent says:
+ * the reply itself, before it has anything in it — its "Working" header and
+ * the turning ring under it, where the reply will draw them. So when the reply
+ * arrives it takes over in place, its first words appearing between the two
+ * (the ring moving down to make room, see `ReplyMotion`), rather than a row of
+ * dots giving way to a header a line lower. It fades in a beat after the send,
+ * as the sent message settles.
+ */
+const PendingReply = memo(function PendingReply() {
   return (
-    <Message from="assistant">
-      <MessageContent>
-        <div className="flex items-center gap-1.5 py-1">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-[pulse_1.4s_ease-in-out_infinite]" />
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-[pulse_1.4s_ease-in-out_0.2s_infinite]" />
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-[pulse_1.4s_ease-in-out_0.4s_infinite]" />
-        </div>
-      </MessageContent>
-    </Message>
+    <div className="chat-enter-late">
+      <Message from="assistant">
+        <MessageContent>
+          <CompletedTurnContent parts={NO_PARTS} completed={false} pending />
+        </MessageContent>
+      </Message>
+    </div>
   )
 })
+
+type LiveStatsMessage = ComponentProps<typeof LiveTurnStats>["message"]
+
+/**
+ * The running turn's figures, kept at the turn's last ones while the bar
+ * slides away after it ends (the live message goes as the turn does), so the
+ * figures leave with the bar instead of blanking it first. Mounted only while
+ * the bar is, so a new turn starts from its own.
+ */
+function HeldLiveTurnStats({ message }: { message: LiveStatsMessage | null }) {
+  const [held, setHeld] = useState(message)
+  if (message !== null && message !== held) setHeld(message)
+  const shown = message ?? held
+  // Keyed by its turn: a turn that starts while the last one's bar is still
+  // sliding away gets figures of its own, its clock from zero.
+  return shown ? (
+    <LiveTurnStats key={shown.id} message={shown} />
+  ) : (
+    <div className="h-8" />
+  )
+}
 
 const AutoScrollOnSend = memo(function AutoScrollOnSend({
   signal,
@@ -1740,7 +1788,13 @@ export function MessageListView({
           )
         }
         case "typing":
-          return <PendingTypingIndicator />
+          // Where the reply will be: under the sent message, as far down as
+          // a reply after a message is (`isRoleTransition`).
+          return (
+            <div style={{ paddingTop: 16 }}>
+              <PendingReply />
+            </div>
+          )
         case "compaction":
           // Chrome-less centered divider between turns (no avatar / stats footer).
           return (
@@ -2149,9 +2203,14 @@ export function MessageListView({
             </Button>
           )}
         </MessageThread>
-        {liveMessage && connStatus === "prompting" && (
-          <LiveTurnStats message={liveMessage} />
-        )}
+        {/* Slides in over the composer as a turn starts and out as it ends,
+            so the transcript above eases up and back instead of jumping. */}
+        <SlideSlot
+          className="shrink-0"
+          show={liveMessage !== null && connStatus === "prompting"}
+        >
+          <HeldLiveTurnStats message={liveMessage} />
+        </SlideSlot>
         {/* Overlay stack pinned to the inline-start edge (top-left in LTR,
         top-right in RTL) — only where the plan and sub-agents have no side
         panel to go to (see `insightsInSidebar`). A flex column keeps the order

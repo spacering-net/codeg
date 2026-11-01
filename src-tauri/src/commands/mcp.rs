@@ -4865,20 +4865,20 @@ fn remove_trae_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
 // `transport` discriminant — `{transport: "stdio", enabled, command, args,
 // env}` or `{transport: "http", enabled, url, headers}`, plus an `oauth` block
 // for a server that signs in. The loader behind its `mcp` commands
-// (`parseStoredMcpServer`, read against 1.84.0, 1.86.3 and 1.88.0) takes
-// `transport` first, then `type` as an alias, and otherwise infers stdio from
-// `command` and http from `url`. It models no `cwd`, and an entry with any
-// other transport (`sse` included) or a non-boolean `enabled` fails and is
-// dropped while the rest of the file still loads. codeg reads entries the same
-// way, so its list matches `command-code mcp list`, and writes only what that
-// loader models. The loader that starts a session's servers is looser: it
-// connects an `sse` entry with its HTTP client and treats a non-boolean
-// `enabled` as unset, so such a hand-written entry still starts although
-// neither list shows it. The `oauth` block is the one place codeg's list sides
-// with the session instead: `mcp list` also drops an entry whose `oauth` block
-// it cannot parse (`oauth: {}`, live on 1.86.3 and 1.88.0) or whose OAuth url
-// is neither https nor loopback http, which the session still starts and
-// codeg, reading no `oauth` rules, still lists.
+// (`parseStoredMcpServer`, read against 1.84.0, 1.86.3, 1.88.0, 1.88.1 and
+// 1.88.2) takes `transport` first, then `type` as an alias, and otherwise
+// infers stdio from `command` and http from `url`. It models no `cwd`, and an
+// entry with any other transport (`sse` included) or a non-boolean `enabled`
+// fails and is dropped while the rest of the file still loads. codeg reads
+// entries the same way, so its list matches `command-code mcp list`, and writes
+// only what that loader models. The loader that starts a session's servers is
+// looser: it connects an `sse` entry with its HTTP client and treats a
+// non-boolean `enabled` as unset, so such a hand-written entry still starts
+// although neither list shows it. The `oauth` block is the one place codeg's
+// list sides with the session instead: `mcp list` also drops an entry whose
+// `oauth` block it cannot parse (`oauth: {}`, live on 1.86.3, 1.88.0, 1.88.1
+// and 1.88.2) or whose OAuth url is neither https nor loopback http, which the
+// session still starts and codeg, reading no `oauth` rules, still lists.
 //
 // `command-code acp` loads this file itself, so `CommandCode` is on the ACP
 // forward skip list in `connection.rs`; the codeg-mcp companion still arrives

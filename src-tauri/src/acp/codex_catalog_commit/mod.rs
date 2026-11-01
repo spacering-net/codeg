@@ -659,12 +659,14 @@ impl TomlInput {
 }
 
 /// Provider ids codex builds in. A `[model_providers.<id>]` table does not
-/// configure one of them (the Bedrock ids even reject most fields), so a bound
-/// provider never lands there.
+/// configure one of them (the Bedrock ids and, from codex 0.165, Google Cloud
+/// Vertex AI's `gcp` even reject most fields), so a bound provider never lands
+/// there.
 const BUILT_IN_PROVIDERS: &[&str] = &[
     "openai",
     "amazon-bedrock",
     "amazon-bedrock-runtime",
+    "gcp",
     "ollama",
     "lmstudio",
 ];

@@ -278,7 +278,7 @@
       "imageBlur": "Flou de l'image",
       "panelOpacity": "Opacité des panneaux",
       "panelOpacityHint": "Opacité de la barre latérale, des panneaux et des barres d'onglets. Plus c'est bas, plus l'image transparaît.",
-      "errorTooLarge": "L'image est trop volumineuse (16 Mo maximum).",
+      "errorTooLarge": "L'image est trop volumineuse (64 Mo maximum).",
       "errorUnsupportedFormat": "Format d'image non pris en charge. Choisissez un PNG, JPEG, WebP ou GIF.",
       "errorUploadFailed": "Échec de la définition de l'image d'arrière-plan.",
       "market": {
@@ -1630,7 +1630,9 @@
       "disableNonessentialTrafficAria": "Désactiver la télémétrie ou les requêtes réseau superflues de Claude Code",
       "gatewayDiscovery": "Laisser Claude lister les modèles Claude de la passerelle",
       "gatewayDiscoveryAria": "Laisser Claude Code lister les modèles Claude de la passerelle",
-      "gatewayDiscoveryHint": "Claude interroge lui-même l’URL de l’API et ne garde que les ID contenant « claude » ou « anthropic » ; ils apparaissent dès la session suivante."
+      "gatewayDiscoveryHint": "Claude interroge lui-même l’URL de l’API et ne garde que les ID contenant « claude » ou « anthropic » ; ils apparaissent dès la session suivante.",
+      "thinkingSummaries": "Afficher les résumés de réflexion de Claude",
+      "thinkingSummariesHint": "Par défaut, Claude Code n’affiche que les notes que Claude écrit entre deux appels d’outils. Une fois l’option activée, un résumé de son raisonnement s’affiche aussi. Aucun jeton supplémentaire n’est consommé ; nécessite claude-agent-acp 0.99.0 ou ultérieur."
     },
     "dialogs": {
       "confirmDeleteProvider": "Supprimer le provider {providerId} ?",
@@ -4327,6 +4329,7 @@
         "cardResultPending": "Résultat pas encore reçu"
       },
       "asyncTasks": {
+        "title": "Tâches en arrière-plan",
         "openOutput": "Sortie",
         "stop": "Arrêter",
         "tokens": "{count} jetons",
@@ -4710,7 +4713,7 @@
     "agentTypeRequired": "Le type d'agent est requis.",
     "agentTypeImmutableHint": "Le type d'agent ne peut pas être modifié après la création.",
     "model": "Modèle",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modèle Principal",
     "claudeReasoningModel": "Modèle de Raisonnement (réflexion)",

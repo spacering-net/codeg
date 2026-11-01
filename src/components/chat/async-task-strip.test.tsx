@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi, beforeEach } from "vitest"
@@ -212,6 +212,147 @@ describe("AsyncTaskStrip", () => {
         />
       )
       expect(screen.getByText(t.scheduledTask)).toBeInTheDocument()
+    })
+  })
+
+  describe("more than one task", () => {
+    // Every row the strip holds is room the transcript under it loses.
+    const several = (count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        task({ task_id: `t${i}`, name: `job ${i}` })
+      )
+    const header = () =>
+      screen.getByRole("button", { name: `${t.title} 4` }) as HTMLElement
+    const rerenderStrip = (
+      view: ReturnType<typeof renderStrip>,
+      tasks: AsyncTaskRecord[]
+    ) =>
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <AsyncTaskStrip tasks={tasks} onStop={vi.fn()} />
+        </NextIntlClientProvider>
+      )
+
+    it("gives a single task a row of its own, with nothing to fold", () => {
+      renderStrip(<AsyncTaskStrip tasks={several(1)} onStop={vi.fn()} />)
+      expect(screen.getByText("job 0")).toBeInTheDocument()
+      expect(screen.queryByRole("button", { expanded: true })).toBeNull()
+      expect(screen.queryByText(t.title)).toBeNull()
+    })
+
+    it("heads them with what they are and how many, the list open", () => {
+      renderStrip(<AsyncTaskStrip tasks={several(4)} onStop={vi.fn()} />)
+      expect(header()).toHaveAttribute("aria-expanded", "true")
+      expect(screen.getAllByRole("button", { name: t.stop })).toHaveLength(4)
+      // The list the header opens, the rows in it.
+      const list = document.getElementById(
+        header().getAttribute("aria-controls")!
+      )!
+      expect(list).toContainElement(screen.getByText("job 3"))
+    })
+
+    it("stops the list a little past three rows, scrolling the rest", () => {
+      // Rows with buttons and rows without are both 2rem, the header too:
+      // the 7rem cap cuts through the fourth row whatever the rows hold.
+      const tasks = several(6).map((job, i) =>
+        i % 2 === 0 ? job : { ...job, can_stop: false }
+      )
+      renderStrip(<AsyncTaskStrip tasks={tasks} onStop={vi.fn()} />)
+      const header = screen.getByRole("button", { name: `${t.title} 6` })
+      const list = document.getElementById(
+        header.getAttribute("aria-controls")!
+      )!
+      // The scrollport is the list's host; the header stays out of it.
+      const scroller = list.closest("[data-overlayscrollbars-initialize]")
+      expect(scroller).not.toBeNull()
+      expect(scroller).toHaveClass("max-h-28")
+      expect(scroller).not.toContainElement(header)
+      const lines = [header, ...Array.from(list.children)]
+      expect(lines).toHaveLength(7)
+      for (const line of lines) {
+        expect(line).toHaveClass("min-h-8", "py-1")
+      }
+    })
+
+    it("folds the list away to its header, and back", async () => {
+      renderStrip(<AsyncTaskStrip tasks={several(4)} onStop={vi.fn()} />)
+      await userEvent.click(header())
+      expect(header()).toHaveAttribute("aria-expanded", "false")
+      expect(header()).not.toHaveAttribute("aria-controls")
+      expect(screen.queryByText("job 0")).toBeNull()
+      expect(screen.queryByRole("button", { name: t.stop })).toBeNull()
+
+      await userEvent.click(header())
+      expect(header()).toHaveAttribute("aria-expanded", "true")
+      expect(screen.getAllByRole("button", { name: t.stop })).toHaveLength(4)
+    })
+
+    it("keeps a folded list folded as tasks come and go", async () => {
+      const view = renderStrip(
+        <AsyncTaskStrip tasks={several(2)} onStop={vi.fn()} />
+      )
+      await userEvent.click(
+        screen.getByRole("button", { name: `${t.title} 2` })
+      )
+
+      rerenderStrip(view, several(4))
+      expect(header()).toHaveAttribute("aria-expanded", "false")
+      expect(screen.queryByText("job 3")).toBeNull()
+
+      // Every task settled, then more started: still the reader's fold.
+      rerenderStrip(
+        view,
+        several(4).map((done) => ({ ...done, state: "completed" as const }))
+      )
+      expect(view.container).toBeEmptyDOMElement()
+      rerenderStrip(view, several(4))
+      expect(header()).toHaveAttribute("aria-expanded", "false")
+
+      // Down to one task: its row, with nothing to fold. More again: the
+      // reader's fold.
+      rerenderStrip(view, several(1))
+      expect(screen.getByText("job 0")).toBeInTheDocument()
+      expect(screen.queryByText(t.title)).toBeNull()
+      rerenderStrip(view, several(4))
+      expect(header()).toHaveAttribute("aria-expanded", "false")
+      expect(screen.queryByText("job 0")).toBeNull()
+    })
+
+    it("keeps a row the same row as a second task starts", () => {
+      // Its state (a stop on its way, where its shimmer is) stays with it.
+      const view = renderStrip(
+        <AsyncTaskStrip tasks={several(1)} onStop={vi.fn()} />
+      )
+      const row = screen.getByText("job 0").closest("div")
+      rerenderStrip(view, several(2))
+      expect(screen.getByText("job 0").closest("div")).toBe(row)
+    })
+
+    it("keeps a stop on its way through a fold", async () => {
+      // Folded away and back before the adapter answers, the row must not
+      // offer the stop again.
+      let settle!: (stopped: boolean) => void
+      const onStop = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            settle = resolve
+          })
+      )
+      renderStrip(<AsyncTaskStrip tasks={several(2)} onStop={onStop} />)
+      await userEvent.click(screen.getAllByRole("button", { name: t.stop })[0]!)
+      expect(onStop).toHaveBeenCalledWith("t0")
+
+      const fold = screen.getByRole("button", { name: `${t.title} 2` })
+      await userEvent.click(fold)
+      await userEvent.click(fold)
+      const [first, second] = screen.getAllByRole("button", { name: t.stop })
+      expect(first).toBeDisabled()
+      expect(second).toBeEnabled()
+
+      // Answered: offered again (a declined stop can be retried).
+      await act(async () => settle(false))
+      expect(screen.getAllByRole("button", { name: t.stop })[0]).toBeEnabled()
+      expect(onStop).toHaveBeenCalledTimes(1)
     })
   })
 })

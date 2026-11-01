@@ -278,7 +278,7 @@
       "imageBlur": "Bildunschärfe",
       "panelOpacity": "Panel-Deckkraft",
       "panelOpacityHint": "Wie deckend Seitenleiste, Panels und Tab-Leisten sind. Niedriger lässt mehr vom Bild durchscheinen.",
-      "errorTooLarge": "Bild ist zu groß (max. 16 MB).",
+      "errorTooLarge": "Bild ist zu groß (max. 64 MB).",
       "errorUnsupportedFormat": "Nicht unterstütztes Bildformat. Wähle ein PNG, JPEG, WebP oder GIF.",
       "errorUploadFailed": "Hintergrundbild konnte nicht festgelegt werden.",
       "market": {
@@ -1630,7 +1630,9 @@
       "disableNonessentialTrafficAria": "Telemetrie oder überflüssige Netzwerkanfragen von Claude Code deaktivieren",
       "gatewayDiscovery": "Claude die Claude-Modelle des Gateways auflisten lassen",
       "gatewayDiscoveryAria": "Claude Code die Claude-Modelle des Gateways auflisten lassen",
-      "gatewayDiscoveryHint": "Claude fragt die API-URL selbst nach Modellen und behält nur IDs, die „claude“ oder „anthropic“ enthalten; sie erscheinen ab der nächsten Sitzung."
+      "gatewayDiscoveryHint": "Claude fragt die API-URL selbst nach Modellen und behält nur IDs, die „claude“ oder „anthropic“ enthalten; sie erscheinen ab der nächsten Sitzung.",
+      "thinkingSummaries": "Zusammenfassungen von Claudes Denken anzeigen",
+      "thinkingSummariesHint": "Claude Code zeigt standardmäßig nur die Notizen, die Claude zwischen Tool-Aufrufen schreibt. Eingeschaltet erscheint zusätzlich eine Zusammenfassung seines Denkens. Das kostet keine zusätzlichen Tokens und erfordert claude-agent-acp 0.99.0 oder neuer."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",
@@ -4327,6 +4329,7 @@
         "cardResultPending": "Ergebnis steht noch aus"
       },
       "asyncTasks": {
+        "title": "Hintergrundaufgaben",
         "openOutput": "Ausgabe",
         "stop": "Stoppen",
         "tokens": "{count} Tokens",
@@ -4710,7 +4713,7 @@
     "agentTypeRequired": "Agententyp ist erforderlich.",
     "agentTypeImmutableHint": "Der Agententyp kann nach der Erstellung nicht mehr geändert werden.",
     "model": "Modell",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Hauptmodell",
     "claudeReasoningModel": "Reasoning-Modell (Thinking)",
