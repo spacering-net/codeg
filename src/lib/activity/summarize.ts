@@ -147,6 +147,7 @@ export function summarizeActivity(steps: ActivityStep[]): ActivitySummary {
 
     switch (tool.kind) {
       case "compaction":
+      case "handoff":
       case "todo":
       case "delegation-status":
       case "shell-session":

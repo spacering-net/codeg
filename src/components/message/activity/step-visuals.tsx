@@ -114,6 +114,8 @@ export function toolIcon(tool: ToolDescriptor): ActivityIcon {
       return ClipboardListIcon
     case "compaction":
       return ArchiveIcon
+    case "handoff":
+      return UsersIcon
     case "completion":
       return CircleCheckIcon
     case "generic":

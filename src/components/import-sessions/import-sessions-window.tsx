@@ -423,6 +423,9 @@ export function ImportSessionsWindow({
           selections.push({
             agentType: s.agent_type,
             externalId: s.external_id,
+            ...(s.agent_account_id
+              ? { agentAccountId: s.agent_account_id }
+              : {}),
           })
         }
       }

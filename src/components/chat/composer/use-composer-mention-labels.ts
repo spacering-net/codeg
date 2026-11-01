@@ -26,8 +26,10 @@ export interface ComposerMentionLabels {
  */
 export function useComposerMentionLabels(): ComposerMentionLabels {
   const t = useTranslations("Folder.chat.messageInput")
+  const tAccounts = useTranslations("AgentAccounts")
   const groupLabels = useMemo<ReferenceGroupLabels>(
     () => ({
+      defaultAccount: tAccounts("default"),
       file: t("mentionGroupFile"),
       agent: t("mentionGroupAgent"),
       assistant: t("mentionGroupAssistant"),
@@ -35,7 +37,7 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
       commit: t("mentionGroupCommit"),
       skill: t("mentionGroupSkill"),
     }),
-    [t]
+    [t, tAccounts]
   )
   const uiLabels = useMemo<MentionUiLabels>(
     () => ({

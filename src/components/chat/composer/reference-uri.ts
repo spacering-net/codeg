@@ -7,7 +7,9 @@ import type { ReferenceAttrs } from "./types"
 // (from-prompt-blocks.ts) and transcript badge rendering
 // (ai-elements/markdown-link.tsx). Mirrors the schemes the adapters emit
 // (suggestion/adapters.ts) and the node's allow-list (nodes/reference-node.ts).
-const AGENT_URI = /^codeg:\/\/agent\/(.+)$/i
+const AGENT_URI =
+  /^codeg:\/\/agent\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})(?:\?account=(default|[A-Za-z0-9][A-Za-z0-9._-]{0,127}))?$/i
+
 // Assistant ids are positive integers, never zero-padded — the shape the
 // backend's routing scan (`agent_mentions.rs`) accepts, and the adapter writes.
 const ASSISTANT_URI = /^codeg:\/\/assistant\/([1-9]\d{0,9})$/i
@@ -98,14 +100,18 @@ export function parseCodegReferenceUri(
   const agent = uri.match(AGENT_URI)
   if (agent) {
     const type = agent[1]
+    const accountId = agent[2]
     return {
       refType: "agent",
       // The transcript link text is `@name`; strip a single leading `@` so the
       // restored badge reads `name`, matching a live-inserted agent badge.
-      id: type,
+      id: accountId ? `${type}?account=${accountId}` : type,
       label: (label || type).replace(/^@/, "") || type,
       uri,
-      meta: { agentType: type as AgentType },
+      meta: {
+        agentType: type as AgentType,
+        ...(accountId ? { agentAccountId: accountId } : {}),
+      },
     }
   }
 

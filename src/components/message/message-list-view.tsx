@@ -27,6 +27,8 @@ import {
   contextCompactionSummary,
   isContextCompactionMeta,
 } from "@/lib/context-compaction"
+import { AgentHandoffCard } from "./agent-handoff-card"
+import { isAgentHandoffMeta } from "@/lib/agent-handoff"
 import {
   createMessageTurnAdapter,
   groupGoalRuns,
@@ -290,6 +292,15 @@ export type ThreadRenderItem =
       /** The compaction call's id — the event's own name wherever the live
        *  and history channels agree on one (see `dedupeCompactionItems`). */
       callId?: string
+    }
+  | {
+      // The seam where a conversation was handed to a different agent
+      // (`_meta["codeg.handoff"]`, see `acp::handoff`). Same treatment as the
+      // compaction divider: hoisted out of the assistant run so it renders
+      // BETWEEN the previous agent's last reply and the new agent's first.
+      key: string
+      kind: "handoff"
+      meta: Record<string, unknown> | null
     }
 
 /**
@@ -920,6 +931,27 @@ export function dedupeCompactionItems(
     return !repeat
   })
   return dropped ? kept : items
+}
+
+/**
+ * `compactionOnlyMeta`'s twin for the agent-handoff divider: the `_meta` of a
+ * group whose only meaningful content is one tool-call tagged
+ * `codeg.handoff`, else `null`. Exported for the timeline tests.
+ */
+export function handoffOnlyMeta(
+  group: ResolvedMessageGroup
+): Record<string, unknown> | null {
+  if (group.role !== "assistant") return null
+  if (group.resources.length > 0 || group.images.length > 0) return null
+  const meaningful = group.parts.filter(
+    (p) => !(p.type === "text" && p.text.trim().length === 0)
+  )
+  if (meaningful.length !== 1) return null
+  const only = meaningful[0]
+  if (only.type !== "tool-call" || !isAgentHandoffMeta(only.meta)) {
+    return null
+  }
+  return only.meta ?? null
 }
 
 /**
@@ -1607,6 +1639,10 @@ export function MessageListView({
           callId: compaction.callId,
         }
       }
+      const handoffMeta = handoffOnlyMeta(group)
+      if (handoffMeta !== null) {
+        return { key, kind: "handoff" as const, meta: handoffMeta }
+      }
       return {
         key,
         kind: "turn" as const,
@@ -1804,6 +1840,12 @@ export function MessageListView({
                 meta={item.meta}
                 summary={item.summary}
               />
+            </div>
+          )
+        case "handoff":
+          return (
+            <div className="px-1 py-2">
+              <AgentHandoffCard meta={item.meta} />
             </div>
           )
         default:

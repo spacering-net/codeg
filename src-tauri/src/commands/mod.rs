@@ -48,6 +48,7 @@ pub mod folder_commands;
 pub mod folder_links;
 pub mod folders;
 pub mod forge;
+pub mod handoff;
 /// The `ui-render` skill and the agents it is enabled for (Skill Packs > UI).
 pub mod generative_ui;
 /// Folder commands set to run on the desktop's own machine ("Run on this
@@ -75,6 +76,7 @@ pub mod remote_proxy;
 pub mod remote_workspace;
 pub mod science;
 pub mod session_info;
+pub mod subscription_quota;
 pub mod system_settings;
 pub mod terminal;
 pub mod token_usage;
@@ -86,3 +88,5 @@ pub mod work_task;
 pub mod workspace_state;
 #[cfg(feature = "tauri-runtime")]
 pub mod workspace_windows;
+pub mod agent_accounts;
+pub mod account_switch;

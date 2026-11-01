@@ -1380,22 +1380,30 @@ function recomputeTabs() {
   } else {
     const conversationMap = new Map<string, (typeof conversations)[number]>()
     for (const c of conversations) {
-      conversationMap.set(`${c.folder_id}-${c.agent_type}-${c.id}`, c)
+      conversationMap.set(`${c.folder_id}-${c.id}`, c)
     }
     const prevById = prev.length ? new Map(prev.map((d) => [d.id, d])) : null
     next = rawTabs.map((tab) => {
       if (tab.conversationId != null) {
         const conv =
-          conversationMap.get(
-            `${tab.folderId}-${tab.agentType}-${tab.conversationId}`
-          ) ?? childSummaries.get(tab.conversationId)
+          conversationMap.get(`${tab.folderId}-${tab.conversationId}`) ??
+          childSummaries.get(tab.conversationId)
         if (conv) {
           const newTitle =
             formatConversationTitle(conv.title) ||
             runtime.labels.untitledConversation
           const newStatus = conv.status as ConversationStatus | undefined
-          if (tab.title !== newTitle || tab.status !== newStatus) {
-            const derived = { ...tab, title: newTitle, status: newStatus }
+          if (
+            tab.title !== newTitle ||
+            tab.status !== newStatus ||
+            tab.agentType !== conv.agent_type
+          ) {
+            const derived = {
+              ...tab,
+              title: newTitle,
+              status: newStatus,
+              agentType: conv.agent_type,
+            }
             const prevItem = prevById?.get(tab.id)
             return prevItem && sameDerivedTab(prevItem, derived)
               ? prevItem
@@ -1416,7 +1424,19 @@ function recomputeTabs() {
     applyGroupInvariants()
     return
   }
-  useTabStore.setState({ tabs: next })
+  const byId = new Map(next.map((tab) => [tab.id, tab]))
+  const rebound = rawTabs.map((tab) => {
+    const derived = byId.get(tab.id)
+    return derived && derived.agentType !== tab.agentType
+      ? { ...tab, agentType: derived.agentType }
+      : tab
+  })
+  useTabStore.setState({
+    tabs: next,
+    ...(rebound.some((tab, i) => tab !== rawTabs[i])
+      ? { rawTabs: rebound }
+      : {}),
+  })
   applyGroupInvariants()
 }
 

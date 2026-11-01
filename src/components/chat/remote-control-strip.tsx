@@ -77,7 +77,7 @@ export function RemoteControlStrip({
   return (
     <div
       role="status"
-      className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5 text-xs"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-muted/30 px-4 py-1.5 text-xs"
     >
       <Smartphone
         aria-hidden="true"
@@ -87,18 +87,18 @@ export function RemoteControlStrip({
       {url ? (
         <button
           type="button"
-          className="min-w-0 truncate text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="min-h-11 min-w-0 flex-1 basis-32 truncate text-muted-foreground underline-offset-2 hover:text-foreground hover:underline sm:min-h-0"
           title={t("open")}
           onClick={handleOpen}
         >
           {url}
         </button>
       ) : (
-        <span className="min-w-0 truncate text-muted-foreground/70">
+        <span className="min-w-0 flex-1 basis-32 truncate text-muted-foreground/70">
           {t("noUrl")}
         </span>
       )}
-      <span className="ms-auto flex shrink-0 items-center gap-1">
+      <span className="ms-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
         {url && (
           <Popover>
             <PopoverTrigger asChild>
@@ -106,7 +106,7 @@ export function RemoteControlStrip({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-6 gap-1 px-2 text-xs"
+                className="h-11 gap-1 px-2 text-xs sm:h-6"
               >
                 <QrCode aria-hidden="true" className="size-3" />
                 {t("qr")}
@@ -132,7 +132,7 @@ export function RemoteControlStrip({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-6 gap-1 px-2 text-xs"
+            className="h-11 gap-1 px-2 text-xs sm:h-6"
             onClick={() => void handleCopy()}
           >
             {copied ? (
@@ -152,7 +152,7 @@ export function RemoteControlStrip({
               variant="ghost"
               size="sm"
               disabled={!canTurnOff}
-              className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+              className="h-11 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive sm:h-6"
               onClick={onTurnOff}
             >
               <Power aria-hidden="true" className="size-3" />

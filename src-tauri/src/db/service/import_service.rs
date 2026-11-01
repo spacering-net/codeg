@@ -46,6 +46,179 @@ fn build_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
     build_agent_parser(agent_type, env)
 }
 
+pub(crate) async fn collect_account_summaries(
+    conn: &DatabaseConnection,
+    id: &str,
+) -> Result<Vec<(AgentType, ConversationSummary)>, DbError> {
+    let account = super::agent_account_service::get(conn, id).await?;
+    let agent = AgentType::from_wire(&account.agent_type)
+        .ok_or_else(|| DbError::Validation("Unknown account agent".into()))?;
+    super::agent_account_service::resolve(conn, agent, id).await?;
+    let home = std::path::PathBuf::from(account.home_dir);
+    tokio::task::spawn_blocking(move || {
+        crate::parsers::build_account_parser(agent, Some(&home), &crate::parsers::AgentEnv::inherited())?.list_conversations()
+    }).await.map_err(|e| DbError::Validation(e.to_string()))?
+        .map(|sessions| sessions.into_iter().filter(|s| s.parent_id.is_none()).map(|s| (agent, s)).collect())
+        .map_err(|e| DbError::Validation(e.to_string()))
+}
+
+/// The Claude transcript directory the Default account's sessions are read
+/// from: the one `ClaudeParser::new()` lists.
+pub(crate) async fn default_claude_projects(conn: &DatabaseConnection) -> std::path::PathBuf {
+    let env = agent_setting_service::load_agent_env(conn, AgentType::ClaudeCode).await;
+    crate::parsers::claude::resolve_claude_config_dir_for_env(&env).join("projects")
+}
+
+/// Claude sessions found in `scope` (an account, `None` for Default) that are
+/// only an older copy of a conversation codeg keeps under another account.
+///
+/// An account switch copies the session into the target account and leaves
+/// the source's copy in place. Everything in that copy is also in the
+/// conversation's current one, so importing it adds a stale duplicate, and
+/// its row in the source account then blocks switching the conversation back.
+/// A copy holding anything the current one lacks stays importable, as does
+/// any session id two accounts merely share. Sessions with a row of their own
+/// in `scope` are left to the usual reconciliation.
+pub(crate) async fn superseded_claude_copies(
+    conn: &DatabaseConnection,
+    scope: Option<&str>,
+    summaries: &[(AgentType, ConversationSummary)],
+    default_projects: &std::path::Path,
+) -> Result<std::collections::HashSet<String>, DbError> {
+    use std::collections::{HashMap, HashSet};
+    let found: HashSet<&str> = summaries
+        .iter()
+        .filter(|(agent, _)| *agent == AgentType::ClaudeCode)
+        .map(|(_, summary)| summary.id.as_str())
+        .collect();
+    if found.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let rows = conversation::Entity::find()
+        .filter(conversation::Column::AgentType.eq(agent_type_db_str(&AgentType::ClaudeCode)))
+        .filter(conversation::Column::ExternalId.is_not_null())
+        .all(conn)
+        .await?;
+    let mut own = HashSet::new();
+    // Session id → the other scopes holding a live conversation for it.
+    let mut held: HashMap<String, Vec<Option<String>>> = HashMap::new();
+    for row in rows {
+        let Some(sid) = row.external_id.filter(|sid| found.contains(sid.as_str())) else {
+            continue;
+        };
+        if row.agent_account_id.as_deref() == scope {
+            own.insert(sid);
+        } else if row.deleted_at.is_none() {
+            held.entry(sid).or_default().push(row.agent_account_id);
+        }
+    }
+    held.retain(|sid, _| !own.contains(sid));
+    if held.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut dirs: HashMap<Option<String>, Option<std::path::PathBuf>> = HashMap::new();
+    for owner in std::iter::once(scope.map(str::to_owned)).chain(held.values().flatten().cloned()) {
+        if dirs.contains_key(&owner) {
+            continue;
+        }
+        let dir = match owner.as_deref() {
+            None => Some(default_projects.to_path_buf()),
+            Some(id) => super::agent_account_service::get(conn, id)
+                .await
+                .ok()
+                .and_then(|account| {
+                    crate::acp::agent_accounts::layout(AgentType::ClaudeCode)
+                        .map(|layout| layout.transcript_dir(std::path::Path::new(&account.home_dir)))
+                }),
+        };
+        dirs.insert(owner, dir);
+    }
+    let Some(ours) = dirs.get(&scope.map(str::to_owned)).cloned().flatten() else {
+        return Ok(HashSet::new());
+    };
+    let checks: Vec<(String, Vec<std::path::PathBuf>)> = held
+        .into_iter()
+        .map(|(sid, owners)| {
+            let theirs = owners
+                .iter()
+                .filter_map(|owner| dirs.get(owner).cloned().flatten())
+                .collect();
+            (sid, theirs)
+        })
+        .collect();
+    tokio::task::spawn_blocking(move || {
+        checks
+            .into_iter()
+            .filter(|(sid, theirs)| {
+                theirs
+                    .iter()
+                    .any(|projects| claude_copy_is_covered(&ours, projects, sid))
+            })
+            .map(|(sid, _)| sid)
+            .collect()
+    })
+    .await
+    .map_err(|e| DbError::Validation(e.to_string()))
+}
+
+/// Whether all of `sid` in `ours` is also in `theirs` (two Claude `projects`
+/// folders), by the switch's own test for an older copy it may replace
+/// (`account_transfer`): the transcript a byte prefix, and its sidecar folder
+/// (sub-agent transcripts, tool results) and file-history each an older tree.
+/// Anything ambiguous or unreadable counts as not covered, which leaves the
+/// session importable.
+fn claude_copy_is_covered(ours: &std::path::Path, theirs: &std::path::Path, sid: &str) -> bool {
+    use crate::acp::account_transfer::{is_prefix, tree_is_older};
+    let (Some(copy), Some(current)) = (unique_session_file(ours, sid), unique_session_file(theirs, sid))
+    else {
+        return false;
+    };
+    let (Some(our_home), Some(their_home)) = (ours.parent(), theirs.parent()) else {
+        return false;
+    };
+    if !is_prefix(&copy, &current).unwrap_or(false) {
+        return false;
+    }
+    [
+        (copy.with_file_name(sid), current.with_file_name(sid)),
+        (
+            our_home.join("file-history").join(sid),
+            their_home.join("file-history").join(sid),
+        ),
+    ]
+    .iter()
+    .all(|(mine, other)| match mine.symlink_metadata() {
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        Ok(_) => tree_is_older(mine, other).unwrap_or(false),
+    })
+}
+
+/// `<sid>.jsonl` when exactly one project folder under `projects` holds it.
+/// Several copies make it unclear which one the conversation came from, and a
+/// folder that cannot be read might hold another.
+fn unique_session_file(projects: &std::path::Path, sid: &str) -> Option<std::path::PathBuf> {
+    // Also rejects an id that is not a plain file name.
+    crate::parsers::claude::find_session_file_in(projects, sid)?;
+    let mut found = None;
+    for entry in std::fs::read_dir(projects).ok()? {
+        let project = entry.ok()?.path();
+        if !project.is_dir() {
+            continue;
+        }
+        let candidate = project.join(format!("{sid}.jsonl"));
+        match candidate.symlink_metadata() {
+            Ok(_) => {
+                if found.replace(candidate).is_some() {
+                    return None;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    found
+}
+
 /// List every local agent's sessions — one `spawn_blocking` per parser so the
 /// filesystem walks run concurrently (each closure captures the Copy
 /// `AgentType` and that agent's launch environment from `envs`, and constructs
@@ -204,11 +377,23 @@ pub(crate) async fn import_summaries(
 /// their (already-created) folder unbroadcast, and imports are idempotent so a
 /// re-run finishes the rest — rolling good rows back would be worse. Callers
 /// surface the `failed` count in their own structured result.
+#[cfg(test)]
 pub(crate) async fn import_summaries_resilient(
     conn: &DatabaseConnection,
     folder_id: i32,
     items: &[(AgentType, ConversationSummary)],
     deleted: DeletedPolicy,
+    counted_elsewhere: &HashSet<String>,
+) -> (ImportResult, Vec<i32>, u32) {
+    import_summaries_resilient_for_account(conn, folder_id, items, deleted, None, counted_elsewhere).await
+}
+
+pub(crate) async fn import_summaries_resilient_for_account(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    items: &[(AgentType, ConversationSummary)],
+    deleted: DeletedPolicy,
+    account_id: Option<&str>,
     counted_elsewhere: &HashSet<String>,
 ) -> (ImportResult, Vec<i32>, u32) {
     let mut imported = 0u32;
@@ -219,16 +404,7 @@ pub(crate) async fn import_summaries_resilient(
     let mut updated_ids: Vec<i32> = Vec::new();
 
     for (agent_type, summary) in items {
-        match import_one(
-            conn,
-            folder_id,
-            agent_type,
-            summary,
-            deleted,
-            counted_elsewhere,
-        )
-        .await
-        {
+        match import_one_for_account(conn, folder_id, agent_type, summary, deleted, account_id, counted_elsewhere).await {
             Ok(ImportOutcome::Imported) => imported += 1,
             Ok(ImportOutcome::Updated(id)) => {
                 updated += 1;
@@ -269,7 +445,7 @@ pub async fn import_local_conversations(
 ) -> Result<(ImportResult, Vec<i32>), DbError> {
     let envs = agent_setting_service::load_agent_envs(conn).await;
     let summaries = collect_local_summaries(&envs, |_, _, _, _| {}).await;
-    let matched: Vec<(AgentType, ConversationSummary)> = summaries
+    let mut matched: Vec<(AgentType, ConversationSummary)> = summaries
         .into_iter()
         .filter(|(_, c)| {
             c.folder_path
@@ -278,6 +454,9 @@ pub async fn import_local_conversations(
                 .unwrap_or(false)
         })
         .collect();
+    let superseded =
+        superseded_claude_copies(conn, None, &matched, &default_claude_projects(conn).await).await?;
+    matched.retain(|(agent, c)| *agent != AgentType::ClaudeCode || !superseded.contains(&c.id));
 
     let counted_elsewhere =
         claude_sessions_counted_elsewhere(conn, &crate::paths::codeg_acp_transcripts_root())
@@ -389,7 +568,45 @@ pub(crate) async fn claude_sessions_counted_elsewhere(
         .filter(conversation::Column::DeletedAt.is_null())
         .all(conn)
         .await?;
-    Ok(claude_sessions_counted_in(&rows, transcripts_root))
+    let mut counted = claude_sessions_counted_in(&rows, transcripts_root);
+    // A handoff changes the conversation's current agent, not ownership of
+    // the saved usage. Keep its earlier custom-Claude segments under the
+    // same upstream import rule while that logical conversation is live.
+    // Select identities only; the saved message bodies are not needed here.
+    use crate::db::entities::conversation_handoff;
+    use sea_orm::{QuerySelect, QueryTrait};
+    let live = conversation::Entity::find()
+        .select_only()
+        .column(conversation::Column::Id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .into_query();
+    let sources: Vec<(String, Option<String>)> = conversation_handoff::Entity::find()
+        .select_only()
+        .columns([
+            conversation_handoff::Column::FromAgentType,
+            conversation_handoff::Column::FromExternalId,
+        ])
+        .filter(conversation_handoff::Column::ConversationId.in_subquery(live))
+        .filter(conversation_handoff::Column::HistoryJson.is_not_null())
+        .filter(conversation_handoff::Column::FromAgentType.starts_with(
+            crate::models::agent::CUSTOM_AGENT_WIRE_PREFIX,
+        ))
+        .filter(conversation_handoff::Column::FromExternalId.is_not_null())
+        .into_tuple()
+        .all(conn)
+        .await?;
+    for (source, sid) in sources {
+        let (Some(agent), Some(sid)) = (claude_adapter_agent(&source), sid) else {
+            continue;
+        };
+        counted.extend(crate::acp_transcript::continuation_ancestors_in(
+            transcripts_root,
+            crate::acp::registry::registry_id_for(agent),
+            &sid,
+        ));
+        counted.insert(sid);
+    }
+    Ok(counted)
 }
 
 /// Reconcile ONE already-imported conversation against a fresh parse of its
@@ -528,13 +745,34 @@ async fn import_one(
     deleted: DeletedPolicy,
     counted_elsewhere: &HashSet<String>,
 ) -> Result<ImportOutcome, DbError> {
+    import_one_for_account(conn, folder_id, agent_type, summary, deleted, None, counted_elsewhere).await
+}
+
+async fn import_one_for_account(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: &AgentType,
+    summary: &ConversationSummary,
+    deleted: DeletedPolicy,
+    account_id: Option<&str>,
+    counted_elsewhere: &HashSet<String>,
+) -> Result<ImportOutcome, DbError> {
+    if let Some(id) = account_id {
+        super::agent_account_service::resolve(conn, *agent_type, id).await?;
+    }
     let at_str = agent_type_db_str(agent_type);
 
     let exists = conversation::Entity::find()
         .filter(conversation::Column::ExternalId.eq(&summary.id))
         .filter(conversation::Column::AgentType.eq(&at_str))
+        .filter(conversation_service::account_condition(account_id))
         .one(conn)
         .await?;
+
+    if exists.is_none() && super::handoff_service::archived_sources(conn, account_id, &[(*agent_type, summary.clone())]).await?
+        .contains(&(*agent_type, summary.id.clone())) {
+        return Ok(ImportOutcome::Skipped);
+    }
 
     // A session another agent's live conversation already counts is not added
     // under this agent — neither as a new row nor by bringing back a deleted
@@ -627,6 +865,7 @@ async fn import_one(
         title: Set(summary.title.clone()),
         title_locked: Set(false),
         agent_type: Set(at_str),
+        agent_account_id: Set(account_id.map(str::to_owned)),
         // Imported sessions land as `PendingReview` ("待审查"), not `Completed`:
         // they are surfaced for the user to review and stay visible even when
         // the sidebar's "show completed" filter is off (now its default).
@@ -1109,6 +1348,7 @@ mod tests {
         conversation::ActiveModel {
             id: NotSet,
             folder_id: Set(folder),
+            agent_account_id: Set(None),
             title: Set(Some("child".to_string())),
             title_locked: Set(false),
             agent_type: Set(agent_type_db_str(&at)),
@@ -1406,6 +1646,7 @@ mod tests {
         conversation::ActiveModel {
             id: NotSet,
             folder_id: Set(folder),
+            agent_account_id: Set(None),
             title: Set(Some("child original".to_string())),
             title_locked: Set(false),
             agent_type: Set(at_str),
@@ -1453,6 +1694,102 @@ mod tests {
         );
     }
 
+    /// A switch leaves the account it moved a conversation out of an older
+    /// copy of the session. Only a copy whose transcript, sidecar folder and
+    /// file-history all are in the conversation codeg still holds under another
+    /// account counts as superseded.
+    #[tokio::test]
+    async fn only_an_older_copy_of_a_conversation_held_elsewhere_is_superseded() {
+        use super::super::agent_account_service;
+        use crate::db::entities::conversation::ConversationKind;
+        use std::path::Path;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let folder = seed_folder(&db, "/tmp/codeg-import").await;
+        let default_home = data.path().join("default");
+        let default_projects = default_home.join("projects");
+        let account =
+            agent_account_service::create(&db.conn, data.path(), AgentType::ClaudeCode, "Work", None)
+                .await
+                .unwrap();
+        let account_home = Path::new(&account.home_dir).to_path_buf();
+        let write = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let transcript = |home: &Path, text: &str| write(&home.join("projects/project/moved.jsonl"), text);
+        // Switched from Default to Work, then continued there.
+        let row = conversation_service::create_inner(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            None,
+            None,
+            None,
+            ConversationKind::Regular,
+            Some(account.id.clone()),
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, row.id, "moved", &[])
+            .await
+            .unwrap();
+        transcript(&default_home, "first\n");
+        transcript(&account_home, "first\nsecond\n");
+        let found = vec![(AgentType::ClaudeCode, summary("moved", None))];
+        let superseded = |scope: Option<String>| {
+            let (conn, found, default_projects) = (&db.conn, &found, &default_projects);
+            async move {
+                !superseded_claude_copies(conn, scope.as_deref(), found, default_projects)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            }
+        };
+
+        assert!(superseded(None).await);
+        // The account that holds the conversation reconciles its own row.
+        assert!(!superseded(Some(account.id.clone())).await);
+        // Another agent's session with the same id is not a Claude copy.
+        let codex = vec![(AgentType::Codex, summary("moved", None))];
+        assert!(superseded_claude_copies(&db.conn, None, &codex, &default_projects)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // A transcript with turns of its own is a conversation of its own.
+        transcript(&default_home, "first\nmine\n");
+        assert!(!superseded(None).await);
+        transcript(&default_home, "first\n");
+
+        // Sub-agent transcripts and tool results live beside the transcript.
+        let sidecar = |home: &Path, name: &str| home.join("projects/project/moved").join(name);
+        write(&sidecar(&default_home, "subagents/agent-a.jsonl"), "task\n");
+        assert!(!superseded(None).await, "a sidecar file the conversation lacks");
+        write(&sidecar(&account_home, "subagents/agent-a.jsonl"), "task\nmore\n");
+        assert!(superseded(None).await);
+        write(&sidecar(&default_home, "tool-results/r1.txt"), "only here");
+        assert!(!superseded(None).await, "a tool result the conversation lacks");
+        std::fs::remove_dir_all(sidecar(&default_home, "tool-results")).unwrap();
+
+        // So does file-history, the originals rewind restores.
+        let history = |home: &Path| home.join("file-history/moved/snapshot@v1");
+        write(&history(&default_home), "original");
+        assert!(!superseded(None).await, "a file version the conversation lacks");
+        write(&history(&account_home), "original");
+        assert!(superseded(None).await);
+
+        // Two copies of the id in Default: which one moved is unclear.
+        write(&default_home.join("projects/elsewhere/moved.jsonl"), "first\n");
+        assert!(!superseded(None).await);
+        std::fs::remove_dir_all(default_home.join("projects/elsewhere")).unwrap();
+        assert!(superseded(None).await);
+
+        // A trashed conversation hides nothing.
+        conversation_service::soft_delete(&db.conn, row.id).await.unwrap();
+        assert!(!superseded(None).await);
+    }
+
     /// A custom agent on `package`, saved the way the add form saves one.
     fn custom_def(id: &str, package: &str) -> crate::acp::custom_registry::CustomAgentDef {
         use crate::acp::custom_registry::{
@@ -1494,6 +1831,50 @@ mod tests {
             .await
             .expect("bind");
         row.id
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn handoff_keeps_custom_claude_source_and_continuation_ids_counted() {
+        use crate::acp::custom_registry::{hydrate, hydrate_test_guard};
+        use crate::db::service::handoff_service::{self, NewHandoff};
+        let _guard = hydrate_test_guard();
+        hydrate(&[
+            custom_def("handoff-counted", "@agentclientprotocol/claude-agent-acp"),
+            custom_def("handoff-unknown", "@example/unknown-adapter"),
+        ]);
+        let db = fresh_in_memory_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let cwd = "/tmp/handoff-counted-import";
+        let folder = seed_folder(&db, cwd).await;
+        let owner = bound_row(&db.conn, folder, AgentType::Codex, "current-codex").await;
+        let other = bound_row(&db.conn, folder, AgentType::Codex, "other-codex").await;
+        let legacy = bound_row(&db.conn, folder, AgentType::Codex, "legacy-codex").await;
+        let official = AgentType::custom("handoff-counted").unwrap();
+        let header = crate::acp_transcript::TranscriptHeader::new(
+            &official.as_wire(), "saved-source", cwd, 0,
+        ).continuing("saved-ancestor");
+        crate::acp_transcript::record_header_in(root.path(),
+            crate::acp::registry::registry_id_for(official), &header).await.unwrap();
+        for (conversation_id, source, sid, target_sid, saved) in [
+            (owner, official, "saved-source", "current-codex", true),
+            (other, AgentType::custom("handoff-unknown").unwrap(), "unknown-source", "other-codex", true),
+            (legacy, official, "unretained-source", "legacy-codex", false),
+        ] {
+            handoff_service::record(&db.conn, NewHandoff {
+                conversation_id, from_agent_type: source, from_external_id: Some(sid.into()),
+                to_agent_type: AgentType::Codex, to_external_id: target_sid.into(),
+                path: if saved { "context" } else { "summary" }, carried: false, user_turns_before: 1,
+                note: None, briefing: None, truncated: false,
+                from_account_id: None, to_account_id: None, history_json: saved.then(|| "[]".into()),
+                context_id: None, context_pending: false, source_stats_json: None, source_model: None,
+            }).await.unwrap();
+        }
+        let counted = claude_sessions_counted_elsewhere(&db.conn, root.path()).await.unwrap();
+        assert_eq!(counted, HashSet::from(["saved-source".into(), "saved-ancestor".into()]));
+        conversation_service::soft_delete(&db.conn, owner).await.unwrap();
+        assert!(claude_sessions_counted_elsewhere(&db.conn, root.path()).await.unwrap().is_empty());
+        hydrate(&[]);
     }
 
     async fn claude_rows(conn: &DatabaseConnection, ext: &str) -> Vec<conversation::Model> {

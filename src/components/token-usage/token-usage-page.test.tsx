@@ -29,6 +29,10 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/hooks/use-acp-agents", () => ({
   useAcpAgents: () => ({ agents: h.agents, fresh: true, refresh: vi.fn() }),
 }))
+vi.mock("@/components/token-usage/subscription-quota-panel", () => ({
+  SubscriptionQuotaPanel: () => null,
+}))
+
 vi.mock("@/lib/platform", () => ({ subscribe: async () => () => {} }))
 vi.mock("./charts", async () => ({
   ...(await vi.importActual<typeof import("./charts")>("./charts")),
