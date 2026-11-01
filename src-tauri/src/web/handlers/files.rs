@@ -206,8 +206,9 @@ pub async fn create_file_tree_entry(
 
 /// Hard cap on a single uploaded attachment.
 ///
-/// This is the user-facing attachment ceiling for web / remote-workspace mode
-/// (oversize is rejected with a visible toast), sized to match the desktop
+/// This is the user-facing attachment ceiling for web / remote-workspace mode,
+/// and for a desktop paste with no file behind it (`store_attachment_bytes`);
+/// oversize is rejected with a visible toast. It is sized to match the desktop
 /// drag-drop image limit (`DRAG_DROP_IMAGE_MAX_BYTES`, 20 MB) so the same
 /// screenshot attaches in every mode. Uploaded images are re-inlined into the
 /// prompt server-side (`acp::prompt_hydration`), so this also bounds that
@@ -776,13 +777,7 @@ pub async fn upload_attachment(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<UploadAttachmentResult>, AppCommandError> {
-    let uploads_root = codeg_uploads_root();
-    // Ensure root exists before canonicalize/ensure_path_inside can compare.
-    tokio::fs::create_dir_all(&uploads_root)
-        .await
-        .map_err(|e| {
-            AppCommandError::io_error("Failed to create uploads root").with_detail(e.to_string())
-        })?;
+    let uploads_root = prepare_uploads_root().await?;
 
     // Quota check, before staging any bytes. The reservation is bounded by
     // the request's Content-Length (see `upload_reservation_bytes`) so a
@@ -794,34 +789,135 @@ pub async fn upload_attachment(
     // on every exit path (success, multipart error, panic) closes the
     // TOCTOU window where two concurrent uploads both saw the same
     // disk-level `used` and admitted past the cap.
-    let _quota_guard = if let Some(cap) = upload_quota_config_from_env().cap_bytes() {
-        let content_length = headers
-            .get(axum::http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok());
-        let reserve = upload_reservation_bytes(content_length);
-        let used = current_uploads_total_bytes(&uploads_root).await;
-        match try_reserve_in_flight(&UPLOAD_IN_FLIGHT_BYTES, reserve, used, cap) {
-            Ok(guard) => Some(guard),
-            Err(()) => {
-                let mut params = BTreeMap::new();
-                params.insert("used".to_string(), used.to_string());
-                params.insert("limit".to_string(), cap.to_string());
-                return Err(
-                    AppCommandError::io_error("Upload quota exceeded for this server")
-                        .with_detail(format!("used={used} limit={cap}"))
-                        .with_i18n(UPLOAD_I18N_KEY_QUOTA_EXCEEDED, params),
-                );
-            }
-        }
-    } else {
-        None
-    };
+    let content_length = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+    let _quota_guard =
+        reserve_upload_quota(&uploads_root, upload_reservation_bytes(content_length)).await?;
 
     // Pre-stage the file under <uploads_root>/.tmp/<uuid>.part so we can
     // stream bytes to disk without knowing the final bucket up front (the
     // session_id form field may arrive after the file). On success we rename
     // into place; on any error we delete it.
+    let (tmp_dir, staging_name) = prepare_upload_staging(&uploads_root).await?;
+
+    // Wrap the streaming work so any early return cleans up the staged file.
+    // Cleanup goes through `upload_jail::remove_staging_best_effort` so the
+    // unlink itself can't be redirected by a swap of `.tmp` between
+    // streaming and cleanup.
+    let result = stream_and_finalize(&mut multipart, &uploads_root, &tmp_dir, &staging_name).await;
+    if result.is_err() {
+        upload_jail::remove_staging_best_effort(&tmp_dir, &staging_name).await;
+    }
+    // `_quota_guard` drops here regardless of `result`, releasing the
+    // reservation for the next admission.
+    result.map(Json)
+}
+
+/// Store an attachment whose bytes are already in memory: something pasted
+/// into the desktop composer with no file behind it. It lands exactly where
+/// and how [`upload_attachment`] puts a streamed one (same size cap, quota,
+/// staging jail, session bucket and free-name choice), so the composer links
+/// it like any other upload.
+pub async fn store_attachment_bytes(
+    file_name: &str,
+    mime_type: Option<String>,
+    session_id: Option<&str>,
+    bytes: &[u8],
+) -> Result<UploadAttachmentResult, AppCommandError> {
+    let uploads_root = prepare_uploads_root().await?;
+    store_attachment_bytes_in(&uploads_root, file_name, mime_type, session_id, bytes).await
+}
+
+/// [`store_attachment_bytes`] under an explicit, existing uploads root.
+async fn store_attachment_bytes_in(
+    uploads_root: &std::path::Path,
+    file_name: &str,
+    mime_type: Option<String>,
+    session_id: Option<&str>,
+    bytes: &[u8],
+) -> Result<UploadAttachmentResult, AppCommandError> {
+    let size = bytes.len() as u64;
+    if size > UPLOAD_MAX_BYTES {
+        return Err(upload_too_large(size));
+    }
+    // Held to the end, like `upload_attachment`'s.
+    let _quota_guard = reserve_upload_quota(uploads_root, size).await?;
+    let (tmp_dir, staging_name) = prepare_upload_staging(uploads_root).await?;
+    let session_bucket = session_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(sanitize_session_bucket);
+    let result = write_and_finalize(
+        bytes,
+        uploads_root,
+        &tmp_dir,
+        &staging_name,
+        file_name,
+        session_bucket,
+        mime_type,
+    )
+    .await;
+    if result.is_err() {
+        upload_jail::remove_staging_best_effort(&tmp_dir, &staging_name).await;
+    }
+    result
+}
+
+/// The uploads root, created when missing: the jail checks canonicalize it,
+/// which needs it on disk.
+async fn prepare_uploads_root() -> Result<std::path::PathBuf, AppCommandError> {
+    let uploads_root = codeg_uploads_root();
+    tokio::fs::create_dir_all(&uploads_root)
+        .await
+        .map_err(|e| {
+            AppCommandError::io_error("Failed to create uploads root").with_detail(e.to_string())
+        })?;
+    Ok(uploads_root)
+}
+
+/// Reserve `reserve` bytes of the `CODEG_UPLOAD_MAX_TOTAL_BYTES` quota, when
+/// one is set. The caller holds the guard until the upload has settled.
+async fn reserve_upload_quota(
+    uploads_root: &std::path::Path,
+    reserve: u64,
+) -> Result<Option<InFlightGuard<'static>>, AppCommandError> {
+    let Some(cap) = upload_quota_config_from_env().cap_bytes() else {
+        return Ok(None);
+    };
+    let used = current_uploads_total_bytes(uploads_root).await;
+    match try_reserve_in_flight(&UPLOAD_IN_FLIGHT_BYTES, reserve, used, cap) {
+        Ok(guard) => Ok(Some(guard)),
+        Err(()) => {
+            let mut params = BTreeMap::new();
+            params.insert("used".to_string(), used.to_string());
+            params.insert("limit".to_string(), cap.to_string());
+            Err(
+                AppCommandError::io_error("Upload quota exceeded for this server")
+                    .with_detail(format!("used={used} limit={cap}"))
+                    .with_i18n(UPLOAD_I18N_KEY_QUOTA_EXCEEDED, params),
+            )
+        }
+    }
+}
+
+/// The error for an attachment over [`UPLOAD_MAX_BYTES`], whichever layer
+/// notices first; they all carry the same i18n key, so the toast reads alike.
+pub(crate) fn upload_too_large(size: u64) -> AppCommandError {
+    let mut params = BTreeMap::new();
+    params.insert("size".to_string(), size.to_string());
+    params.insert("limit".to_string(), UPLOAD_MAX_BYTES.to_string());
+    AppCommandError::io_error("Upload exceeds the maximum allowed size")
+        .with_detail(format!("size={size} limit={UPLOAD_MAX_BYTES}"))
+        .with_i18n(UPLOAD_I18N_KEY_TOO_LARGE, params)
+}
+
+/// `<uploads_root>/.tmp`, created and checked to be a real directory inside
+/// the root, and a fresh staging file name in it.
+async fn prepare_upload_staging(
+    uploads_root: &std::path::Path,
+) -> Result<(std::path::PathBuf, String), AppCommandError> {
     let tmp_dir = uploads_root.join(".tmp");
     tokio::fs::create_dir_all(&tmp_dir).await.map_err(|e| {
         AppCommandError::io_error("Failed to create tmp directory").with_detail(e.to_string())
@@ -847,21 +943,46 @@ pub async fn upload_attachment(
             );
         }
     }
-    ensure_path_inside(&tmp_dir, &uploads_root).await?;
+    ensure_path_inside(&tmp_dir, uploads_root).await?;
     let staging_id = uuid::Uuid::new_v4().simple().to_string();
-    let staging_name = format!("{staging_id}.part");
+    Ok((tmp_dir, format!("{staging_id}.part")))
+}
 
-    // Wrap the streaming work so any early return cleans up the staged file.
-    // Cleanup goes through `upload_jail::remove_staging_best_effort` so the
-    // unlink itself can't be redirected by a swap of `.tmp` between
-    // streaming and cleanup.
-    let result = stream_and_finalize(&mut multipart, &uploads_root, &tmp_dir, &staging_name).await;
-    if result.is_err() {
-        upload_jail::remove_staging_best_effort(&tmp_dir, &staging_name).await;
+/// Write in-memory bytes to the staging file, then finalize them like a
+/// streamed upload. The handle is closed before the move into the bucket.
+async fn write_and_finalize(
+    bytes: &[u8],
+    uploads_root: &std::path::Path,
+    tmp_dir: &std::path::Path,
+    staging_name: &str,
+    file_name: &str,
+    session_bucket: Option<String>,
+    mime_type: Option<String>,
+) -> Result<UploadAttachmentResult, AppCommandError> {
+    {
+        let mut out = upload_jail::create_staging_file(tmp_dir, staging_name)
+            .await
+            .map_err(|e| {
+                AppCommandError::io_error("Failed to create staging file")
+                    .with_detail(e.to_string())
+            })?;
+        out.write_all(bytes).await.map_err(|e| {
+            AppCommandError::io_error("Failed to write staging file").with_detail(e.to_string())
+        })?;
+        out.flush().await.map_err(|e| {
+            AppCommandError::io_error("Failed to flush staging file").with_detail(e.to_string())
+        })?;
     }
-    // `_quota_guard` drops here regardless of `result`, releasing the
-    // reservation for the next admission.
-    result.map(Json)
+    finalize_staged_upload(
+        uploads_root,
+        tmp_dir,
+        staging_name,
+        Some(file_name),
+        session_bucket,
+        mime_type,
+        bytes.len() as u64,
+    )
+    .await
 }
 
 /// Drain the multipart body and produce the final upload result. Splits out
@@ -930,14 +1051,7 @@ async fn stream_and_finalize(
                         // or local path read), and they all surface as
                         // the same i18n key so the toast text in the UI
                         // is uniform.
-                        let mut params = BTreeMap::new();
-                        params.insert("size".to_string(), new_total.to_string());
-                        params.insert("limit".to_string(), UPLOAD_MAX_BYTES.to_string());
-                        return Err(AppCommandError::io_error(
-                            "Upload exceeds the maximum allowed size",
-                        )
-                        .with_detail(format!("size={new_total} limit={UPLOAD_MAX_BYTES}"))
-                        .with_i18n(UPLOAD_I18N_KEY_TOO_LARGE, params));
+                        return Err(upload_too_large(new_total));
                     }
                     out.write_all(&chunk).await.map_err(|e| {
                         AppCommandError::io_error("Failed to write chunk")
@@ -962,12 +1076,36 @@ async fn stream_and_finalize(
             "Missing `file` field in multipart upload",
         ));
     }
+    finalize_staged_upload(
+        uploads_root,
+        tmp_dir,
+        staging_name,
+        raw_name.as_deref(),
+        session_id,
+        mime_type,
+        written,
+    )
+    .await
+}
+
+/// Move a fully written staging file into its session bucket under a free
+/// name, and describe where it landed. Shared by every way an attachment
+/// arrives, so they are all jailed and named alike.
+async fn finalize_staged_upload(
+    uploads_root: &std::path::Path,
+    tmp_dir: &std::path::Path,
+    staging_name: &str,
+    raw_name: Option<&str>,
+    session_bucket: Option<String>,
+    mime_type: Option<String>,
+    written: u64,
+) -> Result<UploadAttachmentResult, AppCommandError> {
     if written == 0 {
         return Err(AppCommandError::io_error("Uploaded file is empty"));
     }
 
-    let safe_name = sanitize_upload_filename(raw_name.as_deref().unwrap_or("file"));
-    let bucket = session_id.unwrap_or_else(|| "anon".to_string());
+    let safe_name = sanitize_upload_filename(raw_name.unwrap_or("file"));
+    let bucket = session_bucket.unwrap_or_else(|| "anon".to_string());
     let dir = uploads_root.join(&bucket);
     tokio::fs::create_dir_all(&dir).await.map_err(|e| {
         AppCommandError::io_error("Failed to create uploads directory").with_detail(e.to_string())
@@ -1111,6 +1249,81 @@ mod tests {
             b"new"
         );
         assert!(!tmp.join("upload.part").exists());
+    }
+
+    #[tokio::test]
+    async fn stored_bytes_land_in_the_session_bucket_like_an_upload() {
+        let root = tempfile::tempdir().unwrap();
+        let first = store_attachment_bytes_in(
+            root.path(),
+            "bundle.zip",
+            Some("application/zip".to_string()),
+            Some("tab-1"),
+            b"PK\x05\x06",
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.name, "bundle.zip");
+        assert_eq!(first.size, 4);
+        assert_eq!(first.mime_type.as_deref(), Some("application/zip"));
+        assert_eq!(std::fs::read(&first.path).unwrap(), b"PK\x05\x06");
+        // The stored path drops Windows' verbatim prefix, so the expected
+        // parent drops it the same way.
+        let bucket = simplify_verbatim_path(&root.path().join("tab-1").canonicalize().unwrap());
+        assert_eq!(
+            std::path::Path::new(&first.path).parent(),
+            Some(bucket.as_path())
+        );
+
+        // The same name pasted again takes the next free one; the first stays.
+        let second =
+            store_attachment_bytes_in(root.path(), "bundle.zip", None, Some("tab-1"), b"other")
+                .await
+                .unwrap();
+        assert_eq!(second.name, "bundle (1).zip");
+        assert_eq!(std::fs::read(&first.path).unwrap(), b"PK\x05\x06");
+        assert_eq!(std::fs::read(&second.path).unwrap(), b"other");
+        // Nothing is left behind in staging.
+        let staged = std::fs::read_dir(root.path().join(".tmp")).unwrap().count();
+        assert_eq!(staged, 0);
+    }
+
+    #[tokio::test]
+    async fn stored_bytes_are_named_and_bucketed_as_safely_as_an_upload() {
+        let root = tempfile::tempdir().unwrap();
+        let stored =
+            store_attachment_bytes_in(root.path(), "../../etc/passwd", None, Some("  "), b"x")
+                .await
+                .unwrap();
+        assert_eq!(stored.name, "passwd");
+        let anon = simplify_verbatim_path(&root.path().join("anon").canonicalize().unwrap());
+        assert_eq!(
+            std::path::Path::new(&stored.path).parent(),
+            Some(anon.as_path())
+        );
+    }
+
+    #[tokio::test]
+    async fn stored_bytes_are_refused_when_empty_or_over_the_cap() {
+        let root = tempfile::tempdir().unwrap();
+        let empty = store_attachment_bytes_in(root.path(), "a.txt", None, None, b"")
+            .await
+            .unwrap_err();
+        assert_eq!(empty.message, "Uploaded file is empty");
+
+        let big = vec![0u8; UPLOAD_MAX_BYTES as usize + 1];
+        let too_large = store_attachment_bytes_in(root.path(), "big.bin", None, None, &big)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            too_large.i18n_key.as_deref(),
+            Some(UPLOAD_I18N_KEY_TOO_LARGE)
+        );
+
+        // Neither left a file anywhere under the root.
+        let staged = std::fs::read_dir(root.path().join(".tmp")).unwrap().count();
+        assert_eq!(staged, 0);
+        assert!(!root.path().join("anon").exists());
     }
 
     #[test]

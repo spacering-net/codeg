@@ -69,6 +69,36 @@ export function commandInvocationToken(name: string): string {
   return name.startsWith("$") ? name : `/${name}`
 }
 
+const NO_SKILL_COMMANDS: ReadonlySet<string> = new Set()
+
+/**
+ * The names of the advertised commands a `/` menu shows as skills, or an empty
+ * set when it should show none.
+ *
+ * claude-agent-acp (0.99.1+) marks a command as a skill in two passes. The
+ * list `session/new` sends marks only the skills whose `SKILL.md` the adapter
+ * found itself, under the cwd or the home directory. Once Claude Code's own
+ * skill list has been read (shortly after the session's first prompt starts),
+ * it sends the list again with every skill marked, the plugin and nested ones
+ * with their path and the ones bundled with the CLI (`simplify`, `loop`, …)
+ * with the kind alone. A list made before that read would show some skills
+ * marked and others not, so the marks count only in a list that has a skill
+ * without a path: only that read produces one. Until then (and in a list from
+ * a session that never prompts, such as the agent-options probe) every row
+ * keeps the one look it has always had.
+ */
+export function skillMarkedCommands(
+  commands: readonly Pick<
+    AvailableCommandInfo,
+    "name" | "skill" | "skill_path"
+  >[]
+): ReadonlySet<string> {
+  if (!commands.some((cmd) => cmd.skill && !cmd.skill_path)) {
+    return NO_SKILL_COMMANDS
+  }
+  return new Set(commands.filter((cmd) => cmd.skill).map((cmd) => cmd.name))
+}
+
 /**
  * What the agent says goes after a command (codex `/review-branch` → `branch
  * name`, claude `/mcp` → `[reconnect|enable|disable [<server>|all]]`), or

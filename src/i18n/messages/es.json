@@ -281,7 +281,7 @@
       "imageBlur": "Desenfoque de la imagen",
       "panelOpacity": "Opacidad de los paneles",
       "panelOpacityHint": "Cuán opacos son la barra lateral, los paneles y las barras de pestañas. Más bajo deja ver más la imagen.",
-      "errorTooLarge": "La imagen es demasiado grande (máx. 16 MB).",
+      "errorTooLarge": "La imagen es demasiado grande (máx. 64 MB).",
       "errorUnsupportedFormat": "Formato de imagen no admitido. Elige un PNG, JPEG, WebP o GIF.",
       "errorUploadFailed": "No se pudo establecer la imagen de fondo.",
       "market": {
@@ -1633,7 +1633,9 @@
       "disableNonessentialTrafficAria": "Desactivar la telemetría o las solicitudes de red innecesarias de Claude Code",
       "gatewayDiscovery": "Dejar que Claude liste los modelos Claude de la pasarela",
       "gatewayDiscoveryAria": "Dejar que Claude Code liste los modelos Claude de la pasarela",
-      "gatewayDiscoveryHint": "Claude pide los modelos a la URL de la API y solo conserva los ID que contienen «claude» o «anthropic»; aparecen desde la siguiente sesión."
+      "gatewayDiscoveryHint": "Claude pide los modelos a la URL de la API y solo conserva los ID que contienen «claude» o «anthropic»; aparecen desde la siguiente sesión.",
+      "thinkingSummaries": "Mostrar resúmenes del razonamiento de Claude",
+      "thinkingSummariesHint": "Claude Code solo muestra las notas que Claude escribe entre llamadas a herramientas. Al activarlo, también aparece un resumen de su razonamiento. No consume tokens adicionales y requiere claude-agent-acp 0.99.0 o posterior."
     },
     "dialogs": {
       "confirmDeleteProvider": "¿Eliminar proveedor {providerId}?",
@@ -4372,6 +4374,7 @@
         "cardResultPending": "El resultado aún no ha llegado"
       },
       "asyncTasks": {
+        "title": "Tareas en segundo plano",
         "openOutput": "Salida",
         "stop": "Detener",
         "tokens": "{count} tokens",
@@ -4755,7 +4758,7 @@
     "agentTypeRequired": "El tipo de agente es obligatorio.",
     "agentTypeImmutableHint": "El tipo de agente no se puede cambiar después de la creación.",
     "model": "Modelo",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modelo Principal",
     "claudeReasoningModel": "Modelo de Razonamiento (pensamiento)",

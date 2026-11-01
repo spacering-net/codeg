@@ -12,7 +12,7 @@ import {
   toolResult,
   toolUse,
 } from "./__fixtures__/mockup-turn"
-import { buildActivity } from "./build-activity"
+import { buildActivity, rowIdentity } from "./build-activity"
 import type { ActivityItem } from "./types"
 
 function rows(items: ActivityItem[]): string[] {
@@ -408,5 +408,42 @@ describe("buildActivity edge cases", () => {
     expect(rows(model.items)).toEqual(["command:b"])
     expect(model.summary.interrupted).toBe(2)
     expect(model.summary.failed).toBe(0)
+  })
+})
+
+describe("rowIdentity", () => {
+  it("drops the reply's anchor from the steps keyed by place", () => {
+    expect(rowIdentity("thought:h1abc:0")).toBe("thought@0")
+    expect(rowIdentity("note:toolu_01:12")).toBe("note@12")
+    expect(rowIdentity("plan:h9:3")).toBe("plan@3")
+    expect(rowIdentity("image:h9:4")).toBe("image@4")
+  })
+
+  it("keeps a key the anchor plays no part in", () => {
+    expect(rowIdentity("tool:toolu_01")).toBe("tool:toolu_01")
+    expect(rowIdentity("result:call-1:3")).toBe("result:call-1:3")
+    expect(rowIdentity("dpoll:call-2")).toBe("dpoll:call-2")
+  })
+
+  it("is the same while a short opening thought grows past the anchor's length", () => {
+    // Its anchor is hashed from what it says so far until it says enough.
+    const short = buildActivity(
+      [{ type: "reasoning", content: "Look", isStreaming: true }],
+      { isStreaming: true, keepAnswer: true }
+    )
+    const longer = buildActivity(
+      [
+        {
+          type: "reasoning",
+          content: "Looking at the repository layout before anything else",
+          isStreaming: true,
+        },
+      ],
+      { isStreaming: true, keepAnswer: true }
+    )
+    expect(short.items[0]!.key).not.toBe(longer.items[0]!.key)
+    expect(rowIdentity(short.items[0]!.key)).toBe(
+      rowIdentity(longer.items[0]!.key)
+    )
   })
 })

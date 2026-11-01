@@ -1793,6 +1793,104 @@ describe("MessageInput slash menu rows", () => {
   })
 })
 
+// claude-agent-acp 0.99.1 marks Claude's skills among its commands: at first
+// only the ones whose SKILL.md it found on disk, and once Claude Code's own
+// skill list is read, all of them (a bundled one without a path). The menu
+// shows the marks only in that second list, so it never shows some skills
+// marked and others not.
+describe("MessageInput slash menu skill rows", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+  })
+
+  const USER_SKILL_PATH = "/home/u/.claude/skills/user-skill/SKILL.md"
+
+  async function openMenu(
+    availableCommands: React.ComponentProps<
+      typeof MessageInput
+    >["availableCommands"]
+  ) {
+    renderInput({ agentType: "claude_code", availableCommands })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    act(() => {
+      editor.commands.insertContent("/")
+    })
+    return screen.findByTestId("slash-menu")
+  }
+
+  function kindOf(menu: HTMLElement, token: string) {
+    const row = within(menu).getByText(token).closest("button") as HTMLElement
+    const column = row.querySelector<HTMLElement>("[data-command-kind]")
+    return {
+      kind: column?.dataset.commandKind ?? null,
+      icon: column?.querySelector("svg") != null,
+      text: row.textContent,
+    }
+  }
+
+  it("shows every skill with the skill icon once the agent has marked them all", async () => {
+    const menu = await openMenu([
+      {
+        name: "user-skill",
+        description: "User skill probe",
+        skill: true,
+        skill_path: USER_SKILL_PATH,
+      },
+      {
+        name: "simplify",
+        description: "Review the changed code",
+        input_hint: "[<target>]",
+        skill: true,
+      },
+      { name: "compact", description: "Compact the thread" },
+    ])
+    expect(kindOf(menu, "/user-skill")).toEqual({
+      kind: "skill",
+      icon: true,
+      text: "/user-skillUser skill probe",
+    })
+    expect(kindOf(menu, "/simplify")).toEqual({
+      kind: "skill",
+      icon: true,
+      text: "/simplify[<target>]Review the changed code",
+    })
+    // A command keeps an empty column, so the tokens line up.
+    expect(kindOf(menu, "/compact")).toEqual({
+      kind: "command",
+      icon: false,
+      text: "/compactCompact the thread",
+    })
+    // Hovering a skill's token shows its SKILL.md, when there is one.
+    expect(within(menu).getByText("/user-skill")).toHaveAttribute(
+      "title",
+      USER_SKILL_PATH
+    )
+    expect(within(menu).getByText("/simplify")).not.toHaveAttribute("title")
+  })
+
+  it("keeps every row plain while only some skills are marked", async () => {
+    const menu = await openMenu([
+      {
+        name: "user-skill",
+        description: "User skill probe",
+        skill: true,
+        skill_path: USER_SKILL_PATH,
+      },
+      { name: "simplify", description: "Review the changed code" },
+      { name: "compact", description: "Compact the thread" },
+    ])
+    expect(menu.querySelector("[data-command-kind]")).toBeNull()
+    expect(within(menu).getByText("/user-skill")).not.toHaveAttribute("title")
+    expect(kindOf(menu, "/user-skill").text).toBe("/user-skillUser skill probe")
+  })
+})
+
 // Antigravity's ACP server advertises only its built-ins and never a skill, so
 // the skills it loads reach the `/` menu from disk, after those commands.
 describe("MessageInput slash menu for skills an agent does not advertise", () => {
@@ -3343,6 +3441,48 @@ describe("MessageInput live content for draft tidying", () => {
         finishRead?.("")
       })
       await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
+    })
+
+    describe("with files copied in Finder / Explorer", () => {
+      afterEach(() => {
+        attachmentsOverride.current = null
+      })
+
+      // jsdom has no `ClipboardEvent`, which ProseMirror's `pasteText` builds,
+      // so the text paste itself is only observed being asked for.
+      function spyOnTextPaste() {
+        const view = composerHandle.current!.getEditor()!.view
+        return vi.spyOn(view, "pasteText").mockImplementation(() => true)
+      }
+
+      it("attaches the files instead of pasting the names the text API sees", async () => {
+        let attachedFiles = false
+        const appendClipboardFiles = vi.fn(async () => {
+          attachedFiles = true
+          return true
+        })
+        attachmentsOverride.current = { appendClipboardFiles }
+        setClipboard(async () => "bundle.zip")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() => expect(attachedFiles).toBe(true))
+        await act(async () => {})
+        expect(pasteText).not.toHaveBeenCalled()
+      })
+
+      it("still pastes the text when the clipboard holds no files", async () => {
+        attachmentsOverride.current = {
+          appendClipboardFiles: vi.fn(async () => false),
+        }
+        setClipboard(async () => "plain words")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() =>
+          expect(pasteText).toHaveBeenCalledWith("plain words")
+        )
+      })
     })
   })
 

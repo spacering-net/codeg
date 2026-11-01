@@ -43,9 +43,66 @@ pub async fn save_text_file(path: String, contents: String) -> Result<(), AppCom
     Ok(())
 }
 
+/// Keep something pasted into the desktop composer that has no file behind
+/// it (bytes an app put on the clipboard without a path) in codeg's uploads
+/// directory, so the agent is handed a path to read, as with any upload.
+///
+/// The bytes cross the IPC as base64. A payload that could not decode to
+/// within `UPLOAD_MAX_BYTES`, the cap every upload has, is refused before it
+/// is decoded.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn save_pasted_attachment(
+    file_name: String,
+    mime_type: Option<String>,
+    session_id: Option<String>,
+    data_base64: String,
+) -> Result<crate::web::handlers::files::UploadAttachmentResult, AppCommandError> {
+    use crate::web::handlers::files::{store_attachment_bytes, upload_too_large, UPLOAD_MAX_BYTES};
+
+    // The longest padded base64 of a file exactly at the cap.
+    let max_base64_len = (UPLOAD_MAX_BYTES as usize).div_ceil(3) * 4;
+    if data_base64.len() > max_base64_len {
+        return Err(upload_too_large((data_base64.len() / 4 * 3) as u64));
+    }
+    let bytes = STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| AppCommandError::invalid_input(format!("invalid base64 payload: {e}")))?;
+    store_attachment_bytes(&file_name, mime_type, session_id.as_deref(), &bytes).await
+}
+
 #[cfg(all(test, feature = "tauri-runtime"))]
 mod tests {
     use super::*;
+
+    // Only the refusals that happen before anything is written: a stored
+    // paste goes to the real uploads root, which a test must not touch. The
+    // storing itself is covered by `store_attachment_bytes_in`'s tests.
+    #[tokio::test]
+    async fn a_pasted_payload_over_the_cap_is_refused_before_decoding() {
+        let cap = crate::web::handlers::files::UPLOAD_MAX_BYTES as usize;
+        // Not base64 at all: only the length check can turn this into the
+        // size-cap error; decoding it would fail as invalid input instead.
+        let oversized = "!".repeat(cap.div_ceil(3) * 4 + 4);
+        let err = save_pasted_attachment("big.bin".into(), None, None, oversized)
+            .await
+            .expect_err("must refuse");
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some(crate::app_error::UPLOAD_I18N_KEY_TOO_LARGE)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pasted_payload_that_is_not_base64_is_refused() {
+        let err = save_pasted_attachment("a.zip".into(), None, None, "not base64!".into())
+            .await
+            .expect_err("must refuse");
+        assert!(matches!(
+            err.code,
+            crate::app_error::AppErrorCode::InvalidInput
+        ));
+    }
 
     #[tokio::test]
     async fn save_text_file_writes_utf8_payload() {

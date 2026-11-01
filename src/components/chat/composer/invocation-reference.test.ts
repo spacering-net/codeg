@@ -8,6 +8,7 @@ import {
   commandInvocationToken,
   commandToReference,
   diskSkillTrigger,
+  skillMarkedCommands,
   skillsForMenu,
   skillToReference,
 } from "./invocation-reference"
@@ -163,5 +164,59 @@ describe("commandInputHint", () => {
     expect(commandInputHint({ ...cmd("compact"), input_hint: null })).toBeNull()
     // The backend maps an input kind it does not know to an empty hint.
     expect(commandInputHint({ ...cmd("compact"), input_hint: "  " })).toBeNull()
+  })
+})
+
+// claude-agent-acp 0.99.1 marks skills in two passes: the list `session/new`
+// sends marks only the ones with a SKILL.md it found on disk, and the list it
+// sends once Claude Code's own skill list is read marks them all, the bundled
+// ones without a path. Lists recorded live, trimmed.
+describe("skillMarkedCommands", () => {
+  const userSkill: AvailableCommandInfo = {
+    name: "user-skill",
+    description: "User skill probe (user)",
+    skill: true,
+    skill_path: "/home/u/.claude/skills/user-skill/SKILL.md",
+  }
+  const compact = cmd("compact")
+
+  it("marks every skill of a list made from Claude Code's skill list", () => {
+    const read: AvailableCommandInfo[] = [
+      userSkill,
+      {
+        name: "plug:pskill",
+        description: "(plug) Plugin skill probe",
+        skill: true,
+        skill_path: "/home/u/plugins/plug/skills/pskill/SKILL.md",
+      },
+      { name: "simplify", description: "Review the changed code", skill: true },
+      compact,
+    ]
+    expect([...skillMarkedCommands(read)]).toEqual([
+      "user-skill",
+      "plug:pskill",
+      "simplify",
+    ])
+  })
+
+  it("marks nothing in a list made before that read", () => {
+    const first: AvailableCommandInfo[] = [
+      userSkill,
+      cmd("plug:pskill"),
+      cmd("simplify"),
+      compact,
+    ]
+    expect(skillMarkedCommands(first).size).toBe(0)
+  })
+
+  it("marks nothing where no command is marked at all", () => {
+    expect(skillMarkedCommands([compact, cmd("review")]).size).toBe(0)
+    expect(skillMarkedCommands([]).size).toBe(0)
+  })
+
+  it("does not count a path-less entry that is not a skill", () => {
+    expect(
+      skillMarkedCommands([userSkill, { ...compact, skill: false }]).size
+    ).toBe(0)
   })
 })

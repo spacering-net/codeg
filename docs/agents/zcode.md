@@ -1,6 +1,6 @@
 # ZCode
 
-Codeg connects to [official ZCode](https://github.com/zai-org/ZCode) through the community [zcode-acp-server](https://github.com/william0wang/zcode-acp) bridge. The bundled registry pins the bridge to `0.76.3`.
+Codeg connects to [official ZCode](https://github.com/zai-org/ZCode) through the community [zcode-acp-server](https://github.com/william0wang/zcode-acp) bridge. The bundled registry pins the bridge to `0.79.1`.
 
 ## Setup
 
@@ -14,6 +14,8 @@ Codeg discovers the official desktop bundle or the `zcode` command on PATH, and 
 Codeg runs the bridge and the official CLI on that same Node. The bridge would otherwise move itself to Bun 1.4 or newer when it finds one; set `ZCODE_ACP_RUNTIME` in the agent environment to choose its runtime yourself.
 
 The bridge reuses ZCode's existing authentication. Codeg does not copy credentials or create legacy ZCode configuration files. Sign-in errors should be resolved in official ZCode; the agent stderr diagnostics show startup failures.
+
+From bridge 0.78.0 a GLM Coding Plan key added in the ZCode desktop app under Settings → Model Provider ("Use API key") also works. Instead of signing in to the desktop app, you can run `zcode-acp setup --provider zai` (or `--provider bigmodel`) in a terminal and enter an individual Coding Plan key. The bridge keeps that key in `~/.zcode/v2/acp-accounts.json`, or under `ZCODE_HOME` when that is set, so run the setup with the same `ZCODE_HOME` as ZCode's environment in Codeg. It does not change the desktop app's settings. Reconnect the conversation afterwards.
 
 ZCode Start Plan accounts cannot run through the bridge. Their model requests need a captcha that only the ZCode desktop app can solve, so each prompt fails with a message saying so. GLM Coding Plan providers are not affected.
 
@@ -70,6 +72,8 @@ A new session explicitly confirms Build mode before sending its first prompt. A 
 The bridge writes a disabled sandbox template to `.zcode/acp/sandbox.json` in a workspace only while its sandbox is enabled globally, through `sandbox.enabled` in the bridge's user configuration or `ZCODE_ACP_SANDBOX=1`. Codeg sets neither, so unless you enable the sandbox yourself, the bridge does not create that file.
 
 From bridge 0.76.3 the scheduling tools `CronCreate`, `CronList`, `CronUpdate` and `CronDelete` are removed from every session the bridge creates or restores, on a ZCode backend that accepts its tool denylist. Codeg sets neither `ZCODE_ENABLE_AUTOMATION_TOOLS` nor `ZCODE_DISALLOWED_TOOLS`. To give the model those tools again, add `ZCODE_ENABLE_AUTOMATION_TOOLS=1` to ZCode's environment variables in Codeg's agent settings.
+
+From bridge 0.79.0 a model request that fails with a network error, or with a provider error the bridge treats as a passing gateway fault, is sent again up to five times over about 15 seconds. Each retry shows a "[Network error, retrying …]" line in the reply. If the last attempt also fails, the reply ends with a "[Request failed: …]" line instead of an error, and the conversation stays usable: send the message again to retry. An error the bridge does not retry, such as a full context window, still fails the prompt at once.
 
 Codeg records its own ACP transcripts for ZCode, including messages, thoughts, tools and usage. These transcripts support history and reconnecting to sessions created in Codeg. Existing custom ZCode entries keep their registration, launch configuration and history; the built-in option records its history separately. This integration does not scan ZCode's native SQLite sessions.
 

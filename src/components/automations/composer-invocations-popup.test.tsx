@@ -31,6 +31,7 @@ function invocations(
   return {
     isOpen: true,
     commands,
+    skillCommands: new Set(),
     skills: [],
     skillTrigger: null,
     knownInvocations: new Set(commands.map((cmd) => `/${cmd.name}`)),
@@ -98,5 +99,33 @@ describe("ComposerInvocationsPopup", () => {
     expect(skills.textContent).toBe("/skillsList available skills.")
     // A blank hint draws nothing, not an empty span.
     expect(skills.querySelectorAll("span")).toHaveLength(2)
+    // No command is shown as a skill, so no row has the icon column.
+    expect(document.querySelector("[data-command-kind]")).toBeNull()
+  })
+
+  it("shows the commands it is given as skills with the skill icon", () => {
+    const commands: AvailableCommandInfo[] = [
+      {
+        name: "review",
+        description: "Review the diff.",
+        skill: true,
+        skill_path: "/p/review/SKILL.md",
+      },
+      { name: "mcp", description: "List configured MCP tools." },
+    ]
+    renderInHost(invocations({ commands, skillCommands: new Set(["review"]) }))
+
+    const kind = (token: string) =>
+      (
+        screen.getByText(token).closest("button") as HTMLElement
+      ).querySelector<HTMLElement>("[data-command-kind]")
+    expect(kind("/review")?.dataset.commandKind).toBe("skill")
+    expect(kind("/review")?.querySelector("svg")).not.toBeNull()
+    expect(kind("/mcp")?.dataset.commandKind).toBe("command")
+    expect(kind("/mcp")?.querySelector("svg")).toBeNull()
+    expect(screen.getByText("/review")).toHaveAttribute(
+      "title",
+      "/p/review/SKILL.md"
+    )
   })
 })

@@ -1,6 +1,8 @@
 //! Put files *themselves* — not their paths — on the OS clipboard, so a paste
 //! in Finder / Explorer / Files (or any app that accepts dropped files) writes
-//! a copy of the entry rather than its name.
+//! a copy of the entry rather than its name. And the way back: read which
+//! files a copy in one of those put there, so a paste into the composer can
+//! attach them by path, as a drop does.
 //!
 //! Desktop only, and deliberately so. The clipboard belongs to the machine
 //! running the UI, while a web or remote-desktop window's workspace lives on
@@ -11,7 +13,61 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::app_error::AppCommandError;
+
+/// One entry the OS clipboard holds as a file.
+///
+/// A webview hands a page the `File`s of a paste without their paths; `name`
+/// and `size` are what the composer pairs those back to these entries by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFile {
+    pub path: String,
+    /// The final path component, the name the webview gives the `File`.
+    pub name: String,
+    /// Byte length of a regular file; `None` for anything else.
+    pub size: Option<u64>,
+    pub is_dir: bool,
+}
+
+/// Describe the paths a clipboard reader found, keeping the entries a paste
+/// can be attached from: absolute, still there, and named in UTF-8 (the
+/// agent is handed the path as text).
+pub fn describe_clipboard_files(paths: Vec<PathBuf>) -> Vec<ClipboardFile> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            if !path.is_absolute() {
+                return None;
+            }
+            let meta = std::fs::metadata(&path).ok()?;
+            Some(ClipboardFile {
+                name: path.file_name()?.to_str()?.to_string(),
+                path: path.to_str()?.to_string(),
+                size: meta.is_file().then_some(meta.len()),
+                is_dir: meta.is_dir(),
+            })
+        })
+        .collect()
+}
+
+/// The URIs in Nautilus' `x-special/gnome-copied-files` payload: the verb
+/// (`copy` or `cut`) on the first line, then one URI per line.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "tauri-runtime")),
+    allow(dead_code)
+)]
+fn gnome_copied_file_uris(payload: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(payload)
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| line.starts_with("file://"))
+        .map(str::to_string)
+        .collect()
+}
 
 /// Turn the request's raw strings into filesystem entries we are willing to
 /// hand the OS clipboard.
@@ -99,9 +155,22 @@ pub async fn copy_files_to_clipboard(
     })
 }
 
-/// The per-OS clipboard writers. Each one takes ownership of the resolved
-/// paths because the work may have to hop onto another thread to reach the
-/// window toolkit.
+/// The files the OS clipboard holds, as a copy in Finder / Explorer / a Linux
+/// file manager put them there. Empty when it holds none.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn read_clipboard_files(
+    app: tauri::AppHandle,
+) -> Result<Vec<ClipboardFile>, AppCommandError> {
+    let paths = platform::read_files(&app).map_err(|detail| {
+        AppCommandError::io_error("failed to read the files on the clipboard").with_detail(detail)
+    })?;
+    Ok(describe_clipboard_files(paths))
+}
+
+/// The per-OS clipboard writers and readers. Each writer takes ownership of
+/// the resolved paths because the work may have to hop onto another thread to
+/// reach the window toolkit.
 #[cfg(feature = "tauri-runtime")]
 mod platform {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -152,6 +221,30 @@ mod platform {
                 Err("the pasteboard refused the file URLs".to_string())
             }
         })?
+    }
+
+    /// macOS: the file URL on each item of the general pasteboard, one item
+    /// per copied file as Finder writes them. A file reference URL
+    /// (`file:///.file/id=…`) is resolved to the path it points at.
+    #[cfg(target_os = "macos")]
+    pub fn read_files(app: &AppHandle) -> Result<Vec<std::path::PathBuf>, String> {
+        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL};
+        use objc2_foundation::NSURL;
+
+        run_on_main(app, || {
+            let Some(items) = NSPasteboard::generalPasteboard().pasteboardItems() else {
+                return Vec::new();
+            };
+            items
+                .iter()
+                .filter_map(|item| {
+                    // SAFETY: an AppKit constant, initialized before main.
+                    let file_url = item.stringForType(unsafe { NSPasteboardTypeFileURL })?;
+                    let url = NSURL::URLWithString(&file_url)?.filePathURL()?;
+                    Some(std::path::PathBuf::from(url.path()?.to_string()))
+                })
+                .collect()
+        })
     }
 
     /// Linux: GTK owns the CLIPBOARD selection and serves the data lazily, so
@@ -219,6 +312,38 @@ mod platform {
                 Err("GTK refused ownership of the clipboard selection".to_string())
             }
         })?
+    }
+
+    /// Linux: the `text/uri-list` a file manager offers for copied files, or,
+    /// when that is empty, Nautilus' own `x-special/gnome-copied-files`. GTK
+    /// answers on the main loop, so the request is made there and the reply
+    /// awaited here, never on the main thread itself.
+    #[cfg(target_os = "linux")]
+    pub fn read_files(app: &AppHandle) -> Result<Vec<std::path::PathBuf>, String> {
+        use gtk::{gdk, glib, Clipboard};
+
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+        run_on_main(app, move || {
+            let clipboard = Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+            clipboard.request_uris(move |clipboard, uris| {
+                if !uris.is_empty() {
+                    let _ = tx.send(uris.iter().map(|uri| uri.to_string()).collect());
+                    return;
+                }
+                let gnome = gdk::Atom::intern("x-special/gnome-copied-files");
+                clipboard.request_contents(&gnome, move |_, selection| {
+                    let _ = tx.send(super::gnome_copied_file_uris(&selection.data()));
+                });
+            });
+        })?;
+        let uris = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .map_err(|e| format!("the clipboard did not answer: {e}"))?;
+        Ok(uris
+            .iter()
+            .filter_map(|uri| glib::filename_from_uri(uri).ok())
+            .map(|(path, _host)| path)
+            .collect())
     }
 
     /// Windows: `CF_HDROP` — a `DROPFILES` header followed by a
@@ -299,12 +424,57 @@ mod platform {
         Ok(())
     }
 
+    /// Windows: the `CF_HDROP` list Explorer puts on the clipboard for Ctrl+C.
+    /// The clipboard keeps owning the block; it is only read while open.
+    #[cfg(target_os = "windows")]
+    pub fn read_files(_app: &tauri::AppHandle) -> Result<Vec<std::path::PathBuf>, String> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::System::DataExchange::{
+            CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+        };
+        use windows_sys::Win32::System::Ole::CF_HDROP;
+        use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
+
+        // SAFETY: the handle is only used between `OpenClipboard` and
+        // `CloseClipboard`, and every buffer handed to `DragQueryFileW` is
+        // sized from the length it reported for that entry.
+        unsafe {
+            if IsClipboardFormatAvailable(CF_HDROP as u32) == 0 {
+                return Ok(Vec::new());
+            }
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return Err("another application is holding the clipboard".to_string());
+            }
+            let hdrop: HDROP = GetClipboardData(CF_HDROP as u32);
+            let mut paths = Vec::new();
+            if !hdrop.is_null() {
+                let count = DragQueryFileW(hdrop, u32::MAX, std::ptr::null_mut(), 0);
+                for index in 0..count {
+                    let len = DragQueryFileW(hdrop, index, std::ptr::null_mut(), 0);
+                    let mut name = vec![0u16; len as usize + 1];
+                    let copied = DragQueryFileW(hdrop, index, name.as_mut_ptr(), name.len() as u32);
+                    name.truncate(copied as usize);
+                    paths.push(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+                        &name,
+                    )));
+                }
+            }
+            CloseClipboard();
+            Ok(paths)
+        }
+    }
+
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub fn write_files(
         _app: &tauri::AppHandle,
         _paths: Vec<std::path::PathBuf>,
     ) -> Result<(), String> {
         Err("copying files to the clipboard is not supported on this platform".to_string())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    pub fn read_files(_app: &tauri::AppHandle) -> Result<Vec<std::path::PathBuf>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -395,5 +565,74 @@ mod tests {
             file_uri(Path::new("/tmp/a-b_c.d~e/f")),
             "file:///tmp/a-b_c.d~e/f"
         );
+    }
+
+    #[test]
+    fn describes_files_and_folders_by_name_and_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("bundle.zip");
+        std::fs::write(&file, b"PK\x05\x06").expect("write");
+        let folder = dir.path().join("assets");
+        std::fs::create_dir(&folder).expect("mkdir");
+
+        let described = describe_clipboard_files(vec![file.clone(), folder.clone()]);
+        assert_eq!(
+            described,
+            vec![
+                ClipboardFile {
+                    path: file.to_string_lossy().into_owned(),
+                    name: "bundle.zip".to_string(),
+                    size: Some(4),
+                    is_dir: false,
+                },
+                ClipboardFile {
+                    path: folder.to_string_lossy().into_owned(),
+                    name: "assets".to_string(),
+                    size: None,
+                    is_dir: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn crosses_the_ipc_in_the_shape_the_composer_reads() {
+        let entry = ClipboardFile {
+            path: "/work/assets".to_string(),
+            name: "assets".to_string(),
+            size: None,
+            is_dir: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&entry).expect("serialize"),
+            serde_json::json!({
+                "path": "/work/assets",
+                "name": "assets",
+                "size": null,
+                "isDir": true,
+            })
+        );
+    }
+
+    #[test]
+    fn leaves_out_what_a_paste_cannot_attach() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gone = dir.path().join("gone.txt");
+        let relative = PathBuf::from("relative.txt");
+        assert_eq!(describe_clipboard_files(vec![gone, relative]), vec![]);
+    }
+
+    #[test]
+    fn reads_the_uris_out_of_a_gnome_copied_files_payload() {
+        assert_eq!(
+            gnome_copied_file_uris(b"copy\nfile:///home/me/a%20b.txt\nfile:///home/me/dir\n"),
+            vec!["file:///home/me/a%20b.txt", "file:///home/me/dir"]
+        );
+        // `cut` is a verb too, and anything that is not a file URI is skipped.
+        assert_eq!(
+            gnome_copied_file_uris(b"cut\r\nfile:///x\r\nhttps://example.com\r\n"),
+            vec!["file:///x"]
+        );
+        assert!(gnome_copied_file_uris(b"").is_empty());
     }
 }

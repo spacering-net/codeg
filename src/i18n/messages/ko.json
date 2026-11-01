@@ -281,7 +281,7 @@
       "imageBlur": "이미지 흐림",
       "panelOpacity": "패널 불투명도",
       "panelOpacityHint": "사이드바, 패널, 탭 바의 불투명도입니다. 낮을수록 이미지가 더 많이 비쳐 보입니다.",
-      "errorTooLarge": "이미지가 너무 큽니다(최대 16 MB).",
+      "errorTooLarge": "이미지가 너무 큽니다(최대 64 MB).",
       "errorUnsupportedFormat": "지원하지 않는 이미지 형식입니다. PNG, JPEG, WebP, GIF 중에서 선택하세요.",
       "errorUploadFailed": "배경 이미지 설정에 실패했습니다.",
       "market": {
@@ -1633,7 +1633,9 @@
       "disableNonessentialTrafficAria": "Claude Code 텔레메트리 또는 불필요한 네트워크 요청 비활성화",
       "gatewayDiscovery": "게이트웨이의 Claude 모델을 Claude가 나열하게 하기",
       "gatewayDiscoveryAria": "게이트웨이의 Claude 모델을 Claude Code가 나열하게 하기",
-      "gatewayDiscoveryHint": "Claude가 API URL에 직접 모델을 조회하고 “claude” 또는 “anthropic”이 들어간 ID만 남깁니다. 다음 세션부터 표시됩니다."
+      "gatewayDiscoveryHint": "Claude가 API URL에 직접 모델을 조회하고 “claude” 또는 “anthropic”이 들어간 ID만 남깁니다. 다음 세션부터 표시됩니다.",
+      "thinkingSummaries": "Claude의 사고 요약 표시",
+      "thinkingSummariesHint": "Claude Code는 기본적으로 Claude가 도구 호출 사이에 쓰는 메모만 표시합니다. 켜면 추론 과정의 요약도 표시됩니다. 추가 토큰은 들지 않으며 claude-agent-acp 0.99.0 이상이 필요합니다."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId}를 삭제하시겠습니까?",
@@ -4372,6 +4374,7 @@
         "cardResultPending": "결과가 아직 반환되지 않았습니다"
       },
       "asyncTasks": {
+        "title": "백그라운드 작업",
         "openOutput": "출력",
         "stop": "중지",
         "tokens": "{count} 토큰",
@@ -4755,7 +4758,7 @@
     "agentTypeRequired": "에이전트 유형을 선택하세요.",
     "agentTypeImmutableHint": "에이전트 유형은 생성 후 변경할 수 없습니다.",
     "model": "모델",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "메인 모델",
     "claudeReasoningModel": "추론 모델 (사고)",

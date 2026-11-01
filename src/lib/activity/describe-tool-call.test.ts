@@ -51,6 +51,7 @@ describe("toolStepKind", () => {
     ["Agent", { prompt: "p", subagent_type: "Explore" }, "agent"],
     ["Task", { prompt: "p", subagent_type: "Explore" }, "generic"],
     ["ExitPlanMode", { plan: "# P" }, "plan-mode"],
+    ["EnterPlanMode", {}, "plan-mode"],
     ["AskUserQuestion", { questions: [] }, "question"],
     ["mcp__linear__get_issue", { id: "HVAC-1" }, "mcp"],
     // codeg's own MCP companions are never third-party MCP rows

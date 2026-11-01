@@ -1,6 +1,8 @@
 "use client"
 
-import { useLayoutEffect, type RefObject } from "react"
+import { useLayoutEffect, useRef, type RefObject } from "react"
+
+import { takesPendingPlace } from "../reply-motion"
 
 /** On a row that joined the list while it was live: its rail segment, and a
  *  dot's incoming one, grow in from the top (globals.css). */
@@ -22,6 +24,8 @@ const STAGGER_MS = 100
 const MAX_JOIN = 6
 /** What the marks start on a row of the list. */
 const GROWTH = new Set(["activity-rail-grow", "activity-rail-extend"])
+/** The foot a list ends on (timeline-foot.tsx). */
+const FOOT = '[data-marker="working"], [data-marker="foot"]'
 
 function unmark(row: Element) {
   row.removeAttribute(ENTER)
@@ -50,35 +54,32 @@ function delayGrowth(row: HTMLElement, ms: number) {
  * unfolded draws its rail as it stands. Rows join through React's DOM inserts,
  * which a MutationObserver reports — never the rows the list mounted with —
  * after the commit and before the frame is painted, so a segment starts from
- * nothing. A row's marks go once its growth has run — a row that joined can
- * later be the last one another row follows — and every mark goes when the
- * list settles, so a segment drawn again later (a row opened in history) does
- * not replay. Marks are attributes the stylesheet matches on the row itself,
- * so setting one restyles that row alone, never what is inside it.
+ * nothing. The one list whose rows join as it mounts is a reply's that takes
+ * the pending reply's place (`takesPendingPlace`): the pending reply stood as
+ * that list before anything had come. A row's marks go once its growth has
+ * run — a row that joined can later be the last one another row follows — and
+ * every mark goes when the list settles, so a segment drawn again later (a row
+ * opened in history) does not replay. Marks are attributes the stylesheet
+ * matches on the row itself, so setting one restyles that row alone, never
+ * what is inside it.
  */
 export function useRailGrowth(
   listRef: RefObject<HTMLElement | null>,
   live: boolean
 ) {
+  /** The list the marks go on while it is live. */
+  const marked = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
     const list = listRef.current
-    if (!live || !list || typeof MutationObserver === "undefined") return
-    const observer = new MutationObserver((records) => {
-      const joined: HTMLElement[] = []
-      const extended: HTMLElement[] = []
-      for (const record of records) {
-        const added = [...record.addedNodes].filter(
-          (node): node is HTMLElement =>
-            node instanceof HTMLElement && node.parentElement === list
-        )
-        if (added.length === 0) continue
-        joined.push(...added)
-        // Appended after what was the last row: that row's segment runs on.
-        const before = record.previousSibling
-        if (record.nextSibling === null && before instanceof HTMLElement) {
-          extended.push(before)
-        }
-      }
+    if (!live || !list || typeof MutationObserver === "undefined") {
+      // Settled: every mark goes, so a segment drawn again later (a row
+      // opened in history) does not replay.
+      for (const row of marked.current?.children ?? []) unmark(row)
+      marked.current = null
+      return
+    }
+    marked.current = list
+    const join = (joined: HTMLElement[], extended: HTMLElement[]) => {
       if (joined.length === 0 || joined.length > MAX_JOIN) return
       for (const row of extended) {
         row.setAttribute(EXTEND, "")
@@ -96,8 +97,37 @@ export function useRailGrowth(
       rows.forEach((row, index) => {
         if (index > 0) delayGrowth(row, index * STAGGER_MS)
       })
+    }
+    const observer = new MutationObserver((records) => {
+      const joined: HTMLElement[] = []
+      const extended: HTMLElement[] = []
+      for (const record of records) {
+        const added = [...record.addedNodes].filter(
+          (node): node is HTMLElement =>
+            node instanceof HTMLElement && node.parentElement === list
+        )
+        if (added.length === 0) continue
+        joined.push(...added)
+        // Appended after what was the last row: that row's segment runs on.
+        const before = record.previousSibling
+        if (record.nextSibling === null && before instanceof HTMLElement) {
+          extended.push(before)
+        }
+      }
+      join(joined, extended)
     })
     observer.observe(list, { childList: true })
+    // A reply taking the pending reply's place mounts with what has come so
+    // far: its rows join the list that stood there, its turning ring alone.
+    if (takesPendingPlace(list)) {
+      join(
+        [...list.children].filter(
+          (row): row is HTMLElement =>
+            row instanceof HTMLElement && !row.matches(FOOT)
+        ),
+        []
+      )
+    }
     // Rows deeper down (a group's members, a live tail) have their own.
     const grown = (event: AnimationEvent) => {
       const row = event.target
@@ -110,10 +140,11 @@ export function useRailGrowth(
       }
     }
     list.addEventListener("animationend", grown)
+    // Not the marks: an effect run over again on a list still live (Strict
+    // Mode) would take the ones a reply mounted with before they had run.
     return () => {
       observer.disconnect()
       list.removeEventListener("animationend", grown)
-      for (const row of list.children) unmark(row)
     }
   }, [listRef, live])
 }

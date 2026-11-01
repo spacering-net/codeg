@@ -281,7 +281,7 @@
       "imageBlur": "Image blur",
       "panelOpacity": "Panel opacity",
       "panelOpacityHint": "How opaque the sidebar, panels and tab bars are. Lower lets more of the image show through.",
-      "errorTooLarge": "Image is too large (max 16 MB).",
+      "errorTooLarge": "Image is too large (max 64 MB).",
       "errorUnsupportedFormat": "Unsupported image format. Choose a PNG, JPEG, WebP or GIF.",
       "errorUploadFailed": "Failed to set the background image.",
       "market": {
@@ -1633,7 +1633,9 @@
       "disableNonessentialTrafficAria": "Disable Claude Code telemetry or redundant network requests",
       "gatewayDiscovery": "Let Claude list the gateway's Claude models",
       "gatewayDiscoveryAria": "Let Claude Code list the gateway's Claude models",
-      "gatewayDiscoveryHint": "Claude asks the API URL for its models itself and keeps only ids that contain “claude” or “anthropic”; they show from the next session."
+      "gatewayDiscoveryHint": "Claude asks the API URL for its models itself and keeps only ids that contain “claude” or “anthropic”; they show from the next session.",
+      "thinkingSummaries": "Show Claude's thinking summaries",
+      "thinkingSummariesHint": "Claude Code shows only the notes Claude writes between tool calls. Turn this on to also see a summary of its reasoning. It costs no extra tokens and needs claude-agent-acp 0.99.0 or later."
     },
     "dialogs": {
       "confirmDeleteProvider": "Delete Provider {providerId}?",
@@ -4372,6 +4374,7 @@
         "cardResultPending": "Result not returned yet"
       },
       "asyncTasks": {
+        "title": "Background tasks",
         "openOutput": "Output",
         "stop": "Stop",
         "tokens": "{count} tokens",
@@ -4775,7 +4778,7 @@
     "agentTypeRequired": "Agent type is required.",
     "agentTypeImmutableHint": "Agent type cannot be changed after creation.",
     "model": "Model",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Main Model",
     "claudeReasoningModel": "Reasoning Model (thinking)",

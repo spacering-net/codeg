@@ -281,7 +281,7 @@
       "imageBlur": "تمويه الصورة",
       "panelOpacity": "عتامة اللوحات",
       "panelOpacityHint": "مدى عتامة الشريط الجانبي واللوحات وأشرطة التبويب. الأقل يُظهر المزيد من الصورة.",
-      "errorTooLarge": "الصورة كبيرة جدًا (16 ميجابايت كحد أقصى).",
+      "errorTooLarge": "الصورة كبيرة جدًا (64 ميجابايت كحد أقصى).",
       "errorUnsupportedFormat": "صيغة صورة غير مدعومة. اختر ملف PNG أو JPEG أو WebP أو GIF.",
       "errorUploadFailed": "فشل تعيين صورة الخلفية.",
       "market": {
@@ -1633,7 +1633,9 @@
       "disableNonessentialTrafficAria": "تعطيل القياس عن بُعد أو طلبات الشبكة غير الضرورية في Claude Code",
       "gatewayDiscovery": "السماح لـ Claude بسرد نماذج Claude في البوابة",
       "gatewayDiscoveryAria": "السماح لـ Claude Code بسرد نماذج Claude في البوابة",
-      "gatewayDiscoveryHint": "يستعلم Claude بنفسه من عنوان API عن النماذج، ولا يُبقي إلا المعرّفات التي تحتوي على «claude» أو «anthropic»؛ وتظهر بدءًا من الجلسة التالية."
+      "gatewayDiscoveryHint": "يستعلم Claude بنفسه من عنوان API عن النماذج، ولا يُبقي إلا المعرّفات التي تحتوي على «claude» أو «anthropic»؛ وتظهر بدءًا من الجلسة التالية.",
+      "thinkingSummaries": "عرض ملخصات تفكير Claude",
+      "thinkingSummariesHint": "يعرض Claude Code افتراضيًا الملاحظات التي يكتبها Claude بين استدعاءات الأدوات فقط. عند التفعيل يظهر أيضًا ملخص لتفكيره. لا يستهلك ذلك رموزًا إضافية، ويتطلب claude-agent-acp 0.99.0 أو أحدث."
     },
     "dialogs": {
       "confirmDeleteProvider": "حذف المزود {providerId}؟",
@@ -4372,6 +4374,7 @@
         "cardResultPending": "لم تصل النتيجة بعد"
       },
       "asyncTasks": {
+        "title": "مهام الخلفية",
         "openOutput": "المخرجات",
         "stop": "إيقاف",
         "tokens": "{count} رمز",
@@ -4755,7 +4758,7 @@
     "agentTypeRequired": "نوع الوكيل مطلوب.",
     "agentTypeImmutableHint": "لا يمكن تغيير نوع الوكيل بعد الإنشاء.",
     "model": "النموذج",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "النموذج الرئيسي",
     "claudeReasoningModel": "نموذج الاستدلال (التفكير)",

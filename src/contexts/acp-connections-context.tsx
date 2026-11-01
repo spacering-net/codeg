@@ -1566,7 +1566,12 @@ function sameCommands(
     if (
       a[i].name !== b[i].name ||
       a[i].description !== b[i].description ||
-      a[i].input_hint !== b[i].input_hint
+      a[i].input_hint !== b[i].input_hint ||
+      // claude-agent-acp 0.99.1 sends the list again once it has read Claude
+      // Code's skill list, with the same commands and only their skill marks
+      // added: that list must replace the one before it.
+      Boolean(a[i].skill) !== Boolean(b[i].skill) ||
+      (a[i].skill_path ?? null) !== (b[i].skill_path ?? null)
     ) {
       return false
     }

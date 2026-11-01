@@ -26,6 +26,12 @@
 //! with it. The adapter puts the sentence on the `sessionFailure` title only;
 //! the same rule here gives it to the line a reloaded failed turn draws and to
 //! a failed compaction's card.
+//!
+//! codex-acp 2.4.0 (#697) adds one more rule, ahead of both: a ChatGPT login
+//! looks its workspace up on chatgpt.com before each model request, and when
+//! that lookup gets no answer the turn fails with one of two bare texts
+//! ([`WORKSPACE_ROUTING_UNAVAILABLE_MESSAGES`]). They read as a sentence that
+//! says so, with the original text kept at its end.
 
 use serde_json::Value;
 
@@ -39,6 +45,23 @@ Switch back to the previous provider or start a new thread.";
 
 /// The provider error code the explanation is for.
 const INVALID_ENCRYPTED_CONTENT_CODE: &str = "invalid_encrypted_content";
+
+/// codex-acp 2.4.0's `ACCOUNT_READ_UNAVAILABLE_MESSAGES`: the whole error text
+/// of a workspace lookup that got no answer from the ChatGPT backend. Matched
+/// exactly, as the adapter's `Set.has` does.
+const WORKSPACE_ROUTING_UNAVAILABLE_MESSAGES: &[&str] = &[
+    "workspace routing discovery failed",
+    "workspace routing discovery timed out",
+];
+
+/// codex-acp 2.4.0's `workspaceRoutingUnavailableMessage`, word for word.
+fn workspace_routing_unavailable_message(text: &str) -> String {
+    format!(
+        "Codex can't reach chatgpt.com to look up your ChatGPT workspace. \
+Check your network connection and any proxy, VPN, or firewall that blocks chatgpt.com, then try again. \
+({text})"
+    )
+}
 
 /// The error types the adapter recognizes. Any other type is not the envelope.
 const SERVICE_ERROR_TYPES: &[&str] = &[
@@ -54,8 +77,8 @@ const SERVICE_ERROR_TYPES: &[&str] = &[
 ];
 
 /// The message of a known service error envelope, the explanation of an
-/// `invalid_encrypted_content` error, or `None` for any other text, which then
-/// stays as it is.
+/// `invalid_encrypted_content` error or of an unreachable workspace lookup, or
+/// `None` for any other text, which then stays as it is.
 ///
 /// Strict on purpose, like the adapter: a key beyond `type`/`status`/`error`
 /// (or beyond `type`/`message`/`code`/`param` inside `error`), a status that is
@@ -65,6 +88,9 @@ const SERVICE_ERROR_TYPES: &[&str] = &[
 /// encrypted-content check comes first and reads any JSON, as the adapter's
 /// does: its gateway shapes carry keys the envelope rule refuses.
 pub(crate) fn readable_service_error_message(text: &str) -> Option<String> {
+    if WORKSPACE_ROUTING_UNAVAILABLE_MESSAGES.contains(&text) {
+        return Some(workspace_routing_unavailable_message(text));
+    }
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return None;
     };
@@ -415,6 +441,33 @@ mod tests {
     #[test]
     fn explains_exactly_what_the_adapter_explains() {
         for (text, want) in ADAPTER_EXPLAINS {
+            assert_eq!(
+                readable_service_error_message(text).as_deref(),
+                *want,
+                "{text:?}"
+            );
+        }
+    }
+
+    /// Inputs run through codex-acp 2.4.0's own `readableServiceErrorMessage`
+    /// under Node 24.18 (#697), each with what it returned (`None` where it
+    /// returned the text unchanged): only the whole bare text matches, and an
+    /// envelope carrying it as its message reads down to the bare text.
+    const ADAPTER_EXPLAINS_ROUTING: &[(&str, Option<&str>)] = &[
+        ("workspace routing discovery failed", Some("Codex can't reach chatgpt.com to look up your ChatGPT workspace. Check your network connection and any proxy, VPN, or firewall that blocks chatgpt.com, then try again. (workspace routing discovery failed)")),
+        ("workspace routing discovery timed out", Some("Codex can't reach chatgpt.com to look up your ChatGPT workspace. Check your network connection and any proxy, VPN, or firewall that blocks chatgpt.com, then try again. (workspace routing discovery timed out)")),
+        (" workspace routing discovery failed", None),
+        ("workspace routing discovery failed\n", None),
+        ("Workspace routing discovery failed", None),
+        ("workspace routing discovery unauthorized (401)", None),
+        ("workspace routing discovery", None),
+        ("\"workspace routing discovery failed\"", None),
+        ("{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"workspace routing discovery failed\"}}", Some("workspace routing discovery failed")),
+    ];
+
+    #[test]
+    fn explains_an_unreachable_workspace_lookup_as_the_adapter_does() {
+        for (text, want) in ADAPTER_EXPLAINS_ROUTING {
             assert_eq!(
                 readable_service_error_message(text).as_deref(),
                 *want,

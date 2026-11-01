@@ -1139,6 +1139,42 @@ fn apply_codex_env_policy(
     }
 }
 
+/// codex-acp's switch for its predicted follow-up prompt (2.5.0, #703): the
+/// adapter predicts unless it reads `false` here.
+const CODEX_PROMPT_SUGGESTIONS_ENV: &str = "CODEX_ACP_PROMPT_SUGGESTIONS";
+
+/// Codex-only: turn codex-acp's predicted follow-up prompt off for a
+/// connection nobody types into. `prompt_suggestions` is
+/// `SessionState.wants_prompt_suggestions`.
+///
+/// codex-acp 2.5.0 (#703) predicts the user's next prompt after every turn
+/// that ends normally, for AIR clients such as codeg. Each prediction is one
+/// more model call: an ephemeral thread on the title model (`gpt-5.6-luna`)
+/// that reads the turn's prompt and final answer. codeg offers it in the empty
+/// composer (`AcpEvent::PromptSuggestion`). An automation run, a chat-channel
+/// bot, a `codeg-cli` run and a one-shot generation have no composer, so a
+/// Claude session of theirs asks for no prediction
+/// ([`claude_raw_sdk_session_meta`]). codex-acp has no per-session switch,
+/// only this variable, so it is set for their whole process. It is forced
+/// after the user's environment, like `DISABLE_MCP_CONFIG_FILTERING`, so a
+/// user's `true` cannot bring back a call whose answer nothing shows. A
+/// connection that composes leaves the variable as the user set it, and a
+/// user's `false` keeps the prediction off everywhere.
+fn apply_codex_prompt_suggestion_policy(
+    agent_type: AgentType,
+    merged: &mut Vec<(String, String)>,
+    prompt_suggestions: bool,
+) {
+    if agent_type != AgentType::Codex || prompt_suggestions {
+        return;
+    }
+    merged.retain(|(k, _)| k != CODEX_PROMPT_SUGGESTIONS_ENV);
+    merged.push((
+        CODEX_PROMPT_SUGGESTIONS_ENV.to_string(),
+        "false".to_string(),
+    ));
+}
+
 /// Prepend `dir` to the PATH entry of `env`, seeding from `fallback_path` when
 /// `env` has no PATH key of its own. Removes any pre-existing PATH key first
 /// (case-insensitively when `windows`, since Windows env keys are
@@ -1274,8 +1310,9 @@ pub enum SteerOutcome {
     /// `idleBehavior = "promptRequired"` opt-in — NOT consumed, still
     /// host-owned. The caller reroutes it through `session/prompt`.
     PromptRequired,
-    /// The adapter ignored the opt-in (pre-0.64 claude adapter, codex-acp)
-    /// and spun up a detached turn no host request owns — consumed. The
+    /// The adapter ignored the opt-in (pre-0.64 claude adapter, codex-acp
+    /// before 2.4.0) and spun up a detached turn no host request owns —
+    /// consumed. The
     /// manager records it delivered, warns, and downgrades
     /// `native_steering_available` for the rest of the session.
     StartedNewTurn,
@@ -2162,6 +2199,7 @@ async fn build_agent(
     stderr_tail: &Arc<StderrTail>,
     scratch: Option<&Path>,
     account_home: Option<&Path>,
+    prompt_suggestions: bool,
 ) -> Result<(AcpAgent, crate::acp::reported_usage::PromptUsageMode), AcpError> {
     // A conversation can outlive the custom-agent definition it was started
     // with (the user deleted it in settings). `get_agent_meta` cannot report
@@ -2243,6 +2281,7 @@ async fn build_agent(
                 codex_initial_mode.as_deref(),
                 inherited_codex_config.as_deref(),
             );
+            apply_codex_prompt_suggestion_policy(agent_type, &mut merged_env, prompt_suggestions);
             // codex-acp 1.0.0 honors APP_SERVER_LOGS as a directory for its
             // adapter-side logs. Surface it only under CODEG_ACP_DEBUG so
             // default runs are unchanged; a directory-creation failure silently
@@ -2785,6 +2824,9 @@ pub(crate) async fn spawn_agent_connection(
         initial_state.pi_enabled_model_patterns =
             crate::commands::acp::pi_enabled_model_patterns_for_env(&runtime_env, &launch_cwd);
     }
+    // Fixed by the owner at creation; codex reads it from its launch
+    // environment (`apply_codex_prompt_suggestion_policy`).
+    let wants_prompt_suggestions = initial_state.wants_prompt_suggestions;
 
     let session_state = Arc::new(RwLock::new(initial_state));
 
@@ -2835,6 +2877,7 @@ pub(crate) async fn spawn_agent_connection(
         &stderr_tail,
         scratch.as_ref().map(|s| s.path()),
         account_home.as_deref(),
+        wants_prompt_suggestions,
     )
     .await
     {
@@ -3458,6 +3501,25 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     fn waiting_len(&self) -> usize {
         self.waiting.len()
     }
+
+    /// The tool calls the parked cards ask about: the one on screen first,
+    /// then the waiting ones in order, each once. A card that names no tool
+    /// call adds nothing.
+    fn parked_tool_call_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for request_id in self
+            .showing
+            .iter()
+            .chain(self.waiting.iter().map(|card| &card.request_id))
+        {
+            if let Some(parked) = self.responders.get(request_id) {
+                if !parked.tool_call_id.is_empty() && !ids.contains(&parked.tool_call_id) {
+                    ids.push(parked.tool_call_id.clone());
+                }
+            }
+        }
+        ids
+    }
 }
 
 /// Shared per-connection permission state (responders + display queue).
@@ -3822,11 +3884,75 @@ async fn drain_permissions_then_emit(
     emit_with_state(state, emitter, follow_up).await;
 }
 
-/// Shared body of the two drains above. Emits the compensating
+/// What Qoder records as the result of a tool call whose permission request a
+/// Stop cancelled. It is the result 1.1.81 writes into its transcript, and the
+/// text 1.1.75 also sent on the call's closing `tool_call_update`.
+const QODER_STOPPED_CALL_RESULT: &str = "The user doesn't want to proceed with this tool \
+    use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written \
+    to the file). Do not repeat this call; take a different approach, or if you cannot proceed \
+    without it, tell the user what you were trying to do and why you need it.";
+
+/// The closing reports codeg sends itself, on a Stop, for the tool calls
+/// whose permission requests the Stop answers `cancelled`.
+///
+/// Such a call never runs. An agent normally closes it in its last frames for
+/// the turn, and those settle the call's card after the turn has ended (the
+/// frontend's `ConnectionState.cancelledTurn`). Qoder stopped doing so with the
+/// rewrite of its ACP agent in 1.1.76: through 1.1.81 it answers the cancelled
+/// prompt without another word about the call, so its card would show it
+/// running until the conversation is reloaded. 1.1.75 closed the call `failed`
+/// with the result its transcript still records, which codeg sends in its
+/// place. Empty for every other agent.
+fn stopped_call_reports<R: PermissionResponder>(
+    agent_type: AgentType,
+    queue: &PermissionQueue<R>,
+) -> Vec<AcpEvent> {
+    if agent_type != AgentType::Qoder {
+        return Vec::new();
+    }
+    queue
+        .parked_tool_call_ids()
+        .into_iter()
+        .map(|tool_call_id| AcpEvent::ToolCallUpdate {
+            tool_call_id,
+            title: None,
+            status: Some("failed".to_string()),
+            content: Some(QODER_STOPPED_CALL_RESULT.to_string()),
+            raw_input: None,
+            raw_output: Some(QODER_STOPPED_CALL_RESULT.to_string()),
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: None,
+        })
+        .collect()
+}
+
+/// [`drain_permissions_then_emit`] for a Stop. The drain's `cancelled` answers
+/// are followed by the closing reports codeg sends for the calls those requests
+/// gated ([`stopped_call_reports`]), all before `follow_up`, which ends the
+/// turn, and in the same critical section.
+async fn drain_permissions_on_stop_then_emit<R: PermissionResponder>(
+    perms: &tokio::sync::Mutex<PermissionQueue<R>>,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    follow_up: AcpEvent,
+) {
+    let mut queue = perms.lock().await;
+    let closings = stopped_call_reports(agent_type, &queue);
+    drain_permissions_locked(&mut queue, state, emitter).await;
+    for closing in closings {
+        emit_with_state(state, emitter, closing).await;
+    }
+    emit_with_state(state, emitter, follow_up).await;
+}
+
+/// Shared body of the drains above. Emits the compensating
 /// `PermissionResolved` for whatever was on screen; queued cards were never
 /// published, so they need none.
-async fn drain_permissions_locked(
-    queue: &mut PermissionQueue,
+async fn drain_permissions_locked<R: PermissionResponder>(
+    queue: &mut PermissionQueue<R>,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
 ) {
@@ -5968,9 +6094,10 @@ fn build_grok_set_model_params(
 /// has no typed request for. Always opts into the 0.64.0
 /// `promptRequired` idle contract; codeg only enables native steering for
 /// adapters proven to honor it AND to keep the owning prompt in flight across
-/// the steered work (claude-agent-acp 0.65.0 / #958 — see
-/// [`synthesize_native_steering`] and `registry::steering_prompt_required_min_version`),
-/// but the caller still handles every outcome in case the proof was wrong.
+/// the steered work (claude-agent-acp 0.65.0 / #958, codex-acp 2.4.0 / #593 —
+/// see [`synthesize_native_steering`] and
+/// `registry::steering_prompt_required_min_version`), but the caller still
+/// handles every outcome in case the proof was wrong.
 async fn send_steer_request(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
@@ -6867,7 +6994,8 @@ fn build_client_capabilities(
     // it denies `AskUserQuestion` for the session, so the model never gets the
     // tool. Verified on the real 1.1.67 wire, MCP tool-call approvals staying
     // on `session/request_permission`; the same form and answer handling ship
-    // in every release from 1.1.23 through 1.1.75, which matters because codeg
+    // in every release from 1.1.23 through 1.1.75, and 1.1.81 sends the same
+    // forms and takes the same answers live, which matters because codeg
     // launches a `qoder` found on PATH ahead of the pinned package). OpenCode 2
     // asks its native `question` tool's questions ONLY as a form
     // (`packages/cli/src/acp/elicitation.ts`, 2.2.0): `q<n>` select fields
@@ -7559,10 +7687,10 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     //
     // Command Code joins it for the same reason: `command-code acp` loads
     // `~/.commandcode/mcp.json` and starts what `session/new` carries as well
-    // (verified against 1.84.0, 1.86.3 and 1.88.0, a server from each source
-    // in one session's tool list), and a name on both sides keeps the file's
-    // copy, as its docs say and 1.88.0 showed live. codeg's MCP settings UI
-    // manages that file.
+    // (verified against 1.84.0, 1.86.3, 1.88.0, 1.88.1 and 1.88.2, a server
+    // from each source in one session's tool list), and a name on both sides
+    // keeps the file's copy, as its docs say and 1.88.0, 1.88.1 and 1.88.2
+    // showed live. codeg's MCP settings UI manages that file.
     //
     // OpenCode joins it: 2.x loads `mcp.servers` from its own config, which
     // codeg's MCP settings UI manages, and turns each server `session/new`
@@ -8884,8 +9012,9 @@ async fn run_connection(
             // alone can't vouch for the process on the other end of the pipe.
             // The raw advertisement is deliberately NOT stored: exposing it
             // would tempt the frontend to re-derive eligibility and show the
-            // instant channel for adapters (codex) that advertise steering but
-            // would detach a turn on the idle race.
+            // instant channel for adapters that advertise steering but would
+            // detach a turn on the idle race (codex-acp before 2.4.0, which a
+            // PATH install can still be).
             let steering_advertised = init_advertises_steering(init_resp.meta.as_ref());
             let native_steering_available = synthesize_native_steering(
                 agent_type,
@@ -11873,7 +12002,7 @@ async fn set_session_config_option_inner(
 ) -> Result<Vec<SessionConfigOption>, agent_client_protocol::Error> {
     // Of the two ACP mode requests, only session/set_mode refreshes the
     // bridge's plan-enabled mirror; set_config_option("mode") keeps reporting
-    // "plan" while that mirror is set (bridge 0.69.2 through 0.76.3). Send
+    // "plan" while that mirror is set (bridge 0.69.2 through 0.79.1). Send
     // set_mode first for mode changes, then read the config response; the
     // initial-mode gate still requires an exact confirmation before prompt.
     if agent_type == AgentType::ZCode && config_id == "mode" {
@@ -13300,6 +13429,116 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
     }
 }
 
+/// How long after the answer to a prompt that a Stop cancelled codeg holds
+/// CodeBuddy's next prompt.
+///
+/// CodeBuddy (2.171.0 through 2.177.1) answers a `session/prompt` that starts
+/// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
+/// does not run the prompt or keep it in its history (`isCancelBarrierActive`
+/// in its ACP view). It arms that barrier while it handles the cancel, before
+/// it answers the cancelled prompt, so a prompt sent this long after that
+/// answer always starts past it; the extra 100 ms covers the trip to the
+/// agent. Without the hold, the queued message codeg sends the moment a Stop
+/// ends the turn was answered `cancelled` and lost.
+const CODEBUDDY_CANCEL_BARRIER: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// How long a prompt held for [`CODEBUDDY_CANCEL_BARRIER`] waits for the
+/// cancelled prompt's answer before it goes ahead without one. The barrier is
+/// long over by then; this only bounds the hold when CodeBuddy never answers.
+const CODEBUDDY_CANCEL_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A Stop codeg sent CodeBuddy mid-turn, kept until the next prompt has waited
+/// out its barrier (see [`CODEBUDDY_CANCEL_BARRIER`]).
+struct CodeBuddyCancel {
+    cancelled_at: tokio::time::Instant,
+    /// When the cancelled prompt was answered, from the task that awaits it.
+    answered: oneshot::Receiver<tokio::time::Instant>,
+}
+
+/// A prompt held back until CodeBuddy's cancel barrier has passed. The idle
+/// loop keeps reading the agent while it waits, so the cancelled turn's last
+/// frames still land there instead of in this prompt's turn.
+struct HeldPrompt {
+    command: ConnectionCommand,
+    cancel: CodeBuddyCancel,
+    /// When the prompt may go, once known. Kept here because the loop drops
+    /// the waiting future whenever it reads an update, and the answer can be
+    /// received only once.
+    release_at: Option<tokio::time::Instant>,
+}
+
+/// What the idle loop does with a command it just received.
+enum Admitted {
+    /// Run it now.
+    Run(Option<ConnectionCommand>),
+    /// A prompt to hold until CodeBuddy's cancel barrier has passed.
+    Held(HeldPrompt),
+}
+
+/// Only a prompt is held, and only the first one after a Stop: the hold
+/// consumes the pending cancel.
+fn hold_for_codebuddy_cancel(
+    command: Option<ConnectionCommand>,
+    pending: &mut Option<CodeBuddyCancel>,
+) -> Admitted {
+    match command {
+        Some(command @ ConnectionCommand::Prompt { .. }) => match pending.take() {
+            Some(cancel) => Admitted::Held(HeldPrompt {
+                command,
+                cancel,
+                release_at: None,
+            }),
+            None => Admitted::Run(Some(command)),
+        },
+        other => Admitted::Run(other),
+    }
+}
+
+/// Resolves when `held` may be sent: [`CODEBUDDY_CANCEL_BARRIER`] after the
+/// cancelled prompt's answer, or as soon as it is clear none will come.
+async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
+    let release_at = match held.release_at {
+        Some(at) => at,
+        None => {
+            let give_up = held.cancel.cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT;
+            let at = match tokio::time::timeout_at(give_up, &mut held.cancel.answered).await {
+                Ok(Ok(answered_at)) => answered_at + CODEBUDDY_CANCEL_BARRIER,
+                // The task holding the cancelled prompt ended without an answer,
+                // or the answer is overdue: in both cases the barrier, armed
+                // when CodeBuddy took the cancel, has already passed.
+                Ok(Err(_)) | Err(_) => tokio::time::Instant::now(),
+            };
+            held.release_at = Some(at);
+            at
+        }
+    };
+    tokio::time::sleep_until(release_at).await;
+}
+
+/// CodeBuddy's stop reason for a prompt codeg did not cancel.
+///
+/// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
+/// 2.177.1) answers the next prompt it runs `cancelled` even though that
+/// prompt ran to the end: its forwarding keeps the session's aborted signal
+/// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
+/// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
+/// gets here, as the Cancel arm ends that turn itself, so this one finished.
+fn codebuddy_stop_reason(
+    agent_type: AgentType,
+    reason: StopReason,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> StopReason {
+    let finished = meta
+        .and_then(|meta| meta.get("codebuddy.ai/finishReason"))
+        .and_then(serde_json::Value::as_str)
+        == Some("stop");
+    if agent_type == AgentType::CodeBuddy && reason == StopReason::Cancelled && finished {
+        StopReason::EndTurn
+    } else {
+        reason
+    }
+}
+
 /// Classify a `session/load` failure into a stable frontend `code` when the
 /// historical session cannot be restored — either the agent has no record of
 /// it (`ResourceNotFound`, -32002) or the agent process/session died mid-load.
@@ -13575,7 +13814,7 @@ fn prompt_rejection_is_terminal(e: &agent_client_protocol::Error) -> bool {
 /// Kimi Code 2.3.0's refusal of a prompt on a session another process wrote
 /// since this connection opened it: -32600 with `data.code: "session.stale"`
 /// and "Session was updated by another client. Close and reopen the session,
-/// then retry." (the same body through 2.3.3). Its error table marks the code
+/// then retry." (the same body through 2.4.0). Its error table marks the code
 /// not retryable, and every later prompt on the connection answers the same,
 /// while a new process loads the session with the other process's turns and
 /// prompts normally. The writer is whoever held the session lock in between
@@ -14146,12 +14385,30 @@ async fn run_conversation_loop(
     // own needs a turn to have started it, and background work cannot outlive
     // the agent process this loop's connection owns.
     let mut prompted = false;
+    // A Stop codeg sent CodeBuddy mid-turn, and the prompt held back until its
+    // barrier has passed (see `CODEBUDDY_CANCEL_BARRIER`).
+    let mut codebuddy_cancel: Option<CodeBuddyCancel> = None;
+    let mut held_prompt: Option<HeldPrompt> = None;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
             tokio::select! {
                 biased;
-                cmd = cmd_rx.recv() => break cmd,
+                () = async {
+                    match held_prompt.as_mut() {
+                        Some(held) => wait_out_codebuddy_cancel(held).await,
+                        None => std::future::pending().await,
+                    }
+                }, if held_prompt.is_some() => {
+                    break held_prompt.take().map(|held| held.command);
+                }
+                // Not while a prompt is held: what comes after it waits its turn.
+                cmd = cmd_rx.recv(), if held_prompt.is_none() => {
+                    match hold_for_codebuddy_cancel(cmd, &mut codebuddy_cancel) {
+                        Admitted::Run(cmd) => break cmd,
+                        Admitted::Held(held) => held_prompt = Some(held),
+                    }
+                }
                 update = session.read_update() => {
                     // An `Err` is the session's router going away, not one bad
                     // message (see `AgentSession::read_update`): the connection
@@ -14241,8 +14498,8 @@ async fn run_conversation_loop(
                     }
                 }
             }
-            // Reached only on the update arm (the command arm breaks out), so
-            // `session` is free again here.
+            // Reached on the update arm, or right after a prompt was held (the
+            // other arms break out), so `session` is free again here.
             for (config_id, value_id) in std::mem::take(&mut config_drift_to_reassert) {
                 tracing::info!(
                     "[ACP] re-asserting '{config_id}'='{value_id}' — the agent reverted it \
@@ -14873,7 +15130,11 @@ async fn run_conversation_loop(
                                 )
                                 .await;
                             }
-                            let reason = response.stop_reason;
+                            let reason = codebuddy_stop_reason(
+                                agent_type,
+                                response.stop_reason,
+                                response.meta.as_ref(),
+                            );
                             if !tracked_terminal_tool_calls.is_empty() {
                                 poll_tracked_terminal_tool_calls(
                                     terminal_runtime.as_ref(),
@@ -15235,6 +15496,7 @@ async fn run_conversation_loop(
                                         Agent,
                                         CancelNotification::new(sid.clone()),
                                     );
+                                    let cancelled_at = tokio::time::Instant::now();
                                     // Also terminate any command runtimes created for this
                                     // session so cancellation does not hang on long-running
                                     // terminal tools.
@@ -15263,11 +15525,15 @@ async fn run_conversation_loop(
                                     // the turn-end exits: a request admitted
                                     // between the two would be published and then
                                     // silently un-displayed by TurnComplete,
-                                    // wedging the queue.
-                                    drain_permissions_then_emit(
+                                    // wedging the queue. The calls those
+                                    // permission requests gated are closed
+                                    // here for an agent that leaves them open
+                                    // (see `stopped_call_reports`).
+                                    drain_permissions_on_stop_then_emit(
                                         perms,
                                         state,
                                         emitter,
+                                        agent_type,
                                         AcpEvent::TurnComplete {
                                             session_id: sid.0.to_string(),
                                             stop_reason: "cancelled".into(),
@@ -15332,9 +15598,23 @@ async fn run_conversation_loop(
                                     // request instead would make the runtime send
                                     // `$/cancel_request` on top of the
                                     // `session/cancel` above — a second
-                                    // cancellation of the same turn.
+                                    // cancellation of the same turn. For
+                                    // CodeBuddy the answer also times the hold
+                                    // on the next prompt (see
+                                    // `CODEBUDDY_CANCEL_BARRIER`).
+                                    let answered = (agent_type == AgentType::CodeBuddy).then(|| {
+                                        let (answered, answer) = oneshot::channel();
+                                        codebuddy_cancel = Some(CodeBuddyCancel {
+                                            cancelled_at,
+                                            answered: answer,
+                                        });
+                                        answered
+                                    });
                                     tokio::spawn(async move {
                                         let _ = prompt_response.await;
+                                        if let Some(answered) = answered {
+                                            let _ = answered.send(tokio::time::Instant::now());
+                                        }
                                     });
                                     break;
                                 }
@@ -18926,10 +19206,15 @@ fn session_info_goal_value(
 /// after a turn as `_meta.promptSuggestions = {suggestions: [{text}]}`, to an
 /// AIR client only, and sends `suggestions: []` when the next prompt arrives
 /// (the prediction is spent) or a conversation reset drops the transcript it
-/// was drawn from. The first non-blank `text` is the one offered, as AIR offers
-/// it. The key names no vendor, but it is read only from the two adapters codeg
-/// declares AIR to ([`crate::acp::air_contract::speaks_air_contract`]), the
-/// only agents that send it.
+/// was drawn from. codex-acp 2.5.0 (#703) sends the same key under the same
+/// rules. Codex predicts nothing itself, so the adapter asks the title model
+/// on an ephemeral thread, and the answer lands about one model call after
+/// the turn's response. A prediction still in flight when the next prompt
+/// starts is dropped. The first non-blank `text` is the one offered, as AIR
+/// offers it. The key names no vendor, but it is read only from the two
+/// adapters codeg declares AIR to
+/// ([`crate::acp::air_contract::speaks_air_contract`]), the only agents that
+/// send it.
 fn prompt_suggestion_update(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -19305,6 +19590,94 @@ fn is_config_option_state_command(
         .and_then(|action| action.get("kind"))
         .and_then(|kind| kind.as_str())
         == Some("setConfigOption")
+}
+
+/// The commands an `available_commands_update` advertises, as codeg lists them.
+///
+/// Config-option state toggles are dropped (codex `/plan`, see
+/// [`is_config_option_state_command`]): they are already the
+/// `collaboration_mode` selector, not invokable commands. So are ZCode's
+/// commands codeg drives itself. Some agents (e.g. Claude Code with
+/// overlapping user/project slash commands) emit entries sharing a name; the
+/// first is kept, so downstream consumers don't render duplicates (the frontend
+/// reducer also dedupes as a defensive measure). A command the agent marks as a
+/// skill carries the mark (see [`air_command_skill`]).
+fn available_command_infos(
+    agent_type: AgentType,
+    commands: &[agent_client_protocol::schema::v1::AvailableCommand],
+) -> Vec<AvailableCommandInfo> {
+    let mut seen = HashSet::new();
+    commands
+        .iter()
+        .filter(|cmd| !is_config_option_state_command(agent_type, cmd.meta.as_ref()))
+        .filter(|cmd| {
+            agent_type != AgentType::ZCode
+                || !matches!(
+                    cmd.name.as_str(),
+                    "auto" | "goal" | "fork" | "rewind" | "queue" | "steer"
+                )
+        })
+        .filter(|cmd| seen.insert(cmd.name.clone()))
+        .map(|cmd| {
+            let input_hint = cmd.input.as_ref().map(|input| match input {
+                agent_client_protocol::schema::v1::AvailableCommandInput::Unstructured(u) => {
+                    u.hint.clone()
+                }
+                _ => String::new(),
+            });
+            let skill = air_command_skill(cmd.meta.as_ref());
+            AvailableCommandInfo {
+                name: cmd.name.clone(),
+                description: cmd.description.clone(),
+                input_hint,
+                skill: skill.is_some(),
+                skill_path: skill.flatten(),
+            }
+        })
+        .collect()
+}
+
+/// Whether an advertised command is a skill, read off JetBrains AIR's command
+/// `_meta`: `Some` when it carries `jetbrains.air.kind = "skill"`, holding the
+/// `skillPath` beside it (the absolute path of its `SKILL.md`) when there is
+/// one, and `None` for every other command. The envelope must be `version >= 1`,
+/// as in [`air_recommended_value`].
+///
+/// claude-agent-acp is the agent that sends it, to an AIR client only (codeg is
+/// one for Claude, see `build_client_capabilities`). Up to 0.99.0 it marked a
+/// command only when it found the skill's `SKILL.md` itself, under the session
+/// cwd or the home directory, so plugin, CLI-bundled and nested skills reached
+/// codeg as plain commands. From 0.99.1 (#1473) it also reads Claude Code's own
+/// skill list (`getContextUsage().skills.skillFrontmatter`) on the session's
+/// first `system/init` and on every `commands_changed`, and sends the list
+/// again with every skill marked: one with a file gets `skillPath`, one bundled
+/// with the CLI (`simplify`, `loop`, …) the kind alone. A built-in command
+/// (`compact`), an MCP prompt and a `.claude/commands` prompt file stay
+/// unmarked. Measured on 0.99.1 with codeg's capabilities: the list
+/// `session/new` sends marks the user and project skills only, the read lands
+/// about 0.9 s after the first prompt and marks the plugin and the bundled
+/// skills too, and a skill under `sub/.claude/skills` joins, marked, once a
+/// file in `sub/` is read. The frontend shows the marks only for a list that
+/// has that read behind it (`skillMarkedCommands`), so no menu ever shows some
+/// skills marked and others not. codex-acp's `$skill` commands carry a
+/// `skillPath` without a `kind`, so they stay plain commands here, as before.
+fn air_command_skill(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<Option<String>> {
+    let air = meta?.get("jetbrains")?.get("air")?;
+    if air.get("version").and_then(serde_json::Value::as_i64)? < 1 {
+        return None;
+    }
+    if air.get("kind").and_then(serde_json::Value::as_str) != Some("skill") {
+        return None;
+    }
+    Some(
+        air.get("skillPath")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string),
+    )
 }
 
 /// True when a CodeBuddy sub-agent tool call's `_meta` marks it as a BACKGROUND
@@ -19979,12 +20352,13 @@ fn grok_meta_marks_ask_user(
 /// answered card the bridge recorded, and so must be dropped. Consumes the
 /// record.
 ///
-/// Measured against antigravity-acp 1.4.1 and 1.4.3: each question opens a
-/// `tool_call` (`interaction_<hex>`, titled with the question, `rawInput: {}`,
-/// `pending`), is asked through `session/request_permission` under the same id,
-/// and is closed by a `tool_call_update` carrying only `status` and a fixed
-/// `rawOutput` ("Response received" / "Interaction cancelled"). The server
-/// emits no frame for the model's `ask_question` call itself.
+/// Measured against antigravity-acp 1.4.1, 1.4.3 and 1.4.4: each question opens
+/// a `tool_call` (`interaction_<hex>`, titled with the question,
+/// `rawInput: {}`, `pending`), is asked through `session/request_permission`
+/// under the same id, and is closed by a `tool_call_update` carrying only
+/// `status` and a fixed `rawOutput` ("Response received" / "Interaction
+/// cancelled"). The server emits no frame for the model's `ask_question` call
+/// itself.
 ///
 /// The opening frame is kept: it is the row the answered card lands on, and the
 /// row an approval card's answer settles. The closing frame is dropped only
@@ -21166,6 +21540,8 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
                     .unwrap_or("")
                     .to_string(),
                 input_hint,
+                skill: false,
+                skill_path: None,
             })
         })
         .collect();
@@ -21192,6 +21568,8 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
             name: name.to_string(),
             description,
             input_hint: kiro_prompt_input_hint(prompt),
+            skill: false,
+            skill_path: None,
         })
     }));
     // The composer sends a command named `$x` as `$x`, the token codex-acp
@@ -24909,38 +25287,7 @@ async fn emit_conversation_update(
                 .await;
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
-            // Drop config-option state toggles (codex `/plan` — see
-            // `is_config_option_state_command`): they're already the
-            // `collaboration_mode` selector, not invokable commands. Then dedup:
-            // some agents (e.g. Claude Code with overlapping user/project slash
-            // commands) emit duplicate entries sharing the same name. Keep the
-            // first occurrence so downstream consumers don't render duplicates;
-            // the frontend reducer also dedupes as a defensive measure.
-            let mut seen = HashSet::new();
-            let commands: Vec<AvailableCommandInfo> = update
-                .available_commands
-                .iter()
-                .filter(|cmd| !is_config_option_state_command(agent_type, cmd.meta.as_ref()))
-                .filter(|cmd| {
-                    agent_type != AgentType::ZCode
-                        || !matches!(
-                            cmd.name.as_str(),
-                            "auto" | "goal" | "fork" | "rewind" | "queue" | "steer"
-                        )
-                })
-                .filter(|cmd| seen.insert(cmd.name.clone()))
-                .map(|cmd| {
-                    let input_hint = cmd.input.as_ref().map(|input| match input {
-                        agent_client_protocol::schema::v1::AvailableCommandInput::Unstructured(u) => u.hint.clone(),
-                        _ => String::new(),
-                    });
-                    AvailableCommandInfo {
-                        name: cmd.name.clone(),
-                        description: cmd.description.clone(),
-                        input_hint,
-                    }
-                })
-                .collect();
+            let commands = available_command_infos(agent_type, &update.available_commands);
             emit_with_state(state, emitter, AcpEvent::AvailableCommands { commands }).await;
         }
         SessionUpdate::UsageUpdate(update) => {
@@ -25077,10 +25424,10 @@ async fn emit_conversation_update(
                 crate::acp::session_title::accept_wire_title(state, emitter, agent_type, title)
                     .await;
             }
-            // claude-agent-acp 0.92.0's predicted follow-up prompt, offered in
-            // the empty composer. It arrives after the turn's response (Claude
-            // Code predicts once the turn has ended), and its clear at the
-            // start of the next prompt.
+            // The predicted follow-up prompt of claude-agent-acp 0.92.0 and
+            // codex-acp 2.5.0, offered in the empty composer. It arrives after
+            // the turn's response (both predict once the turn has ended), and
+            // its clear at the start of the next prompt.
             if let Some(text) = prompt_suggestion_update(agent_type, info.meta.as_ref()) {
                 emit_with_state(state, emitter, AcpEvent::PromptSuggestion { text }).await;
             }
@@ -25570,6 +25917,171 @@ mod tests {
             log.lock().unwrap().clone(),
             vec![("a".to_string(), StubSettled::Cancelled)]
         );
+    }
+
+    /// Admit `request_id`, a card asking about `tool_call`.
+    fn admit_stub_about(
+        queue: &mut PermissionQueue<StubResponder>,
+        log: &StubLog,
+        request_id: &str,
+        tool_call: serde_json::Value,
+    ) {
+        queue.admit(
+            StubResponder {
+                request_id: request_id.to_string(),
+                log: Arc::clone(log),
+                withdrawn: Default::default(),
+            },
+            QueuedPermission {
+                request_id: request_id.to_string(),
+                tool_call,
+                options: vec![],
+            },
+        );
+    }
+
+    #[test]
+    fn permission_queue_lists_the_tool_calls_its_cards_ask_about() {
+        let (mut q, log) = stub_queue();
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r1",
+            serde_json::json!({"toolCallId": "call-b"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r2",
+            serde_json::json!({"toolCallId": "call-a"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r3",
+            serde_json::json!({"toolCallId": "call-b"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r4",
+            serde_json::json!({"title": "names no call"}),
+        );
+        assert_eq!(
+            q.parked_tool_call_ids(),
+            ["call-b", "call-a"],
+            "the card on screen first, then the queue, each call once"
+        );
+        q.drain();
+        assert!(q.parked_tool_call_ids().is_empty());
+    }
+
+    /// What a Stop's drain emits for `agent_type` with two cards parked, one on
+    /// screen and one waiting, and how their requests were answered.
+    async fn events_of_a_stop(agent_type: AgentType) -> (Vec<String>, Vec<(String, StubSettled)>) {
+        let (mut q, log) = stub_queue();
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r1",
+            serde_json::json!({"toolCallId": "call-1"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r2",
+            serde_json::json!({"toolCallId": "call-2"}),
+        );
+        let perms = tokio::sync::Mutex::new(q);
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-stop".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let mut events = state.read().await.event_stream().subscribe();
+        drain_permissions_on_stop_then_emit(
+            &perms,
+            &state,
+            &EventEmitter::Noop,
+            agent_type,
+            AcpEvent::TurnComplete {
+                session_id: "s1".to_string(),
+                stop_reason: "cancelled".to_string(),
+                agent_type: agent_type.to_string(),
+            },
+        )
+        .await;
+        let mut seen = Vec::new();
+        while let Ok(envelope) = events.try_recv() {
+            seen.push(match &envelope.payload {
+                AcpEvent::PermissionResolved {
+                    request_id,
+                    option_id,
+                    ..
+                } => format!("resolved {request_id} {option_id:?}"),
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    status,
+                    content,
+                    raw_output,
+                    ..
+                } => {
+                    assert_eq!(content.as_deref(), Some(QODER_STOPPED_CALL_RESULT));
+                    assert_eq!(raw_output.as_deref(), Some(QODER_STOPPED_CALL_RESULT));
+                    format!("closed {tool_call_id} {}", status.as_deref().unwrap_or("-"))
+                }
+                AcpEvent::TurnComplete { stop_reason, .. } => format!("turn {stop_reason}"),
+                other => format!("{other:?}"),
+            });
+        }
+        let mut settled = log.lock().unwrap().clone();
+        settled.sort();
+        (seen, settled)
+    }
+
+    /// Qoder (1.1.76 through 1.1.81) never closes a tool call whose permission
+    /// request a Stop cancelled, so codeg closes it, as 1.1.75 did, ahead of
+    /// the turn's end, where the card still takes it.
+    #[tokio::test]
+    async fn a_stop_closes_the_qoder_calls_its_cancelled_permissions_gated() {
+        let (events, settled) = events_of_a_stop(AgentType::Qoder).await;
+        assert_eq!(
+            events,
+            [
+                "resolved r1 None",
+                "closed call-1 failed",
+                "closed call-2 failed",
+                "turn cancelled",
+            ]
+        );
+        assert_eq!(
+            settled,
+            [
+                ("r1".to_string(), StubSettled::Cancelled),
+                ("r2".to_string(), StubSettled::Cancelled),
+            ]
+        );
+    }
+
+    /// Every other agent closes those calls itself, after the turn has ended, so
+    /// codeg sends nothing in their place.
+    #[tokio::test]
+    async fn a_stop_leaves_other_agents_to_close_their_own_calls() {
+        for agent_type in [
+            AgentType::ClaudeCode,
+            AgentType::Codex,
+            AgentType::CodeBuddy,
+        ] {
+            let (events, settled) = events_of_a_stop(agent_type).await;
+            assert_eq!(
+                events,
+                ["resolved r1 None", "turn cancelled"],
+                "{agent_type:?}"
+            );
+            assert_eq!(settled.len(), 2, "{agent_type:?}");
+        }
     }
 
     #[test]
@@ -26760,6 +27272,200 @@ mod tests {
             AgentType::Codex,
             Some(&plain)
         ));
+    }
+
+    /// Commands as claude-agent-acp 0.99.1 sent them to codeg's capabilities
+    /// (recorded live; the home directory renamed), in one of two lists.
+    /// `before_read`: the list `session/new` sends, which marks only the skills
+    /// whose `SKILL.md` the adapter finds under the cwd or the home directory.
+    /// Otherwise the list it sends again once Claude Code's own skill list has
+    /// been read (#1473), which marks the plugin and the bundled skills too.
+    fn claude_0991_commands(
+        before_read: bool,
+    ) -> Vec<agent_client_protocol::schema::v1::AvailableCommand> {
+        let skill = |path: Option<&str>| match path {
+            Some(path) => serde_json::json!({"jetbrains": {"air": {
+                "version": 1, "kind": "skill", "skillPath": path,
+            }}}),
+            None => serde_json::json!({"jetbrains": {"air": {"version": 1, "kind": "skill"}}}),
+        };
+        let mut commands = vec![
+            serde_json::json!({"name": "user-skill", "description": "User skill probe (user)", "input": null,
+                "_meta": skill(Some("/home/u/.claude/skills/user-skill/SKILL.md"))}),
+            serde_json::json!({"name": "prompt-cmd", "description": "Prompt command probe (project)", "input": null}),
+            serde_json::json!({"name": "plug:pskill", "description": "(plug) Plugin skill probe", "input": null}),
+            serde_json::json!({"name": "simplify", "description": "Review the changed code", "input": {"hint": "[<target>]"}}),
+            serde_json::json!({"name": "compact", "description": "Free up context by summarizing the conversation so far",
+                "input": {"hint": "<optional custom summarization instructions>"}}),
+            serde_json::json!({"name": "mcp", "description": "Show the MCP servers and their status, or reconnect, enable, or disable a server",
+                "input": {"hint": "[reconnect|enable|disable [<server>|all]]"}}),
+        ];
+        if !before_read {
+            commands[2]["_meta"] = skill(Some("/home/u/plugins/plug/skills/pskill/SKILL.md"));
+            commands[3]["_meta"] = skill(None);
+        }
+        serde_json::from_value(serde_json::Value::Array(commands)).expect("ACP commands")
+    }
+
+    /// The skill marks each listed command carries, as `(name, skill, path)`.
+    fn skill_marks(commands: &[AvailableCommandInfo]) -> Vec<(&str, bool, Option<&str>)> {
+        commands
+            .iter()
+            .map(|c| (c.name.as_str(), c.skill, c.skill_path.as_deref()))
+            .collect()
+    }
+
+    #[test]
+    fn claude_skill_commands_carry_the_air_skill_mark() {
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        assert_eq!(
+            skill_marks(&read),
+            vec![
+                (
+                    "user-skill",
+                    true,
+                    Some("/home/u/.claude/skills/user-skill/SKILL.md")
+                ),
+                ("prompt-cmd", false, None),
+                (
+                    "plug:pskill",
+                    true,
+                    Some("/home/u/plugins/plug/skills/pskill/SKILL.md")
+                ),
+                // Bundled with the CLI: a skill without a file.
+                ("simplify", true, None),
+                ("compact", false, None),
+                ("mcp", false, None),
+            ]
+        );
+        // The mark leaves the rest of the command as it was.
+        assert_eq!(read[3].description, "Review the changed code");
+        assert_eq!(read[3].input_hint.as_deref(), Some("[<target>]"));
+
+        // Before the read only the skill found on disk is marked.
+        let first = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(true));
+        assert_eq!(
+            skill_marks(&first),
+            vec![
+                (
+                    "user-skill",
+                    true,
+                    Some("/home/u/.claude/skills/user-skill/SKILL.md")
+                ),
+                ("prompt-cmd", false, None),
+                ("plug:pskill", false, None),
+                ("simplify", false, None),
+                ("compact", false, None),
+                ("mcp", false, None),
+            ]
+        );
+    }
+
+    /// A command nothing marks goes to the frontend exactly as before the
+    /// marks existed (no `skill` / `skill_path` keys), so every other agent's
+    /// list and every snapshot is unchanged; a marked one adds the two keys.
+    #[test]
+    fn skill_marks_stay_off_the_wire_for_unmarked_commands() {
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        assert_eq!(
+            serde_json::to_value(&read[4]).unwrap(),
+            serde_json::json!({
+                "name": "compact",
+                "description": "Free up context by summarizing the conversation so far",
+                "input_hint": "<optional custom summarization instructions>",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&read[2]).unwrap(),
+            serde_json::json!({
+                "name": "plug:pskill",
+                "description": "(plug) Plugin skill probe",
+                "input_hint": null,
+                "skill": true,
+                "skill_path": "/home/u/plugins/plug/skills/pskill/SKILL.md",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&read[3]).unwrap()["skill"],
+            serde_json::json!(true)
+        );
+        assert!(serde_json::to_value(&read[3])
+            .unwrap()
+            .get("skill_path")
+            .is_none());
+        // A stored list from before the marks reads back unmarked.
+        let old: AvailableCommandInfo = serde_json::from_value(serde_json::json!({
+            "name": "compact", "description": "", "input_hint": null,
+        }))
+        .unwrap();
+        assert!(!old.skill);
+        assert_eq!(old.skill_path, None);
+    }
+
+    #[test]
+    fn air_command_skill_reads_only_a_versioned_skill_kind() {
+        let air =
+            |value: serde_json::Value| meta_map(serde_json::json!({"jetbrains": {"air": value}}));
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({
+                "version": 1, "kind": "skill", "skillPath": " /p/SKILL.md ",
+            })))),
+            Some(Some("/p/SKILL.md".to_string()))
+        );
+        // A blank path is no path.
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({
+                "version": 1, "kind": "skill", "skillPath": "  ",
+            })))),
+            Some(None)
+        );
+        // No kind: codex-acp's `$skill` commands carry the path alone.
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({
+                "version": 1, "skillPath": "/workspace/.agents/skills/build/SKILL.md",
+            })))),
+            None
+        );
+        // Another kind, an envelope without a version or below 1, the key
+        // outside the AIR namespace, and no `_meta` at all.
+        assert_eq!(
+            air_command_skill(Some(&air(
+                serde_json::json!({"version": 1, "kind": "prompt"})
+            ))),
+            None
+        );
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({"kind": "skill"})))),
+            None
+        );
+        assert_eq!(
+            air_command_skill(Some(&air(
+                serde_json::json!({"version": 0, "kind": "skill"})
+            ))),
+            None
+        );
+        assert_eq!(
+            air_command_skill(Some(&meta_map(serde_json::json!({"kind": "skill"})))),
+            None
+        );
+        assert_eq!(air_command_skill(None), None);
+    }
+
+    /// The first of two commands sharing a name is the one kept, mark and all,
+    /// as it was before the marks.
+    #[test]
+    fn a_duplicate_command_name_keeps_the_first_entry_and_its_mark() {
+        let commands: Vec<agent_client_protocol::schema::v1::AvailableCommand> =
+            serde_json::from_value(serde_json::json!([
+                {"name": "deploy", "description": "project", "input": null,
+                    "_meta": {"jetbrains": {"air": {"version": 1, "kind": "skill", "skillPath": "/w/.claude/skills/deploy/SKILL.md"}}}},
+                {"name": "deploy", "description": "user", "input": null},
+            ]))
+            .unwrap();
+        assert_eq!(
+            skill_marks(&available_command_infos(AgentType::ClaudeCode, &commands)),
+            vec![("deploy", true, Some("/w/.claude/skills/deploy/SKILL.md"))]
+        );
     }
 
     #[test]
@@ -28219,12 +28925,40 @@ mod tests {
             Some(&advertised),
             Some(&proven)
         ));
-        // Registry policy gate: codex advertises steering but has no
-        // promptRequired minimum — never native, whatever it reports.
+        // Registry policy gate: an agent with no promptRequired minimum is
+        // never native, whatever it reports.
+        assert!(!synthesize_native_steering(
+            AgentType::Gemini,
+            Some(&advertised),
+            Some(&proven)
+        ));
+        // codex-acp honors the opt-in from 2.4.0 (#593). Its versions are
+        // read against its own floor: 2.3.0 ignored the opt-in, and a
+        // prerelease of 2.4.0 may predate it.
+        for (version, native) in [
+            ("2.4.0", true),
+            ("2.5.1", true),
+            ("2.3.0", false),
+            ("2.3.1-preview.12", false),
+            ("2.4.0-preview.1", false),
+        ] {
+            assert_eq!(
+                synthesize_native_steering(
+                    AgentType::Codex,
+                    Some(&advertised),
+                    Some(&Implementation::new(
+                        "@agentclientprotocol/codex-acp",
+                        version
+                    )),
+                ),
+                native,
+                "codex-acp {version}"
+            );
+        }
         assert!(!synthesize_native_steering(
             AgentType::Codex,
             Some(&advertised),
-            Some(&proven)
+            None
         ));
         // Runtime proof gate: 0.64.1 advertises steering identically but still
         // settles the owning prompt on a mid-generation `injected` (#934, fixed
@@ -30001,6 +30735,43 @@ mod tests {
                 vec![serde_json::json!({"thread_unload_delay_secs": 60})],
                 "{blank:?}"
             );
+        }
+    }
+
+    /// codex-acp 2.5.0 predicts the next prompt after every turn, one model
+    /// call each. A connection nobody types into turns that off for its
+    /// process; one that composes leaves the user's own setting alone.
+    #[test]
+    fn codex_prompt_suggestion_policy_turns_the_prediction_off_where_nobody_composes() {
+        let key = "CODEX_ACP_PROMPT_SUGGESTIONS";
+        let values = |env: &[(String, String)]| -> Vec<String> {
+            env.iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .collect()
+        };
+
+        // No composer: off, and a user's `true` is replaced, not duplicated.
+        let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut env, false);
+        assert_eq!(values(&env), ["false"]);
+        let mut user_on = vec![(key.to_string(), "true".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut user_on, false);
+        assert_eq!(values(&user_on), ["false"]);
+
+        // A composer: nothing added, and a user's `false` stands.
+        let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut env, true);
+        assert!(values(&env).is_empty());
+        let mut user_off = vec![(key.to_string(), "false".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut user_off, true);
+        assert_eq!(values(&user_off), ["false"]);
+
+        // Codex only: a Claude session asks for none through its `_meta`.
+        for agent in [AgentType::ClaudeCode, AgentType::Grok, AgentType::OpenCode] {
+            let mut env = Vec::new();
+            apply_codex_prompt_suggestion_policy(agent, &mut env, false);
+            assert!(env.is_empty(), "{agent:?}");
         }
     }
 
@@ -32296,6 +33067,19 @@ mod tests {
         .expect("codex transport notice");
         assert!(codex_multiline.title.starts_with("Falling back from WebSockets"));
         assert!(codex_multiline.title.contains('\n'));
+
+        // claude-agent-acp 0.99.0 (#1464): an MCP server from `session/new`
+        // that failed to start, reported during the first prompt's turn.
+        let mcp = session_notice(&from_wire(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"d04fcebb-9f01-43b2-9b01-28b4a59d756b","update":{"sessionUpdate":"notice","severity":"warning","title":"MCP server \"broken-probe\" failed to start","description":"Its tools are unavailable in this session. Run /mcp for the error."}}}"#,
+        ))
+        .expect("claude MCP start-up notice");
+        assert_eq!(mcp.severity, "warning");
+        assert_eq!(mcp.title, "MCP server \"broken-probe\" failed to start");
+        assert_eq!(
+            mcp.description.as_deref(),
+            Some("Its tools are unavailable in this session. Run /mcp for the error.")
+        );
     }
 
     /// `title` is required and non-empty per the RFD. Without it there is
@@ -33720,6 +34504,51 @@ mod tests {
             "response to `session/prompt` never received: channel closed",
         );
         assert!(prompt_rejection_is_terminal(&dropped), "{dropped}");
+    }
+
+    /// claude-agent-acp's answers for a session it has no record of, captured
+    /// live from 0.98.0 and 0.99.0. 0.99.0 (#1458) answers `sessionNotFound`
+    /// (-32002 with `data.sessionId`) where 0.98.0 threw a plain error that
+    /// reached the client as -32603 with the text in `data.details`, and its
+    /// `session/load` miss carries `data.sessionId` instead of `data.uri`. A
+    /// prompt on such a session still ends the connection, and a load of it
+    /// still takes the `resource_not_found` banner.
+    #[test]
+    fn claude_session_not_found_reads_the_same_before_and_after_0_99_0() {
+        let error = |value: serde_json::Value| -> agent_client_protocol::Error {
+            serde_json::from_value(value).expect("an ACP error")
+        };
+        let prompt_0_98 = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"details": "Session not found"}
+        }));
+        let prompt_0_99 = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found",
+            "data": {"sessionId": "10d48aa1-0f66-45e1-a91f-46a2f43d418c"}
+        }));
+        assert!(prompt_rejection_is_terminal(&prompt_0_98), "{prompt_0_98}");
+        assert!(prompt_rejection_is_terminal(&prompt_0_99), "{prompt_0_99}");
+
+        let load_0_98 = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found: 30c4f341-e332-493c-b2b3-b0d41ff2e18f",
+            "data": {"uri": "30c4f341-e332-493c-b2b3-b0d41ff2e18f"}
+        }));
+        let load_0_99 = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found",
+            "data": {"sessionId": "28124b47-919f-4112-b567-0f3c7a87d966"}
+        }));
+        assert_eq!(
+            classify_session_load_error(&load_0_98),
+            Some("resource_not_found")
+        );
+        assert_eq!(
+            classify_session_load_error(&load_0_99),
+            Some("resource_not_found")
+        );
     }
 
     /// codex-acp 2.2 rejects a prompt with 1001 when the app-server died. A
@@ -43393,11 +44222,25 @@ mod tests {
         )
     }
 
+    /// The method of a scripted frame sent as a request rather than a
+    /// notification: the agent asks for permission and waits, off the handler,
+    /// for an answer it then ignores.
+    const PERMISSION_REQUEST_FRAME: &str = "session/request_permission";
+
     fn send_grok_frames(
         cx: &ConnectionTo<Client>,
         frames: &[GrokFrame],
     ) -> Result<(), agent_client_protocol::Error> {
         for (method, params) in frames {
+            if *method == PERMISSION_REQUEST_FRAME {
+                let request: RequestPermissionRequest = serde_json::from_value(params.clone())
+                    .map_err(agent_client_protocol::Error::into_internal_error)?;
+                let answer = cx.send_request_to(Client, request);
+                tokio::spawn(async move {
+                    let _ = answer.block_task().await;
+                });
+                continue;
+            }
             cx.send_notification(UntypedMessage::new(method, params.clone())?)?;
         }
         Ok(())
@@ -46113,9 +46956,34 @@ mod tests {
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
+            // One queue for the loop and for the permission requests the agent
+            // sends (`PERMISSION_REQUEST_FRAME`), which the production handler
+            // parks there.
+            let perms = PendingPermissions::default();
+            let loop_perms = Arc::clone(&perms);
+            let permission_state = Arc::clone(&state);
             let client = tokio::spawn(async move {
                 let _ = Client
                     .builder()
+                    .on_receive_request(
+                        async move |req: RequestPermissionRequest,
+                                    responder: Responder<RequestPermissionResponse>,
+                                    cx: ConnectionTo<Agent>| {
+                            handle_permission_request(
+                                &cx,
+                                &permission_state,
+                                &EventEmitter::Noop,
+                                &perms,
+                                "/tmp",
+                                agent_type,
+                                req,
+                                responder,
+                            )
+                            .await;
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
                     .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
                         let raw = cx
                             .send_request_to(
@@ -46127,7 +46995,7 @@ mod tests {
                         let response: NewSessionResponse = serde_json::from_value(raw)
                             .map_err(agent_client_protocol::Error::into_internal_error)?;
                         let mut session = AgentSession::attach(&cx, response)?;
-                        let perms = PendingPermissions::default();
+                        let perms = loop_perms;
                         let ledger = background_watch::PromptLedger::shared();
                         let stderr_tail = Arc::new(StderrTail::new());
                         run_conversation_loop(
@@ -46485,6 +47353,96 @@ mod tests {
         }).await;
     }
 
+    /// A Stop while a permission request is pending, run the way codeg runs it:
+    /// `session/cancel`, the request answered `cancelled`, the turn ended at
+    /// once. Qoder (1.1.76 through 1.1.81) never closes the call that request
+    /// gated, so codeg closes it ahead of the turn's end, where its card still
+    /// takes the report; another agent's call is left open for the agent's own
+    /// closing report.
+    #[tokio::test]
+    async fn a_stop_with_a_permission_pending_closes_a_qoder_call_before_the_turn_ends() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let custom = AgentType::custom(IDLE_PROBE_AGENT).expect("a valid custom id");
+            for (agent_type, closed_by_codeg) in [(AgentType::Qoder, true), (custom, false)] {
+                let mut lp = CustomLoop::start_for(
+                    agent_type,
+                    vec![vec![
+                        custom_update(serde_json::json!({
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "call-w",
+                            "title": "Write X.md",
+                            "kind": "edit",
+                            "status": "pending",
+                            "rawInput": {"file_path": "/tmp/X.md", "content": "x\n"},
+                        })),
+                        (
+                            PERMISSION_REQUEST_FRAME,
+                            serde_json::json!({
+                                "sessionId": "s1",
+                                "toolCall": {"toolCallId": "call-w"},
+                                "options": [
+                                    {"optionId": "proceed_once", "name": "Allow", "kind": "allow_once"},
+                                    {"optionId": "cancel", "name": "Reject", "kind": "reject_once"},
+                                ],
+                            }),
+                        ),
+                    ]],
+                )
+                .await;
+                lp.state.write().await.turn_in_flight = true;
+                lp.cmd_tx
+                    .send(ConnectionCommand::Prompt {
+                        blocks: vec![PromptInputBlock::Text {
+                            text: "write X.md".into(),
+                        }],
+                        user_message: None,
+                        internal_suffix: Vec::new(),
+                    })
+                    .await
+                    .expect("the loop is running");
+                lp.until("the permission card", |e| {
+                    matches!(e, AcpEvent::PermissionRequest { .. })
+                })
+                .await;
+                lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+                let end = lp
+                    .until("the stopped turn's end", |e| {
+                        matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+                    })
+                    .await;
+                let closings: Vec<_> = lp.seen[..end]
+                    .iter()
+                    .filter_map(|e| match e {
+                        AcpEvent::ToolCallUpdate {
+                            tool_call_id,
+                            status,
+                            content,
+                            ..
+                        } if tool_call_id == "call-w" => Some((status.clone(), content.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                if closed_by_codeg {
+                    assert_eq!(
+                        closings,
+                        [(
+                            Some("failed".to_string()),
+                            Some(QODER_STOPPED_CALL_RESULT.to_string())
+                        )],
+                        "{agent_type:?}"
+                    );
+                } else {
+                    assert!(closings.is_empty(), "{agent_type:?}: {closings:?}");
+                }
+                lp.respond.notify_one();
+                lp.shutdown().await;
+            }
+        })
+        .await;
+    }
+
     /// A local cancel lets go of the prompt without waiting for the agent, so
     /// the cancelled reply's last frames land on the idle loop. No turn end is
     /// recorded ahead of them (as for every agent whose history is codeg's
@@ -46553,6 +47511,297 @@ mod tests {
                 ]
             );
             assert!(history.turns[3].usage.is_none());
+            lp.shutdown().await;
+        })
+        .await;
+    }
+
+    fn prompt_command(text: &str) -> ConnectionCommand {
+        ConnectionCommand::Prompt {
+            blocks: vec![PromptInputBlock::Text { text: text.into() }],
+            user_message: None,
+            internal_suffix: Vec::new(),
+        }
+    }
+
+    fn held_after_stop(answer: oneshot::Receiver<tokio::time::Instant>) -> HeldPrompt {
+        HeldPrompt {
+            command: prompt_command("two"),
+            cancel: CodeBuddyCancel {
+                cancelled_at: tokio::time::Instant::now(),
+                answered: answer,
+            },
+            release_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_first_prompt_after_a_codebuddy_stop_is_held() {
+        let (_answered, answer) = oneshot::channel();
+        let mut pending = Some(CodeBuddyCancel {
+            cancelled_at: tokio::time::Instant::now(),
+            answered: answer,
+        });
+        // Other commands go through and leave the Stop pending.
+        assert!(matches!(
+            hold_for_codebuddy_cancel(Some(ConnectionCommand::Cancel), &mut pending),
+            Admitted::Run(Some(ConnectionCommand::Cancel))
+        ));
+        assert!(matches!(
+            hold_for_codebuddy_cancel(None, &mut pending),
+            Admitted::Run(None)
+        ));
+        assert!(pending.is_some());
+        // The first prompt is held and takes the Stop with it…
+        assert!(matches!(
+            hold_for_codebuddy_cancel(Some(prompt_command("two")), &mut pending),
+            Admitted::Held(HeldPrompt {
+                command: ConnectionCommand::Prompt { .. },
+                release_at: None,
+                ..
+            })
+        ));
+        assert!(pending.is_none());
+        // …so the one after it goes straight through.
+        assert!(matches!(
+            hold_for_codebuddy_cancel(Some(prompt_command("three")), &mut pending),
+            Admitted::Run(Some(ConnectionCommand::Prompt { .. }))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_codebuddy_prompt_goes_once_the_cancel_barrier_has_passed() {
+        let (answered, answer) = oneshot::channel();
+        let mut held = held_after_stop(answer);
+        let start = tokio::time::Instant::now();
+        let answer_after = std::time::Duration::from_millis(30);
+        tokio::spawn(async move {
+            tokio::time::sleep(answer_after).await;
+            let _ = answered.send(tokio::time::Instant::now());
+        });
+        // The idle loop drops this wait whenever it reads an update; the answer
+        // can be received only once, so the release time it gave must stick.
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            wait_out_codebuddy_cancel(&mut held),
+        )
+        .await
+        .is_err());
+        let release = start + answer_after + CODEBUDDY_CANCEL_BARRIER;
+        assert_eq!(held.release_at, Some(release));
+        wait_out_codebuddy_cancel(&mut held).await;
+        assert_eq!(tokio::time::Instant::now(), release);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_codebuddy_prompt_goes_at_once_when_no_answer_can_come() {
+        let (answered, answer) = oneshot::channel::<tokio::time::Instant>();
+        drop(answered);
+        let mut held = held_after_stop(answer);
+        let start = tokio::time::Instant::now();
+        wait_out_codebuddy_cancel(&mut held).await;
+        assert_eq!(tokio::time::Instant::now(), start);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_codebuddy_prompt_stops_waiting_for_an_answer_that_never_comes() {
+        let (_answered, answer) = oneshot::channel::<tokio::time::Instant>();
+        let mut held = held_after_stop(answer);
+        let cancelled_at = held.cancel.cancelled_at;
+        wait_out_codebuddy_cancel(&mut held).await;
+        assert_eq!(
+            tokio::time::Instant::now(),
+            cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT
+        );
+    }
+
+    #[test]
+    fn codebuddy_cancelled_answer_for_a_finished_run_ends_the_turn() {
+        let meta = |value: serde_json::Value| value.as_object().cloned();
+        // The first prompt CodeBuddy runs after a Stop that caught a permission
+        // request, as 2.177.1 answers it.
+        let finished = meta(serde_json::json!({
+            "codebuddy.ai/finishReason": "stop",
+            "codebuddy.ai/outcome": "CANCELLED",
+        }));
+        assert_eq!(
+            codebuddy_stop_reason(
+                AgentType::CodeBuddy,
+                StopReason::Cancelled,
+                finished.as_ref()
+            ),
+            StopReason::EndTurn
+        );
+        // A real cancel, and a prompt the cancel barrier dropped, carry no
+        // finish reason; a run cut short carries another one.
+        for meta in [
+            None,
+            meta(serde_json::json!({"codebuddy.ai/outcome": "CANCELLED"})),
+            meta(serde_json::json!({"codebuddy.ai/finishReason": null})),
+            meta(serde_json::json!({"codebuddy.ai/finishReason": "length"})),
+        ] {
+            assert_eq!(
+                codebuddy_stop_reason(AgentType::CodeBuddy, StopReason::Cancelled, meta.as_ref()),
+                StopReason::Cancelled
+            );
+        }
+        // Other agents and other stop reasons are left alone.
+        assert_eq!(
+            codebuddy_stop_reason(
+                AgentType::ClaudeCode,
+                StopReason::Cancelled,
+                finished.as_ref()
+            ),
+            StopReason::Cancelled
+        );
+        assert_eq!(
+            codebuddy_stop_reason(
+                AgentType::CodeBuddy,
+                StopReason::MaxTokens,
+                finished.as_ref()
+            ),
+            StopReason::MaxTokens
+        );
+    }
+
+    /// CodeBuddy answers a prompt that starts within 500 ms of a Stop with
+    /// `cancelled` and never runs it. codeg's message queue sends the next
+    /// message the moment a Stop ends the turn, so that prompt is held until
+    /// the cancelled prompt's answer plus the barrier, while the idle loop
+    /// keeps reading the cancelled turn's last frames.
+    #[tokio::test]
+    async fn codebuddy_holds_the_prompt_after_a_stop_until_its_cancel_barrier_passes() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let mut lp = CustomLoop::start_for(
+                AgentType::CodeBuddy,
+                vec![vec![custom_text("working, ")], vec![custom_text("second")]],
+            )
+            .await;
+            lp.open_turn("one", "working, ").await;
+            lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            let stopped = lp
+                .until("cancelled", |e| {
+                    matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+                })
+                .await;
+            // The queued message, sent as soon as the Stop ended the turn.
+            lp.state.write().await.turn_in_flight = true;
+            lp.cmd_tx.send(prompt_command("two")).await.unwrap();
+            let prompting = |e: &AcpEvent| {
+                matches!(
+                    e,
+                    AcpEvent::StatusChanged {
+                        status: ConnectionStatus::Prompting
+                    }
+                )
+            };
+            // While it is held, the idle loop still reads the agent.
+            lp.agent_sends(vec![custom_text("late tail"), grok_barrier()]);
+            let read = lp.until_barrier().await;
+            assert!(!lp.seen[stopped..read].iter().any(prompting));
+            // The cancelled prompt has not been answered yet, so it stays held.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            lp.agent_sends(vec![grok_barrier()]);
+            let read = lp.until_barrier().await;
+            assert!(!lp.seen[stopped..read].iter().any(prompting));
+
+            let answered = std::time::Instant::now();
+            lp.respond.notify_one();
+            lp.until_text("second").await;
+            assert!(
+                answered.elapsed() >= CODEBUDDY_CANCEL_BARRIER,
+                "sent {:?} after the cancelled prompt's answer",
+                answered.elapsed()
+            );
+            lp.close_turn().await;
+            assert!(matches!(
+                lp.seen.last(),
+                Some(AcpEvent::TurnComplete { stop_reason, .. }) if stop_reason == "end_turn"
+            ));
+            lp.shutdown().await;
+        })
+        .await;
+    }
+
+    /// A Stop that arrives while a prompt is held waits for it: the prompt then
+    /// goes out and is stopped, instead of the Stop going to an idle session
+    /// and the held prompt running anyway.
+    #[tokio::test]
+    async fn codebuddy_stop_during_the_hold_stops_the_held_prompt() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let mut lp = CustomLoop::start_for(
+                AgentType::CodeBuddy,
+                vec![vec![custom_text("working, ")], vec![custom_text("second")]],
+            )
+            .await;
+            lp.open_turn("one", "working, ").await;
+            lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            lp.until("the first stop", |e| {
+                matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+            })
+            .await;
+            lp.state.write().await.turn_in_flight = true;
+            lp.cmd_tx.send(prompt_command("two")).await.unwrap();
+            lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            lp.respond.notify_one();
+            let prompting = lp
+                .until("the held prompt", |e| {
+                    matches!(
+                        e,
+                        AcpEvent::StatusChanged {
+                            status: ConnectionStatus::Prompting
+                        }
+                    )
+                })
+                .await;
+            let stopped = lp
+                .until("the second stop", |e| {
+                    matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+                })
+                .await;
+            assert!(stopped > prompting);
+            lp.shutdown().await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_finished_codebuddy_run_answered_cancelled_ends_its_turn() {
+        use agent_client_protocol::schema::v1::PromptResponse;
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let answered = |finish: Option<&str>| {
+                let mut response = PromptResponse::new(StopReason::Cancelled);
+                let mut meta = serde_json::Map::new();
+                meta.insert("codebuddy.ai/outcome".into(), "CANCELLED".into());
+                if let Some(finish) = finish {
+                    meta.insert("codebuddy.ai/finishReason".into(), finish.into());
+                }
+                response.meta = Some(meta);
+                response
+            };
+            let mut lp = CustomLoop::start_with_responses(
+                AgentType::CodeBuddy,
+                vec![vec![custom_text("done")], vec![custom_text("cut")]],
+                vec![answered(Some("stop")), answered(None)],
+            )
+            .await;
+            for (prompt, text, end) in [("one", "done", "end_turn"), ("two", "cut", "cancelled")] {
+                lp.run_turn(prompt, text).await;
+                assert!(
+                    matches!(
+                        lp.seen.last(),
+                        Some(AcpEvent::TurnComplete { stop_reason, .. }) if stop_reason == end
+                    ),
+                    "{prompt}: {:?}",
+                    lp.seen.last()
+                );
+            }
             lp.shutdown().await;
         })
         .await;

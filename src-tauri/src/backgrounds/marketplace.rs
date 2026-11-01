@@ -9,7 +9,7 @@
 //!   `BackgroundAsset` for the frontend to mint a blob URL from.
 //! - `download(...)` — full image through the *same* validation and atomic
 //!   write as a manual background pick, so a market download and a local
-//!   file share one security path (byte sniff, 16 MiB / 40 Mpx caps).
+//!   file share one security path (byte sniff, 64 MiB / 100 Mpx caps).
 //!
 //! All traffic uses a process-wide `reqwest::Client` with a stable user-agent,
 //! mirroring `crate::pets::marketplace`, and a redirect policy that re-applies
@@ -34,18 +34,23 @@ const WALLHAVEN_PURITY: &str = "100";
 const MAX_SEARCH_JSON_BYTES: u64 = 4 * 1024 * 1024;
 /// Thumbnail cap. Real `th.wallhaven.cc/small` files are tens of KiB.
 const MAX_ASSET_BYTES: u64 = 4 * 1024 * 1024;
-/// Full-image cap. Deliberately equals `backgrounds::MAX_BG_BYTES` so the
-/// transport cap and the byte-level validator agree on one ceiling.
-const MAX_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024;
+/// Full-image cap. Is `backgrounds::MAX_BG_BYTES` so the transport cap and the
+/// byte-level validator agree on one ceiling.
+const MAX_DOWNLOAD_BYTES: u64 = super::MAX_BG_BYTES as u64;
 /// Longest accepted search query; wallhaven itself truncates far earlier.
 const MAX_QUERY_CHARS: usize = 128;
 /// Deadline for the small JSON/thumbnail fetches, which are tens of KiB.
 const SMALL_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-/// Deadline for a full image. Deliberately not 30 s: at the 16 MiB ceiling that
-/// would demand ~4.4 Mbit/s sustained, and this market exists precisely because
-/// some users cannot reach the CDN well. Stalls are caught by the client's
-/// read timeout, so this only bounds a slow-but-progressing transfer.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+/// Deadline for a full image. Deliberately not 30 s: at the 64 MiB ceiling that
+/// would demand ~18 Mbit/s sustained, and this market exists precisely because
+/// some users cannot reach the CDN well. 570 s still asks ~0.95 Mbit/s for the
+/// largest file; it is not longer because the remote-desktop proxy caps any
+/// request at 600 s, and the frontend's transport timeout
+/// (`downloadWorkspaceBgMarket`) is that 600 s — 30 s above this deadline, so
+/// this side's structured timeout error arrives first in every runtime. Stalls
+/// are caught by the client's read timeout, so this only bounds a
+/// slow-but-progressing transfer.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(570);
 /// Redirect hops allowed, each re-checked against the host allowlist.
 const MAX_REDIRECT_HOPS: usize = 5;
 
@@ -155,9 +160,9 @@ pub struct MarketSearchParams {
 ///
 /// `width`/`height`/`file_size_bytes` are carried rather than dropped because
 /// `download` refuses anything past `backgrounds::MAX_BG_BYTES` /
-/// `MAX_BG_PIXELS`, and roughly one wallhaven listing in fifteen is past one of
-/// them. Without these three numbers the frontend cannot tell a wallpaper it can
-/// apply from one it can only fail on. `0` means the listing omitted the field.
+/// `MAX_BG_PIXELS`, and some wallhaven listings are past one of them. Without
+/// these three numbers the frontend cannot tell a wallpaper it can apply from
+/// one it can only fail on. `0` means the listing omitted the field.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketWallpaperSummary {
@@ -364,9 +369,9 @@ pub async fn download(url: &str, source_url: &str) -> Result<(), AppCommandError
         "wallpaper download",
     )
     .await?;
-    // Same gate as a manual pick: byte sniff, 16 MiB and 40 Mpx caps. Off the
+    // Same gate as a manual pick: byte sniff, 64 MiB and 100 Mpx caps. Off the
     // runtime like every other command in `commands::background` — decoding a
-    // header and fsyncing up to 16 MiB is not work to do on an executor thread.
+    // header and fsyncing up to 64 MiB is not work to do on an executor thread.
     tokio::task::spawn_blocking(move || {
         validate_background(&bytes)?;
         write_background_atomic(&bytes)
