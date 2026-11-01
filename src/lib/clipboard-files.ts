@@ -17,3 +17,26 @@ export async function copyFilesToClipboard(paths: string[]): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("copy_files_to_clipboard", { paths })
 }
+
+/** One entry the OS clipboard holds as a file (`commands::clipboard`). */
+export interface ClipboardFile {
+  path: string
+  /** The final path component, the name a webview gives the pasted `File`. */
+  name: string
+  /** Byte length of a regular file; null for anything else. */
+  size: number | null
+  isDir: boolean
+}
+
+/**
+ * The files a copy in Finder / Explorer / a Linux file manager left on the OS
+ * clipboard, empty when it holds none. A webview hands a paste of them to the
+ * page as `File`s without their paths; this is where the paths come from.
+ *
+ * Same desktop-only contract as {@link copyFilesToClipboard}: only the Tauri
+ * command exists, so callers gate on pure-desktop mode first.
+ */
+export async function readClipboardFiles(): Promise<ClipboardFile[]> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<ClipboardFile[]>("read_clipboard_files")
+}

@@ -2254,6 +2254,16 @@ pub struct AvailableCommandInfo {
     pub name: String,
     pub description: String,
     pub input_hint: Option<String>,
+    /// The agent marks the command as a skill (JetBrains AIR's command
+    /// `_meta.jetbrains.air.kind = "skill"`, read by `air_command_skill` in
+    /// `connection.rs`). Left off the wire when false, so a command of an agent
+    /// that marks nothing serializes exactly as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skill: bool,
+    /// The skill's `SKILL.md`, when the agent sent its path. Only ever set
+    /// together with `skill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
 }
 
 /// Claude Code's Remote Control for a session that has it on: the session can

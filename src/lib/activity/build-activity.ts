@@ -412,6 +412,23 @@ function buildActivityUncached(
   return model
 }
 
+/** A step keyed by its reply's anchor and its place in the reply:
+ *  `note:<anchor>:<index>`, and so thoughts, plans and images. */
+const ANCHORED_KEY = /^(note|thought|plan|image):.+:(\d+)$/
+
+/**
+ * A step's identity within its own reply: its key without the reply's anchor.
+ * The anchor tells replies apart (the disclosure store, the last build kept
+ * per reply), but while the first thing a reply says is still short it is
+ * hashed from that text as it grows, so a thought's key changes several times
+ * in its first moments — and a row keyed by it was drawn anew each time,
+ * cutting short its arrival. Within one reply the part's place is enough.
+ */
+export function rowIdentity(key: string): string {
+  const anchored = ANCHORED_KEY.exec(key)
+  return anchored ? `${anchored[1]}@${anchored[2]}` : key
+}
+
 /**
  * Does a reply's answer leave anything for the reader? Whitespace-only text is
  * not an answer: it renders as an empty markdown block, so a turn "kept
@@ -443,7 +460,9 @@ export function buildActivity(
   opts: {
     isStreaming: boolean
     /** Keep closing prose as steps instead of splitting it off as the
-     *  answer — for a sub-agent's own timeline, which has no answer slot. */
+     *  answer — for a sub-agent's own timeline, which has no answer slot,
+     *  and for a reply still being written, whose closing prose is not
+     *  known yet. */
     keepAnswer?: boolean
   }
 ): ActivityModel {

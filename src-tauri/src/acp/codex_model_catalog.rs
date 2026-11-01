@@ -147,6 +147,14 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// all, so a value of any type there now loads. No `ModelInfo` field was
 /// added. Re-probed against the 0.164.0 binary: every field here and every
 /// enum set above behaves as on 0.160.1.
+///
+/// 0.165.0 (codex-acp 2.4.0 moves `@openai/codex` ^0.164.0 → ^0.165.0) adds
+/// GPT-6.1 Terra (12 slugs; file position three, priority 7) with the same
+/// key set as every other entry, and changes no other model. No `ModelInfo`
+/// field was added. Re-probed against the 0.165.0 binary: every field here
+/// and every enum set above behaves as on 0.164.0, and both the 0.164.0 and
+/// the 0.165.0 snapshot load whole. Its new keys are nested — see
+/// [`model_messages_override_is_safe`].
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -243,6 +251,12 @@ const MODEL_MESSAGES_TEXT_FIELDS: &[&str] = &[
 /// through as well: none is in the bundled catalog or the editor, and the
 /// codex that will load a catalog judges it before codeg publishes it
 /// ([`crate::acp::codex_runtime`]).
+///
+/// 0.165 adds five more of the same kind, each of which 0.164.0 ignores and
+/// 0.165.0 refuses when mistyped: `permissions.writable_root` and
+/// `permissions.writable_roots` (strings), and `tools.history`,
+/// `tools.notes` and `tools.context_management` (objects). They pass through
+/// for the same reasons.
 fn model_messages_override_is_safe(value: &Value) -> bool {
     match value {
         Value::Null => true,
@@ -824,15 +838,16 @@ mod tests {
         let models = snap();
         assert_eq!(
             models.len(),
-            11,
-            "snapshot should carry the catalog codex 0.159.2–0.164.0 ships"
+            12,
+            "snapshot should carry the catalog codex 0.165.0 ships"
         );
         // 0.158.0 deleted gpt-5.4 outright (it had shipped hidden, as a
         // retirement stub) rather than hiding it any further.
         assert!(models.iter().all(|m| slug_of(m) != Some("gpt-5.4")));
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-6-astra")));
-        // 0.156.1 adds GPT-6 Sol and Luna, 0.159.1 GPT-6.1 Sol; all listed.
-        for added in ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"] {
+        // 0.156.1 adds GPT-6 Sol and Luna, 0.159.1 GPT-6.1 Sol, 0.165.0
+        // GPT-6.1 Terra; all listed.
+        for added in ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"] {
             let m = models
                 .iter()
                 .find(|m| slug_of(m) == Some(added))
@@ -954,8 +969,8 @@ mod tests {
             catalog: None,
         };
         let cat = expand_to_catalog(&config, &snap());
-        // All 11 officials auto-included + 1 custom = 12.
-        assert_eq!(slugs(&cat).len(), 12);
+        // All 12 officials auto-included + 1 custom = 13.
+        assert_eq!(slugs(&cat).len(), 13);
         // Custom is first (top of picker) and forced list + api.
         let c = find(&cat, "gw/opus").expect("custom present");
         assert_eq!(c.get("visibility").unwrap(), "list");

@@ -705,7 +705,7 @@ pub fn is_codeg_ask_tool_name(name: &str) -> bool {
 /// own questions: `server.py::_ask_user_handler` mints
 /// `interaction_<8 hex>` for each question it asks (the model's `ask_question`,
 /// asked one question at a time, and the workspace-trust prompt alike). It is
-/// the only producer of that prefix in 1.4.1 and 1.4.3.
+/// the only producer of that prefix in 1.4.1, 1.4.3 and 1.4.4.
 pub const ANTIGRAVITY_INTERACTION_ID_PREFIX: &str = "interaction_";
 
 /// True when `id` has the shape of an antigravity-acp question's tool call id

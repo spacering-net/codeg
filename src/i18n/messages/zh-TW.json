@@ -278,7 +278,7 @@
       "imageBlur": "圖片模糊",
       "panelOpacity": "面板不透明度",
       "panelOpacityHint": "側邊欄、面板與標籤列的不透明程度。越低，透出的圖片越多。",
-      "errorTooLarge": "圖片太大（最大 16 MB）。",
+      "errorTooLarge": "圖片太大（最大 64 MB）。",
       "errorUnsupportedFormat": "不支援的圖片格式，請選擇 PNG、JPEG、WebP 或 GIF。",
       "errorUploadFailed": "設定背景圖片失敗。",
       "market": {
@@ -1630,7 +1630,9 @@
       "disableNonessentialTrafficAria": "停用 Claude Code 遙測或多餘的網路請求",
       "gatewayDiscovery": "讓 Claude 列出閘道的 Claude 模型",
       "gatewayDiscoveryAria": "讓 Claude Code 列出閘道的 Claude 模型",
-      "gatewayDiscoveryHint": "Claude 會自行向 API 位址查詢模型，只保留含「claude」或「anthropic」的 ID，從下一個工作階段起出現。"
+      "gatewayDiscoveryHint": "Claude 會自行向 API 位址查詢模型，只保留含「claude」或「anthropic」的 ID，從下一個工作階段起出現。",
+      "thinkingSummaries": "顯示 Claude 的思考摘要",
+      "thinkingSummariesHint": "Claude Code 預設只顯示 Claude 在工具呼叫之間寫下的說明。開啟後還會顯示其推理過程的摘要。不額外消耗 token，需要 claude-agent-acp 0.99.0 或更新版本。"
     },
     "dialogs": {
       "confirmDeleteProvider": "確認刪除 Provider {providerId}？",
@@ -4327,6 +4329,7 @@
         "cardResultPending": "結果尚未返回"
       },
       "asyncTasks": {
+        "title": "背景任務",
         "openOutput": "輸出",
         "stop": "停止",
         "tokens": "{count} tokens",
@@ -4710,7 +4713,7 @@
     "agentTypeRequired": "請選擇智能體類型。",
     "agentTypeImmutableHint": "智能體類型建立後不可修改。",
     "model": "模型",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "主要模型",
     "claudeReasoningModel": "推理模型（思考）",

@@ -2898,6 +2898,13 @@ export interface AvailableCommandInfo {
   name: string
   description: string
   input_hint?: string | null
+  /** The agent marks the command as a skill (claude-agent-acp's AIR
+   *  `kind: "skill"`). Absent when it does not. A `/` menu shows the mark only
+   *  for a list the agent has marked in full; see `skillMarkedCommands`. */
+  skill?: boolean
+  /** The skill's `SKILL.md`, when the agent sent its path. A skill bundled
+   *  with the agent CLI has none. */
+  skill_path?: string | null
 }
 
 /**

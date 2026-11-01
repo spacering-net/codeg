@@ -1,8 +1,20 @@
 import { act, render } from "@testing-library/react"
-import { useRef } from "react"
-import { describe, expect, it } from "vitest"
+import { StrictMode, useRef } from "react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { useRailGrowth } from "./use-rail-growth"
+
+/** Whether a reply is taking the pending reply's place as the list mounts.
+ *  Told once, as in the thread: the reply's own mount, right after, takes
+ *  the pending reply's layout. */
+const handoff = vi.hoisted(() => ({ taking: false }))
+vi.mock("../reply-motion", () => ({
+  takesPendingPlace: () => {
+    const taking = handoff.taking
+    handoff.taking = false
+    return taking
+  },
+}))
 
 function List({
   rows,
@@ -28,7 +40,7 @@ function List({
           data-body={row === body ? "" : undefined}
         />
       ))}
-      {foot ? <li key="foot" data-row="foot" /> : null}
+      {foot ? <li key="foot" data-row="foot" data-marker="working" /> : null}
     </ul>
   )
 }
@@ -50,6 +62,10 @@ async function marks(container: HTMLElement) {
 }
 
 describe("useRailGrowth", () => {
+  afterEach(() => {
+    handoff.taking = false
+  })
+
   it("marks the rows that join a live list, and the row they follow", async () => {
     const view = render(<List rows={["a", "b"]} live />)
     view.rerender(<List rows={["a", "b", "c", "d"]} live />)
@@ -150,6 +166,30 @@ describe("useRailGrowth", () => {
       c: "",
       foot: "",
     })
+  })
+
+  it("lets the rows join that a reply mounts with in the pending reply's place", async () => {
+    // The pending reply stood as this list, its ring alone: what the reply
+    // mounts with has only just come, and grows in as rows that join do.
+    handoff.taking = true
+    const view = render(<List rows={["a", "b"]} live foot />)
+
+    expect(await marks(view.container)).toEqual({
+      a: "enter",
+      b: "enter",
+      foot: "",
+    })
+  })
+
+  it("keeps those marks through its effect run over again (Strict Mode)", async () => {
+    handoff.taking = true
+    const view = render(
+      <StrictMode>
+        <List rows={["a"]} live foot />
+      </StrictMode>
+    )
+
+    expect(await marks(view.container)).toEqual({ a: "enter", foot: "" })
   })
 
   it("marks nothing in a settled list", async () => {

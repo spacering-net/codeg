@@ -123,6 +123,8 @@ mod tests {
             name: name.to_string(),
             description: String::new(),
             input_hint: None,
+            skill: false,
+            skill_path: None,
         }
     }
 

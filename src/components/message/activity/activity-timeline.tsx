@@ -4,7 +4,7 @@ import { memo, useMemo, useRef, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
-import { hasVisibleAnswer } from "@/lib/activity/build-activity"
+import { hasVisibleAnswer, rowIdentity } from "@/lib/activity/build-activity"
 import type {
   ActivityItem,
   ActivityModel,
@@ -59,10 +59,15 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   pinnedOnly = false,
   foot,
   headed = false,
+  nested = false,
 }: {
   model: ActivityModel
   isStreaming: boolean
-  renderPart: (part: AdaptedContentPart, key: string) => ReactNode
+  renderPart: (
+    part: AdaptedContentPart,
+    key: string,
+    live?: boolean
+  ) => ReactNode
   pinnedOnly?: boolean
   /** The list folds away with its host — the reply, a sub-agent's row, a
    *  goal's card: the rail runs on past the last row to a foot, the turning
@@ -70,8 +75,12 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   foot?: ActivityFoot
   /** The list hangs under the turn's header capsule: its first step sits as
    *  far below it as a step below the one before, and the rail runs up to
-   *  it (globals.css). */
+   *  it (globals.css). While its foot turns it stands before any step has
+   *  come: the rail runs from the header down to the turning ring, where the
+   *  first step will go, and the steps join above the ring. */
   headed?: boolean
+  /** Drawn inside a step (see `ActivityRenderContextValue.nested`). */
+  nested?: boolean
 }) {
   const t = useTranslations("Folder.chat.activity")
   const context = useMemo(
@@ -80,20 +89,22 @@ export const ActivityTimeline = memo(function ActivityTimeline({
       isStreaming,
       recoveredKeys: model.summary.recoveredKeys,
       pinnedOnly,
+      nested,
       renderNested: (
-        nested: ActivityModel,
+        nestedModel: ActivityModel,
         nestedStreaming: boolean,
         nestedFoot?: ActivityFoot
       ) => (
         <ActivityTimeline
-          model={nested}
+          model={nestedModel}
           isStreaming={nestedStreaming}
           renderPart={renderPart}
           foot={nestedFoot}
+          nested
         />
       ),
     }),
-    [renderPart, isStreaming, model.summary.recoveredKeys, pinnedOnly]
+    [renderPart, isStreaming, model.summary.recoveredKeys, pinnedOnly, nested]
   )
   // A giant reply (an agent loop of hundreds of calls) opens with its first
   // and last rows; the middle is revealed a chunk at a time. Message-level
@@ -101,8 +112,15 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   const [revealed, setRevealed] = useState(0)
   const items = model.items
   const listRef = useRef<HTMLOListElement>(null)
-  // Still going, its rail grows down to each step that joins it.
-  useRailGrowth(listRef, !pinnedOnly && isStreaming && items.length > 0)
+  // Under the header, the list is there from the start: with no step yet,
+  // it is the rail down to its turning foot (see `headed`).
+  const standing = headed && !pinnedOnly && foot?.working === true
+  // Still going, its rail grows down to each step that joins it — the first
+  // one too, when the list was standing for it.
+  useRailGrowth(
+    listRef,
+    !pinnedOnly && isStreaming && (items.length > 0 || standing)
+  )
   const long = items.length > LONG_TIMELINE_ROWS && !pinnedOnly
   // While it streams, its rows slide into the fold one at a time as new ones
   // arrive: cutting the tail to size the moment it crossed the threshold would
@@ -113,11 +131,11 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   const hidden = long
     ? Math.max(0, items.length - LONG_TIMELINE_HEAD - tailSize - revealed)
     : 0
-  if (items.length === 0) return null
+  if (items.length === 0 && !standing) return null
   const headSize = LONG_TIMELINE_HEAD + revealed
   // A group the reply has moved past — a row follows it, or the answer under
   // the rows does — takes no more members.
-  const lastKey = items[items.length - 1]!.key
+  const lastKey = items.length > 0 ? items[items.length - 1]!.key : null
   const answerFollows = hasVisibleAnswer(model.answer)
   // One list of children, the fold among them: a row that moves between the
   // head, the fold and the tail keeps its key's place, never remounting.
@@ -133,6 +151,9 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         role="list"
         className="activity-timeline empty:hidden"
         data-headed={headed ? "" : undefined}
+        // Standing for its first step, the list holds only the turning ring:
+        // nothing to read yet, so no list either.
+        aria-hidden={items.length === 0 ? true : undefined}
       >
         {rows.map((item) =>
           item === FOLD ? (
@@ -152,11 +173,14 @@ export const ActivityTimeline = memo(function ActivityTimeline({
             </li>
           ) : (
             <ActivityItemView
-              key={item.key}
+              key={rowIdentity(item.key)}
               item={item}
               followed={
                 item.type === "group" && (item.key !== lastKey || answerFollows)
               }
+              // The list's last step while the reply is written: if it is
+              // prose, it is the prose being written now.
+              tail={isStreaming && !pinnedOnly && item.key === lastKey}
             />
           )
         )}
@@ -169,6 +193,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
             working={foot.working}
             what={foot.what}
             onFold={foot.onFold}
+            motionScope={nested ? undefined : ""}
           />
         ) : null}
       </ol>
@@ -195,10 +220,13 @@ function canOutliveTurn(item: ActivityItem): boolean {
 const ActivityItemView = memo(function ActivityItemView({
   item,
   followed,
+  tail,
 }: {
   item: ActivityItem
-  /** A group with something after it in the reply (see `useGroupGoing`). */
+  /** A group with something after it in the reply (see `useGroupPlace`). */
   followed: boolean
+  /** The last step of a list still being written. */
+  tail: boolean
 }) {
   const { pinnedOnly } = useActivityRender()
   if (pinnedOnly && !canOutliveTurn(item)) return null
@@ -219,18 +247,30 @@ const ActivityItemView = memo(function ActivityItemView({
       />
     )
   }
-  return <StepView step={item.step} />
+  return <StepView step={item.step} tail={tail} />
 })
 
-function StepView({ step }: { step: ActivityStep }) {
+/** A note's motion key: the prose it holds, by its place in the reply —
+ *  `note:<anchor>:<index>` holds the part at `<index>` — which is the key
+ *  that prose has as the reply's answer too (`CompletedTurnContent`). */
+function proseMotionKey(noteKey: string): string {
+  return `prose:${noteKey.slice(noteKey.lastIndexOf(":") + 1)}`
+}
+
+function StepView({ step, tail }: { step: ActivityStep; tail: boolean }) {
   const t = useTranslations("Folder.chat.activity")
-  const { renderPart, renderNested } = useActivityRender()
+  const { renderPart, renderNested, nested } = useActivityRender()
   switch (step.type) {
     case "thought":
       return <ThoughtRow step={step} />
     case "note":
       return (
-        <NoteRow stepKey={step.key}>{renderPart(step.part, step.key)}</NoteRow>
+        <NoteRow
+          stepKey={step.key}
+          motionKey={nested ? undefined : proseMotionKey(step.key)}
+        >
+          {renderPart(step.part, step.key, tail)}
+        </NoteRow>
       )
     case "tool-result":
       return <ToolResultRow step={step} />

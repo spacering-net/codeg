@@ -497,9 +497,10 @@ pub struct SessionState {
     /// too.
     pub prompt_suggestion: Option<String>,
     /// Whether this connection's sessions ask the agent to predict the next
-    /// prompt (claude-agent-acp's `promptSuggestions`, which costs one request
-    /// after every turn; see `connection::claude_raw_sdk_session_meta`). Fixed
-    /// at creation by [`owner_composes_prompts`]. Backend-internal — not
+    /// prompt, which costs one request after every turn: claude-agent-acp's
+    /// `promptSuggestions` (see `connection::claude_raw_sdk_session_meta`) and
+    /// codex-acp's (see `connection::apply_codex_prompt_suggestion_policy`).
+    /// Fixed at creation by [`owner_composes_prompts`]. Backend-internal — not
     /// serialized, not carried on `to_snapshot()`.
     pub wants_prompt_suggestions: bool,
     /// The `--settings` a Claude launch hands every session request of its

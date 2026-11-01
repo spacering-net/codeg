@@ -15,7 +15,13 @@ import type { ActivityFoot } from "./timeline-foot"
  * mounts the timeline; importing it here would close an import cycle.
  */
 export interface ActivityRenderContextValue {
-  renderPart: (part: AdaptedContentPart, key: string) => ReactNode
+  /** `live`: the part is the prose the agent is writing right now — its
+   *  words fade in as they arrive. */
+  renderPart: (
+    part: AdaptedContentPart,
+    key: string,
+    live?: boolean
+  ) => ReactNode
   /** The reply is still being written. */
   isStreaming: boolean
   /** Failed steps a later step redid successfully (see `summarizeActivity`). */
@@ -30,6 +36,9 @@ export interface ActivityRenderContextValue {
   /** Only rows still running are drawn — the folded turn's long-lived rows
    *  (delegations, sub-agents, background tasks that outlive the turn). */
   pinnedOnly: boolean
+  /** A list inside a step (a sub-agent's, a goal's): its prose and its foot
+   *  are not the reply's own, so they carry no motion keys (`ReplyMotion`). */
+  nested: boolean
 }
 
 const ActivityRenderContext = createContext<ActivityRenderContextValue | null>(

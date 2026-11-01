@@ -1972,13 +1972,13 @@ pub fn build_router_with_proxy_auth(
         )
         .route(
             "/background_set",
-            // A 16MiB image becomes ~21.4MiB once base64-encoded and wrapped in
+            // A 64MiB image becomes ~85.4MiB once base64-encoded and wrapped in
             // the JSON envelope; axum's default 2MiB `DefaultBodyLimit` would
             // 413 any real photo before the handler runs. Raise it to cover the
             // advertised ceiling; `backgrounds::validate_background` stays the
             // authoritative size boundary on the decoded bytes.
             post(handlers::background::background_set)
-                .layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(96 * 1024 * 1024)),
         )
         .route(
             "/background_clear",

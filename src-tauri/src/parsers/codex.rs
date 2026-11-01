@@ -5369,6 +5369,9 @@ impl CodexParser {
         // After every pass that drops messages, so it sees every pair of cards
         // they leave touching.
         merge_touching_thinking_cards(&mut messages, turn_starts);
+        // After the promotion and dedupe passes, which compare the raw text of
+        // a record's twins.
+        render_agent_message_citations(&mut messages, cwd.as_deref().unwrap_or(""));
         let mut turns = group_into_turns(messages);
         reconcile_turn_usage(&mut turns, &recorded_round_usage);
         super::relocate_orphaned_tool_results(&mut turns);
@@ -5699,6 +5702,41 @@ fn push_turn_start(turn_starts: &mut Vec<DateTime<Utc>>, ts: DateTime<Utc>) {
         Some(last) if ts <= *last => {}
         _ => turn_starts.push(ts),
     }
+}
+
+/// Rewrite the model's file citations in agent prose as the Markdown links
+/// codex-acp 2.4.0 streams for them (#698), resolved against the session cwd —
+/// see [`super::codex_file_citations`]. The adapter rewrites `agentMessage`
+/// text only, so this takes the two places that text lands: the
+/// `event_msg.agent_message` arm (`assistant-N`) and promoted `response_item`
+/// messages (`codex-ri-…`). Plan documents, image generations and the
+/// plan-review marker keep their text, as they do live.
+fn render_agent_message_citations(messages: &mut [UnifiedMessage], cwd: &str) {
+    for message in messages.iter_mut() {
+        if !matches!(message.role, MessageRole::Assistant)
+            || !is_agent_prose_message_id(&message.id)
+        {
+            continue;
+        }
+        for block in &mut message.content {
+            if let ContentBlock::Text { text } = block {
+                if let std::borrow::Cow::Owned(rendered) =
+                    super::codex_file_citations::render_file_citations(text, cwd)
+                {
+                    *text = rendered;
+                }
+            }
+        }
+    }
+}
+
+/// `assistant-<n>` (the agent-message arm) or a promoted record
+/// (`codex-ri-…`), as opposed to `assistant-plan-…`, `assistant-imagegen-…`
+/// and the other synthesized assistant messages.
+fn is_agent_prose_message_id(id: &str) -> bool {
+    id.strip_prefix("assistant-")
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        || id.starts_with("codex-ri-")
 }
 
 /// Join the thinking cards left touching once the transcript is assembled.
@@ -17134,6 +17172,272 @@ mod tests {
         assert_eq!(
             turn_texts(&detail),
             vec![("assistant", Some("still readable".into()))]
+        );
+    }
+
+    /// Where the adapter's `path.join(cwd, path)` lands on this host: `/` on
+    /// posix, `\` under `path.win32` (a rooted `/w` keeps no drive there).
+    fn host_joined(cwd: &str, path: &str) -> String {
+        if cfg!(windows) {
+            format!("{cwd}/{path}").replace('/', "\\")
+        } else {
+            format!("{cwd}/{path}")
+        }
+    }
+
+    /// A codex 0.165 rollout written through codex-acp 2.4.0, recorded live:
+    /// no `event_msg.user_message` / `agent_message`, only the `response_item`
+    /// records and their `item_completed` twins. The reply cites two files,
+    /// one in code and one escaped; codex-acp streamed it as
+    /// `[docs/policy.txt](<cwd>/docs/policy.txt)` and `[/abs/dir/a b.txt](</abs/dir/a b.txt>)`,
+    /// leaving the other two as written, and a reload reads the same.
+    #[test]
+    fn a_reloaded_reply_shows_its_file_citations_as_the_links_live_showed() {
+        const REPLY: &str = "Read the policy :codex-file-citation{path=\"docs/policy.txt\" purpose=\"source\"} and ::codex-file-citation{path='/abs/dir/a b.txt'}. Code `:codex-file-citation{path=\"in-code.txt\"}` stays, so does \\:codex-file-citation{path=\"escaped.txt\"} here. End with a tick `x`";
+        let content = jsonl(&[
+            record(
+                "2026-10-29T11:20:34.397Z",
+                "session_meta",
+                serde_json::json!({"id": "cite-1", "cwd": "/w/proj", "cli_version": "0.165.0", "source": "vscode", "model_provider": "fake"}),
+            ),
+            record(
+                "2026-10-29T11:20:34.398Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-10-29T11:20:34.418Z",
+                "turn_context",
+                serde_json::json!({"turn_id": "t1", "cwd": "/w/proj", "model": "gpt-5.5"}),
+            ),
+            record(
+                "2026-10-29T11:20:34.422Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "CITE please"}]}),
+            ),
+            record(
+                "2026-10-29T11:20:34.423Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "UserMessage", "id": "u1", "content": [{"type": "text", "text": "CITE please", "text_elements": []}]}}),
+            ),
+            record(
+                "2026-10-29T11:20:34.761Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "AgentMessage", "id": "msg_1", "content": [{"type": "Text", "text": REPLY}]}}),
+            ),
+            assistant_item("2026-10-29T11:20:34.762Z", REPLY),
+            record(
+                "2026-10-29T11:20:34.770Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1", "last_agent_message": REPLY}),
+            ),
+        ]);
+        let detail = parse_rollout("cite-live", &content, "cite-1");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("CITE please".into())),
+                (
+                    "assistant",
+                    Some(format!("Read the policy [docs/policy.txt]({}) and [/abs/dir/a b.txt](</abs/dir/a b.txt>). Code `:codex-file-citation{{path=\"in-code.txt\"}}` stays, so does \\:codex-file-citation{{path=\"escaped.txt\"}} here. End with a tick `x`", host_joined("/w/proj", "docs/policy.txt")))
+                ),
+            ]
+        );
+    }
+
+    /// The older shape, an `event_msg.agent_message`, reads the same, against
+    /// the session's own cwd.
+    #[test]
+    fn an_agent_message_event_renders_its_citations_against_the_session_cwd() {
+        let content = jsonl(&[
+            record(
+                "2026-10-29T10:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cite-2", "cwd": "/repo"}),
+            ),
+            record(
+                "2026-10-29T10:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": "where is it?"}),
+            ),
+            record(
+                "2026-10-29T10:00:02Z",
+                "event_msg",
+                serde_json::json!({"type": "agent_message", "message": "Here: :codex-file-citation{path=\"src/app.ts\" purpose=\"source\"}"}),
+            ),
+        ]);
+        let detail = parse_rollout("cite-event", &content, "cite-2");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("where is it?".into())),
+                (
+                    "assistant",
+                    Some(format!(
+                        "Here: [src/app.ts]({})",
+                        host_joined("/repo", "src/app.ts")
+                    ))
+                ),
+            ]
+        );
+    }
+
+    /// codex-acp rewrites agent messages only. A plan document, and a
+    /// user's own text, keep a directive as written.
+    #[test]
+    fn citations_stay_as_written_outside_agent_prose() {
+        let directive = ":codex-file-citation{path=\"a.txt\"}";
+        let plan = format!("Plan.\n\n<proposed_plan>\n1. Edit {directive}\n</proposed_plan>\n");
+        let content = jsonl(&[
+            record(
+                "2026-10-29T10:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cite-3", "cwd": "/repo"}),
+            ),
+            record(
+                "2026-10-29T10:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": format!("keep {directive}")}),
+            ),
+            assistant_item("2026-10-29T10:00:02Z", &plan),
+        ]);
+        let detail = parse_rollout("cite-plan", &content, "cite-3");
+        let texts = turn_texts(&detail);
+        assert_eq!(texts[0], ("user", Some(format!("keep {directive}"))));
+        let rendered: String = detail
+            .turns
+            .iter()
+            .flat_map(|turn| turn.blocks.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(rendered.contains(directive), "{rendered}");
+        assert!(!rendered.contains("[a.txt]("), "{rendered}");
+    }
+
+    /// A note steered into a running codex turn (codex-acp 2.4.0 + codex
+    /// 0.165, recorded live): the steered response was cut off before its
+    /// first item, and the note is a user `response_item` with a
+    /// `client_id`-bearing twin, mid-turn. History shows it where it was sent.
+    #[test]
+    fn a_steered_note_reads_as_the_user_message_it_was() {
+        let content = jsonl(&[
+            record(
+                "2026-10-29T11:23:18.966Z",
+                "session_meta",
+                serde_json::json!({"id": "steer-1", "cwd": "/w", "cli_version": "0.165.0"}),
+            ),
+            record(
+                "2026-10-29T11:23:19.106Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t2"}),
+            ),
+            record(
+                "2026-10-29T11:23:19.112Z",
+                "turn_context",
+                serde_json::json!({"turn_id": "t2", "cwd": "/w", "model": "gpt-5.5"}),
+            ),
+            record(
+                "2026-10-29T11:23:19.114Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "SLOW:5 first"}]}),
+            ),
+            record(
+                "2026-10-29T11:23:19.115Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "UserMessage", "id": "u2", "content": [{"type": "text", "text": "SLOW:5 first", "text_elements": []}]}}),
+            ),
+            token_count("2026-10-29T11:23:19.130Z", 1000, 10),
+            record(
+                "2026-10-29T11:23:19.133Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "PLAIN steered note"}]}),
+            ),
+            record(
+                "2026-10-29T11:23:19.134Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "UserMessage", "id": "u3", "client_id": "aeaeb2f0-d3cf-4188-b659-ae30ef7bd7f7", "content": [{"type": "text", "text": "PLAIN steered note", "text_elements": []}]}}),
+            ),
+            record(
+                "2026-10-29T11:23:19.144Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "AgentMessage", "id": "msg_3", "content": [{"type": "Text", "text": "Plain answer."}]}}),
+            ),
+            assistant_item("2026-10-29T11:23:19.145Z", "Plain answer."),
+            token_count("2026-10-29T11:23:19.148Z", 2000, 20),
+            record(
+                "2026-10-29T11:23:19.168Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t2", "last_agent_message": "Plain answer."}),
+            ),
+        ]);
+        let detail = parse_rollout("steered", &content, "steer-1");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("SLOW:5 first".into())),
+                ("user", Some("PLAIN steered note".into())),
+                ("assistant", Some("Plain answer.".into())),
+            ]
+        );
+    }
+
+    /// codex 0.165 turns `reasoning_effort_override` on: under a ChatGPT
+    /// login (the built-in OpenAI provider), a mid-thread effort change is
+    /// recorded as a `configuration_update` response item after the prompt.
+    /// It is model input, not conversation, so the transcript is the one the
+    /// rollout without it reads as.
+    #[test]
+    fn a_configuration_update_record_changes_nothing_on_screen() {
+        let records = |with_update: bool| {
+            let mut records = vec![
+                record(
+                    "2026-10-29T10:00:00Z",
+                    "session_meta",
+                    serde_json::json!({"id": "cfg-1", "cwd": "/w", "cli_version": "0.165.0"}),
+                ),
+                record(
+                    "2026-10-29T10:00:01Z",
+                    "event_msg",
+                    serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+                ),
+                record(
+                    "2026-10-29T10:00:01.500Z",
+                    "response_item",
+                    serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "think harder"}]}),
+                ),
+            ];
+            if with_update {
+                records.push(record(
+                    "2026-10-29T10:00:01.600Z",
+                    "response_item",
+                    serde_json::json!({"type": "configuration_update", "reasoning": {"effort": "high"}}),
+                ));
+            }
+            records.extend([
+                record("2026-10-29T10:00:02Z", "response_item", serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "**Thinking it over**"}]})),
+                assistant_item("2026-10-29T10:00:03Z", "Done."),
+                token_count("2026-10-29T10:00:03.100Z", 1000, 10),
+                record("2026-10-29T10:00:04Z", "event_msg", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            ]);
+            jsonl(&records)
+        };
+        let with = parse_rollout("cfg-update", &records(true), "cfg-1");
+        let without = parse_rollout("cfg-plain", &records(false), "cfg-1");
+
+        assert_eq!(turn_texts(&with), turn_texts(&without));
+        assert_eq!(
+            serde_json::to_value(&with.turns).unwrap(),
+            serde_json::to_value(&without.turns).unwrap()
+        );
+        assert_eq!(
+            summary_of("cfg-update-sum", &records(true)).message_count,
+            summary_of("cfg-plain-sum", &records(false)).message_count
         );
     }
 

@@ -278,7 +278,7 @@
       "imageBlur": "Desfoque da imagem",
       "panelOpacity": "Opacidade dos painéis",
       "panelOpacityHint": "O quão opacos são a barra lateral, os painéis e as barras de abas. Mais baixo deixa a imagem transparecer mais.",
-      "errorTooLarge": "A imagem é muito grande (máx. 16 MB).",
+      "errorTooLarge": "A imagem é muito grande (máx. 64 MB).",
       "errorUnsupportedFormat": "Formato de imagem não suportado. Escolha um PNG, JPEG, WebP ou GIF.",
       "errorUploadFailed": "Falha ao definir a imagem de fundo.",
       "market": {
@@ -1630,7 +1630,9 @@
       "disableNonessentialTrafficAria": "Desativar a telemetria ou solicitações de rede desnecessárias do Claude Code",
       "gatewayDiscovery": "Deixar o Claude listar os modelos Claude do gateway",
       "gatewayDiscoveryAria": "Deixar o Claude Code listar os modelos Claude do gateway",
-      "gatewayDiscoveryHint": "O Claude consulta a URL da API e mantém só os IDs que contêm “claude” ou “anthropic”; eles aparecem a partir da próxima sessão."
+      "gatewayDiscoveryHint": "O Claude consulta a URL da API e mantém só os IDs que contêm “claude” ou “anthropic”; eles aparecem a partir da próxima sessão.",
+      "thinkingSummaries": "Mostrar resumos do raciocínio do Claude",
+      "thinkingSummariesHint": "Por padrão, o Claude Code mostra só as notas que o Claude escreve entre chamadas de ferramentas. Ao ativar, aparece também um resumo do raciocínio. Não consome tokens extras e requer claude-agent-acp 0.99.0 ou posterior."
     },
     "dialogs": {
       "confirmDeleteProvider": "Excluir o provedor {providerId}?",
@@ -4327,6 +4329,7 @@
         "cardResultPending": "Resultado ainda não retornou"
       },
       "asyncTasks": {
+        "title": "Tarefas em segundo plano",
         "openOutput": "Saída",
         "stop": "Parar",
         "tokens": "{count} tokens",
@@ -4710,7 +4713,7 @@
     "agentTypeRequired": "O tipo de agente é obrigatório.",
     "agentTypeImmutableHint": "O tipo de agente não pode ser alterado após a criação.",
     "model": "Modelo",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modelo Principal",
     "claudeReasoningModel": "Modelo de Raciocínio (pensamento)",

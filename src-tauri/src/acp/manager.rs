@@ -3847,8 +3847,11 @@ impl ConnectionManager {
     /// feedback is mid-turn steering, pulled by the agent via the
     /// `check_user_feedback` MCP tool; with no active turn there is nothing to
     /// steer and the note would strand (the frontend falls back to an ordinary
-    /// prompt). The append rides `emit_with_state` so `SessionState.feedback`,
-    /// the ring buffer, and every attached client stay in lockstep.
+    /// prompt). The native channel also answers `NoActiveTurn` while a
+    /// permission card is open on an agent that would drop the note
+    /// (`registry::steering_waits_out_open_permission`). The append rides
+    /// `emit_with_state` so `SessionState.feedback`, the ring buffer, and
+    /// every attached client stay in lockstep.
     /// `blocks`, when present, is the full prompt-block draft (text plus
     /// image attachments) to deliver on the native wire instead of the bare
     /// `text` — `text` then serves as the recorded note. Only the native
@@ -3982,6 +3985,16 @@ impl ConnectionManager {
         let admitted_turns_completed = {
             let s = state.read().await;
             if !s.turn_in_flight {
+                return Err(AcpError::NoActiveTurn);
+            }
+            // An agent that drops an injected note when an open card's answer
+            // aborts the turn (codex's `cancel`) takes it as the next prompt
+            // instead — the same reroute as an ended turn. A card that opens
+            // after this read is not covered: the request may already be on
+            // the wire.
+            if s.pending_permission.is_some()
+                && crate::acp::registry::steering_waits_out_open_permission(s.agent_type)
+            {
                 return Err(AcpError::NoActiveTurn);
             }
             s.turns_completed
@@ -11012,6 +11025,103 @@ mod tests {
         // channel stays native — the caller resubmits as a normal prompt.
         assert!(s.feedback.is_empty());
         assert!(s.native_steering_available);
+    }
+
+    async fn open_permission_card(mgr: &ConnectionManager, conn_id: &str) {
+        use crate::acp::session_state::PendingPermissionState;
+        let state = mgr.get_state(conn_id).await.unwrap();
+        state.write().await.pending_permission = Some(PendingPermissionState {
+            request_id: "req-1".into(),
+            tool_call_id: "tc-1".into(),
+            tool_call: serde_json::json!({ "toolCallId": "tc-1", "title": "touch x" }),
+            options: vec![],
+            created_at: chrono::Utc::now(),
+            queued: 0,
+        });
+    }
+
+    /// codex aborts the turn on an approval's `cancel` answer and drops a note
+    /// injected while the card was open, so the note is not steered: it gets
+    /// the reroute an ended turn gets, and nothing reaches the loop.
+    #[tokio::test]
+    async fn native_codex_submit_under_an_open_permission_card_takes_the_queue() {
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        open_permission_card(&mgr, "c1").await;
+
+        // Bounded: without the rule the submit would wait forever on a steer
+        // reply nobody sends, and the test should fail rather than hang.
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mgr.submit_feedback("c1", "do it the other way".into(), None),
+        )
+        .await
+        .expect("the submit must not wait on a steer")
+        .unwrap_err();
+        assert!(matches!(err, AcpError::NoActiveTurn), "{err:?}");
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "no steer may go out while the card is open"
+        );
+        let state = mgr.get_state("c1").await.unwrap();
+        let s = state.read().await;
+        assert!(s.feedback.is_empty());
+        assert!(s.native_steering_available, "the channel stays native");
+    }
+
+    /// Once the card is answered, codex steers again.
+    #[tokio::test]
+    async fn native_codex_submit_steers_once_no_card_is_open() {
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        open_permission_card(&mgr, "c1").await;
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .pending_permission = None;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback("c1", "ship it".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        assert_eq!(
+            fake_loop.await.unwrap(),
+            vec![PromptInputBlock::Text {
+                text: "ship it".into()
+            }]
+        );
+    }
+
+    /// The rule is codex's: Claude Code keeps steering through an open card.
+    #[tokio::test]
+    async fn native_claude_submit_still_steers_under_an_open_permission_card() {
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        open_permission_card(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback("c1", "note".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        let _ = fake_loop.await;
     }
 
     #[tokio::test]

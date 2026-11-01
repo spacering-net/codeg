@@ -177,6 +177,39 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
     ).toBe("memory_recall")
   })
 
+  it("names EnterPlanMode by its meta name whatever kind the adapter gives it", () => {
+    // claude-agent-acp 0.99.0 (#1467) reports EnterPlanMode with the
+    // `switch_mode` kind ExitPlanMode has, where 0.98.0 said `other`. The
+    // frames are otherwise the same (measured): the opening tool_call has no
+    // input, the update after it an empty one.
+    const meta = { claudeCode: { toolName: "EnterPlanMode" } }
+    for (const kind of ["switch_mode", "other"]) {
+      for (const rawInput of [null, "{}"]) {
+        const name = inferLiveToolName({
+          title: "EnterPlanMode",
+          kind,
+          rawInput,
+          meta,
+        })
+        expect(name, `${kind} ${rawInput}`).toBe("enterplanmode")
+        expect(normalizeToolName(name)).toBe("enterplanmode")
+      }
+    }
+    // The meta name decides, not the kind: with no title to go by, a
+    // `switch_mode` call is still EnterPlanMode rather than a generic switch.
+    expect(
+      inferLiveToolName({
+        title: null,
+        kind: "switch_mode",
+        rawInput: null,
+        meta,
+      })
+    ).toBe("enterplanmode")
+    expect(
+      inferLiveToolName({ title: null, kind: "switch_mode", rawInput: null })
+    ).toBe("switch_mode")
+  })
+
   it("falls back to title-based inference when no meta is provided", () => {
     // Pre-0.37 traffic / non-Claude agents have no meta.claudeCode.toolName.
     // The legacy paths must keep working.
