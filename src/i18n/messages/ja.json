@@ -3994,15 +3994,6 @@
           "webSearches": "Web 検索 {count} 件",
           "memories": "メモリ参照 {count} 件"
         },
-        "verb": {
-          "read": "読取",
-          "search": "検索",
-          "glob": "照合",
-          "list": "一覧",
-          "fetch": "取得",
-          "webSearch": "Web検索",
-          "memory": "想起"
-        },
         "stepVerb": {
           "read": "読み取り",
           "search": "検索",

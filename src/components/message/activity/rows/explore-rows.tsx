@@ -213,16 +213,6 @@ function lastLiveTool(steps: ToolStep[]): ToolStep | null {
   return null
 }
 
-const VERB_KEY = {
-  read: "verb.read",
-  search: "verb.search",
-  glob: "verb.glob",
-  list: "verb.list",
-  fetch: "verb.fetch",
-  "web-search": "verb.webSearch",
-  memory: "verb.memory",
-} as const
-
 const STEP_VERB_KEY = {
   read: "stepVerb.read",
   search: "stepVerb.search",
@@ -234,10 +224,9 @@ const STEP_VERB_KEY = {
 } as const
 
 /**
- * One read or search. Inside an explore group it is a child row —
- * `read  agent/src/q.py  212 lines`, with the verb as a short monospace
- * column; on its own it is a full row with its own ring: `Read
- * agent/src/q.py  212 lines`.
+ * One read or search: `Read agent/src/q.py  212 lines`. Inside an explore
+ * group it is a child row on a dot; on its own it is a full row with its own
+ * ring.
  */
 export const ExploreChildRow = memo(function ExploreChildRow({
   step: given,
@@ -251,7 +240,7 @@ export const ExploreChildRow = memo(function ExploreChildRow({
   const { recoveredKeys } = useActivityRender()
   const step = useLiveToolStep(given)
   const { tool, part } = step
-  const known = tool.kind in VERB_KEY
+  const known = tool.kind in STEP_VERB_KEY
   const path = useDisplayPath(tool.target?.path)
   const hasDetail = exploreHasDetail(tool, part.output ?? null, part.errorText)
   const failed = tool.status === "failed" || tool.status === "rejected"
@@ -293,28 +282,16 @@ export const ExploreChildRow = memo(function ExploreChildRow({
       trailing={<ToolFigure tool={tool} />}
       detail={() => <ExploreDetail step={step} />}
     >
-      <span
-        className={cn(
-          "flex min-w-0 items-baseline",
-          standalone ? "gap-2" : "gap-3"
-        )}
-      >
+      {/* Laid out as a command row is, in a group or not: the verb in words,
+          then the target right after it. */}
+      <span className="flex min-w-0 items-baseline gap-2">
         {known ? (
-          standalone ? (
-            <span className="shrink-0 font-medium text-activity-secondary">
-              {t(STEP_VERB_KEY[tool.kind as keyof typeof STEP_VERB_KEY])}
-            </span>
-          ) : (
-            <span className="activity-mono w-14 shrink-0 text-activity-secondary">
-              {t(VERB_KEY[tool.kind as keyof typeof VERB_KEY])}
-            </span>
-          )
+          <span className="shrink-0 font-medium text-activity-secondary">
+            {t(STEP_VERB_KEY[tool.kind as keyof typeof STEP_VERB_KEY])}
+          </span>
         ) : null}
         <span
-          className={cn(
-            "min-w-0 truncate font-mono text-activity-secondary",
-            standalone && "text-[0.8125rem]"
-          )}
+          className="min-w-0 truncate font-mono text-[0.8125rem] text-activity-secondary"
           dir="ltr"
         >
           {targetText}

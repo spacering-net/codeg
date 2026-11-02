@@ -3994,15 +3994,6 @@
           "webSearches": "{count, plural, one {# Websuche} other {# Websuchen}}",
           "memories": "{count, plural, one {# Speicherabruf} other {# Speicherabrufe}}"
         },
-        "verb": {
-          "read": "lesen",
-          "search": "grep",
-          "glob": "glob",
-          "list": "liste",
-          "fetch": "abruf",
-          "webSearch": "suche",
-          "memory": "abruf"
-        },
         "stepVerb": {
           "read": "Gelesen",
           "search": "Gesucht",

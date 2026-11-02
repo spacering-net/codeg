@@ -3994,15 +3994,6 @@
           "webSearches": "{count} 次联网搜索",
           "memories": "{count} 次记忆检索"
         },
-        "verb": {
-          "read": "读取",
-          "search": "搜索",
-          "glob": "匹配",
-          "list": "列出",
-          "fetch": "抓取",
-          "webSearch": "联网搜索",
-          "memory": "回忆"
-        },
         "stepVerb": {
           "read": "读取",
           "search": "搜索",

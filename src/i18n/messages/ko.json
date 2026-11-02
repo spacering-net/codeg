@@ -3994,15 +3994,6 @@
           "webSearches": "웹 검색 {count}회",
           "memories": "메모리 조회 {count}회"
         },
-        "verb": {
-          "read": "읽기",
-          "search": "검색",
-          "glob": "매칭",
-          "list": "목록",
-          "fetch": "가져오기",
-          "webSearch": "웹 검색",
-          "memory": "회상"
-        },
         "stepVerb": {
           "read": "읽음",
           "search": "검색함",

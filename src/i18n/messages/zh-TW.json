@@ -3994,15 +3994,6 @@
           "webSearches": "{count} 次網路搜尋",
           "memories": "{count} 次記憶檢索"
         },
-        "verb": {
-          "read": "讀取",
-          "search": "搜尋",
-          "glob": "比對",
-          "list": "列出",
-          "fetch": "擷取",
-          "webSearch": "網路搜尋",
-          "memory": "回憶"
-        },
         "stepVerb": {
           "read": "讀取",
           "search": "搜尋",
