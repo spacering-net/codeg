@@ -14,8 +14,8 @@ import {
   type AdaptedToolCallPart,
 } from "@/lib/adapters/ai-elements-adapter"
 import { buildBackgroundTaskRows } from "@/lib/background-task"
-import { delegateCallTaskId } from "@/lib/delegation-card"
 import { buildDelegationTaskRows } from "@/lib/delegation-status"
+import { delegationStepTaskId } from "./delegation-task"
 import { describeToolCall } from "./describe-tool-call"
 import { groupActivitySteps } from "./group"
 import { combineStatuses, toolCallStatus, type StepStatus } from "./status"
@@ -199,7 +199,9 @@ function launchesBefore(
  * A delegation's status checks are rows of their own — the agent waiting on
  * the task, right after handing it over or after other work — yet the newest
  * of them says how the delegation stands: hand the delegation step the polls
- * about its task, so its step bar and result read that report.
+ * about its task, so its step bar and result read that report. A resume of
+ * the task is a delegation step too, and the checks after it are about the
+ * run it started — they go to it, not to the call before it.
  */
 function linkLaterDelegationPolls(steps: ActivityStep[]): ActivityStep[] {
   const tasksOf = new Map<AdaptedToolCallPart[], Set<string | null>>()
@@ -211,11 +213,23 @@ function linkLaterDelegationPolls(steps: ActivityStep[]): ActivityStep[] {
     return tasks
   }
   return steps.map((step, index) => {
-    if (step.type !== "tool" || step.tool.kind !== "delegation") return step
-    const taskId = delegateCallTaskId(step.part)
+    if (step.type !== "tool") return step
+    if (
+      step.tool.kind !== "delegation" &&
+      step.tool.kind !== "delegation-resume"
+    )
+      return step
+    const taskId = delegationStepTaskId(step)
     const later: AdaptedToolCallPart[] = []
     if (taskId !== null) {
       for (const next of steps.slice(index + 1)) {
+        if (
+          next.type === "tool" &&
+          next.tool.kind === "delegation-resume" &&
+          delegationStepTaskId(next) === taskId
+        ) {
+          break
+        }
         if (
           next.type === "delegation-polls" &&
           tasksIn(next.polls).has(taskId)

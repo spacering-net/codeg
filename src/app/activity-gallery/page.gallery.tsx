@@ -662,6 +662,10 @@ const RUNNING_TASK_ID = "5b4a74be-2c1d-4e8f-9a0b-6c5d4e3f2a1b"
 const RUNNING_TASK =
   "Run the web unit tests in /Users/me/work/my-app and report every failure with its file path and line number."
 
+const RESUMED_TASK_ID = "4df5d544-8b1e-4c2a-9f3d-1a2b3c4d5e6f"
+const RESUMED_TASK =
+  "Perform an independent security-focused review of the completed implementation and report every finding with its file and line."
+
 const DELEGATION_TURN: MessageTurn = {
   id: "turn-delegation",
   role: "assistant",
@@ -758,6 +762,50 @@ const DELEGATION_TURN: MessageTurn = {
     toolResult(
       "d4",
       JSON.stringify({ task_id: RUNNING_TASK_ID, status: "running" })
+    ),
+    // An interrupted sub-agent brought back: drawn as its delegation row.
+    toolUse(
+      "d5",
+      "mcp__codeg-mcp__resume_delegation",
+      {
+        task_id: RESUMED_TASK_ID,
+        reason: "The app was restarted while the review was running.",
+      },
+      {
+        "codeg.delegation": {
+          status: "running",
+          child_conversation_id: 80,
+          agent_type: "codex",
+          task_id: RESUMED_TASK_ID,
+          task_preview: RESUMED_TASK,
+        },
+      }
+    ),
+    toolResult(
+      "d5",
+      JSON.stringify({
+        task_id: RESUMED_TASK_ID,
+        status: "running",
+        agent_type: "codex",
+        child_conversation_id: 80,
+        message: `Delegation resumed. task_id=${RESUMED_TASK_ID} (unchanged).`,
+      })
+    ),
+    // A refused resume revived nothing: only its reason is shown.
+    toolUse("d6", "mcp__codeg-mcp__resume_delegation", {
+      task_id: POLLED_TASK_ID,
+    }),
+    toolResult(
+      "d6",
+      JSON.stringify({
+        task_id: POLLED_TASK_ID,
+        status: "completed",
+        error_code: "not_resumable",
+        agent_type: "codex",
+        child_conversation_id: 78,
+        message:
+          "Not resumed: the task already completed — resume only applies to a canceled task.",
+      })
     ),
     {
       type: "text",

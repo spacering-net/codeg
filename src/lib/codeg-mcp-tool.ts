@@ -5,10 +5,10 @@
  * `create_work_task` — plus `resume_delegation`.
  *
  * `resume_delegation` is the odd one out: it revives a sub-agent, so its
- * primary renderer is `ResumedDelegationCard`, which states WHICH sub-agent
- * came back rather than echoing a task id. This module still parses it, for
- * two jobs the delegation card can't do — supplying that card's `task_id` /
- * `reason` / result text, and being the fallback when the resume was REFUSED
+ * primary renderer is the timeline's `DelegationResumeRow`, which states
+ * WHICH sub-agent came back rather than echoing a task id. This module still
+ * parses it, for two jobs the delegation row can't do — supplying that row's
+ * `task_id` / `reason`, and being the fallback when the resume was REFUSED
  * (`not_resumable`, unknown task): there is no sub-agent to draw then, only a
  * reason to read.
  *

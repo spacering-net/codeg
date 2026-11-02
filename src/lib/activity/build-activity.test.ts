@@ -116,6 +116,120 @@ describe("buildActivity on the reference turn", () => {
     ).toEqual(["d2", "d3"])
   })
 
+  it("hands a resume the checks after it, and the call before it only the earlier ones", () => {
+    const TASK = "a1b2c3d4"
+    const status = (id: string) =>
+      toolUse(id, "mcp__codeg-mcp__get_delegation_status", {
+        task_ids: [TASK],
+      })
+    const turn: MessageTurn = {
+      id: "turn-resume-check",
+      role: "assistant",
+      timestamp: "2026-10-22T09:00:00Z",
+      blocks: [
+        toolUse("d1", "mcp__codeg-mcp__delegate_to_agent", {
+          agent_type: "codex",
+          task: "Review the patch.",
+        }),
+        toolResult("d1", JSON.stringify({ task_id: TASK, status: "started" })),
+        status("d2"),
+        toolResult("d2", JSON.stringify({ task_id: TASK, status: "canceled" })),
+        toolUse("r1", "mcp__codeg-mcp__resume_delegation", { task_id: TASK }),
+        toolResult(
+          "r1",
+          JSON.stringify({
+            task_id: TASK,
+            status: "running",
+            agent_type: "codex",
+            child_conversation_id: 9,
+          })
+        ),
+        status("d3"),
+        toolResult(
+          "d3",
+          JSON.stringify({ task_id: TASK, status: "completed", text: "Done." })
+        ),
+      ],
+    }
+    const model = buildActivity(
+      adaptMessageTurn(turn, MOCKUP_ADAPTER_TEXT).content,
+      { isStreaming: false }
+    )
+    const pollsOf = (id: string) => {
+      const step = model.steps.find(
+        (s) => s.type === "tool" && s.part.toolCallId === id
+      )
+      return step?.type === "tool"
+        ? step.laterPolls?.map((p) => p.toolCallId)
+        : null
+    }
+    expect(pollsOf("d1")).toEqual(["d2"])
+    expect(pollsOf("r1")).toEqual(["d3"])
+  })
+
+  it.each([
+    ["completed", 0],
+    ["failed", 1],
+  ])(
+    "leaves a refused resume out of the checks: the call before it still ends (%s)",
+    (ending, failed) => {
+      const TASK = "a1b2c3d4"
+      const turn: MessageTurn = {
+        id: "turn-refused-resume",
+        role: "assistant",
+        timestamp: "2026-10-22T09:00:00Z",
+        blocks: [
+          toolUse("d1", "mcp__codeg-mcp__delegate_to_agent", {
+            agent_type: "codex",
+            task: "Review the patch.",
+          }),
+          toolResult(
+            "d1",
+            JSON.stringify({ task_id: TASK, status: "started" })
+          ),
+          toolUse("r1", "mcp__codeg-mcp__resume_delegation", {
+            task_id: TASK,
+          }),
+          toolResult(
+            "r1",
+            JSON.stringify({
+              task_id: TASK,
+              status: "running",
+              error_code: "not_resumable",
+              agent_type: "codex",
+              child_conversation_id: 9,
+              message: "Not resumed: the task is still running.",
+            })
+          ),
+          toolUse("d2", "mcp__codeg-mcp__get_delegation_status", {
+            task_ids: [TASK],
+          }),
+          toolResult(
+            "d2",
+            JSON.stringify({ task_id: TASK, status: ending, text: "Done." })
+          ),
+        ],
+      }
+      const model = buildActivity(
+        adaptMessageTurn(turn, MOCKUP_ADAPTER_TEXT).content,
+        { isStreaming: false }
+      )
+      const pollsOf = (id: string) => {
+        const step = model.steps.find(
+          (s) => s.type === "tool" && s.part.toolCallId === id
+        )
+        return step?.type === "tool"
+          ? step.laterPolls?.map((p) => p.toolCallId)
+          : null
+      }
+      expect(pollsOf("d1")).toEqual(["d2"])
+      expect(pollsOf("r1")).toBeUndefined()
+      expect(model.summary.running).toBe(false)
+      // A failed task is the delegation's failure, counted once.
+      expect(model.summary.failed).toBe(failed)
+    }
+  )
+
   it("keeps the closing prose as the answer", () => {
     expect(model.answer).toHaveLength(1)
     expect(model.answer[0]).toMatchObject({ type: "text" })

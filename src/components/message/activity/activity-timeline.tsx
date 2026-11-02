@@ -22,6 +22,7 @@ import { CommandGroupRow, CommandRow } from "./rows/command-rows"
 import {
   DelegationCancelRow,
   DelegationPollsRow,
+  DelegationResumeRow,
   DelegationRow,
 } from "./rows/delegation-rows"
 import { FeedbackRow, PlanModeRow } from "./rows/interaction-rows"
@@ -212,6 +213,7 @@ function canOutliveTurn(item: ActivityItem): boolean {
   return (
     step.type === "tool" &&
     (step.tool.kind === "delegation" ||
+      step.tool.kind === "delegation-resume" ||
       step.tool.kind === "delegation-status" ||
       step.tool.kind === "agent")
   )
@@ -363,6 +365,31 @@ function ToolStepView({ step: given }: { step: ToolStep }) {
       return <AgentRow step={step} />
     case "delegation":
       return <DelegationRow step={step} />
+    case "delegation-resume":
+      return (
+        <DelegationResumeRow
+          step={step}
+          fallback={
+            // A refused resume revived nothing: the reason is the row.
+            <HostedRow
+              stepKey={step.key}
+              icon={CODEG_MCP_TOOL_ICONS.resume_delegation}
+              status={tool.status}
+              kindLabel={t("kind.delegation")}
+              inset={false}
+            >
+              <CodegMcpToolCard
+                layout="timeline"
+                tool="resume_delegation"
+                input={part.input ?? null}
+                output={part.output ?? null}
+                errorText={part.errorText ?? null}
+                state={part.state}
+              />
+            </HostedRow>
+          }
+        />
+      )
     case "delegation-status":
       return (
         <DelegationPollsRow

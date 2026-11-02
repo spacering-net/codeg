@@ -45,8 +45,7 @@ interface AgentCapsuleProps {
    * the pill is itself the collapsible trigger, so a nested button would be
    * invalid, and an action buried in the body is unreachable while collapsed
    * and absent entirely when there is no body (the live case, where the child's
-   * transcript is the only record there is). Mirrors the right-edge affordance
-   * `DelegationCardRow` gives every delegation card.
+   * transcript is the only record there is).
    */
   headerAction?: ReactNode
   /** Accessible label for the trigger. */

@@ -482,8 +482,8 @@ export function singletonSourceTurns(turn: MessageTurn): MessageTurn[] {
 //   - `resume_delegation`, which brought an interrupted one BACK. Its own
 //     tool_call_id is not a binding key (the broker re-binds the child to the
 //     original delegate call, usually in an earlier turn), so it is keyed by
-//     the task id in its arguments — `taskIdHint`, exactly as
-//     `ResumedDelegationCard` does. Without this arm a resumed sub-agent would
+//     the task id in its arguments — `taskIdHint`, exactly as the timeline's
+//     `DelegationResumeRow` does. Without this arm a resumed sub-agent would
 //     be missing from the overlay while it runs, because the reply that
 //     resumed it contains no `delegate_to_agent` call at all.
 //
@@ -516,7 +516,7 @@ function collectDelegationSources(
       } else if (name === "resume_delegation") {
         // A refusal names the task's agent and child but revived nothing —
         // listing it would put a sub-agent in the overlay that is not running
-        // on this turn's behalf. Same judgement as `ResumedDelegationCard`,
+        // on this turn's behalf. Same judgement as `DelegationResumeRow`,
         // which falls back to the plain tool card here.
         if (isRefusedResume(part.output ?? null, part.errorText ?? null)) {
           continue
@@ -531,7 +531,7 @@ function collectDelegationSources(
           taskIdHint: taskId,
           // Deliberately not the resume's `{task_id, reason}` arguments —
           // `parseInput` looks for `task`/`agent_type`/`working_dir` and would
-          // only warn about an unrecognized shape. See `ResumedDelegationCard`.
+          // only warn about an unrecognized shape. See `DelegationResumeRow`.
           input: null,
           output: part.output ?? null,
           errorText: part.errorText ?? null,

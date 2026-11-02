@@ -51,7 +51,7 @@ function BindingProbe({ parentToolUseId }: { parentToolUseId: string }) {
   )
 }
 
-/** Same idea for the task-id lookup `ResumedDelegationCard` depends on. */
+/** Same idea for the task-id lookup a resumed delegation row depends on. */
 function TaskIdProbe({ taskId }: { taskId: string }) {
   const { findByTaskId } = useDelegation()
   const binding = findByTaskId(taskId)

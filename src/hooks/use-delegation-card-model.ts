@@ -5,7 +5,7 @@
  * child ids — from a `delegate_to_agent` tool call, in priority order:
  *   live `DelegationContext` binding → persisted `meta["codeg.delegation"]`
  *   → parsed tool input/output. The same model drives the timeline's
- *   delegation row, the resumed-delegation card and the top-right
+ *   delegation and resumed-delegation rows and the top-right
  *   `SubAgentOverlay`, so they never disagree on what a sub-agent is doing.
  *
  * Pure parsing lives in `@/lib/delegation-card`; this hook adds the two
@@ -48,7 +48,7 @@ export interface DelegationCardSource {
   meta?: Record<string, unknown> | null
   /**
    * A broker task id to resolve the live binding by when `parentToolUseId`
-   * matches none. Set by `ResumedDelegationCard`: a resume re-binds the child
+   * matches none. Set by `DelegationResumeRow`: a resume re-binds the child
    * to the ORIGINAL `delegate_to_agent` call's tool_use_id, so the resume
    * call's own id is never a binding key — the task id in its arguments is.
    */
