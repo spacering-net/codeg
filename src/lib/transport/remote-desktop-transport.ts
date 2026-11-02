@@ -92,6 +92,13 @@ function isAuthenticationFailed(err: unknown): boolean {
  * webview labels that explicitly subscribed via this transport, never
  * `app.emit` broadcasting. Two remote workspaces opened side-by-side
  * see entirely separate event streams.
+ *
+ * That targeting only holds if the listener is scoped to this webview.
+ * Tauri delivers `emit_to(EventTarget::webview(label))` to every listener
+ * registered with the `Any` target, in every webview, so a global
+ * `listen()` here would also receive the copies addressed to other windows
+ * sharing this connection (duplicated terminal output, foreign ready /
+ * disconnected signals). Keep `getCurrentWebview().listen()`.
  */
 export class RemoteDesktopTransport implements Transport {
   private handlers = new Map<string, Set<(payload: unknown) => void>>()
