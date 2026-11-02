@@ -1770,26 +1770,6 @@ const OPENCODE_PROVIDER_NPM_OPTIONS = [
   },
 ] as const
 
-function buildOpenCodeModelOptions(
-  config: OpenCodeConfigView | null
-): OpenCodeModelOptionGroup[] {
-  if (!config) return []
-  const groups: OpenCodeModelOptionGroup[] = []
-  for (const providerId of config.providerIds) {
-    const provider = config.providers[providerId]
-    if (!provider || provider.modelIds.length === 0) continue
-    groups.push({
-      providerId,
-      label: provider.name || providerId,
-      models: provider.modelIds.map((modelId) => ({
-        value: `${providerId}/${modelId}`,
-        label: modelId,
-      })),
-    })
-  }
-  return groups
-}
-
 function OpenCodeModelCombobox({
   value,
   onValueChange,
@@ -6429,16 +6409,14 @@ export function AcpAgentSettings() {
     openCodeIntegrations,
     openCodeCatalog,
   ])
-  const openCodeModelOptions = useMemo(() => {
-    const catalogGroups = buildConnectedModelOptions({
-      connected: openCodeConnected,
-      catalog: openCodeCatalog,
-    })
-    // Fall back to the config-derived groups before the catalog has loaded.
-    return catalogGroups.length > 0
-      ? catalogGroups
-      : buildOpenCodeModelOptions(selectedOpenCodeConfig)
-  }, [openCodeConnected, openCodeCatalog, selectedOpenCodeConfig])
+  const openCodeModelOptions = useMemo(
+    () =>
+      buildConnectedModelOptions({
+        connected: openCodeConnected,
+        catalog: openCodeCatalog,
+      }),
+    [openCodeConnected, openCodeCatalog]
+  )
   const openCodeCatalogIds = useMemo(
     () => new Set(openCodeCatalog.map((p) => p.id)),
     [openCodeCatalog]

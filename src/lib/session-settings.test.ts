@@ -354,3 +354,17 @@ describe("MiniMax Code ACP model settings", () => {
     ])
   })
 })
+
+it("shows a filtered current model without offering it again", () => {
+  const setting = choice(
+    build([
+      select("model", "Model", "model", "relay/disabled", ["relay/allowed"]),
+    ])[0]
+  )
+  expect(setting.currentLabel).toBe("relay/disabled")
+  expect(
+    setting.groups.flatMap((group) =>
+      group.options.map((option) => option.value)
+    )
+  ).toEqual(["relay/allowed"])
+})

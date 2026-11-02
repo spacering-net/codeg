@@ -41,6 +41,7 @@ pub mod opencode_catalog;
 pub(crate) mod opencode_config;
 pub(crate) mod opencode_credentials;
 pub mod opencode_launch;
+pub(crate) mod opencode_models;
 pub mod opencode_plugins;
 pub mod plan_approval;
 pub mod preflight;
