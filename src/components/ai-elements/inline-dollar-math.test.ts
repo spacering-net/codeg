@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest"
-import { normalizeInlineDollarMath } from "./inline-dollar-math"
+import { fromMarkdown } from "mdast-util-from-markdown"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  hasInlineDollarMathCandidate,
+  normalizeInlineDollarMath,
+} from "./inline-dollar-math"
+
+vi.mock("mdast-util-from-markdown", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("mdast-util-from-markdown")>()
+  return { ...actual, fromMarkdown: vi.fn(actual.fromMarkdown) }
+})
+
+beforeEach(() => {
+  vi.mocked(fromMarkdown).mockClear()
+})
 
 describe("normalizeInlineDollarMath", () => {
   it.each([
@@ -43,6 +57,11 @@ describe("normalizeInlineDollarMath", () => {
     "$$\nx + $y$",
     "$$$\nx + $y$\n$$$",
     "$x\0CBLK0\0y$",
+    // An escaped dollar before the closer would merge into a `$$$` run.
+    "$a\\$$ end",
+    // Raw HTML blocks are not Markdown, so remark-math never renders them.
+    "<pre>\n$x^2$\n</pre>",
+    "<div>\n$AV$ text\n</div>",
   ])("preserves literal or existing math input %s", (text) => {
     expect(normalizeInlineDollarMath(text)).toBe(text)
   })
@@ -64,4 +83,37 @@ describe("normalizeInlineDollarMath", () => {
     expect(normalized).toBe("$$x + \\$5$$ and $$T$$")
     expect(normalizeInlineDollarMath(normalized)).toBe(normalized)
   })
+
+  it("skips the Markdown parse when no pair can be a formula", () => {
+    const text = "Set `$HOME`:\n\n```bash\necho $PATH:$FOO\n```\n\nCosts $5."
+    expect(normalizeInlineDollarMath(text)).toBe(text)
+    expect(fromMarkdown).not.toHaveBeenCalled()
+  })
+
+  it("still parses to protect code once a candidate exists", () => {
+    const text = "`$T$` and $AV$"
+    expect(normalizeInlineDollarMath(text)).toBe("`$T$` and $$AV$$")
+    expect(fromMarkdown).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("hasInlineDollarMathCandidate", () => {
+  it.each([
+    "正文 $T$。",
+    "$5,$x^2$ and $AV$",
+    "`$T$`",
+    "```tex\n$AV$",
+    "$$x + $y$ $$",
+  ])("is a parse-free superset of the rewrite: %s", (text) => {
+    expect(hasInlineDollarMathCandidate(text)).toBe(true)
+    expect(fromMarkdown).not.toHaveBeenCalled()
+  })
+
+  it.each(["Costs $25. Set $HOME and $1.", "$5-$10", "echo $A$B", "$a\\$$"])(
+    "is false when no adjacent pair qualifies: %s",
+    (text) => {
+      expect(hasInlineDollarMathCandidate(text)).toBe(false)
+      expect(normalizeInlineDollarMath(text)).toBe(text)
+    }
+  )
 })
