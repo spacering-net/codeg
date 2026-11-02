@@ -34,6 +34,7 @@ import { useChatHtmlEnabled } from "@/lib/chat-html-prefs"
 import { createChatHtmlProcessor } from "@/lib/chat-html-markdown"
 import { scrollportComponents } from "./markdown-scrollport"
 import { maskLiteralSpans } from "./markdown-mask"
+import { normalizeInlineDollarMath } from "./inline-dollar-math"
 import { rehypePluginsAllowingCodeg } from "./rehype-allow-codeg"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { withRelativeFileLinks } from "./rehype-relative-file-links"
@@ -360,6 +361,7 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>
 // remark-math uses dollar delimiters. `\[...\]` / `\(...\)` are rewritten
 // to `$$...$$`. Single-dollar `$...$` is disabled (`singleDollarTextMath:
 // false`) so currency (`$9.99`) and shell vars (`$HOME`, `$1`) stay prose.
+// Only tightly delimited single-dollar formulas are normalized explicitly.
 //
 // A single-line `$$x$$` inside a paragraph stays *inline* math (mdast tags
 // every math-text node `math-inline` regardless of dollar count). The one
@@ -403,7 +405,7 @@ export function normalizeMathDelimiters(text: string): string {
       const open = atContentStart ? MATH_FENCE_PAD : ""
       return `${open}$$${inner}${MATH_FENCE_PAD}$$`
     })
-  return restore(normalized)
+  return normalizeInlineDollarMath(restore(normalized))
 }
 
 function isSpaceOrTab(code: number): boolean {
