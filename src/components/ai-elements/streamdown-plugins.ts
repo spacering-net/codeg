@@ -4,6 +4,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react"
 import type { ComponentProps } from "react"
 import { cjk } from "@streamdown/cjk"
 import type { Streamdown } from "streamdown"
+import { hasInlineDollarMathCandidate } from "./inline-dollar-math"
 
 // Streamdown's `plugins` prop config: `{ code?, mermaid?, math?, cjk? }`.
 type PluginConfig = NonNullable<ComponentProps<typeof Streamdown>["plugins"]>
@@ -32,7 +33,7 @@ export type HeavyKind = "code" | "math" | "mermaid"
 //
 // Correctness: each engine only *affects* output when its trigger syntax is
 // present (shiki only highlights fenced code; remark-math transforms `$$…$$`
-// and ` ```math ` fences — not lone `$…$`; mermaid only replaces ```mermaid
+// and ` ```math ` fences plus normalized `$…$`; mermaid only replaces ```mermaid
 // blocks). Loading exactly when the trigger appears therefore reproduces the
 // eager-plugin output byte-for-byte, save for a one-time pre-load fallback
 // render (plain code / literal `$…$` / mermaid source) that upgrades once the
@@ -245,7 +246,7 @@ const NO_NEEDS: HeavyPluginNeeds = { code: false, math: false, mermaid: false }
  * Cheap, behavior-preserving detection of which heavy plugins a piece of
  * Markdown needs. Runs on possibly-streaming text (once per streaming batch for
  * the live message; memoized to nothing for stable historical text), so it uses
- * only native `String` scans.
+ * only native `String` / regex scans.
  */
 export function detectHeavyPlugins(text: string): HeavyPluginNeeds {
   const hasFence = text.includes("```") || text.includes("~~~")
@@ -266,13 +267,16 @@ export function detectHeavyPlugins(text: string): HeavyPluginNeeds {
   return {
     // Any fenced or indented block may want syntax highlighting.
     code: hasFence || hasIndentedCode,
-    // After `singleDollarTextMath: false`, a lone `$` can never produce math.
+    // `normalizeInlineDollarMath` rewrites tight `$…$` formulas to `$$…$$`.
+    // Raw text is checked with its parse-free superset (a formula that only
+    // sits in code loads KaTeX early, as `$$` in code already does).
     // `normalizeMathDelimiters` rewrites `\[…\]` / `\(...\)` to `$$…$$`.
     // rehype-katex also renders ` ```math ` fences with no `$` anywhere, so
     // those have to stay a trigger. Callers may detect on raw pre-normalized
     // text, so `\(` / `\[` count too.
     math:
       text.includes("$$") ||
+      hasInlineDollarMathCandidate(text) ||
       text.includes("\\[") ||
       text.includes("\\(") ||
       /(?:```|~~~)[^\S\r\n]*math\b/i.test(text),

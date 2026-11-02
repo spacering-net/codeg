@@ -6,10 +6,47 @@ import type { AttachHandlers, RemoteTransportConfig } from "./types"
 const ipc = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
-  listeners: new Map<string, (event: Event<unknown>) => void>(),
+  getCurrentWebview: vi.fn(),
+  listeners: new Map<string, Set<(event: Event<unknown>) => void>>(),
 }))
 vi.mock("@tauri-apps/api/core", () => ({ invoke: ipc.invoke }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: ipc.listen }))
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: ipc.getCurrentWebview,
+}))
+
+type EventHandler = (event: Event<unknown>) => void
+
+function listenerKey(target: string | null, event: string) {
+  return `${target ?? "*"}\u0000${event}`
+}
+
+function registerListener(
+  target: string | null,
+  event: string,
+  handler: EventHandler
+) {
+  const key = listenerKey(target, event)
+  let handlers = ipc.listeners.get(key)
+  if (!handlers) {
+    handlers = new Set()
+    ipc.listeners.set(key, handlers)
+  }
+  handlers.add(handler)
+  return () => {
+    handlers.delete(handler)
+    if (handlers.size === 0) ipc.listeners.delete(key)
+  }
+}
+
+function createWebview(label: string) {
+  return {
+    label,
+    listen: vi.fn((event: string, handler: EventHandler) =>
+      Promise.resolve(registerListener(label, event, handler))
+    ),
+  }
+}
 
 const config: RemoteTransportConfig = {
   id: 7,
@@ -19,6 +56,7 @@ const config: RemoteTransportConfig = {
   windowInstanceId: "rw-test",
 }
 const transports: RemoteDesktopTransport[] = []
+let defaultWebview: ReturnType<typeof createWebview>
 
 function transport(overrides: Partial<RemoteTransportConfig> = {}) {
   const t = new RemoteDesktopTransport({ ...config, ...overrides })
@@ -26,17 +64,24 @@ function transport(overrides: Partial<RemoteTransportConfig> = {}) {
   return t
 }
 
-function emit(payload: unknown, id = config.id) {
+function emit(payload: unknown, id = config.id, target = defaultWebview.label) {
   const event = `remote-ws-event-${id}`
-  ipc.listeners.get(event)?.({ event, id: 1, payload })
+  const eventData = { event, id: 1, payload }
+  for (const listenerTarget of [target, null]) {
+    for (const handler of ipc.listeners.get(
+      listenerKey(listenerTarget, event)
+    ) ?? []) {
+      handler(eventData)
+    }
+  }
 }
 
-function ready(id = config.id) {
-  emit({ channel: "__ready__", payload: null }, id)
+function ready(id = config.id, target = defaultWebview.label) {
+  emit({ channel: "__ready__", payload: null }, id, target)
 }
 
-function drop(id = config.id) {
-  emit({ channel: "__disconnected__", payload: null }, id)
+function drop(id = config.id, target = defaultWebview.label) {
+  emit({ channel: "__disconnected__", payload: null }, id, target)
 }
 
 function sentFrames() {
@@ -68,10 +113,13 @@ async function flush() {
 beforeEach(() => {
   vi.useFakeTimers()
   ipc.invoke.mockReset().mockResolvedValue(undefined)
-  ipc.listen.mockReset().mockImplementation(async (event, callback) => {
-    ipc.listeners.set(event, callback)
-    return () => ipc.listeners.delete(event)
-  })
+  ipc.listen
+    .mockReset()
+    .mockImplementation(async (event: string, callback: EventHandler) =>
+      registerListener(null, event, callback)
+    )
+  defaultWebview = createWebview("main-webview")
+  ipc.getCurrentWebview.mockReset().mockReturnValue(defaultWebview)
   ipc.listeners.clear()
 })
 
@@ -254,6 +302,56 @@ describe("remote desktop event recovery", () => {
     expect(updateB.mock.calls).toEqual([["B"]])
   })
 
+  it("isolates same-connection frames and lifecycle events by Webview target", async () => {
+    const webviewA = createWebview("remote-webview-a")
+    const webviewB = createWebview("remote-webview-b")
+    ipc.getCurrentWebview
+      .mockReturnValueOnce(webviewA)
+      .mockReturnValueOnce(webviewB)
+    const a = transport({ windowInstanceId: "window-instance-a" })
+    const b = transport({ windowInstanceId: "window-instance-b" })
+    const updateA = vi.fn()
+    const updateB = vi.fn()
+    const subA = a.subscribe("terminal://output", updateA)
+    const subB = b.subscribe("terminal://output", updateB)
+    await flush()
+
+    expect(webviewA.listen).toHaveBeenCalledWith(
+      "remote-ws-event-7",
+      expect.any(Function)
+    )
+    expect(webviewB.listen).toHaveBeenCalledWith(
+      "remote-ws-event-7",
+      expect.any(Function)
+    )
+
+    ready(config.id, webviewA.label)
+    expect(a.getConnectionSnapshot()).toBe("connected")
+    expect(b.getConnectionSnapshot()).toBe("reconnecting")
+    ready(config.id, webviewB.label)
+    await Promise.all([subA, subB])
+
+    emit(
+      { channel: "terminal://output", payload: "output from A" },
+      config.id,
+      webviewA.label
+    )
+    emit(
+      { channel: "terminal://output", payload: "output from B" },
+      config.id,
+      webviewB.label
+    )
+    expect(updateA.mock.calls).toEqual([["output from A"]])
+    expect(updateB.mock.calls).toEqual([["output from B"]])
+
+    drop(config.id, webviewA.label)
+    expect(a.getConnectionSnapshot()).toBe("reconnecting")
+    expect(b.getConnectionSnapshot()).toBe("connected")
+    ready(config.id, webviewA.label)
+    expect(a.getConnectionSnapshot()).toBe("connected")
+    expect(b.getConnectionSnapshot()).toBe("connected")
+  })
+
   it("coalesces failed attach sends and cancels retry after destroy", async () => {
     const t = transport()
     const stream = t.eventStream()
@@ -276,7 +374,7 @@ describe("remote desktop event recovery", () => {
 
   it("releases an IPC listener that arrives after its window was destroyed", async () => {
     let finishListen!: (unlisten: () => void) => void
-    ipc.listen.mockImplementation(
+    defaultWebview.listen.mockImplementation(
       () => new Promise((resolve) => (finishListen = resolve))
     )
     const t = transport()
