@@ -62,8 +62,21 @@ describe("normalizeInlineDollarMath", () => {
     // Raw HTML blocks are not Markdown, so remark-math never renders them.
     "<pre>\n$x^2$\n</pre>",
     "<div>\n$AV$ text\n</div>",
+    // A closer that opens another shell expansion is not a formula end.
+    'echo "$prefix${suffix}"',
+    "echo $A$@",
+    '$(git rev-parse --show-toplevel)/$(basename "$PWD")',
+    "$(a)-$(b)",
   ])("preserves literal or existing math input %s", (text) => {
     expect(normalizeInlineDollarMath(text)).toBe(text)
+  })
+
+  it("keeps prose punctuation after a closer, such as a question mark", () => {
+    // `$?` / `$!` stay allowed: "is it $x$?" is far more common in replies
+    // than an unquoted `echo $A$?` outside code.
+    expect(normalizeInlineDollarMath("Is it $x$? Then $n$!")).toBe(
+      "Is it $$x$$? Then $$n$$!"
+    )
   })
 
   it("continues after a display fence with a longer closer", () => {

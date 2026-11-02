@@ -19,7 +19,9 @@ function isFormulaPair(source: string, open: DollarRun, close: DollarRun) {
   const inner = source.slice(start + 1, end)
   return !(
     /[\w$]/.test(source[start - 1] ?? "") ||
-    /[\w$]/.test(source[end + 1] ?? "") ||
+    // A closer that starts another shell expansion (`$a${b}`, `$A$@`,
+    // `$(a)/$(b)`) is a shell `$`, not the end of a formula.
+    /[\w${(@]/.test(source[end + 1] ?? "") ||
     !inner ||
     // A trailing escaped `\$` would merge into the closing `$$` run.
     /^[\s{]|[\s$]$|[\n\r\0]/.test(inner) ||
