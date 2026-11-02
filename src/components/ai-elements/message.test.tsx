@@ -138,8 +138,7 @@ describe("normalizeMathDelimiters", () => {
   })
 
   it("does not rewrite currency or shell $ tokens", () => {
-    // This helper only rewrites `\(`/`\[`. The real `$` fix is
-    // `singleDollarTextMath: false` — covered in math-delimiters.parse.test.ts.
+    // Currency and unpaired shell variables must stay literal.
     const text = "Costs $25. Set $HOME and $1."
     expect(normalizeMathDelimiters(text)).toBe(text)
   })

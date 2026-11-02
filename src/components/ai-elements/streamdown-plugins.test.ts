@@ -87,6 +87,7 @@ describe("detectHeavyPlugins", () => {
     expect(detectHeavyPlugins("price $5").math).toBe(false)
     expect(detectHeavyPlugins("Set $HOME and $1").math).toBe(false)
     expect(detectHeavyPlugins("energy $$E=mc^2$$").math).toBe(true)
+    expect(detectHeavyPlugins("令 $T$ 和 $AV$ 满足 $A - T$。").math).toBe(true)
     expect(detectHeavyPlugins("\\[ x^2 \\]").math).toBe(true)
     expect(detectHeavyPlugins("\\( y \\)").math).toBe(true)
     expect(detectHeavyPlugins("```math\nx\n```").math).toBe(true)
