@@ -1162,7 +1162,15 @@ pub async fn create_forge_task(
         standing.as_deref(),
         draft.instruction.as_deref(),
     );
-    let envelope = forge_untrusted_envelope(provider.as_str(), &draft.snapshot);
+    // CNB's issue LIST carries no description, and both callers build their
+    // snapshot from a list row — so without this read the agent would get the
+    // title and an empty fence. Same reason the change above is hydrated: the
+    // card must not exist without what its prompt needs.
+    let mut snapshot = draft.snapshot.clone();
+    if provider == ForgeProvider::Cnb && !is_pr {
+        forge::cnb::fill_issue_body(&auth, &owner_repo, source.number, &mut snapshot).await?;
+    }
+    let envelope = forge_untrusted_envelope(provider.as_str(), &snapshot);
     let blocks = vec![
         serde_json::to_value(crate::acp::types::PromptInputBlock::Text {
             text: instruction.clone(),

@@ -90,12 +90,12 @@ import {
   forgeChangeFiles,
   forgeCreateComment,
   forgeIdentity,
-  forgeIssueDetail,
   forgeListComments,
   forgeMergeChange,
   forgeMergeOptions,
   forgeSetItemState,
 } from "@/lib/api"
+import { useIssueBody } from "@/components/forge/use-issue-body"
 import {
   type AppErrorTranslator,
   toLocalizedErrorMessage,
@@ -2335,59 +2335,6 @@ function Conversation({
  * rather than a local guess — see `forge_create_comment_core` and
  * `forge_set_item_state_core`.
  */
-/**
- * The description of an issue whose LIST row carries none.
- *
- * CNB's issue list omits `body` entirely (its pull list carries one), so the
- * first paint has nothing to draw where the description goes. One read, paid
- * when the panel opens — the same trade the comment thread makes, and for the
- * same reason: a list page holds thirty items whose reader opens at most one.
- * Scoped to that forge by the caller; every other one ships the body on the
- * row and never asks.
- *
- * `pending` is its own state rather than "body is null", because the two
- * answer different questions — "the forge has not said yet" and "the forge
- * says there is nothing" — and only the second may draw the empty-state line.
- */
-function useIssueBody(
-  folderId: number | null,
-  row: ForgeIssueRow | null,
-  enabled: boolean
-): { body: string | null; pending: boolean } {
-  const [read, setRead] = useState<{ key: string; body: string | null } | null>(
-    null
-  )
-  const key = row != null ? `${row.is_pr ? "pr" : "issue"}-${row.number}` : null
-  const onRow = row?.body ?? null
-  const wanted = enabled && row != null && !row.is_pr && onRow == null
-  const number = row?.number ?? null
-
-  useEffect(() => {
-    if (!wanted || key == null || number == null || folderId == null) return
-    let live = true
-    forgeIssueDetail(folderId, number)
-      .then((full) => {
-        if (live) setRead({ key, body: full.body ?? null })
-      })
-      .catch(() => {
-        // The panel keeps drawing — the thread below reports its own failures.
-        // Falling back to "no description" is the honest cost of one failed
-        // read: the alternative is an empty slot that never fills.
-        if (live) setRead({ key, body: null })
-      })
-    return () => {
-      live = false
-    }
-    // `onRow` is a dependency so a row that ARRIVES with a body — a list
-    // refresh, or a write the page adopted — retires the read instead of
-    // leaving a second copy to disagree with it.
-  }, [wanted, folderId, key, number, onRow])
-
-  if (!wanted) return { body: onRow, pending: false }
-  if (read?.key !== key) return { body: null, pending: true }
-  return { body: read.body, pending: false }
-}
-
 export function ForgeIssueDetailSheet({
   row,
   link,

@@ -142,6 +142,32 @@ pub async fn issue_detail(
     Ok(raw.into_row(auth, &repo, false))
 }
 
+/// Fill in the description of an ISSUE snapshot that came off a list row.
+///
+/// A task's prompt wraps the snapshot it was created from, and on CNB both
+/// places that build one — the trigger dialog and an auto-processing scan —
+/// hold a list row, which never carries a body. Without this read every CNB
+/// issue task would hand its agent a title and an empty fence: "handle issue
+/// #N" with nothing to judge. Only a missing body is read; one the caller
+/// already has (the panel read it, say) is left exactly as it is.
+pub async fn fill_issue_body(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    number: i64,
+    snapshot: &mut super::envelope::ForgeSnapshot,
+) -> Result<(), ForgeError> {
+    if snapshot
+        .body
+        .as_deref()
+        .is_some_and(|body| !body.trim().is_empty())
+    {
+        return Ok(());
+    }
+    require_number(number)?;
+    snapshot.body = issue_detail(auth, owner_repo, number).await?.body;
+    Ok(())
+}
+
 /// Rows per scan page. CNB clamps `page_size` to 100.
 const SCAN_PAGE_LIMIT: u32 = 100;
 
@@ -659,6 +685,11 @@ fn repo_ref(owner_repo: &str) -> Result<String, ForgeError> {
         .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))
 }
 
+/// `None` for an absent or blank string — CNB's spelling of "no time".
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.trim().is_empty())
+}
+
 fn require_number(number: i64) -> Result<(), ForgeError> {
     if number <= 0 {
         return Err(ForgeError::Invalid(format!(
@@ -899,7 +930,10 @@ impl RawItem {
                 .collect(),
             author,
             author_avatar,
-            updated_at: self.last_acted_at.or(self.updated_at),
+            // CNB spells an unset time as `""` (see `closed_at` on a live
+            // row), and an empty `last_acted_at` must not shadow a real
+            // `updated_at` — nor reach the panel as a date it cannot read.
+            updated_at: non_empty(self.last_acted_at).or(non_empty(self.updated_at)),
             html_url: format!("{}/{repo}/-/{collection}/{number}", web_origin(auth)),
             is_pr,
             comments: self.comment_count,
@@ -1037,13 +1071,14 @@ impl RawComment {
                 )
             })
             .unwrap_or((None, None));
+        let created_at = non_empty(self.created_at);
         ForgeComment {
             id: self.id,
             author,
             author_avatar,
             body: truncate_chars(self.body.as_deref().unwrap_or_default(), BODY_CAP),
-            updated_at: ForgeComment::edited_at(self.created_at.as_deref(), self.updated_at),
-            created_at: self.created_at,
+            updated_at: ForgeComment::edited_at(created_at.as_deref(), non_empty(self.updated_at)),
+            created_at,
             // CNB sends no per-comment URL and no anchor is guaranteed to
             // survive its SPA routing; no link beats a link that 404s.
             html_url: None,
@@ -1337,6 +1372,116 @@ mod tests {
                 account_id: None,
             },
         )
+    }
+
+    fn mock_auth(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: super::super::ForgeProvider::Cnb,
+            server_host: "cnb.example".into(),
+            api_base,
+            account_id: "cnb-mock".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "t0ken".into(),
+            scopes: vec![],
+        }
+    }
+
+    /// `GET /acme/app/-/issues/7` answering an issue DETAIL — the one payload
+    /// that carries the body — and counting how often it was asked, with which
+    /// credential.
+    async fn mock_issue_detail() -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    ) {
+        use axum::http::HeaderMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen_auth = Arc::new(Mutex::new(None));
+        let app = axum::Router::new().route("/acme/app/-/issues/7", {
+            let hits = hits.clone();
+            let seen_auth = seen_auth.clone();
+            axum::routing::get(move |headers: HeaderMap| async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                *seen_auth.lock().unwrap() = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                axum::Json(serde_json::json!({
+                    "number": "7",
+                    "title": "Crash on start",
+                    "body": "Steps:\n1. open the app",
+                    "state": "open",
+                    "labels": [],
+                    "comment_count": 0,
+                    "updated_at": "2026-10-29T12:06:18Z",
+                    "last_acted_at": ""
+                }))
+            })
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), hits, seen_auth)
+    }
+
+    fn list_snapshot(body: Option<&str>) -> super::super::envelope::ForgeSnapshot {
+        super::super::envelope::ForgeSnapshot {
+            title: "Crash on start".into(),
+            body: body.map(str::to_string),
+            labels: vec![],
+            author: None,
+        }
+    }
+
+    /// A task built from a CNB list row would otherwise hand its agent a title
+    /// and an empty fence: the list never carries the body.
+    #[tokio::test]
+    async fn a_list_snapshot_gets_the_issue_body_read_in() {
+        let (api_base, hits, seen_auth) = mock_issue_detail().await;
+        let auth = mock_auth(api_base);
+
+        let mut snapshot = list_snapshot(None);
+        fill_issue_body(&auth, "acme/app", 7, &mut snapshot)
+            .await
+            .expect("hydrated");
+        assert_eq!(snapshot.body.as_deref(), Some("Steps:\n1. open the app"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(seen_auth.lock().unwrap().as_deref(), Some("Bearer t0ken"));
+
+        // A blank body is the list's "nothing", not an answer.
+        let mut blank = list_snapshot(Some("  "));
+        fill_issue_body(&auth, "acme/app", 7, &mut blank)
+            .await
+            .expect("hydrated");
+        assert_eq!(blank.body.as_deref(), Some("Steps:\n1. open the app"));
+    }
+
+    /// A body the caller already holds is never re-read or replaced.
+    #[tokio::test]
+    async fn a_snapshot_that_has_a_body_costs_no_request() {
+        let (api_base, hits, _) = mock_issue_detail().await;
+        let auth = mock_auth(api_base);
+
+        let mut snapshot = list_snapshot(Some("already here"));
+        fill_issue_body(&auth, "acme/app", 7, &mut snapshot)
+            .await
+            .expect("untouched");
+        assert_eq!(snapshot.body.as_deref(), Some("already here"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// CNB spells an unset time `""`; an empty `last_acted_at` must fall back
+    /// to `updated_at` rather than reach the panel as an unreadable date.
+    #[tokio::test]
+    async fn an_empty_activity_time_falls_back_to_updated_at() {
+        let (api_base, _, _) = mock_issue_detail().await;
+        let auth = mock_auth(api_base);
+        let row = issue_detail(&auth, "acme/app", 7).await.expect("detail");
+        assert_eq!(row.updated_at.as_deref(), Some("2026-10-29T12:06:18Z"));
+        assert_eq!(row.body.as_deref(), Some("Steps:\n1. open the app"));
     }
 
     #[test]

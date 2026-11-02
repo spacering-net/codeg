@@ -569,7 +569,7 @@ async fn detect_forge(host: &str, origin: &str) -> Option<ForgeProvider> {
         return verdict;
     }
     // The public hosts are not worth a round trip; their names ARE the answer.
-    if host == "github.com" || host == "gitlab.com" {
+    if host == "github.com" || host == "gitlab.com" || host == "cnb.cool" {
         return None;
     }
     let client = super::http_client().ok()?;
