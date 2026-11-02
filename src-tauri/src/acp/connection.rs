@@ -11923,7 +11923,7 @@ async fn set_session_config_option_inner(
 ) -> Result<Vec<SessionConfigOption>, agent_client_protocol::Error> {
     // Of the two ACP mode requests, only session/set_mode refreshes the
     // bridge's plan-enabled mirror; set_config_option("mode") keeps reporting
-    // "plan" while that mirror is set (bridge 0.69.2 through 0.79.1). Send
+    // "plan" while that mirror is set (bridge 0.69.2 through 0.82.0). Send
     // set_mode first for mode changes, then read the config response; the
     // initial-mode gate still requires an exact confirmation before prompt.
     if agent_type == AgentType::ZCode && config_id == "mode" {
@@ -13353,7 +13353,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.177.1) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.179.2) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13439,7 +13439,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.177.1) answers the next prompt it runs `cancelled` even though that
+/// 2.179.2) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -27358,6 +27358,42 @@ mod tests {
         );
     }
 
+    /// OpenCode 2.2.5's list as it sent it to codeg's capabilities, plus a
+    /// `steer`. Only ZCode leaves any of them out, the commands codeg drives
+    /// itself; OpenCode lists its `goal` like every other agent, though over
+    /// ACP it does not work yet (see the OpenCode entry in `acp::registry`).
+    #[test]
+    fn opencode_lists_goal_and_zcode_leaves_its_own_commands_out() {
+        let commands: Vec<agent_client_protocol::schema::v1::AvailableCommand> =
+            serde_json::from_value(serde_json::json!([
+                {"name": "init", "description": "guided AGENTS.md setup", "input": null},
+                {"name": "review", "description": "review changes [commit|branch|pr], defaults to uncommitted", "input": null},
+                {"name": "goal", "description": "keep working until an objective is met [pause|resume|clear]", "input": null},
+                {"name": "compact", "description": "Compact the session", "input": null},
+                {"name": "steer", "description": "steer the running turn", "input": null},
+            ]))
+            .unwrap();
+        let names = |agent_type| {
+            available_command_infos(agent_type, &commands)
+                .into_iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(AgentType::ZCode), ["init", "review", "compact"]);
+        for agent_type in [
+            AgentType::OpenCode,
+            AgentType::ClaudeCode,
+            AgentType::Codex,
+            AgentType::KimiCode,
+        ] {
+            assert_eq!(
+                names(agent_type),
+                ["init", "review", "goal", "compact", "steer"],
+                "{agent_type:?}"
+            );
+        }
+    }
+
     #[test]
     fn goal_control_action_roundtrips_codex_wire_values() {
         // codex-acp #293: `_codex/session/goal_control` expects lowercase
@@ -27515,6 +27551,44 @@ mod tests {
                 .map(|info| info.version.as_str()),
             Some("2.3.0")
         );
+    }
+
+    /// zcode-acp-server 0.82.0's `initialize` answer to codeg's exact
+    /// `clientCapabilities`, recorded against a stand-in backend: from 0.81.0
+    /// the bridge advertises the steering extension, with a `timings` list of
+    /// its own. The answer must still parse, and the advertisement alone must
+    /// not move ZCode off the pull channel: codeg has no steering floor for
+    /// it, and the bridge's `_session/steering` still starts a turn of its own
+    /// when the running one ends just before the backend takes the text.
+    #[test]
+    fn zcode_0820_initialize_advertises_steering_but_keeps_the_pull_channel() {
+        let wire = serde_json::json!({
+            "_meta": {"steering": {"supported": true, "timings": ["now", "next"]}},
+            "agentCapabilities": {
+                "_meta": {"zcode": {"fs": true, "turnState": ["$/zcode/turnState", "_zcode/turnState"]}},
+                "loadSession": true,
+                "mcpCapabilities": {"http": true, "sse": false},
+                "promptCapabilities": {"audio": false, "embeddedContext": true, "image": true},
+                "sessionCapabilities": {"fork": {}, "list": {}, "resume": {}}
+            },
+            "agentInfo": {"name": "zcode-acp-server", "title": "ZCode", "version": "0.82.0"},
+            "authMethods": [{
+                "description": "Reads the GLM API key from the ZCode desktop app's credential files (~/.zcode/v2) or a saved zcode-acp account. No editor-side credentials required.",
+                "id": "zcode-credentials",
+                "name": "ZCode built-in credentials"
+            }],
+            "protocolVersion": 1
+        });
+        let response: agent_client_protocol::schema::v1::InitializeResponse =
+            serde_json::from_value(wire).expect("0.82.0 initialize parses");
+        assert_eq!(response.protocol_version, ProtocolVersion::V1);
+        assert!(response.agent_capabilities.load_session);
+        assert!(init_advertises_steering(response.meta.as_ref()));
+        assert!(!synthesize_native_steering(
+            AgentType::ZCode,
+            response.meta.as_ref(),
+            response.agent_info.as_ref(),
+        ));
     }
 
     #[test]

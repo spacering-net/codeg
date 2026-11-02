@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "Quantos níveis os subagentes podem aninhar (experimental.subagent_depth). 1 impede um subagente de iniciar outro.",
           "preserveRecentTokens": "Orçamento de tokens dos turnos recentes mantidos literalmente após uma compactação (compaction.keep.tokens). Padrão 15000.",
-          "reserved": "Janela deixada livre para que uma compactação nunca estoure o contexto (compaction.buffer). Sem valor, reserva 15% da janela, no mínimo 16K.",
+          "reserved": "Espaço deixado livre na janela de contexto antes da compactação automática (compaction.buffer): um número de tokens como <code>20000</code> ou uma parte da janela de <code>1%</code> a <code>99%</code>, como <code>20%</code>. Sem valor, <code>15%</code> da janela ficam livres, no mínimo <code>16000</code> tokens.",
           "maxLines": "Saída maior que isso vai para o disco e é substituída por uma prévia. Padrão 2000.",
           "maxBytes": "Saída maior que isso vai para o disco e é substituída por uma prévia. Padrão 51200."
         }

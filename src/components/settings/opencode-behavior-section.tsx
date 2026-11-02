@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { ExternalLink, SlidersHorizontal } from "lucide-react"
 
@@ -19,6 +19,7 @@ import {
   OPENCODE_NUMBER_FIELDS,
   OPENCODE_TOGGLE_DEFAULTS,
   OPENCODE_UPDATE_MODES,
+  parseOpenCodeNumberInput,
   readOpenCodeBehavior,
   removeIgnoredLegacyKeys,
   setOpenCodeDefaultAgent,
@@ -26,6 +27,7 @@ import {
   setOpenCodeToggle,
   setOpenCodeUpdate,
   type OpenCodeNumberField,
+  type OpenCodeNumberValue,
   type OpenCodeToggleField,
   type OpenCodeUpdateMode,
 } from "@/lib/opencode-behavior"
@@ -35,6 +37,13 @@ import { isOpenCodeConfigEditable } from "@/lib/opencode-permissions"
 const UNSET = "__opencode_behavior_unset__"
 
 const DOCS_URL = "https://opencode.ai/v2/docs/config"
+
+/** A value a hint quotes, set the way the field takes it. */
+const hintLiteral = (chunks: ReactNode) => (
+  <code dir="ltr" className="rounded bg-muted px-1 font-mono break-words">
+    {chunks}
+  </code>
+)
 
 /**
  * Visual editor for the OpenCode 2 config keys that shape a session's behavior:
@@ -85,13 +94,15 @@ export function OpenCodeBehaviorSection({
     [t]
   )
 
-  const numberHints = useMemo<Record<OpenCodeNumberField, string>>(
+  const numberHints = useMemo<Record<OpenCodeNumberField, ReactNode>>(
     () => ({
       "experimental.subagent_depth": t("openCode.behavior.hints.subagentDepth"),
       "compaction.keep.tokens": t(
         "openCode.behavior.hints.preserveRecentTokens"
       ),
-      "compaction.buffer": t("openCode.behavior.hints.reserved"),
+      "compaction.buffer": t.rich("openCode.behavior.hints.reserved", {
+        code: hintLiteral,
+      }),
       "tool_output.max_lines": t("openCode.behavior.hints.maxLines"),
       "tool_output.max_bytes": t("openCode.behavior.hints.maxBytes"),
     }),
@@ -108,20 +119,18 @@ export function OpenCodeBehaviorSection({
     [t]
   )
 
+  /** Write what `raw` says, and return what the field holds afterwards. */
   const handleNumberChange = useCallback(
-    (field: OpenCodeNumberField, raw: string) => {
-      const trimmed = raw.trim()
-      if (trimmed === "") {
-        onChange(setOpenCodeNumber(configText, field, null))
-        return
-      }
-      const parsed = Number(trimmed)
+    (field: OpenCodeNumberField, raw: string): OpenCodeNumberValue | null => {
+      const parsed = parseOpenCodeNumberInput(field, raw)
       // A half-typed value ("1e", "-") is neither written nor an error: the
-      // input keeps showing what the document says until it parses.
-      if (!Number.isInteger(parsed)) return
-      onChange(setOpenCodeNumber(configText, field, parsed))
+      // document keeps what it says until the input spells a value.
+      if (parsed === undefined) return view.numbers[field]
+      const next = setOpenCodeNumber(configText, field, parsed)
+      onChange(next)
+      return readOpenCodeBehavior(next).numbers[field]
     },
-    [configText, onChange]
+    [configText, onChange, view]
   )
 
   const handleToggle = useCallback(
@@ -300,23 +309,82 @@ export function OpenCodeBehaviorSection({
                 {numberHints[meta.field]}
               </p>
             </div>
-            <Input
-              type="number"
-              inputMode="numeric"
-              min={meta.min}
-              value={view.numbers[meta.field] ?? ""}
-              disabled={locked}
-              placeholder={meta.placeholder}
-              className="h-7 w-44 font-mono text-xs"
-              onChange={(event) => {
-                handleNumberChange(meta.field, event.target.value)
-              }}
-              aria-label={numberLabels[meta.field]}
-            />
+            {meta.percent ? (
+              <ShareOrNumberInput
+                value={view.numbers[meta.field]}
+                disabled={locked}
+                placeholder={meta.placeholder}
+                onType={(raw) => handleNumberChange(meta.field, raw)}
+                ariaLabel={numberLabels[meta.field]}
+              />
+            ) : (
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={meta.min}
+                value={view.numbers[meta.field] ?? ""}
+                disabled={locked}
+                placeholder={meta.placeholder}
+                className="h-7 w-44 font-mono text-xs"
+                onChange={(event) => {
+                  handleNumberChange(meta.field, event.target.value)
+                }}
+                aria-label={numberLabels[meta.field]}
+              />
+            )}
           </div>
         ))}
       </div>
     </div>
+  )
+}
+
+/**
+ * The input of a field that takes a token count or a share of the window
+ * ("20%"), which a `type="number"` input cannot hold.
+ *
+ * A text input that only mirrored the document would drop every keystroke that
+ * spells no value yet — the "." of "12.5%" — so it shows what was typed for as
+ * long as the document holds what that typing wrote, and the document again
+ * once it holds anything else (an edit in the JSON box) or the input loses
+ * focus.
+ */
+function ShareOrNumberInput({
+  value,
+  disabled,
+  placeholder,
+  onType,
+  ariaLabel,
+}: {
+  value: OpenCodeNumberValue | null
+  disabled: boolean
+  placeholder: string
+  /** Hands the typed text over and returns what the field holds afterwards. */
+  onType: (raw: string) => OpenCodeNumberValue | null
+  ariaLabel: string
+}) {
+  const stored = value === null ? "" : String(value)
+  const [draft, setDraft] = useState<{ text: string; stored: string } | null>(
+    null
+  )
+  return (
+    <Input
+      type="text"
+      dir="ltr"
+      spellCheck={false}
+      autoComplete="off"
+      value={draft !== null && draft.stored === stored ? draft.text : stored}
+      disabled={disabled}
+      placeholder={placeholder}
+      className="h-7 w-44 font-mono text-xs"
+      onChange={(event) => {
+        const text = event.target.value
+        const held = onType(text)
+        setDraft({ text, stored: held === null ? "" : String(held) })
+      }}
+      onBlur={() => setDraft(null)}
+      aria-label={ariaLabel}
+    />
   )
 }
 

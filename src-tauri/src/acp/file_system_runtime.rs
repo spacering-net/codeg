@@ -301,17 +301,30 @@ fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String
 /// The most text one `fs/read_text_file` answer may carry for `agent_type`.
 ///
 /// Every agent gets [`FS_MAX_READ_RESPONSE_BYTES`], and a bigger read fails
-/// with a hint to narrow it with `line` / `limit`. Google Antigravity cannot
-/// narrow it: from 1.4.4 its `client_view_file` asks for the whole file and
-/// slices out the requested lines itself, because its output header shows the
-/// file's line count, which an answer does not carry. Under the common limit
-/// even a few lines of a file over 2 MiB would fail to read. Its whole file
-/// may therefore fill the [`FS_MAX_FILE_SIZE_BYTES`] any read is held to. Its
-/// stdio transport takes such an answer as one line: past its buffer limit it
-/// reads the line in pieces instead of refusing it.
+/// with a hint to narrow it with `line` / `limit`. Two agents never narrow a
+/// read, so under that limit even a few lines of a file over 2 MiB would fail
+/// to read, and their whole file may fill the [`FS_MAX_FILE_SIZE_BYTES`] any
+/// read is held to:
+///
+/// - Google Antigravity: from 1.4.4 its `client_view_file` asks for the whole
+///   file and slices out the requested lines itself, because its output header
+///   shows the file's line count, which an answer does not carry. Its stdio
+///   transport takes such an answer as one line: past its buffer limit it reads
+///   the line in pieces instead of refusing it.
+/// - Kimi Code: its ACP file service asks for the whole file with only the
+///   session and the path (`acp-fs/acpFsService.ts`, 2.4.0 and 2.4.1) and cuts
+///   out the page its `Read` tool returns, so the `line` / `limit` hint never
+///   reaches it and the model only sees "Invalid params". It caps what the
+///   model gets itself (2.4.1: 100,000 characters or about 25,000 tokens). The
+///   line buffer of the ACP SDK it bundles (1.3.0) has no length limit.
+///   Measured on 2.4.1 with a 3,000,000-byte file: given the whole file, a
+///   `Read` handed the model its first 958 lines, 99,918 characters ending in
+///   Kimi's own "Next Read" hint, and one with `n_lines=10` the ten lines.
 fn read_response_limit(agent_type: AgentType) -> usize {
     match agent_type {
-        AgentType::Antigravity => usize::try_from(FS_MAX_FILE_SIZE_BYTES).unwrap_or(usize::MAX),
+        AgentType::Antigravity | AgentType::KimiCode => {
+            usize::try_from(FS_MAX_FILE_SIZE_BYTES).unwrap_or(usize::MAX)
+        }
         _ => FS_MAX_READ_RESPONSE_BYTES,
     }
 }
@@ -327,7 +340,7 @@ fn read_response_limit(agent_type: AgentType) -> usize {
 /// once it has a plan. Through codeg's `fs/read_text_file` the read of a plan
 /// not written yet fails with a JSON-RPC error, and Kimi takes only a local
 /// `ENOENT` for "no plan yet" (`isMissingFileError` in its plan service,
-/// 2.3.3 and 2.4.0), so the error fails the call instead. The model never gets
+/// 2.3.3 through 2.4.1), so the error fails the call instead. The model never gets
 /// the plan file's path, its first tool call ends the turn with no reply, and
 /// plan mode cannot start. A missing plan file therefore reads as empty here,
 /// which is what Kimi reads from its own disk.
@@ -1803,43 +1816,48 @@ mod tests {
         (file, content)
     }
 
-    /// Antigravity reads the whole file for every `client_view_file` and slices
-    /// the lines itself (see `read_response_limit`), so its read of a file over
+    /// Antigravity and Kimi Code read the whole file for every read and slice
+    /// it themselves (see `read_response_limit`), so their read of a file over
     /// 2 MiB must succeed, under every policy, up to the file size limit.
     #[tokio::test(flavor = "current_thread")]
-    async fn antigravity_reads_whole_files_up_to_the_file_size_limit() {
+    async fn whole_file_readers_read_up_to_the_file_size_limit() {
         let workspace = temp_workspace();
         let (file, content) = file_over_the_read_limit(&workspace);
-
-        for policy in ["default", "strict", "unrestricted"] {
-            let env = BTreeMap::from([(FS_POLICY_ENV.to_string(), policy.to_string())]);
-            let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
-                &workspace,
-                AgentType::Antigravity,
-                &env,
-            ));
-            let response = runtime
-                .read_text_file(ReadTextFileRequest::new("sid", &file))
-                .await
-                .unwrap_or_else(|error| panic!("{policy}: whole-file read failed: {error:?}"));
-            assert!(
-                response.content == content,
-                "{policy}: the read returned other text"
-            );
-        }
-
-        // A file over the size limit still fails.
         let huge = workspace.join("huge.txt");
         File::create(&huge)
             .and_then(|file| file.set_len(FS_MAX_FILE_SIZE_BYTES + 1))
             .expect("create a file over the size limit");
-        let antigravity = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
-            &workspace,
-            AgentType::Antigravity,
-            &BTreeMap::new(),
-        ));
-        let message = read_error(&antigravity, &huge).await;
-        assert!(message.contains("file too large"), "{message}");
+
+        for agent_type in [AgentType::Antigravity, AgentType::KimiCode] {
+            for policy in ["default", "strict", "unrestricted"] {
+                let env = BTreeMap::from([(FS_POLICY_ENV.to_string(), policy.to_string())]);
+                let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
+                    &workspace, agent_type, &env,
+                ));
+                let response = runtime
+                    .read_text_file(ReadTextFileRequest::new("sid", &file))
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("{agent_type:?} {policy}: whole-file read failed: {error:?}")
+                    });
+                assert!(
+                    response.content == content,
+                    "{agent_type:?} {policy}: the read returned other text"
+                );
+            }
+
+            // A file over the size limit still fails.
+            let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+                &workspace,
+                agent_type,
+                &BTreeMap::new(),
+            ));
+            let message = read_error(&runtime, &huge).await;
+            assert!(
+                message.contains("file too large"),
+                "{agent_type:?}: {message}"
+            );
+        }
 
         let _ = fs::remove_dir_all(workspace);
     }

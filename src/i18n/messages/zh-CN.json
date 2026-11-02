@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "子智能体最多可以嵌套几层（experimental.subagent_depth）。填 1 表示子智能体不能再启动子智能体。",
           "preserveRecentTokens": "压缩后仍按原文保留的最近对话 token 预算（compaction.keep.tokens）。默认 15000。",
-          "reserved": "为压缩本身预留的窗口，避免压缩过程撑爆上下文（compaction.buffer）。不填则预留窗口的 15%，至少 16K。",
+          "reserved": "自动压缩前在上下文窗口里预留的空间（compaction.buffer）：填 token 数，如 <code>20000</code>；或填窗口占比，<code>1%</code> 到 <code>99%</code>，如 <code>20%</code>。不填则预留窗口的 <code>15%</code>，至少 <code>16000</code> 个 token。",
           "maxLines": "超过该行数的输出会落盘，只在会话里留一段预览。默认 2000。",
           "maxBytes": "超过该字节数的输出会落盘，只在会话里留一段预览。默认 51200。"
         }

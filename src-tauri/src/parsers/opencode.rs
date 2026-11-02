@@ -784,7 +784,9 @@ impl OpenCodeParser {
     /// summary it kept ([`v2_compaction_blocks`]), and `shell`, a command the
     /// user ran themselves ([`v2_shell_blocks`]). `synthetic` rows are text
     /// OpenCode wrote for the model; they are read only for the results of
-    /// background sub-agents, which arrive as one ([`background_subagent_child`]).
+    /// background work, which arrive as one: a sub-agent's
+    /// ([`background_subagent_child`]), and a command's or an image job's
+    /// ([`background_job_notice_key`]).
     /// The rest are text for the model too (`system`, such as the "the
     /// available tools have changed" notice its 1.x migration appends to a
     /// session that called a renamed tool, or a code-mode catalog update;
@@ -823,6 +825,17 @@ impl OpenCodeParser {
             };
             entries.push((msg_id, msg_type, row_time_created, value));
         }
+        let assistant_ids: Vec<&str> = entries
+            .iter()
+            .filter(|(_, msg_type, _, _)| msg_type == "assistant")
+            .map(|(msg_id, _, _, _)| msg_id.as_str())
+            .collect();
+        let mut parts = load_v2_session_parts(conn, &assistant_ids).await;
+        for (msg_id, msg_type, _, value) in &mut entries {
+            if msg_type == "assistant" {
+                splice_v2_parts(value, parts.remove(msg_id.as_str()));
+            }
+        }
 
         // Gathered up front so each loads in one query, as
         // `load_sqlite_messages` does: the sub-agent sessions this one
@@ -830,6 +843,7 @@ impl OpenCodeParser {
         // media its prompts keep in the `blob` table.
         let mut subagent_session_ids: Vec<String> = Vec::new();
         let mut background_results: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut job_notices: HashMap<String, serde_json::Value> = HashMap::new();
         let mut media_hashes: Vec<String> = Vec::new();
         for (_, msg_type, _, value) in &entries {
             match msg_type.as_str() {
@@ -849,6 +863,8 @@ impl OpenCodeParser {
                 "synthetic" => {
                     if let Some(child) = background_subagent_child(value) {
                         background_results.insert(child.to_string(), value.clone());
+                    } else if let Some(job) = background_job_notice_key(value) {
+                        job_notices.insert(job, value.clone());
                     }
                 }
                 "user" => media_hashes.extend(v2_user_media_refs(value).map(str::to_string)),
@@ -870,8 +886,12 @@ impl OpenCodeParser {
 
             let (role, content, usage, model) = match msg_type.as_str() {
                 "assistant" => {
-                    let mut blocks =
-                        v2_assistant_blocks(&value, &subagent_tools, &background_results);
+                    let mut blocks = v2_assistant_blocks(
+                        &value,
+                        &subagent_tools,
+                        &background_results,
+                        &job_notices,
+                    );
                     // Same failure marker as a 1.x message (see `load_sqlite_messages`).
                     if let Some(error) = assistant_error_text(&value) {
                         blocks.push(ContentBlock::Text { text: error });
@@ -2637,6 +2657,78 @@ async fn load_media_blobs(conn: &DatabaseConnection, hashes: &[String]) -> Media
     blobs
 }
 
+/// The `session_part` rows of `message_ids`, as each message's content parts in
+/// `ordinal` order.
+///
+/// OpenCode 2.2.5 added the table and reads an assistant message's content
+/// from it whenever the message has rows there (`core/src/session/history.ts`,
+/// `withParts`): the rows' data, in order, replaces the message's inline
+/// `content`. 2.2.5 itself writes rows only for a message that already has
+/// some, and then leaves `content: []` in its `session_message` row; its own
+/// comment reserves the table for "a newer release" that moves a message's
+/// parts there. Its rows carry each part whole, `type` included, and the row's
+/// `type` column says the same, so the column only fills a part that lacks one.
+/// A database from before 2.2.5 has no such table, so a failed read leaves
+/// every message as it is stored inline.
+async fn load_v2_session_parts(
+    conn: &DatabaseConnection,
+    message_ids: &[&str],
+) -> HashMap<String, Vec<serde_json::Value>> {
+    let mut parts: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for batch in message_ids.chunks(500) {
+        let placeholders = vec!["?"; batch.len()].join(", ");
+        let sql = format!(
+            "SELECT message_id, type, data FROM session_part \
+             WHERE message_id IN ({placeholders}) ORDER BY message_id, ordinal"
+        );
+        let values: Vec<sea_orm::Value> = batch.iter().map(|id| (*id).into()).collect();
+        let Ok(rows) = conn
+            .query_all(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                &sql,
+                values,
+            ))
+            .await
+        else {
+            return HashMap::new();
+        };
+        for row in rows {
+            let (Ok(message_id), Ok(data)) = (
+                row.try_get::<String>("", "message_id"),
+                row.try_get::<String>("", "data"),
+            ) else {
+                continue;
+            };
+            let Ok(mut part) = serde_json::from_str::<serde_json::Value>(&data) else {
+                continue;
+            };
+            if let (Some(fields), Ok(kind)) =
+                (part.as_object_mut(), row.try_get::<String>("", "type"))
+            {
+                fields
+                    .entry("type")
+                    .or_insert(serde_json::Value::String(kind));
+            }
+            parts.entry(message_id).or_default().push(part);
+        }
+    }
+    parts
+}
+
+/// Give `message` the content parts its `session_part` rows hold, the way
+/// OpenCode reads it: only a message that has rows there, and only in place of
+/// a `content` its data already carries.
+fn splice_v2_parts(message: &mut serde_json::Value, parts: Option<Vec<serde_json::Value>>) {
+    let Some(parts) = parts else {
+        return;
+    };
+    if let Some(fields) = message.as_object_mut() {
+        if fields.contains_key("content") {
+            fields.insert("content".to_string(), serde_json::Value::Array(parts));
+        }
+    }
+}
+
 /// The child session a `synthetic` row reports the end of, when it is the
 /// notice a background sub-agent's result arrives in: OpenCode delivers that
 /// result to the parent session as a synthetic message tagged
@@ -2651,13 +2743,106 @@ fn background_subagent_child(message: &serde_json::Value) -> Option<&str> {
     pick_str(metadata, &["childID"])
 }
 
+/// The background job a tool call handed its work to, keyed the way
+/// [`background_job_notice_key`] keys the notice of its end. A command the
+/// model sent to the background, or one moved there while it ran, completes at
+/// once with `metadata: { status: "running", shellID }` and only says so
+/// (`core/src/tool/plugin/shell.ts`, `backgroundResult`); an image request
+/// (2.2.2 on) always does, with `metadata.jobID`
+/// (`core/src/tool/plugin/image-generate.ts`).
+fn background_job_of_call(tool_name: &str, state: Option<&serde_json::Value>) -> Option<String> {
+    let metadata = state.and_then(|s| s.get("metadata"));
+    match tool_name {
+        "shell" | "bash" if pick_str(metadata, &["status"]) == Some("running") => {
+            pick_str(metadata, &["shellID"]).map(|id| format!("shell:{id}"))
+        }
+        "experimental_image_generate" => {
+            pick_str(metadata, &["jobID"]).map(|id| format!("image:{id}"))
+        }
+        _ => None,
+    }
+}
+
+/// The background job a `synthetic` row reports the end of, when it is the
+/// notice that job's result arrives in. A command's is tagged
+/// `metadata: { source: "shell", shellID, jobID, state, exit? }`, its text the
+/// result wrapped in `<shell id=… state=… command=…>` (`core/src/shell/result.ts`,
+/// `notification`); an image job's `metadata: { source:
+/// "experimental_image_generate", jobID, state, path }`, wrapped in
+/// `<image id=… state=…>` (`core/src/image/notice.ts`). A command the user ran
+/// themselves gets a `shell` notice without a `jobID`, and no tool call to settle.
+fn background_job_notice_key(message: &serde_json::Value) -> Option<String> {
+    let metadata = message.get("metadata");
+    let job = pick_str(metadata, &["jobID"])?;
+    match pick_str(metadata, &["source"])? {
+        "shell" => pick_str(metadata, &["shellID"]).map(|id| format!("shell:{id}")),
+        "experimental_image_generate" => Some(format!("image:{job}")),
+        _ => None,
+    }
+}
+
+/// The text of a background job's notice without the `<shell …>` / `<image …>`
+/// tag around it. The tag is matched whole, as OpenCode writes it, since a
+/// command's `command` attribute is the command as typed, `>` and newlines
+/// included; a notice in any other form is kept as it is.
+fn background_job_notice_text(notice: &serde_json::Value) -> Option<String> {
+    let text = pick_str_verbatim(Some(notice), &["text"])?;
+    let metadata = notice.get("metadata");
+    let job = pick_str(metadata, &["jobID"]).unwrap_or("");
+    let state = pick_str(metadata, &["state"]).unwrap_or("");
+    let (open, close) = match pick_str(metadata, &["source"]) {
+        Some("shell") => {
+            let command = pick_str_verbatim(Some(notice), &["description"]).unwrap_or("");
+            (
+                format!("<shell id=\"{job}\" state=\"{state}\" command=\"{command}\">\n"),
+                "\n</shell>",
+            )
+        }
+        _ => (
+            format!("<image id=\"{job}\" state=\"{state}\">\n"),
+            "\n</image>",
+        ),
+    };
+    let body = text
+        .strip_prefix(open.as_str())
+        .and_then(|rest| rest.strip_suffix(close))
+        .unwrap_or(text)
+        .trim();
+    (!body.is_empty()).then(|| body.to_string())
+}
+
+/// Report a background job's end on the call that started it, as OpenCode told
+/// the model: the notice's text in place of the "moved to the background" /
+/// "started in the background" result (none for a command that printed
+/// nothing and exited 0, whose notice is empty), its state, and for a command
+/// its exit status. The way [`v2_agent_blocks`] settles a background
+/// sub-agent's card.
+fn settle_background_job(
+    normalized: &mut NormalizedToolCall,
+    tool_name: &str,
+    notice: &serde_json::Value,
+) {
+    let metadata = notice.get("metadata");
+    normalized.output_preview = background_job_notice_text(notice);
+    normalized.is_error = is_error_status(pick_str(metadata, &["state"]).unwrap_or(""));
+    if matches!(tool_name, "shell" | "bash") {
+        normalized.exit_code = command_exit_code(metadata);
+        normalized.meta = metadata
+            .map(|metadata| crate::acp::connection::opencode_metadata_meta("shell", metadata))
+            .filter(|extras| !extras.is_empty())
+            .map(serde_json::Value::Object);
+    }
+}
+
 /// The blocks of a 2.x assistant message: its text, its reasoning, and each
 /// tool call as a call/result pair — what `load_sqlite_parts` builds from 1.x
-/// parts, through the same `normalize_tool_call`.
+/// parts, through the same `normalize_tool_call`. A call whose work went to the
+/// background reports how it ended once `job_notices` has its notice.
 fn v2_assistant_blocks(
     message: &serde_json::Value,
     subagent_tools: &HashMap<String, Vec<AgentToolCall>>,
     background_results: &HashMap<String, serde_json::Value>,
+    job_notices: &HashMap<String, serde_json::Value>,
 ) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     for part in v2_content(message) {
@@ -2692,7 +2877,12 @@ fn v2_assistant_blocks(
                     .get("name")
                     .and_then(|n| n.as_str())
                     .unwrap_or("unknown");
-                let normalized = normalize_tool_call(tool_name, part.get("state"));
+                let mut normalized = normalize_tool_call(tool_name, part.get("state"));
+                if let Some(notice) = background_job_of_call(tool_name, part.get("state"))
+                    .and_then(|job| job_notices.get(&job))
+                {
+                    settle_background_job(&mut normalized, tool_name, notice);
+                }
                 blocks.push(ContentBlock::ToolUse {
                     tool_use_id: call_id.clone(),
                     tool_name: normalized.tool_name,
@@ -2956,10 +3146,10 @@ async fn batch_load_v2_subagent_tool_calls(
     let placeholders: Vec<&str> = session_ids.iter().map(|_| "?").collect();
     let sql = format!(
         r#"
-        SELECT session_id, data
+        SELECT id, session_id, type, data
         FROM session_message
         WHERE session_id IN ({})
-          AND type = 'assistant'
+          AND type IN ('assistant', 'synthetic')
         ORDER BY session_id, seq ASC
         "#,
         placeholders.join(", ")
@@ -2978,18 +3168,35 @@ async fn batch_load_v2_subagent_tool_calls(
         Err(_) => return HashMap::new(),
     };
 
-    let mut result: HashMap<String, Vec<AgentToolCall>> = HashMap::new();
+    // The children's own background work reports to them, in notices of their own.
+    let mut messages = Vec::with_capacity(rows.len());
+    let mut job_notices: HashMap<String, serde_json::Value> = HashMap::new();
     for row in rows {
-        let Ok(sid) = row.try_get::<String>("", "session_id") else {
-            continue;
-        };
-        let Ok(data_raw) = row.try_get::<String>("", "data") else {
+        let (Ok(id), Ok(sid), Ok(kind), Ok(data_raw)) = (
+            row.try_get::<String>("", "id"),
+            row.try_get::<String>("", "session_id"),
+            row.try_get::<String>("", "type"),
+            row.try_get::<String>("", "data"),
+        ) else {
             continue;
         };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&data_raw) else {
             continue;
         };
+        if kind == "synthetic" {
+            if let Some(job) = background_job_notice_key(&value) {
+                job_notices.insert(job, value);
+            }
+            continue;
+        }
+        messages.push((id, sid, value));
+    }
+    let ids: Vec<&str> = messages.iter().map(|(id, _, _)| id.as_str()).collect();
+    let mut parts = load_v2_session_parts(conn, &ids).await;
 
+    let mut result: HashMap<String, Vec<AgentToolCall>> = HashMap::new();
+    for (id, sid, mut value) in messages {
+        splice_v2_parts(&mut value, parts.remove(id.as_str()));
         for part in v2_content(&value) {
             // Nested launches are skipped, as for 1.x, to avoid recursion.
             if part.get("type").and_then(|t| t.as_str()) != Some("tool")
@@ -3002,7 +3209,12 @@ async fn batch_load_v2_subagent_tool_calls(
                 .and_then(|n| n.as_str())
                 .unwrap_or("unknown");
             let state = part.get("state");
-            let normalized = normalize_tool_call(tool_name, state);
+            let mut normalized = normalize_tool_call(tool_name, state);
+            if let Some(notice) =
+                background_job_of_call(tool_name, state).and_then(|job| job_notices.get(&job))
+            {
+                settle_background_job(&mut normalized, tool_name, notice);
+            }
             let status = pick_str(state, &["status"]).unwrap_or("");
 
             result.entry(sid.clone()).or_default().push(AgentToolCall {
@@ -4052,6 +4264,34 @@ mod tests {
             );
         }
 
+        /// One `session_part` row: a content part of an assistant message,
+        /// typed by its `type` column (OpenCode 2.2.5's layout).
+        fn v2_part(
+            &mut self,
+            session: &str,
+            message: &str,
+            ordinal: i64,
+            kind: &str,
+            data: serde_json::Value,
+        ) {
+            self.exec(
+                "INSERT INTO session_part \
+                 (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) \
+                 VALUES (?, ?, ?, ?, ?, 0, 0, ?)",
+                [
+                    message.into(),
+                    session.into(),
+                    ordinal.into(),
+                    kind.into(),
+                    data.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(str::to_string)
+                        .into(),
+                    data.to_string().into(),
+                ],
+            );
+        }
+
         fn build(self) -> (tempfile::TempDir, super::OpenCodeParser) {
             let dir = tempfile::tempdir().expect("tempdir");
             let db_path = dir.path().join("opencode.db");
@@ -4090,6 +4330,13 @@ mod tests {
          type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, \
          time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
     ];
+
+    /// `session_part` as OpenCode 2.2.5 creates it (migration
+    /// `20261029002625_session_part`, foreign keys left out).
+    const SESSION_PART_TABLE: &str = "CREATE TABLE session_part (message_id TEXT NOT NULL, \
+         session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT, \
+         time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL, \
+         PRIMARY KEY (message_id, ordinal))";
 
     fn text_blocks(blocks: &[ContentBlock]) -> Vec<&str> {
         blocks
@@ -4438,6 +4685,530 @@ mod tests {
             ["[opencode provider.invalid-request] fake provider rejected the request"]
         );
         assert_eq!(text_blocks(&detail.turns[5].blocks), ["[opencode aborted]"]);
+    }
+
+    /// OpenCode 2.2.5 reads an assistant message's content from its
+    /// `session_part` rows whenever it has some, in `ordinal` order, while the
+    /// `session_message` row keeps an empty `content`. A part is read as stored;
+    /// the row's `type` column only fills a part that has no `type`. A message
+    /// without rows there reads inline as before, and a sub-agent's messages
+    /// read the same way, their tool calls showing on the launch.
+    #[test]
+    fn assistant_parts_kept_in_session_part_replace_the_inline_content() {
+        use crate::parsers::AgentParser;
+
+        let t0: i64 = 1_793_400_000_000;
+        let model = serde_json::json!({ "id": "test-model", "providerID": "test" });
+        let mut fx = DbFixture::new(&[V2_TABLES[0], V2_TABLES[1], SESSION_PART_TABLE]);
+        fx.v2_session("ses_main", None, Some("Parts"), t0, t0 + 900);
+        fx.v2_session("ses_kid", Some("ses_main"), Some("Kid"), t0 + 300, t0 + 400);
+        fx.v2_message(
+            "ses_main",
+            "msg_u1",
+            0,
+            "user",
+            t0,
+            serde_json::json!({ "time": { "created": t0 }, "text": "go" }),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_a1",
+            1,
+            "assistant",
+            t0 + 10,
+            serde_json::json!({
+                "time": { "created": t0 + 10, "completed": t0 + 90 },
+                "agent": "build",
+                "model": model,
+                "content": []
+            }),
+        );
+        // Inserted out of order: `ordinal` decides, not the row order.
+        fx.v2_part(
+            "ses_main",
+            "msg_a1",
+            1,
+            "text",
+            // No `type` of its own: the row's column supplies it.
+            serde_json::json!({ "text": "Running it." }),
+        );
+        fx.v2_part(
+            "ses_main",
+            "msg_a1",
+            0,
+            // The part's own `type` stands, whatever the column says.
+            "text",
+            serde_json::json!({ "type": "reasoning", "text": "Run it first." }),
+        );
+        fx.v2_part(
+            "ses_main",
+            "msg_a1",
+            2,
+            "tool",
+            serde_json::json!({
+                "type": "tool",
+                "id": "call_1",
+                "name": "shell",
+                "state": {
+                    "status": "completed",
+                    "input": { "command": "echo hi" },
+                    "content": [{ "type": "text", "text": "hi\n" }]
+                }
+            }),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_a2",
+            2,
+            "assistant",
+            t0 + 100,
+            serde_json::json!({
+                "time": { "created": t0 + 100, "completed": t0 + 400 },
+                "agent": "build",
+                "model": model,
+                "content": []
+            }),
+        );
+        fx.v2_part(
+            "ses_main",
+            "msg_a2",
+            0,
+            "tool",
+            serde_json::json!({
+                "type": "tool",
+                "id": "call_2",
+                "name": "subagent",
+                "state": {
+                    "status": "completed",
+                    "input": { "agent": "general", "description": "Kid", "prompt": "look" },
+                    "content": [{
+                        "type": "text",
+                        "text": "<subagent sessionID=\"ses_kid\" state=\"completed\">\nkid done\n</subagent>"
+                    }],
+                    "metadata": { "sessionID": "ses_kid", "status": "completed" }
+                }
+            }),
+        );
+        // No rows in `session_part`: the inline content stands.
+        fx.v2_message(
+            "ses_main",
+            "msg_a3",
+            3,
+            "assistant",
+            t0 + 500,
+            serde_json::json!({
+                "time": { "created": t0 + 500, "completed": t0 + 510 },
+                "agent": "build",
+                "model": model,
+                "content": [{ "type": "text", "text": "Inline as before." }]
+            }),
+        );
+        fx.v2_message(
+            "ses_kid",
+            "msg_k1",
+            0,
+            "assistant",
+            t0 + 310,
+            serde_json::json!({
+                "time": { "created": t0 + 310, "completed": t0 + 390 },
+                "agent": "general",
+                "model": model,
+                "content": []
+            }),
+        );
+        fx.v2_part(
+            "ses_kid",
+            "msg_k1",
+            0,
+            "tool",
+            serde_json::json!({
+                "type": "tool",
+                "id": "call_k",
+                "name": "shell",
+                "state": {
+                    "status": "completed",
+                    "input": { "command": "echo kid-output" },
+                    "content": [{ "type": "text", "text": "kid-output\n" }]
+                }
+            }),
+        );
+        let (_dir, parser) = fx.build();
+
+        let detail = parser.get_conversation("ses_main").expect("detail");
+        assert_eq!(detail.turns.len(), 4);
+        match detail.turns[1].blocks.as_slice() {
+            [ContentBlock::Thinking { text: thinking }, ContentBlock::Text { text }, ContentBlock::ToolUse { tool_name, .. }, ContentBlock::ToolResult { output_preview, .. }] =>
+            {
+                assert_eq!(thinking, "Run it first.");
+                assert_eq!(text, "Running it.");
+                assert_eq!(tool_name, "shell");
+                assert_eq!(output_preview.as_deref(), Some("hi"));
+            }
+            other => panic!("unexpected blocks from session_part: {other:?}"),
+        }
+        match detail.turns[2].blocks.as_slice() {
+            [ContentBlock::ToolUse { tool_name, .. }, ContentBlock::ToolResult {
+                output_preview,
+                agent_stats: Some(stats),
+                ..
+            }] => {
+                assert_eq!(tool_name, "Agent");
+                assert_eq!(output_preview.as_deref(), Some("kid done"));
+                assert_eq!(stats.tool_calls.len(), 1, "the kid's own part");
+                assert_eq!(
+                    stats.tool_calls[0].output_preview.as_deref(),
+                    Some("kid-output")
+                );
+            }
+            other => panic!("unexpected agent blocks: {other:?}"),
+        }
+        assert_eq!(text_blocks(&detail.turns[3].blocks), ["Inline as before."]);
+    }
+
+    /// A call whose work went to the background — a command (`shell` with
+    /// `background: true`) or an image request — reports how it ended once
+    /// OpenCode's notice of that end is in the session, its own or a
+    /// sub-agent's. Shapes as OpenCode 2.2.5 (and, for commands, 2.2.0) wrote
+    /// them live; the image job's ids, paths and model are shortened.
+    #[test]
+    fn background_jobs_report_their_end_on_the_call_that_started_them() {
+        use crate::parsers::AgentParser;
+
+        let t0: i64 = 1_793_500_000_000;
+        let model = serde_json::json!({ "id": "test-model", "providerID": "test" });
+        let bg_shell = |id: &str, shell: &str, command: &str| {
+            serde_json::json!({
+                "type": "tool",
+                "id": id,
+                "name": "shell",
+                "state": {
+                    "status": "completed",
+                    "input": { "command": command, "background": true },
+                    "content": [
+                        { "type": "text", "text": format!("Command moved to the background (shell ID: {shell}).\nOutput is streaming to: /data/shell/{shell}.out") },
+                        { "type": "text", "text": "You will be notified automatically when the command finishes." }
+                    ],
+                    "metadata": { "status": "running", "truncated": false, "shellID": shell }
+                }
+            })
+        };
+        let image = |id: &str, job: &str| {
+            serde_json::json!({
+                "type": "tool",
+                "id": id,
+                "name": "experimental_image_generate",
+                "state": {
+                    "status": "completed",
+                    "input": { "prompt": "a red square" },
+                    "content": [{ "type": "text", "text": format!("Image job {job} started in the background with openai/gpt-image-2.") }],
+                    "metadata": { "path": format!("/tmp/images/{job}"), "model": "openai/gpt-image-2", "jobID": job, "truncated": false }
+                }
+            })
+        };
+        let shell_notice = |shell: &str, command: &str, exit: i64, text: &str| {
+            serde_json::json!({
+                "metadata": { "source": "shell", "shellID": shell, "jobID": shell, "state": "completed", "truncated": false, "exit": exit },
+                "time": { "created": t0 + 50 },
+                "text": format!("<shell id=\"{shell}\" state=\"completed\" command=\"{command}\">\n{text}\n</shell>"),
+                "description": command
+            })
+        };
+        let image_notice = |job: &str, state: &str, text: &str| {
+            serde_json::json!({
+                "metadata": { "source": "experimental_image_generate", "jobID": job, "state": state, "path": format!("/tmp/images/{job}") },
+                "time": { "created": t0 + 60 },
+                "text": format!("<image id=\"{job}\" state=\"{state}\">\n{text}\n</image>"),
+                "description": "Image generation"
+            })
+        };
+
+        let mut fx = DbFixture::new(&V2_TABLES);
+        fx.v2_session("ses_main", None, Some("Jobs"), t0, t0 + 900);
+        fx.v2_session("ses_kid", Some("ses_main"), Some("Kid"), t0 + 300, t0 + 400);
+        fx.v2_message(
+            "ses_main",
+            "msg_u1",
+            0,
+            "user",
+            t0,
+            serde_json::json!({ "time": { "created": t0 }, "text": "go" }),
+        );
+        // A command with `>` and `"` in it, as the notice's tag repeats it.
+        let tricky = "echo \"x>\" && exit 3";
+        fx.v2_message("ses_main", "msg_a1", 1, "assistant", t0 + 10, serde_json::json!({
+            "time": { "created": t0 + 10, "completed": t0 + 20 },
+            "agent": "build",
+            "model": model,
+            "content": [
+                bg_shell("call_bg", "sh_bg", "sleep 2; echo bg-done"),
+                bg_shell("call_fail", "sh_fail", tricky),
+                bg_shell("call_quiet", "sh_quiet", "sleep 1"),
+                bg_shell("call_wait", "sh_wait", "sleep 600"),
+                image("call_img", "image_ok"),
+                image("call_img_err", "image_err"),
+                // Ran in the foreground: a notice naming its shell is not its own.
+                {
+                    "type": "tool",
+                    "id": "call_fg",
+                    "name": "shell",
+                    "state": {
+                        "status": "completed",
+                        "input": { "command": "echo fg" },
+                        "content": [{ "type": "text", "text": "fg-out" }],
+                        "metadata": { "status": "completed", "truncated": false, "exit": 0, "shellID": "sh_fg" }
+                    }
+                },
+                {
+                    "type": "tool",
+                    "id": "call_kid",
+                    "name": "subagent",
+                    "state": {
+                        "status": "completed",
+                        "input": { "agent": "general", "description": "Kid", "prompt": "look" },
+                        "content": [{ "type": "text", "text": "<subagent sessionID=\"ses_kid\" state=\"completed\">\nkid done\n</subagent>" }],
+                        "metadata": { "sessionID": "ses_kid", "status": "completed" }
+                    }
+                }
+            ]
+        }));
+        fx.v2_message(
+            "ses_main",
+            "msg_n1",
+            2,
+            "synthetic",
+            t0 + 50,
+            shell_notice("sh_bg", "sleep 2; echo bg-done", 0, "bg-done\n"),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n2",
+            3,
+            "synthetic",
+            t0 + 51,
+            shell_notice("sh_fail", tricky, 3, "oops\n\nExited with code 3"),
+        );
+        // Nothing printed and exit 0: the notice's body is empty
+        // (`notifyWhenDone` in `core/src/tool/plugin/shell.ts`).
+        fx.v2_message(
+            "ses_main",
+            "msg_n2q",
+            4,
+            "synthetic",
+            t0 + 51,
+            shell_notice("sh_quiet", "sleep 1", 0, ""),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n3",
+            5,
+            "synthetic",
+            t0 + 52,
+            shell_notice("sh_fg", "echo fg", 0, "not this"),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n4",
+            6,
+            "synthetic",
+            t0 + 60,
+            image_notice(
+                "image_ok",
+                "completed",
+                "Image request finished. Saved image: /tmp/images/image_ok.png (openai/gpt-image-2).\nUse the read tool on this path to view the image.",
+            ),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n5",
+            7,
+            "synthetic",
+            t0 + 61,
+            image_notice(
+                "image_err",
+                "error",
+                "Image request failed for /tmp/images/image_err: openai/gpt-image-2 rejected the prompt",
+            ),
+        );
+        fx.v2_message(
+            "ses_kid",
+            "msg_k1",
+            0,
+            "assistant",
+            t0 + 310,
+            serde_json::json!({
+                "time": { "created": t0 + 310, "completed": t0 + 320 },
+                "agent": "general",
+                "model": model,
+                "content": [
+                    bg_shell("call_kid_bg", "sh_kid", "echo kid"),
+                    bg_shell("call_kid_quiet", "sh_kid_quiet", "sleep 1")
+                ]
+            }),
+        );
+        fx.v2_message(
+            "ses_kid",
+            "msg_k2",
+            1,
+            "synthetic",
+            t0 + 330,
+            shell_notice("sh_kid", "echo kid", 0, "kid-bg-done"),
+        );
+        fx.v2_message(
+            "ses_kid",
+            "msg_k3",
+            2,
+            "synthetic",
+            t0 + 331,
+            shell_notice("sh_kid_quiet", "sleep 1", 0, ""),
+        );
+        let (_dir, parser) = fx.build();
+
+        let detail = parser.get_conversation("ses_main").expect("detail");
+        let blocks: Vec<&ContentBlock> = detail.turns.iter().flat_map(|t| &t.blocks).collect();
+        let result = |id: &str| {
+            blocks
+                .iter()
+                .find_map(|block| match block {
+                    ContentBlock::ToolResult {
+                        tool_use_id: Some(use_id),
+                        output_preview,
+                        is_error,
+                        exit_code,
+                        agent_stats,
+                        ..
+                    } if use_id == id => Some((
+                        output_preview.clone().unwrap_or_default(),
+                        *is_error,
+                        *exit_code,
+                        agent_stats.as_ref().map(|stats| {
+                            stats
+                                .tool_calls
+                                .iter()
+                                .map(|call| call.output_preview.clone())
+                                .collect::<Vec<_>>()
+                        }),
+                    )),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no result for {id}"))
+        };
+        let call_meta = |id: &str| {
+            blocks.iter().find_map(|block| match block {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(use_id),
+                    meta,
+                    ..
+                } if use_id == id => Some(meta.clone()),
+                _ => None,
+            })
+        };
+
+        assert_eq!(
+            result("call_bg"),
+            ("bg-done".to_string(), false, Some(0), None)
+        );
+        assert_eq!(
+            result("call_fail"),
+            (
+                "oops\n\nExited with code 3".to_string(),
+                false,
+                Some(3),
+                None
+            )
+        );
+        assert_eq!(
+            call_meta("call_fail"),
+            Some(Some(serde_json::json!({ "codeg.exitCode": 3 })))
+        );
+        // An empty notice clears the background result rather than keeping it.
+        assert_eq!(result("call_quiet"), (String::new(), false, Some(0), None));
+        let (waiting, waiting_error, waiting_exit, _) = result("call_wait");
+        assert!(
+            waiting.starts_with("Command moved to the background (shell ID: sh_wait)"),
+            "{waiting}"
+        );
+        assert_eq!((waiting_error, waiting_exit), (false, None));
+        assert_eq!(
+            result("call_img"),
+            (
+                "Image request finished. Saved image: /tmp/images/image_ok.png (openai/gpt-image-2).\nUse the read tool on this path to view the image.".to_string(),
+                false,
+                None,
+                None
+            )
+        );
+        assert_eq!(
+            result("call_img_err"),
+            (
+                "Image request failed for /tmp/images/image_err: openai/gpt-image-2 rejected the prompt".to_string(),
+                true,
+                None,
+                None
+            )
+        );
+        assert_eq!(result("call_fg").0, "fg-out");
+        let (_, _, _, kid_calls) = result("call_kid");
+        assert_eq!(kid_calls, Some(vec![Some("kid-bg-done".to_string()), None]));
+        // The notices themselves are text for the model, not turns.
+        assert_eq!(detail.turns.len(), 2);
+    }
+
+    /// Only a background job's notice is keyed: a command the user ran gets a
+    /// `shell` notice without a `jobID`, and a sub-agent's has its own reader.
+    #[test]
+    fn background_job_notice_keys() {
+        let key = |metadata: serde_json::Value| {
+            super::background_job_notice_key(&serde_json::json!({ "metadata": metadata }))
+        };
+        assert_eq!(
+            key(serde_json::json!({ "source": "shell", "shellID": "sh_1", "jobID": "sh_1" })),
+            Some("shell:sh_1".to_string())
+        );
+        assert_eq!(
+            key(serde_json::json!({ "source": "experimental_image_generate", "jobID": "image_1" })),
+            Some("image:image_1".to_string())
+        );
+        assert_eq!(
+            key(serde_json::json!({ "source": "shell", "shellID": "sh_u" })),
+            None
+        );
+        assert_eq!(
+            key(serde_json::json!({ "source": "subagent", "childID": "ses_1", "jobID": "j" })),
+            None
+        );
+        // A notice in another form keeps its text whole.
+        assert_eq!(
+            super::background_job_notice_text(&serde_json::json!({
+                "metadata": { "source": "shell", "shellID": "sh_1", "jobID": "sh_1", "state": "completed" },
+                "text": "<shell id=\"sh_other\">\nout\n</shell>",
+                "description": "echo"
+            })),
+            Some("<shell id=\"sh_other\">\nout\n</shell>".to_string())
+        );
+    }
+
+    /// Parts replace a `content` the message carries and nothing else, as
+    /// OpenCode's `withParts` (`"content" in row.data`) does; no rows, no change.
+    #[test]
+    fn session_parts_only_replace_a_content_the_message_carries() {
+        let part = serde_json::json!({ "type": "text", "text": "from the part" });
+
+        let mut with_content =
+            serde_json::json!({ "content": [{ "type": "text", "text": "inline" }] });
+        super::splice_v2_parts(&mut with_content, Some(vec![part.clone()]));
+        assert_eq!(with_content["content"], serde_json::json!([part]));
+
+        let mut without_content = serde_json::json!({ "error": { "type": "aborted" } });
+        super::splice_v2_parts(&mut without_content, Some(vec![part]));
+        assert_eq!(
+            without_content,
+            serde_json::json!({ "error": { "type": "aborted" } })
+        );
+
+        let mut untouched =
+            serde_json::json!({ "content": [{ "type": "text", "text": "inline" }] });
+        super::splice_v2_parts(&mut untouched, None);
+        assert_eq!(untouched["content"][0]["text"], "inline");
     }
 
     /// History the 1.x migration carried into `session_message` keeps its 1.x

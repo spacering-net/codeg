@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { parseJsoncObject } from "./jsonc-edit"
 import {
+  parseOpenCodeNumberInput,
   readOpenCodeBehavior,
   removeIgnoredLegacyKeys,
   setOpenCodeDefaultAgent,
@@ -108,6 +109,62 @@ describe("readOpenCodeBehavior", () => {
     )
     expect(view.toggles["experimental.todo"]).toBe(true)
   })
+
+  it("reads a compaction buffer given as a share of the window", () => {
+    const buffer = (compaction: object) =>
+      readOpenCodeBehavior(JSON.stringify({ compaction })).numbers[
+        "compaction.buffer"
+      ]
+    expect(buffer({ buffer: "20%" })).toBe("20%")
+    expect(buffer({ buffer: "12.5%" })).toBe("12.5%")
+    expect(buffer({ buffer: "1%" })).toBe("1%")
+    expect(buffer({ buffer: "99.9%" })).toBe("99.9%")
+    // 1.x's key takes the same values (`normalize.ts` decodes it with the
+    // 2.x field's schema).
+    expect(buffer({ reserved: "30%" })).toBe("30%")
+    // What OpenCode rejects reads as unset, as any malformed value does.
+    for (const rejected of [
+      "100%",
+      "0%",
+      "0.5%",
+      "05%",
+      "20 %",
+      "20",
+      "%",
+      "x%",
+    ]) {
+      expect(buffer({ buffer: rejected }), rejected).toBeNull()
+    }
+    // Only the buffer takes a share.
+    expect(
+      readOpenCodeBehavior(
+        JSON.stringify({ compaction: { keep: { tokens: "20%" } } })
+      ).numbers["compaction.keep.tokens"]
+    ).toBeNull()
+  })
+})
+
+describe("parseOpenCodeNumberInput", () => {
+  it("reads integers, shares for the buffer, and nothing else", () => {
+    expect(parseOpenCodeNumberInput("compaction.buffer", "")).toBeNull()
+    expect(parseOpenCodeNumberInput("compaction.buffer", "  ")).toBeNull()
+    expect(parseOpenCodeNumberInput("compaction.buffer", "20000")).toBe(20000)
+    expect(parseOpenCodeNumberInput("compaction.buffer", " 20% ")).toBe("20%")
+    expect(parseOpenCodeNumberInput("compaction.buffer", "12.5%")).toBe("12.5%")
+    // A trailing dot still spells the integer, as `Number` reads it.
+    expect(parseOpenCodeNumberInput("compaction.buffer", "12.")).toBe(12)
+    // On the way to a value: spells none yet.
+    for (const partial of ["12.5", "100%", "-", "1e", "%"]) {
+      expect(
+        parseOpenCodeNumberInput("compaction.buffer", partial),
+        partial
+      ).toBeUndefined()
+    }
+    expect(
+      parseOpenCodeNumberInput("compaction.keep.tokens", "20%")
+    ).toBeUndefined()
+    expect(parseOpenCodeNumberInput("tool_output.max_lines", "-3")).toBe(-3)
+  })
 })
 
 describe("writers", () => {
@@ -154,6 +211,35 @@ describe("writers", () => {
     // Below the floor, or not an integer: untouched.
     expect(setOpenCodeNumber(buffer, "tool_output.max_lines", 0)).toBe(buffer)
     expect(setOpenCodeNumber(buffer, "compaction.buffer", 1.5)).toBe(buffer)
+  })
+
+  it("writes a share of the window for the buffer only", () => {
+    const start = JSON.stringify({ compaction: { auto: true, reserved: 2 } })
+    const share = setOpenCodeNumber(start, "compaction.buffer", "20%")
+    // Written at the 2.x path, replacing the 1.x spelling.
+    expect(parse(share)).toEqual({ compaction: { auto: true, buffer: "20%" } })
+    expect(readOpenCodeBehavior(share).numbers["compaction.buffer"]).toBe("20%")
+    // A token count replaces it, and an emptied field unsets it.
+    const tokens = setOpenCodeNumber(share, "compaction.buffer", 20000)
+    expect(parse(tokens)).toEqual({ compaction: { auto: true, buffer: 20000 } })
+    expect(parse(setOpenCodeNumber(share, "compaction.buffer", null))).toEqual({
+      compaction: { auto: true },
+    })
+    // A share OpenCode rejects, or one for a field that takes none: untouched.
+    expect(setOpenCodeNumber(share, "compaction.buffer", "100%")).toBe(share)
+    expect(setOpenCodeNumber(share, "compaction.buffer", "20")).toBe(share)
+    expect(setOpenCodeNumber(share, "compaction.keep.tokens", "20%")).toBe(
+      share
+    )
+  })
+
+  it("leaves a share alone when another field is written", () => {
+    const text = '{\n  // free room\n  "compaction": { "buffer": "20%" },\n}\n'
+    const out = setOpenCodeNumber(text, "compaction.keep.tokens", 5000)
+    expect(out).toContain("// free room")
+    expect(parse(out)).toEqual({
+      compaction: { buffer: "20%", keep: { tokens: 5000 } },
+    })
   })
 
   it("keeps comments and leaves unparsable text alone", () => {

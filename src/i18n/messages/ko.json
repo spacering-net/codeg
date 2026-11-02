@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "하위 에이전트를 몇 단계까지 중첩할 수 있는지(experimental.subagent_depth)입니다. 1이면 하위 에이전트가 다른 하위 에이전트를 실행할 수 없습니다.",
           "preserveRecentTokens": "압축 후에도 원문 그대로 유지할 최근 대화의 토큰 예산(compaction.keep.tokens)입니다. 기본값 15000.",
-          "reserved": "압축 자체가 컨텍스트를 넘치지 않도록 비워 두는 창(compaction.buffer)입니다. 설정하지 않으면 창의 15%(최소 16K)를 예약합니다.",
+          "reserved": "자동 압축 전에 컨텍스트 창에서 비워 두는 공간(compaction.buffer)입니다. 토큰 수(예: <code>20000</code>)나 창 대비 비율(<code>1%</code>~<code>99%</code>, 예: <code>20%</code>)로 지정합니다. 설정하지 않으면 창의 <code>15%</code>(최소 <code>16000</code> 토큰)를 비워 둡니다.",
           "maxLines": "이보다 긴 출력은 디스크에 저장되고 미리 보기만 남습니다. 기본값 2000.",
           "maxBytes": "이보다 큰 출력은 디스크에 저장되고 미리 보기만 남습니다. 기본값 51200."
         }

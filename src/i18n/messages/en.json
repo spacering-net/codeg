@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "How deep sub-agents may nest (experimental.subagent_depth). 1 stops a sub-agent from launching another.",
           "preserveRecentTokens": "Token budget of recent turns kept verbatim after a compaction (compaction.keep.tokens). Default 15000.",
-          "reserved": "Window left free so a compaction never overflows the context (compaction.buffer). Unset reserves 15% of the window, at least 16K.",
+          "reserved": "Room kept free in the context window before automatic compaction (compaction.buffer): a token count such as <code>20000</code>, or a share of the window from <code>1%</code> to <code>99%</code>, such as <code>20%</code>. Unset keeps <code>15%</code> of the window free, at least <code>16000</code> tokens.",
           "maxLines": "Output longer than this is written to disk and replaced with a preview. Default 2000.",
           "maxBytes": "Output larger than this is written to disk and replaced with a preview. Default 51200."
         }

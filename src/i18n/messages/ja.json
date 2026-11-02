@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "サブエージェントを何段までネストできるか（experimental.subagent_depth）。1 ならサブエージェントはさらに別のサブエージェントを起動できません。",
           "preserveRecentTokens": "コンパクション後も原文のまま残す直近ターンのトークン予算（compaction.keep.tokens）。既定値 15000。",
-          "reserved": "コンパクション自体がコンテキストを溢れさせないよう空けておくウィンドウ（compaction.buffer）。未設定ならウィンドウの 15%（最低 16K）を確保します。",
+          "reserved": "自動コンパクションの前にコンテキストウィンドウで空けておく領域（compaction.buffer）。トークン数（例: <code>20000</code>）か、ウィンドウに対する割合（<code>1%</code>〜<code>99%</code>、例: <code>20%</code>）で指定します。未設定ならウィンドウの <code>15%</code>（最低 <code>16000</code> トークン）を空けます。",
           "maxLines": "これを超える出力はディスクに書き出され、プレビューだけが残ります。既定 2000。",
           "maxBytes": "これを超える出力はディスクに書き出され、プレビューだけが残ります。既定 51200。"
         }

@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "Cuántos niveles pueden anidarse los subagentes (experimental.subagent_depth). 1 impide que un subagente lance otro.",
           "preserveRecentTokens": "Presupuesto de tokens de los turnos recientes que se conservan literalmente tras una compactación (compaction.keep.tokens). Predeterminado: 15000.",
-          "reserved": "Ventana que se deja libre para que una compactación nunca desborde el contexto (compaction.buffer). Sin valor reserva el 15 % de la ventana, al menos 16K.",
+          "reserved": "Espacio que se deja libre en la ventana de contexto antes de la compactación automática (compaction.buffer): un número de tokens como <code>20000</code> o una parte de la ventana de <code>1%</code> a <code>99%</code>, como <code>20%</code>. Sin valor se deja libre el <code>15%</code> de la ventana, al menos <code>16000</code> tokens.",
           "maxLines": "La salida más larga se escribe en disco y se sustituye por una vista previa. Por defecto 2000.",
           "maxBytes": "La salida más grande se escribe en disco y se sustituye por una vista previa. Por defecto 51200."
         }

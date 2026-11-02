@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "子智慧體最多可以巢狀幾層（experimental.subagent_depth）。填 1 表示子智慧體不能再啟動子智慧體。",
           "preserveRecentTokens": "壓縮後仍按原文保留的最近對話 token 預算（compaction.keep.tokens）。預設 15000。",
-          "reserved": "為壓縮本身預留的視窗，避免壓縮過程撐爆上下文（compaction.buffer）。不填則預留視窗的 15%，至少 16K。",
+          "reserved": "自動壓縮前在上下文視窗裡預留的空間（compaction.buffer）：填 token 數，如 <code>20000</code>；或填視窗占比，<code>1%</code> 到 <code>99%</code>，如 <code>20%</code>。不填則預留視窗的 <code>15%</code>，至少 <code>16000</code> 個 token。",
           "maxLines": "超過該行數的輸出會落檔，只在對話裡留一段預覽。預設 2000。",
           "maxBytes": "超過該位元組數的輸出會落檔，只在對話裡留一段預覽。預設 51200。"
         }

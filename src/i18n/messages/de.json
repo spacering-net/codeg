@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "Wie tief Sub-Agenten verschachtelt sein dürfen (experimental.subagent_depth). 1 verhindert, dass ein Sub-Agent einen weiteren startet.",
           "preserveRecentTokens": "Token-Budget der letzten Runden, die nach einer Verdichtung wörtlich erhalten bleiben (compaction.keep.tokens). Standard 15000.",
-          "reserved": "Freigehaltenes Fenster, damit eine Verdichtung den Kontext nie sprengt (compaction.buffer). Ohne Wert werden 15 % des Fensters reserviert, mindestens 16K.",
+          "reserved": "Platz, der im Kontextfenster vor der automatischen Verdichtung frei bleibt (compaction.buffer): eine Tokenzahl wie <code>20000</code> oder ein Anteil des Fensters von <code>1%</code> bis <code>99%</code>, etwa <code>20%</code>. Ohne Wert bleiben <code>15%</code> des Fensters frei, mindestens <code>16000</code> Tokens.",
           "maxLines": "Längere Ausgaben werden auf die Festplatte geschrieben und durch eine Vorschau ersetzt. Standard 2000.",
           "maxBytes": "Größere Ausgaben werden auf die Festplatte geschrieben und durch eine Vorschau ersetzt. Standard 51200."
         }

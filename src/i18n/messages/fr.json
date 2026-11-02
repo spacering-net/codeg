@@ -1413,7 +1413,7 @@
         "hints": {
           "subagentDepth": "Profondeur d’imbrication maximale des sous-agents (experimental.subagent_depth). 1 empêche un sous-agent d’en lancer un autre.",
           "preserveRecentTokens": "Budget de jetons des derniers tours conservés tels quels après une compaction (compaction.keep.tokens). Par défaut 15000.",
-          "reserved": "Fenêtre laissée libre pour qu’une compaction ne déborde jamais du contexte (compaction.buffer). Sans valeur, 15 % de la fenêtre sont réservés, au moins 16K.",
+          "reserved": "Espace laissé libre dans la fenêtre de contexte avant la compaction automatique (compaction.buffer) : un nombre de tokens comme <code>20000</code>, ou une part de la fenêtre de <code>1%</code> à <code>99%</code>, par exemple <code>20%</code>. Sans valeur, <code>15%</code> de la fenêtre restent libres, au moins <code>16000</code> tokens.",
           "maxLines": "Une sortie plus longue est écrite sur disque et remplacée par un aperçu. Par défaut 2000.",
           "maxBytes": "Une sortie plus grosse est écrite sur disque et remplacée par un aperçu. Par défaut 51200."
         }
