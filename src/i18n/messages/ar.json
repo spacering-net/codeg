@@ -384,7 +384,7 @@
     "giteaNoAccounts": "لا يوجد حساب Gitea بعد",
     "cnbTitle": "حسابات CNB",
     "cnbDescription": "أدر حسابات CNB (cnb.cool) للمصادقة. تُخزَّن الرموز محليًا.",
-    "cnbTokenHint": "أنشئ رمز وصول من CNB ← الإعدادات الشخصية ← رموز الوصول مع النطاقات account-profile:r و repo-issue:rw و repo-pr:rw و repo-notes:rw و repo-code:r. بدون account-profile:r لن يخبر CNB عن المستخدم الذي يخصه الرمز، ولن يمكن إضافة الحساب.",
+    "cnbTokenHint": "أنشئ رمز وصول من CNB ← الإعدادات الشخصية ← رموز الوصول مع النطاقات account-profile:r و repo-issue:rw و repo-pr:rw و repo-notes:rw و repo-code:rw. بدون account-profile:r لن يخبر CNB عن المستخدم الذي يخصه الرمز، ولن يمكن إضافة الحساب.",
     "cnbNoAccounts": "لا يوجد حساب CNB بعد",
     "noAccounts": "لا توجد حسابات GitHub مكوّنة.",
     "addAccount": "إضافة حساب",

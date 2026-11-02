@@ -772,7 +772,12 @@ fn with_credentials(cmd: &mut tokio::process::Command, ctx: &DeliveryCtx<'_>, au
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     match crate::git_credential::ensure_askpass_script(ctx.data_dir) {
         Ok(askpass) => {
-            let username = if auth.username.trim().is_empty() {
+            // CNB's git server takes the FIXED username `cnb` with the token
+            // as the password, whatever the account's login is — see
+            // `git_credential::git_username_for`.
+            let username = if ctx.provider == ForgeProvider::Cnb {
+                crate::git_credential::CNB_GIT_USERNAME
+            } else if auth.username.trim().is_empty() {
                 // No forge checks the username when the password is a token
                 // (Gitea looks the token up and authenticates by it, ignoring
                 // whatever name came with it), but git insists on having one;
@@ -781,9 +786,7 @@ fn with_credentials(cmd: &mut tokio::process::Command, ctx: &DeliveryCtx<'_>, au
                 match ctx.provider {
                     ForgeProvider::GitHub | ForgeProvider::Gitea => "x-access-token",
                     ForgeProvider::GitLab => "oauth2",
-                    // CNB's git server accepts the access token as the
-                    // password; its own credential helper sends the account name.
-                    ForgeProvider::Cnb => "cnb",
+                    ForgeProvider::Cnb => crate::git_credential::CNB_GIT_USERNAME,
                 }
             } else {
                 auth.username.trim()
@@ -1006,12 +1009,57 @@ impl From<RawPull> for ForgePr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use axum::extract::Query;
     use axum::routing::{get, post};
     use axum::Json;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    /// CNB's git server authenticates by a FIXED username, `cnb`. An account
+    /// stored with its own login must still send `cnb`, or every push of a
+    /// delivery is refused.
+    #[tokio::test]
+    async fn a_cnb_delivery_sends_the_fixed_git_username() {
+        let conn = sea_orm::Database::connect("sqlite::memory:")
+            .await
+            .expect("db");
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let username_sent = |provider: ForgeProvider| {
+            let ctx = DeliveryCtx {
+                conn: &conn,
+                data_dir: data_dir.path(),
+                provider,
+                server_host: "cnb.cool",
+                account_id: "a",
+                owner_repo: "acme/app",
+            };
+            let auth = ResolvedAuth {
+                provider,
+                server_host: "cnb.cool".into(),
+                api_base: "https://api.cnb.cool".into(),
+                account_id: "a".into(),
+                username: "alice".into(),
+                avatar_url: None,
+                token: "t0ken".into(),
+                scopes: vec![],
+            };
+            let mut cmd = tokio::process::Command::new("git");
+            with_credentials(&mut cmd, &ctx, &auth);
+            cmd.as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "CODEG_GIT_USERNAME")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy().into_owned())
+        };
+        assert_eq!(username_sent(ForgeProvider::Cnb).as_deref(), Some("cnb"));
+        // Everyone else keeps the account's own login.
+        assert_eq!(
+            username_sent(ForgeProvider::Gitea).as_deref(),
+            Some("alice")
+        );
+    }
 
     /// The delivery error string is the only thing a human sees when a push
     /// fails, and `classify_remote_git_error` files everything specific under

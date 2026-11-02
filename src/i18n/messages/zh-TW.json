@@ -384,7 +384,7 @@
     "giteaNoAccounts": "還沒有 Gitea 帳號",
     "cnbTitle": "CNB 帳號",
     "cnbDescription": "管理用於身分驗證的 CNB（cnb.cool）帳號。權杖儲存在本機。",
-    "cnbTokenHint": "在 CNB 的「個人設定 → 存取權杖」中建立存取權杖，勾選 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 與 repo-code:r 權限。缺少 account-profile:r 時，CNB 不會回傳權杖所屬使用者，帳號將無法新增。",
+    "cnbTokenHint": "在 CNB 的「個人設定 → 存取權杖」中建立存取權杖，勾選 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 與 repo-code:rw 權限。缺少 account-profile:r 時，CNB 不會回傳權杖所屬使用者，帳號將無法新增。",
     "cnbNoAccounts": "還沒有 CNB 帳號",
     "noAccounts": "尚未設定 GitHub 帳號。",
     "addAccount": "新增帳號",

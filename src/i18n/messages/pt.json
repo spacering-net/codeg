@@ -384,7 +384,7 @@
     "giteaNoAccounts": "Ainda não há conta do Gitea",
     "cnbTitle": "Contas CNB",
     "cnbDescription": "Gerencie contas CNB (cnb.cool) para autenticação. Os tokens são armazenados localmente.",
-    "cnbTokenHint": "Crie um token de acesso em CNB → Configurações pessoais → Tokens de acesso com os escopos account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw e repo-code:r. Sem account-profile:r, o CNB não informa a qual usuário o token pertence e a conta não pode ser adicionada.",
+    "cnbTokenHint": "Crie um token de acesso em CNB → Configurações pessoais → Tokens de acesso com os escopos account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw e repo-code:rw. Sem account-profile:r, o CNB não informa a qual usuário o token pertence e a conta não pode ser adicionada.",
     "cnbNoAccounts": "Ainda não há conta CNB",
     "noAccounts": "Nenhuma conta do GitHub configurada.",
     "addAccount": "Adicionar conta",

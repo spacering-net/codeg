@@ -26,7 +26,12 @@ export function useIssueBody(
   const [read, setRead] = useState<{ key: string; body: string | null } | null>(
     null
   )
-  const key = row != null ? `${row.is_pr ? "pr" : "issue"}-${row.number}` : null
+  // The folder is part of the key: issue #42 of one repository is not #42 of
+  // another, and a read held for the first must not answer for the second.
+  const key =
+    row != null
+      ? `${folderId ?? "none"}:${row.is_pr ? "pr" : "issue"}-${row.number}`
+      : null
   const onRow = row?.body ?? null
   const wanted = enabled && row != null && !row.is_pr && onRow == null
   const number = row?.number ?? null

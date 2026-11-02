@@ -384,7 +384,7 @@
     "giteaNoAccounts": "Gitea アカウントがまだありません",
     "cnbTitle": "CNB アカウント",
     "cnbDescription": "認証用の CNB（cnb.cool）アカウントを管理します。トークンはローカルに保存されます。",
-    "cnbTokenHint": "CNB の「個人設定 → アクセストークン」で、account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw、repo-code:r のスコープを付けてアクセストークンを作成してください。account-profile:r がないと CNB はトークンの持ち主を返さないため、アカウントを追加できません。",
+    "cnbTokenHint": "CNB の「個人設定 → アクセストークン」で、account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw、repo-code:rw のスコープを付けてアクセストークンを作成してください。account-profile:r がないと CNB はトークンの持ち主を返さないため、アカウントを追加できません。",
     "cnbNoAccounts": "CNB アカウントはまだありません",
     "noAccounts": "GitHub アカウントが設定されていません。",
     "addAccount": "アカウントを追加",

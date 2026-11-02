@@ -384,7 +384,7 @@
     "giteaNoAccounts": "还没有 Gitea 账号",
     "cnbTitle": "CNB 账号",
     "cnbDescription": "管理用于身份验证的 CNB（cnb.cool）账号。令牌存储在本地。",
-    "cnbTokenHint": "在 CNB 的「个人设置 → 访问令牌」中创建访问令牌，勾选 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 和 repo-code:r 权限。缺少 account-profile:r 时，CNB 不会返回令牌所属用户，账号将无法添加。",
+    "cnbTokenHint": "在 CNB 的「个人设置 → 访问令牌」中创建访问令牌，勾选 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 和 repo-code:rw 权限。缺少 account-profile:r 时，CNB 不会返回令牌所属用户，账号将无法添加。",
     "cnbNoAccounts": "还没有 CNB 账号",
     "noAccounts": "暂无 GitHub 账号。",
     "addAccount": "添加账号",
