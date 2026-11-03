@@ -543,6 +543,70 @@ describe("integrations and the panel view", () => {
     })
     expect(groups[1].models.map((m) => m.value)).toEqual(["relay/relay-1"])
   })
+
+  it("filters disabled configured and catalog models by provider and config ID", () => {
+    const connected = buildConnectedProviders({
+      config: {
+        provider: {
+          anthropic: { models: { enabled: { disabled: true } } },
+        },
+        providers: {
+          anthropic: {
+            blacklist: ["enabled"],
+            models: {
+              "claude-x": { disabled: true },
+              "vendor/hidden": { disabled: true },
+              enabled: { disabled: false, modelID: "claude-x" },
+              implicit: {},
+              malformed: { disabled: "true" },
+            },
+          },
+          relay: { models: { "claude-x": {} } },
+        },
+      },
+      integrations: [],
+      catalog: CATALOG,
+    })
+    const groups = buildConnectedModelOptions({ connected, catalog: CATALOG })
+    expect(groups.flatMap((group) => group.models.map((m) => m.value))).toEqual(
+      [
+        "anthropic/enabled",
+        "anthropic/implicit",
+        "anthropic/malformed",
+        "relay/claude-x",
+      ]
+    )
+  })
+
+  it.each([{ catalog: [] }, { catalog: CATALOG }])(
+    "omits providers with only disabled models (catalog size: $catalog.length)",
+    ({ catalog }) => {
+      const connected = buildConnectedProviders({
+        config: {
+          providers: {
+            anthropic: { models: { "claude-x": { disabled: true } } },
+          },
+        },
+        integrations: [],
+        catalog,
+      })
+      expect(buildConnectedModelOptions({ connected, catalog })).toEqual([])
+    }
+  )
+
+  it("keeps models a 1.x provider block marks disabled, as OpenCode 2 does", () => {
+    const connected = buildConnectedProviders({
+      config: {
+        provider: { relay: { models: { a: {}, b: { disabled: true } } } },
+      },
+      integrations: [],
+      catalog: [],
+    })
+    const groups = buildConnectedModelOptions({ connected, catalog: [] })
+    expect(groups.flatMap((group) => group.models.map((m) => m.value))).toEqual(
+      ["relay/a", "relay/b"]
+    )
+  })
 })
 
 describe("custom provider ids and labels", () => {
