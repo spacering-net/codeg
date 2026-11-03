@@ -9263,7 +9263,7 @@ pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<Pa
         // an `AGENTS.md` there is only read when the workspace IS the home.
         AgentType::CodeBuddy => Some(first_existing_file(
             &crate::parsers::codebuddy::resolve_codebuddy_config_dir(),
-            &["CODEBUDDY.md", "CODEBUDDY.mdc"],
+            CODEBUDDY_INSTRUCTIONS_FILES,
         )),
         AgentType::KimiCode => {
             Some(crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("AGENTS.md"))
@@ -9271,7 +9271,7 @@ pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<Pa
         // Pi loads the first of these that exists.
         AgentType::Pi => Some(first_existing_file(
             &crate::parsers::pi::resolve_pi_agent_dir(),
-            &["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"],
+            PI_INSTRUCTIONS_FILES,
         )),
         AgentType::Grok => Some(crate::parsers::grok::resolve_grok_home_dir().join("AGENTS.md")),
         AgentType::DeepSeek => {
@@ -9303,13 +9303,40 @@ pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<Pa
     }
 }
 
+const CODEX_INSTRUCTIONS_FILES: &[&str] = &["AGENTS.override.md", "AGENTS.md"];
+const PI_INSTRUCTIONS_FILES: &[&str] =
+    &["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+const CODEBUDDY_INSTRUCTIONS_FILES: &[&str] = &["CODEBUDDY.md", "CODEBUDDY.mdc"];
+
+/// Every file [`agent_system_instructions_path`] may resolve to for the agent,
+/// whichever is in effect right now. A save goes to the file the panel showed
+/// (when it is one of these), not to a fresh resolution: blanking Codex's
+/// override, say, flips the resolution to `AGENTS.md`, whose content the
+/// editor never displayed.
+fn agent_system_instructions_candidates(agent_type: AgentType) -> Vec<PathBuf> {
+    let Some(resolved) = agent_system_instructions_path(agent_type) else {
+        return Vec::new();
+    };
+    let siblings: &[&str] = match agent_type {
+        AgentType::Codex | AgentType::Trae => CODEX_INSTRUCTIONS_FILES,
+        AgentType::Pi => PI_INSTRUCTIONS_FILES,
+        AgentType::CodeBuddy => CODEBUDDY_INSTRUCTIONS_FILES,
+        _ => &[],
+    };
+    let mut candidates = vec![resolved.clone()];
+    if let Some(dir) = resolved.parent() {
+        candidates.extend(siblings.iter().map(|name| dir.join(name)));
+    }
+    candidates
+}
+
 /// `<dir>/AGENTS.override.md` while it holds anything but whitespace, else
 /// `<dir>/AGENTS.md` — the file Codex (and its forks) actually loads.
 fn codex_style_instructions_file(dir: &Path) -> PathBuf {
-    let override_file = dir.join("AGENTS.override.md");
+    let override_file = dir.join(CODEX_INSTRUCTIONS_FILES[0]);
     match fs::read_to_string(&override_file) {
         Ok(text) if !text.trim().is_empty() => override_file,
-        _ => dir.join("AGENTS.md"),
+        _ => dir.join(CODEX_INSTRUCTIONS_FILES[1]),
     }
 }
 
@@ -9344,13 +9371,47 @@ pub(crate) fn load_agent_system_instructions(
 ///   replaced, since the panel showed it empty;
 /// - the write is atomic and goes through a symlink, keeping the link and the
 ///   file's permissions.
-fn persist_agent_system_instructions(agent_type: AgentType, content: &str) -> Result<(), AcpError> {
-    let Some(path) = agent_system_instructions_path(agent_type) else {
+///
+/// `shown_path` is the file the panel displayed (the `system_instructions_file_path`
+/// it was given); the write goes there, and only when it is one of the
+/// agent's own instruction files. Without it the file is resolved afresh.
+fn persist_agent_system_instructions(
+    agent_type: AgentType,
+    content: &str,
+    shown_path: Option<&str>,
+) -> Result<(), AcpError> {
+    let Some(resolved) = agent_system_instructions_path(agent_type) else {
         return Err(AcpError::protocol(
             "this agent has no global instructions file",
         ));
     };
+    let path = instructions_write_target(
+        resolved,
+        agent_system_instructions_candidates(agent_type),
+        shown_path,
+    )?;
     write_instructions_file(&path, content)
+}
+
+/// The file a save writes: the one the panel showed when it is among the
+/// agent's `candidates`, else (nothing shown) the `resolved` one.
+fn instructions_write_target(
+    resolved: PathBuf,
+    candidates: Vec<PathBuf>,
+    shown_path: Option<&str>,
+) -> Result<PathBuf, AcpError> {
+    let Some(shown) = shown_path else {
+        return Ok(resolved);
+    };
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.display().to_string() == shown)
+        .ok_or_else(|| {
+            AcpError::protocol(format!(
+                "{shown} is not this agent's instructions file (it is now {}); reopen the settings to edit it",
+                resolved.display()
+            ))
+        })
 }
 
 fn write_instructions_file(path: &Path, content: &str) -> Result<(), AcpError> {
@@ -13134,6 +13195,7 @@ pub(crate) async fn acp_update_agent_config_core(
     agent_type: AgentType,
     config_json: Option<String>,
     system_instructions_content: Option<String>,
+    system_instructions_file_path: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13170,7 +13232,11 @@ pub(crate) async fn acp_update_agent_config_core(
     }
 
     if let Some(instructions) = system_instructions_content.as_deref() {
-        persist_agent_system_instructions(agent_type, instructions)?;
+        persist_agent_system_instructions(
+            agent_type,
+            instructions,
+            system_instructions_file_path.as_deref(),
+        )?;
         // The instructions panel saves on its own: nothing else was sent, so
         // no native config file may be touched — the generic tail below would
         // re-serialize the agent's settings file (and reset it to `{}` when it
@@ -13317,6 +13383,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
     agent_type: AgentType,
     config_json: Option<String>,
     system_instructions_content: Option<String>,
+    system_instructions_file_path: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13335,6 +13402,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
         agent_type,
         config_json,
         system_instructions_content,
+        system_instructions_file_path,
         codex_auth_json,
         codex_config_toml,
         codex_config_toml_baseline,
@@ -13358,6 +13426,7 @@ pub async fn acp_update_agent_config(
     agent_type: AgentType,
     config_json: Option<String>,
     system_instructions_content: Option<String>,
+    system_instructions_file_path: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13381,6 +13450,7 @@ pub async fn acp_update_agent_config(
         agent_type,
         config_json,
         system_instructions_content,
+        system_instructions_file_path,
         codex_auth_json,
         codex_config_toml,
         codex_config_toml_baseline,
@@ -23483,6 +23553,46 @@ model = "gpt"
         assert_eq!(
             codex_style_instructions_file(dir.path()),
             dir.path().join("AGENTS.override.md")
+        );
+    }
+
+    #[test]
+    fn instructions_save_stays_on_the_shown_file_when_the_resolution_flips() {
+        let dir = tempfile::tempdir().unwrap();
+        let override_file = dir.path().join("AGENTS.override.md");
+        let agents_file = dir.path().join("AGENTS.md");
+        fs::write(&override_file, "# Override").unwrap();
+        fs::write(&agents_file, "# Fallback").unwrap();
+        let candidates = || vec![override_file.clone(), agents_file.clone()];
+        let shown = override_file.display().to_string();
+
+        // Blanking the shown override flips Codex's resolution to AGENTS.md…
+        write_instructions_file(&override_file, "").unwrap();
+        let resolved = codex_style_instructions_file(dir.path());
+        assert_eq!(resolved, agents_file);
+        // …but the next save still lands on the file the editor showed.
+        let target = instructions_write_target(resolved, candidates(), Some(&shown)).unwrap();
+        assert_eq!(target, override_file);
+        write_instructions_file(&target, "# New").unwrap();
+        assert_eq!(fs::read_to_string(&agents_file).unwrap(), "# Fallback");
+        assert_eq!(fs::read_to_string(&override_file).unwrap(), "# New");
+    }
+
+    #[test]
+    fn instructions_save_refuses_a_path_that_is_not_the_agents_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents_file = dir.path().join("AGENTS.md");
+        let elsewhere = dir.path().join("elsewhere.md").display().to_string();
+        assert!(instructions_write_target(
+            agents_file.clone(),
+            vec![agents_file.clone()],
+            Some(&elsewhere)
+        )
+        .is_err());
+        assert_eq!(
+            instructions_write_target(agents_file.clone(), vec![agents_file.clone()], None)
+                .unwrap(),
+            agents_file
         );
     }
 

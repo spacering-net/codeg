@@ -711,6 +711,8 @@ pub struct AcpUpdateAgentConfigParams {
     pub agent_type: AgentType,
     pub config_json: Option<String>,
     pub system_instructions_content: Option<String>,
+    #[serde(default)]
+    pub system_instructions_file_path: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
     #[serde(default)]
@@ -732,6 +734,7 @@ pub async fn acp_update_agent_config(
         params.agent_type,
         params.config_json,
         params.system_instructions_content,
+        params.system_instructions_file_path,
         params.codex_auth_json,
         params.codex_config_toml,
         params.codex_config_toml_baseline,

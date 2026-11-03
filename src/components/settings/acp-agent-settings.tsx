@@ -5398,11 +5398,16 @@ export function AcpAgentSettings() {
   )
 
   const persistSystemInstructions = useCallback(
-    async (agentType: AgentType, content: string) => {
+    async (
+      agentType: AgentType,
+      content: string,
+      filePath: string | null | undefined
+    ) => {
       setSavingInstructions((prev) => ({ ...prev, [agentType]: true }))
       try {
         const affected = await acpUpdateAgentConfig(agentType, {
           system_instructions_content: content,
+          system_instructions_file_path: filePath ?? null,
         })
         reportAffectedSessions(affected)
         setAgents((prev) =>
@@ -5438,6 +5443,7 @@ export function AcpAgentSettings() {
       configText: string,
       options?: {
         systemInstructionsText?: string
+        systemInstructionsFilePath?: string
         codexAuthJsonText?: string
         codexConfigTomlText?: string
         codexConfigTomlBaseline?: string
@@ -5493,6 +5499,8 @@ export function AcpAgentSettings() {
             typeof options?.systemInstructionsText === "string"
               ? options.systemInstructionsText
               : null,
+          system_instructions_file_path:
+            options?.systemInstructionsFilePath ?? null,
           codex_auth_json:
             typeof codexAuthJsonText === "string" ? codexAuthJsonText : null,
           codex_config_toml:
@@ -8964,7 +8972,8 @@ export function AcpAgentSettings() {
                         onClick={() =>
                           persistSystemInstructions(
                             selectedAgent.agent_type,
-                            selectedDraft.systemInstructionsText
+                            selectedDraft.systemInstructionsText,
+                            selectedAgent.system_instructions_file_path
                           )
                         }
                       >
@@ -13165,6 +13174,9 @@ base_url = "https://api.openai.com/v1"`}
                                       selectedDraft.systemInstructionsBaseline
                                       ? selectedDraft.systemInstructionsText
                                       : undefined,
+                                  systemInstructionsFilePath:
+                                    selectedAgent.system_instructions_file_path ??
+                                    undefined,
                                 }
                               )
                             )

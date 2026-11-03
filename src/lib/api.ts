@@ -681,6 +681,9 @@ export async function acpUpdateAgentConfig(
   params: {
     config_json?: string | null
     system_instructions_content?: string | null
+    /** The instructions file the editor showed: the content is written there
+     *  (the agent's own file only), not to a fresh resolution. */
+    system_instructions_file_path?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
     /** The config.toml text the draft was loaded from: a key codeg manages
@@ -710,6 +713,7 @@ export async function acpUpdateAgentConfig(
     agentType,
     configJson: params.config_json ?? null,
     systemInstructionsContent: params.system_instructions_content ?? null,
+    systemInstructionsFilePath: params.system_instructions_file_path ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
     codexConfigTomlBaseline: params.codex_config_toml_baseline ?? null,

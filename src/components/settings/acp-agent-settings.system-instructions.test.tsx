@@ -130,6 +130,8 @@ describe("System Instructions in ACP agent settings", () => {
     await waitFor(() => expect(acpUpdateAgentConfig).toHaveBeenCalledTimes(1))
     expect(acpUpdateAgentConfig).toHaveBeenCalledWith("gemini", {
       system_instructions_content: "# Updated guidelines\nAlways write tests.",
+      // Bound to the file the editor showed, not a fresh resolution.
+      system_instructions_file_path: "C:/Users/test/.gemini/GEMINI.md",
     })
   })
 
@@ -195,6 +197,7 @@ describe("System Instructions in ACP agent settings", () => {
     await waitFor(() => expect(acpUpdateAgentConfig).toHaveBeenCalledTimes(1))
     expect(vi.mocked(acpUpdateAgentConfig).mock.calls[0][1]).toMatchObject({
       system_instructions_content: "# Edited",
+      system_instructions_file_path: "/home/test/.claude/CLAUDE.md",
     })
 
     // Saved: the next shared save no longer carries it.
