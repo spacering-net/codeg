@@ -2395,6 +2395,9 @@
     },
     "conversationCard": {
       "untitledConversation": "未命名会话",
+      "history": "历史会话",
+      "historyEmpty": "没有未打开的历史会话",
+      "historyLoadFailed": "无法加载历史会话",
       "newConversation": "新建会话",
       "maximize": "最大化",
       "restore": "还原",

@@ -2395,6 +2395,9 @@
     },
     "conversationCard": {
       "untitledConversation": "Conversación sin título",
+      "history": "Historial de conversaciones",
+      "historyEmpty": "No hay conversaciones sin abrir",
+      "historyLoadFailed": "No se pudo cargar el historial de conversaciones",
       "newConversation": "Nueva conversación",
       "maximize": "Maximizar",
       "restore": "Restaurar",

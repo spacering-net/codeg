@@ -2395,6 +2395,9 @@
     },
     "conversationCard": {
       "untitledConversation": "제목 없는 대화",
+      "history": "대화 기록",
+      "historyEmpty": "열지 않은 대화가 없습니다",
+      "historyLoadFailed": "대화 기록을 불러올 수 없습니다",
       "newConversation": "새 대화",
       "maximize": "최대화",
       "restore": "복원",

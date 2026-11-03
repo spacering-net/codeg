@@ -33,6 +33,7 @@ import {
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useIsCoarsePointer } from "@/hooks/use-is-coarse-pointer"
 import { STRIP_ICON_BTN } from "./strip-icon-button"
+import { ConversationHistoryMenu } from "./conversation-history-menu"
 import { TabItem, type TabMoveTarget } from "./tab-item"
 
 interface TabBarProps {
@@ -60,6 +61,7 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
   // Mobile shows one pane at a time and has nothing to cover.
   const showMaximize = maximizeControl && mode === "fusion" && !isMobile
   const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const tabScope = useFolderTabsStore((s) => s.scope)
   const tabs = useVisibleConversationTabs()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const groupOf = useTabStore((s) => s.groupOf)
@@ -122,6 +124,11 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
   const visibleLayout = useVisibleConversationLayout()
   const orderedLeaves = useMemo(() => leafIds(visibleLayout), [visibleLayout])
   const isSplit = orderedLeaves.length > 1
+  const showHistory =
+    tabsFollowFolder &&
+    typeof tabScope === "number" &&
+    !isMobile &&
+    (groupId == null || groupId === orderedLeaves[0])
   const canSplitMove = groupTabs.length >= 2
   const moveTargets = useMemo<TabMoveTarget[]>(() => {
     if (!isSplit) return []
@@ -322,7 +329,7 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
   // doesn't leave a stray line poking out from under it (globals.css).
   const lastTabActive = activeIndex >= 0 && activeIndex === groupTabs.length - 1
 
-  return (
+  const strip = (
     <Reorder.Group
       as="div"
       ref={scrollRef}
@@ -404,17 +411,17 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
         )
       })}
       {/* The new-conversation button + drag spacer (+ the maximize/restore
-          button, flush right, while a file column sits beside this one) are the
-          Reorder.Group's own trailing children, so they share the tabs' flex
-          line — the new-conversation button hugs the last tab and the spacer
-          fills the leftover row as a window-drag region. They are not
-          Reorder.Items, so dragging a tab only ever permutes the tabs. Wrapped
-          in one `flex-1` `ws-strip-line` box so the workspace-bg bottom hairline
-          runs unbroken under all of them — the short `self-start h-7` buttons
-          can't carry the line themselves. NO `min-w-0`: its min-content (the
-          shrink-0 buttons + the spacer's `min-w-10`) is its floor, so under
-          many-tab overflow the tabs shrink to reserve it instead of it
-          collapsing to 0 and clipping the buttons. */}
+        button, flush right, while a file column sits beside this one) are the
+        Reorder.Group's own trailing children, so they share the tabs' flex
+        line — the new-conversation button hugs the last tab and the spacer
+        fills the leftover row as a window-drag region. They are not
+        Reorder.Items, so dragging a tab only ever permutes the tabs. Wrapped
+        in one `flex-1` `ws-strip-line` box so the workspace-bg bottom hairline
+        runs unbroken under all of them — the short `self-start h-7` buttons
+        can't carry the line themselves. NO `min-w-0`: its min-content (the
+        shrink-0 buttons + the spacer's `min-w-10`) is its floor, so under
+        many-tab overflow the tabs shrink to reserve it instead of it
+        collapsing to 0 and clipping the buttons. */}
       <div
         // `relative` anchors two decorative pseudo-elements: the
         // `data-adjacent-active` inset baseline (globals.css `.ws-strip-line`
@@ -445,20 +452,20 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
           <SquarePen className="h-3.5 w-3.5" />
         </button>
         {/* Drag spacer, floored at `min-w-10` (40px) instead of `min-w-0`: even
-            when many tabs overflow and squeeze this region, a grabbable
-            window-drag gap always remains to the RIGHT of the new-conversation
-            button, so the button never reaches the strip's right edge (or the
-            maximize button) and the packed strip stays draggable. Group strips
-            keep the drag region too: while split there is NO dedicated
-            title-bar row above the shells (the workspace layout drops it), so
-            each strip's tail is that group's slice of the window-drag surface —
-            for the top row it IS the title bar, and lower rows offer the same
-            grab area, mirroring the unsplit strip. */}
+          when many tabs overflow and squeeze this region, a grabbable
+          window-drag gap always remains to the RIGHT of the new-conversation
+          button, so the button never reaches the strip's right edge (or the
+          maximize button) and the packed strip stays draggable. Group strips
+          keep the drag region too: while split there is NO dedicated
+          title-bar row above the shells (the workspace layout drops it), so
+          each strip's tail is that group's slice of the window-drag surface —
+          for the top row it IS the title bar, and lower rows offer the same
+          grab area, mirroring the unsplit strip. */}
         <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
         {/* Maximize/restore, flush right like the file strip's own: the
-            conversation column over the whole middle area with the file column
-            hidden under it, and back. `mr-1.5` gives it the 6px inset from the
-            strip's right edge it has above and below. */}
+          conversation column over the whole middle area with the file column
+          hidden under it, and back. `mr-1.5` gives it the 6px inset from the
+          strip's right edge it has above and below. */}
         {showMaximize && groupTabs.length > 0 && (
           <button
             type="button"
@@ -481,5 +488,20 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
         )}
       </div>
     </Reorder.Group>
+  )
+
+  if (!showHistory) return strip
+
+  // Keep the history trigger outside the scrolling/reorderable tab list.
+  return (
+    <div className="flex h-full min-w-0 flex-1 items-stretch">
+      <div
+        className="flex h-full shrink-0 items-stretch pt-1.5 pl-2 ws-strip-line"
+        data-adjacent-active={activeIndex === 0 ? "before" : undefined}
+      >
+        <ConversationHistoryMenu />
+      </div>
+      {strip}
+    </div>
   )
 }
