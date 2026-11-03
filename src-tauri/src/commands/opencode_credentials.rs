@@ -62,14 +62,22 @@ pub struct OpenCodeConnectKeyRequest {
     pub replace: bool,
 }
 
-/// The environment a session would launch OpenCode with, whether or not the
-/// agent is enabled: connecting a provider is how a user gets ready to use it.
+/// The environment a default-account session would launch OpenCode with,
+/// whether or not the agent is enabled: connecting a provider is how a user
+/// gets ready to use it. A named account signs in through its own CLI.
 async fn runtime_env(
     db: &AppDatabase,
     data_dir: &Path,
 ) -> Result<BTreeMap<String, String>, AcpError> {
-    crate::commands::acp::build_runtime_env_for_agent(db, AgentType::OpenCode, None, data_dir, true)
-        .await
+    crate::commands::acp::build_runtime_env_for_agent(
+        db,
+        AgentType::OpenCode,
+        None,
+        data_dir,
+        true,
+        None,
+    )
+    .await
 }
 
 /// Mark the change and tell running sessions and other windows about it.

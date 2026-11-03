@@ -509,6 +509,7 @@ pub async fn list_provider_models_core(
                 None,
                 data_dir,
                 true,
+                None,
             )
             .await
             .map_err(|e| AppCommandError::io_error(e.to_string()))?;
