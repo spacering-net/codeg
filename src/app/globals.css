@@ -2473,6 +2473,46 @@
   font-family: var(--font-sans);
 }
 
+/* A row that opens (the header button of `ActivityRow`, of a delegation
+   check, of a codeg tool or question record laid out as a row, of a goal),
+   pointed at or
+   focused: its grey words — label, description, command, path, figure, the
+   chevron — and the grey glyph in its ring (`RailIcon`'s `data-quiet`) darken
+   to the foreground, as the fold row at the foot of a list does
+   (`TimelineFoot`). What has a colour of its own keeps it: a tone (a diff's
+   counts, a failure, an amber wait), the shimmer of a running label, a name
+   already in the foreground, an agent's logo; the ring itself stays, as the
+   foot's does.
+   The ring is the row's marker (`.activity-marker`), beside the header and
+   not in it, so it is found from the row: the nearest row holding the button
+   — not a row whose panel holds a nested row that does. Hover only where
+   there is a pointer that hovers, as Tailwind's `hover:` does, so a tap does
+   not leave the row lit. */
+@media (hover: hover) {
+  .activity-row-toggle:hover
+    :is(.text-activity-secondary, .text-muted-foreground),
+  :is(.activity-item, .activity-child):has(.activity-row-toggle:hover):not(
+      :has(:is(.activity-item, .activity-child) .activity-row-toggle:hover)
+    )
+    > .activity-marker
+    [data-quiet] {
+    color: var(--foreground);
+  }
+}
+.activity-row-toggle:focus-visible
+  :is(.text-activity-secondary, .text-muted-foreground),
+:is(.activity-item, .activity-child):has(
+    .activity-row-toggle:focus-visible
+  ):not(
+    :has(
+      :is(.activity-item, .activity-child) .activity-row-toggle:focus-visible
+    )
+  )
+  > .activity-marker
+  [data-quiet] {
+  color: var(--foreground);
+}
+
 /* A row's figure (`RowFigure`) takes the line's room past the label and runs a
    faint dashed line across it, up to the figure, so a figure at the far end
    of a wide row still reads as its label's. None when the figure shows

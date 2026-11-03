@@ -237,7 +237,7 @@ export function AskQuestionResultCard({
       onClick={() => setExpanded((v) => !v)}
       aria-expanded={expanded}
       data-testid="ask-question-result-card"
-      className="group/row flex w-full min-w-0 cursor-pointer items-start gap-1 rounded-sm py-0.5 text-start text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="activity-row-toggle group/row flex w-full min-w-0 cursor-pointer items-start gap-1 rounded-sm py-0.5 text-start text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="min-w-0 truncate">
         <span className="me-1 font-medium text-muted-foreground">

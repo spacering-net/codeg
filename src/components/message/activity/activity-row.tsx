@@ -187,7 +187,7 @@ export function ActivityRow({
     >
       <span
         className={cn(
-          "absolute flex items-center justify-center",
+          "activity-marker absolute flex items-center justify-center",
           MARKER_POSITION[variant][markerKind]
         )}
       >
@@ -198,7 +198,9 @@ export function ActivityRow({
           type="button"
           className={cn(
             headerClass,
-            "cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            // Pointed at or focused, its words darken as the foot's do
+            // (`.activity-row-toggle` in globals.css).
+            "activity-row-toggle cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           )}
           aria-expanded={open}
           aria-controls={open ? detailId : undefined}

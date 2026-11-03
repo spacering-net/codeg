@@ -102,7 +102,7 @@ export function TimelineFoot({
       >
         <span
           className={cn(
-            "absolute flex items-center justify-center",
+            "activity-marker absolute flex items-center justify-center",
             main ? "start-0 top-1 size-5" : "start-0 top-1.5 size-4"
           )}
         >

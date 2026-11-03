@@ -309,7 +309,7 @@ function GoalCard({
     >
       <CollapsibleTrigger
         className={cn(
-          "group flex min-h-7 w-full max-w-full items-center gap-2 rounded-sm py-0.5 text-start text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "activity-row-toggle group flex min-h-7 w-full max-w-full items-center gap-2 rounded-sm py-0.5 text-start text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           tone === "error" && "text-tone-danger"
         )}
         aria-label={headerText}

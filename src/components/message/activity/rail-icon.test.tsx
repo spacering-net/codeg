@@ -35,4 +35,21 @@ describe("RailIcon", () => {
     )
     expect(glyph.getAttribute("viewBox")).toBe("-7 -8 40 40")
   })
+
+  // A grey glyph inks in with its row on hover (globals.css); a tone stays.
+  it("marks a grey glyph, and only a grey one, as quiet", () => {
+    const quiet = ["succeeded", "pending", "running", "cancelled"] as const
+    for (const status of quiet) {
+      const glyph = glyphOf(
+        render(<RailIcon icon={SquareTerminalIcon} status={status} />)
+      )
+      expect(glyph).toHaveAttribute("data-quiet")
+    }
+    for (const status of ["awaiting", "failed", "rejected"] as const) {
+      const glyph = glyphOf(
+        render(<RailIcon icon={SquareTerminalIcon} status={status} />)
+      )
+      expect(glyph).not.toHaveAttribute("data-quiet")
+    }
+  })
 })

@@ -266,7 +266,7 @@ export function CodegMcpToolCard({
           className={cn(
             "flex w-full text-start",
             timeline
-              ? "group/row min-w-0 cursor-pointer items-start rounded-sm py-0.5 text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              ? "activity-row-toggle group/row min-w-0 cursor-pointer items-start rounded-sm py-0.5 text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               : "items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/50"
           )}
         >

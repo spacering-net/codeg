@@ -41,7 +41,7 @@ export const HostedRow = memo(function HostedRow({
       // beside it (globals.css).
       data-body=""
     >
-      <span className="absolute start-0 top-1 flex size-5 items-center justify-center">
+      <span className="activity-marker absolute start-0 top-1 flex size-5 items-center justify-center">
         <RailIcon
           icon={icon}
           status={status}

@@ -1289,6 +1289,36 @@ describe("command row", () => {
       expect(label).toHaveClass("text-activity-secondary", "font-medium")
     }
   })
+
+  it("darkens its words on hover or focus, as the fold row does", () => {
+    renderUi(
+      <Round
+        parts={parts(
+          turn([
+            toolUse("c1", "Bash", {
+              command: "pnpm test",
+              description: "Run the tests",
+            }),
+            toolResult("c1", "ok"),
+          ])
+        )}
+      />
+    )
+
+    // `.activity-row-toggle` (globals.css) takes the secondary ink inside the
+    // header that opens the row to the foreground.
+    const header = screen.getByText("Run the tests").closest("button")!
+    expect(header).toHaveAttribute("aria-expanded")
+    expect(header).toHaveClass("activity-row-toggle")
+    expect(within(header).getByText("Command")).toHaveClass(
+      "text-activity-secondary"
+    )
+    // So does the grey glyph in its ring, the row's marker beside it.
+    const marker = header.parentElement!.querySelector(
+      ":scope > .activity-marker"
+    )!
+    expect(marker.querySelector("svg")).toHaveAttribute("data-quiet")
+  })
 })
 
 describe("skill and to-do rows", () => {

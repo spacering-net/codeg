@@ -558,7 +558,7 @@ function PollsLi({
       data-step-key={stepKey}
       data-body={open ? "" : undefined}
     >
-      <span className="absolute start-0 top-1 flex size-5 items-center justify-center">
+      <span className="activity-marker absolute start-0 top-1 flex size-5 items-center justify-center">
         {marker}
       </span>
       <div className="min-w-0">{body}</div>

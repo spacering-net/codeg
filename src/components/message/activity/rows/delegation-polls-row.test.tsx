@@ -130,6 +130,10 @@ describe("delegation status checks", () => {
     expect(screen.getByText("done")).toBeInTheDocument()
     // ×N reflects the actual number of polls (3) and matches the pager total.
     expect(screen.getByText("×3")).toBeInTheDocument()
+    // Its header inks in on hover, as the timeline's other rows do
+    // (`.activity-row-toggle` in globals.css).
+    expect(screen.getByRole("button")).toHaveClass("activity-row-toggle")
+    expect(screen.getByText("×3")).toHaveClass("text-activity-secondary")
     fireEvent.click(screen.getByRole("button"))
     // Default page is the latest poll's result.
     expect(screen.getByText("All tests pass.")).toBeInTheDocument()
