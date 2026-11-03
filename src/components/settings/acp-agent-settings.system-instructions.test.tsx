@@ -24,6 +24,25 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ])
   )
 })
+vi.mock("@/lib/transport", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  // tjx's panel reaches the backend through the transport directly (the
+  // model-provider service store), not only through `@/lib/api`; answer those
+  // calls with an empty result so nothing here can reach the real transport.
+  const stub = () =>
+    new Proxy(
+      {},
+      {
+        get:
+          (_target, prop) =>
+          (..._args: unknown[]) =>
+            prop === "subscribe"
+              ? Promise.resolve(() => {})
+              : Promise.resolve([] as unknown[]),
+      }
+    )
+  return { ...actual, getTransport: stub, getShellTransport: stub }
+})
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }))
