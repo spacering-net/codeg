@@ -258,6 +258,20 @@ pub async fn acp_list_agent_skills(
     Ok(Json(result))
 }
 
+pub async fn acp_list_agent_runtime_skills(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpListAgentSkillsParams>,
+) -> Result<Json<AgentSkillsListResult>, AppCommandError> {
+    let result = acp_commands::acp_list_agent_runtime_skills_core(
+        params.agent_type,
+        params.workspace_path,
+        &state.db,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpReadAgentSkillParams {

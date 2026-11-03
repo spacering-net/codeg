@@ -9631,7 +9631,9 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // or, at the top of one of those directories, a flat `<id>.md`
         // (`skill-scan.ts`, `skill-file.ts`). New skills go to the first of
         // each list, the layout OpenCode documents. It also reads
-        // `.claude/skills`, which codeg lists under Claude Code.
+        // `.claude/skills`, which codeg lists under Claude Code, and the same
+        // folders in every directory above the project; the composer's `/`
+        // menu reads all of them (`acp::opencode_skills`).
         //
         // `~/.agents/skills` matters beyond OpenCode: OpenCode is a
         // "universal" agent for the `skills` CLI, whose global `skills add`
@@ -10192,7 +10194,7 @@ fn parse_frontmatter_scalar(rest: &str) -> Option<String> {
     }
 }
 
-fn build_skill_item(
+pub(crate) fn build_skill_item(
     id: String,
     scope: AgentSkillScope,
     layout: AgentSkillLayout,
@@ -14874,6 +14876,38 @@ pub async fn acp_list_agent_skills(
         locations,
         skills,
     })
+}
+
+/// The skills an agent's sessions can load, for the composer menus. OpenCode
+/// loads skills from more folders than the Skills settings page manages for it
+/// (`acp::opencode_skills`), so its menu reads them all, with the environment
+/// OpenCode is launched with; every other agent's menu lists what
+/// [`acp_list_agent_skills`] does.
+pub(crate) async fn acp_list_agent_runtime_skills_core(
+    agent_type: AgentType,
+    workspace_path: Option<String>,
+    db: &AppDatabase,
+) -> Result<AgentSkillsListResult, AcpError> {
+    if agent_type != AgentType::OpenCode {
+        return acp_list_agent_skills(agent_type, workspace_path).await;
+    }
+    let env = agent_setting_service::load_agent_env(&db.conn, agent_type).await;
+    let workspace = workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(Path::new);
+    Ok(crate::acp::opencode_skills::SkillSources::for_env(&env).listing(workspace))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_list_agent_runtime_skills(
+    agent_type: AgentType,
+    workspace_path: Option<String>,
+    db: State<'_, AppDatabase>,
+) -> Result<AgentSkillsListResult, AcpError> {
+    acp_list_agent_runtime_skills_core(agent_type, workspace_path, &db).await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]

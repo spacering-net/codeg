@@ -21,8 +21,9 @@ const nothingRemembered = () => null
  * `/`·`$` menu offers the same agent, so a sent message badges the tokens its
  * composer could have inserted and nothing else. That is the commands the
  * connection advertises, plus, for an agent that does not advertise its skills
- * (Codex's `$` menu, Antigravity's `/` one), the on-disk skills behind that
- * menu, read from the same folder as the composer's scan (one shared entry).
+ * (Codex's `$` menu, Antigravity's and OpenCode's `/` one), the on-disk skills
+ * behind that menu, read from the same folder as the composer's scan (one
+ * shared entry).
  * Every other agent advertises its skills as commands already.
  *
  * Until the connection has advertised (there is none yet, it is still coming

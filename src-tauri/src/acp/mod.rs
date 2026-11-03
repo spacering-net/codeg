@@ -42,6 +42,7 @@ pub(crate) mod opencode_config;
 pub(crate) mod opencode_credentials;
 pub mod opencode_launch;
 pub mod opencode_plugins;
+pub(crate) mod opencode_skills;
 pub mod plan_approval;
 pub mod preflight;
 pub mod prompt_hydration;

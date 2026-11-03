@@ -380,9 +380,10 @@ export function MessageInput({
   const tAttach = useTranslations("Folder.chat.messageInput")
   // Skills read from disk feed the menu only for an agent that does not
   // advertise them itself: Codex under `$` (its native command set is very
-  // small), Antigravity under `/` beside its commands (its ACP server lists
-  // only its built-ins). Every other agent surfaces its skills through ACP
-  // `availableCommands`, so a disk scan would only repeat them — skip it.
+  // small), Antigravity and OpenCode under `/` beside their commands (their
+  // ACP servers list only commands, never a skill). Every other agent surfaces
+  // its skills through ACP `availableCommands`, so a disk scan would only
+  // repeat them — skip it.
   const skillTrigger = diskSkillTrigger(agentType)
   // Pass the working dir so we see both global skills and folder-scoped
   // project skills (e.g. `{folder}/.codex/skills`). Without this, users
@@ -1081,8 +1082,8 @@ export function MessageInput({
     }
   }, [slashMenuOpen, slashSelectedIndex, slashAutocompleteCount])
 
-  // ── Editor-driven `/` (commands, plus Antigravity's skills) and `$` (Codex
-  // skills) trigger detection ──
+  // ── Editor-driven `/` (commands, plus Antigravity's and OpenCode's skills)
+  // and `$` (Codex skills) trigger detection ──
   // The `@` mention panel is now owned by RichComposer; this only handles the
   // runtime-command menus. We inspect the text before the collapsed caret in the
   // current block: a `/` (any agent) or `$` (Codex) at the start or right after
@@ -1113,11 +1114,11 @@ export function MessageInput({
     // command list, which exists only once the connection is up — so an empty
     // list means "nothing to show" unless the connection is still coming, where
     // the panel opens on a loading row instead. A trigger that also lists disk
-    // skills (Codex's `$`, Antigravity's `/`) is deliberately ungated:
-    // `useAgentSkills` reports an in-flight scan as an empty list, so closing on
-    // empty would strand a trigger typed before the scan lands. Left open, the
-    // panel simply stays hidden until the skills arrive and then fills itself
-    // in — no second keystroke needed.
+    // skills (Codex's `$`, Antigravity's and OpenCode's `/`) is deliberately
+    // ungated: `useAgentSkills` reports an in-flight scan as an empty list, so
+    // closing on empty would strand a trigger typed before the scan lands. Left
+    // open, the panel simply stays hidden until the skills arrive and then fills
+    // itself in — no second keystroke needed.
     if (
       trigger === "/" &&
       skillTrigger !== "/" &&

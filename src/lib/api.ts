@@ -1596,6 +1596,22 @@ export async function acpListAgentSkills(params: {
   })
 }
 
+/**
+ * The skills an agent's sessions can load, for the composer menus. For
+ * OpenCode that is every skill it reads (`.claude` folders and the folders
+ * above the workspace included), more than the Skills settings page manages
+ * through {@link acpListAgentSkills}; for every other agent the two agree.
+ */
+export async function acpListAgentRuntimeSkills(params: {
+  agentType: AgentType
+  workspacePath?: string | null
+}): Promise<AgentSkillsListResult> {
+  return getTransport().call("acp_list_agent_runtime_skills", {
+    agentType: params.agentType,
+    workspacePath: params.workspacePath ?? null,
+  })
+}
+
 export async function acpReadAgentSkill(params: {
   agentType: AgentType
   scope: AgentSkillScope
