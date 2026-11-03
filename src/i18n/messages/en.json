@@ -763,6 +763,12 @@
     "emptyNoAgent": "No available agent.",
     "configManagement": "Config Management",
     "envVars": "Environment Variables",
+    "systemInstructions": {
+      "label": "System Instructions",
+      "hint": "Configure global system-level instructions for this agent, saved to its global instructions file.",
+      "placeholder": "Enter global system instructions (Markdown format, e.g., role definitions, guidelines, coding standards)...",
+      "filePath": "File path"
+    },
     "hostTools": {
       "label": "Let the agent handle files and commands",
       "description": "codeg stops serving file access and terminal commands, so the agent runs them in its own process — where its own sandbox and permission rules apply. Delegating to other agents is also turned off, since that would route the same work back through codeg. codeg adds no sandbox itself, so turn this on only if the agent has one configured."
@@ -902,6 +908,7 @@
       "installGuide": "Install guide",
       "uninstalling": "Uninstalling...",
       "saveEnvVars": "Save environment variables",
+      "saveSystemInstructions": "Save System Instructions",
       "saving": "Saving...",
       "saveGrokConfig": "Save Grok Config",
       "saveCodexConfig": "Save Codex Config",
@@ -1617,6 +1624,8 @@
       "saveAgentOrderFailed": "Failed to save Agent order",
       "saveAgentSwitchFailed": "Failed to save Agent switch",
       "saveEnvFailed": "Failed to save environment variables",
+      "systemInstructionsSaved": "System instructions saved",
+      "saveSystemInstructionsFailed": "Failed to save system instructions",
       "grokSaved": "Grok config saved",
       "saveGrokNativeFailed": "Failed to save Grok native config",
       "saveGrokApiKeyFailed": "Settings saved, but the API key couldn't be saved",

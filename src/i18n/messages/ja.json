@@ -763,6 +763,12 @@
     "emptyNoAgent": "利用可能なエージェントがありません。",
     "configManagement": "設定管理",
     "envVars": "環境変数",
+    "systemInstructions": {
+      "label": "システム指示",
+      "hint": "このエージェントのグローバルなシステム指示を設定し、グローバル指示ファイルに保存します。",
+      "placeholder": "グローバルなシステム指示を Markdown 形式で入力してください（役割の定義、ガイドライン、コーディング規約など）...",
+      "filePath": "ファイルパス"
+    },
     "hostTools": {
       "label": "ファイルとコマンドをエージェント自身に処理させる",
       "description": "codeg がファイルアクセスとターミナルコマンドを代行しなくなり、エージェントが自身のプロセスで実行します。そうすることで初めて、エージェント自身のサンドボックスと権限ルールが適用されます。他のエージェントへの委任も無効になります（同じ処理が codeg 経由に戻ってしまうため）。codeg 自体はサンドボックスを提供しないため、エージェント側でサンドボックスを設定済みの場合にのみ有効にしてください。"
@@ -890,6 +896,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "システム指示を保存",
       "dragSort": "ドラッグして並べ替え",
       "dragSortAgent": "{name} をドラッグして並べ替え",
       "refreshCheck": "再チェック",
@@ -1607,6 +1614,8 @@
       "authRecoveredStructured": "auth.json が不正のため、構造化設定にリセットしました"
     },
     "toasts": {
+      "systemInstructionsSaved": "システム指示を保存しました",
+      "saveSystemInstructionsFailed": "システム指示の保存に失敗しました",
       "agentActionCompleted": "{name} の {action} が完了しました",
       "agentActionFailed": "{name} の {action} に失敗しました",
       "localVersion": "ローカルバージョン: {version}",

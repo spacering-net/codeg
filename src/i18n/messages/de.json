@@ -763,6 +763,12 @@
     "emptyNoAgent": "Keine verfügbaren Agenten.",
     "configManagement": "Konfigurationsverwaltung",
     "envVars": "Umgebungsvariablen",
+    "systemInstructions": {
+      "label": "Systemanweisungen",
+      "hint": "Globale Systemanweisungen für diesen Agenten konfigurieren und in seiner globalen Anweisungsdatei speichern.",
+      "placeholder": "Globale Systemanweisungen im Markdown-Format eingeben, z. B. Rollendefinitionen, Richtlinien und Programmierstandards...",
+      "filePath": "Dateipfad"
+    },
     "hostTools": {
       "label": "Dateien und Befehle vom Agenten selbst ausführen lassen",
       "description": "codeg übernimmt Dateizugriffe und Terminalbefehle nicht mehr, sodass der Agent sie im eigenen Prozess ausführt – nur dort greifen seine eigene Sandbox und seine Berechtigungsregeln. Auch das Delegieren an andere Agenten wird deaktiviert, da dieselbe Arbeit sonst wieder über codeg liefe. codeg fügt selbst keine Sandbox hinzu; aktivieren Sie dies also nur, wenn im Agenten eine konfiguriert ist."
@@ -890,6 +896,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "Systemanweisungen speichern",
       "dragSort": "Zum Neuordnen ziehen",
       "dragSortAgent": "{name} zum Neuordnen ziehen",
       "refreshCheck": "Prüfung aktualisieren",
@@ -1607,6 +1614,8 @@
       "authRecoveredStructured": "auth.json ist ungültig; auf strukturierte Konfiguration zurückgesetzt"
     },
     "toasts": {
+      "systemInstructionsSaved": "Systemanweisungen gespeichert",
+      "saveSystemInstructionsFailed": "Systemanweisungen konnten nicht gespeichert werden",
       "agentActionCompleted": "{name} {action} abgeschlossen",
       "agentActionFailed": "{name} {action} fehlgeschlagen",
       "localVersion": "Lokale Version: {version}",

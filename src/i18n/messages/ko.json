@@ -763,6 +763,12 @@
     "emptyNoAgent": "사용 가능한 에이전트가 없습니다.",
     "configManagement": "구성 관리",
     "envVars": "환경 변수",
+    "systemInstructions": {
+      "label": "시스템 지침",
+      "hint": "이 에이전트의 전역 시스템 지침을 설정하고 전역 지침 파일에 저장합니다.",
+      "placeholder": "전역 시스템 지침을 Markdown 형식으로 입력하세요(예: 역할 정의, 가이드라인, 코딩 표준)...",
+      "filePath": "파일 경로"
+    },
     "hostTools": {
       "label": "파일과 명령을 에이전트가 직접 처리",
       "description": "codeg가 파일 접근과 터미널 명령을 대신 처리하지 않고 에이전트가 자체 프로세스에서 실행합니다. 그래야 에이전트 자체의 샌드박스와 권한 규칙이 적용됩니다. 다른 에이전트에 위임하는 기능도 함께 꺼집니다. 같은 작업이 다시 codeg를 거치게 되기 때문입니다. codeg는 자체 샌드박스를 제공하지 않으므로 에이전트에 샌드박스를 구성한 경우에만 켜세요."
@@ -890,6 +896,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "시스템 지침 저장",
       "dragSort": "드래그하여 순서 변경",
       "dragSortAgent": "{name} 순서 변경",
       "refreshCheck": "다시 확인",
@@ -1607,6 +1614,8 @@
       "authRecoveredStructured": "auth.json이 잘못되어 구조화 구성으로 재설정했습니다"
     },
     "toasts": {
+      "systemInstructionsSaved": "시스템 지침이 저장되었습니다",
+      "saveSystemInstructionsFailed": "시스템 지침을 저장하지 못했습니다",
       "agentActionCompleted": "{name} {action} 완료",
       "agentActionFailed": "{name} {action} 실패",
       "localVersion": "로컬 버전: {version}",
