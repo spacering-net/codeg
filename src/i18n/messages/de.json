@@ -382,6 +382,10 @@
     "giteaDescription": "Gitea- (und Forgejo-)Konten für die Authentifizierung verwalten. Token werden lokal gespeichert.",
     "giteaTokenHint": "Erstellen Sie unter Gitea → Settings → Applications einen Access Token mit den Scopes write:repository, write:issue und read:user.",
     "giteaNoAccounts": "Noch kein Gitea-Konto",
+    "cnbTitle": "CNB-Konten",
+    "cnbDescription": "Verwalte CNB-Konten (cnb.cool) für die Authentifizierung. Tokens werden lokal gespeichert.",
+    "cnbTokenHint": "Erstelle unter CNB → Persönliche Einstellungen → Zugriffstokens ein Zugriffstoken mit den Scopes account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw und repo-code:rw. Ohne account-profile:r nennt CNB nicht, zu welchem Benutzer das Token gehört, und das Konto lässt sich nicht hinzufügen.",
+    "cnbNoAccounts": "Noch kein CNB-Konto",
     "noAccounts": "Keine GitHub-Konten konfiguriert.",
     "addAccount": "Konto hinzufügen",
     "serverUrl": "Server-URL",
@@ -763,6 +767,12 @@
     "emptyNoAgent": "Keine verfügbaren Agenten.",
     "configManagement": "Konfigurationsverwaltung",
     "envVars": "Umgebungsvariablen",
+    "systemInstructions": {
+      "label": "Systemanweisungen",
+      "hint": "Globale Systemanweisungen für diesen Agenten konfigurieren und in seiner globalen Anweisungsdatei speichern.",
+      "placeholder": "Globale Systemanweisungen im Markdown-Format eingeben, z. B. Rollendefinitionen, Richtlinien und Programmierstandards...",
+      "filePath": "Dateipfad"
+    },
     "hostTools": {
       "label": "Dateien und Befehle vom Agenten selbst ausführen lassen",
       "description": "codeg übernimmt Dateizugriffe und Terminalbefehle nicht mehr, sodass der Agent sie im eigenen Prozess ausführt – nur dort greifen seine eigene Sandbox und seine Berechtigungsregeln. Auch das Delegieren an andere Agenten wird deaktiviert, da dieselbe Arbeit sonst wieder über codeg liefe. codeg fügt selbst keine Sandbox hinzu; aktivieren Sie dies also nur, wenn im Agenten eine konfiguriert ist."
@@ -890,6 +900,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "Systemanweisungen speichern",
       "dragSort": "Zum Neuordnen ziehen",
       "dragSortAgent": "{name} zum Neuordnen ziehen",
       "refreshCheck": "Prüfung aktualisieren",
@@ -1607,6 +1618,8 @@
       "authRecoveredStructured": "auth.json ist ungültig; auf strukturierte Konfiguration zurückgesetzt"
     },
     "toasts": {
+      "systemInstructionsSaved": "Systemanweisungen gespeichert",
+      "saveSystemInstructionsFailed": "Systemanweisungen konnten nicht gespeichert werden",
       "agentActionCompleted": "{name} {action} abgeschlossen",
       "agentActionFailed": "{name} {action} fehlgeschlagen",
       "localVersion": "Lokale Version: {version}",
@@ -6953,7 +6966,7 @@
     "noRemote": "Dieser Ordner hat kein erkennbares Forge-Remote (origin)",
     "errors": {
       "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden.",
-      "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub, GitLab und Gitea, und {host} wird als keines davon erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise-, GitLab-, Gitea- oder Forgejo-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
+      "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub, GitLab, Gitea und CNB, und {host} wird als keines davon erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise-, GitLab-, Gitea-, Forgejo- oder CNB-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
       "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen."
     },
     "addAccount": "Konto hinzufügen",

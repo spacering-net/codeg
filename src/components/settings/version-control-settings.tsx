@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   CheckCircle2,
+  Cloud,
   GitBranch,
   GitFork,
   Github,
@@ -39,6 +40,7 @@ import {
   validateGitHubToken,
   validateGitLabToken,
   validateGiteaToken,
+  validateCnbToken,
   getAccountToken,
   deleteAccountToken,
 } from "@/lib/api"
@@ -79,12 +81,18 @@ function isGiteaAccount(account: GitHubAccount): boolean {
   return account.provider === "gitea"
 }
 
+/** CNB, like Gitea, only ever arrives declared. */
+function isCnbAccount(account: GitHubAccount): boolean {
+  return account.provider === "cnb"
+}
+
 /** Which "who am I" endpoint tests an account's stored token, or `null` for a
  *  plain git credential — those validate against nothing, so the most that can
  *  be said is that the keyring still holds the secret. */
 function validatorFor(
   account: GitHubAccount
 ): typeof validateGitHubToken | null {
+  if (isCnbAccount(account)) return validateCnbToken
   if (isGiteaAccount(account)) return validateGiteaToken
   if (isGitLabAccount(account)) return validateGitLabToken
   if (isGitHubAccount(account)) return validateGitHubToken
@@ -95,6 +103,7 @@ function validatorFor(
  *  declaration decides; GitHub is the fallback because an undeclared account
  *  only ever reaches the rotate action from the GitHub section. */
 function providerOf(account: GitHubAccount): ForgeProviderId {
+  if (isCnbAccount(account)) return "cnb"
   if (isGiteaAccount(account)) return "gitea"
   if (isGitLabAccount(account)) return "gitlab"
   return "github"
@@ -229,6 +238,7 @@ export function VersionControlSettings() {
   const [addGitHubOpen, setAddGitHubOpen] = useState(false)
   const [addGitLabOpen, setAddGitLabOpen] = useState(false)
   const [addGiteaOpen, setAddGiteaOpen] = useState(false)
+  const [addCnbOpen, setAddCnbOpen] = useState(false)
   const [rotateTarget, setRotateTarget] = useState<GitHubAccount | null>(null)
   const [addGitOpen, setAddGitOpen] = useState(false)
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null)
@@ -247,10 +257,18 @@ export function VersionControlSettings() {
     () => accounts.accounts.filter(isGiteaAccount),
     [accounts]
   )
+  const cnbAccounts = useMemo(
+    () => accounts.accounts.filter(isCnbAccount),
+    [accounts]
+  )
   const gitAccounts = useMemo(
     () =>
       accounts.accounts.filter(
-        (a) => !isGitHubAccount(a) && !isGitLabAccount(a) && !isGiteaAccount(a)
+        (a) =>
+          !isGitHubAccount(a) &&
+          !isGitLabAccount(a) &&
+          !isGiteaAccount(a) &&
+          !isCnbAccount(a)
       ),
     [accounts]
   )
@@ -638,6 +656,44 @@ export function VersionControlSettings() {
           </div>
         </section>
 
+        {/* ---- CNB Accounts ---- */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Cloud className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("cnbTitle")}</h2>
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("cnbDescription")}
+          </p>
+
+          {cnbAccounts.length === 0 ? (
+            <div className="rounded-md border border-dashed bg-muted/10 px-4 py-6 text-center text-xs text-muted-foreground">
+              {t("cnbNoAccounts")}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {cnbAccounts.map((account) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  testingId={testingAccountId}
+                  onTest={handleTestConnection}
+                  onRotate={setRotateTarget}
+                  onSetDefault={handleSetDefault}
+                  onRemove={setRemoveTarget}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setAddCnbOpen(true)}>
+              {t("addAccount")}
+            </Button>
+          </div>
+        </section>
+
         {/* ---- Git Accounts (non-forge) ---- */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
@@ -697,6 +753,13 @@ export function VersionControlSettings() {
         provider="gitea"
         open={addGiteaOpen}
         onOpenChange={setAddGiteaOpen}
+        onAccountAdded={handleAccountAdded}
+        isFirstAccount={accounts.accounts.length === 0}
+      />
+      <AddForgeAccountDialog
+        provider="cnb"
+        open={addCnbOpen}
+        onOpenChange={setAddCnbOpen}
         onAccountAdded={handleAccountAdded}
         isFirstAccount={accounts.accounts.length === 0}
       />

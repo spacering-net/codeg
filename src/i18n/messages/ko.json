@@ -382,6 +382,10 @@
     "giteaDescription": "인증용 Gitea(및 Forgejo) 계정을 관리합니다. 토큰은 로컬에 저장됩니다.",
     "giteaTokenHint": "Gitea → Settings → Applications에서 write:repository, write:issue, read:user 범위를 가진 액세스 토큰을 만드세요.",
     "giteaNoAccounts": "아직 Gitea 계정이 없습니다",
+    "cnbTitle": "CNB 계정",
+    "cnbDescription": "인증용 CNB(cnb.cool) 계정을 관리합니다. 토큰은 로컬에 저장됩니다.",
+    "cnbTokenHint": "CNB의 개인 설정 → 액세스 토큰에서 account-profile:r, repo-issue:rw, repo-pr:rw, repo-notes:rw, repo-code:rw 스코프를 포함해 액세스 토큰을 만드세요. account-profile:r이 없으면 CNB가 토큰 소유자를 알려주지 않아 계정을 추가할 수 없습니다.",
+    "cnbNoAccounts": "아직 CNB 계정이 없습니다",
     "noAccounts": "설정된 GitHub 계정이 없습니다.",
     "addAccount": "계정 추가",
     "serverUrl": "서버 URL",
@@ -763,6 +767,12 @@
     "emptyNoAgent": "사용 가능한 에이전트가 없습니다.",
     "configManagement": "구성 관리",
     "envVars": "환경 변수",
+    "systemInstructions": {
+      "label": "시스템 지침",
+      "hint": "이 에이전트의 전역 시스템 지침을 설정하고 전역 지침 파일에 저장합니다.",
+      "placeholder": "전역 시스템 지침을 Markdown 형식으로 입력하세요(예: 역할 정의, 가이드라인, 코딩 표준)...",
+      "filePath": "파일 경로"
+    },
     "hostTools": {
       "label": "파일과 명령을 에이전트가 직접 처리",
       "description": "codeg가 파일 접근과 터미널 명령을 대신 처리하지 않고 에이전트가 자체 프로세스에서 실행합니다. 그래야 에이전트 자체의 샌드박스와 권한 규칙이 적용됩니다. 다른 에이전트에 위임하는 기능도 함께 꺼집니다. 같은 작업이 다시 codeg를 거치게 되기 때문입니다. codeg는 자체 샌드박스를 제공하지 않으므로 에이전트에 샌드박스를 구성한 경우에만 켜세요."
@@ -890,6 +900,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "시스템 지침 저장",
       "dragSort": "드래그하여 순서 변경",
       "dragSortAgent": "{name} 순서 변경",
       "refreshCheck": "다시 확인",
@@ -1607,6 +1618,8 @@
       "authRecoveredStructured": "auth.json이 잘못되어 구조화 구성으로 재설정했습니다"
     },
     "toasts": {
+      "systemInstructionsSaved": "시스템 지침이 저장되었습니다",
+      "saveSystemInstructionsFailed": "시스템 지침을 저장하지 못했습니다",
       "agentActionCompleted": "{name} {action} 완료",
       "agentActionFailed": "{name} {action} 실패",
       "localVersion": "로컬 버전: {version}",
@@ -6953,7 +6966,7 @@
     "noRemote": "이 폴더에는 인식 가능한 원격 저장소(origin)가 없습니다",
     "errors": {
       "noAccount": "{host}에 대한 {provider} 계정이 설정되지 않았습니다. 설정 → 버전 관리에서 추가하면 이 저장소를 불러올 수 있습니다.",
-      "unsupportedHost": "리포지토리 패널은 GitHub, GitLab, Gitea만 지원하며, {host}는 그중 어느 쪽으로도 인식되지 않습니다. 자체 호스팅 GitHub Enterprise, GitLab, Gitea 또는 Forgejo 인스턴스라면 설정 → 버전 관리에서 계정을 추가하세요.",
+      "unsupportedHost": "리포지토리 패널은 GitHub, GitLab, Gitea, CNB만 지원하며, {host}는 그중 어느 쪽으로도 인식되지 않습니다. 자체 호스팅 GitHub Enterprise, GitLab, Gitea, Forgejo 또는 CNB 인스턴스라면 설정 → 버전 관리에서 계정을 추가하세요.",
       "wrongForge": "{host}은(는) {provider}입니다. 다른 포지로 잘못 인식되었으나 감지 결과를 수정했습니다. 다시 불러오세요."
     },
     "addAccount": "계정 추가",

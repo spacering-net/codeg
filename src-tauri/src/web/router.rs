@@ -948,6 +948,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::version_control::validate_gitea_token),
         )
         .route(
+            "/validate_cnb_token",
+            post(handlers::version_control::validate_cnb_token),
+        )
+        .route(
             "/save_account_token",
             post(handlers::version_control::save_account_token),
         )
@@ -1826,6 +1830,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/forge_list_issues",
             post(handlers::forge::forge_list_issues),
+        )
+        .route(
+            "/forge_issue_detail",
+            post(handlers::forge::forge_issue_detail),
         )
         .route(
             "/forge_tab_count",

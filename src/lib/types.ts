@@ -2421,10 +2421,10 @@ export interface ForgeRemote {
    *  accounts and the hostname, never chosen here. */
   provider: ForgeProviderId
   /** Whether `provider` is KNOWN rather than assumed — an account configured
-   *  for the host, or a hostname naming one of the two forges. `false` is a
-   *  remote that parsed perfectly well but lives somewhere codeg cannot read
-   *  (Bitbucket, Gitee, a Gitea): the panel says only GitHub and GitLab are
-   *  supported rather than spending a call that fails as a raw API error. */
+   *  for the host, or a hostname naming one of the supported forges. `false` is
+   *  a remote that parsed perfectly well but lives somewhere codeg cannot read
+   *  (Bitbucket, Gitee): the panel names the forges it does support rather than
+   *  spending a call that fails as a raw API error. */
   supported: boolean
 }
 
@@ -3924,6 +3924,8 @@ export interface AcpAgentInfo {
   host_tools_agent_mode: boolean
   config_json: string | null
   config_file_path: string | null
+  system_instructions_file_path?: string | null
+  system_instructions_content?: string | null
   codex_auth_json: string | null
   codex_config_toml: string | null
   /** Compact structured codex model-catalog source (the custom-model list),
@@ -4603,8 +4605,9 @@ export interface GitHubAccount {
 
 /** Mirrors `forge::ForgeProvider`. `"gitea"` covers Forgejo too — it is a
  *  Gitea fork serving the same `/api/v1`, and one wire value keeps one
- *  instance's accounts and provenance keys from splitting in two. */
-export type ForgeProviderId = "github" | "gitlab" | "gitea"
+ *  instance's accounts and provenance keys from splitting in two. `"cnb"` is
+ *  Tencent's CNB (cnb.cool), whose OpenAPI lives on its own host. */
+export type ForgeProviderId = "github" | "gitlab" | "gitea" | "cnb"
 
 export interface GitHubAccountsSettings {
   accounts: GitHubAccount[]

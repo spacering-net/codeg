@@ -382,6 +382,10 @@
     "giteaDescription": "管理用于身份验证的 Gitea（及 Forgejo）账号。令牌存储在本地。",
     "giteaTokenHint": "在 Gitea → Settings → Applications 中创建带 write:repository、write:issue 和 read:user 权限的访问令牌。",
     "giteaNoAccounts": "还没有 Gitea 账号",
+    "cnbTitle": "CNB 账号",
+    "cnbDescription": "管理用于身份验证的 CNB（cnb.cool）账号。令牌存储在本地。",
+    "cnbTokenHint": "在 CNB 的「个人设置 → 访问令牌」中创建访问令牌，勾选 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 和 repo-code:rw 权限。缺少 account-profile:r 时，CNB 不会返回令牌所属用户，账号将无法添加。",
+    "cnbNoAccounts": "还没有 CNB 账号",
     "noAccounts": "暂无 GitHub 账号。",
     "addAccount": "添加账号",
     "serverUrl": "服务器地址",
@@ -763,6 +767,12 @@
     "emptyNoAgent": "暂无可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "环境变量",
+    "systemInstructions": {
+      "label": "系统级提示词",
+      "hint": "配置该 Agent 的全局指令/系统提示词，保存后写入其全局提示词文件。",
+      "placeholder": "输入全局系统提示词（Markdown 格式，如角色设定、工作原则、代码规范等）...",
+      "filePath": "文件路径"
+    },
     "hostTools": {
       "label": "由 Agent 自行处理文件与命令",
       "description": "codeg 不再代为提供文件访问和终端命令，改由 Agent 在自己的进程中执行——只有这样它自带的沙箱与权限规则才会生效。同时会关闭向其他 Agent 委托，否则同样的操作又会绕回 codeg 执行。codeg 本身不提供沙箱，因此请仅在 Agent 已配置沙箱时开启。"
@@ -902,6 +912,7 @@
       "installGuide": "安装指南",
       "uninstalling": "卸载中...",
       "saveEnvVars": "保存环境变量",
+      "saveSystemInstructions": "保存系统级提示词",
       "saving": "保存中...",
       "saveGrokConfig": "保存 Grok 配置",
       "saveCodexConfig": "保存 Codex 配置",
@@ -1617,6 +1628,8 @@
       "saveAgentOrderFailed": "保存 Agent 排序失败",
       "saveAgentSwitchFailed": "保存 Agent 开关失败",
       "saveEnvFailed": "保存环境变量失败",
+      "systemInstructionsSaved": "系统级提示词已保存",
+      "saveSystemInstructionsFailed": "保存系统级提示词失败",
       "grokSaved": "Grok 配置已保存",
       "saveGrokNativeFailed": "保存 Grok 原生配置失败",
       "saveGrokApiKeyFailed": "设置已保存，但 API Key 未能保存",
@@ -6953,7 +6966,7 @@
     "noRemote": "该文件夹没有可识别的代码托管远端（origin）",
     "errors": {
       "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
-      "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab 和 Gitea，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 实例，请在「设置 → 版本控制」中为它添加账号。",
+      "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab、Gitea 和 CNB，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 实例，请在「设置 → 版本控制」中为它添加账号。",
       "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。"
     },
     "addAccount": "添加账号",

@@ -67,6 +67,7 @@ vi.mock("@/components/ai-elements/message", () => ({
   ),
 }))
 const forgeListComments = vi.hoisted(() => vi.fn())
+const forgeIssueDetail = vi.hoisted(() => vi.fn())
 const forgeCreateComment = vi.hoisted(() => vi.fn())
 const forgeSetItemState = vi.hoisted(() => vi.fn())
 const forgeChangeDetail = vi.hoisted(() => vi.fn())
@@ -76,6 +77,7 @@ const forgeMergeChange = vi.hoisted(() => vi.fn())
 const forgeIdentity = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/api", () => ({
   forgeListComments,
+  forgeIssueDetail,
   forgeCreateComment,
   forgeSetItemState,
   forgeChangeDetail,
@@ -295,6 +297,8 @@ function mount(
     onRowUpdated?: (updated: ForgeIssueRow) => void
     onCommentPosted?: (item: { isPr: boolean; number: number }) => void
     folderId?: number | null
+    /** CNB mode — see `useIssueBody`. */
+    issueBodyOnDemand?: boolean
   } = {}
 ) {
   const onOpenChange = handlers.onOpenChange ?? vi.fn()
@@ -307,6 +311,7 @@ function mount(
         row={item}
         link={link}
         folderId={handlers.folderId === undefined ? 7 : handlers.folderId}
+        issueBodyOnDemand={handlers.issueBodyOnDemand ?? false}
         onOpenChange={onOpenChange}
         onStart={onStart}
         onRowUpdated={onRowUpdated}
@@ -332,6 +337,9 @@ beforeEach(() => {
   // case that is about the header or the footer. The tests that are about the
   // discussion say what comes back for themselves.
   forgeListComments.mockReturnValue(new Promise(() => {}))
+  // The description read a CNB issue's panel makes (see `useIssueBody`). Still
+  // in flight unless a case says otherwise, for the same reason as the thread.
+  forgeIssueDetail.mockReturnValue(new Promise(() => {}))
   // Same rule for the change section: a pull request always asks for both, and
   // a request that resolved would update state after a test about something
   // else had finished. The cases that are ABOUT the change say so themselves.
@@ -357,6 +365,40 @@ describe("ForgeIssueDetailSheet", () => {
     mount(row())
     expect(screen.getByTestId("markdown")).toHaveTextContent("## Steps")
     expect(screen.queryByText("No description")).not.toBeInTheDocument()
+  })
+
+  /**
+   * CNB's issue list carries no body (its pull list does), so the panel reads
+   * the item itself when it opens. Until that answer arrives it must draw
+   * NOTHING where the description goes: "No description" is a claim, and
+   * flashing it over an issue that has one is worse than an empty slot.
+   */
+  it("says nothing about the description until a CNB row's read lands", () => {
+    mount(row({ body: null }), null, { issueBodyOnDemand: true })
+    expect(forgeIssueDetail).toHaveBeenCalledWith(7, 42)
+    expect(screen.queryByTestId("markdown")).not.toBeInTheDocument()
+    expect(screen.queryByText("No description")).not.toBeInTheDocument()
+  })
+
+  it("draws the description a CNB row's read brings back", async () => {
+    forgeIssueDetail.mockResolvedValue(row({ body: "## From the item" }))
+    mount(row({ body: null }), null, { issueBodyOnDemand: true })
+    await waitFor(() =>
+      expect(screen.getByTestId("markdown")).toHaveTextContent(
+        "## From the item"
+      )
+    )
+    expect(screen.queryByText("No description")).not.toBeInTheDocument()
+  })
+
+  /**
+   * Every other forge ships the body with the row, and must not pay for a
+   * second read (or have its genuinely empty description withheld).
+   */
+  it("keeps the row's own answer when the list carries a body", () => {
+    mount(row({ body: "" }))
+    expect(forgeIssueDetail).not.toHaveBeenCalled()
+    expect(screen.getByText("No description")).toBeInTheDocument()
   })
 
   /**

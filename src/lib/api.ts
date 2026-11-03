@@ -680,6 +680,10 @@ export async function acpUpdateAgentConfig(
   agentType: AgentType,
   params: {
     config_json?: string | null
+    system_instructions_content?: string | null
+    /** The instructions file the editor showed: the content is written there
+     *  (the agent's own file only), not to a fresh resolution. */
+    system_instructions_file_path?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
     /** The config.toml text the draft was loaded from: a key codeg manages
@@ -708,6 +712,8 @@ export async function acpUpdateAgentConfig(
   return getTransport().call("acp_update_agent_config", {
     agentType,
     configJson: params.config_json ?? null,
+    systemInstructionsContent: params.system_instructions_content ?? null,
+    systemInstructionsFilePath: params.system_instructions_file_path ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
     codexConfigTomlBaseline: params.codex_config_toml_baseline ?? null,
@@ -2197,6 +2203,14 @@ export async function validateGiteaToken(
   token: string
 ): Promise<GitHubTokenValidation> {
   return getTransport().call("validate_gitea_token", { serverUrl, token })
+}
+
+/** CNB is its own API dialect: `https://api.cnb.cool` with a `Bearer` token. */
+export async function validateCnbToken(
+  serverUrl: string,
+  token: string
+): Promise<GitHubTokenValidation> {
+  return getTransport().call("validate_cnb_token", { serverUrl, token })
 }
 
 export async function updateGitHubAccounts(
@@ -6266,6 +6280,24 @@ export async function forgeListIssues(
       perPage: query.perPage ?? DEFAULT_FORGE_PAGE_SIZE,
       accountId: query.accountId ?? null,
     },
+  })
+}
+
+/** One issue, read in full — its description included.
+ *
+ *  CNB's issue LIST omits the body (its pull list carries one), so the detail
+ *  panel asks for the item itself the moment it opens — one request, paid only
+ *  for the item somebody is reading, the same trade the comment thread makes.
+ *  No other forge takes this path: their list rows already carry the body. */
+export async function forgeIssueDetail(
+  folderId: number,
+  number: number,
+  accountId?: string | null
+): Promise<ForgeIssueRow> {
+  return getTransport().call("forge_issue_detail", {
+    folderId,
+    number,
+    accountId: accountId ?? null,
   })
 }
 

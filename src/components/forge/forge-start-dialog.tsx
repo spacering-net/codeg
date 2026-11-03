@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
 import { workTaskCreateFromForge } from "@/lib/api"
+import { useIssueBody } from "@/components/forge/use-issue-body"
 import {
   toLocalizedErrorMessage,
   type AppErrorTranslator,
@@ -37,11 +38,13 @@ import type {
   WorkTask,
 } from "@/lib/types"
 
-/** GitLab calls it a merge request, and a dialog that promises a pull request
- *  and then opens a merge request reads like the wrong tool answered. */
+/** GitLab and CNB call it a merge request, and a dialog that promises a pull
+ *  request and then opens a merge request reads like the wrong tool answered. */
 function descriptionKey(isPr: boolean, provider: ForgeProviderId) {
   if (!isPr) return "dialogDescription"
-  return provider === "gitlab" ? "dialogDescriptionMr" : "dialogDescriptionPr"
+  return provider === "gitlab" || provider === "cnb"
+    ? "dialogDescriptionMr"
+    : "dialogDescriptionPr"
 }
 
 /** The kind's scenario menu, default first — the server enforces the same
@@ -123,6 +126,10 @@ export function ForgeStartDialog({
     )
   )
   const [instruction, setInstruction] = useState("")
+  // CNB's issue list carries no description, so the preview reads it — what
+  // the preview shows is what the envelope wraps. The server fills a body that
+  // is still missing at Create, so submitting before this lands loses nothing.
+  const issueBody = useIssueBody(folderId, row, remote.provider === "cnb")
   // Asked here, once per work item, rather than kept as a project-wide switch:
   // this is the one thing the task will do in a thread other people are
   // reading, so the decision belongs in front of the item it publishes on.
@@ -150,7 +157,7 @@ export function ForgeStartDialog({
         },
         snapshot: {
           title: row.title,
-          body: row.body,
+          body: issueBody.body,
           // Names only: the snapshot is TEXT handed to an agent, and a colour
           // means nothing there.
           labels: row.labels.map((l) => l.name),
@@ -288,7 +295,9 @@ export function ForgeStartDialog({
               <CollapsibleContent>
                 {/* Read-only: this is the DATA the server-side envelope wraps. */}
                 <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-border/60 bg-muted/40 p-2 font-mono text-[0.6875rem] text-muted-foreground">
-                  {row.body?.trim() || t("previewEmpty")}
+                  {issueBody.pending
+                    ? null
+                    : issueBody.body?.trim() || t("previewEmpty")}
                 </div>
               </CollapsibleContent>
             </Collapsible>

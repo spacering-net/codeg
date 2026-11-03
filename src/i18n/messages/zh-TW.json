@@ -382,6 +382,10 @@
     "giteaDescription": "管理用於身份驗證的 Gitea（及 Forgejo）帳號。權杖儲存在本機。",
     "giteaTokenHint": "在 Gitea → Settings → Applications 中建立具備 write:repository、write:issue 與 read:user 權限的存取權杖。",
     "giteaNoAccounts": "還沒有 Gitea 帳號",
+    "cnbTitle": "CNB 帳號",
+    "cnbDescription": "管理用於身分驗證的 CNB（cnb.cool）帳號。權杖儲存在本機。",
+    "cnbTokenHint": "在 CNB 的「個人設定 → 存取權杖」中建立存取權杖，勾選 account-profile:r、repo-issue:rw、repo-pr:rw、repo-notes:rw 與 repo-code:rw 權限。缺少 account-profile:r 時，CNB 不會回傳權杖所屬使用者，帳號將無法新增。",
+    "cnbNoAccounts": "還沒有 CNB 帳號",
     "noAccounts": "尚未設定 GitHub 帳號。",
     "addAccount": "新增帳號",
     "serverUrl": "伺服器網址",
@@ -763,6 +767,12 @@
     "emptyNoAgent": "暫無可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "環境變數",
+    "systemInstructions": {
+      "label": "系統級提示詞",
+      "hint": "設定此 Agent 的全域系統級提示詞，並儲存至其全域指令檔案。",
+      "placeholder": "輸入全域系統提示詞（Markdown 格式，例如角色定義、行為準則、程式碼規範等）...",
+      "filePath": "檔案路徑"
+    },
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",
       "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。同時會關閉向其他 Agent 委派，否則同樣的操作又會繞回 codeg 執行。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。"
@@ -890,6 +900,7 @@
       }
     },
     "actions": {
+      "saveSystemInstructions": "儲存系統級提示詞",
       "dragSort": "拖拽排序",
       "dragSortAgent": "拖拽排序 {name}",
       "refreshCheck": "刷新檢測",
@@ -1607,6 +1618,8 @@
       "authRecoveredStructured": "auth.json 格式無效，已重置為結構化配置"
     },
     "toasts": {
+      "systemInstructionsSaved": "系統級提示詞已儲存",
+      "saveSystemInstructionsFailed": "儲存系統級提示詞失敗",
       "agentActionCompleted": "{name}{action}完成",
       "agentActionFailed": "{name}{action}失敗",
       "localVersion": "本地版本：{version}",
@@ -6953,7 +6966,7 @@
     "noRemote": "該資料夾沒有可識別的程式碼託管遠端（origin）",
     "errors": {
       "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。",
-      "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab 與 Gitea，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
+      "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab、Gitea 與 CNB，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
       "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。"
     },
     "addAccount": "新增帳號",
