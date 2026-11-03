@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, ConnectionTo};
 
 use crate::acp::connection::{
-    claude_raw_sdk_session_meta, send_capturing_models, ClaudeSessionOptions,
+    agent_error_text, claude_raw_sdk_session_meta, send_capturing_models, ClaudeSessionOptions,
 };
 
 use crate::acp::error::AcpError;
@@ -233,7 +233,7 @@ pub async fn fork_session(
         build_fork_request(session_id, agent_type, cwd, mcp_servers, claude, fork_point),
     )
     .await
-    .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))
+    .map_err(|e| AcpError::protocol(format!("session/fork failed: {}", agent_error_text(&e))))
 }
 
 /// The `session/fork` request: the fork point, if any, and — for Claude only —

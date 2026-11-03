@@ -9593,7 +9593,19 @@ async fn run_connection(
                         if let Some(tagged) = tag_pi_runtime_outdated(&e, agent_type) {
                             return Err(tagged);
                         }
-                        let err_str = e.to_string();
+                        // The same holds for a Claude Code that refused to
+                        // start on this machine (see `claude_refused_to_start`):
+                        // its error carries the CLI's own sentence about what
+                        // to fix, which is what the user needs to see.
+                        if claude_refused_to_start(&e) {
+                            tracing::warn!(
+                                "[ACP][{agent_type}] session/load refused at startup ({}); \
+                                 not falling back to session/new",
+                                agent_error_text(&e)
+                            );
+                            return Err(e);
+                        }
+                        let err_str = agent_error_text(&e);
                         let forgotten_session = classify_session_load_error(&e);
                         let recovers_locally =
                             recovers_load_failure_locally(agent_type, forgotten_session);
@@ -9653,7 +9665,7 @@ async fn run_connection(
                                 &state,
                                 &emitter_clone,
                                 AcpEvent::Error {
-                                    message: format!("Failed to load session, starting new: {e}"),
+                                    message: format!("Failed to load session, starting new: {err_str}"),
                                     agent_type: agent_type.to_string(),
                                     code: Some(SESSION_LOAD_FALLBACK_ERROR_CODE.to_string()),
                                     details: None,
@@ -9934,7 +9946,7 @@ fn connection_failure(err: agent_client_protocol::Error) -> AcpError {
         // let the frontend append the `supports_mcp` suggestion.
         AcpError::mcp_rejected(raw.replace(MCP_SUSPECT_SENTINEL, ""))
     } else {
-        AcpError::protocol(raw)
+        AcpError::protocol(agent_error_text(&err))
     }
 }
 
@@ -13576,6 +13588,27 @@ fn classify_session_load_error(e: &agent_client_protocol::Error) -> Option<&'sta
     if reason == Some("thread_active_writer") {
         return Some("session_busy");
     }
+    // claude-agent-acp 0.100.0 (#1508): two of the reasons Claude Code gives
+    // for not starting belong to the session, not to the machine, so a
+    // `session/new` would open and leave the history behind.
+    //  * `session_held_by_background`: the session runs as a Claude Code
+    //    background job (`claude agents` lists it). Busy, not gone, as with
+    //    codex's writer lock: it opens once that job stops.
+    //  * `worktree_resume_refused` / `worktree_unverified`: the session is
+    //    bound to a git worktree Claude Code could not verify, or will not
+    //    enter. The CLI keeps or clears the binding itself, and its message
+    //    says whether opening it again can work.
+    // Up to 0.99.x both reached codeg as "Claude Code process exited with code
+    // 1. stderr: …", which `SESSION_GONE_MARKERS` reads as unavailable. From
+    // 0.100.0 the message is the CLI's own sentence, which names no marker.
+    // The other reasons are about the machine; see `claude_refused_to_start`.
+    match claude_startup_failure_reason(e) {
+        Some("session_held_by_background") => return Some("session_busy"),
+        Some("worktree_resume_refused" | "worktree_unverified") => {
+            return Some("session_unavailable")
+        }
+        _ => {}
+    }
     // codex-acp 2.2: the app-server died under the open (see
     // [`codex_app_server_lost`]). Never the `session/new` fallback, whether or
     // not the adapter will restart it. Up to 2.1.x a dead app-server took the
@@ -13596,6 +13629,63 @@ fn classify_session_load_error(e: &agent_client_protocol::Error) -> Option<&'sta
         return Some("resource_not_found");
     }
     classify_session_load_failure(e.code, &e.to_string())
+}
+
+/// Why Claude Code refused to start, as claude-agent-acp 0.100.0 (#1508)
+/// answers a request that starts it: `data.startupFailureReason`, one of the
+/// CLI's `SDKStartupFailureReason` values (`proxy_invalid`, `cli_version_too_old`,
+/// `session_held_by_background`, …). The adapter makes the CLI's own sentence
+/// the error's message (`Internal error: Invalid proxy URL in HTTPS_PROXY: …
+/// Fix or unset HTTPS_PROXY and restart Claude Code.`) and picks the code from
+/// the reason: `authRequired` for the three a new sign-in fixes
+/// (`gateway_signin_required`, `org_pin_mismatch`, `org_config_refused`),
+/// `invalidParams` for `cwd_unavailable`, `internalError` for the rest. `None`
+/// for any other error, and for older adapters, which report the same refusal
+/// as "Claude Code process exited with code 1. stderr: …" in `data.details`.
+fn claude_startup_failure_reason(e: &agent_client_protocol::Error) -> Option<&str> {
+    e.data
+        .as_ref()?
+        .get("startupFailureReason")?
+        .as_str()
+        .filter(|reason| !reason.is_empty())
+}
+
+/// Whether a failed `session/load` (or `session/resume`) is Claude Code
+/// refusing to start for a reason of the machine it runs on: a proxy setting
+/// that is no URL, managed settings or an organization policy it cannot apply,
+/// a CLI below the required version, an unusable temp directory, a required
+/// sandbox that cannot run, …. Those refuse every session the same way, so the
+/// `session/new` fallback would only announce a fresh start and fail as well,
+/// while the session itself is fine. The reasons of the session
+/// ([`classify_session_load_error`]) and those a sign-in fixes (`authRequired`,
+/// which keeps the ladder's own handling) are not this.
+fn claude_refused_to_start(e: &agent_client_protocol::Error) -> bool {
+    claude_startup_failure_reason(e).is_some()
+        && !matches!(
+            e.code,
+            agent_client_protocol::schema::v1::ErrorCode::AuthRequired
+        )
+        && classify_session_load_error(e).is_none()
+}
+
+/// An agent's error as the user reads it: its `Display`, the message followed
+/// by `data` as JSON, except that a `data` holding nothing but Claude Code's
+/// startup-failure reason is left out. That reason is the machine-readable
+/// twin of the message, which already is the CLI's sentence about it (see
+/// [`claude_startup_failure_reason`]), so it would only add
+/// `{"startupFailureReason": "proxy_invalid"}` under the advice.
+pub(crate) fn agent_error_text(e: &agent_client_protocol::Error) -> String {
+    let reason_only = e
+        .data
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|data| data.len() == 1)
+        && claude_startup_failure_reason(e).is_some();
+    if reason_only && !e.message.is_empty() {
+        e.message.clone()
+    } else {
+        e.to_string()
+    }
 }
 
 /// OpenCode 2's answer for a session it has no record of: -32602 with
@@ -14958,7 +15048,7 @@ async fn run_conversation_loop(
                                             // can quote a local path, and this
                                             // string is rendered in the UI and
                                             // pushed over the WebSocket.
-                                            message: AcpError::protocol(e.to_string())
+                                            message: AcpError::protocol(agent_error_text(&e))
                                                 .to_string(),
                                             agent_type: agent_type.to_string(),
                                             // No stable code: the payload IS the
@@ -29484,6 +29574,120 @@ mod tests {
         assert!(!recovers_load_failure_locally(custom, Some("session_busy")));
     }
 
+    /// claude-agent-acp 0.100.0 (#1508) names why Claude Code refused to start.
+    /// The bodies are the ones measured on `session/resume` and `session/load`
+    /// with 0.100.0, and with 0.99.1 for the same refusal.
+    #[test]
+    fn classify_load_error_reads_claude_startup_failure_reason() {
+        let error = |body: serde_json::Value| -> agent_client_protocol::Error {
+            serde_json::from_value(body).expect("an ACP error body")
+        };
+        let refused = |reason: &str, message: &str| {
+            error(serde_json::json!({
+                "code": -32603,
+                "message": message,
+                "data": { "startupFailureReason": reason }
+            }))
+        };
+
+        // A background job holds the session: busy, the history kept.
+        let held = refused(
+            "session_held_by_background",
+            "Internal error: Error: That session is running in the background. Run \
+             `claude agents` to find it and open it, or stop it there first to resume it \
+             here. Add --fork-session to branch off a copy instead.",
+        );
+        assert_eq!(classify_session_load_error(&held), Some("session_busy"));
+        assert!(!claude_refused_to_start(&held));
+        // The worktree the session is bound to: unavailable, never a new session.
+        for reason in ["worktree_resume_refused", "worktree_unverified"] {
+            let worktree = refused(reason, "Internal error: Error: cannot resume into worktree");
+            assert_eq!(
+                classify_session_load_error(&worktree),
+                Some("session_unavailable"),
+                "{reason}"
+            );
+            assert!(!claude_refused_to_start(&worktree), "{reason}");
+        }
+        // A reason of the machine is left to the caller, which ends the open.
+        let proxy = refused(
+            "proxy_invalid",
+            "Internal error: Invalid proxy URL in HTTPS_PROXY: \"proxy.local:3128\" cannot \
+             be parsed as a URL.",
+        );
+        assert_eq!(classify_session_load_error(&proxy), None);
+        assert!(claude_refused_to_start(&proxy));
+        let cwd = error(serde_json::json!({
+            "code": -32602,
+            "message": "Invalid params: The working directory was deleted.",
+            "data": { "startupFailureReason": "cwd_unavailable" }
+        }));
+        assert!(claude_refused_to_start(&cwd));
+        // One a sign-in fixes keeps the ladder's `authRequired` handling.
+        let signed_out = error(serde_json::json!({
+            "code": -32000,
+            "message": "Authentication required: Your Claude apps gateway sign-in ended.",
+            "data": { "startupFailureReason": "gateway_signin_required" }
+        }));
+        assert_eq!(classify_session_load_error(&signed_out), None);
+        assert!(!claude_refused_to_start(&signed_out));
+
+        // 0.99.1 carries the same refusal only as the CLI's exit, which still
+        // reads as unavailable from its text.
+        let held_0_99_1 = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {
+                "details": "Claude Code process exited with code 1. stderr: Error: That \
+                    session is running in the background. Run `claude agents` to find it \
+                    and open it, or stop it there first to resume it here."
+            }
+        }));
+        assert_eq!(
+            classify_session_load_error(&held_0_99_1),
+            Some("session_unavailable")
+        );
+        assert!(!claude_refused_to_start(&held_0_99_1));
+    }
+
+    /// The reason is the machine-readable twin of the CLI's sentence, so the
+    /// text the user reads stops at the sentence. Any other `data` stays.
+    #[test]
+    fn agent_error_text_leaves_out_a_lone_startup_failure_reason() {
+        let error = |body: serde_json::Value| -> agent_client_protocol::Error {
+            serde_json::from_value(body).expect("an ACP error body")
+        };
+        let proxy = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error: Invalid proxy URL in HTTPS_PROXY.",
+            "data": { "startupFailureReason": "proxy_invalid" }
+        }));
+        assert_eq!(
+            agent_error_text(&proxy),
+            "Internal error: Invalid proxy URL in HTTPS_PROXY."
+        );
+        for body in [
+            serde_json::json!({
+                "code": -32603,
+                "message": "Internal error",
+                "data": { "details": "Claude Code process exited with code 1." }
+            }),
+            serde_json::json!({
+                "code": -32603,
+                "message": "Internal error: refused",
+                "data": { "startupFailureReason": "proxy_invalid", "extra": 1 }
+            }),
+            serde_json::json!({
+                "code": -32603,
+                "message": "Internal error: refused",
+                "data": { "startupFailureReason": 7 }
+            }),
+        ] {
+            let e = error(body);
+            assert_eq!(agent_error_text(&e), e.to_string());
+        }
+    }
+
     /// The same lock as above, as each codex-acp version reports it. Both bodies
     /// were captured live: two adapter processes on one `CODEX_HOME`, the
     /// second `session/load`ing (and `session/resume`ing — the identical error)
@@ -34419,7 +34623,7 @@ mod tests {
         assert!(!prompt_rejection_is_terminal(&e));
         // What the user reads is the agent's own sentence, sanitized — the
         // banner is the only place the reason exists.
-        let rendered = AcpError::protocol(e.to_string()).to_string();
+        let rendered = AcpError::protocol(agent_error_text(&e)).to_string();
         assert!(rendered.contains("/mcp"), "{rendered}");
     }
 
@@ -34694,6 +34898,11 @@ mod tests {
         terminal: Option<String>,
         /// Refuse session/new, once released, instead of opening a session.
         fail_session_new: bool,
+        /// Advertise `loadSession` and answer session/load with this ACP error
+        /// body, as the agent's JSON-RPC answer would carry it.
+        load_error: Option<serde_json::Value>,
+        /// Advertise `session/resume` and answer it with this ACP error body.
+        resume_error: Option<serde_json::Value>,
     }
 
     /// An in-process agent for `run_connection`'s handshake. It reports each
@@ -34716,9 +34925,19 @@ mod tests {
                 stall_initialize,
                 terminal,
                 fail_session_new,
+                load_error,
+                resume_error,
             } = script;
+            let advertises_load = load_error.is_some();
+            let advertises_resume = resume_error.is_some();
             let (seen_tx, seen) = mpsc::unbounded_channel();
-            let (init_seen, new_seen, prompt_seen) = (seen_tx.clone(), seen_tx.clone(), seen_tx);
+            let (init_seen, new_seen, load_seen, resume_seen, prompt_seen) = (
+                seen_tx.clone(),
+                seen_tx.clone(),
+                seen_tx.clone(),
+                seen_tx.clone(),
+                seen_tx,
+            );
             let open_session = Arc::new(tokio::sync::Notify::new());
             let release = Arc::clone(&open_session);
             let (closed_tx, closed) = oneshot::channel();
@@ -34738,7 +34957,48 @@ mod tests {
                                 });
                                 return Ok(());
                             }
-                            responder.respond(InitializeResponse::new(ProtocolVersion::V1))
+                            use agent_client_protocol::schema::v1::{
+                                AgentCapabilities, SessionCapabilities, SessionResumeCapabilities,
+                            };
+                            let mut sessions = SessionCapabilities::new();
+                            if advertises_resume {
+                                sessions = sessions.resume(SessionResumeCapabilities::new());
+                            }
+                            responder.respond(
+                                InitializeResponse::new(ProtocolVersion::V1).agent_capabilities(
+                                    AgentCapabilities::new()
+                                        .load_session(advertises_load)
+                                        .session_capabilities(sessions),
+                                ),
+                            )
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: LoadSessionRequest,
+                                    responder: Responder<LoadSessionResponse>,
+                                    _cx: ConnectionTo<Client>| {
+                            let _ = load_seen.send("session/load".to_string());
+                            match load_error.clone() {
+                                Some(body) => responder.respond_with_error(
+                                    serde_json::from_value(body).expect("an ACP error body"),
+                                ),
+                                None => responder.respond(LoadSessionResponse::new()),
+                            }
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: ResumeSessionRequest,
+                                    responder: Responder<ResumeSessionResponse>,
+                                    _cx: ConnectionTo<Client>| {
+                            let _ = resume_seen.send("session/resume".to_string());
+                            match resume_error.clone() {
+                                Some(body) => responder.respond_with_error(
+                                    serde_json::from_value(body).expect("an ACP error body"),
+                                ),
+                                None => responder.respond(ResumeSessionResponse::new()),
+                            }
                         },
                         on_receive_request!(),
                     )
@@ -34843,6 +35103,16 @@ mod tests {
 
     impl HandshakeRun {
         async fn start(client_end: agent_client_protocol::Channel) -> Self {
+            Self::start_reopening(client_end, None).await
+        }
+
+        /// [`Self::start`] for a conversation that already has the agent
+        /// session `session_id`, which the handshake reopens.
+        async fn start_reopening(
+            client_end: agent_client_protocol::Channel,
+            session_id: Option<&str>,
+        ) -> Self {
+            let session_id = session_id.map(str::to_string);
             let dir = tempfile::tempdir().expect("tempdir");
             let cwd = dir.path().to_path_buf();
             // An agent codeg forwards no MCP servers to, so the handshake reads
@@ -34870,7 +35140,7 @@ mod tests {
                         "conn-handshake".to_string(),
                         agent_type,
                         Some(cwd.to_string_lossy().into_owned()),
-                        None,
+                        session_id,
                         cmd_rx,
                         run_handshake,
                         EventEmitter::Noop,
@@ -35022,6 +35292,187 @@ mod tests {
         let (ended, _) = run.ended().await;
         assert!(ended.is_ok(), "{ended:?}");
         agent.closed().await;
+    }
+
+    /// Reopen the session `s-old` with an agent following `script`, and return
+    /// how the handshake ended, what it emitted, and every request the agent
+    /// got.
+    async fn reopen_with(
+        script: HandshakeScript,
+    ) -> (Result<(), AcpError>, Vec<AcpEvent>, Vec<String>) {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(agent_end, script);
+        let run = HandshakeRun::start_reopening(client_end, Some("s-old")).await;
+        let mut requests = vec![agent.next_request().await];
+        // A `session/new` fallback is held by the agent until released: let
+        // the handshake go there, as `a_cancelled_handshake_stops_waiting_for_the_session`.
+        // One that comes later leaves the handshake waiting, so `ended` fails.
+        while let Ok(Some(next)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), agent.seen.recv()).await
+        {
+            let fallback = next == "session/new";
+            requests.push(next);
+            if fallback {
+                run.handshake.cancel();
+                break;
+            }
+        }
+        let (ended, emitted) = run.ended().await;
+        while let Ok(next) = agent.seen.try_recv() {
+            requests.push(next);
+        }
+        agent.closed().await;
+        (ended, emitted, requests)
+    }
+
+    /// [`reopen_with`] an agent that answers session/load with `load_error`.
+    async fn reopen_failing_with(
+        load_error: serde_json::Value,
+    ) -> (Result<(), AcpError>, Vec<AcpEvent>, Vec<String>) {
+        reopen_with(HandshakeScript {
+            load_error: Some(load_error),
+            ..Default::default()
+        })
+        .await
+    }
+
+    /// [`reopen_with`] an agent that, as claude-agent-acp does, offers
+    /// session/resume and answers it and session/load with the same `error`.
+    async fn reopen_resume_and_load_failing_with(
+        error: serde_json::Value,
+    ) -> (Result<(), AcpError>, Vec<AcpEvent>, Vec<String>) {
+        reopen_with(HandshakeScript {
+            load_error: Some(error.clone()),
+            resume_error: Some(error),
+            ..Default::default()
+        })
+        .await
+    }
+
+    /// claude-agent-acp 0.100.0 (#1508) on a Claude Code that refused to start
+    /// for a reason of the machine: the CLI's own sentence as the message, and
+    /// the reason in `data` (the body as measured, `HTTPS_PROXY` set to
+    /// `proxy.local:3128`). A `session/new` would be refused the same way, so
+    /// the handshake ends with the CLI's words, without the reason's JSON, and
+    /// asks for no new session. (Any agent can send this body; the harness's
+    /// is not Claude, which would read the machine's MCP config.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_claude_code_refusing_to_start_ends_the_reopen_with_its_own_words() {
+        let message = "Internal error: Invalid proxy URL in HTTPS_PROXY: \"proxy.local:3128\" \
+            cannot be parsed as a URL.\nProxy settings must be a complete URL including the \
+            scheme, e.g. \"http://proxy.example.com:8080\".\nFix or unset HTTPS_PROXY and \
+            restart Claude Code.";
+        let (ended, emitted, requests) = reopen_resume_and_load_failing_with(serde_json::json!({
+            "code": -32603,
+            "message": message,
+            "data": { "startupFailureReason": "proxy_invalid" }
+        }))
+        .await;
+        assert_eq!(requests, ["initialize", "session/resume", "session/load"]);
+        assert!(
+            matches!(&ended, Err(AcpError::Protocol(text)) if text == message),
+            "{ended:?}"
+        );
+        assert!(
+            !emitted.iter().any(|e| matches!(
+                e,
+                AcpEvent::SessionStarted { .. }
+                    | AcpEvent::SessionLoadFailed { .. }
+                    | AcpEvent::Error { .. }
+            )),
+            "no fresh start is announced: {emitted:#?}"
+        );
+    }
+
+    /// A Claude Code background job holds the session (measured: a live
+    /// non-interactive holder registered for it). It is busy, not gone, so the
+    /// conversation keeps it: the banner, and no `session/new` that would bind
+    /// the row to an empty session.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_session_running_in_the_background_keeps_its_conversation() {
+        let (ended, emitted, requests) = reopen_resume_and_load_failing_with(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error: Error: That session is running in the background. \
+                Run `claude agents` to find it and open it, or stop it there first to \
+                resume it here. Add --fork-session to branch off a copy instead.",
+            "data": { "startupFailureReason": "session_held_by_background" }
+        }))
+        .await;
+        assert_eq!(requests, ["initialize", "session/resume", "session/load"]);
+        assert!(ended.is_ok(), "{ended:?}");
+        assert!(
+            emitted.iter().any(|e| matches!(
+                e,
+                AcpEvent::SessionLoadFailed { session_id, code, .. }
+                    if session_id == "s-old" && code == "session_busy"
+            )),
+            "{emitted:#?}"
+        );
+    }
+
+    /// A session bound to a worktree Claude Code will not enter cannot be
+    /// opened now, but it is not gone either: the banner, no `session/new`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_session_claude_code_will_not_reenter_keeps_its_conversation() {
+        for reason in ["worktree_resume_refused", "worktree_unverified"] {
+            let (ended, emitted, requests) = reopen_failing_with(serde_json::json!({
+                "code": -32603,
+                "message": "Internal error: Error: cannot resume into worktree /w: unsafe.",
+                "data": { "startupFailureReason": reason }
+            }))
+            .await;
+            assert_eq!(requests, ["initialize", "session/load"], "{reason}");
+            assert!(ended.is_ok(), "{reason}: {ended:?}");
+            assert!(
+                emitted.iter().any(|e| matches!(
+                    e,
+                    AcpEvent::SessionLoadFailed { session_id, code, .. }
+                        if session_id == "s-old" && code == "session_unavailable"
+                )),
+                "{reason}: {emitted:#?}"
+            );
+        }
+    }
+
+    /// The reasons a new sign-in fixes come as `authRequired` and keep the
+    /// ladder's own handling of that code: no banner, no `session/new`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_startup_refusal_a_sign_in_fixes_keeps_the_auth_path() {
+        let (ended, emitted, requests) = reopen_failing_with(serde_json::json!({
+            "code": -32000,
+            "message": "Authentication required: Your Claude apps gateway sign-in ended.",
+            "data": { "startupFailureReason": "gateway_signin_required" }
+        }))
+        .await;
+        assert_eq!(requests, ["initialize", "session/load"]);
+        assert!(ended.is_ok(), "{ended:?}");
+        assert!(
+            !emitted.iter().any(|e| matches!(
+                e,
+                AcpEvent::SessionLoadFailed { .. } | AcpEvent::Error { .. }
+            )),
+            "{emitted:#?}"
+        );
+    }
+
+    /// The control: a failure without a reason still falls back to a new
+    /// session, announced first.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unexplained_load_failure_still_falls_back_to_a_new_session() {
+        let (_ended, emitted, requests) = reopen_failing_with(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "details": "something broke" }
+        }))
+        .await;
+        assert_eq!(requests, ["initialize", "session/load", "session/new"]);
+        assert!(
+            emitted.iter().any(|e| matches!(
+                e,
+                AcpEvent::Error { code: Some(code), .. } if code == SESSION_LOAD_FALLBACK_ERROR_CODE
+            )),
+            "{emitted:#?}"
+        );
     }
 
     /// A [`HandshakeAgent`] that starts a terminal while opening the session,

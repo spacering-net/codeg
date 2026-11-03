@@ -187,6 +187,52 @@ fn first_transcript_texts(blocks: &[crate::acp::types::PromptInputBlock]) -> Vec
     texts
 }
 
+/// How Claude Code records an MCP prompt that the first text block invokes
+/// the way claude-agent-acp's `/` menu names it, `/mcp:<server>:<prompt>
+/// <args>`; `None` for any other text. The ledger keeps it beside the text as
+/// sent, which the record does not contain, as `LedgerEntry::recorded_command`.
+///
+/// The adapter's `promptToClaude` rewrites that block, matched by
+/// `^\/mcp:([^:\s]+):(\S+)(?:\s+([\s\S]*))?$` (0.100.0, #1495; earlier
+/// releases took one line only and left a prompt spanning lines as typed,
+/// which the plain fingerprint matches), to `/<server>:<prompt> (MCP)
+/// <args>`, the name Claude Code lists the prompt under. Claude Code records
+/// the command by its own name, `mcp__<server>__<prompt>`, with the server
+/// name normalized as MCP tool names are (`normalizeNameForMCP`: each UTF-16
+/// unit outside `[A-Za-z0-9_-]` becomes `_`; its extra rule for a
+/// `claude.ai ` server cannot apply, since the name holds no whitespace) and
+/// the prompt name as it is. The arguments go into `<command-args>`, so
+/// `/mcp:probe:greet world` is recorded as `/mcp__probe__greet` with `world`,
+/// which `slash_command_display` reads back as `/mcp__probe__greet world`.
+fn claude_mcp_prompt_transcript_text(text: &str) -> Option<String> {
+    use crate::acp::js_text::is_js_whitespace;
+    let (server, rest) = text.strip_prefix("/mcp:")?.split_once(':')?;
+    if server.is_empty() || server.contains(is_js_whitespace) {
+        return None;
+    }
+    let prompt_end = rest.find(is_js_whitespace).unwrap_or(rest.len());
+    let (prompt, args) = rest.split_at(prompt_end);
+    if prompt.is_empty() {
+        return None;
+    }
+    let mut recorded = String::from("/mcp__");
+    for c in server.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            recorded.push(c);
+        } else {
+            recorded.extend(std::iter::repeat_n('_', c.len_utf16()));
+        }
+    }
+    recorded.push_str("__");
+    recorded.push_str(prompt);
+    let args = args.trim_matches(is_js_whitespace);
+    if !args.is_empty() {
+        recorded.push(' ');
+        recorded.push_str(args);
+    }
+    Some(recorded)
+}
+
 /// [`first_transcript_texts`] for one adapter generation: `forwards_blobs`
 /// picks 0.99.0's rule for blob resources, and `false` the earlier one. A
 /// resource is read in the wire form `connection::map_prompt_blocks` gives it:
@@ -287,6 +333,11 @@ struct LedgerEntry {
     /// Any of them matching consumes the entry, so each sent prompt is still
     /// matched once.
     fingerprints: Vec<String>,
+    /// The command Claude Code records for an MCP prompt the entry invokes
+    /// ([`claude_mcp_prompt_transcript_text`]). Claude Code writes it only as
+    /// a command record, so it is matched only against a reconstructed
+    /// command, exactly, and never by the verbatim prefix rule.
+    recorded_command: Option<String>,
     recorded_at: Instant,
 }
 
@@ -405,9 +456,17 @@ impl PromptLedger {
             *self.clear_sent_at.lock().unwrap_or_else(|p| p.into_inner()) =
                 Some((Instant::now(), std::time::SystemTime::now()));
         }
+        let recorded_command = blocks
+            .iter()
+            .find_map(|block| match block {
+                crate::acp::types::PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .and_then(claude_mcp_prompt_transcript_text);
         let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.push_back(LedgerEntry {
             fingerprints,
+            recorded_command,
             recorded_at: Instant::now(),
         });
         while entries.len() > LEDGER_CAP {
@@ -443,10 +502,17 @@ impl PromptLedger {
                     || reconstructed_slash_command_fingerprint(fingerprint).as_deref() == Some(text)
             }
         };
+        let matches_recorded_command = |command: &str| {
+            matches!(initiator, TurnInitiatorText::ReconstructedSlashCommand(_))
+                && reconstructed_slash_command_fingerprint(command).as_deref() == Some(text)
+        };
         if let Some(pos) = entries.iter().position(|e| {
             e.fingerprints
                 .iter()
                 .any(|fingerprint| matches(fingerprint))
+                || e.recorded_command
+                    .as_deref()
+                    .is_some_and(matches_recorded_command)
         }) {
             entries.remove(pos);
             return true;
@@ -3063,6 +3129,121 @@ mod tests {
             "the wire renders this turn — a rebuilt separator must not turn it \
              into an overlay copy"
         );
+    }
+
+    /// An MCP prompt sent the way the `/` menu offers it, `/mcp:<server>:<prompt>`,
+    /// is recorded under Claude Code's own name for the command. The records are
+    /// the ones claude-agent-acp 0.100.0 and Claude Code 2.1.316 wrote for a
+    /// probe server `probe` with a prompt `greet`, the second one for arguments
+    /// that span lines, which 0.100.0 (#1495) rewrites too.
+    #[test]
+    fn an_mcp_prompt_matches_the_ledger_under_claude_codes_command_name() {
+        for (sent, recorded_args) in [
+            ("/mcp:probe:greet world", "world"),
+            ("/mcp:probe:greet line1\nline2", "line1\\nline2"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = temp_session(&dir);
+            let ledger = PromptLedger::shared();
+            ledger.record_text(sent);
+
+            let mut ws = WatchState::new();
+            ws.session_id = Some("s1".into());
+            ws.epoch = Some(epoch("2020-01-01T00:00:00Z"));
+            ws.adopt_file(path.clone());
+
+            let command = format!(
+                r#"{{"type":"user","timestamp":"2026-07-07T03:50:00.000Z","uuid":"u-cmd","promptId":"p1","message":{{"role":"user","content":"<command-message>mcp__probe__greet</command-message>\n<command-name>/mcp__probe__greet</command-name>\n<command-args>{recorded_args}</command-args>"}}}}"#
+            );
+            let expansion = r#"{"type":"user","timestamp":"2026-07-07T03:50:00.100Z","uuid":"u-exp","parentUuid":"u-cmd","promptId":"p1","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"PROMPT_GREET for world"}]}}"#;
+            write_lines(
+                &path,
+                &[&command, expansion, &assistant_text("a1", "Hello.")],
+            );
+            let event = tick_prompting(&mut ws, &ledger);
+            assert!(
+                event.is_none() || unpack(event.unwrap()).0.is_empty(),
+                "{sent:?}: the wire renders this turn — the command record under \
+                 Claude Code's name must not surface an overlay copy"
+            );
+        }
+    }
+
+    /// The adapter's pattern decides what is an MCP prompt invocation, and the
+    /// CLI's normalization what its record is named.
+    #[test]
+    fn claude_mcp_prompt_transcript_text_mirrors_the_adapter_and_the_cli() {
+        let read = claude_mcp_prompt_transcript_text;
+        assert_eq!(
+            read("/mcp:probe:greet world").as_deref(),
+            Some("/mcp__probe__greet world")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet").as_deref(),
+            Some("/mcp__probe__greet")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet \t ").as_deref(),
+            Some("/mcp__probe__greet")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet  two  words \n").as_deref(),
+            Some("/mcp__probe__greet two  words")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet line1\nline2").as_deref(),
+            Some("/mcp__probe__greet line1\nline2")
+        );
+        // The server name is normalized per UTF-16 unit, the prompt name kept,
+        // colons and all, up to the first whitespace.
+        assert_eq!(
+            read("/mcp:my.server-1:do.it x").as_deref(),
+            Some("/mcp__my_server-1__do.it x")
+        );
+        assert_eq!(read("/mcp:caf\u{e9}:p").as_deref(), Some("/mcp__caf___p"));
+        assert_eq!(read("/mcp:\u{1F600}:p").as_deref(), Some("/mcp______p"));
+        assert_eq!(read("/mcp:srv:a:b c").as_deref(), Some("/mcp__srv__a:b c"));
+        // What the adapter leaves as it is.
+        for text in [
+            " /mcp:probe:greet x",
+            "/mcp:probe",
+            "/mcp::greet",
+            "/mcp:probe:",
+            "/mcp:probe: x",
+            "/mcp:pro be:greet",
+            "/probe:greet (MCP) x",
+            "/mcp__probe__greet x",
+        ] {
+            assert_eq!(read(text), None, "{text:?}");
+        }
+    }
+
+    /// Claude Code writes an MCP prompt's own name only in a command record,
+    /// so that form consumes the entry only as a rebuilt command, exactly: a
+    /// literal prompt that merely starts with it stays a turn of its own.
+    #[test]
+    fn an_mcp_prompts_recorded_command_matches_only_a_command_record() {
+        let ledger = PromptLedger::shared();
+        ledger.record_text("/mcp:probe:greet world");
+        for initiator in [
+            TurnInitiatorText::Verbatim("/mcp__probe__greet worldly".into()),
+            TurnInitiatorText::Verbatim("/mcp__probe__greet world".into()),
+            TurnInitiatorText::ReconstructedSlashCommand("/mcp__probe__greet worldly".into()),
+        ] {
+            assert!(!ledger.consume_matching(&initiator), "{initiator:?}");
+        }
+        let command =
+            TurnInitiatorText::ReconstructedSlashCommand("/mcp__probe__greet world".into());
+        assert!(ledger.consume_matching(&command));
+        assert!(!ledger.consume_matching(&command), "consumed once");
+
+        // The text as sent still matches as before: 0.99.1 leaves a prompt
+        // whose arguments span lines as typed.
+        let ledger = PromptLedger::shared();
+        ledger.record_text("/mcp:probe:greet line1\nline2");
+        assert!(ledger.consume_matching(&TurnInitiatorText::Verbatim(
+            "/mcp:probe:greet line1\nline2".into()
+        )));
     }
 
     #[test]

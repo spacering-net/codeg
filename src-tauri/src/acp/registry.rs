@@ -2955,9 +2955,121 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1479 titles a native subagent by its task, in the RFD form
             //     a client gets only when it declares `subagents` and is not
             //     AIR; codeg is AIR and declares none.
+            //
+            // 0.100.0 moves the Claude Agent SDK to 0.3.316 (Claude Code
+            // 2.1.312 → 2.1.316) and the ACP SDK to 2.4.0; `engines.node` stays
+            // ">=22", and the CLI's model catalog is unchanged (the same 22
+            // ids, the same latest model of each family). The scenario harness,
+            // run on the 0.100.0 sources with codeg's exact
+            // `clientCapabilities`, is byte-identical to 0.99.1's recording in
+            // all 40 scenarios, `initialize` and `session/new` included. Most of
+            // the release is for ACP v2 (background work lists, `cancelled` and
+            // `paused` tool calls, v2 elicitation values, native Windows paths
+            // in v2 patches), and codeg asks for protocol 1. Measured live
+            // against the local fake Anthropic API (no model call), 0.99.1 and
+            // 0.100.0 side by side:
+            //
+            // (yyyy) **Claude Code says why it did not start** (#1508). The
+            // adapter starts the CLI with `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`
+            // and answers a request that starts it (session/new, load, resume,
+            // fork) and that the CLI refused with the CLI's own sentence as the
+            // message and `data.startupFailureReason`: `authRequired` for the
+            // three reasons a new sign-in fixes, `invalidParams` for
+            // `cwd_unavailable`, `internalError` for the other 16. 0.99.1
+            // answered -32603 with "Claude Code process exited with code 1.
+            // stderr: …" in `data.details` (both measured with an `HTTPS_PROXY`
+            // that is no URL, and with a session a live background job holds).
+            // Three readers followed the old shape:
+            //   * the load ladder's `SESSION_GONE_MARKERS` read "process exited"
+            //     as an unavailable session, which kept the conversation; the
+            //     new text names no marker, so a reopen fell through to
+            //     `session/new` and bound the conversation to an empty session.
+            //     `classify_session_load_error` now reads the reason: a session
+            //     a background job holds (`session_held_by_background`, "That
+            //     session is running in the background. Run `claude agents` …")
+            //     is busy, and one bound to a worktree Claude Code could not
+            //     verify or will not enter (`worktree_*`) is unavailable.
+            //   * any other reason is the machine's (a proxy setting, managed
+            //     settings or an organization policy, the CLI's version, the
+            //     temp directory, a required sandbox), and refuses a
+            //     `session/new` the same way. A reopen now ends there with the
+            //     CLI's sentence (`claude_refused_to_start`), as it does for a pi
+            //     too old for pi-acp, instead of announcing a fresh start that
+            //     fails.
+            //   * error texts leave the reason's JSON out (`agent_error_text`);
+            //     `Display` appends it after the CLI's advice.
+            //   The sign-in reasons (`gateway_signin_required`,
+            //   `org_pin_mismatch`, `org_config_refused`) keep codeg's handling
+            //   of `authRequired` on each path.
+            //
+            // (zzzz) **An MCP prompt is recorded under Claude Code's name**.
+            // The `/` menu offers an MCP prompt as `mcp:<server>:<prompt>`; the
+            // adapter rewrites `/mcp:…` to `/<server>:<prompt> (MCP)`, and
+            // Claude Code records the command as `/mcp__<server>__<prompt>`
+            // with its arguments (measured with a probe server on both
+            // versions). The transcript watcher's ledger held only the text as
+            // sent, so the command record read as a turn codeg did not send,
+            // and the overlay drew it again under the live copy. #1495 widens
+            // the rewrite to arguments that span lines (0.99.1 left those as
+            // typed, measured) and narrows it to the first text block. The
+            // ledger now also holds the recorded form
+            // (`background_watch::claude_mcp_prompt_transcript_text`), matched
+            // only against a command record.
+            //
+            // (aaaaa) **Clearing the context on plan approval resets the usage**
+            // (#1484). After "Yes, clear context (N% used) and …" the adapter
+            // sends `usage_update {used: 0}`, with no `_meta`, after the mode
+            // and config updates; 0.99.1 sent nothing until the fresh context's
+            // first response. codeg keeps its guard against a zero reading (the
+            // reducer keeps the last non-zero one, and the composer reads 0 as
+            // no reading): a gateway that reports usage only at the end of a
+            // response makes the adapter send `used: 0` with the model at the
+            // start of every response (measured with `message_start` usage
+            // zeroed), which the guard keeps from flashing the ring to 0%. So
+            // the ring keeps the old context's reading until the fresh
+            // context's first response, as with 0.99.1.
+            //
+            // (bbbbb) Nothing to change in codeg, each checked:
+            //   * #1495 rejects with -32602 a v1 prompt holding `audio` or an
+            //     unknown block, a config value whose type does not match the
+            //     option, a relative `cwd` or `additionalDirectories` entry, an
+            //     unknown `authenticate` method and a relative `session/list`
+            //     cwd. codeg sends text, image, resource and resource-link
+            //     blocks, encodes a value by the option's advertised kind (and
+            //     declares no boolean options, so Fast mode and ultracode stay
+            //     "on"/"off" selects), sends absolute paths, sends Claude no
+            //     `authenticate` (only TRAE's handshake and Antigravity's login
+            //     flow use it) and sends no `session/list`. The command list
+            //     drops names holding whitespace and repeated names, and a fork
+            //     of an unknown session answers -32002.
+            //   * #1494: a prompt sent after `session/cancel` runs after it
+            //     instead of being cancelled, and `session/close` withdraws open
+            //     permission requests first. codeg sends one prompt at a time (a
+            //     steer goes to `_session/steering`, which a cancel still
+            //     abandons) and closes a withdrawn request's card.
+            //   * #1496 (a subagent's working directory), #1510 and #1511
+            //     (background work) and #1493 (v2 elicitation values) are for
+            //     the subagents RFD form and v2, neither of which codeg takes.
+            //     #1474 restores a session's choices when `providers/*` restarts
+            //     its query, and codeg sends no `providers/*`. #1482 retries a
+            //     SKILL.md it could not read instead of caching the miss.
+            //   * A working directory codeg cannot read still fails as a native
+            //     binary "that exists but failed to launch" (both versions).
+            //   * CLI 2.1.314 and 2.1.316: idle compaction, on by default, runs
+            //     only for interactive sessions and the IDE, desktop and remote
+            //     entrypoints, not the SDK's `sdk-ts`. The Bash edit diff, which
+            //     codeg does not read, is off by default outside auto and bypass
+            //     modes. The measured turns write no `total_tokens_reminder`
+            //     attachment, which the history parser never read. A session
+            //     opened with a skill or a prompt command now gets a generated
+            //     title, which reaches codeg as the `ai-title` record it reads.
+            //     New settings reach Claude Code through the agent's environment
+            //     or settings.json as they are: `CLAUDE_CODE_SUBAGENT_EFFORT`,
+            //     `CLAUDE_CODE_DISABLE_ULTRATHINK` and
+            //     `permissions.blockWritesOutsideWorkingDirectories`.
             distribution: AgentDistribution::Npx {
-                version: "0.99.1",
-                package: "@agentclientprotocol/claude-agent-acp@0.99.1",
+                version: "0.100.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.100.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -7504,8 +7616,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.99.1",
-            "@agentclientprotocol/claude-agent-acp@0.99.1",
+            "0.100.0",
+            "@agentclientprotocol/claude-agent-acp@0.100.0",
             Some("22.0.0"),
         );
         assert_npx_version(
