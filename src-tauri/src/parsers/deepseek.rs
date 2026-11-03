@@ -144,13 +144,18 @@ pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathB
 /// - `assistant/message` — the ASSEMBLED assistant message for one step
 ///   (`content[]` of `text` / `reasoning` / `tool-call {id, name, arguments}`
 ///   blocks) plus that step's `usage` (`inputTokens` / `outputTokens` /
-///   `cacheReadTokens` / `reasoningTokens`). Through 0.8.0 the raw stream
-///   duplicated it as `assistant/chunk` / `*-chunks` ROWS; 0.9.0 stopped
-///   persisting those and moved the compacted stream into this event's own
-///   `stream` field, which is read as part of the event rather than as a row.
+///   `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens`; the last
+///   three are optional in every format generation). Through 0.8.0 the raw
+///   stream duplicated it as `assistant/chunk` / `*-chunks` ROWS; 0.9.0
+///   stopped persisting those and moved the compacted stream into this event's
+///   own `stream` field, which is read as part of the event rather than as a
+///   row.
 ///   Either way only `message.content` is read — see the skip below.
-/// - `tool/result` — the paired result (`message.content[0]` is a
-///   `tool-result` with `toolCallId` / `content[]` / `isError`).
+/// - `tool/result` — the paired result. Released v3 (and older) wraps it in a
+///   `tool-result` content block (`toolCallId` / `content[]` / `isError`);
+///   session-format v4 (DSH 0.2.x) lifts it to a first-class `role: "tool"`
+///   message carrying those three fields on the message itself, with no
+///   wrapper. Both shapes are read.
 /// - `turn/start` / `turn/end` — authoritative turn boundaries; `turn/end`
 ///   carries the end reason (`completed` / `aborted` / `error` / …) and its
 ///   `time` is the turn's completion clock. A turn missing its `turn/end`
@@ -160,6 +165,10 @@ pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathB
 ///   (last one wins).
 /// - `compaction/start` → `compaction/summary` → `compaction/end` (0.6.0) —
 ///   one context compaction, rendered as the shared context-compaction marker.
+///
+/// Session-format v4 (DSH 0.2.x) keeps the event envelope and every other
+/// record shape this parser consumes, including the step `usage` object; the
+/// difference it does introduce is the first-class tool result handled above.
 ///
 /// Images (0.6.0): an `image` content block carries only an
 /// `ImageAttachmentRef`; the bytes live in the content-addressed store at
@@ -749,19 +758,28 @@ fn add_usage(a: TurnUsage, b: TurnUsage) -> TurnUsage {
 /// Map one step's `usage` object onto `TurnUsage`; `None` when all counters
 /// are absent or zero. `reasoningTokens` is a subset of `outputTokens` (the
 /// adapter reports both), so it is deliberately not added anywhere.
+///
+/// `cacheWriteTokens` is the prompt-cache write side and maps onto
+/// `cache_creation_input_tokens`. Upstream counts are disjoint (`inputTokens`
+/// is uncached input only), matching `TurnUsage`. The key is optional in every
+/// format generation, so it is read regardless of the header version. In
+/// practice the DeepSeek adapter only reports it from DSH 0.2.x (Messages API
+/// `cache_creation_input_tokens`); 0.1.x reported `reasoningTokens` instead,
+/// and a missing key reads as zero.
 fn usage_from_step(usage: Option<&Value>) -> Option<TurnUsage> {
     let usage = usage?;
     let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     let input = field("inputTokens");
     let output = field("outputTokens");
     let cache_read = field("cacheReadTokens");
-    if input == 0 && output == 0 && cache_read == 0 {
+    let cache_write = field("cacheWriteTokens");
+    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
         return None;
     }
     Some(TurnUsage {
         input_tokens: input,
         output_tokens: output,
-        cache_creation_input_tokens: 0,
+        cache_creation_input_tokens: cache_write,
         cache_read_input_tokens: cache_read,
     })
 }
@@ -1074,30 +1092,49 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
             }
             "tool/result" => {
                 let Some(data) = data else { continue };
-                let result = data
-                    .pointer("/message/content")
+                let message = data.get("message");
+                // Two record shapes. Released v3 (and older) wraps the payload
+                // in a `tool-result` content block; session-format v4 (DSH
+                // 0.2.x) drops the wrapper and presents the result as a
+                // first-class `role: "tool"` message. Read the wrapper when it
+                // is present so v3 renders exactly as before, and fall back to
+                // the message for v4.
+                let wrapper = message
+                    .and_then(|m| m.get("content"))
                     .and_then(Value::as_array)
                     .and_then(|items| {
                         items
                             .iter()
                             .find(|i| i.get("type").and_then(Value::as_str) == Some("tool-result"))
                     });
-                let tool_use_id = result
+                let tool_use_id = wrapper
                     .and_then(|r| r.get("toolCallId"))
                     .and_then(Value::as_str)
+                    .or_else(|| {
+                        message
+                            .and_then(|m| m.get("toolCallId"))
+                            .and_then(Value::as_str)
+                    })
                     .or_else(|| {
                         data.pointer("/message/source/callId")
                             .and_then(Value::as_str)
                     })
                     .map(String::from);
-                let output = result
-                    .map(|r| collect_text_parts(r.get("content")))
-                    .unwrap_or_default();
+                let output = match wrapper {
+                    Some(result) => collect_text_parts(result.get("content")),
+                    None => collect_text_parts(message.and_then(|m| m.get("content"))),
+                };
                 // `data.error` is the tool's internal failure identity; the
-                // model-facing `isError` flag is the primary signal.
-                let is_error = result
+                // model-facing `isError` flag is the primary signal. v3 carries
+                // the flag on the wrapper block, v4 on the message itself.
+                let is_error = wrapper
                     .and_then(|r| r.get("isError"))
                     .and_then(Value::as_bool)
+                    .or_else(|| {
+                        message
+                            .and_then(|m| m.get("isError"))
+                            .and_then(Value::as_bool)
+                    })
                     .unwrap_or(false)
                     || data.get("error").is_some_and(|e| !e.is_null());
                 sp.content_events += 1;
@@ -1429,6 +1466,19 @@ mod tests {
             "createdAt": 1_786_708_736_990_i64,
             "cwd": cwd,
             "delegationDepth": 0
+        })
+        .to_string()
+    }
+
+    fn v4_header_line(cwd: &str) -> String {
+        json!({
+            "type": "session",
+            "version": 4,
+            "id": "0126397e-97b1-4420-a564-bffe4453915b",
+            "createdAt": 1_786_708_736_990_i64,
+            "cwd": cwd,
+            "delegationDepth": 0,
+            "agentPreset": "standard"
         })
         .to_string()
     }
@@ -1790,6 +1840,147 @@ mod tests {
         ));
     }
 
+    /// Session-format v4 (DSH 0.2.x) turns a tool result into a first-class
+    /// `role: "tool"` message: `toolCallId` / `content[]` / `isError` sit on
+    /// the message, and the released-v3 `tool-result` wrapper block is gone. A
+    /// parser that only knows the wrapper renders the call with an EMPTY
+    /// output and never flags the error.
+    #[test]
+    fn parses_v4_first_class_tool_results() {
+        let log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            event(
+                "tool/result",
+                2,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_1"},
+                        "toolCallId": "call_1",
+                        "content": [{"type": "text", "text": "<content>hello</content>"}],
+                        "isError": false,
+                        "id": "t-1"
+                    }
+                }),
+            ),
+            event(
+                "tool/result",
+                3,
+                1_200,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_2"},
+                        "toolCallId": "call_2",
+                        "content": [{"type": "text", "text": "Error: MCP error -32001: Request timed out"}],
+                        "isError": true,
+                        "id": "t-2"
+                    }
+                }),
+            ),
+            event("turn/end", 4, 1_300, json!({"turn": 1})),
+        ]
+        .join("\n");
+
+        let sp = parse_session_events(&log, None);
+        assert_eq!(sp.turns.len(), 1);
+        assert!(matches!(
+            &sp.turns[0].blocks[0],
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), is_error: false, .. }
+                if id == "call_1" && out.contains("hello")
+        ));
+        assert!(matches!(
+            &sp.turns[0].blocks[1],
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), is_error: true, .. }
+                if id == "call_2" && out.contains("timed out")
+        ));
+    }
+
+    /// A v4 result whose message omits `toolCallId` still resolves its identity
+    /// through `message.source.callId` — the fallback the released-v3 wrapper
+    /// never exercised, because the wrapper always carried the id.
+    #[test]
+    fn parses_v4_tool_results_without_message_tool_call_id() {
+        let log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            event(
+                "tool/result",
+                2,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_from_source"},
+                        "content": [{"type": "text", "text": "out"}],
+                        "isError": false,
+                        "id": "t-1"
+                    }
+                }),
+            ),
+            event("turn/end", 3, 1_200, json!({"turn": 1})),
+        ]
+        .join("\n");
+
+        let sp = parse_session_events(&log, None);
+        assert!(matches!(
+            &sp.turns[0].blocks[0],
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), .. }
+                if id == "call_from_source" && out == "out"
+        ));
+    }
+
+    /// DSH 0.2.x reports prompt-cache writes as `cacheWriteTokens` (the key is
+    /// optional in v3 and v4 alike); the counter must reach the turn rather
+    /// than being dropped as an unknown key, whatever the header version.
+    #[test]
+    fn cache_write_tokens_reach_the_turn_in_any_generation() {
+        let step = |usage: Value| {
+            event(
+                "assistant/message",
+                2,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "source": {"kind": "model", "model": "deepseek-v4"}, "id": "a-1"},
+                    "usage": usage
+                }),
+            )
+        };
+        for header in [header_line("/w"), v4_header_line("/w")] {
+            let log = [
+                header.clone(),
+                event("turn/start", 1, 1_000, json!({"turn": 1})),
+                step(json!({"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 2, "cacheWriteTokens": 7})),
+                event("turn/end", 3, 1_200, json!({"turn": 1})),
+            ]
+            .join("\n");
+            let sp = parse_session_events(&log, None);
+            let usage = sp.turns[0].usage.as_ref().expect("usage");
+            assert_eq!(usage.input_tokens, 10);
+            assert_eq!(usage.cache_creation_input_tokens, 7);
+            assert_eq!(usage.cache_read_input_tokens, 2);
+
+            // A step whose only non-zero counter is the cache write still
+            // reports usage instead of reading as "no usage".
+            let log = [
+                header,
+                event("turn/start", 1, 1_000, json!({"turn": 1})),
+                step(json!({"inputTokens": 0, "outputTokens": 0, "cacheWriteTokens": 7})),
+                event("turn/end", 3, 1_200, json!({"turn": 1})),
+            ]
+            .join("\n");
+            let sp = parse_session_events(&log, None);
+            let usage = sp.turns[0].usage.as_ref().expect("cache-write-only usage");
+            assert_eq!(usage.cache_creation_input_tokens, 7);
+        }
+    }
+
     #[test]
     fn oversized_tool_arguments_stay_valid_json() {
         let long_task = "长".repeat(DEEPSEEK_TOOL_INPUT_CAP);
@@ -2128,6 +2319,92 @@ mod tests {
         let parser = DeepSeekParser::with_base_dir(dir.clone());
         let detail = parser.get_conversation(GEN_ID).expect("detail");
         assert_eq!(user_texts(&detail), vec!["four".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A v3 session that a DSH 0.2.x write open migrated to v4 keeps both
+    /// generations in one directory. The public parse path must pick the v4
+    /// successor (highest generation) and render its first-class tool result —
+    /// the exact shape a shared `$DSH_HOME/sessions` produces after a migration.
+    #[test]
+    fn reads_a_migrated_v4_generation_and_its_tool_result() {
+        let dir = scratch_dir("gen-v4-tool-result");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["three"]),
+        );
+        let v4_log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            event(
+                "user/message",
+                2,
+                1_010,
+                json!({
+                    "content": [{"type": "text", "text": "four"}],
+                    "source": {"kind": "user"},
+                    "role": "user",
+                    "id": "u-1"
+                }),
+            ),
+            event(
+                "assistant/message",
+                3,
+                1_050,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "tool-call", "id": "call_1", "name": "read", "arguments": "{\"file_path\": \"/tmp/t.txt\"}"}],
+                        "source": {"kind": "model", "model": "deepseek-v4"},
+                        "id": "a-1"
+                    },
+                    "usage": {"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 2, "cacheWriteTokens": 7}
+                }),
+            ),
+            event(
+                "tool/result",
+                4,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_1"},
+                        "toolCallId": "call_1",
+                        "content": [{"type": "text", "text": "<content>hello</content>"}],
+                        "isError": false,
+                        "id": "t-1"
+                    }
+                }),
+            ),
+            event("turn/end", 5, 1_200, json!({"turn": 1})),
+        ]
+        .join("\n");
+        write_log(&dir, "--w--", GEN_ID, "session.v4.jsonl.zstd", &v4_log);
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        // The successor, not the retained predecessor: only v4 carries "four".
+        assert_eq!(user_texts(&detail), vec!["four".to_string()]);
+        let assistant = detail
+            .turns
+            .iter()
+            .find(|turn| matches!(turn.role, TurnRole::Assistant))
+            .expect("assistant turn");
+        assert!(assistant.blocks.iter().any(|block| matches!(
+            block,
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), is_error: false, .. }
+                if id == "call_1" && out.contains("hello")
+        )));
+        // The v4 cache-write counter rides the same detail path.
+        let stats = detail.session_stats.expect("stats");
+        let usage = stats.total_usage.expect("usage");
+        assert_eq!(usage.cache_creation_input_tokens, 7);
 
         let _ = fs::remove_dir_all(&dir);
     }
