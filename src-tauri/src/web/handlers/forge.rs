@@ -47,6 +47,15 @@ pub struct ListIssuesParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IssueDetailParams {
+    pub folder_id: i32,
+    pub number: i64,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TabCountParams {
     pub folder_id: i32,
     /// Which tab to count. Always the one NOT on screen — the visible tab's
@@ -169,6 +178,16 @@ pub async fn forge_list_issues(
 ) -> Result<Json<crate::forge::ForgeIssueList>, AppCommandError> {
     Ok(Json(
         core::forge_list_issues_core(&state.db, params.folder_id, params.query).await?,
+    ))
+}
+
+pub async fn forge_issue_detail(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<IssueDetailParams>,
+) -> Result<Json<crate::forge::ForgeIssueRow>, AppCommandError> {
+    Ok(Json(
+        core::forge_issue_detail_core(&state.db, params.folder_id, params.number, params.account_id)
+            .await?,
     ))
 }
 
