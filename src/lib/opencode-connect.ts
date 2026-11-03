@@ -702,9 +702,14 @@ export function buildConnectedProviders(params: {
       baseUrl: block?.baseUrl ?? "",
       npm: block?.npm ?? "",
       modelIds: block?.modelIds ?? [],
-      disabledModelIds: Object.values(block?.models ?? {})
-        .filter((model) => model.disabled)
-        .map((model) => model.id),
+      // OpenCode 2 reads `disabled` on 2.x blocks only; a 1.x block's
+      // model-level `disabled` is dropped when it migrates the block.
+      disabledModelIds:
+        block?.shape === "native"
+          ? Object.values(block.models)
+              .filter((model) => model.disabled)
+              .map((model) => model.id)
+          : [],
     })
   }
   result.sort(

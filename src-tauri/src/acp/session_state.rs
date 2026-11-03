@@ -1,7 +1,7 @@
 //! 会话级状态结构。后端权威：流式累积、in-flight tool calls、待处理 permission 等
 //! 全部住在这里。Phase 2 的 snapshot 端点直接从此处读取 live 部分。
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -472,8 +472,6 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub pi_enabled_model_patterns: Option<Vec<String>>,
-    /// OpenCode model IDs hidden by model disabled flags.
-    pub opencode_hidden_models: HashSet<String>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
@@ -909,7 +907,6 @@ impl SessionState {
             env_pinned_config_option_ids: Vec::new(),
             trae_pat_sign_in: false,
             pi_enabled_model_patterns: None,
-            opencode_hidden_models: HashSet::new(),
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),

@@ -2760,10 +2760,6 @@ pub async fn spawn_agent_connection(
         initial_state.pi_enabled_model_patterns =
             crate::commands::acp::pi_enabled_model_patterns_for_env(&runtime_env, &launch_cwd);
     }
-    if agent_type == AgentType::OpenCode {
-        initial_state.opencode_hidden_models =
-            crate::acp::opencode_models::hidden_models_for_env(&runtime_env, &launch_cwd);
-    }
     // Fixed by the owner at creation; codex reads it from its launch
     // environment (`apply_codex_prompt_suggestion_policy`).
     let wants_prompt_suggestions = initial_state.wants_prompt_suggestions;
@@ -4502,41 +4498,6 @@ fn filter_pi_enabled_model_options(
         .collect()
 }
 
-fn filter_opencode_model_options(
-    hidden: &HashSet<String>,
-    config_options: Vec<SessionConfigOption>,
-) -> Vec<SessionConfigOption> {
-    if hidden.is_empty() {
-        return config_options;
-    }
-    config_options
-        .into_iter()
-        .map(|mut option| {
-            if !is_model_config_option(&option) {
-                return option;
-            }
-            let SessionConfigKind::Select(select) = &mut option.kind else {
-                return option;
-            };
-            let keep = |row: &SessionConfigSelectOption| {
-                let value = row.value.to_string();
-                !hidden.contains(value.split('#').next().unwrap_or(&value))
-            };
-            match &mut select.options {
-                SessionConfigSelectOptions::Ungrouped(options) => options.retain(&keep),
-                SessionConfigSelectOptions::Grouped(groups) => {
-                    for group in groups.iter_mut() {
-                        group.options.retain(&keep);
-                    }
-                    groups.retain(|group| !group.options.is_empty());
-                }
-                _ => {}
-            }
-            option
-        })
-        .collect()
-}
-
 async fn emit_session_config_options_values(
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -4545,12 +4506,11 @@ async fn emit_session_config_options_values(
     // Drop what this launch froze BEFORE mapping, so every producer of this
     // event — establishment, the answer to a set, and the agent's own
     // `config_option_update` push — is filtered by one rule.
-    let (pinned, pi_enabled_model_patterns, opencode_hidden_models) = {
+    let (pinned, pi_enabled_model_patterns) = {
         let guard = state.read().await;
         (
             guard.env_pinned_config_option_ids.clone(),
             guard.pi_enabled_model_patterns.clone(),
-            guard.opencode_hidden_models.clone(),
         )
     };
     let visible = visible_config_options(&pinned, config_options);
@@ -4558,7 +4518,6 @@ async fn emit_session_config_options_values(
         Some(patterns) => filter_pi_enabled_model_options(patterns, visible),
         None => visible,
     };
-    let visible = filter_opencode_model_options(&opencode_hidden_models, visible);
     emit_with_state(
         state,
         emitter,
@@ -42601,106 +42560,6 @@ mod tests {
             ids(visible_config_options(&[], options())),
             vec!["auto_approve".to_string(), "provider".to_string()]
         );
-    }
-
-    #[tokio::test]
-    async fn opencode_models_are_filtered_in_events_and_session_snapshots() {
-        let mut initial = SessionState::new(
-            "opencode-model-filter".into(),
-            AgentType::OpenCode,
-            None,
-            "w".into(),
-            None,
-        );
-        initial.opencode_hidden_models = HashSet::from([
-            "relay/hidden".into(),
-            "relay/disabled".into(),
-        ]);
-        let state = Arc::new(RwLock::new(initial));
-        let options: Vec<SessionConfigOption> = serde_json::from_value(serde_json::json!([
-            {
-                "type": "select", "id": "model", "name": "Model", "category": "model",
-                "currentValue": "relay/hidden",
-                "options": [
-                    {"value":"relay/hidden", "name":"Hidden"},
-                    {"value":"relay/disabled#high", "name":"Disabled variant"},
-                    {"value":"other/hidden", "name":"Other provider"},
-                    {"value":"relay/allowed", "name":"Allowed"}
-                ]
-            },
-            {
-                "type": "select", "id": "effort", "name": "Effort",
-                "currentValue": "relay/disabled",
-                "options": [{"value":"relay/disabled", "name":"Unrelated option"}]
-            }
-        ]))
-        .unwrap();
-        // Repeated emissions cover establishment, setter responses and pushes.
-        for _ in 0..2 {
-            emit_session_config_options_values(&state, &EventEmitter::Noop, options.clone()).await;
-            let guard = state.read().await;
-            let options = guard.config_options.as_ref().unwrap();
-            let SessionConfigKindInfo::Select(model) = &options[0].kind else {
-                panic!("expected model selector");
-            };
-            assert_eq!(model.current_value, "relay/hidden");
-            assert_eq!(
-                model.options.iter().map(|row| row.value.as_str()).collect::<Vec<_>>(),
-                ["other/hidden", "relay/allowed"]
-            );
-            let SessionConfigKindInfo::Select(effort) = &options[1].kind else {
-                panic!("expected effort selector");
-            };
-            assert_eq!(effort.options.len(), 1);
-            let events = guard.recent_events_after(0).unwrap();
-            let AcpEvent::SessionConfigOptions {
-                config_options: emitted,
-            } = &events.last().unwrap().payload
-            else {
-                panic!("expected config option event");
-            };
-            assert_eq!(emitted, options);
-            assert_eq!(guard.to_snapshot().config_options.as_ref(), Some(options));
-        }
-    }
-
-    #[test]
-    fn opencode_models_drop_empty_groups_and_keep_the_selector_when_all_hidden() {
-        let options: Vec<SessionConfigOption> = serde_json::from_value(serde_json::json!([{
-            "type": "select", "id": "custom-model", "category": "model", "name": "Model",
-            "currentValue": "relay/disabled",
-            "options": [
-                {"group":"relay", "name":"Relay", "options":[
-                    {"value":"relay/disabled", "name":"Disabled"}
-                ]},
-                {"group":"other", "name":"Other", "options":[
-                    {"value":"other/allowed", "name":"Allowed"}
-                ]}
-            ]
-        }]))
-        .unwrap();
-        let hidden = HashSet::from(["relay/disabled".into()]);
-        let filtered = filter_opencode_model_options(&hidden, options);
-        let SessionConfigKind::Select(select) = &filtered[0].kind else {
-            panic!("expected model selector");
-        };
-        let SessionConfigSelectOptions::Grouped(groups) = &select.options else {
-            panic!("expected grouped options");
-        };
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].options[0].value.to_string(), "other/allowed");
-
-        let filtered = filter_opencode_model_options(
-            &HashSet::from(["other/allowed".into()]),
-            filtered,
-        );
-        let SessionConfigKind::Select(select) = &filtered[0].kind else {
-            panic!("expected model selector");
-        };
-        let SessionConfigSelectOptions::Grouped(groups) = &select.options else {
-            panic!("expected grouped options");
-        };
-        assert!(groups.is_empty());
     }
 
     fn pi_model_selector_options() -> Vec<SessionConfigOption> {

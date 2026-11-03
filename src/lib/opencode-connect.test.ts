@@ -593,6 +593,20 @@ describe("integrations and the panel view", () => {
       expect(buildConnectedModelOptions({ connected, catalog })).toEqual([])
     }
   )
+
+  it("keeps models a 1.x provider block marks disabled, as OpenCode 2 does", () => {
+    const connected = buildConnectedProviders({
+      config: {
+        provider: { relay: { models: { a: {}, b: { disabled: true } } } },
+      },
+      integrations: [],
+      catalog: [],
+    })
+    const groups = buildConnectedModelOptions({ connected, catalog: [] })
+    expect(groups.flatMap((group) => group.models.map((m) => m.value))).toEqual(
+      ["relay/a", "relay/b"]
+    )
+  })
 })
 
 describe("custom provider ids and labels", () => {
