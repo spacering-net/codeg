@@ -238,6 +238,10 @@ interface AgentDraft {
   enabled: boolean
   envText: string
   systemInstructionsText: string
+  /** The instructions file's content when the draft was built (or last
+   *  saved): the shared save sends the text only when it differs, so an
+   *  untouched draft never writes the agent's file. */
+  systemInstructionsBaseline: string
   configText: string
   apiBaseUrl: string
   apiKey: string
@@ -514,6 +518,28 @@ function parseEnvText(envText: string): Record<string, string> {
     map[key] = value
   }
   return map
+}
+
+/**
+ * Re-read on refresh: the instructions file is often edited outside codeg (by
+ * hand, or by the agent's own CLI), so an untouched editor shows what is on
+ * disk now instead of the text it was first loaded with.
+ */
+export function rebaseSystemInstructionsDraft(
+  draft: AgentDraft,
+  agent: AcpAgentInfo
+): AgentDraft {
+  // An unsaved edit is kept as typed; an untouched editor follows the file.
+  if (draft.systemInstructionsText !== draft.systemInstructionsBaseline) {
+    return draft
+  }
+  const next = agent.system_instructions_content ?? ""
+  if (next === draft.systemInstructionsBaseline) return draft
+  return {
+    ...draft,
+    systemInstructionsText: next,
+    systemInstructionsBaseline: next,
+  }
 }
 
 /**
@@ -3887,6 +3913,7 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     enabled: agent.enabled,
     envText,
     systemInstructionsText: agent.system_instructions_content ?? "",
+    systemInstructionsBaseline: agent.system_instructions_content ?? "",
     configText,
     apiBaseUrl:
       agent.agent_type === "hermes"
@@ -5027,6 +5054,13 @@ export function AcpAgentSettings() {
           if (agent.agent_type === "deepseek" && existing) {
             updated[agent.agent_type] = rebaseDeepSeekDraft(existing, agent)
           }
+          const current = updated[agent.agent_type]
+          if (current) {
+            updated[agent.agent_type] = rebaseSystemInstructionsDraft(
+              current,
+              agent
+            )
+          }
         }
         return updated
       })
@@ -5347,6 +5381,22 @@ export function AcpAgentSettings() {
     [reportAffectedSessions]
   )
 
+  // The file now holds `content`: an editor still showing it is clean again,
+  // and one the user kept typing in stays dirty against the new baseline.
+  const markSystemInstructionsSaved = useCallback(
+    (agentType: AgentType, content: string) => {
+      setDrafts((prev) => {
+        const draft = prev[agentType]
+        if (!draft || draft.systemInstructionsBaseline === content) return prev
+        return {
+          ...prev,
+          [agentType]: { ...draft, systemInstructionsBaseline: content },
+        }
+      })
+    },
+    []
+  )
+
   const persistSystemInstructions = useCallback(
     async (agentType: AgentType, content: string) => {
       setSavingInstructions((prev) => ({ ...prev, [agentType]: true }))
@@ -5365,6 +5415,7 @@ export function AcpAgentSettings() {
               : agent
           )
         )
+        markSystemInstructionsSaved(agentType, content)
         toast.success(t("toasts.systemInstructionsSaved"), {
           description: t("toasts.configSavedHint"),
         })
@@ -5378,7 +5429,7 @@ export function AcpAgentSettings() {
         setSavingInstructions((prev) => ({ ...prev, [agentType]: false }))
       }
     },
-    [reportAffectedSessions, t]
+    [markSystemInstructionsSaved, reportAffectedSessions, t]
   )
 
   const persistConfig = useCallback(
@@ -5516,11 +5567,14 @@ export function AcpAgentSettings() {
               : agent
           )
         )
+        if (typeof options?.systemInstructionsText === "string") {
+          markSystemInstructionsSaved(agentType, options.systemInstructionsText)
+        }
       } finally {
         setSavingConfig((prev) => ({ ...prev, [agentType]: false }))
       }
     },
-    [agents, reportAffectedSessions]
+    [agents, markSystemInstructionsSaved, reportAffectedSessions]
   )
 
   // After a Grok save, re-read the merged on-disk config and rebuild the Grok
@@ -13102,8 +13156,15 @@ base_url = "https://api.openai.com/v1"`}
                                 selectedAgent.agent_type,
                                 configToSave,
                                 {
+                                  // Only an edited text: an untouched one would
+                                  // write a stale copy over the file (or create
+                                  // an empty one).
                                   systemInstructionsText:
-                                    selectedDraft.systemInstructionsText,
+                                    selectedAgent.system_instructions_file_path &&
+                                    selectedDraft.systemInstructionsText !==
+                                      selectedDraft.systemInstructionsBaseline
+                                      ? selectedDraft.systemInstructionsText
+                                      : undefined,
                                 }
                               )
                             )

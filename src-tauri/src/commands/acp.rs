@@ -9224,66 +9224,155 @@ fn qoder_settings_json_path() -> PathBuf {
 }
 
 
+/// The user-global instructions file the agent itself loads at session start,
+/// or `None` when it has no such file codeg can edit safely.
+///
+/// Each entry is the file the agent's shipped code reads (checked against the
+/// pinned releases), resolved with the same environment overrides as the rest
+/// of this panel. `None` on purpose:
+/// - Hermes: its only global file is `SOUL.md`, which REPLACES the persona;
+/// - Cursor: user rules are `.mdc` files with front matter, or server-side;
+/// - MiniMax Code: the data dir moves with profiles and a legacy migration;
+/// - OpenClaw: the file lives in a workspace configured in openclaw.json, and
+///   may be on a remote Gateway;
+/// - custom agents: codeg does not know their file layout.
 pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<PathBuf> {
     match agent_type {
-        AgentType::ClaudeCode => Some(home_dir_or_default().join(".claude").join("CLAUDE.md")),
-        AgentType::Codex => Some(crate::parsers::codex::resolve_codex_home_dir().join("AGENTS.md")),
-        AgentType::Gemini => Some(crate::parsers::gemini::resolve_gemini_base_dir().join("GEMINI.md")),
+        AgentType::ClaudeCode => {
+            Some(crate::parsers::claude::resolve_claude_config_dir().join("CLAUDE.md"))
+        }
+        // `AGENTS.override.md` wins while it is non-blank.
+        AgentType::Codex => Some(codex_style_instructions_file(
+            &crate::parsers::codex::resolve_codex_home_dir(),
+        )),
+        AgentType::Gemini => {
+            Some(crate::parsers::gemini::resolve_gemini_base_dir().join("GEMINI.md"))
+        }
+        // Antigravity reads every one of `~/.gemini/{AGENTS,GEMINI}.md` from a
+        // hardcoded `~/.gemini` (it ignores `GEMINI_HOME`); `AGENTS.md` keeps
+        // it apart from Gemini CLI's `GEMINI.md`.
+        AgentType::Antigravity => Some(home_dir_or_default().join(".gemini").join("AGENTS.md")),
         AgentType::OpenCode => Some(
             crate::acp::opencode_config::config_dir()
                 .unwrap_or_else(|| home_dir_or_default().join(".config").join("opencode"))
                 .join("AGENTS.md"),
         ),
-        AgentType::Antigravity => Some(crate::parsers::antigravity::resolve_gemini_home().join("GEMINI.md")),
-        AgentType::Cline => Some(home_dir_or_default().join(".cline").join("AGENTS.md")),
-        AgentType::Hermes => Some(crate::parsers::hermes::resolve_hermes_home_dir().join("AGENTS.md")),
-        AgentType::CodeBuddy => Some(crate::parsers::codebuddy::resolve_codebuddy_config_dir().join("AGENTS.md")),
-        AgentType::KimiCode => Some(crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("AGENTS.md")),
-        AgentType::Pi => Some(crate::parsers::pi::resolve_pi_agent_dir().join("AGENTS.md")),
-        AgentType::Grok => Some(crate::parsers::grok::resolve_grok_home_dir().join("AGENTS.md")),
-        AgentType::Cursor => Some(crate::parsers::cursor::resolve_cursor_config_dir().join("AGENTS.md")),
-        AgentType::DeepSeek => Some(home_dir_or_default().join(".dsh").join("AGENTS.md")),
-        AgentType::Qoder => Some(crate::parsers::qoder::resolve_qoder_config_dir().join("AGENTS.md")),
-        AgentType::Kiro => Some(crate::parsers::kiro::resolve_kiro_home_dir().join("AGENTS.md")),
-        AgentType::Trae => Some(crate::acp::trae::resolve_trae_home_dir().join("AGENTS.md")),
-        AgentType::CommandCode => Some(crate::acp::command_code::command_code_home_dir().join("AGENTS.md")),
-        AgentType::ZCode => Some(inherited_node_home_dir().join(".zcode").join("AGENTS.md")),
-        AgentType::MiniMaxCode => Some(home_dir_or_default().join(".minimax-code").join("AGENTS.md")),
-        AgentType::OpenClaw => Some(home_dir_or_default().join(".openclaw").join("AGENTS.md")),
-        AgentType::Custom(id) => {
-            crate::acp::custom_registry::skills_decl(id)
-                .dir
-                .map(PathBuf::from)
-                .or_else(|| Some(home_dir_or_default().join(format!(".{}", id))))
-                .map(|p| p.join("AGENTS.md"))
+        // Cline's "Global AGENTS.md" is the cross-agent `~/.agents` one.
+        AgentType::Cline => Some(home_dir_or_default().join(".agents").join("AGENTS.md")),
+        // User memory is `<config dir>/CODEBUDDY.md` (or `.mdc`, first found);
+        // an `AGENTS.md` there is only read when the workspace IS the home.
+        AgentType::CodeBuddy => Some(first_existing_file(
+            &crate::parsers::codebuddy::resolve_codebuddy_config_dir(),
+            &["CODEBUDDY.md", "CODEBUDDY.mdc"],
+        )),
+        AgentType::KimiCode => {
+            Some(crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("AGENTS.md"))
         }
+        // Pi loads the first of these that exists.
+        AgentType::Pi => Some(first_existing_file(
+            &crate::parsers::pi::resolve_pi_agent_dir(),
+            &["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"],
+        )),
+        AgentType::Grok => Some(crate::parsers::grok::resolve_grok_home_dir().join("AGENTS.md")),
+        AgentType::DeepSeek => {
+            Some(crate::parsers::deepseek::resolve_dsh_home_dir().join("AGENTS.md"))
+        }
+        AgentType::Qoder => {
+            Some(crate::parsers::qoder::resolve_qoder_config_dir().join("AGENTS.md"))
+        }
+        // Kiro's global instructions are steering files.
+        AgentType::Kiro => Some(
+            crate::parsers::kiro::resolve_kiro_home_dir()
+                .join("steering")
+                .join("AGENTS.md"),
+        ),
+        // A Codex fork: same override precedence.
+        AgentType::Trae => Some(codex_style_instructions_file(
+            &crate::acp::trae::resolve_trae_home_dir(),
+        )),
+        AgentType::CommandCode => {
+            Some(crate::acp::command_code::command_code_home_dir().join("AGENTS.md"))
+        }
+        // ZCode follows HOME / USERPROFILE only.
+        AgentType::ZCode => Some(inherited_node_home_dir().join(".zcode").join("AGENTS.md")),
+        AgentType::Hermes
+        | AgentType::Cursor
+        | AgentType::MiniMaxCode
+        | AgentType::OpenClaw
+        | AgentType::Custom(_) => None,
     }
 }
 
-pub(crate) fn load_agent_system_instructions(agent_type: AgentType) -> (Option<String>, Option<String>) {
+/// `<dir>/AGENTS.override.md` while it holds anything but whitespace, else
+/// `<dir>/AGENTS.md` — the file Codex (and its forks) actually loads.
+fn codex_style_instructions_file(dir: &Path) -> PathBuf {
+    let override_file = dir.join("AGENTS.override.md");
+    match fs::read_to_string(&override_file) {
+        Ok(text) if !text.trim().is_empty() => override_file,
+        _ => dir.join("AGENTS.md"),
+    }
+}
+
+/// The first of `names` in `dir` that is a file, else the first name.
+fn first_existing_file(dir: &Path, names: &[&str]) -> PathBuf {
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| dir.join(names[0]))
+}
+
+/// The agent's global instructions file as `(path, content)` for the settings
+/// panel; the content is `None` when the file does not exist or cannot be read
+/// as UTF-8 text.
+pub(crate) fn load_agent_system_instructions(
+    agent_type: AgentType,
+) -> (Option<String>, Option<String>) {
     let path = agent_system_instructions_path(agent_type);
     let path_str = path.as_ref().map(|p| p.display().to_string());
     let content = path.and_then(|p| fs::read_to_string(p).ok());
     (path_str, content)
 }
 
-pub(crate) fn persist_agent_system_instructions(agent_type: AgentType, content: Option<&str>) -> Result<(), AcpError> {
+/// Write `content` as the agent's global instructions file.
+///
+/// The file belongs to the agent (and to the user, who may edit it by hand or
+/// keep it in a dotfiles checkout), so the write is careful with it:
+/// - content equal to what is on disk is not written at all, and empty content
+///   for a missing file does not create it (nor its directory);
+/// - a file that exists but cannot be read as text is refused rather than
+///   replaced, since the panel showed it empty;
+/// - the write is atomic and goes through a symlink, keeping the link and the
+///   file's permissions.
+fn persist_agent_system_instructions(agent_type: AgentType, content: &str) -> Result<(), AcpError> {
     let Some(path) = agent_system_instructions_path(agent_type) else {
-        return Ok(());
+        return Err(AcpError::protocol(
+            "this agent has no global instructions file",
+        ));
     };
-    if let Some(text) = content {
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    AcpError::protocol(format!("failed to create instructions directory {}: {e}", parent.display()))
-                })?;
-            }
+    write_instructions_file(&path, content)
+}
+
+fn write_instructions_file(path: &Path, content: &str) -> Result<(), AcpError> {
+    let current = match fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(AcpError::protocol(format!(
+                "failed to read instructions file {}: {e}",
+                path.display()
+            )))
         }
-        fs::write(&path, text).map_err(|e| {
-            AcpError::protocol(format!("failed to write instructions file {}: {e}", path.display()))
-        })?;
+    };
+    if current.as_deref().unwrap_or_default() == content {
+        return Ok(());
     }
-    Ok(())
+    crate::acp::opencode_config::write_atomic(path, content).map_err(|e| {
+        AcpError::protocol(format!(
+            "failed to write instructions file {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 
@@ -13057,9 +13146,6 @@ pub(crate) async fn acp_update_agent_config_core(
     db: &AppDatabase,
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
-    if let Some(instructions) = system_instructions_content.as_deref() {
-        persist_agent_system_instructions(agent_type, Some(instructions))?;
-    }
     let config_json = config_json.and_then(|raw| {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -13080,6 +13166,27 @@ pub(crate) async fn acp_update_agent_config_core(
             return Err(AcpError::protocol(
                 "invalid config_json: root must be a JSON object",
             ));
+        }
+    }
+
+    if let Some(instructions) = system_instructions_content.as_deref() {
+        persist_agent_system_instructions(agent_type, instructions)?;
+        // The instructions panel saves on its own: nothing else was sent, so
+        // no native config file may be touched — the generic tail below would
+        // re-serialize the agent's settings file (and reset it to `{}` when it
+        // does not parse).
+        if config_json.is_none()
+            && codex_auth_json.is_none()
+            && codex_config_toml.is_none()
+            && codex_model_catalog.is_none()
+            && codex_sandbox.is_none()
+            && grok_config_toml.is_none()
+            && grok_structured.is_none()
+            && cursor_cli_config_json.is_none()
+            && cursor_structured.is_none()
+        {
+            emit_acp_agents_updated(emitter, "config_updated", Some(agent_type));
+            return Ok(());
         }
     }
 
@@ -23283,27 +23390,111 @@ model = "gpt"
     }
 
     #[test]
+    fn instructions_write_creates_the_file_and_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("AGENTS.md");
+        write_instructions_file(&path, "# Rules\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# Rules\n");
+        write_instructions_file(&path, "").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[test]
+    fn instructions_write_of_empty_text_never_creates_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("agent");
+        write_instructions_file(&agent_dir.join("AGENTS.md"), "").unwrap();
+        assert!(!agent_dir.exists());
+    }
+
+    #[test]
+    fn instructions_write_refuses_a_file_it_cannot_read_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        assert!(write_instructions_file(&path, "# Rules").is_err());
+        assert_eq!(fs::read(&path).unwrap(), vec![0xff, 0xfe, 0x00]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instructions_write_goes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dotfiles-CLAUDE.md");
+        fs::write(&target, "old").unwrap();
+        let link = dir.path().join("CLAUDE.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_instructions_file(&link, "new").unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
     fn test_agent_system_instructions_paths() {
-        assert!(agent_system_instructions_path(AgentType::ClaudeCode).unwrap().ends_with("CLAUDE.md"));
-        assert!(agent_system_instructions_path(AgentType::CodeBuddy).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Gemini).unwrap().ends_with("GEMINI.md"));
-        assert!(agent_system_instructions_path(AgentType::Antigravity).unwrap().ends_with("GEMINI.md"));
-        assert!(agent_system_instructions_path(AgentType::Codex).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::OpenCode).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Cline).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Hermes).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Grok).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Cursor).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::DeepSeek).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Qoder).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Kiro).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Trae).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::CommandCode).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::ZCode).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::MiniMaxCode).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::KimiCode).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Pi).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::OpenClaw).unwrap().ends_with("AGENTS.md"));
-        assert!(agent_system_instructions_path(AgentType::Custom("my-bot")).unwrap().ends_with("AGENTS.md"));
+        let file_name = |agent: AgentType| {
+            agent_system_instructions_path(agent)
+                .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        };
+        assert_eq!(file_name(AgentType::ClaudeCode).as_deref(), Some("CLAUDE.md"));
+        assert_eq!(file_name(AgentType::Gemini).as_deref(), Some("GEMINI.md"));
+        for agent in [
+            AgentType::Antigravity,
+            AgentType::OpenCode,
+            AgentType::Cline,
+            AgentType::KimiCode,
+            AgentType::Grok,
+            AgentType::DeepSeek,
+            AgentType::Qoder,
+            AgentType::Kiro,
+            AgentType::CommandCode,
+            AgentType::ZCode,
+        ] {
+            assert_eq!(file_name(agent).as_deref(), Some("AGENTS.md"), "{agent:?}");
+        }
+        let antigravity = agent_system_instructions_path(AgentType::Antigravity).unwrap();
+        assert!(antigravity.ends_with(".gemini/AGENTS.md"));
+        let kiro = agent_system_instructions_path(AgentType::Kiro).unwrap();
+        assert!(kiro.ends_with("steering/AGENTS.md"));
+        let cline = agent_system_instructions_path(AgentType::Cline).unwrap();
+        assert!(cline.ends_with(".agents/AGENTS.md"));
+        // Codex, Trae, Pi and CodeBuddy pick among candidates that exist on
+        // this machine; their rules are covered by the helpers' tests.
+        for agent in [AgentType::Codex, AgentType::Trae, AgentType::Pi, AgentType::CodeBuddy] {
+            assert!(agent_system_instructions_path(agent).is_some(), "{agent:?}");
+        }
+        for agent in [
+            AgentType::Hermes,
+            AgentType::Cursor,
+            AgentType::MiniMaxCode,
+            AgentType::OpenClaw,
+            AgentType::Custom("my-bot"),
+        ] {
+            assert_eq!(agent_system_instructions_path(agent), None, "{agent:?}");
+        }
+    }
+
+    #[test]
+    fn codex_style_instructions_use_a_non_blank_override() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(codex_style_instructions_file(dir.path()), dir.path().join("AGENTS.md"));
+        fs::write(dir.path().join("AGENTS.override.md"), " \n").unwrap();
+        assert_eq!(codex_style_instructions_file(dir.path()), dir.path().join("AGENTS.md"));
+        fs::write(dir.path().join("AGENTS.override.md"), "# Override").unwrap();
+        assert_eq!(
+            codex_style_instructions_file(dir.path()),
+            dir.path().join("AGENTS.override.md")
+        );
+    }
+
+    #[test]
+    fn first_existing_instructions_file_falls_back_to_the_first_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"];
+        assert_eq!(
+            first_existing_file(dir.path(), &names),
+            dir.path().join("AGENTS.override.md")
+        );
+        fs::write(dir.path().join("CLAUDE.md"), "x").unwrap();
+        assert_eq!(first_existing_file(dir.path(), &names), dir.path().join("CLAUDE.md"));
     }
 }

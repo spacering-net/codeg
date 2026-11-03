@@ -1,15 +1,19 @@
-﻿import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import {
   acpListAgents,
   acpUpdateAgentConfig,
+  acpUpdateAgentEnv,
   listModelProviders,
 } from "@/lib/api"
 import type { AcpAgentInfo } from "@/lib/types"
-import { AcpAgentSettings } from "./acp-agent-settings"
+import {
+  AcpAgentSettings,
+  rebaseSystemInstructionsDraft,
+} from "./acp-agent-settings"
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -62,7 +66,31 @@ function makeAgent(overrides: Partial<AcpAgentInfo> = {}): AcpAgentInfo {
   }
 }
 
+// Claude Code's panel is the one whose shared save also carries the
+// instructions; the other panels save them with the card's own button.
+function claudeAgent(): AcpAgentInfo {
+  return makeAgent({
+    agent_type: "claude_code",
+    name: "Claude Code",
+    registry_id: "claude-acp",
+    system_instructions_file_path: "/home/test/.claude/CLAUDE.md",
+    system_instructions_content: "# Be brief",
+  })
+}
+
+function renderSettings() {
+  render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <AcpAgentSettings />
+    </NextIntlClientProvider>
+  )
+}
+
 describe("System Instructions in ACP agent settings", () => {
+  beforeEach(() => {
+    vi.mocked(acpUpdateAgentConfig).mockReset()
+  })
+
   it("renders system instructions with path and content, and allows saving", async () => {
     const agent = makeAgent()
     vi.mocked(acpListAgents).mockResolvedValue([agent])
@@ -121,5 +149,95 @@ describe("System Instructions in ACP agent settings", () => {
 
     await screen.findByRole("heading", { name: "Gemini" })
     expect(screen.queryByText("System Instructions")).not.toBeInTheDocument()
+  })
+
+  it("the shared config save leaves untouched instructions alone", async () => {
+    vi.mocked(acpListAgents).mockResolvedValue([claudeAgent()])
+    vi.mocked(listModelProviders).mockResolvedValue([])
+    vi.mocked(acpUpdateAgentEnv).mockResolvedValue(0)
+    vi.mocked(acpUpdateAgentConfig).mockResolvedValue(0)
+
+    renderSettings()
+    await screen.findByRole("heading", { name: "Claude Code" })
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: enMessages.AcpAgentSettings.actions.saveConfigManagement,
+      })
+    )
+
+    await waitFor(() => expect(acpUpdateAgentConfig).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(acpUpdateAgentConfig).mock.calls[0][1]).toMatchObject({
+      system_instructions_content: null,
+    })
+  })
+
+  it("the shared config save sends edited instructions once", async () => {
+    vi.mocked(acpListAgents).mockResolvedValue([claudeAgent()])
+    vi.mocked(listModelProviders).mockResolvedValue([])
+    vi.mocked(acpUpdateAgentEnv).mockResolvedValue(0)
+    vi.mocked(acpUpdateAgentConfig).mockResolvedValue(0)
+
+    renderSettings()
+    await screen.findByRole("heading", { name: "Claude Code" })
+
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        enMessages.AcpAgentSettings.systemInstructions.placeholder
+      ),
+      { target: { value: "# Edited" } }
+    )
+    const save = screen.getByRole("button", {
+      name: enMessages.AcpAgentSettings.actions.saveConfigManagement,
+    })
+    fireEvent.click(save)
+
+    await waitFor(() => expect(acpUpdateAgentConfig).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(acpUpdateAgentConfig).mock.calls[0][1]).toMatchObject({
+      system_instructions_content: "# Edited",
+    })
+
+    // Saved: the next shared save no longer carries it.
+    await waitFor(() => expect(save).toBeEnabled())
+    fireEvent.click(save)
+    await waitFor(() => expect(acpUpdateAgentConfig).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(acpUpdateAgentConfig).mock.calls[1][1]).toMatchObject({
+      system_instructions_content: null,
+    })
+  })
+})
+
+describe("rebaseSystemInstructionsDraft", () => {
+  type Draft = Parameters<typeof rebaseSystemInstructionsDraft>[0]
+  const draft = (text: string, baseline: string) =>
+    ({
+      systemInstructionsText: text,
+      systemInstructionsBaseline: baseline,
+    }) as Draft
+
+  it("follows the file while the editor is untouched", () => {
+    const next = rebaseSystemInstructionsDraft(
+      draft("old", "old"),
+      makeAgent({ system_instructions_content: "new" })
+    )
+    expect(next.systemInstructionsText).toBe("new")
+    expect(next.systemInstructionsBaseline).toBe("new")
+  })
+
+  it("keeps an unsaved edit, and returns the same draft when nothing moved", () => {
+    const edited = draft("typed", "old")
+    expect(
+      rebaseSystemInstructionsDraft(
+        edited,
+        makeAgent({ system_instructions_content: "new" })
+      )
+    ).toBe(edited)
+    const clean = draft("same", "same")
+    expect(
+      rebaseSystemInstructionsDraft(
+        clean,
+        makeAgent({ system_instructions_content: "same" })
+      )
+    ).toBe(clean)
   })
 })
