@@ -698,7 +698,9 @@ const ConversationTabView = memo(function ConversationTabView({
     ),
   })
   const { status: connStatus, sessionId: connSessionId } = conn
-  const messageQueue = useMessageQueue()
+  const messageQueue = useMessageQueue(
+    dbConversationId != null ? String(dbConversationId) : null
+  )
   const {
     queue: msgQueue,
     enqueue: mqEnqueue,
