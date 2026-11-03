@@ -12,7 +12,7 @@ import {
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { getAgentLabel } from "@/lib/custom-agents"
-import type { ConversationStatus, DbConversationSummary } from "@/lib/types"
+import { STATUS_ORDER, type DbConversationSummary } from "@/lib/types"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 import { compareByUpdatedAtDesc } from "@/components/conversations/sidebar-conversation-grouping"
@@ -123,9 +123,10 @@ export function ConversationHistoryMenu() {
           const title =
             formatConversationTitle(conversation.title) ||
             t("untitledConversation")
-          const status = tStatus.has(conversation.status)
-            ? tStatus(conversation.status)
-            : undefined
+          const knownStatus = STATUS_ORDER.find(
+            (s) => s === conversation.status
+          )
+          const status = knownStatus ? tStatus(knownStatus) : undefined
           return (
             <DropdownMenuItem
               key={conversation.id}
@@ -142,7 +143,7 @@ export function ConversationHistoryMenu() {
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   {getAgentLabel(conversation.agent_type)}
                   <ConversationStatusDot
-                    status={conversation.status as ConversationStatus}
+                    status={knownStatus}
                     size="sm"
                     title={status}
                   />
