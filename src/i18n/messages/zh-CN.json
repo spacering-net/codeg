@@ -771,7 +771,11 @@
       "label": "系统级提示词",
       "hint": "配置该 Agent 的全局指令/系统提示词，保存后写入其全局提示词文件。",
       "placeholder": "输入全局系统提示词（Markdown 格式，如角色设定、工作原则、代码规范等）...",
-      "filePath": "文件路径"
+      "filePath": "文件路径",
+      "unsaved": "有未保存的更改",
+      "discard": "放弃更改",
+      "copyPath": "复制文件路径",
+      "pathCopied": "已复制文件路径"
     },
     "hostTools": {
       "label": "由 Agent 自行处理文件与命令",

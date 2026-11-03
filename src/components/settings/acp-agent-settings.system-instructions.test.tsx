@@ -13,6 +13,7 @@ import type { AcpAgentInfo } from "@/lib/types"
 import {
   AcpAgentSettings,
   rebaseSystemInstructionsDraft,
+  splitInstructionsPath,
 } from "./acp-agent-settings"
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -107,8 +108,11 @@ describe("System Instructions in ACP agent settings", () => {
 
     // Check system instructions section
     expect(screen.getByText("System Instructions")).toBeInTheDocument()
+    // The file name stays in view; the full path is the tooltip.
+    expect(screen.getByText("GEMINI.md")).toBeInTheDocument()
+    expect(screen.getByText("C:/Users/test/.gemini/")).toBeInTheDocument()
     expect(
-      screen.getByText("C:/Users/test/.gemini/GEMINI.md")
+      screen.getByTitle("C:/Users/test/.gemini/GEMINI.md")
     ).toBeInTheDocument()
 
     const instructionsInput = screen.getByPlaceholderText(
@@ -125,6 +129,7 @@ describe("System Instructions in ACP agent settings", () => {
     const saveButton = screen.getByRole("button", {
       name: enMessages.AcpAgentSettings.actions.saveSystemInstructions,
     })
+    expect(saveButton).toBeEnabled()
     fireEvent.click(saveButton)
 
     await waitFor(() => expect(acpUpdateAgentConfig).toHaveBeenCalledTimes(1))
@@ -133,6 +138,37 @@ describe("System Instructions in ACP agent settings", () => {
       // Bound to the file the editor showed, not a fresh resolution.
       system_instructions_file_path: "C:/Users/test/.gemini/GEMINI.md",
     })
+  })
+
+  it("saves only an edit, and discarding restores the loaded text", async () => {
+    vi.mocked(acpListAgents).mockResolvedValue([makeAgent()])
+    vi.mocked(listModelProviders).mockResolvedValue([])
+
+    renderSettings()
+    await screen.findByRole("heading", { name: "Gemini" })
+
+    const m = enMessages.AcpAgentSettings
+    const input = screen.getByLabelText(m.systemInstructions.label)
+    const save = screen.getByRole("button", {
+      name: m.actions.saveSystemInstructions,
+    })
+    expect(save).toBeDisabled()
+    expect(screen.queryByText(m.systemInstructions.unsaved)).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: m.systemInstructions.discard })
+    ).toBeNull()
+
+    fireEvent.change(input, { target: { value: "# Draft" } })
+    expect(save).toBeEnabled()
+    expect(screen.getByText(m.systemInstructions.unsaved)).toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole("button", { name: m.systemInstructions.discard })
+    )
+    expect(input).toHaveValue("# You are a helpful assistant")
+    expect(save).toBeDisabled()
+    expect(screen.queryByText(m.systemInstructions.unsaved)).toBeNull()
+    expect(acpUpdateAgentConfig).not.toHaveBeenCalled()
   })
 
   it("does not render system instructions section when path is null", async () => {
@@ -242,5 +278,25 @@ describe("rebaseSystemInstructionsDraft", () => {
         makeAgent({ system_instructions_content: "same" })
       )
     ).toBe(clean)
+  })
+})
+
+describe("splitInstructionsPath", () => {
+  it("keeps the separator on the directory, for both separators", () => {
+    expect(splitInstructionsPath("/home/u/.claude/CLAUDE.md")).toEqual({
+      dir: "/home/u/.claude/",
+      name: "CLAUDE.md",
+    })
+    expect(splitInstructionsPath("C:\\Users\\u\\.codex\\AGENTS.md")).toEqual({
+      dir: "C:\\Users\\u\\.codex\\",
+      name: "AGENTS.md",
+    })
+  })
+
+  it("gives a bare name an empty directory", () => {
+    expect(splitInstructionsPath("AGENTS.md")).toEqual({
+      dir: "",
+      name: "AGENTS.md",
+    })
   })
 })

@@ -22,6 +22,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileText,
   GripVertical,
   Loader2,
   Minus,
@@ -34,6 +35,7 @@ import {
   Save,
   Stethoscope,
   Trash2,
+  Undo2,
   Wrench,
 } from "lucide-react"
 import { parse as parseTomlDocument } from "smol-toml"
@@ -518,6 +520,19 @@ function parseEnvText(envText: string): Record<string, string> {
     map[key] = value
   }
   return map
+}
+
+/**
+ * Split an instructions file path into its directory (with the trailing
+ * separator) and file name, so the panel can elide the directory and keep the
+ * name in view. Handles both `/` and `\` separators.
+ */
+export function splitInstructionsPath(path: string): {
+  dir: string
+  name: string
+} {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+  return { dir: path.slice(0, cut + 1), name: path.slice(cut + 1) }
 }
 
 /**
@@ -8976,63 +8991,135 @@ export function AcpAgentSettings() {
                   </div>
                 </div>
 
-                {selectedAgent.system_instructions_file_path && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <label className="text-xs font-medium">
-                        {t("systemInstructions.label")}
-                      </label>
-                      <span
-                        className="text-2xs text-muted-foreground truncate max-w-[65%]"
-                        title={selectedAgent.system_instructions_file_path}
-                      >
-                        {selectedAgent.system_instructions_file_path}
-                      </span>
-                    </div>
-                    <p className="text-2xs text-muted-foreground">
-                      {t("systemInstructions.hint")}
-                    </p>
-                    <div className="relative group">
-                      <Textarea
-                        value={selectedDraft.systemInstructionsText}
-                        onChange={(event) => {
-                          updateSelectedDraft((current) => ({
-                            ...current,
-                            systemInstructionsText: event.target.value,
-                          }))
-                        }}
-                        placeholder={t("systemInstructions.placeholder")}
-                        className="min-h-32 font-mono text-xs"
-                        disabled={selectedIsSavingInstructions}
-                      />
-                    </div>
-                    <div className="flex justify-end">
-                      <Button
-                        size="sm"
-                        disabled={selectedIsSavingInstructions}
-                        onClick={() =>
-                          persistSystemInstructions(
-                            selectedAgent.agent_type,
-                            selectedDraft.systemInstructionsText,
-                            selectedAgent.system_instructions_file_path
-                          )
-                        }
-                      >
-                        {selectedIsSavingInstructions ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            {t("actions.saving")}
-                          </>
-                        ) : (
-                          <>
-                            <Save className="h-3.5 w-3.5" />
-                            {t("actions.saveSystemInstructions")}
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                {selectedAgent.system_instructions_file_path &&
+                  (() => {
+                    const instructionsPath =
+                      selectedAgent.system_instructions_file_path
+                    const { dir: instructionsDir, name: instructionsFile } =
+                      splitInstructionsPath(instructionsPath)
+                    const instructionsDirty =
+                      selectedDraft.systemInstructionsText !==
+                      selectedDraft.systemInstructionsBaseline
+                    return (
+                      <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                        <div className="space-y-1">
+                          <label
+                            htmlFor="agent-system-instructions"
+                            className="text-xs font-medium"
+                          >
+                            {t("systemInstructions.label")}
+                          </label>
+                          <p className="text-2xs text-muted-foreground">
+                            {t("systemInstructions.hint")}
+                          </p>
+                        </div>
+                        {/* The file name is what tells the user which file
+                            this is (CLAUDE.md, GEMINI.md, AGENTS.md …), so a
+                            long path gives up its directory, never the name. */}
+                        <div className="flex items-center gap-1.5 rounded-md border bg-background/60 py-0.5 ps-2 pe-0.5">
+                          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span
+                            dir="ltr"
+                            className="flex min-w-0 flex-1 font-mono text-2xs"
+                            title={instructionsPath}
+                          >
+                            {instructionsDir && (
+                              <span className="truncate text-muted-foreground">
+                                {instructionsDir}
+                              </span>
+                            )}
+                            <span className="shrink-0 text-foreground">
+                              {instructionsFile}
+                            </span>
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 shrink-0 p-0"
+                            title={t("systemInstructions.copyPath")}
+                            aria-label={t("systemInstructions.copyPath")}
+                            onClick={async () => {
+                              const ok =
+                                await copyTextToClipboard(instructionsPath)
+                              if (ok) {
+                                toast.success(
+                                  t("systemInstructions.pathCopied")
+                                )
+                              }
+                            }}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <Textarea
+                          id="agent-system-instructions"
+                          value={selectedDraft.systemInstructionsText}
+                          onChange={(event) => {
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              systemInstructionsText: event.target.value,
+                            }))
+                          }}
+                          placeholder={t("systemInstructions.placeholder")}
+                          className="min-h-40 max-h-[28rem] overflow-y-auto rounded-md bg-background/60 font-mono text-xs leading-relaxed md:text-xs"
+                          spellCheck={false}
+                          disabled={selectedIsSavingInstructions}
+                        />
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {instructionsDirty && (
+                            <span className="me-auto flex items-center gap-1.5 text-2xs text-muted-foreground">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                              {t("systemInstructions.unsaved")}
+                            </span>
+                          )}
+                          {instructionsDirty && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={selectedIsSavingInstructions}
+                              onClick={() => {
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  systemInstructionsText:
+                                    current.systemInstructionsBaseline,
+                                }))
+                              }}
+                            >
+                              <Undo2 className="h-3.5 w-3.5" />
+                              {t("systemInstructions.discard")}
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            disabled={
+                              selectedIsSavingInstructions || !instructionsDirty
+                            }
+                            onClick={() =>
+                              persistSystemInstructions(
+                                selectedAgent.agent_type,
+                                selectedDraft.systemInstructionsText,
+                                instructionsPath
+                              )
+                            }
+                          >
+                            {selectedIsSavingInstructions ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                {t("actions.saving")}
+                              </>
+                            ) : (
+                              <>
+                                <Save className="h-3.5 w-3.5" />
+                                {t("actions.saveSystemInstructions")}
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })()}
 
                 {selectedAgent.agent_type === "codex" ? (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">

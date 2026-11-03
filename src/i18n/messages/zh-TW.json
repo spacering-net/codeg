@@ -771,7 +771,11 @@
       "label": "系統級提示詞",
       "hint": "設定此 Agent 的全域系統級提示詞，並儲存至其全域指令檔案。",
       "placeholder": "輸入全域系統提示詞（Markdown 格式，例如角色定義、行為準則、程式碼規範等）...",
-      "filePath": "檔案路徑"
+      "filePath": "檔案路徑",
+      "unsaved": "有未儲存的變更",
+      "discard": "捨棄變更",
+      "copyPath": "複製檔案路徑",
+      "pathCopied": "已複製檔案路徑"
     },
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",

@@ -771,7 +771,11 @@
       "label": "Instructions système",
       "hint": "Configurez les instructions système globales de cet agent et enregistrez-les dans son fichier global d’instructions.",
       "placeholder": "Saisissez les instructions système globales au format Markdown, par exemple des définitions de rôles, des directives et des normes de programmation...",
-      "filePath": "Chemin du fichier"
+      "filePath": "Chemin du fichier",
+      "unsaved": "Modifications non enregistrées",
+      "discard": "Annuler les modifications",
+      "copyPath": "Copier le chemin du fichier",
+      "pathCopied": "Chemin du fichier copié"
     },
     "hostTools": {
       "label": "Laisser l'agent gérer les fichiers et les commandes",

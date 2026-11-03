@@ -771,7 +771,11 @@
       "label": "Instrucciones del sistema",
       "hint": "Configura las instrucciones globales del sistema para este agente y guárdalas en su archivo global de instrucciones.",
       "placeholder": "Introduce instrucciones globales del sistema en formato Markdown, como definiciones de roles, directrices y normas de programación...",
-      "filePath": "Ruta del archivo"
+      "filePath": "Ruta del archivo",
+      "unsaved": "Cambios sin guardar",
+      "discard": "Descartar cambios",
+      "copyPath": "Copiar ruta del archivo",
+      "pathCopied": "Ruta del archivo copiada"
     },
     "hostTools": {
       "label": "Dejar que el agente gestione archivos y comandos",
