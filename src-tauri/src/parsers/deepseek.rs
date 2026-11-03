@@ -144,11 +144,12 @@ pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathB
 /// - `assistant/message` — the ASSEMBLED assistant message for one step
 ///   (`content[]` of `text` / `reasoning` / `tool-call {id, name, arguments}`
 ///   blocks) plus that step's `usage` (`inputTokens` / `outputTokens` /
-///   `cacheReadTokens` / `reasoningTokens`; session-format v4 swaps
-///   `reasoningTokens` for `cacheWriteTokens`). Through 0.8.0 the raw stream
-///   duplicated it as `assistant/chunk` / `*-chunks` ROWS; 0.9.0 stopped
-///   persisting those and moved the compacted stream into this event's own
-///   `stream` field, which is read as part of the event rather than as a row.
+///   `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens`; the last
+///   three are optional in every format generation). Through 0.8.0 the raw
+///   stream duplicated it as `assistant/chunk` / `*-chunks` ROWS; 0.9.0
+///   stopped persisting those and moved the compacted stream into this event's
+///   own `stream` field, which is read as part of the event rather than as a
+///   row.
 ///   Either way only `message.content` is read — see the skip below.
 /// - `tool/result` — the paired result. Released v3 (and older) wraps it in a
 ///   `tool-result` content block (`toolCallId` / `content[]` / `isError`);
@@ -166,9 +167,8 @@ pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathB
 ///   one context compaction, rendered as the shared context-compaction marker.
 ///
 /// Session-format v4 (DSH 0.2.x) keeps the event envelope and every other
-/// record shape this parser consumes; the two differences it does introduce
-/// are the first-class tool result and the renamed prompt-cache write counter,
-/// both handled above.
+/// record shape this parser consumes, including the step `usage` object; the
+/// difference it does introduce is the first-class tool result handled above.
 ///
 /// Images (0.6.0): an `image` content block carries only an
 /// `ImageAttachmentRef`; the bytes live in the content-addressed store at
@@ -759,10 +759,13 @@ fn add_usage(a: TurnUsage, b: TurnUsage) -> TurnUsage {
 /// are absent or zero. `reasoningTokens` is a subset of `outputTokens` (the
 /// adapter reports both), so it is deliberately not added anywhere.
 ///
-/// Session-format v4 (DSH 0.2.x) replaces `reasoningTokens` with
-/// `cacheWriteTokens`, the prompt-cache write side; it maps onto
-/// `cache_creation_input_tokens`. Released v3 logs carry no such counter and a
-/// missing key reads as zero, so the same mapping serves both generations.
+/// `cacheWriteTokens` is the prompt-cache write side and maps onto
+/// `cache_creation_input_tokens`. Upstream counts are disjoint (`inputTokens`
+/// is uncached input only), matching `TurnUsage`. The key is optional in every
+/// format generation, so it is read regardless of the header version. In
+/// practice the DeepSeek adapter only reports it from DSH 0.2.x (Messages API
+/// `cache_creation_input_tokens`); 0.1.x reported `reasoningTokens` instead,
+/// and a missing key reads as zero.
 fn usage_from_step(usage: Option<&Value>) -> Option<TurnUsage> {
     let usage = usage?;
     let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
@@ -1932,14 +1935,12 @@ mod tests {
         ));
     }
 
-    /// Session-format v4 (DSH 0.2.x) reports prompt-cache writes as
-    /// `cacheWriteTokens` instead of the v3 `reasoningTokens`; the counter must
-    /// reach the turn rather than being dropped as an unknown key.
+    /// DSH 0.2.x reports prompt-cache writes as `cacheWriteTokens` (the key is
+    /// optional in v3 and v4 alike); the counter must reach the turn rather
+    /// than being dropped as an unknown key, whatever the header version.
     #[test]
-    fn v4_cache_write_tokens_reach_the_turn() {
-        let log = [
-            v4_header_line("/w"),
-            event("turn/start", 1, 1_000, json!({"turn": 1})),
+    fn cache_write_tokens_reach_the_turn_in_any_generation() {
+        let step = |usage: Value| {
             event(
                 "assistant/message",
                 2,
@@ -1947,17 +1948,37 @@ mod tests {
                 json!({
                     "turn": 1, "step": 1,
                     "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "source": {"kind": "model", "model": "deepseek-v4"}, "id": "a-1"},
-                    "usage": {"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 2, "cacheWriteTokens": 7}
+                    "usage": usage
                 }),
-            ),
-            event("turn/end", 3, 1_200, json!({"turn": 1})),
-        ]
-        .join("\n");
+            )
+        };
+        for header in [header_line("/w"), v4_header_line("/w")] {
+            let log = [
+                header.clone(),
+                event("turn/start", 1, 1_000, json!({"turn": 1})),
+                step(json!({"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 2, "cacheWriteTokens": 7})),
+                event("turn/end", 3, 1_200, json!({"turn": 1})),
+            ]
+            .join("\n");
+            let sp = parse_session_events(&log, None);
+            let usage = sp.turns[0].usage.as_ref().expect("usage");
+            assert_eq!(usage.input_tokens, 10);
+            assert_eq!(usage.cache_creation_input_tokens, 7);
+            assert_eq!(usage.cache_read_input_tokens, 2);
 
-        let sp = parse_session_events(&log, None);
-        let usage = sp.turns[0].usage.as_ref().expect("usage");
-        assert_eq!(usage.cache_creation_input_tokens, 7);
-        assert_eq!(usage.cache_read_input_tokens, 2);
+            // A step whose only non-zero counter is the cache write still
+            // reports usage instead of reading as "no usage".
+            let log = [
+                header,
+                event("turn/start", 1, 1_000, json!({"turn": 1})),
+                step(json!({"inputTokens": 0, "outputTokens": 0, "cacheWriteTokens": 7})),
+                event("turn/end", 3, 1_200, json!({"turn": 1})),
+            ]
+            .join("\n");
+            let sp = parse_session_events(&log, None);
+            let usage = sp.turns[0].usage.as_ref().expect("cache-write-only usage");
+            assert_eq!(usage.cache_creation_input_tokens, 7);
+        }
     }
 
     #[test]
