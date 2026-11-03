@@ -4574,6 +4574,8 @@
       "questionRequestDesc": "Quando um agente faz uma pergunta",
       "userPromptSent": "Mensagem do usuário",
       "userPromptSentDesc": "Quando você envia uma mensagem (o texto da mensagem é incluído na notificação)",
+      "topLevelOnly": "Apenas sessões principais",
+      "topLevelOnlyDesc": "Subsessões iniciadas por delegação não enviam Turno concluído nem Erro do agente; o agente que delegou informa o resultado quando terminar. Suas solicitações de permissão e perguntas continuam sendo notificadas, porque o agente está esperando por você. Vale para canais e webhooks.",
       "saved": "Filtro de eventos atualizado.",
       "saveFailed": "Falha ao salvar o filtro de eventos.",
       "loadFailed": "Falha ao carregar as configurações.",

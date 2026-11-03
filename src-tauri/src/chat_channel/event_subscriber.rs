@@ -12,12 +12,16 @@ use super::manager::ChatChannelManager;
 use super::message_formatter;
 use super::session_bridge::SessionBridge;
 use super::types::RichMessage;
+use super::webhook::{ParentSession, SessionContext};
 use crate::acp::internal_bus::InternalEventBus;
-use crate::acp::types::{AcpEvent, EventEnvelope};
+use crate::acp::manager::ConnectionManager;
+use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
+use crate::db::entities::conversation;
 use crate::db::service::{
     app_metadata_service, chat_channel_message_log_service, chat_channel_service,
 };
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+use crate::models::agent::AgentType;
 
 /// Minimum interval between pushes for the same event type per channel (debounce).
 const DEBOUNCE_SECS: u64 = 5;
@@ -29,12 +33,22 @@ const DEBOUNCE_SECS: u64 = 5;
 /// forwarding prompt text after upgrade. The user must enable them
 /// deliberately, which persists an explicit filter list containing the id.
 const DEFAULT_OFF_EVENTS: &[&str] = &["user_prompt_sent"];
+/// Events the "top-level sessions only" setting drops when they come from a
+/// delegation sub-session: the parent agent is still working and reports the
+/// outcome itself. Blocking gates (`permission_request`, `question_request`)
+/// are NOT here — a sub-session parked on one waits for the user, and nothing
+/// else would tell them. `user_prompt_sent` is only ever emitted for prompts a
+/// person typed into a conversation, never for a delegated kickoff.
+const SUB_SESSION_QUIET_EVENTS: &[&str] = &["turn_complete", "error"];
 /// How often to refresh cached config from DB.
 const CONFIG_CACHE_TTL_SECS: u64 = 30;
 
 const MESSAGE_LANGUAGE_KEY: &str = "chat_message_language";
 const EVENT_FILTER_KEY: &str = "chat_event_filter";
 const EVENT_WEBHOOKS_KEY: &str = "chat_event_webhooks";
+/// `"true"` when only top-level sessions may send `SUB_SESSION_QUIET_EVENTS`.
+/// Absent (or anything else) means sub-sessions notify like any session.
+pub const EVENT_TOP_LEVEL_ONLY_KEY: &str = "chat_event_top_level_only";
 
 /// Bumped whenever the Events-tab config (event filter, webhooks, message
 /// language) is written. The subscriber's config cache compares this against
@@ -76,6 +90,9 @@ struct EventConfigCache {
     /// feed as IM channels, but are not debounced and ignore the per-channel
     /// filter (an automation consumer wants the complete stream).
     webhooks: Vec<String>,
+    /// Drop `SUB_SESSION_QUIET_EVENTS` from delegation sub-sessions, for IM
+    /// channels and webhooks alike. A failed read keeps the prior value.
+    top_level_only: bool,
     /// `None` until the first clean refresh, which is what forces one.
     ///
     /// This used to be a plain `Instant` seeded with
@@ -101,6 +118,7 @@ impl EventConfigCache {
             filter_known: false,
             enabled_channels: Vec::new(),
             webhooks: Vec::new(),
+            top_level_only: false,
             // Force refresh on first use
             last_refresh: None,
             last_epoch: 0,
@@ -186,6 +204,11 @@ impl EventConfigCache {
             .map(|json| super::webhook::enabled_webhook_urls(&json))
             .unwrap_or_default();
 
+        // A DB error keeps the prior value and retries on the next refresh.
+        if let Ok(value) = app_metadata_service::get_value(db, EVENT_TOP_LEVEL_ONLY_KEY).await {
+            self.top_level_only = value.as_deref() == Some("true");
+        }
+
         if let Ok(channels) = chat_channel_service::list_enabled(db).await {
             self.enabled_channels = channels
                 .into_iter()
@@ -209,11 +232,166 @@ impl EventConfigCache {
     }
 }
 
+/// Which conversation each live connection is bound to, so an event (which
+/// names only its connection) can be traced to its conversation row.
+///
+/// Learned from `ConversationLinked` on this subscriber's own bus receiver:
+/// that event precedes every turn on the connection in bus order, so it has
+/// been seen by the time the turn's `TurnComplete` is processed — even when
+/// the connection is already gone from the [`ConnectionManager`] (a delegation
+/// child torn down right after its turn). Not every connection announces one:
+/// a chat-channel `/resume` (and its follow-ups) prompts through the unlinked
+/// `send_prompt`, and only the chat [`SessionBridge`] knows its conversation.
+/// The session relay may remove that session (on a terminal error) well
+/// before this subscriber, which awaits IM sends inline, reaches the same
+/// events, so the bridge keeps a removed session's conversation until this
+/// subscriber handles the connection's `Disconnected` and forgets it. The
+/// manager's live state is the last fallback (it also covers a link this
+/// receiver missed in a `Lagged` gap).
+#[derive(Default)]
+struct ConnectionDirectory {
+    linked: HashMap<String, i32>,
+    conn_mgr: Option<ConnectionManager>,
+}
+
+impl ConnectionDirectory {
+    fn new(conn_mgr: ConnectionManager) -> Self {
+        Self {
+            linked: HashMap::new(),
+            conn_mgr: Some(conn_mgr),
+        }
+    }
+
+    /// Track links and forget disconnected connections. Runs for EVERY
+    /// envelope, before any filtering.
+    async fn observe(&mut self, envelope: &EventEnvelope, bridge: &Arc<Mutex<SessionBridge>>) {
+        match &envelope.payload {
+            AcpEvent::ConversationLinked {
+                conversation_id, ..
+            } => {
+                self.linked
+                    .insert(envelope.connection_id.clone(), *conversation_id);
+            }
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected,
+            } => {
+                self.linked.remove(&envelope.connection_id);
+                // Nothing after this needs the connection's conversation.
+                bridge.lock().await.forget_ended(&envelope.connection_id);
+            }
+            _ if !self.linked.contains_key(&envelope.connection_id) => {
+                let bridged = bridge
+                    .lock()
+                    .await
+                    .conversation_id_of(&envelope.connection_id);
+                if let Some(conversation_id) = bridged {
+                    self.linked
+                        .insert(envelope.connection_id.clone(), conversation_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn linked_conversation_id(&self, connection_id: &str) -> Option<i32> {
+        self.linked.get(connection_id).copied()
+    }
+
+    async fn live_conversation_id(&self, connection_id: &str) -> Option<i32> {
+        let state = self.conn_mgr.as_ref()?.get_state(connection_id).await?;
+        let id = state.read().await.conversation_id;
+        id
+    }
+
+    /// The connection's agent, for a connection with no conversation row to
+    /// read it from. `None` once the connection is gone.
+    async fn agent_type(&self, connection_id: &str) -> Option<AgentType> {
+        let state = self.conn_mgr.as_ref()?.get_state(connection_id).await?;
+        let agent_type = state.read().await.agent_type;
+        Some(agent_type)
+    }
+}
+
+/// Resolve what the webhook body (and the top-level-only gate) needs to know
+/// about the conversation behind `connection_id`. Best effort: whatever cannot
+/// be resolved stays `None`, and an unresolvable connection reads as a
+/// top-level session — a missed sub-session check costs one extra
+/// notification, a wrong one would cost a notification the user wanted.
+async fn resolve_session_context(
+    db: &DatabaseConnection,
+    directory: &ConnectionDirectory,
+    bridge: &Arc<Mutex<SessionBridge>>,
+    connection_id: &str,
+) -> SessionContext {
+    use sea_orm::EntityTrait;
+
+    let mut conversation_id = directory.linked_conversation_id(connection_id);
+    if conversation_id.is_none() {
+        conversation_id = bridge.lock().await.conversation_id_of(connection_id);
+    }
+    if conversation_id.is_none() {
+        conversation_id = directory.live_conversation_id(connection_id).await;
+    }
+    let row = match conversation_id {
+        Some(id) => conversation::Entity::find_by_id(id)
+            .one(db)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let Some(row) = row else {
+        let agent = directory.agent_type(connection_id).await;
+        return SessionContext {
+            conversation_id,
+            agent_type: agent.as_ref().and_then(agent_type_id),
+            agent_name: agent.as_ref().map(AgentType::to_string),
+            ..SessionContext::default()
+        };
+    };
+
+    let agent_name =
+        serde_json::from_value::<AgentType>(serde_json::Value::String(row.agent_type.clone()))
+            .ok()
+            .map(|agent| agent.to_string());
+    let parent = match row.parent_id {
+        Some(parent_id) => Some(ParentSession {
+            conversation_id: parent_id,
+            title: conversation::Entity::find_by_id(parent_id)
+                .one(db)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|p| p.title),
+        }),
+        None => None,
+    };
+    SessionContext {
+        conversation_id: Some(row.id),
+        conversation_title: row.title,
+        agent_type: Some(row.agent_type),
+        agent_name,
+        assistant_name: row
+            .assistant_snapshot
+            .as_deref()
+            .and_then(crate::models::AssistantRunSnapshot::name_from_json),
+        parent,
+    }
+}
+
+/// The stable id an agent is stored under (`conversation.agent_type`).
+fn agent_type_id(agent: &AgentType) -> Option<String> {
+    serde_json::to_value(agent)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+}
+
 pub fn spawn_event_subscriber(
     bus: Arc<InternalEventBus>,
     manager: ChatChannelManager,
     db_conn: DatabaseConnection,
     bridge: Arc<Mutex<SessionBridge>>,
+    conn_mgr: ConnectionManager,
 ) -> JoinHandle<()> {
     // Subscribe synchronously before the spawn so the broadcast buffer
     // catches any events emitted in the gap between `start_background`
@@ -224,6 +402,7 @@ pub fn spawn_event_subscriber(
     tokio::spawn(async move {
         let mut last_push: HashMap<(i32, String), Instant> = HashMap::new();
         let mut config = EventConfigCache::new();
+        let mut directory = ConnectionDirectory::new(conn_mgr);
         // One reqwest client, reused (and cheaply cloned) for every webhook POST.
         let webhook_client = super::webhook::make_webhook_client();
         let mut lag_throttle = LagLogThrottle::new(LAG_LOG_WINDOW);
@@ -250,6 +429,7 @@ pub fn spawn_event_subscriber(
                 }
             };
 
+            directory.observe(envelope_arc.as_ref(), &bridge).await;
             config.refresh_if_needed(&db_conn).await;
 
             // Prune stale debounce entries
@@ -263,6 +443,7 @@ pub fn spawn_event_subscriber(
                 &config,
                 &mut last_push,
                 &webhook_client,
+                &directory,
             )
             .await;
         }
@@ -284,6 +465,7 @@ async fn process_envelope(
     config: &EventConfigCache,
     last_push: &mut HashMap<(i32, String), Instant>,
     webhook_client: &reqwest::Client,
+    directory: &ConnectionDirectory,
 ) {
     let Some((event_type, msg)) = parse_acp_event(&envelope.payload, config.lang) else {
         return;
@@ -328,13 +510,35 @@ async fn process_envelope(
         return;
     }
 
+    // The conversation behind the connection: needed for the webhook body and
+    // for the top-level-only gate. Resolved only when one of them will use it,
+    // so the common no-webhook IM-only path does no extra DB reads.
+    let gate_applies =
+        config.top_level_only && SUB_SESSION_QUIET_EVENTS.contains(&event_type.as_str());
+    let session = if gate_applies || !config.webhooks.is_empty() {
+        resolve_session_context(db_conn, directory, bridge, &envelope.connection_id).await
+    } else {
+        SessionContext::default()
+    };
+
+    // "Top-level sessions only": a delegation sub-session's turn end / error
+    // is the parent agent's business — it is still working and reports the
+    // outcome in its own turn. Applies to IM channels and webhooks alike.
+    if gate_applies && session.parent.is_some() {
+        return;
+    }
+
     // Webhook fan-out: channel-agnostic, shares the global gates above but is
     // independent of the per-channel filter and the debounce below. Built once
     // and delivered fire-and-forget so an unreachable endpoint can't stall the
     // subscriber loop. Runs even with zero enabled IM channels.
     if !config.webhooks.is_empty() {
-        let payload =
-            super::webhook::build_webhook_payload(&event_type, &envelope.connection_id, &msg);
+        let payload = super::webhook::build_webhook_payload(
+            &event_type,
+            &envelope.connection_id,
+            &msg,
+            &session,
+        );
         super::webhook::spawn_webhook_delivery(
             webhook_client.clone(),
             config.webhooks.clone(),
@@ -538,6 +742,7 @@ mod permission_push_tests {
                 event_filter_json: None,
             }],
             webhooks: Vec::new(),
+            top_level_only: false,
             last_refresh: Some(Instant::now()),
             last_epoch: 0,
         }
@@ -691,6 +896,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -722,6 +928,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -750,6 +957,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -775,6 +983,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
         process_envelope(
@@ -785,6 +994,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -828,6 +1038,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
         process_envelope(
@@ -838,6 +1049,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -876,6 +1088,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
         process_envelope(
@@ -886,6 +1099,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -922,6 +1136,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -950,6 +1165,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -982,6 +1198,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
         process_envelope(
@@ -992,6 +1209,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1021,6 +1239,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1047,6 +1266,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1082,6 +1302,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1119,6 +1340,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1163,6 +1385,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1203,6 +1426,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1246,6 +1470,7 @@ mod permission_push_tests {
                 &config,
                 &mut last_push,
                 &test_client(),
+                &ConnectionDirectory::default(),
             )
             .await;
         }
@@ -1379,6 +1604,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1457,6 +1683,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1492,6 +1719,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1601,6 +1829,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1633,6 +1862,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1661,6 +1891,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
         process_envelope(
@@ -1671,6 +1902,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1700,6 +1932,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1732,6 +1965,7 @@ mod permission_push_tests {
             &config,
             &mut last_push,
             &test_client(),
+            &ConnectionDirectory::default(),
         )
         .await;
 
@@ -1744,5 +1978,713 @@ mod permission_push_tests {
             request.contains("\"event\":\"question_request\""),
             "got: {request}"
         );
+    }
+
+    // ---- Sub-sessions: the "top-level sessions only" gate and the webhook
+    // ---- session context (#1084).
+
+    /// A root conversation and a delegation child of it run as an assistant.
+    /// Returns `(db, parent_id, child_id)`.
+    async fn seed_parent_and_child() -> (crate::db::AppDatabase, i32, i32) {
+        use crate::acp::delegation::spawner::{AssistantLink, DelegationLink};
+        use crate::db::service::conversation_service;
+        use crate::models::AssistantRunSnapshot;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/webhook-sub").await;
+        let parent = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Refactor auth".into()),
+            None,
+        )
+        .await
+        .expect("create parent");
+        let child = conversation_service::create_with_delegation(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("Run the tests".into()),
+            None,
+            Some(DelegationLink {
+                parent_conversation_id: parent.id,
+                parent_tool_use_id: "tu-1".into(),
+                delegation_call_id: "call-1".into(),
+                assistant: Some(AssistantLink {
+                    id: 3,
+                    snapshot: AssistantRunSnapshot {
+                        name: "Tester".into(),
+                        agent_options: Default::default(),
+                        instructions: String::new(),
+                    },
+                }),
+            }),
+        )
+        .await
+        .expect("create child");
+        (db, parent.id, child.id)
+    }
+
+    fn linked_envelope(connection_id: &str, conversation_id: i32) -> EventEnvelope {
+        EventEnvelope {
+            seq: 1,
+            connection_id: connection_id.into(),
+            payload: AcpEvent::ConversationLinked {
+                conversation_id,
+                folder_id: 1,
+                parent_conversation_id: None,
+                parent_tool_use_id: None,
+            },
+        }
+    }
+
+    fn error_envelope(connection_id: &str) -> EventEnvelope {
+        EventEnvelope {
+            seq: 1,
+            connection_id: connection_id.into(),
+            payload: AcpEvent::Error {
+                message: "boom".into(),
+                agent_type: "Codex CLI".into(),
+                code: None,
+                details: None,
+                terminal: false,
+            },
+        }
+    }
+
+    /// Directory that has seen `conn-parent` / `conn-child` linked.
+    async fn directory_for(parent_id: i32, child_id: i32) -> ConnectionDirectory {
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let mut directory = ConnectionDirectory::default();
+        directory
+            .observe(&linked_envelope("conn-parent", parent_id), &bridge)
+            .await;
+        directory
+            .observe(&linked_envelope("conn-child", child_id), &bridge)
+            .await;
+        directory
+    }
+
+    async fn run(
+        envelope: &EventEnvelope,
+        chat: &ChatChannelManager,
+        db: &DatabaseConnection,
+        config: &EventConfigCache,
+        directory: &ConnectionDirectory,
+    ) {
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        // Fresh debounce map per call: these tests are about the gate, not the
+        // 5 s turn_complete debounce.
+        let mut last_push = HashMap::new();
+        process_envelope(
+            envelope,
+            &bridge,
+            chat,
+            db,
+            config,
+            &mut last_push,
+            &test_client(),
+            directory,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn directory_tracks_links_and_forgets_disconnected_connections() {
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let mut directory = ConnectionDirectory::default();
+        directory.observe(&linked_envelope("c1", 41), &bridge).await;
+        assert_eq!(directory.linked_conversation_id("c1"), Some(41));
+        assert_eq!(directory.linked_conversation_id("c2"), None);
+
+        directory
+            .observe(
+                &EventEnvelope {
+                    seq: 2,
+                    connection_id: "c1".into(),
+                    payload: AcpEvent::StatusChanged {
+                        status: ConnectionStatus::Disconnected,
+                    },
+                },
+                &bridge,
+            )
+            .await;
+        assert_eq!(directory.linked_conversation_id("c1"), None);
+    }
+
+    /// The bus receiver can miss a `ConversationLinked` (a `Lagged` gap); the
+    /// live connection state still names the conversation.
+    #[tokio::test]
+    async fn directory_falls_back_to_the_live_connection_state() {
+        use crate::web::event_bridge::EventEmitter;
+
+        let conn_mgr = ConnectionManager::new();
+        conn_mgr
+            .insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        conn_mgr
+            .get_state("c1")
+            .await
+            .expect("state")
+            .write()
+            .await
+            .conversation_id = Some(77);
+
+        let directory = ConnectionDirectory::new(conn_mgr);
+        assert_eq!(directory.linked_conversation_id("c1"), None);
+        assert_eq!(directory.live_conversation_id("c1").await, Some(77));
+        assert_eq!(directory.agent_type("c1").await, Some(AgentType::Codex));
+        assert_eq!(directory.live_conversation_id("gone").await, None);
+    }
+
+    /// A chat-channel `/resume` connection never announces `ConversationLinked`
+    /// and its follow-ups prompt unlinked, so its live state names no
+    /// conversation either: the chat bridge is what knows it.
+    #[tokio::test]
+    async fn chat_resumed_sub_session_resolves_through_the_bridge() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        // Channel 8 is the event-push target; the resumed session belongs to
+        // channel 9, so the bridge entry is not this channel's own relay.
+        let (chat, rec) = manager_with_recorder(8).await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        {
+            let mut session = bridged_session("chat-child", 9);
+            session.conversation_id = child_id;
+            bridge.lock().await.register("chat-child".into(), session);
+            let mut session = bridged_session("chat-root", 9);
+            session.conversation_id = parent_id;
+            bridge.lock().await.register("chat-root".into(), session);
+        }
+        let mut config = config_all_on(8);
+        config.top_level_only = true;
+        let directory = ConnectionDirectory::default();
+
+        for envelope in [
+            turn_complete_envelope("chat-child"),
+            error_envelope("chat-child"),
+        ] {
+            process_envelope(
+                &envelope,
+                &bridge,
+                &chat,
+                &db.conn,
+                &config,
+                &mut HashMap::new(),
+                &test_client(),
+                &directory,
+            )
+            .await;
+        }
+        assert!(
+            sent(&rec).await.is_empty(),
+            "resumed sub-session must stay quiet"
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { accept_request(&listener).await });
+        config.webhooks = vec![format!("http://{addr}/hook")];
+        process_envelope(
+            &turn_complete_envelope("chat-root"),
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut HashMap::new(),
+            &test_client(),
+            &directory,
+        )
+        .await;
+        assert_eq!(sent(&rec).await.len(), 1, "the resumed root still notifies");
+        let request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("webhook should be delivered within 5s")
+            .unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["conversation_id"], parent_id);
+        assert_eq!(body["conversation_title"], "Refactor auth");
+        assert_eq!(body["session_kind"], "session");
+    }
+
+    /// Off, a resumed sub-session's webhook names it and its parent.
+    #[tokio::test]
+    async fn chat_resumed_sub_session_webhook_carries_parent() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, _rec) = manager_with_recorder(8).await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let mut session = bridged_session("chat-child", 9);
+        session.conversation_id = child_id;
+        bridge.lock().await.register("chat-child".into(), session);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { accept_request(&listener).await });
+        let mut config = config_all_on(8);
+        config.webhooks = vec![format!("http://{addr}/hook")];
+
+        process_envelope(
+            &turn_complete_envelope("chat-child"),
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut HashMap::new(),
+            &test_client(),
+            &ConnectionDirectory::default(),
+        )
+        .await;
+
+        let request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("webhook should be delivered within 5s")
+            .unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["conversation_id"], child_id);
+        assert_eq!(body["session_kind"], "sub_session");
+        assert_eq!(body["parent_conversation_id"], parent_id);
+        assert_eq!(body["parent_conversation_title"], "Refactor auth");
+    }
+
+    #[tokio::test]
+    async fn top_level_only_drops_sub_session_turn_complete_and_error() {
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, rec) = manager_with_recorder(7).await;
+        let mut config = config_all_on(7);
+        config.top_level_only = true;
+        let directory = directory_for(parent_id, child_id).await;
+
+        run(
+            &turn_complete_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+        run(
+            &error_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+        assert!(
+            sent(&rec).await.is_empty(),
+            "sub-session turn_complete / error must stay quiet"
+        );
+
+        run(
+            &turn_complete_envelope("conn-parent"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+        let msgs = sent(&rec).await;
+        assert_eq!(msgs.len(), 1, "the top-level turn still notifies: {msgs:?}");
+        assert!(msgs[0].contains("Turn Complete"), "got {:?}", msgs[0]);
+    }
+
+    /// Blocking gates from a sub-session still notify under the setting: the
+    /// agent is parked until the user acts, and nothing else would tell them.
+    #[tokio::test]
+    async fn top_level_only_keeps_sub_session_permission_and_question() {
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, rec) = manager_with_recorder(7).await;
+        let mut config = config_all_on(7);
+        config.top_level_only = true;
+        let directory = directory_for(parent_id, child_id).await;
+
+        run(
+            &permission_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+        run(
+            &question_request_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+
+        let msgs = sent(&rec).await;
+        assert_eq!(msgs.len(), 2, "got {msgs:?}");
+        assert!(msgs[0].contains("Permission Request"), "got {:?}", msgs[0]);
+    }
+
+    /// Off (the default), a sub-session's turn end notifies like any other.
+    #[tokio::test]
+    async fn sub_session_turn_complete_notifies_when_setting_is_off() {
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, rec) = manager_with_recorder(7).await;
+        let config = config_all_on(7);
+        assert!(!config.top_level_only);
+        let directory = directory_for(parent_id, child_id).await;
+
+        run(
+            &turn_complete_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+        assert_eq!(sent(&rec).await.len(), 1);
+    }
+
+    /// A connection whose conversation cannot be resolved counts as top-level:
+    /// missing the check costs one extra notification, not a lost one.
+    #[tokio::test]
+    async fn top_level_only_delivers_for_an_unresolved_connection() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (chat, rec) = manager_with_recorder(7).await;
+        let mut config = config_all_on(7);
+        config.top_level_only = true;
+
+        run(
+            &turn_complete_envelope("unknown-conn"),
+            &chat,
+            &db.conn,
+            &config,
+            &ConnectionDirectory::default(),
+        )
+        .await;
+        assert_eq!(sent(&rec).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn top_level_only_also_silences_sub_session_webhooks() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, _rec) = manager_with_recorder(7).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut config = config_all_on(7);
+        config.top_level_only = true;
+        config.webhooks = vec![format!("http://{addr}/hook")];
+        let directory = directory_for(parent_id, child_id).await;
+
+        run(
+            &turn_complete_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+
+        let accepted = tokio::time::timeout(Duration::from_millis(300), listener.accept()).await;
+        assert!(
+            accepted.is_err(),
+            "a sub-session turn must not reach the webhook"
+        );
+    }
+
+    fn json_body(request: &str) -> serde_json::Value {
+        let body = request.split("\r\n\r\n").nth(1).expect("body");
+        serde_json::from_str(body).expect("json body")
+    }
+
+    #[tokio::test]
+    async fn webhook_body_names_the_sub_session_and_its_parent() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, _rec) = manager_with_recorder(7).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { accept_request(&listener).await });
+        let mut config = config_all_on(7);
+        config.webhooks = vec![format!("http://{addr}/hook")];
+        let directory = directory_for(parent_id, child_id).await;
+
+        run(
+            &permission_envelope("conn-child"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+
+        let request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("webhook should be delivered within 5s")
+            .unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["event"], "permission_request");
+        assert_eq!(body["conversation_id"], child_id);
+        assert_eq!(body["conversation_title"], "Run the tests");
+        assert_eq!(body["agent_type"], "codex");
+        assert_eq!(body["agent_name"], "Codex CLI");
+        assert_eq!(body["assistant_name"], "Tester");
+        assert_eq!(body["session_kind"], "sub_session");
+        assert_eq!(body["parent_conversation_id"], parent_id);
+        assert_eq!(body["parent_conversation_title"], "Refactor auth");
+    }
+
+    #[tokio::test]
+    async fn webhook_body_for_a_top_level_session() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, _rec) = manager_with_recorder(7).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { accept_request(&listener).await });
+        let mut config = config_all_on(7);
+        config.top_level_only = true;
+        config.webhooks = vec![format!("http://{addr}/hook")];
+        let directory = directory_for(parent_id, child_id).await;
+
+        run(
+            &turn_complete_envelope("conn-parent"),
+            &chat,
+            &db.conn,
+            &config,
+            &directory,
+        )
+        .await;
+
+        let request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("webhook should be delivered within 5s")
+            .unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["event"], "turn_complete");
+        assert_eq!(body["conversation_id"], parent_id);
+        assert_eq!(body["conversation_title"], "Refactor auth");
+        assert_eq!(body["agent_type"], "claude_code");
+        assert_eq!(body["agent_name"], "Claude Code");
+        assert!(body["assistant_name"].is_null());
+        assert_eq!(body["session_kind"], "session");
+        assert!(body["parent_conversation_id"].is_null());
+        assert!(body["parent_conversation_title"].is_null());
+    }
+
+    fn prompting_envelope(connection_id: &str) -> EventEnvelope {
+        EventEnvelope {
+            seq: 1,
+            connection_id: connection_id.into(),
+            payload: AcpEvent::StatusChanged {
+                status: ConnectionStatus::Prompting,
+            },
+        }
+    }
+
+    fn terminal_error_envelope(connection_id: &str) -> EventEnvelope {
+        let mut envelope = error_envelope(connection_id);
+        if let AcpEvent::Error { terminal, .. } = &mut envelope.payload {
+            *terminal = true;
+        }
+        envelope
+    }
+
+    /// The session relay removes a chat session's bridge entry on a terminal
+    /// error, possibly before this subscriber processes that error. The
+    /// directory remembers the conversation from the connection's earlier
+    /// events, so the gate and the webhook body still know it.
+    #[tokio::test]
+    async fn chat_resumed_sub_session_survives_bridge_cleanup_on_terminal_error() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, rec) = manager_with_recorder(8).await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let mut session = bridged_session("chat-child", 9);
+        session.conversation_id = child_id;
+        bridge.lock().await.register("chat-child".into(), session);
+
+        let mut directory = ConnectionDirectory::default();
+        directory
+            .observe(&prompting_envelope("chat-child"), &bridge)
+            .await;
+        // The relay ran ahead and dropped the session on the terminal error.
+        bridge.lock().await.remove("chat-child");
+        let error = terminal_error_envelope("chat-child");
+        directory.observe(&error, &bridge).await;
+
+        let mut config = config_all_on(8);
+        config.top_level_only = true;
+        process_envelope(
+            &error,
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut HashMap::new(),
+            &test_client(),
+            &directory,
+        )
+        .await;
+        assert!(
+            sent(&rec).await.is_empty(),
+            "a resumed sub-session's terminal error must stay quiet"
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { accept_request(&listener).await });
+        config.top_level_only = false;
+        config.webhooks = vec![format!("http://{addr}/hook")];
+        process_envelope(
+            &error,
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut HashMap::new(),
+            &test_client(),
+            &directory,
+        )
+        .await;
+        let request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("webhook should be delivered within 5s")
+            .unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["event"], "error");
+        assert_eq!(body["conversation_id"], child_id);
+        assert_eq!(body["session_kind"], "sub_session");
+        assert_eq!(body["parent_conversation_id"], parent_id);
+        assert_eq!(body["parent_conversation_title"], "Refactor auth");
+    }
+
+    /// This subscriber can trail the session relay by seconds (it awaits IM
+    /// sends inline): by the time it sees ANY of a resumed child's events, the
+    /// relay may already have removed the session on its terminal error. The
+    /// bridge still answers for the removed session until `Disconnected`.
+    #[tokio::test]
+    async fn chat_resumed_sub_session_resolves_when_the_relay_ran_far_ahead() {
+        use tokio::net::TcpListener;
+
+        let (db, parent_id, child_id) = seed_parent_and_child().await;
+        let (chat, rec) = manager_with_recorder(8).await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let mut session = bridged_session("chat-child", 9);
+        session.conversation_id = child_id;
+        bridge.lock().await.register("chat-child".into(), session);
+        // The relay processed Prompting + the terminal error and removed the
+        // session before this subscriber observed a single event.
+        bridge.lock().await.remove("chat-child");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut config = config_all_on(8);
+        config.top_level_only = true;
+        config.webhooks = vec![format!("http://{addr}/hook")];
+        let mut directory = ConnectionDirectory::default();
+        let error = terminal_error_envelope("chat-child");
+        for envelope in [prompting_envelope("chat-child"), error.clone()] {
+            directory.observe(&envelope, &bridge).await;
+        }
+        process_envelope(
+            &error,
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut HashMap::new(),
+            &test_client(),
+            &directory,
+        )
+        .await;
+        assert!(sent(&rec).await.is_empty(), "IM must stay quiet");
+        let accepted = tokio::time::timeout(Duration::from_millis(300), listener.accept()).await;
+        assert!(accepted.is_err(), "the webhook must stay quiet too");
+
+        // With the setting off the same late error carries its context.
+        let server = tokio::spawn(async move { accept_request(&listener).await });
+        config.top_level_only = false;
+        process_envelope(
+            &error,
+            &bridge,
+            &chat,
+            &db.conn,
+            &config,
+            &mut HashMap::new(),
+            &test_client(),
+            &directory,
+        )
+        .await;
+        let request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("webhook should be delivered within 5s")
+            .unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["conversation_id"], child_id);
+        assert_eq!(body["session_kind"], "sub_session");
+        assert_eq!(body["parent_conversation_id"], parent_id);
+        assert_eq!(body["parent_conversation_title"], "Refactor auth");
+
+        // Disconnected ends it: the bridge forgets the removed session.
+        let disconnected = EventEnvelope {
+            seq: 3,
+            connection_id: "chat-child".into(),
+            payload: AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected,
+            },
+        };
+        directory.observe(&disconnected, &bridge).await;
+        assert_eq!(bridge.lock().await.conversation_id_of("chat-child"), None);
+        assert_eq!(directory.linked_conversation_id("chat-child"), None);
+    }
+
+    /// A disconnect forgets a bridge-learned link too, even while the bridge
+    /// entry is still there, so the directory does not grow per connection.
+    #[tokio::test]
+    async fn bridge_learned_link_is_forgotten_on_disconnect() {
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        let mut session = bridged_session("chat-1", 9);
+        session.conversation_id = 5;
+        bridge.lock().await.register("chat-1".into(), session);
+        let mut directory = ConnectionDirectory::default();
+
+        directory
+            .observe(&prompting_envelope("chat-1"), &bridge)
+            .await;
+        assert_eq!(directory.linked_conversation_id("chat-1"), Some(5));
+
+        let disconnected = EventEnvelope {
+            seq: 2,
+            connection_id: "chat-1".into(),
+            payload: AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected,
+            },
+        };
+        directory.observe(&disconnected, &bridge).await;
+        assert_eq!(directory.linked_conversation_id("chat-1"), None);
+    }
+
+    #[tokio::test]
+    async fn refresh_reads_the_top_level_only_setting() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mut config = EventConfigCache::new();
+        config.refresh_with_epoch(&db.conn, 1).await;
+        assert!(!config.top_level_only, "absent means off");
+
+        app_metadata_service::upsert_value(&db.conn, EVENT_TOP_LEVEL_ONLY_KEY, "true")
+            .await
+            .unwrap();
+        config.refresh_with_epoch(&db.conn, 2).await;
+        assert!(config.top_level_only);
+
+        app_metadata_service::upsert_value(&db.conn, EVENT_TOP_LEVEL_ONLY_KEY, "false")
+            .await
+            .unwrap();
+        config.refresh_with_epoch(&db.conn, 3).await;
+        assert!(!config.top_level_only);
     }
 }

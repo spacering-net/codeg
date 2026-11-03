@@ -4594,6 +4594,8 @@
       "questionRequestDesc": "当智能体向你提问时",
       "userPromptSent": "用户消息",
       "userPromptSentDesc": "当你发送消息时——通知中会包含消息内容",
+      "topLevelOnly": "仅顶层会话",
+      "topLevelOnlyDesc": "委派出来的子会话不再推送「对话完成」和「代理错误」，结果由发起委派的智能体在它完成时一并报告。子会话的权限请求和提问照常通知，因为智能体在等你处理。对渠道和 Webhook 都生效。",
       "saved": "事件过滤已更新。",
       "saveFailed": "保存事件过滤失败。",
       "loadFailed": "加载设置失败。",

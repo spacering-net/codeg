@@ -4574,6 +4574,8 @@
       "questionRequestDesc": "當智慧代理向你提問時",
       "userPromptSent": "使用者訊息",
       "userPromptSentDesc": "當你傳送訊息時——通知中會包含訊息內容",
+      "topLevelOnly": "僅頂層對話",
+      "topLevelOnlyDesc": "委派出來的子對話不再推送「對話完成」和「代理錯誤」，結果由發起委派的智慧代理在它完成時一併回報。子對話的權限請求和提問照常通知，因為智慧代理在等你處理。對頻道和 Webhook 都生效。",
       "saved": "事件篩選已更新。",
       "saveFailed": "儲存事件篩選失敗。",
       "loadFailed": "載入設定失敗。",

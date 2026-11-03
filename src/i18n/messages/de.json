@@ -4574,6 +4574,8 @@
       "questionRequestDesc": "Wenn ein Agent dir eine Frage stellt",
       "userPromptSent": "Benutzernachricht",
       "userPromptSentDesc": "Wenn du eine Nachricht sendest – der Nachrichtentext ist in der Benachrichtigung enthalten",
+      "topLevelOnly": "Nur Hauptsitzungen",
+      "topLevelOnlyDesc": "Per Delegation gestartete Untersitzungen senden weder „Runde abgeschlossen“ noch „Agentenfehler“; der delegierende Agent meldet ihr Ergebnis, wenn er fertig ist. Ihre Berechtigungsanfragen und Fragen werden weiter gemeldet, weil der Agent auf dich wartet. Gilt für Kanäle und Webhooks.",
       "saved": "Ereignisfilter aktualisiert.",
       "saveFailed": "Fehler beim Speichern des Ereignisfilters.",
       "loadFailed": "Einstellungen konnten nicht geladen werden.",

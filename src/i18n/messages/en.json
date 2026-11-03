@@ -4594,6 +4594,8 @@
       "questionRequestDesc": "When an agent asks you a question",
       "userPromptSent": "User Message",
       "userPromptSentDesc": "When you send a message — the message text is included in the notification",
+      "topLevelOnly": "Top-level sessions only",
+      "topLevelOnlyDesc": "Sub-sessions started by delegation don't send Turn Complete or Agent Error; the delegating agent reports their outcome when it finishes. Their permission requests and questions still notify, because the agent is waiting for you. Applies to channels and webhooks.",
       "saved": "Event filter updated.",
       "saveFailed": "Failed to save event filter.",
       "loadFailed": "Failed to load settings.",

@@ -37,6 +37,7 @@ pub const PORTABLE_PREFERENCE_KEYS: &[&str] = &[
     "chat_command_prefix",
     "chat_message_language",
     "chat_event_filter",
+    "chat_event_top_level_only",
 ];
 
 /// Keys whose presence in a snapshot would leak a credential or clobber

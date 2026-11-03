@@ -2413,6 +2413,8 @@ mod tauri_app {
                 chat_channel_commands::set_chat_event_filter,
                 chat_channel_commands::get_chat_event_webhooks,
                 chat_channel_commands::set_chat_event_webhooks,
+                chat_channel_commands::get_chat_event_top_level_only,
+                chat_channel_commands::set_chat_event_top_level_only,
                 chat_channel_commands::get_chat_message_language,
                 chat_channel_commands::set_chat_message_language,
                 chat_channel_commands::weixin_get_qrcode,

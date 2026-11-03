@@ -5479,6 +5479,16 @@ export async function setChatEventWebhooks(
   return getTransport().call("set_chat_event_webhooks", { webhooks })
 }
 
+export async function getChatEventTopLevelOnly(): Promise<boolean> {
+  return getTransport().call("get_chat_event_top_level_only")
+}
+
+export async function setChatEventTopLevelOnly(
+  enabled: boolean
+): Promise<void> {
+  return getTransport().call("set_chat_event_top_level_only", { enabled })
+}
+
 export async function getChatMessageLanguage(): Promise<string> {
   return getTransport().call("get_chat_message_language")
 }

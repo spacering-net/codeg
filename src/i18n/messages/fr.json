@@ -4574,6 +4574,8 @@
       "questionRequestDesc": "Quand un agent vous pose une question",
       "userPromptSent": "Message de l'utilisateur",
       "userPromptSentDesc": "Lorsque vous envoyez un message (le texte du message est inclus dans la notification)",
+      "topLevelOnly": "Sessions principales uniquement",
+      "topLevelOnlyDesc": "Les sous-sessions lancées par délégation n'envoient ni « Tour terminé » ni « Erreur de l'agent » ; l'agent qui a délégué rend compte du résultat quand il a fini. Leurs demandes d'autorisation et questions restent notifiées, car l'agent vous attend. S'applique aux canaux et aux webhooks.",
       "saved": "Filtre d'événements mis à jour.",
       "saveFailed": "Échec de l'enregistrement du filtre d'événements.",
       "loadFailed": "Échec du chargement des paramètres.",

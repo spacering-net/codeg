@@ -1644,6 +1644,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::chat_channel::set_chat_event_webhooks),
         )
         .route(
+            "/get_chat_event_top_level_only",
+            post(handlers::chat_channel::get_chat_event_top_level_only),
+        )
+        .route(
+            "/set_chat_event_top_level_only",
+            post(handlers::chat_channel::set_chat_event_top_level_only),
+        )
+        .route(
             "/get_chat_message_language",
             post(handlers::chat_channel::get_chat_message_language),
         )

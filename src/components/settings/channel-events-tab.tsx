@@ -30,8 +30,10 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   getChatEventFilter,
+  getChatEventTopLevelOnly,
   getChatEventWebhooks,
   setChatEventFilter,
+  setChatEventTopLevelOnly,
   setChatEventWebhooks,
 } from "@/lib/api"
 import type { WebhookConfig } from "@/lib/types"
@@ -90,7 +92,9 @@ export function isValidWebhookUrl(url: string): boolean {
 }
 
 // Example payloads documenting the wire contract. Kept as literal JSON (not
-// translated) so consumers see the exact field names they receive.
+// translated) so consumers see the exact field names they receive. The
+// permission_request example is a delegation sub-session (`session_kind:
+// "sub_session"`, naming its parent); the others are top-level sessions.
 const PAYLOAD_EXAMPLES: Record<(typeof ALL_EVENT_TYPES)[number]["id"], string> =
   {
     user_prompt_sent: `{
@@ -100,6 +104,14 @@ const PAYLOAD_EXAMPLES: Record<(typeof ALL_EVENT_TYPES)[number]["id"], string> =
   "body": "Please refactor the auth module",
   "fields": [],
   "connection_id": "conn-abc",
+  "conversation_id": 12,
+  "conversation_title": "Refactor the auth module",
+  "agent_type": "claude_code",
+  "agent_name": "Claude Code",
+  "assistant_name": null,
+  "session_kind": "session",
+  "parent_conversation_id": null,
+  "parent_conversation_title": null,
   "source": "codeg"
 }`,
     turn_complete: `{
@@ -109,6 +121,14 @@ const PAYLOAD_EXAMPLES: Record<(typeof ALL_EVENT_TYPES)[number]["id"], string> =
   "body": "Claude Code finished its turn.",
   "fields": [{ "label": "Stop Reason", "value": "End Turn" }],
   "connection_id": "conn-abc",
+  "conversation_id": 12,
+  "conversation_title": "Refactor the auth module",
+  "agent_type": "claude_code",
+  "agent_name": "Claude Code",
+  "assistant_name": null,
+  "session_kind": "session",
+  "parent_conversation_id": null,
+  "parent_conversation_title": null,
   "source": "codeg"
 }`,
     error: `{
@@ -118,6 +138,14 @@ const PAYLOAD_EXAMPLES: Record<(typeof ALL_EVENT_TYPES)[number]["id"], string> =
   "body": "Claude Code encountered an error.",
   "fields": [{ "label": "Error", "value": "connection reset" }],
   "connection_id": "conn-abc",
+  "conversation_id": 12,
+  "conversation_title": "Refactor the auth module",
+  "agent_type": "claude_code",
+  "agent_name": "Claude Code",
+  "assistant_name": null,
+  "session_kind": "session",
+  "parent_conversation_id": null,
+  "parent_conversation_title": null,
   "source": "codeg"
 }`,
     permission_request: `{
@@ -126,7 +154,15 @@ const PAYLOAD_EXAMPLES: Record<(typeof ALL_EVENT_TYPES)[number]["id"], string> =
   "title": "Permission Request",
   "body": "An agent is waiting for approval.",
   "fields": [{ "label": "Operation", "value": "Bash: npm test" }],
-  "connection_id": "conn-abc",
+  "connection_id": "conn-def",
+  "conversation_id": 15,
+  "conversation_title": "Run the test suite",
+  "agent_type": "codex",
+  "agent_name": "Codex CLI",
+  "assistant_name": "Tester",
+  "session_kind": "sub_session",
+  "parent_conversation_id": 12,
+  "parent_conversation_title": "Refactor the auth module",
   "source": "codeg"
 }`,
     question_request: `{
@@ -136,6 +172,14 @@ const PAYLOAD_EXAMPLES: Record<(typeof ALL_EVENT_TYPES)[number]["id"], string> =
   "body": "An agent is asking a question. Answer it in Codeg.",
   "fields": [{ "label": "Approach", "value": "Which approach should we take?\\n• MVP first\\n• Risk first" }],
   "connection_id": "conn-abc",
+  "conversation_id": 12,
+  "conversation_title": "Refactor the auth module",
+  "agent_type": "claude_code",
+  "agent_name": "Claude Code",
+  "assistant_name": null,
+  "session_kind": "session",
+  "parent_conversation_id": null,
+  "parent_conversation_title": null,
   "source": "codeg"
 }`,
   }
@@ -147,6 +191,7 @@ export function ChannelEventsTab() {
     new Set(DEFAULT_ON_IDS)
   )
   const [webhooks, setWebhooks] = useState<WebhookConfig[]>([])
+  const [topLevelOnly, setTopLevelOnly] = useState(false)
   const [loading, setLoading] = useState(true)
   // True when the initial config fetch failed. We then refuse to render the
   // controls and surface a retry instead — saving from the still-default state
@@ -173,10 +218,15 @@ export function ChannelEventsTab() {
   const loadConfig = useCallback(() => {
     setLoading(true)
     setLoadError(false)
-    Promise.all([getChatEventFilter(), getChatEventWebhooks()])
-      .then(([filter, hooks]) => {
+    Promise.all([
+      getChatEventFilter(),
+      getChatEventWebhooks(),
+      getChatEventTopLevelOnly(),
+    ])
+      .then(([filter, hooks, topLevel]) => {
         setEnabledEvents(parseFilter(filter))
         setWebhooks(hooks)
+        setTopLevelOnly(topLevel)
         setLoadError(false)
       })
       .catch(() => setLoadError(true))
@@ -215,6 +265,22 @@ export function ChannelEventsTab() {
       }
     },
     [enabledEvents, t]
+  )
+
+  const handleTopLevelOnly = useCallback(
+    async (checked: boolean) => {
+      setSaving(true)
+      try {
+        await setChatEventTopLevelOnly(checked)
+        setTopLevelOnly(checked)
+        toast.success(t("saved"))
+      } catch {
+        toast.error(t("saveFailed"))
+      } finally {
+        setSaving(false)
+      }
+    },
+    [t]
   )
 
   // Persist the full webhook list. State is updated only on success, so a
@@ -348,6 +414,21 @@ export function ChannelEventsTab() {
           </div>
         ))}
       </section>
+
+      <div className="flex items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">{t("topLevelOnly")}</div>
+          <div className="text-xs text-muted-foreground">
+            {t("topLevelOnlyDesc")}
+          </div>
+        </div>
+        <Switch
+          checked={topLevelOnly}
+          disabled={saving}
+          aria-label={t("topLevelOnly")}
+          onCheckedChange={handleTopLevelOnly}
+        />
+      </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <div className="flex items-center justify-between gap-2">

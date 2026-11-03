@@ -388,6 +388,33 @@ pub async fn set_chat_event_webhooks_core(
     Ok(())
 }
 
+/// Whether delegation sub-sessions stay quiet on the global event feed (no
+/// `turn_complete` / `error` push to IM channels or webhooks). Off by default.
+pub async fn get_chat_event_top_level_only_core(db: &AppDatabase) -> Result<bool, AppCommandError> {
+    let val = crate::db::service::app_metadata_service::get_value(
+        &db.conn,
+        crate::chat_channel::event_subscriber::EVENT_TOP_LEVEL_ONLY_KEY,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+    Ok(val.as_deref() == Some("true"))
+}
+
+pub async fn set_chat_event_top_level_only_core(
+    db: &AppDatabase,
+    enabled: bool,
+) -> Result<(), AppCommandError> {
+    crate::db::service::app_metadata_service::upsert_value(
+        &db.conn,
+        crate::chat_channel::event_subscriber::EVENT_TOP_LEVEL_ONLY_KEY,
+        if enabled { "true" } else { "false" },
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+    crate::chat_channel::event_subscriber::bump_event_config_epoch();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // WeChat QR code auth
 // ---------------------------------------------------------------------------
@@ -646,6 +673,23 @@ pub async fn set_chat_event_webhooks(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn get_chat_event_top_level_only(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<bool, AppCommandError> {
+    get_chat_event_top_level_only_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn set_chat_event_top_level_only(
+    db: tauri::State<'_, AppDatabase>,
+    enabled: bool,
+) -> Result<(), AppCommandError> {
+    set_chat_event_top_level_only_core(&db, enabled).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn get_chat_message_language(
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<String, AppCommandError> {
@@ -807,6 +851,26 @@ mod tests {
             .expect("set none");
         let got_none = get_chat_event_filter_core(&db).await.expect("get none");
         assert!(got_none.is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_event_top_level_only_defaults_off_and_roundtrips() {
+        let db = fresh_in_memory_db().await;
+        assert!(!get_chat_event_top_level_only_core(&db).await.expect("get"));
+
+        set_chat_event_top_level_only_core(&db, true)
+            .await
+            .expect("set on");
+        assert!(get_chat_event_top_level_only_core(&db)
+            .await
+            .expect("get on"));
+
+        set_chat_event_top_level_only_core(&db, false)
+            .await
+            .expect("set off");
+        assert!(!get_chat_event_top_level_only_core(&db)
+            .await
+            .expect("get off"));
     }
 
     fn hook(url: &str, enabled: bool) -> WebhookConfig {

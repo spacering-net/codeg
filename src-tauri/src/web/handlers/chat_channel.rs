@@ -249,6 +249,27 @@ pub async fn set_chat_event_webhooks(
     Ok(Json(()))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEventTopLevelOnlyParams {
+    pub enabled: bool,
+}
+
+pub async fn get_chat_event_top_level_only(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<bool>, AppCommandError> {
+    let result = cc_commands::get_chat_event_top_level_only_core(&state.db).await?;
+    Ok(Json(result))
+}
+
+pub async fn set_chat_event_top_level_only(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetEventTopLevelOnlyParams>,
+) -> Result<Json<()>, AppCommandError> {
+    cc_commands::set_chat_event_top_level_only_core(&state.db, params.enabled).await?;
+    Ok(Json(()))
+}
+
 pub async fn get_chat_message_language(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<String>, AppCommandError> {
