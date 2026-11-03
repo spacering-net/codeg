@@ -86,6 +86,9 @@ pub struct WorkTaskInfo {
     /// forge-sourced task — that one's pull request is `source_meta.result_pr`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<serde_json::Value>,
+    /// The personal-agent dispatch that created this task, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personal_agent_dispatch_id: Option<i32>,
     /// Latest `agent_progress` milestone OF THIS GENERATION (filled by `list`
     /// for live tasks only — the card's realtime progress line). Scoped by
     /// `run_seq`: a retry, a follow-up and a merge each start a new one, and
@@ -204,6 +207,11 @@ pub struct WorkTaskConfig {
     /// editing this afterwards cannot re-base a task that already ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// The role assistant a personal-agent dispatch runs this task as — its
+    /// name as it was at dispatch, for the card. Display only; the agent and
+    /// options above are what runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor_name: Option<String>,
 }
 
 /// The one recognized [`WorkTaskConfig::deliverable`] value.

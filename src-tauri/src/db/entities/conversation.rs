@@ -20,8 +20,10 @@ pub enum ConversationStatus {
 /// flat "Chat" section; `loop` belongs to the Loop Engineering workbench and is
 /// excluded from the sidebar list entirely (no write path yet — reserved for
 /// the loop engine); `delegate` is a delegation child nested under its
-/// parent's tool-call view. Invariant: `kind == Delegate` ⟺ `parent_id IS NOT
-/// NULL`. Written once at insert, never updated.
+/// parent's tool-call view; `personal` is one session segment of the personal
+/// agent, which has its own page and stays out of the sidebar list too.
+/// Invariant: `kind == Delegate` ⟺ `parent_id IS NOT NULL`. Written once at
+/// insert, never updated.
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +36,8 @@ pub enum ConversationKind {
     Loop,
     #[sea_orm(string_value = "delegate")]
     Delegate,
+    #[sea_orm(string_value = "personal")]
+    Personal,
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -90,6 +94,10 @@ pub struct Model {
 
 /// [`Model::source`] of a conversation a `codeg-cli` run started.
 pub const SOURCE_CLI: &str = "cli";
+
+/// [`Model::source`] of a conversation the personal agent dispatched to a role
+/// assistant (a chat or a work conversation).
+pub const SOURCE_PERSONAL_AGENT: &str = "personal_agent";
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {

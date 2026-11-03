@@ -697,6 +697,13 @@ pub struct SessionState {
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
 
+    /// Every main-thread text of the just-completed turn, in order — the
+    /// prose before, between and after its tool calls, each run separated by
+    /// a blank line. Captured at TurnComplete beside `last_assistant_text`,
+    /// which keeps only the concluding run; the personal agent records the
+    /// whole of what the owner saw. Never a subagent's or the thinking's text.
+    pub last_turn_main_text: Option<String>,
+
     /// The just-completed turn's tool-call progress ([`Self::turn_progress`]),
     /// captured at TurnComplete beside `last_assistant_text` — by the time the
     /// delegation broker records a finished child's result, the turn's tool
@@ -815,6 +822,12 @@ pub struct SessionState {
     /// companion it is given carries the tool; a delegated child never has
     /// one. Never on the snapshot.
     pub cli_output_schema: Option<Arc<crate::cli_run::OutputSchema>>,
+
+    /// The personal agent's own connection: given the personal-agent tool
+    /// group and never the delegation or board-authoring ones. Set from the
+    /// spawn seed before anything can read it, never inherited by a
+    /// delegation child. Never on the snapshot.
+    pub personal_agent: bool,
 
     /// Which writer owns the conversation-status write of a `TurnComplete`,
     /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
@@ -937,6 +950,7 @@ impl SessionState {
             async_tasks: BTreeMap::new(),
             async_task_activity_at: None,
             last_assistant_text: None,
+            last_turn_main_text: None,
             last_turn_progress: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
@@ -951,6 +965,7 @@ impl SessionState {
             wire_title_wake: Arc::new(tokio::sync::Notify::new()),
             cli_run: None,
             cli_output_schema: None,
+            personal_agent: false,
             turn_status_claim: None,
         }
     }
@@ -1378,6 +1393,7 @@ impl SessionState {
                 // captured.
                 if self.turn_in_flight || self.live_message.is_some() {
                     self.last_assistant_text = None;
+                    self.last_turn_main_text = None;
                     self.last_turn_progress = self.turn_progress();
                 }
                 if let Some(live) = self.live_message.as_ref() {
@@ -1405,6 +1421,10 @@ impl SessionState {
                         .join("");
                     if !assembled.trim().is_empty() {
                         self.last_assistant_text = Some(assembled);
+                    }
+                    let whole = main_thread_text(&live.content);
+                    if !whole.trim().is_empty() {
+                        self.last_turn_main_text = Some(whole);
                     }
                 }
                 self.live_message = None;
@@ -2452,6 +2472,37 @@ impl SessionState {
     }
 }
 
+/// The main-thread prose of a turn's content, in order. Consecutive text
+/// blocks are one run (deltas of the same paragraph); anything else between
+/// them — a tool call, a thought, a plan — ends the run, and runs are joined
+/// with a blank line. Subagent text (`parent_tool_use_id` set) is the child's
+/// voice and is left out, like the thinking itself.
+pub(crate) fn main_thread_text(content: &[LiveContentBlock]) -> String {
+    let mut runs: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for block in content {
+        match block {
+            LiveContentBlock::Text {
+                text,
+                parent_tool_use_id: None,
+            } => current.push_str(text),
+            // A subagent's prose streams inside its tool call: it neither
+            // belongs to the run nor ends it.
+            LiveContentBlock::Text { .. } | LiveContentBlock::Thinking { .. } => {}
+            LiveContentBlock::ToolCallRef { .. } | LiveContentBlock::Plan { .. } => {
+                if !current.trim().is_empty() {
+                    runs.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+        }
+    }
+    if !current.trim().is_empty() {
+        runs.push(current.trim().to_string());
+    }
+    runs.join("\n\n")
+}
+
 /// Whether someone types the prompts of a connection with this owner label, so
 /// that a predicted follow-up prompt has a composer to appear in.
 ///
@@ -2464,13 +2515,16 @@ impl SessionState {
 /// `codeg-cli` run lets its connection go as soon as its one turn has ended.
 /// Nor a one-shot generation (owner
 /// [`OWNER_LABEL`](crate::acp::one_shot::OWNER_LABEL)), which has no
-/// conversation to continue at all.
+/// conversation to continue at all. Nor the personal agent and the work it
+/// dispatches ([`crate::personal_agent::is_personal_agent_owner`]): codeg's
+/// own engine writes their prompts.
 /// For them a prediction would only be paid for.
 /// Everything else is a person's window, a work task (its session takes
 /// follow-ups once the task stops), or a delegated child (which inherits its
 /// parent's label, and whose session the user can open and continue).
 pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
     owner_window_label != "automation"
+        && !crate::personal_agent::is_personal_agent_owner(owner_window_label)
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
         && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
@@ -4339,6 +4393,53 @@ mod tests {
             agent_type: "claude_code".into(),
         });
         assert_eq!(s.last_assistant_text.as_deref(), Some("final answer"));
+    }
+
+    /// The personal agent records ALL the prose of a turn: before, between
+    /// and after its tool calls, a blank line apart — never a subagent's or a
+    /// thought.
+    #[test]
+    fn main_thread_text_keeps_every_run_of_the_turn() {
+        let blocks = vec![
+            LiveContentBlock::Text {
+                text: "Let me look.".into(),
+                parent_tool_use_id: None,
+            },
+            LiveContentBlock::Thinking {
+                text: "hmm".into(),
+                parent_tool_use_id: None,
+            },
+            LiveContentBlock::ToolCallRef {
+                tool_call_id: "t1".into(),
+            },
+            LiveContentBlock::Text {
+                text: "child prose".into(),
+                parent_tool_use_id: Some("t1".into()),
+            },
+            LiveContentBlock::Text {
+                text: "Found it: ".into(),
+                parent_tool_use_id: None,
+            },
+            LiveContentBlock::Text {
+                text: "line 42.".into(),
+                parent_tool_use_id: None,
+            },
+        ];
+        assert_eq!(main_thread_text(&blocks), "Let me look.\n\nFound it: line 42.");
+        assert_eq!(main_thread_text(&[]), "");
+
+        let mut s = fresh_state();
+        s.status = ConnectionStatus::Prompting;
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "first".into(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "sess-1".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(s.last_turn_main_text.as_deref(), Some("first"));
     }
 
     #[test]

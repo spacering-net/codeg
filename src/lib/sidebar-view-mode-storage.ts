@@ -78,6 +78,7 @@ export interface SidebarSectionCollapsed {
  * chrome. Adding a future route here gives it a toggle for free.
  */
 export const SIDEBAR_NAV_ITEM_IDS = [
+  "personalAgent",
   "automations",
   "tasks",
   "forge",

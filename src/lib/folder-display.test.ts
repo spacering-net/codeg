@@ -74,6 +74,14 @@ describe("excludeChatFolders", () => {
     expect(excludeChatFolders(list).map((f) => f.id)).toEqual([1, 3])
   })
 
+  it("drops the personal agent's working directory too", () => {
+    const list = [
+      { id: 1, kind: "regular" as const },
+      { id: 2, kind: "personal" as const },
+    ]
+    expect(excludeChatFolders(list).map((f) => f.id)).toEqual([1])
+  })
+
   it("returns all folders when none are chat folders", () => {
     const list = [
       { id: 1, kind: "regular" as const },

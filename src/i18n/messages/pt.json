@@ -1987,7 +1987,18 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Colaboração",
-    "sectionDescription": "Como os agentes colaboram entre si e quais ferramentas do próprio codeg eles podem acessar dentro de uma conversa."
+    "sectionDescription": "Como os agentes colaboram entre si e quais ferramentas do próprio codeg eles podem acessar dentro de uma conversa.",
+    "personalAgent": {
+      "title": "Agente pessoal",
+      "workdir": "Diretório de trabalho",
+      "workdirHint": "Onde ele guarda a persona, as regras e a memória, sob git. Atual: {current}. Movê-lo inicia uma nova sessão; o diretório antigo fica como está.",
+      "notConfigured": "Configure o agente pessoal na página dele primeiro.",
+      "placeholder": "Padrão: personal-agent no diretório de dados",
+      "useDefault": "Usar padrão",
+      "apply": "Mover",
+      "saved": "Diretório de trabalho movido.",
+      "readOnly": "O agente pessoal roda em outro processo do codeg; altere lá."
+    }
   },
   "LoginPage": {
     "documentTitle": "Entrar - codeg",
@@ -2317,7 +2328,9 @@
       "noRecentChats": "Nenhum chat recente",
       "noRecentFolders": "Nenhuma conversa de pasta recente",
       "noRecentCli": "Nenhuma conversa recente da linha de comando",
-      "recentFilterMenuLabel": "Mostrar em Recentes"
+      "recentFilterMenuLabel": "Mostrar em Recentes",
+      "personalAgent": "Agente pessoal",
+      "personalAgentBadge": "Atribuída pelo agente pessoal"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",
@@ -6469,7 +6482,9 @@
     "deliverPrBackDeleteWorktree": "Excluir o worktree após enviar",
     "deliverPrBackSubmit": "Enviar",
     "deliverPrBackDone": "Enviado ao pull request",
-    "deliverPrBackDoneMr": "Enviado ao merge request"
+    "deliverPrBackDoneMr": "Enviado ao merge request",
+    "badgePersonalAgent": "Agente pessoal",
+    "badgePersonalAgentExecutor": "Agente pessoal · {executor}"
   },
   "CustomSkillsSettings": {
     "loading": "Carregando habilidades personalizadas…",
@@ -7657,6 +7672,275 @@
         "bypassed": "O mecanismo do navegador deste computador envia alguns endereços por fora do túnel, então as páginas do host remoto não abrem para não serem carregadas deste computador.",
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
+    }
+  },
+  "PersonalAgent": {
+    "title": "Agente pessoal",
+    "settingsButton": "Configurações do agente pessoal",
+    "readOnly": "O agente pessoal roda em outro processo do codeg neste diretório de dados, então esta página é somente leitura aqui.",
+    "noAssistants": "Ainda não há assistentes especializados: é para eles que o agente pessoal repassa o trabalho. Adicione um em Configurações → Colaboração → Assistentes.",
+    "viewSession": "Ver sessão",
+    "viewSessionHint": "A transcrição completa da sessão atual, ao vivo.",
+    "sessionTitle": "Sessão {seq} · transcrição completa",
+    "setup": {
+      "title": "Configure seu agente pessoal",
+      "description": "Seu agente pessoal entende o que você quer, repassa o trabalho aos assistentes que você configurou, acompanha e se lembra. Para começar, escolha o agente em que ele roda.",
+      "action": "Escolher o agente"
+    },
+    "errors": {
+      "engineElsewhere": "O agente pessoal roda em outro processo do codeg neste diretório de dados; esta página é somente leitura aqui."
+    },
+    "state": {
+      "queued": "Na fila",
+      "running": "Em execução",
+      "waiting_input": "Aguardando você",
+      "review": "Em revisão",
+      "completed": "Concluída",
+      "failed": "Falhou",
+      "canceled": "Cancelada",
+      "interrupted": "Interrompida",
+      "handed_over": "Assumida por você"
+    },
+    "mode": {
+      "task": "Tarefa do quadro",
+      "chat": "Chat",
+      "session": "Sessão de trabalho"
+    },
+    "reason": {
+      "first": "primeira sessão",
+      "switch": "troca de cérebro",
+      "option_restart": "configurações de inicialização alteradas",
+      "workdir": "diretório de trabalho movido",
+      "manual": "nova sessão",
+      "recovery": "não foi possível retomar a sessão anterior",
+      "overflow": "estouro de contexto"
+    },
+    "initiator": {
+      "auto": "pelo codeg",
+      "owner": "por você",
+      "agent": "pelo agente"
+    },
+    "marker": {
+      "segmentStart": "Sessão {seq} · {agent} · {reason}",
+      "pendingSwitch": "Uma nova sessão começa com a próxima mensagem ({reason})",
+      "optionsChanged": "Opções alteradas: {changes}",
+      "modeIs": "modo {mode}",
+      "reconnected": "Reconectado à mesma sessão",
+      "compaction": {
+        "ok": "Contexto compactado {who}{range}",
+        "failed": "A compactação iniciada {who} falhou{range}",
+        "canceled": "A compactação iniciada {who} foi cancelada{range}"
+      },
+      "compactionRange": " · {before}% → {after}%",
+      "compactionFrom": " · antes: {before}%",
+      "compactionPaused": "A autocompactação está pausada nesta sessão: compactar não ajudou duas vezes seguidas",
+      "turnCanceled": "Turno parado",
+      "turnFailed": "O turno falhou: {error}",
+      "turnInterrupted": "O turno não terminou",
+      "overflowNewSegment": "O contexto estourou de novo após compactar: uma nova sessão começa",
+      "overflowCompact": "O contexto estourou: compactando antes da próxima mensagem",
+      "workdirChanged": "Diretório de trabalho movido para {path}"
+    },
+    "timeline": {
+      "loadOlder": "Carregar anteriores",
+      "empty": "Diga olá ou peça para ele cuidar de algo.",
+      "supplement": "Adicionado no meio do turno",
+      "queued": "Na fila",
+      "interrupted": "Não terminou",
+      "resend": "Enviar de novo",
+      "resent": "Enviado de novo",
+      "question": "Pergunta",
+      "plan": "Aprovação do plano",
+      "questionState": {
+        "pending": "Aguardando sua resposta",
+        "answered": "Respondida",
+        "skipped": "Ignorada",
+        "resolved": "Encerrada"
+      },
+      "planDecision": {
+        "approve": "Aprovado",
+        "request_changes": "Alterações solicitadas",
+        "abandon": "Abandonado"
+      },
+      "answered": "Sua resposta: {answer}",
+      "permission": "Solicitação de permissão",
+      "permissionPending": "Aguardando sua decisão",
+      "permissionWithdrawn": "Retirada",
+      "permissionChose": "Você escolheu: {option}",
+      "dispatched": "Atribuição",
+      "result": "Atualização",
+      "executor": "executada por {name}",
+      "openTask": "Abrir no quadro",
+      "openConversation": "Abrir a conversa",
+      "open": "Abrir"
+    },
+    "composer": {
+      "placeholder": "Mensagem para o seu agente pessoal…",
+      "placeholderBusy": "Ele está ocupado — sua mensagem vai junto com o próximo turno",
+      "readOnly": "Somente leitura neste processo",
+      "ariaLabel": "Mensagem para o seu agente pessoal",
+      "send": "Enviar",
+      "queue": "Pôr na fila",
+      "supplement": "Adicionar a este turno",
+      "supplementHint": "Incorporar ao turno em andamento em vez de esperar que ele termine",
+      "supplemented": "Adicionado ao turno em andamento.",
+      "queuedInstead": "Na fila — vai junto com o próximo turno.",
+      "waitForUpload": "Aguarde o envio da imagem terminar.",
+      "stop": "Parar",
+      "cancelCompaction": "Parar a compactação",
+      "compact": "Compactar",
+      "compactHint": "Compactar agora o contexto da sessão",
+      "newSession": "Nova sessão",
+      "newSessionHint": "Começar uma nova sessão com a próxima mensagem; a linha do tempo continua",
+      "newSessionQueued": "Uma nova sessão começa com a sua próxima mensagem.",
+      "compacting": "Compactando o contexto…",
+      "replying": "Respondendo…",
+      "brain": "O agente em que ele roda",
+      "queuedCount": "{count, plural, one {# mensagem na fila} other {# mensagens na fila}}"
+    },
+    "aux": {
+      "status": "Status",
+      "dispatches": "Atribuições",
+      "items": "Pendências",
+      "data": "Dados"
+    },
+    "status": {
+      "elsewhere": "O agente roda em outro processo do codeg; o que você vê aqui é lido do banco de dados.",
+      "brain": "Cérebro",
+      "agent": "Agente",
+      "model": "Modelo",
+      "mode": "Modo",
+      "session": "Sessão",
+      "segment": "Atual",
+      "segmentValue": "n.º {seq} · {reason}",
+      "noSegment": "Ainda não começou",
+      "startedAt": "Início",
+      "pending": "A próxima mensagem inicia uma nova",
+      "connection": "Conexão",
+      "connected": "Ativa",
+      "disconnected": "Desconectado (reconecta com a próxima mensagem)",
+      "handoff": "Cartão de passagem",
+      "handoffSize": "{size} caracteres",
+      "handoffTrimmed": "cortado para caber",
+      "context": "Contexto",
+      "usageValue": "{percent}% usado ({source})",
+      "usageSource": {
+        "live": "ao vivo",
+        "transcript": "do arquivo da sessão"
+      },
+      "usageUnknown": "Uso desconhecido — este agente não informa",
+      "threshold": "Autocompacta em {percent}%",
+      "thresholdOff": "Autocompactação desligada",
+      "command": "Comando {command}",
+      "noCommand": "Nenhum comando de compactação conhecido para este agente",
+      "compactions": "Compactações",
+      "compactionCounts": "codeg {auto} · você {manual} · agente {agent}",
+      "lastCheck": "Última verificação",
+      "check": {
+        "below": "Abaixo do limite",
+        "compacted": "Compactado antes de entregar",
+        "disabled": "Autocompactação desligada",
+        "usage_unknown": "Ignorado: uso desconhecido",
+        "no_command": "Ignorado: sem comando de compactação",
+        "paused": "Ignorado: pausado nesta sessão",
+        "skipped_after_attempt": "Entregue logo após uma compactação"
+      },
+      "paused": "Autocompactação pausada nesta sessão",
+      "resume": "Retomar",
+      "work": "Trabalho",
+      "queued": "Aguardando",
+      "queuedValue": "{messages} mensagens · {events} atualizações",
+      "dispatchSlots": "Conversas atribuídas",
+      "slotsValue": "{running} de {limit} em execução · {queued} na fila",
+      "slotsUnlimited": "{running} em execução · {queued} na fila",
+      "waiting": "Aprovações",
+      "waitingOwner": "Aguardando você",
+      "engine": "Roda em",
+      "engineHere": "este processo",
+      "engineElsewhere": "outro processo do codeg",
+      "workdir": "Diretório de trabalho",
+      "lastError": "Último erro",
+      "lastCompaction": "Última compactação",
+      "compactionStatus": {
+        "ok": "concluída",
+        "failed": "falhou",
+        "canceled": "cancelada",
+        "running": "em andamento"
+      },
+      "usageUnknownOffline": "Uso desconhecido — lido ao reconectar"
+    },
+    "dispatches": {
+      "all": "Todas",
+      "empty": "Nada atribuído ainda.",
+      "meta": "{executor} · {folder} · {when}",
+      "noProject": "sem projeto"
+    },
+    "items": {
+      "empty": "Nenhuma pendência.",
+      "waits": {
+        "owner": "Aguardando você",
+        "agent": "Com o agente",
+        "external": "Em andamento",
+        "time": "Mais tarde",
+        "none": "Outras"
+      },
+      "kind": {
+        "dispatch": "atribuição",
+        "reminder": "lembrete",
+        "followup": "acompanhamento",
+        "question": "pergunta"
+      },
+      "onDone": "Ao concluir: {text}"
+    },
+    "data": {
+      "interactions": "Conversa diária",
+      "messages": "Suas mensagens",
+      "replies": "Respostas",
+      "dispatches": "Atribuições diárias",
+      "completed": "Concluídas",
+      "other": "Outras",
+      "failed": "Com falha",
+      "executors": "Por assistente",
+      "completedHint": "{count} concluídas",
+      "tokens": "Tokens diários",
+      "agentTokens": "Agente pessoal",
+      "dispatchTokens": "Trabalho atribuído",
+      "syncedAt": "Números de tokens da última sincronização de uso, {when}",
+      "notSynced": "Os números de tokens aparecem depois de uma sincronização de uso (página Uso de tokens).",
+      "usageCurve": "Uso do contexto",
+      "noUsage": "Ainda sem leituras.",
+      "empty": "Ainda sem dados"
+    },
+    "settings": {
+      "title": "Configurações do agente pessoal",
+      "setupTitle": "Configure seu agente pessoal",
+      "description": "Em que ele roda, quando o contexto dele é compactado e quem ele é.",
+      "setupDescription": "Escolha o agente em que seu agente pessoal roda, com todas as opções. Você pode trocá-lo depois; a linha do tempo continua.",
+      "tabBrain": "Cérebro",
+      "tabCompaction": "Compactação",
+      "tabDispatch": "Atribuição",
+      "tabPersona": "Persona e memória",
+      "name": "Nome",
+      "nameHint": "Como ele é chamado na própria página. Vazio usa o padrão.",
+      "namePlaceholder": "Agente pessoal",
+      "agentHint": "O agente e todas as opções com que ele roda, como os de um assistente.",
+      "switchNote": "Trocar para outro agente inicia uma nova sessão com a sua próxima mensagem. Uma sessão antiga não é retomada; em vez disso, o codeg passa a linha do tempo para a nova sessão.",
+      "autoCompact": "Limite de autocompactação",
+      "autoCompactHint": "Quando o contexto estiver pelo menos tão cheio, o codeg envia o comando de compactação antes da próxima mensagem. 0 desliga. Mantenha abaixo do gatilho do próprio agente.",
+      "compactCommand": "Comando de compactação",
+      "compactCommandHint": "Enviado como digitado. Vazio escolhe o do próprio agente (/compact, /compress…). É limpo quando você troca para outro agente.",
+      "compactionNote": "Compactar mantém a mesma sessão: a próxima mensagem leva um cartão de estado com a persona, as regras e as pendências. Se compactar não ajudar duas vezes seguidas, a autocompactação é pausada nessa sessão.",
+      "concurrency": "Conversas atribuídas ao mesmo tempo",
+      "concurrencyHint": "Atribuições de chat e de sessão de trabalho rodando juntas; o resto espera. 0 é sem limite. As tarefas do quadro seguem o limite do próprio quadro.",
+      "handoffBudget": "Orçamento do cartão de passagem",
+      "handoffBudgetHint": "Caracteres que o cartão de passagem de uma nova sessão pode usar; o que for cortado pode ser relido com as ferramentas do agente.",
+      "skill": "Habilidade integrada",
+      "skillHint": "Ensine ao agente as convenções dele (modos de atribuição, pendências, arquivos de memória) por meio de uma habilidade no diretório de trabalho dele.",
+      "filesNote": "Estes arquivos ficam no diretório de trabalho do agente e recebem commit após cada turno. Alterações na persona e nas regras chegam ao agente com a sua próxima mensagem.",
+      "saveFile": "Salvar arquivo",
+      "fileSaved": "{name} salvo.",
+      "cancel": "Cancelar",
+      "save": "Salvar"
     }
   }
 }

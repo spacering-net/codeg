@@ -263,6 +263,20 @@ pub struct BrokerCreateWorkTaskRequest {
     pub spec: NewWorkTaskSpec,
 }
 
+/// One call of a personal-agent tool (`assistant_list`, `project_list`,
+/// `dispatch`, `dispatch_followup`, `item_list`, `item_read`, `item_update`,
+/// `timeline_read`). One message for the whole group: the companion only checks
+/// the call's shape, and the app — which alone knows whether the caller is the
+/// personal agent's current connection — validates and answers it. Answered
+/// with a [`crate::personal_agent::tools::ToolOutcome`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerPersonalAgentRequest {
+    pub token: String,
+    pub tool: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+}
+
 /// List the built-in browser's tabs as an agent may see them. Backs the
 /// `browser_list_tabs` MCP tool. Authenticated by the per-launch `token`, and
 /// — like [`BrokerSessionRequest`] and for the same single-tenant reason — not
@@ -452,6 +466,7 @@ pub enum BrokerMessage {
     SubmitResult(BrokerSubmitResultRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
+    PersonalAgent(BrokerPersonalAgentRequest),
     BrowserTabs(BrokerBrowserTabsRequest),
     BrowserSnapshot(BrokerBrowserSnapshotRequest),
     BrowserAct(BrokerBrowserActRequest),
@@ -783,6 +798,15 @@ pub async fn client_create_work_task_round_trip(
     req: &BrokerCreateWorkTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
+}
+
+/// Dispatch one personal-agent tool call and read back the serialized
+/// [`crate::personal_agent::tools::ToolOutcome`].
+pub async fn client_personal_agent_round_trip(
+    socket_path: &str,
+    req: &BrokerPersonalAgentRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::PersonalAgent(req.clone())).await
 }
 
 /// Dispatch a `browser_list_tabs` request and read back the serialized

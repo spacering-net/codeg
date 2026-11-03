@@ -740,7 +740,7 @@ impl ConnectionManager {
             emitter,
             preferred_mode_id,
             preferred_config_values,
-            None,
+            crate::acp::connection::SpawnSeed::default(),
         )
         .await
     }
@@ -769,10 +769,46 @@ impl ConnectionManager {
             emitter,
             preferred_mode_id,
             preferred_config_values,
-            Some(seed),
+            crate::acp::connection::SpawnSeed {
+                cli_root: Some(seed),
+                ..Default::default()
+            },
         )
         .await
         .map(|outcome| outcome.connection_id)
+    }
+
+    /// A connection for the personal agent: marked as its own before its agent
+    /// starts, so the codeg-mcp it is given carries the personal-agent tools and
+    /// none of the delegation or board-authoring ones. `session_id` resumes the
+    /// segment's session; `reused` is reported like [`Self::spawn_agent_with_outcome`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_personal_agent(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<SpawnOutcome, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            crate::acp::connection::SpawnSeed {
+                personal_agent: true,
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -786,7 +822,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
-        cli_root: Option<crate::cli_run::RootSeed>,
+        seed: crate::acp::connection::SpawnSeed,
     ) -> Result<SpawnOutcome, AcpError> {
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
@@ -876,7 +912,7 @@ impl ConnectionManager {
             preferred_config_values,
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
-            cli_root,
+            seed,
         )
         .await?;
 

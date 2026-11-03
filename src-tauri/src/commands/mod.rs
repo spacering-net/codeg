@@ -63,6 +63,8 @@ pub mod office_tools;
 /// runtimes).
 pub mod opencode_credentials;
 pub mod open_in;
+/// The personal agent's page (both runtimes).
+pub mod personal_agent;
 #[cfg(feature = "tauri-runtime")]
 pub mod notification;
 pub mod pet;

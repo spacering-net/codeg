@@ -1,0 +1,2978 @@
+//! The personal agent's engine: the one place that decides when its session
+//! starts, what each delivery carries, when to compact, and what lands on the
+//! timeline.
+//!
+//! ## Turns
+//!
+//! The engine sends one prompt at a time and settles it from the event bus.
+//! A prompt is either a **delivery** (the queued owner messages and events, as
+//! one batch) or a **compaction** (the agent's compact command on its own).
+//! Each is recorded as a `personal_agent_batch` row, so after a restart the
+//! engine can tell an interrupted delivery (its owner messages are offered for
+//! resending, its events put back once) from an interrupted compaction (its
+//! batch was never sent: the messages stay queued).
+//!
+//! A turn's `TurnComplete` is recognized by its envelope `seq`: above the
+//! connection's `event_seq` at the moment the prompt was sent, and above the
+//! fence left by the last settled turn. The fence is what keeps a second
+//! `TurnComplete` of the same turn (the cancel path emits its own) or one that
+//! arrived after the liveness tick already settled the turn from the
+//! connection's state from settling the NEXT turn.
+//!
+//! ## Liveness
+//!
+//! The bus is lossy, and a dying connection may emit no `TurnComplete` at all,
+//! so a tick also checks the connection itself: gone means interrupted, and a
+//! turn that is no longer in flight means its end was missed.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{Mutex, Notify};
+use tokio::time::MissedTickBehavior;
+
+use super::cards::{self, AssistantLine, ItemLine, RecentLine};
+use super::compaction::{self, PreDelivery, Streaks};
+use super::dispatch::DispatchConn;
+use super::workdir;
+use super::{DISPATCH_OWNER_LABEL, OWNER_LABEL};
+use crate::acp::manager::ConnectionManager;
+use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
+use crate::acp::InternalEventBus;
+use crate::db::entities::personal_agent as agent_entity;
+use crate::db::entities::personal_agent_batch::{BatchKind, BatchStatus};
+use crate::db::entities::personal_agent_item::ItemStatus;
+use crate::db::entities::personal_agent_segment::{self as segment_entity, SegmentReason};
+use crate::db::entities::personal_agent_timeline::{OwnerStatus, TimelineKind};
+use crate::db::service::personal_agent_service as svc;
+use crate::db::service::personal_agent_service::NewRow;
+use crate::db::AppDatabase;
+use crate::models::personal_agent::{
+    CompactCheck, CompactInitiator, EngineHost, PersonalAgentChange, PersonalAgentInfo,
+    PersonalAgentSettings, PersonalAgentSnapshot, PersonalAgentStatus, SegmentInfo, TimelineRow,
+    TurnInfo, UsageReading,
+};
+use crate::models::{AgentType, AssistantAgentConfig, AssistantAvatar, AssistantLabelSnapshot};
+use crate::web::event_bridge::{emit_event, EventEmitter};
+use crate::work_task::compact;
+
+/// Channel of [`PersonalAgentChange`].
+pub const PERSONAL_AGENT_CHANGED_EVENT: &str = "personal-agent://changed";
+
+/// How often the liveness check looks at the turn in flight.
+const LIVENESS_TICK: Duration = Duration::from_secs(5);
+/// How often dispatched work is reconciled against its session or task.
+const RECONCILE_TICK: Duration = Duration::from_secs(30);
+/// How long a turn may look idle before the tick settles it: a prompt sent
+/// into a connection still shaking hands sits in a channel for a moment.
+const IDLE_GRACE: chrono::Duration = chrono::Duration::seconds(3);
+/// Recent timeline rows a handoff card quotes.
+const HANDOFF_RECENT_ROWS: u64 = 24;
+/// Open matters a card lists.
+const CARD_ITEMS: u64 = 40;
+
+static ENGINE: OnceLock<Arc<PersonalAgentEngine>> = OnceLock::new();
+
+/// The engine of this process, when this process runs it (it holds the
+/// work-task engine). `None` everywhere else: the page is then read-only.
+pub fn engine() -> Option<Arc<PersonalAgentEngine>> {
+    ENGINE.get().cloned()
+}
+
+/// What a segment owes the agent and how its compactions have gone. JSON on
+/// the segment row, so a restart keeps it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SegmentState {
+    /// The handoff card has not been delivered yet (a delivery carrying it was
+    /// interrupted, or none was sent).
+    #[serde(default)]
+    pub handoff_pending: bool,
+    /// The context was compacted; the next delivery carries the state card.
+    #[serde(default)]
+    pub needs_state_card: bool,
+    /// The owner saved the persona or rules from the page.
+    #[serde(default)]
+    pub persona_resend: bool,
+    /// The last delivery overflowed the context: compact before the next one,
+    /// whatever the reading says.
+    #[serde(default)]
+    pub force_compact: bool,
+    /// The forced compaction ran: one more overflow starts a new segment.
+    #[serde(default)]
+    pub overflow_compacted: bool,
+    #[serde(default)]
+    pub streaks: Streaks,
+    #[serde(default)]
+    pub handoff_trimmed: bool,
+}
+
+impl SegmentState {
+    pub fn parse(raw: &str) -> Self {
+        serde_json::from_str(raw).unwrap_or_default()
+    }
+}
+
+/// A compaction in flight.
+#[derive(Debug, Clone)]
+struct CompactionRun {
+    initiator: CompactInitiator,
+    command: String,
+    before: Option<UsageReading>,
+    forced: bool,
+}
+
+/// Which cards a delivery carried, cleared from the segment only when it
+/// completes.
+#[derive(Debug, Clone, Copy, Default)]
+struct Carried {
+    handoff: bool,
+    state_card: bool,
+    persona: bool,
+}
+
+/// The prompt in flight on the personal agent's connection.
+#[derive(Debug, Clone)]
+struct ActiveTurn {
+    batch_id: i32,
+    segment_id: i32,
+    kind: BatchKind,
+    conn_id: String,
+    /// The connection's `event_seq` when the prompt was sent: its completion
+    /// is above it.
+    start_seq: u64,
+    started_at: DateTime<Utc>,
+    owner_row_ids: Vec<i32>,
+    compaction: Option<CompactionRun>,
+    carried: Carried,
+    /// The agent reported a full context during the turn.
+    overflow: bool,
+    /// The last (non-terminal) error reported during the turn.
+    error: Option<String>,
+    /// For a compaction: the first live reading reported after it started —
+    /// the only after-value that describes the compacted session (the
+    /// transcript is written behind, and would still read the old figure).
+    usage_after: Option<UsageReading>,
+    /// For a compaction: whether the agent's own compaction report (a
+    /// `contextCompaction` tool call) said it worked, when it sent one.
+    compaction_reported: Option<bool>,
+    /// For a delivery: the agent compacted its own context during it, after
+    /// this delivery's cards went in — what they carried may be gone again.
+    agent_compacted: bool,
+}
+
+/// How a turn ended.
+#[derive(Debug, Clone)]
+enum TurnEnd {
+    /// The agent answered `TurnComplete` with this stop reason (or the
+    /// liveness tick found the turn over, `None`).
+    Completed(Option<String>),
+    /// The connection went away mid-turn.
+    Lost(String),
+}
+
+#[derive(Default)]
+pub(super) struct EngineState {
+    /// The personal agent's live connection, and the segment it belongs to.
+    pub(super) connection_id: Option<String>,
+    pub(super) connection_segment: Option<i32>,
+    turn: Option<ActiveTurn>,
+    /// `connection_id -> seq`: completions at or below are a settled turn's.
+    fence: HashMap<String, u64>,
+    last_check: Option<CompactCheck>,
+    pub(super) last_error: Option<String>,
+    /// Deliver the next batch without another compaction attempt.
+    skip_compaction_once: bool,
+    /// Agent compactions already recorded, by tool-call id.
+    seen_compactions: HashSet<String>,
+    /// Dispatched conversations, by `connection_id`.
+    pub(super) dispatch_conns: HashMap<String, DispatchConn>,
+}
+
+pub struct PersonalAgentEngine {
+    pub(super) db: AppDatabase,
+    pub(super) manager: ConnectionManager,
+    pub(super) emitter: EventEmitter,
+    pub(super) bus: Arc<InternalEventBus>,
+    pub(super) data_dir: PathBuf,
+    pub(super) state: Mutex<EngineState>,
+    /// Serializes deliveries.
+    pump_lock: Mutex<()>,
+    /// Serializes starting queued dispatches.
+    pub(super) dispatch_lock: Mutex<()>,
+    /// A delivery was asked for while one ran: run again after it.
+    pump_again: AtomicBool,
+    wake: Notify,
+    booted: AtomicBool,
+}
+
+/// Build the engine and publish it. Call ONLY where the work-task engine was
+/// just built: owning that engine is what makes this the one process that
+/// drives the personal agent (and the tasks it dispatches) on this data dir.
+pub fn build(
+    db: AppDatabase,
+    manager: ConnectionManager,
+    emitter: EventEmitter,
+    bus: Arc<InternalEventBus>,
+    data_dir: PathBuf,
+) -> Option<Arc<PersonalAgentEngine>> {
+    let engine = Arc::new(PersonalAgentEngine {
+        db,
+        manager,
+        emitter,
+        bus,
+        data_dir,
+        state: Mutex::new(EngineState::default()),
+        pump_lock: Mutex::new(()),
+        dispatch_lock: Mutex::new(()),
+        pump_again: AtomicBool::new(false),
+        wake: Notify::new(),
+        booted: AtomicBool::new(false),
+    });
+    ENGINE.set(engine.clone()).ok()?;
+    Some(engine)
+}
+
+impl PersonalAgentEngine {
+    /// An engine for tests: not published as the process global, already past
+    /// boot.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(db: AppDatabase, data_dir: PathBuf) -> Arc<Self> {
+        let bus = Arc::new(InternalEventBus::new(Arc::new(
+            crate::acp::EventBusMetrics::default(),
+        )));
+        Arc::new(Self {
+            db,
+            manager: ConnectionManager::new(),
+            emitter: EventEmitter::Noop,
+            bus,
+            data_dir,
+            state: Mutex::new(EngineState::default()),
+            pump_lock: Mutex::new(()),
+            dispatch_lock: Mutex::new(()),
+            pump_again: AtomicBool::new(false),
+            wake: Notify::new(),
+            booted: AtomicBool::new(true),
+        })
+    }
+
+    /// Run boot recovery, as `run` does first.
+    #[cfg(test)]
+    pub(crate) async fn boot_for_test(&self) {
+        self.boot_reconcile().await;
+    }
+
+    /// Put a turn on record on `conn`, as if its prompt had just gone out:
+    /// a delivery (carrying the state card when `state_card`) or an
+    /// automatic compaction (`forced` after an overflow).
+    #[cfg(test)]
+    pub(crate) async fn begin_turn_for_test(
+        &self,
+        conn: &str,
+        segment_id: i32,
+        batch_id: i32,
+        kind: BatchKind,
+        state_card: bool,
+        forced: bool,
+    ) {
+        let mut st = self.state.lock().await;
+        st.connection_id = Some(conn.to_string());
+        st.connection_segment = Some(segment_id);
+        st.turn = Some(ActiveTurn {
+            batch_id,
+            segment_id,
+            kind,
+            conn_id: conn.to_string(),
+            start_seq: 0,
+            started_at: Utc::now(),
+            owner_row_ids: Vec::new(),
+            compaction: (kind == BatchKind::Compaction).then(|| CompactionRun {
+                initiator: CompactInitiator::Auto,
+                command: "/compact".into(),
+                before: None,
+                forced,
+            }),
+            carried: Carried {
+                state_card,
+                ..Default::default()
+            },
+            overflow: false,
+            error: None,
+            usage_after: None,
+            compaction_reported: None,
+            agent_compacted: false,
+        });
+    }
+
+    /// Hand one bus event to the engine, as its loop would.
+    #[cfg(test)]
+    pub(crate) async fn feed_for_test(self: &Arc<Self>, conn: &str, seq: u64, payload: AcpEvent) {
+        self.on_event(&EventEnvelope {
+            seq,
+            connection_id: conn.to_string(),
+            payload,
+        })
+        .await;
+    }
+}
+
+/// The engine's driver: boot recovery, then one loop over the bus, the wake
+/// signal and the ticks. Spawn once, next to `run_task_engine`.
+pub async fn run(engine: Arc<PersonalAgentEngine>) {
+    // Subscribed before anything else, so nothing a recovery step triggers is
+    // missed.
+    let mut rx = engine.bus.subscribe();
+    // The task engine fails every running task as "interrupted by restart" on
+    // boot; a task dispatched before that ran would be failed with them.
+    crate::work_task::wait_boot_reconciled(Duration::from_secs(60)).await;
+    engine.boot_reconcile().await;
+    engine.booted.store(true, Ordering::SeqCst);
+    engine.nudge();
+
+    let mut liveness = tokio::time::interval(LIVENESS_TICK);
+    liveness.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut reconcile = tokio::time::interval(RECONCILE_TICK);
+    reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            ev = rx.recv() => match ev {
+                Ok(env) => engine.on_event(&env).await,
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "[personal_agent] event bus lagged: {n} events dropped; the ticks recover"
+                    );
+                    engine.liveness_tick().await;
+                }
+                Err(RecvError::Closed) => break,
+            },
+            _ = engine.wake.notified() => {
+                let e = engine.clone();
+                tokio::spawn(async move { e.pump().await });
+            }
+            _ = liveness.tick() => {
+                engine.liveness_tick().await;
+                engine.poll_task_dispatches().await;
+            }
+            _ = reconcile.tick() => engine.reconcile_dispatches().await,
+        }
+    }
+}
+
+impl PersonalAgentEngine {
+    /// Ask for a delivery attempt. Cheap and idempotent.
+    pub fn nudge(&self) {
+        self.wake.notify_one();
+    }
+
+    // ── configuration ───────────────────────────────────────────────────────
+
+    pub(super) async fn agent_row(&self) -> Option<agent_entity::Model> {
+        svc::get_agent(&self.db.conn).await.ok().flatten()
+    }
+
+    pub(super) fn workdir_of(&self, row: &agent_entity::Model) -> PathBuf {
+        match row.workdir.as_deref() {
+            Some(p) if !p.trim().is_empty() => PathBuf::from(p),
+            _ => workdir::default_workdir(&self.data_dir),
+        }
+    }
+
+    pub(super) fn info_of(&self, row: &agent_entity::Model) -> Option<PersonalAgentInfo> {
+        to_info(row, &self.workdir_of(row))
+    }
+
+    pub(super) fn emit(&self, change: PersonalAgentChange) {
+        emit_event(&self.emitter, PERSONAL_AGENT_CHANGED_EVENT, change);
+    }
+
+    pub(super) fn emit_rows(&self, rows: Vec<TimelineRow>) {
+        if !rows.is_empty() {
+            self.emit(PersonalAgentChange::Timeline { rows });
+        }
+    }
+
+    /// Write one timeline row and broadcast it.
+    pub(super) async fn push_row(&self, row: NewRow) -> Option<TimelineRow> {
+        match svc::insert_row(&self.db.conn, row).await {
+            Ok(m) => {
+                let r = svc::to_row(m);
+                self.emit_rows(vec![r.clone()]);
+                Some(r)
+            }
+            Err(e) => {
+                tracing::warn!("[personal_agent] timeline write failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// A marker row: segment boundaries, option changes, reconnects,
+    /// compactions, turn outcomes. `marker` names it for the page; `body` is
+    /// the English fallback.
+    pub(super) async fn marker(
+        &self,
+        segment_id: Option<i32>,
+        marker: &str,
+        body: impl Into<String>,
+        mut data: serde_json::Value,
+    ) -> Option<TimelineRow> {
+        if let Some(map) = data.as_object_mut() {
+            map.insert("marker".into(), marker.into());
+        } else {
+            data = serde_json::json!({ "marker": marker });
+        }
+        let mut row = NewRow::new(TimelineKind::Marker, body);
+        row.segment_id = segment_id;
+        row.data = Some(data);
+        self.push_row(row).await
+    }
+
+    // ── boot ────────────────────────────────────────────────────────────────
+
+    /// A fresh process has no live connection, so every batch still running
+    /// was interrupted. A delivery's owner messages are offered for resending
+    /// and its events put back once; a compaction's batch was never sent, so
+    /// nothing else changes.
+    async fn boot_reconcile(&self) {
+        let running = svc::running_batches(&self.db.conn).await.unwrap_or_default();
+        for batch in running {
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                batch.id,
+                BatchStatus::Interrupted,
+                None,
+                Some("interrupted by a restart".into()),
+                None,
+            )
+            .await;
+            if batch.kind == BatchKind::Delivery {
+                self.interrupt_delivery(batch.id, Some(batch.segment_id), "restart")
+                    .await;
+            }
+        }
+        self.boot_dispatches().await;
+    }
+
+    /// Mark a delivery's owner messages interrupted and put its events back.
+    async fn interrupt_delivery(&self, batch_id: i32, segment_id: Option<i32>, why: &str) {
+        let owners = svc::owner_rows_of_batch(&self.db.conn, batch_id)
+            .await
+            .unwrap_or_default();
+        let ids: Vec<i32> = owners.iter().map(|r| r.id).collect();
+        let moved = svc::move_owner_rows(
+            &self.db.conn,
+            &ids,
+            &[OwnerStatus::Delivered],
+            OwnerStatus::Interrupted,
+            None,
+            None,
+        )
+        .await
+        .unwrap_or_default();
+        self.emit_rows(moved.into_iter().map(svc::to_row).collect());
+        let _ = svc::requeue_batch_events(&self.db.conn, batch_id).await;
+        self.marker(
+            segment_id,
+            "turn_interrupted",
+            "The turn did not finish.",
+            serde_json::json!({ "batch_id": batch_id, "why": why }),
+        )
+        .await;
+    }
+
+    // ── events ──────────────────────────────────────────────────────────────
+
+    async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
+        let (is_mine, dispatch_id) = {
+            let st = self.state.lock().await;
+            (
+                st.connection_id.as_deref() == Some(env.connection_id.as_str()),
+                st.dispatch_conns.get(&env.connection_id).map(|c| c.id),
+            )
+        };
+        if is_mine {
+            self.on_own_event(env).await;
+        } else if let Some(id) = dispatch_id {
+            self.on_dispatch_event(id, env).await;
+        }
+    }
+
+    async fn on_own_event(&self, env: &EventEnvelope) {
+        match &env.payload {
+            AcpEvent::TurnComplete { stop_reason, .. } => {
+                let ours = {
+                    let st = self.state.lock().await;
+                    let fenced = st
+                        .fence
+                        .get(&env.connection_id)
+                        .is_some_and(|mark| env.seq <= *mark);
+                    matches!(&st.turn, Some(t) if t.conn_id == env.connection_id
+                        && env.seq > t.start_seq)
+                        && !fenced
+                };
+                if ours {
+                    self.finish_turn(TurnEnd::Completed(Some(stop_reason.clone())), Some(env.seq))
+                        .await;
+                }
+            }
+            AcpEvent::Error {
+                message,
+                code,
+                terminal,
+                ..
+            } => {
+                let overflow = compaction::looks_like_context_overflow(message, code.as_deref());
+                {
+                    let mut st = self.state.lock().await;
+                    if let Some(turn) = st.turn.as_mut() {
+                        turn.error = Some(message.clone());
+                        turn.overflow |= overflow;
+                    }
+                    st.last_error = Some(message.clone());
+                }
+                if *terminal {
+                    self.finish_turn(TurnEnd::Lost(message.clone()), None).await;
+                    self.drop_connection(&env.connection_id).await;
+                }
+                self.emit(PersonalAgentChange::Status);
+            }
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected | ConnectionStatus::Error,
+            } => {
+                self.finish_turn(TurnEnd::Lost("the connection was lost".into()), None)
+                    .await;
+                self.drop_connection(&env.connection_id).await;
+                self.emit(PersonalAgentChange::Status);
+            }
+            AcpEvent::UsageUpdate { used, size } => {
+                let reading = compact::occupancy_percent(Some(*used), Some(*size)).map(|percent| {
+                    UsageReading {
+                        percent,
+                        used: Some(*used),
+                        size: Some(*size),
+                        source: "live",
+                    }
+                });
+                let mut st = self.state.lock().await;
+                if let Some(turn) = st.turn.as_mut() {
+                    if turn.kind == BatchKind::Compaction && turn.usage_after.is_none() {
+                        turn.usage_after = reading;
+                    }
+                }
+            }
+            AcpEvent::ToolCall {
+                tool_call_id,
+                status,
+                meta,
+                ..
+            } => {
+                self.maybe_agent_compaction(tool_call_id, Some(status.as_str()), meta.as_ref())
+                    .await;
+            }
+            AcpEvent::ToolCallUpdate {
+                tool_call_id,
+                status,
+                meta,
+                ..
+            } => {
+                self.maybe_agent_compaction(tool_call_id, status.as_deref(), meta.as_ref())
+                    .await;
+            }
+            AcpEvent::PermissionRequest {
+                request_id,
+                tool_call,
+                options,
+                ..
+            } => {
+                self.record_permission_request(request_id, tool_call, options).await;
+            }
+            AcpEvent::PermissionResolved {
+                request_id,
+                option_id,
+                origin,
+            } => {
+                self.record_permission_resolved(request_id, option_id.as_deref(), origin.as_ref())
+                    .await;
+            }
+            AcpEvent::QuestionRequest {
+                question_id,
+                questions,
+            } => {
+                self.record_question_request(question_id, questions).await;
+            }
+            AcpEvent::QuestionResolved { question_id } => {
+                self.settle_question_row(question_id, None).await;
+            }
+            AcpEvent::PlanApprovalRequest {
+                approval_id,
+                plan_markdown,
+                ..
+            } => {
+                self.record_plan_request(approval_id, plan_markdown).await;
+            }
+            AcpEvent::PlanApprovalResolved { approval_id } => {
+                self.settle_question_row(approval_id, None).await;
+            }
+            AcpEvent::SessionConfigStale { stale: true, .. } => {
+                // The running process keeps its launch-time settings; a change
+                // to them takes a new process, which the plan makes a new
+                // segment (at the next delivery, never mid-turn).
+                if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+                    if seg.pending_reason.is_none() {
+                        let _ = svc::set_pending_reason(
+                            &self.db.conn,
+                            seg.id,
+                            Some(SegmentReason::OptionRestart),
+                        )
+                        .await;
+                        self.marker(
+                            Some(seg.id),
+                            "pending_switch",
+                            "Launch settings changed: a new session starts with the next message.",
+                            serde_json::json!({ "reason": "option_restart" }),
+                        )
+                        .await;
+                        self.emit(PersonalAgentChange::Status);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The connection is gone: forget it, so the next delivery reconnects.
+    async fn drop_connection(&self, conn_id: &str) {
+        let mut st = self.state.lock().await;
+        if st.connection_id.as_deref() == Some(conn_id) {
+            st.connection_id = None;
+            st.connection_segment = None;
+        }
+    }
+
+    /// The agent compacted its context inside a turn: note it, and let the
+    /// next delivery carry the state card. A compaction during codeg's own
+    /// compaction turn is that turn's, recorded when it settles.
+    async fn maybe_agent_compaction(
+        &self,
+        tool_call_id: &str,
+        status: Option<&str>,
+        meta: Option<&serde_json::Value>,
+    ) {
+        let Some(meta) = meta else {
+            return;
+        };
+        let Some(info) = meta.get("contextCompaction") else {
+            return;
+        };
+        if info.is_null() || info == &serde_json::Value::Bool(false) {
+            return;
+        }
+        let finished = matches!(status, Some("completed") | Some("failed"));
+        if !finished {
+            return;
+        }
+        let failed = status == Some("failed") || info.get("error").is_some_and(|e| !e.is_null());
+        let (segment_id, during_own) = {
+            let mut st = self.state.lock().await;
+            if !st.seen_compactions.insert(tool_call_id.to_string()) {
+                return;
+            }
+            let segment_id = st.connection_segment;
+            match st.turn.as_mut() {
+                // codeg's own compaction: the report is that turn's outcome.
+                Some(t) if t.kind == BatchKind::Compaction => {
+                    t.compaction_reported = Some(!failed);
+                    (segment_id, true)
+                }
+                // Inside a delivery: whatever its cards carried may be in
+                // the summary now, so they are owed again afterwards.
+                Some(t) => {
+                    t.agent_compacted |= !failed;
+                    (segment_id, false)
+                }
+                None => (segment_id, false),
+            }
+        };
+        if during_own {
+            return;
+        }
+        let Some(segment_id) = segment_id else {
+            return;
+        };
+        let before = info
+            .get("preTokens")
+            .or_else(|| meta.get("tokensBefore"))
+            .and_then(|v| v.as_u64());
+        let after = info
+            .get("postTokens")
+            .or_else(|| meta.get("tokensAfter"))
+            .and_then(|v| v.as_u64());
+        if !failed {
+            let _ = svc::bump_compactions(&self.db.conn, segment_id, CompactInitiator::Agent).await;
+            self.update_segment_state(segment_id, |s| s.needs_state_card = true)
+                .await;
+        }
+        self.marker(
+            Some(segment_id),
+            "compaction",
+            if failed {
+                "The agent's own compaction failed."
+            } else {
+                "The agent compacted its context."
+            },
+            serde_json::json!({
+                "initiator": "agent",
+                "status": if failed { "failed" } else { "ok" },
+                "before_tokens": before,
+                "after_tokens": after,
+            }),
+        )
+        .await;
+        self.emit(PersonalAgentChange::Status);
+    }
+
+    // ── questions and permissions ───────────────────────────────────────────
+
+    async fn current_segment_id(&self) -> Option<i32> {
+        self.state.lock().await.connection_segment
+    }
+
+    async fn record_permission_request(
+        &self,
+        request_id: &str,
+        tool_call: &serde_json::Value,
+        options: &[crate::acp::types::PermissionOptionInfo],
+    ) {
+        if let Ok(Some(_)) =
+            svc::row_by_ref(&self.db.conn, TimelineKind::Permission, request_id).await
+        {
+            return;
+        }
+        let title = tool_call
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut row = NewRow::new(TimelineKind::Permission, title);
+        row.segment_id = self.current_segment_id().await;
+        row.batch_id = self.state.lock().await.turn.as_ref().map(|t| t.batch_id);
+        row.ref_id = Some(request_id.to_string());
+        row.data = Some(serde_json::json!({
+            "state": "pending",
+            "tool_call": {
+                "title": tool_call.get("title"),
+                "kind": tool_call.get("kind"),
+                "raw_input": tool_call.get("rawInput").or_else(|| tool_call.get("raw_input")),
+            },
+            "options": options,
+        }));
+        self.push_row(row).await;
+        self.emit(PersonalAgentChange::Status);
+    }
+
+    async fn record_permission_resolved(
+        &self,
+        request_id: &str,
+        option_id: Option<&str>,
+        origin: Option<&crate::acp::types::PermissionAnswerOrigin>,
+    ) {
+        let Ok(Some(row)) =
+            svc::row_by_ref(&self.db.conn, TimelineKind::Permission, request_id).await
+        else {
+            return;
+        };
+        let mut data = row
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = data.as_object_mut() {
+            map.insert(
+                "state".into(),
+                if option_id.is_some() { "answered" } else { "withdrawn" }.into(),
+            );
+            map.insert("option_id".into(), option_id.into());
+            map.insert(
+                "origin".into(),
+                origin.map(|o| o.kind()).unwrap_or("none").into(),
+            );
+        }
+        let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
+        if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
+            self.emit_rows(vec![svc::to_row(updated)]);
+        }
+        self.emit(PersonalAgentChange::Status);
+    }
+
+    async fn record_question_request(
+        &self,
+        question_id: &str,
+        questions: &[crate::acp::question::QuestionSpec],
+    ) {
+        if let Ok(Some(_)) =
+            svc::row_by_ref(&self.db.conn, TimelineKind::Question, question_id).await
+        {
+            return;
+        }
+        let body = questions
+            .first()
+            .map(|q| q.question.clone())
+            .unwrap_or_default();
+        let mut row = NewRow::new(TimelineKind::Question, body);
+        row.segment_id = self.current_segment_id().await;
+        row.batch_id = self.state.lock().await.turn.as_ref().map(|t| t.batch_id);
+        row.ref_id = Some(question_id.to_string());
+        row.data = Some(serde_json::json!({
+            "kind": "ask",
+            "state": "pending",
+            "questions": questions,
+        }));
+        self.push_row(row).await;
+        self.emit(PersonalAgentChange::Status);
+    }
+
+    async fn record_plan_request(&self, approval_id: &str, plan_markdown: &str) {
+        if let Ok(Some(_)) =
+            svc::row_by_ref(&self.db.conn, TimelineKind::Question, approval_id).await
+        {
+            return;
+        }
+        let mut row = NewRow::new(TimelineKind::Question, plan_markdown.to_string());
+        row.segment_id = self.current_segment_id().await;
+        row.batch_id = self.state.lock().await.turn.as_ref().map(|t| t.batch_id);
+        row.ref_id = Some(approval_id.to_string());
+        row.data = Some(serde_json::json!({ "kind": "plan_approval", "state": "pending" }));
+        self.push_row(row).await;
+        self.emit(PersonalAgentChange::Status);
+    }
+
+    /// Record the answer to a question or plan approval (`answer` from the
+    /// page), or — `None`, from the resolved event — that it is no longer
+    /// pending without codeg having seen the answer.
+    async fn settle_question_row(&self, ref_id: &str, answer: Option<serde_json::Value>) {
+        let Ok(Some(row)) = svc::row_by_ref(&self.db.conn, TimelineKind::Question, ref_id).await
+        else {
+            return;
+        };
+        let mut data = row
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let pending = data.get("state").and_then(|v| v.as_str()) == Some("pending");
+        if let Some(map) = data.as_object_mut() {
+            match answer {
+                Some(a) => {
+                    let skipped = a.get("declined").and_then(|v| v.as_bool()).unwrap_or(false);
+                    map.insert(
+                        "state".into(),
+                        if skipped { "skipped" } else { "answered" }.into(),
+                    );
+                    map.insert("answer".into(), a);
+                }
+                None if pending => {
+                    map.insert("state".into(), "resolved".into());
+                }
+                None => return,
+            }
+        }
+        let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
+        if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
+            self.emit_rows(vec![svc::to_row(updated)]);
+        }
+        self.emit(PersonalAgentChange::Status);
+    }
+
+    /// The owner answered the agent's question on the page: record it in full,
+    /// then hand it to the waiting tool call.
+    pub async fn answer_question(
+        &self,
+        question_id: &str,
+        answer: crate::acp::question::QuestionAnswer,
+    ) -> Result<(), String> {
+        let conn_id = self.require_connection().await?;
+        let questions = match self.manager.get_state(&conn_id).await {
+            Some(state) => state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .filter(|q| q.question_id == question_id)
+                .map(|q| q.questions.clone()),
+            None => None,
+        };
+        if let Some(questions) = questions {
+            let outcome = crate::acp::question::build_outcome(&questions, &answer);
+            let value = serde_json::to_value(&outcome).unwrap_or_default();
+            self.settle_question_row(question_id, Some(value)).await;
+        }
+        self.manager
+            .answer_question(&conn_id, question_id, answer)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn answer_plan_approval(
+        &self,
+        approval_id: &str,
+        answer: crate::acp::plan_approval::PlanApprovalAnswer,
+    ) -> Result<(), String> {
+        let conn_id = self.require_connection().await?;
+        let value = serde_json::to_value(&answer).unwrap_or_default();
+        self.settle_question_row(approval_id, Some(value)).await;
+        self.manager
+            .answer_plan_approval(&conn_id, approval_id, answer)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn respond_permission(&self, request_id: &str, option_id: &str) -> Result<(), String> {
+        let conn_id = self.require_connection().await?;
+        self.manager
+            .respond_permission(&conn_id, request_id, option_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn require_connection(&self) -> Result<String, String> {
+        self.state
+            .lock()
+            .await
+            .connection_id
+            .clone()
+            .ok_or_else(|| "the personal agent has no live session".to_string())
+    }
+
+    // ── liveness ────────────────────────────────────────────────────────────
+
+    async fn liveness_tick(&self) {
+        let turn = self.state.lock().await.turn.clone();
+        let Some(turn) = turn else {
+            return;
+        };
+        let Some(state) = self.manager.get_state(&turn.conn_id).await else {
+            self.finish_turn(TurnEnd::Lost("the connection was lost".into()), None)
+                .await;
+            self.drop_connection(&turn.conn_id).await;
+            return;
+        };
+        let (in_flight, dead, seq) = {
+            let s = state.read().await;
+            (
+                s.turn_in_flight,
+                matches!(s.status, ConnectionStatus::Disconnected | ConnectionStatus::Error),
+                s.event_seq,
+            )
+        };
+        if dead {
+            self.finish_turn(TurnEnd::Lost("the connection was lost".into()), Some(seq))
+                .await;
+            self.drop_connection(&turn.conn_id).await;
+            return;
+        }
+        if !in_flight && Utc::now() - turn.started_at > IDLE_GRACE {
+            // Ended without our seeing it: settle from the state, and fence
+            // everything already emitted so the late event settles nothing.
+            self.finish_turn(TurnEnd::Completed(None), Some(seq)).await;
+        }
+    }
+
+    // ── segment state ───────────────────────────────────────────────────────
+
+    pub(super) async fn update_segment_state(&self, segment_id: i32, f: impl FnOnce(&mut SegmentState)) {
+        let Ok(Some(seg)) = svc::get_segment(&self.db.conn, segment_id).await else {
+            return;
+        };
+        let mut state = SegmentState::parse(&seg.state);
+        f(&mut state);
+        if let Ok(json) = serde_json::to_string(&state) {
+            let _ = svc::set_segment_state(&self.db.conn, segment_id, json).await;
+        }
+    }
+
+    // ── readings ────────────────────────────────────────────────────────────
+
+    async fn live_reading(&self, conn_id: &str) -> Option<UsageReading> {
+        let state = self.manager.get_state(conn_id).await?;
+        let usage = state.read().await.usage.clone()?;
+        let percent = compact::occupancy_percent(Some(usage.used), Some(usage.size))?;
+        Some(UsageReading {
+            percent,
+            used: Some(usage.used),
+            size: Some(usage.size),
+            source: "live",
+        })
+    }
+
+    /// Occupancy of the session about to be prompted: the live report first,
+    /// the transcript second — and the transcript only when it describes the
+    /// session the connection actually holds (see the kanban's
+    /// `context_reading` for why "close enough" is never good enough).
+    async fn context_reading(&self, conn_id: &str, conversation_id: Option<i32>) -> Option<UsageReading> {
+        if let Some(live) = self.live_reading(conn_id).await {
+            return Some(live);
+        }
+        let conversation_id = conversation_id?;
+        let live_session = self
+            .manager
+            .get_state(conn_id)
+            .await?
+            .read()
+            .await
+            .external_id
+            .clone()?;
+        let row = crate::db::service::conversation_service::get_by_id(&self.db.conn, conversation_id)
+            .await
+            .ok()?;
+        if !compact::transcript_describes_live_session(
+            row.external_id.as_deref(),
+            Some(live_session.as_str()),
+        ) {
+            return None;
+        }
+        let (detail, _) =
+            crate::commands::conversations::get_folder_conversation_core(&self.db.conn, conversation_id)
+                .await
+                .ok()?;
+        let stats = detail.session_stats?;
+        let percent = stats
+            .context_window_usage_percent
+            .filter(|p| p.is_finite() && *p > 0.0)
+            .or_else(|| {
+                compact::occupancy_percent(
+                    stats.context_window_used_tokens,
+                    stats.context_window_max_tokens,
+                )
+            })?;
+        Some(UsageReading {
+            percent,
+            used: stats.context_window_used_tokens,
+            size: stats.context_window_max_tokens,
+            source: "transcript",
+        })
+    }
+
+    // ── delivery ────────────────────────────────────────────────────────────
+
+    /// Deliver whatever waits, when nothing is in flight. Serialized; a call
+    /// that arrives while one runs makes it run once more.
+    pub(super) async fn pump(self: &Arc<Self>) {
+        if !self.booted.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(_guard) = self.pump_lock.try_lock() else {
+            self.pump_again.store(true, Ordering::SeqCst);
+            return;
+        };
+        loop {
+            self.pump_again.store(false, Ordering::SeqCst);
+            if let Err(e) = self.pump_once().await {
+                tracing::warn!("[personal_agent] delivery: {e}");
+                self.state.lock().await.last_error = Some(e);
+                self.emit(PersonalAgentChange::Status);
+            }
+            if !self.pump_again.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+    }
+
+    async fn pump_once(self: &Arc<Self>) -> Result<(), String> {
+        if self.state.lock().await.turn.is_some() {
+            return Ok(());
+        }
+        let Some(row) = self.agent_row().await else {
+            return Ok(());
+        };
+        let owners = svc::queued_owner_rows(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        let events = svc::pending_events(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        if owners.is_empty() && !events.iter().any(|e| e.wake) {
+            return Ok(());
+        }
+        let session = self.ensure_session(&row).await?;
+
+        if !session.fresh {
+            let seg_state = SegmentState::parse(&session.segment.state);
+            let settings = settings_of(&row);
+            let skip_once = std::mem::take(&mut self.state.lock().await.skip_compaction_once);
+            let reading = self
+                .context_reading(&session.conn_id, session.segment.conversation_id)
+                .await;
+            let decision = compaction::decide(
+                seg_state.force_compact,
+                settings.auto_compact_percent,
+                session.segment.auto_compact_paused,
+                skip_once,
+                reading.map(|r| r.percent),
+            );
+            match decision {
+                PreDelivery::Compact { forced } => {
+                    match self
+                        .start_compaction(&row, &session, CompactInitiator::Auto, reading, forced)
+                        .await?
+                    {
+                        CompactionStart::Started => return Ok(()),
+                        CompactionStart::NoCommand if forced => {
+                            // An overflow no command can fix: the only way left is a
+                            // new segment.
+                            self.request_new_segment(SegmentReason::Overflow).await;
+                            return Box::pin(self.pump_once()).await;
+                        }
+                        CompactionStart::NoCommand => {
+                            self.note_check("no_command", reading).await;
+                        }
+                    }
+                }
+                PreDelivery::Deliver(outcome) => self.note_check(outcome, reading).await,
+            }
+        }
+        self.deliver(&row, &session, owners, events).await
+    }
+
+    async fn note_check(&self, outcome: &'static str, reading: Option<UsageReading>) {
+        self.state.lock().await.last_check = Some(CompactCheck {
+            at: Utc::now(),
+            outcome,
+            percent: reading.map(|r| r.percent),
+        });
+    }
+
+    /// Mark the open segment to be replaced at the next delivery.
+    pub(super) async fn request_new_segment(&self, reason: SegmentReason) {
+        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+            let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(reason)).await;
+        }
+    }
+
+    /// The open segment, with a live connection — starting a new segment when
+    /// one is due, and resuming the old session after an idle sweep or a
+    /// restart.
+    async fn ensure_session(&self, row: &agent_entity::Model) -> Result<Session, String> {
+        let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
+        let workdir = self.workdir_of(row);
+        workdir::ensure_initialized(&workdir, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        let folder_id = self.ensure_folder(row, &workdir).await?;
+
+        let seg = svc::open_segment(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(open) = seg.as_ref() {
+            if let Some(reason) = open.pending_reason {
+                self.end_segment(open, reason).await;
+                let new = self.start_segment(&config, reason, Some(open)).await?;
+                return self.connect_fresh(row, &config, new, &workdir, folder_id).await;
+            }
+        }
+        let Some(seg) = seg else {
+            let new = self.start_segment(&config, SegmentReason::First, None).await?;
+            return self.connect_fresh(row, &config, new, &workdir, folder_id).await;
+        };
+
+        // The live connection of this segment, if there is one.
+        let live = {
+            let st = self.state.lock().await;
+            match (&st.connection_id, st.connection_segment) {
+                (Some(c), Some(s)) if s == seg.id => Some(c.clone()),
+                _ => None,
+            }
+        };
+        if let Some(conn_id) = live {
+            if self.manager.touch(&conn_id).await {
+                return Ok(Session {
+                    segment: seg,
+                    conn_id,
+                    folder_id,
+                    fresh: false,
+                });
+            }
+            self.drop_connection(&conn_id).await;
+        }
+        match seg.agent_session_id.clone() {
+            Some(session_id) => {
+                match self
+                    .resume(row, &seg, &session_id, &workdir)
+                    .await
+                {
+                    Ok(conn_id) => {
+                        self.marker(
+                            Some(seg.id),
+                            "reconnected",
+                            "Reconnected to the same session.",
+                            serde_json::json!({}),
+                        )
+                        .await;
+                        Ok(Session {
+                            segment: seg,
+                            conn_id,
+                            folder_id,
+                            fresh: false,
+                        })
+                    }
+                    Err(e) => {
+                        tracing::info!("[personal_agent] resume failed, new segment: {e}");
+                        self.end_segment(&seg, SegmentReason::Recovery).await;
+                        let new = self
+                            .start_segment(&config, SegmentReason::Recovery, Some(&seg))
+                            .await?;
+                        self.connect_fresh(row, &config, new, &workdir, folder_id).await
+                    }
+                }
+            }
+            // Never got as far as a session (its first delivery failed before
+            // the agent answered): start this same segment's session afresh.
+            None => self.connect_fresh(row, &config, seg, &workdir, folder_id).await,
+        }
+    }
+
+    /// The hidden folder backing the working directory, created on demand.
+    async fn ensure_folder(
+        &self,
+        row: &agent_entity::Model,
+        workdir: &std::path::Path,
+    ) -> Result<i32, String> {
+        let path = workdir.to_string_lossy().to_string();
+        let folder = crate::db::service::folder_service::ensure_personal_folder(&self.db.conn, &path)
+            .await
+            .map_err(|e| e.to_string())?;
+        if row.folder_id != Some(folder.id) {
+            let _ = svc::set_workdir(&self.db.conn, row.id, row.workdir.clone(), Some(folder.id)).await;
+        }
+        Ok(folder.id)
+    }
+
+    async fn end_segment(&self, seg: &segment_entity::Model, reason: SegmentReason) {
+        let conn = {
+            let mut st = self.state.lock().await;
+            let conn = if st.connection_segment == Some(seg.id) {
+                st.connection_segment = None;
+                st.connection_id.take()
+            } else {
+                None
+            };
+            st.seen_compactions.clear();
+            conn
+        };
+        let usage = match conn.as_deref() {
+            Some(c) => self.live_reading(c).await,
+            None => None,
+        };
+        if let Some(c) = conn {
+            let _ = self.manager.disconnect(&c).await;
+        }
+        let usage_json = usage.map(|u| serde_json::json!({ "used": u.used, "size": u.size }).to_string());
+        let _ = svc::end_segment(&self.db.conn, seg.id, reason, usage_json).await;
+    }
+
+    async fn start_segment(
+        &self,
+        config: &AssistantAgentConfig,
+        reason: SegmentReason,
+        previous: Option<&segment_entity::Model>,
+    ) -> Result<segment_entity::Model, String> {
+        let snapshot = serde_json::to_string(config).map_err(|e| e.to_string())?;
+        let seg = svc::create_segment(
+            &self.db.conn,
+            &config.agent_type.as_wire(),
+            snapshot,
+            reason,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let state = SegmentState {
+            handoff_pending: true,
+            ..Default::default()
+        };
+        if let Ok(json) = serde_json::to_string(&state) {
+            let _ = svc::set_segment_state(&self.db.conn, seg.id, json).await;
+        }
+        let previous_agent = previous
+            .and_then(|p| serde_json::from_str::<AssistantAgentConfig>(&p.agent_options).ok())
+            .map(|c| c.label_snapshot.agent);
+        self.marker(
+            Some(seg.id),
+            "segment_start",
+            format!("Session {} started on {}.", seg.seq, config.label_snapshot.agent),
+            serde_json::json!({
+                "seq": seg.seq,
+                "reason": reason,
+                "agent_type": config.agent_type,
+                "agent": config.label_snapshot.agent,
+                "previous_agent": previous_agent,
+                "options": config.label_snapshot.options,
+            }),
+        )
+        .await;
+        svc::get_segment(&self.db.conn, seg.id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "segment vanished".to_string())
+    }
+
+    /// A new session for `seg`: spawn, and give it its conversation row.
+    async fn connect_fresh(
+        &self,
+        row: &agent_entity::Model,
+        config: &AssistantAgentConfig,
+        seg: segment_entity::Model,
+        workdir: &std::path::Path,
+        folder_id: i32,
+    ) -> Result<Session, String> {
+        let agent_type = config.agent_type;
+        let settings = settings_of(row);
+        workdir::sync_skill(workdir, agent_type, settings.skill_enabled);
+        let env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            &self.data_dir,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        crate::commands::acp::verify_agent_installed(agent_type)
+            .await
+            .map_err(|e| e.to_string())?;
+        let outcome = self
+            .manager
+            .spawn_personal_agent(
+                agent_type,
+                Some(workdir.to_string_lossy().to_string()),
+                None,
+                env,
+                OWNER_LABEL.to_string(),
+                self.emitter.clone(),
+                config.agent_options.mode_id.clone(),
+                config.agent_options.config_values.clone(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let conn_id = outcome.connection_id;
+        let title = format!("Personal agent · {}", seg.seq);
+        let conversation = crate::db::service::conversation_service::create_personal(
+            &self.db.conn,
+            folder_id,
+            agent_type,
+            Some(title),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let _ =
+            crate::db::service::conversation_service::lock_title(&self.db.conn, conversation.id).await;
+        let _ = svc::set_segment_session(&self.db.conn, seg.id, Some(conversation.id), None).await;
+        {
+            let mut st = self.state.lock().await;
+            st.connection_id = Some(conn_id.clone());
+            st.connection_segment = Some(seg.id);
+        }
+        let seg = svc::get_segment(&self.db.conn, seg.id)
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or(seg);
+        self.emit(PersonalAgentChange::Status);
+        Ok(Session {
+            segment: seg,
+            conn_id,
+            folder_id,
+            fresh: true,
+        })
+    }
+
+    /// Reconnect to the segment's own session. `Err` when the agent no
+    /// longer has it — including the case where it quietly started a fresh
+    /// session instead, which `spawn` still reports as success.
+    async fn resume(
+        &self,
+        row: &agent_entity::Model,
+        seg: &segment_entity::Model,
+        session_id: &str,
+        workdir: &std::path::Path,
+    ) -> Result<String, String> {
+        let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
+        let agent_type = AgentType::from_wire(&seg.agent_type).unwrap_or(config.agent_type);
+        // The segment's own agent, with the brain's current options: a change
+        // that applies within a session is meant to survive a reconnect.
+        let (mode_id, values) = if agent_type == config.agent_type {
+            (
+                config.agent_options.mode_id.clone(),
+                config.agent_options.config_values.clone(),
+            )
+        } else {
+            let snap = serde_json::from_str::<AssistantAgentConfig>(&seg.agent_options).ok();
+            (
+                snap.as_ref().and_then(|s| s.agent_options.mode_id.clone()),
+                snap.map(|s| s.agent_options.config_values).unwrap_or_default(),
+            )
+        };
+        let env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            Some(session_id),
+            &self.data_dir,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        crate::commands::acp::verify_agent_installed(agent_type)
+            .await
+            .map_err(|e| e.to_string())?;
+        let outcome = self
+            .manager
+            .spawn_personal_agent(
+                agent_type,
+                Some(workdir.to_string_lossy().to_string()),
+                Some(session_id.to_string()),
+                env,
+                OWNER_LABEL.to_string(),
+                self.emitter.clone(),
+                mode_id,
+                values,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let conn_id = outcome.connection_id;
+        let held = match self.manager.get_state(&conn_id).await {
+            Some(state) => state.read().await.external_id.clone(),
+            None => return Err("the session ended while resuming".into()),
+        };
+        if held.as_deref() != Some(session_id) {
+            let _ = self.manager.disconnect(&conn_id).await;
+            return Err(format!(
+                "the agent did not resume session {session_id} (holds {held:?})"
+            ));
+        }
+        let mut st = self.state.lock().await;
+        st.connection_id = Some(conn_id.clone());
+        st.connection_segment = Some(seg.id);
+        Ok(conn_id)
+    }
+
+    /// Send the compact command, when there is one. Never fails the delivery
+    /// it precedes: a compaction that cannot start says so and lets it go.
+    async fn start_compaction(
+        &self,
+        row: &agent_entity::Model,
+        session: &Session,
+        initiator: CompactInitiator,
+        before: Option<UsageReading>,
+        forced: bool,
+    ) -> Result<CompactionStart, String> {
+        let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
+        let agent_type = AgentType::from_wire(&session.segment.agent_type).unwrap_or(config.agent_type);
+        let settings = settings_of(row);
+        let advertised = match self.manager.get_state(&session.conn_id).await {
+            Some(state) => state.read().await.available_commands.clone(),
+            None => Vec::new(),
+        };
+        let Some(command) = compact::resolve_compact_command(
+            settings.compact_command_for(agent_type),
+            agent_type,
+            &advertised,
+        ) else {
+            return Ok(CompactionStart::NoCommand);
+        };
+        let batch = svc::create_batch(
+            &self.db.conn,
+            session.segment.id,
+            BatchKind::Compaction,
+            Some(serde_json::json!({
+                "command": command,
+                "initiator": initiator,
+                "forced": forced,
+                "before": before.map(|b| serde_json::json!({
+                    "percent": b.percent, "used": b.used, "size": b.size, "source": b.source,
+                })),
+            })),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        // Registered BEFORE the send: the agent can answer the instant the
+        // prompt is enqueued, and a completion arriving with no turn on record
+        // would be dropped as a stranger's.
+        let start_seq = self.current_seq(&session.conn_id).await;
+        {
+            let mut st = self.state.lock().await;
+            st.turn = Some(ActiveTurn {
+                batch_id: batch.id,
+                segment_id: session.segment.id,
+                kind: BatchKind::Compaction,
+                conn_id: session.conn_id.clone(),
+                start_seq,
+                started_at: Utc::now(),
+                owner_row_ids: Vec::new(),
+                compaction: Some(CompactionRun {
+                    initiator,
+                    command: command.clone(),
+                    before,
+                    forced,
+                }),
+                carried: Carried::default(),
+                overflow: false,
+                error: None,
+                usage_after: None,
+                compaction_reported: None,
+                agent_compacted: false,
+            });
+            st.last_check = Some(CompactCheck {
+                at: Utc::now(),
+                outcome: "compacted",
+                percent: before.map(|b| b.percent),
+            });
+        }
+        let sent = self
+            .manager
+            .send_prompt_linked_with_message_id(
+                &self.db,
+                &session.conn_id,
+                // The bare command, nothing appended: a trailing frame turns
+                // some agents' command into a command with arguments, and
+                // others' into plain prose.
+                vec![PromptInputBlock::Text {
+                    text: command.clone(),
+                }],
+                Some(session.folder_id),
+                session.segment.conversation_id,
+                None,
+                None,
+            )
+            .await;
+        if let Err(e) = sent {
+            self.clear_turn(batch.id).await;
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                batch.id,
+                BatchStatus::Failed,
+                None,
+                Some(e.to_string()),
+                None,
+            )
+            .await;
+            self.marker(
+                Some(session.segment.id),
+                "compaction",
+                "The compaction could not be sent.",
+                serde_json::json!({
+                    "initiator": initiator,
+                    "status": "failed",
+                    "command": command,
+                    "error": e.to_string(),
+                }),
+            )
+            .await;
+            self.state.lock().await.skip_compaction_once = true;
+            return Err(format!("compaction not sent: {e}"));
+        }
+        self.emit(PersonalAgentChange::Status);
+        Ok(CompactionStart::Started)
+    }
+
+    /// Forget the turn of `batch_id` (its prompt never went out).
+    async fn clear_turn(&self, batch_id: i32) {
+        let mut st = self.state.lock().await;
+        if st.turn.as_ref().is_some_and(|t| t.batch_id == batch_id) {
+            st.turn = None;
+        }
+    }
+
+    pub(super) async fn current_seq(&self, conn_id: &str) -> u64 {
+        match self.manager.get_state(conn_id).await {
+            Some(state) => state.read().await.event_seq,
+            None => 0,
+        }
+    }
+
+    /// The events block's lines. Several updates of the same dispatch since
+    /// the last delivery: only the newest is news — the older ones still
+    /// ride in the batch (and are settled with it), they just are not
+    /// repeated. Each carries the agent's plan for when the work is done as
+    /// it stands on the dispatch's entry now: the agent may have changed it
+    /// since the event was written.
+    pub(super) async fn event_lines(
+        &self,
+        events: &[crate::db::entities::personal_agent_event::Model],
+    ) -> Vec<cards::EventLine> {
+        let newest: HashMap<&str, i32> = events
+            .iter()
+            .filter_map(|e| e.coalesce_key.as_deref().map(|k| (k, e.id)))
+            .fold(HashMap::new(), |mut m, (k, id)| {
+                let slot = m.entry(k).or_insert(id);
+                *slot = (*slot).max(id);
+                m
+            });
+        let mut lines = Vec::new();
+        for e in events.iter().filter(|e| match e.coalesce_key.as_deref() {
+            Some(k) => newest.get(k) == Some(&e.id),
+            None => true,
+        }) {
+            let payload = e
+                .payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok());
+            let item = match payload
+                .as_ref()
+                .and_then(|p| p.get("dispatch_id"))
+                .and_then(|v| v.as_i64())
+                .and_then(|id| i32::try_from(id).ok())
+            {
+                Some(id) => svc::item_of_dispatch(&self.db.conn, id).await.ok().flatten(),
+                None => None,
+            };
+            let on_done = match item {
+                Some(item) => item.on_done,
+                None => payload
+                    .as_ref()
+                    .and_then(|p| p.get("on_done").and_then(|v| v.as_str()).map(str::to_string)),
+            };
+            lines.push(cards::EventLine {
+                summary: e.summary.clone(),
+                on_done,
+            });
+        }
+        lines
+    }
+
+    /// The note for events an interrupted turn had already been handed: say
+    /// so, and list what that turn dispatched, so it is not done twice.
+    pub(super) async fn interrupted_note(
+        &self,
+        events: &[crate::db::entities::personal_agent_event::Model],
+    ) -> Option<String> {
+        if !events.iter().any(|e| e.requeues > 0) {
+            return None;
+        }
+        let mut batches: Vec<i32> = events
+            .iter()
+            .filter(|e| e.requeues > 0)
+            .filter_map(|e| e.requeued_from)
+            .collect();
+        batches.sort_unstable();
+        batches.dedup();
+        let mut dispatched = Vec::new();
+        for b in &batches {
+            for d in svc::dispatches_of_batch(&self.db.conn, *b).await.unwrap_or_default() {
+                dispatched.push(format!("#{} \"{}\" ({:?}, {:?})", d.id, d.title, d.mode, d.state));
+            }
+        }
+        Some(cards::interrupted_note(&dispatched))
+    }
+
+    /// Build and send one delivery.
+    async fn deliver(
+        &self,
+        row: &agent_entity::Model,
+        session: &Session,
+        owners: Vec<crate::db::entities::personal_agent_timeline::Model>,
+        events: Vec<crate::db::entities::personal_agent_event::Model>,
+    ) -> Result<(), String> {
+        let workdir = self.workdir_of(row);
+        let settings = settings_of(row);
+        let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
+        let seg_state = SegmentState::parse(&session.segment.state);
+        let digest = workdir::persona_digest(&workdir);
+        let soul = workdir::read_text(&workdir, workdir::SOUL_FILE);
+        let rules = workdir::read_text(&workdir, workdir::RULES_FILE);
+
+        let mut cards_text: Vec<String> = Vec::new();
+        let mut carried = Carried::default();
+        let items = self.item_lines().await;
+        if seg_state.handoff_pending {
+            let card = self
+                .handoff_card(row, &config, &session.segment, &workdir, &items, settings.handoff_budget_chars)
+                .await;
+            let size = card.text.chars().count() as i32;
+            let _ = svc::set_segment_handoff_size(&self.db.conn, session.segment.id, size).await;
+            let trimmed = card.trimmed;
+            self.update_segment_state(session.segment.id, |s| s.handoff_trimmed = trimmed)
+                .await;
+            cards_text.push(card.text);
+            carried.handoff = true;
+        } else if seg_state.needs_state_card {
+            cards_text.push(cards::state_card(&soul, &rules, &items));
+            carried.state_card = true;
+        } else if seg_state.persona_resend || session.segment.persona_digest.as_deref() != Some(&digest)
+        {
+            // Changed between turns, not by the agent itself: its own edits
+            // are folded into the digest at the end of each of its turns.
+            if session.segment.persona_digest.is_some() || seg_state.persona_resend {
+                cards_text.push(cards::persona_update(&soul, &rules));
+                carried.persona = true;
+            }
+        }
+        if let Some(note) = self.interrupted_note(&events).await {
+            cards_text.push(note);
+        }
+        let event_lines = self.event_lines(&events).await;
+        let events_text = cards::events_block(&event_lines);
+        let owner_texts: Vec<String> = owners.iter().map(|o| o.body.clone()).collect();
+        let text = cards::delivery_text(&cards_text, events_text.as_deref(), &owner_texts);
+
+        // Attachments ride after the text, in message order.
+        let mut blocks = vec![PromptInputBlock::Text { text }];
+        for o in &owners {
+            if let Some(extra) = o
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .and_then(|d| d.get("blocks").cloned())
+            {
+                if let Ok(more) = serde_json::from_value::<Vec<PromptInputBlock>>(extra) {
+                    blocks.extend(more);
+                }
+            }
+        }
+
+        let reading = self
+            .context_reading(&session.conn_id, session.segment.conversation_id)
+            .await;
+        let batch = svc::create_batch(
+            &self.db.conn,
+            session.segment.id,
+            BatchKind::Delivery,
+            Some(serde_json::json!({
+                "owner_rows": owners.iter().map(|o| o.id).collect::<Vec<_>>(),
+                "events": events.iter().map(|e| e.id).collect::<Vec<_>>(),
+                "handoff": carried.handoff,
+                "state_card": carried.state_card,
+                "persona": carried.persona,
+                "usage_before": reading.map(|r| r.percent),
+            })),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let owner_ids: Vec<i32> = owners.iter().map(|o| o.id).collect();
+        let event_ids: Vec<i32> = events.iter().map(|e| e.id).collect();
+        let moved = svc::move_owner_rows(
+            &self.db.conn,
+            &owner_ids,
+            &[OwnerStatus::Queued],
+            OwnerStatus::Delivered,
+            Some(batch.id),
+            Some(session.segment.id),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let _ = svc::mark_events_delivered(&self.db.conn, &event_ids, batch.id).await;
+        let start_seq = self.current_seq(&session.conn_id).await;
+        // Registered before the send, for the reason `start_compaction` gives.
+        {
+            let mut st = self.state.lock().await;
+            st.turn = Some(ActiveTurn {
+                batch_id: batch.id,
+                segment_id: session.segment.id,
+                kind: BatchKind::Delivery,
+                conn_id: session.conn_id.clone(),
+                start_seq,
+                started_at: Utc::now(),
+                owner_row_ids: owner_ids.clone(),
+                compaction: None,
+                carried,
+                overflow: false,
+                error: None,
+                usage_after: None,
+                compaction_reported: None,
+                agent_compacted: false,
+            });
+            st.last_error = None;
+        }
+        let sent = self
+            .manager
+            .send_prompt_linked_with_message_id(
+                &self.db,
+                &session.conn_id,
+                blocks,
+                Some(session.folder_id),
+                session.segment.conversation_id,
+                None,
+                None,
+            )
+            .await;
+        if let Err(e) = sent {
+            self.clear_turn(batch.id).await;
+            // Nothing reached the agent: everything goes back as it was.
+            let back = svc::move_owner_rows(
+                &self.db.conn,
+                &owner_ids,
+                &[OwnerStatus::Delivered],
+                OwnerStatus::Queued,
+                None,
+                None,
+            )
+            .await
+            .unwrap_or_default();
+            let _ = svc::revert_batch_events(&self.db.conn, batch.id).await;
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                batch.id,
+                BatchStatus::Failed,
+                None,
+                Some(e.to_string()),
+                None,
+            )
+            .await;
+            self.emit_rows(back.into_iter().map(svc::to_row).collect());
+            if matches!(e, crate::acp::error::AcpError::ProcessExited | crate::acp::error::AcpError::ConnectionNotFound(_)) {
+                self.drop_connection(&session.conn_id).await;
+            }
+            return Err(format!("delivery not sent: {e}"));
+        }
+        // The persona this delivery hands over is what the agent now has.
+        if carried.persona || carried.handoff || carried.state_card {
+            self.update_segment_state(session.segment.id, |s| s.persona_resend = false)
+                .await;
+        }
+        let _ = svc::set_segment_persona_digest(&self.db.conn, session.segment.id, Some(digest)).await;
+        self.emit_rows(moved.into_iter().map(svc::to_row).collect());
+        self.emit(PersonalAgentChange::Status);
+        Ok(())
+    }
+
+    /// The open matters, as cards list them.
+    pub(super) async fn item_lines(&self) -> Vec<ItemLine> {
+        let items = svc::list_items(
+            &self.db.conn,
+            &[ItemStatus::Open, ItemStatus::Waiting],
+            CARD_ITEMS,
+        )
+        .await
+        .unwrap_or_default();
+        let mut lines = Vec::with_capacity(items.len());
+        for i in items.into_iter().rev() {
+            let dispatch = match i.dispatch_id {
+                Some(id) => svc::get_dispatch(&self.db.conn, id).await.ok().flatten().map(|d| {
+                    let name = serde_json::from_str::<crate::models::personal_agent::DispatchExecutorSnapshot>(
+                        &d.executor_snapshot,
+                    )
+                    .map(|s| s.name)
+                    .unwrap_or_default();
+                    (
+                        enum_str(&d.mode),
+                        name,
+                        enum_str(&d.state),
+                    )
+                }),
+                None => None,
+            };
+            lines.push(ItemLine {
+                id: i.id,
+                kind: enum_str(&i.kind),
+                status: enum_str(&i.status),
+                waits_for: i.waits_for.as_ref().map(enum_str),
+                summary: i.summary,
+                dispatch,
+            });
+        }
+        lines
+    }
+
+    async fn handoff_card(
+        &self,
+        row: &agent_entity::Model,
+        config: &AssistantAgentConfig,
+        seg: &segment_entity::Model,
+        workdir: &std::path::Path,
+        items: &[ItemLine],
+        budget: u32,
+    ) -> cards::Card {
+        let _ = row;
+        let recent_rows = svc::recent_rows(
+            &self.db.conn,
+            &[
+                TimelineKind::Owner,
+                TimelineKind::Reply,
+                TimelineKind::Question,
+                TimelineKind::Dispatch,
+                TimelineKind::Result,
+            ],
+            HANDOFF_RECENT_ROWS,
+        )
+        .await
+        .unwrap_or_default();
+        let recent: Vec<RecentLine> = recent_rows
+            .into_iter()
+            // The messages this very delivery carries are in it already.
+            .filter(|r| !(r.kind == TimelineKind::Owner && r.status == Some(OwnerStatus::Queued)))
+            .map(|r| RecentLine {
+                who: match r.kind {
+                    TimelineKind::Owner => "Owner",
+                    TimelineKind::Reply => "You",
+                    _ => "codeg",
+                },
+                text: match r.kind {
+                    TimelineKind::Question => {
+                        let answer = r
+                            .data
+                            .as_deref()
+                            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                            .and_then(|d| d.get("answer").cloned());
+                        match answer {
+                            Some(a) => format!("You asked: {} — answer: {}", r.body, a),
+                            None => format!("You asked: {}", r.body),
+                        }
+                    }
+                    _ => r.body,
+                },
+            })
+            .collect();
+        let assistants: Vec<AssistantLine> =
+            crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| AssistantLine {
+                    id: a.id,
+                    name: a.name,
+                    description: a.description,
+                    agent: a.label_snapshot.agent,
+                })
+                .collect();
+        let previous = svc::list_segments(&self.db.conn)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .rfind(|s| s.id < seg.id)
+            .and_then(|s| serde_json::from_str::<AssistantAgentConfig>(&s.agent_options).ok())
+            .map(|c| c.label_snapshot.agent);
+        cards::handoff_card(&cards::HandoffInput {
+            segment_seq: seg.seq,
+            reason: seg.start_reason,
+            previous_agent: previous.as_deref(),
+            current_agent: &config.label_snapshot.agent,
+            soul: &workdir::read_text(workdir, workdir::SOUL_FILE),
+            rules: &workdir::read_text(workdir, workdir::RULES_FILE),
+            user: &workdir::read_text(workdir, workdir::USER_FILE),
+            memory: &workdir::read_text(workdir, workdir::MEMORY_FILE),
+            items,
+            recent: &recent,
+            assistants: &assistants,
+            budget_chars: budget as usize,
+        })
+    }
+
+    // ── a turn ends ─────────────────────────────────────────────────────────
+
+    async fn finish_turn(&self, end: TurnEnd, seq: Option<u64>) {
+        let turn = {
+            let mut st = self.state.lock().await;
+            let Some(turn) = st.turn.take() else {
+                return;
+            };
+            // Fence everything up to here: a second completion of this turn
+            // must not settle the next one.
+            let mark = seq.unwrap_or(u64::MAX).max(turn.start_seq);
+            st.fence.insert(turn.conn_id.clone(), mark);
+            turn
+        };
+        match turn.kind {
+            BatchKind::Delivery => self.finish_delivery(turn, end).await,
+            BatchKind::Compaction => self.finish_compaction(turn, end).await,
+        }
+        self.emit(PersonalAgentChange::Status);
+        self.nudge();
+    }
+
+    async fn finish_delivery(&self, turn: ActiveTurn, end: TurnEnd) {
+        let (stop, lost) = match &end {
+            TurnEnd::Completed(stop) => (stop.clone(), None),
+            TurnEnd::Lost(why) => (None, Some(why.clone())),
+        };
+        let text = match self.manager.get_state(&turn.conn_id).await {
+            Some(state) => {
+                let s = state.read().await;
+                match &end {
+                    TurnEnd::Completed(_) => s.last_turn_main_text.clone(),
+                    // No completion captured this turn's text, and the field
+                    // still holds the turn before's. What it streamed so far
+                    // is in the live message, which every prompt starts
+                    // empty — so it is this turn's.
+                    TurnEnd::Lost(_) => s
+                        .live_message
+                        .as_ref()
+                        .map(|live| crate::acp::session_state::main_thread_text(&live.content)),
+                }
+            }
+            None => None,
+        }
+        .filter(|t| !t.trim().is_empty());
+        let canceled = matches!(stop.as_deref(), Some("cancelled" | "canceled"));
+        let rejected = stop.as_deref() == Some("rejected");
+        let interrupted = lost.is_some() || turn.overflow || rejected
+            || (turn.error.is_some() && text.is_none() && !canceled);
+
+        // The reply: everything visible the agent wrote, even when the turn
+        // did not end well — the owner saw it stream.
+        if let Some(text) = text.clone() {
+            let mut row = NewRow::new(TimelineKind::Reply, text);
+            row.segment_id = Some(turn.segment_id);
+            row.batch_id = Some(turn.batch_id);
+            row.data = Some(serde_json::json!({
+                "stop_reason": stop,
+                "canceled": canceled,
+                "interrupted": interrupted,
+            }));
+            self.push_row(row).await;
+        }
+
+        if interrupted {
+            let why = if turn.overflow {
+                "overflow"
+            } else if lost.is_some() {
+                "connection"
+            } else {
+                "error"
+            };
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                turn.batch_id,
+                BatchStatus::Interrupted,
+                stop.clone(),
+                turn.error.clone().or(lost.clone()),
+                None,
+            )
+            .await;
+            self.interrupt_delivery(turn.batch_id, Some(turn.segment_id), why).await;
+            if turn.overflow {
+                self.on_overflow(turn.segment_id).await;
+            } else if let Some(err) = turn.error.as_ref().or(lost.as_ref()) {
+                self.marker(
+                    Some(turn.segment_id),
+                    "turn_failed",
+                    format!("The turn failed: {err}"),
+                    serde_json::json!({ "error": err }),
+                )
+                .await;
+            }
+        } else {
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                turn.batch_id,
+                if canceled { BatchStatus::Canceled } else { BatchStatus::Completed },
+                stop.clone(),
+                turn.error.clone(),
+                None,
+            )
+            .await;
+            let moved = svc::move_owner_rows(
+                &self.db.conn,
+                &turn.owner_row_ids,
+                &[OwnerStatus::Delivered],
+                OwnerStatus::Answered,
+                None,
+                None,
+            )
+            .await
+            .unwrap_or_default();
+            self.emit_rows(moved.into_iter().map(svc::to_row).collect());
+            let _ = svc::finish_batch_events(&self.db.conn, turn.batch_id).await;
+            if canceled {
+                self.marker(
+                    Some(turn.segment_id),
+                    "turn_canceled",
+                    "The turn was canceled.",
+                    serde_json::json!({}),
+                )
+                .await;
+            }
+            // What this delivery handed over is now the agent's — unless the
+            // agent compacted it away again during the turn, which owes the
+            // state card anew.
+            let carried = turn.carried;
+            let kept = !turn.agent_compacted;
+            self.update_segment_state(turn.segment_id, |s| {
+                if carried.handoff {
+                    s.handoff_pending = false;
+                }
+                if (carried.state_card || carried.handoff) && kept {
+                    s.needs_state_card = false;
+                }
+                // A turn that came back whole after the forced compaction:
+                // the overflow is behind us.
+                s.overflow_compacted = false;
+            })
+            .await;
+        }
+        self.after_turn_bookkeeping(&turn).await;
+    }
+
+    /// A delivery overflowed the context. Compact before the next one,
+    /// whatever the reading says — unless that already happened once, in
+    /// which case compaction cannot fix it and a new segment starts.
+    async fn on_overflow(&self, segment_id: i32) {
+        let Ok(Some(seg)) = svc::get_segment(&self.db.conn, segment_id).await else {
+            return;
+        };
+        let state = SegmentState::parse(&seg.state);
+        if state.overflow_compacted {
+            let _ = svc::set_pending_reason(&self.db.conn, segment_id, Some(SegmentReason::Overflow)).await;
+            self.marker(
+                Some(segment_id),
+                "overflow",
+                "The context overflowed again after compacting: a new session starts.",
+                serde_json::json!({ "action": "new_segment" }),
+            )
+            .await;
+        } else {
+            self.update_segment_state(segment_id, |s| s.force_compact = true).await;
+            self.marker(
+                Some(segment_id),
+                "overflow",
+                "The context overflowed: compacting before the next message.",
+                serde_json::json!({ "action": "compact" }),
+            )
+            .await;
+        }
+    }
+
+    /// After every delivery: commit the working directory, fold the agent's
+    /// own edits of the persona into the digest, record the session id, and
+    /// judge the last auto-compaction by this turn's reading.
+    async fn after_turn_bookkeeping(&self, turn: &ActiveTurn) {
+        let Some(row) = self.agent_row().await else {
+            return;
+        };
+        let workdir = self.workdir_of(&row);
+        let digest = workdir::persona_digest(&workdir);
+        let _ = svc::set_segment_persona_digest(&self.db.conn, turn.segment_id, Some(digest)).await;
+        let seg = svc::get_segment(&self.db.conn, turn.segment_id).await.ok().flatten();
+        if let Some(seg) = seg.as_ref() {
+            if seg.agent_session_id.is_none() {
+                let held = match self.manager.get_state(&turn.conn_id).await {
+                    Some(state) => state.read().await.external_id.clone(),
+                    None => None,
+                };
+                if held.is_some() {
+                    let _ = svc::set_segment_session(&self.db.conn, seg.id, None, held).await;
+                }
+            }
+            let settings = settings_of(&row);
+            let reading = self.context_reading(&turn.conn_id, seg.conversation_id).await;
+            let mut state = SegmentState::parse(&seg.state);
+            if state.streaks.after_turn(settings.auto_compact_percent, reading.map(|r| r.percent)) {
+                let _ = svc::set_segment_paused(&self.db.conn, seg.id, true).await;
+                self.marker(
+                    Some(seg.id),
+                    "compaction_paused",
+                    "Compaction did not bring the context below the threshold twice in a row: \
+                     auto-compaction is paused for this session.",
+                    serde_json::json!({ "why": "ineffective" }),
+                )
+                .await;
+            }
+            if let Ok(json) = serde_json::to_string(&state) {
+                let _ = svc::set_segment_state(&self.db.conn, seg.id, json).await;
+            }
+            let message = format!("personal agent: session {} turn {}", seg.seq, turn.batch_id);
+            tokio::spawn(async move {
+                workdir::commit_all(&workdir, &message).await;
+            });
+        }
+    }
+
+    async fn finish_compaction(&self, turn: ActiveTurn, end: TurnEnd) {
+        let Some(run) = turn.compaction.clone() else {
+            return;
+        };
+        // The turn ending is not the compaction working. The agent's own
+        // report decides when it sent one; without it, an error during the
+        // turn or any stop but a normal end means it did not.
+        let stop = match &end {
+            TurnEnd::Completed(stop) => stop.as_deref(),
+            TurnEnd::Lost(_) => None,
+        };
+        let status = match &end {
+            TurnEnd::Lost(_) => "failed",
+            TurnEnd::Completed(_) if matches!(stop, Some("cancelled" | "canceled")) => "canceled",
+            TurnEnd::Completed(_) => match turn.compaction_reported {
+                Some(true) => "ok",
+                Some(false) => "failed",
+                None if turn.error.is_some() => "failed",
+                None if matches!(stop, None | Some("end_turn" | "")) => "ok",
+                None => "failed",
+            },
+        };
+        let ok = status == "ok";
+        let error = match &end {
+            TurnEnd::Lost(why) => Some(why.clone()),
+            TurnEnd::Completed(_) if status == "failed" => turn.error.clone().or_else(|| {
+                Some(match (turn.compaction_reported, stop) {
+                    (Some(false), _) => "the agent reported the compaction failed".to_string(),
+                    (_, Some(stop)) => format!("the compaction turn stopped: {stop}"),
+                    _ => "the compaction did not complete".to_string(),
+                })
+            }),
+            TurnEnd::Completed(_) => turn.error.clone(),
+        };
+        let after = turn.usage_after;
+        let _ = svc::finish_batch(
+            &self.db.conn,
+            turn.batch_id,
+            match status {
+                "ok" => BatchStatus::Completed,
+                "canceled" => BatchStatus::Canceled,
+                _ => BatchStatus::Failed,
+            },
+            stop.map(str::to_string),
+            error.clone(),
+            Some(serde_json::json!({
+                "command": run.command,
+                "initiator": run.initiator,
+                "forced": run.forced,
+                "status": status,
+                "before": run.before.map(|b| b.percent),
+                "after": after.map(|a| a.percent),
+            })),
+        )
+        .await;
+        if ok {
+            let _ = svc::bump_compactions(&self.db.conn, turn.segment_id, run.initiator).await;
+        }
+        let mut pause = false;
+        self.update_segment_state(turn.segment_id, |s| {
+            if ok {
+                s.needs_state_card = true;
+            }
+            if run.forced {
+                s.force_compact = false;
+                if ok {
+                    s.overflow_compacted = true;
+                }
+            }
+            if run.initiator == CompactInitiator::Auto && !run.forced {
+                pause = s.streaks.after_compaction(ok);
+            }
+        })
+        .await;
+        self.marker(
+            Some(turn.segment_id),
+            "compaction",
+            match status {
+                "ok" => "Context compacted.",
+                "canceled" => "Compaction canceled.",
+                _ => "Compaction failed.",
+            },
+            serde_json::json!({
+                "initiator": run.initiator,
+                "status": status,
+                "command": run.command,
+                "forced": run.forced,
+                "before_percent": run.before.map(|b| (b.percent * 10.0).round() / 10.0),
+                "before_tokens": run.before.and_then(|b| b.used),
+                "after_percent": after.map(|a| (a.percent * 10.0).round() / 10.0),
+                "after_tokens": after.and_then(|a| a.used),
+                "error": error,
+            }),
+        )
+        .await;
+        if pause {
+            let _ = svc::set_segment_paused(&self.db.conn, turn.segment_id, true).await;
+            self.marker(
+                Some(turn.segment_id),
+                "compaction_paused",
+                "Two compactions in a row did not succeed: auto-compaction is paused for this session.",
+                serde_json::json!({ "why": "failures" }),
+            )
+            .await;
+        }
+        if run.forced && !ok {
+            // The forced compaction did not take: a new segment is the only
+            // way past the overflow.
+            let _ = svc::set_pending_reason(
+                &self.db.conn,
+                turn.segment_id,
+                Some(SegmentReason::Overflow),
+            )
+            .await;
+        }
+        // Whatever happened, the batch that was waiting goes out next.
+        self.state.lock().await.skip_compaction_once = true;
+    }
+
+    // ── what the page does ──────────────────────────────────────────────────
+
+    /// Queue one owner message.
+    pub async fn send_owner_message(
+        &self,
+        text: String,
+        blocks: Vec<PromptInputBlock>,
+    ) -> Result<TimelineRow, String> {
+        if self.agent_row().await.is_none() {
+            return Err("configure the personal agent first".into());
+        }
+        let text = text.trim().to_string();
+        if text.is_empty() && blocks.is_empty() {
+            return Err("the message is empty".into());
+        }
+        let mut row = NewRow::new(TimelineKind::Owner, text);
+        row.status = Some(OwnerStatus::Queued);
+        if !blocks.is_empty() {
+            row.data = Some(serde_json::json!({ "blocks": blocks }));
+        }
+        let row = self.push_row(row).await.ok_or("could not record the message")?;
+        self.emit(PersonalAgentChange::Status);
+        self.nudge();
+        Ok(row)
+    }
+
+    /// Steer the turn in flight with a supplement (the existing live-feedback
+    /// channel), recorded on the timeline. While compacting, or when the turn
+    /// cannot take it, the message is queued instead — `Ok(false)`.
+    pub async fn supplement(&self, text: String) -> Result<(TimelineRow, bool), String> {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err("the message is empty".into());
+        }
+        let turn = self.state.lock().await.turn.clone();
+        if let Some(turn) = turn.filter(|t| t.kind == BatchKind::Delivery) {
+            if self
+                .manager
+                .submit_feedback(&turn.conn_id, text.clone(), None)
+                .await
+                .is_ok()
+            {
+                let mut row = NewRow::new(TimelineKind::Owner, text);
+                row.status = Some(OwnerStatus::Delivered);
+                row.segment_id = Some(turn.segment_id);
+                row.batch_id = Some(turn.batch_id);
+                row.data = Some(serde_json::json!({ "supplement": true }));
+                let row = self.push_row(row).await.ok_or("could not record the message")?;
+                // Answered with the turn it was folded into.
+                if let Some(t) = self.state.lock().await.turn.as_mut() {
+                    if t.batch_id == turn.batch_id {
+                        t.owner_row_ids.push(row.id);
+                    }
+                }
+                return Ok((row, true));
+            }
+        }
+        let row = self.send_owner_message(text, Vec::new()).await?;
+        Ok((row, false))
+    }
+
+    /// Stop the turn in flight, delivery or compaction.
+    pub async fn cancel_turn(&self) -> Result<(), String> {
+        let conn = self.state.lock().await.turn.as_ref().map(|t| t.conn_id.clone());
+        let Some(conn) = conn else {
+            return Ok(());
+        };
+        self.manager
+            .cancel(&self.db.conn, &conn)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// The owner's compact button: between turns only, not counted toward the
+    /// pause.
+    pub async fn compact_now(self: &Arc<Self>) -> Result<(), String> {
+        let _guard = self.pump_lock.lock().await;
+        if self.state.lock().await.turn.is_some() {
+            return Err("a turn is in flight".into());
+        }
+        let row = self.agent_row().await.ok_or("configure the personal agent first")?;
+        let session = self.ensure_session(&row).await?;
+        if session.fresh {
+            return Err("the session is new; there is nothing to compact".into());
+        }
+        let reading = self
+            .context_reading(&session.conn_id, session.segment.conversation_id)
+            .await;
+        match self
+            .start_compaction(&row, &session, CompactInitiator::Owner, reading, false)
+            .await?
+        {
+            CompactionStart::Started => Ok(()),
+            CompactionStart::NoCommand => Err("no compact command is known for this agent".into()),
+        }
+    }
+
+    /// The owner's "new session": takes effect at the next delivery.
+    pub async fn new_session(&self) -> Result<(), String> {
+        let Some(seg) = svc::open_segment(&self.db.conn).await.map_err(|e| e.to_string())? else {
+            return Ok(());
+        };
+        let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(SegmentReason::Manual)).await;
+        self.marker(
+            Some(seg.id),
+            "pending_switch",
+            "A new session starts with the next message.",
+            serde_json::json!({ "reason": "manual" }),
+        )
+        .await;
+        self.emit(PersonalAgentChange::Status);
+        Ok(())
+    }
+
+    /// Lift a paused auto-compaction.
+    pub async fn resume_auto_compact(&self) -> Result<(), String> {
+        let Some(seg) = svc::open_segment(&self.db.conn).await.map_err(|e| e.to_string())? else {
+            return Ok(());
+        };
+        let _ = svc::set_segment_paused(&self.db.conn, seg.id, false).await;
+        self.update_segment_state(seg.id, |s| s.streaks.reset()).await;
+        self.emit(PersonalAgentChange::Status);
+        Ok(())
+    }
+
+    /// Keep the session warm while the page is open: the idle sweep otherwise
+    /// ends it between messages (the next one would then wait for a resume).
+    pub async fn keepalive(&self) {
+        let conn = self.state.lock().await.connection_id.clone();
+        if let Some(conn) = conn {
+            self.manager.touch(&conn).await;
+        }
+    }
+
+    /// Offer an interrupted message again, as a new message at the end.
+    pub async fn resend(&self, row_id: i32) -> Result<TimelineRow, String> {
+        let row = svc::get_row(&self.db.conn, row_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("no such message")?;
+        if row.kind != TimelineKind::Owner || row.status != Some(OwnerStatus::Interrupted) {
+            return Err("only an interrupted message can be sent again".into());
+        }
+        let blocks = row
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .and_then(|d| d.get("blocks").cloned())
+            .and_then(|b| serde_json::from_value::<Vec<PromptInputBlock>>(b).ok())
+            .unwrap_or_default();
+        let new = self.send_owner_message(row.body.clone(), blocks).await?;
+        let mut data = row
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = data.as_object_mut() {
+            map.insert("resent_as".into(), new.id.into());
+        }
+        let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
+        if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
+            self.emit_rows(vec![svc::to_row(updated)]);
+        }
+        Ok(new)
+    }
+
+    /// Save the configuration. A new agent type is a switch (a new segment at
+    /// the next delivery); a change of options within the same agent applies
+    /// to the running session where it can, with a marker.
+    pub async fn save(&self, draft: crate::models::personal_agent::PersonalAgentDraft) -> Result<PersonalAgentInfo, String> {
+        let existing = self.agent_row().await;
+        let mut write = svc::AgentWrite::default();
+        if let Some(name) = draft.name.as_deref() {
+            let name: String = name.trim().chars().filter(|c| !c.is_control()).take(40).collect();
+            write.name = Some(name);
+        }
+        if let Some(avatar) = draft.avatar.as_ref() {
+            crate::db::service::assistant_service::validate_avatar(avatar).map_err(|e| e.to_string())?;
+            write.avatar_json = Some(serde_json::to_string(avatar).map_err(|e| e.to_string())?);
+        }
+        let old_config = existing.as_ref().and_then(brain_of);
+        let mut settings = existing.as_ref().map(settings_of).unwrap_or_default();
+        if let Some(s) = draft.settings.clone() {
+            settings = s.normalized();
+        }
+        let new_config = draft.agent_config.clone();
+        if let Some(config) = new_config.as_ref() {
+            crate::db::service::assistant_service::validate_agent_config(config)
+                .map_err(|e| e.to_string())?;
+            // The one requirement of a brain: its tools come from codeg-mcp,
+            // so the agent must take MCP servers over the wire.
+            if !crate::acp::registry::get_agent_meta(config.agent_type).supports_mcp
+                || !crate::acp::connection::agent_delivers_wire_mcp(config.agent_type)
+            {
+                return Err(format!(
+                    "{} cannot be the personal agent's brain: it does not take codeg's MCP tools",
+                    config.label_snapshot.agent
+                ));
+            }
+            write.agent_type = Some(config.agent_type.as_wire().into_owned());
+            write.agent_options_json =
+                Some(serde_json::to_string(&config.agent_options).map_err(|e| e.to_string())?);
+            write.label_snapshot_json =
+                Some(serde_json::to_string(&config.label_snapshot).map_err(|e| e.to_string())?);
+            // A compact command belongs to the agent it was written for.
+            if old_config.as_ref().is_some_and(|o| o.agent_type != config.agent_type)
+                && draft.settings.is_none()
+            {
+                settings.compact_command = None;
+                settings.compact_command_agent = None;
+            }
+        } else if existing.is_none() {
+            return Err("pick the agent the personal agent runs on".into());
+        }
+        let effective_agent = new_config
+            .as_ref()
+            .map(|c| c.agent_type)
+            .or(old_config.as_ref().map(|c| c.agent_type));
+        if settings.compact_command.is_some() {
+            settings.compact_command_agent = effective_agent.map(|a| a.as_wire().into_owned());
+        }
+        write.settings_json = Some(serde_json::to_string(&settings).map_err(|e| e.to_string())?);
+        let first_save = existing.is_none();
+        let saved = svc::save_agent(&self.db.conn, write)
+            .await
+            .map_err(|e| e.to_string())?;
+        if first_save {
+            let workdir = self.workdir_of(&saved);
+            workdir::ensure_initialized(&workdir, draft.locale.as_deref())
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        if let (Some(old), Some(new)) = (old_config.as_ref(), new_config.as_ref()) {
+            self.apply_brain_change(old, new).await;
+        }
+        let saved = self.agent_row().await.unwrap_or(saved);
+        let workdir = self.workdir_of(&saved);
+        if let Some(agent_type) = effective_agent {
+            workdir::sync_skill(&workdir, agent_type, settings.skill_enabled);
+        }
+        self.emit(PersonalAgentChange::Agent);
+        self.emit(PersonalAgentChange::Status);
+        self.info_of(&saved).ok_or_else(|| "the saved configuration is unreadable".into())
+    }
+
+    async fn apply_brain_change(&self, old: &AssistantAgentConfig, new: &AssistantAgentConfig) {
+        let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await else {
+            return;
+        };
+        if old.agent_type != new.agent_type {
+            let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(SegmentReason::Switch)).await;
+            self.marker(
+                Some(seg.id),
+                "pending_switch",
+                format!(
+                    "Switching to {}: a new session starts with the next message.",
+                    new.label_snapshot.agent
+                ),
+                serde_json::json!({
+                    "reason": "switch",
+                    "agent_type": new.agent_type,
+                    "agent": new.label_snapshot.agent,
+                }),
+            )
+            .await;
+            return;
+        }
+        if old.agent_options == new.agent_options {
+            return;
+        }
+        // Same agent: options apply within the session.
+        if let Ok(snapshot) = serde_json::to_string(new) {
+            let _ = svc::set_segment_options(&self.db.conn, seg.id, snapshot).await;
+        }
+        let conn = {
+            let st = self.state.lock().await;
+            match (&st.connection_id, st.connection_segment) {
+                (Some(c), Some(s)) if s == seg.id => Some(c.clone()),
+                _ => None,
+            }
+        };
+        if let Some(conn) = conn {
+            if new.agent_options.mode_id != old.agent_options.mode_id {
+                if let Some(mode) = new.agent_options.mode_id.clone() {
+                    let _ = self.manager.set_mode(&conn, mode).await;
+                }
+            }
+            for (id, value) in &new.agent_options.config_values {
+                if old.agent_options.config_values.get(id) != Some(value) {
+                    let _ = self
+                        .manager
+                        .set_config_option(&conn, id.clone(), value.clone())
+                        .await;
+                }
+            }
+        }
+        let changed: Vec<serde_json::Value> = new
+            .label_snapshot
+            .options
+            .iter()
+            .filter(|o| {
+                old.label_snapshot
+                    .options
+                    .iter()
+                    .find(|p| p.id == o.id)
+                    .is_none_or(|p| p.value_label != o.value_label)
+            })
+            .map(|o| serde_json::json!({ "name": o.name, "value": o.value_label }))
+            .collect();
+        let mode_changed = old.label_snapshot.mode != new.label_snapshot.mode;
+        self.marker(
+            Some(seg.id),
+            "options_changed",
+            "Options changed.",
+            serde_json::json!({
+                "options": changed,
+                "mode": if mode_changed { new.label_snapshot.mode.clone() } else { None },
+            }),
+        )
+        .await;
+    }
+
+    /// Move the working directory. Idle only; the old directory is left as it
+    /// is, and the next delivery starts a new segment there.
+    pub async fn set_workdir(&self, path: Option<String>) -> Result<PersonalAgentInfo, String> {
+        if self.state.lock().await.turn.is_some() {
+            return Err("wait for the turn in flight to finish".into());
+        }
+        let row = self.agent_row().await.ok_or("configure the personal agent first")?;
+        let target = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => workdir::default_workdir(&self.data_dir),
+        };
+        if target == self.workdir_of(&row) {
+            return self.info_of(&row).ok_or_else(|| "unreadable".into());
+        }
+        workdir::ensure_initialized(&target, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        let folder = crate::db::service::folder_service::ensure_personal_folder(
+            &self.db.conn,
+            &target.to_string_lossy(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let custom = path.filter(|p| !p.trim().is_empty());
+        svc::set_workdir(&self.db.conn, row.id, custom, Some(folder.id))
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+            let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(SegmentReason::Workdir)).await;
+        }
+        self.marker(
+            self.current_segment_id().await,
+            "workdir_changed",
+            format!("Working directory moved to {}.", target.display()),
+            serde_json::json!({ "path": target.to_string_lossy() }),
+        )
+        .await;
+        let row = self.agent_row().await.ok_or("unreadable")?;
+        self.emit(PersonalAgentChange::Agent);
+        self.emit(PersonalAgentChange::Status);
+        self.info_of(&row).ok_or_else(|| "unreadable".into())
+    }
+
+    /// The owner saved a persona/memory file from the page. The persona and
+    /// rules are handed to the agent at the next delivery.
+    pub async fn save_file(&self, name: &str, content: &str) -> Result<(), String> {
+        let row = self.agent_row().await.ok_or("configure the personal agent first")?;
+        let workdir = self.workdir_of(&row);
+        workdir::write_file(&workdir, name, content).map_err(|e| e.to_string())?;
+        if name == workdir::SOUL_FILE || name == workdir::RULES_FILE {
+            if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+                self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
+            }
+        }
+        let message = format!("owner: edit {name}");
+        tokio::spawn(async move {
+            workdir::commit_all(&workdir, &message).await;
+        });
+        Ok(())
+    }
+
+    /// Whether `connection_id` is the personal agent's current connection —
+    /// the only one its tools answer.
+    pub async fn is_current_connection(&self, connection_id: &str) -> bool {
+        self.state.lock().await.connection_id.as_deref() == Some(connection_id)
+    }
+
+    /// The current delivery's batch, for dispatches made during it.
+    pub(super) async fn current_batch(&self) -> Option<i32> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .filter(|t| t.kind == BatchKind::Delivery)
+            .map(|t| t.batch_id)
+    }
+
+    // ── status ──────────────────────────────────────────────────────────────
+
+    pub async fn snapshot(&self) -> PersonalAgentSnapshot {
+        let row = self.agent_row().await;
+        let agent = row.as_ref().and_then(|r| self.info_of(r));
+        let mut status = status_from_db(&self.db, row.as_ref(), EngineHost::Here, &self.data_dir).await;
+        let (conn, turn, last_check, last_error) = {
+            let st = self.state.lock().await;
+            (
+                st.connection_id.clone(),
+                st.turn.clone(),
+                st.last_check.clone(),
+                st.last_error.clone(),
+            )
+        };
+        status.connection_id = conn.clone();
+        status.turn = turn.as_ref().map(|t| TurnInfo {
+            batch_id: t.batch_id,
+            kind: t.kind,
+            started_at: t.started_at,
+            compaction_initiator: t.compaction.as_ref().map(|c| c.initiator),
+        });
+        status.last_check = last_check;
+        status.last_error = last_error;
+        if let Some(conn) = conn.as_deref() {
+            if let Some(state) = self.manager.get_state(conn).await {
+                let s = state.read().await;
+                status.connected = !matches!(
+                    s.status,
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error
+                );
+                status.pending_permission = s.pending_permission.is_some();
+                status.pending_question =
+                    s.pending_question.is_some() || s.pending_plan_approval.is_some();
+            }
+            status.usage = self
+                .context_reading(conn, status.segment.as_ref().and_then(|s| s.conversation_id))
+                .await;
+            if let (Some(row), Some(seg)) = (row.as_ref(), status.segment.as_ref()) {
+                let advertised = match self.manager.get_state(conn).await {
+                    Some(state) => state.read().await.available_commands.clone(),
+                    None => Vec::new(),
+                };
+                status.compact_command = compact::resolve_compact_command(
+                    settings_of(row).compact_command_for(seg.agent_type),
+                    seg.agent_type,
+                    &advertised,
+                );
+            }
+        }
+        PersonalAgentSnapshot { agent, status }
+    }
+}
+
+/// What `pump` works with: the open segment and its live connection.
+struct Session {
+    segment: segment_entity::Model,
+    conn_id: String,
+    folder_id: i32,
+    /// The connection is a brand-new session (nothing to compact).
+    fresh: bool,
+}
+
+enum CompactionStart {
+    Started,
+    NoCommand,
+}
+
+/// `serde`'s snake_case name of an enum value.
+pub(super) fn enum_str<T: Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+pub(super) fn settings_of(row: &agent_entity::Model) -> PersonalAgentSettings {
+    serde_json::from_str(&row.settings).unwrap_or_default()
+}
+
+/// The brain, as an assistant stores one.
+pub(super) fn brain_of(row: &agent_entity::Model) -> Option<AssistantAgentConfig> {
+    Some(AssistantAgentConfig {
+        agent_type: AgentType::from_wire(&row.agent_type)?,
+        agent_options: serde_json::from_str(&row.agent_options).unwrap_or_default(),
+        label_snapshot: serde_json::from_str::<AssistantLabelSnapshot>(&row.label_snapshot)
+            .unwrap_or_else(|_| AssistantLabelSnapshot {
+                agent: row.agent_type.clone(),
+                mode: None,
+                options: Vec::new(),
+            }),
+    })
+}
+
+pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> Option<PersonalAgentInfo> {
+    let brain = brain_of(row)?;
+    Some(PersonalAgentInfo {
+        id: row.id,
+        name: row.name.clone(),
+        avatar: serde_json::from_str::<AssistantAvatar>(&row.avatar).unwrap_or(AssistantAvatar::Emoji {
+            emoji: "🧭".into(),
+            color: "violet".into(),
+        }),
+        agent_type: brain.agent_type,
+        agent_options: brain.agent_options,
+        label_snapshot: brain.label_snapshot,
+        settings: settings_of(row),
+        workdir: workdir.to_string_lossy().to_string(),
+        workdir_custom: row.workdir.as_deref().is_some_and(|w| !w.trim().is_empty()),
+        folder_id: row.folder_id,
+        revision: row.revision,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+pub(super) fn segment_info(seg: &segment_entity::Model) -> Option<SegmentInfo> {
+    let snapshot = serde_json::from_str::<AssistantAgentConfig>(&seg.agent_options).ok();
+    let state = SegmentState::parse(&seg.state);
+    Some(SegmentInfo {
+        id: seg.id,
+        seq: seg.seq,
+        agent_type: AgentType::from_wire(&seg.agent_type)?,
+        label_snapshot: snapshot
+            .map(|s| s.label_snapshot)
+            .unwrap_or_else(|| AssistantLabelSnapshot {
+                agent: seg.agent_type.clone(),
+                mode: None,
+                options: Vec::new(),
+            }),
+        conversation_id: seg.conversation_id,
+        agent_session_id: seg.agent_session_id.clone(),
+        start_reason: seg.start_reason,
+        end_reason: seg.end_reason,
+        pending_reason: seg.pending_reason,
+        started_at: seg.started_at,
+        ended_at: seg.ended_at,
+        handoff_size: seg.handoff_size,
+        handoff_trimmed: state.handoff_trimmed,
+        compactions_auto: seg.compactions_auto,
+        compactions_manual: seg.compactions_manual,
+        compactions_agent: seg.compactions_agent,
+        auto_compact_paused: seg.auto_compact_paused,
+    })
+}
+
+/// The status as the database alone tells it — all a process that does not
+/// run the engine can show.
+pub async fn status_from_db(
+    db: &AppDatabase,
+    row: Option<&agent_entity::Model>,
+    engine: EngineHost,
+    data_dir: &std::path::Path,
+) -> PersonalAgentStatus {
+    let segment = svc::open_segment(&db.conn)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| segment_info(&s));
+    let settings = row.map(settings_of).unwrap_or_default();
+    let running = svc::count_active_conversation_dispatches(&db.conn)
+        .await
+        .unwrap_or(0) as u32;
+    let queued = svc::queued_conversation_dispatches(&db.conn)
+        .await
+        .map(|v| v.len() as u32)
+        .unwrap_or(0);
+    let last_compaction = match segment.as_ref() {
+        Some(seg) => svc::last_compaction(&db.conn, seg.id)
+            .await
+            .ok()
+            .flatten()
+            .map(|b| {
+                let detail = b
+                    .detail
+                    .as_deref()
+                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                    .unwrap_or_default();
+                let before = detail.get("before").and_then(|v| {
+                    v.as_f64()
+                        .or_else(|| v.get("percent").and_then(|p| p.as_f64()))
+                });
+                crate::models::personal_agent::LastCompaction {
+                    at: b.ended_at.unwrap_or(b.started_at),
+                    initiator: detail
+                        .get("initiator")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    status: match b.status {
+                        BatchStatus::Running => "running".to_string(),
+                        BatchStatus::Completed => "ok".to_string(),
+                        BatchStatus::Canceled => "canceled".to_string(),
+                        _ => "failed".to_string(),
+                    },
+                    before_percent: before,
+                    after_percent: detail.get("after").and_then(|v| v.as_f64()),
+                }
+            }),
+        None => None,
+    };
+    let workdir = row.map(|r| match r.workdir.as_deref() {
+        Some(p) if !p.trim().is_empty() => p.to_string(),
+        _ => workdir::default_workdir(data_dir).to_string_lossy().to_string(),
+    });
+    // What the next compaction would send, as far as it is known without a
+    // live session: the setting, or the agent's own built-in command. A live
+    // session's catalog refines it (see `snapshot`).
+    let agent_type = segment
+        .as_ref()
+        .map(|s| s.agent_type)
+        .or_else(|| row.and_then(brain_of).map(|b| b.agent_type));
+    let compact_command = agent_type.and_then(|t| {
+        compact::resolve_compact_command(settings.compact_command_for(t), t, &[])
+    });
+    PersonalAgentStatus {
+        engine,
+        configured: row.is_some(),
+        segment,
+        connection_id: None,
+        connected: false,
+        turn: None,
+        usage: None,
+        auto_compact_percent: settings.auto_compact_percent,
+        compact_command,
+        last_check: None,
+        last_compaction,
+        queued_messages: svc::count_queued_owner_rows(&db.conn).await.unwrap_or(0) as u32,
+        pending_events: svc::count_pending_events(&db.conn).await.unwrap_or(0) as u32,
+        dispatch_running: running,
+        dispatch_queued: queued,
+        dispatch_limit: settings.dispatch_concurrency,
+        pending_permission: false,
+        pending_question: false,
+        last_error: None,
+        workdir,
+    }
+}
+
+/// Snapshot for any process: the engine's own when it runs here, the
+/// database's otherwise.
+pub async fn snapshot_any(db: &AppDatabase, data_dir: &std::path::Path) -> PersonalAgentSnapshot {
+    if let Some(engine) = engine() {
+        return engine.snapshot().await;
+    }
+    let row = svc::get_agent(&db.conn).await.ok().flatten();
+    let agent = row.as_ref().and_then(|r| {
+        let workdir = match r.workdir.as_deref() {
+            Some(p) if !p.trim().is_empty() => PathBuf::from(p),
+            _ => workdir::default_workdir(data_dir),
+        };
+        to_info(r, &workdir)
+    });
+    let status = status_from_db(db, row.as_ref(), EngineHost::Elsewhere, data_dir).await;
+    PersonalAgentSnapshot { agent, status }
+}
+
+/// Whether a connection id belongs to a conversation the personal agent
+/// dispatched (owner label check, for code that only has the state).
+pub fn is_dispatch_owner(owner_window_label: &str) -> bool {
+    owner_window_label == DISPATCH_OWNER_LABEL
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_state_reads_old_and_partial_json() {
+        assert_eq!(SegmentState::parse("{}"), SegmentState::default());
+        assert_eq!(SegmentState::parse("not json"), SegmentState::default());
+        let s = SegmentState::parse(r#"{"needs_state_card":true}"#);
+        assert!(s.needs_state_card);
+        assert!(!s.handoff_pending);
+    }
+
+    #[test]
+    fn enum_names_are_the_wire_names() {
+        use crate::db::entities::personal_agent_dispatch::DispatchState;
+        assert_eq!(enum_str(&DispatchState::WaitingInput), "waiting_input");
+        assert_eq!(enum_str(&SegmentReason::OptionRestart), "option_restart");
+    }
+}

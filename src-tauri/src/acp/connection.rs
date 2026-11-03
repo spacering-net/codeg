@@ -2696,6 +2696,16 @@ async fn build_agent(
 /// into boxed sub-futures rather than raising it further.
 const ACP_CONNECTION_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// What a connection is marked with from the moment it exists — before its
+/// agent starts, so the codeg-mcp companion it is given already knows.
+#[derive(Default)]
+pub struct SpawnSeed {
+    /// The root of a `codeg-cli` run.
+    pub cli_root: Option<crate::cli_run::RootSeed>,
+    /// The personal agent's own connection.
+    pub personal_agent: bool,
+}
+
 /// Spawn an ACP agent process and run the connection loop in a background task.
 ///
 /// On success, the newly created `AgentConnection` is inserted into
@@ -2717,7 +2727,7 @@ pub async fn spawn_agent_connection(
     preferred_config_values: BTreeMap<String, String>,
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
-    cli_root: Option<crate::cli_run::RootSeed>,
+    seed: SpawnSeed,
 ) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
     let launch_cwd = resolve_working_dir(working_dir.as_deref());
@@ -2752,10 +2762,13 @@ pub async fn spawn_agent_connection(
     }
     // A `codeg-cli` run's root: marked before anything can look, the codeg-mcp
     // injection below included.
-    if let Some(seed) = cli_root {
-        initial_state.cli_run = Some(seed.tag);
-        initial_state.cli_output_schema = seed.output_schema;
+    if let Some(root) = seed.cli_root {
+        initial_state.cli_run = Some(root.tag);
+        initial_state.cli_output_schema = root.output_schema;
     }
+    // The personal agent's connection, the same way: its tool group is decided
+    // by the injection below, which reads this.
+    initial_state.personal_agent = seed.personal_agent;
     if agent_type == AgentType::Pi {
         initial_state.pi_enabled_model_patterns =
             crate::commands::acp::pi_enabled_model_patterns_for_env(&runtime_env, &launch_cwd);
@@ -7682,7 +7695,7 @@ async fn send_new_session_capturing_models(
 /// file is, and its tools reach the model. User servers still reach Cline,
 /// through that file (see [`agent_reads_own_mcp_config`]); the codeg-mcp
 /// companion, which only travels over the wire, cannot.
-fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
+pub(crate) fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
     !matches!(agent_type, AgentType::Pi | AgentType::Cline)
 }
 
@@ -8075,6 +8088,8 @@ struct CompanionFeatureFlags {
     automations: bool,
     /// `create_work_task`, gated by the chat-authoring setting.
     taskboard: bool,
+    /// The personal agent's tools: per-spawn, for its own connection only.
+    personal_agent: bool,
     /// `browser_list_tabs` / `browser_snapshot`, gated by the browser-tools
     /// setting AND by there being a built-in browser at all — the tabs are
     /// native webviews this process owns, which server mode has none of.
@@ -8125,6 +8140,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.taskboard {
         features.push("taskboard");
     }
+    if flags.personal_agent {
+        features.push("personal_agent");
+    }
     if flags.browser {
         features.push("browser");
     }
@@ -8170,6 +8188,10 @@ struct LaunchGroups {
     tasks: bool,
     /// `submit_result`: the root of a `codeg-cli` run given `--output-schema`.
     result: bool,
+    /// The personal agent's tools — and, by the same token, none of the
+    /// delegation or board-authoring ones: it hands work out only through its
+    /// own dispatch tool, which the runtime (not this connection) owns.
+    personal_agent: bool,
 }
 
 async fn inject_codeg_mcp(
@@ -8240,6 +8262,10 @@ where
     // tracks the live toggle. One indexed query, skipped outright when
     // delegation is off, and it fails open: the spawn-time disabled check is
     // the hard gate either way.
+    // The personal agent never delegates and never writes to the board
+    // directly: its work goes out through `dispatch`, owned by the runtime, so
+    // a switch of its session cannot cancel what it handed out.
+    let delegation_enabled = delegation_enabled && !groups.personal_agent;
     let disabled = if delegation_enabled {
         injection.agent_availability.disabled_agent_wire_slugs().await
     } else {
@@ -8252,8 +8278,9 @@ where
         sessions: injection.sessions.is_enabled().await,
         tasks: groups.tasks,
         result: groups.result,
-        automations: authoring.automations_enabled,
-        taskboard: authoring.work_tasks_enabled,
+        automations: authoring.automations_enabled && !groups.personal_agent,
+        taskboard: authoring.work_tasks_enabled && !groups.personal_agent,
+        personal_agent: groups.personal_agent,
         // `cfg!` rather than a runtime probe: a browser tab is a native
         // webview owned by this process, and the server binary has no such
         // thing — what a web user sees in a "browser tab" is an iframe their
@@ -9279,6 +9306,7 @@ async fn run_connection(
                         LaunchGroups {
                             tasks: s.owner_window_label == "work_task",
                             result: s.cli_output_schema.is_some(),
+                            personal_agent: s.personal_agent,
                         }
                     };
                     inject_codeg_mcp(
@@ -44238,6 +44266,7 @@ mod tests {
             LaunchGroups {
                 tasks: false,
                 result: true,
+                personal_agent: false,
             },
             HostToolsPolicy::Agent,
             || Some(PathBuf::from("/opt/codeg/codeg-mcp")),
@@ -44256,6 +44285,62 @@ mod tests {
             .map(|i| server.args[i + 1].clone());
         assert_eq!(features.as_deref(), Some("result"));
         assert!(injection.tokens.lookup(&injected.token).await.is_some());
+    }
+
+    /// The personal agent's connection gets its own group whatever the
+    /// settings say — and never the delegation or board-authoring ones, even
+    /// with every one of them switched on: it hands work out only through its
+    /// dispatch tool.
+    #[tokio::test]
+    async fn the_personal_agent_gets_its_group_and_no_delegation_or_authoring() {
+        let injection = test_delegation_injection(
+            Arc::new(TestAllAgentsAvailable) as Arc<dyn AgentAvailabilityLookup>
+        );
+        injection
+            .broker
+            .set_config(crate::acp::delegation::broker::DelegationConfig {
+                enabled: true,
+                ..Default::default()
+            })
+            .await;
+        injection
+            .authoring
+            .set(crate::acp::chat_authoring::ChatAuthoringConfig {
+                automations_enabled: true,
+                work_tasks_enabled: true,
+            })
+            .await;
+        let mut servers: Vec<McpServer> = Vec::new();
+        let injected = inject_codeg_mcp_with_binary_locator(
+            &mut servers,
+            &injection,
+            "personal",
+            std::path::Path::new("/tmp"),
+            LaunchGroups {
+                personal_agent: true,
+                ..Default::default()
+            },
+            HostToolsPolicy::Default,
+            || Some(PathBuf::from("/opt/codeg/codeg-mcp")),
+        )
+        .await
+        .expect("a companion for the personal agent's tools");
+        assert!(!injected.delegation_enabled);
+        let McpServer::Stdio(server) = &servers[0] else {
+            panic!("a stdio server: {servers:?}");
+        };
+        let features = server
+            .args
+            .iter()
+            .skip_while(|a| a.as_str() != "--features")
+            .nth(1)
+            .cloned()
+            .expect("a --features value");
+        let groups: Vec<&str> = features.split(',').collect();
+        assert!(groups.contains(&"personal_agent"), "{features}");
+        for withheld in ["delegation", "automations", "taskboard"] {
+            assert!(!groups.contains(&withheld), "{withheld} leaked: {features}");
+        }
     }
 
     // ─── delegate_target_args: enable-toggle filtering ──────────
@@ -44413,6 +44498,7 @@ mod tests {
                 result: true,
                 automations: true,
                 taskboard: true,
+                personal_agent: true,
                 browser: true,
                 browser_eval: true,
                 computer: true,
@@ -44420,10 +44506,15 @@ mod tests {
                 computer_clipboard: true,
             }),
             Some(
-                "delegation,feedback,ask,sessions,tasks,result,automations,taskboard,browser,\
-                 browser_eval,computer,computer_launch,computer_clipboard"
+                "delegation,feedback,ask,sessions,tasks,result,automations,taskboard,\
+                 personal_agent,browser,browser_eval,computer,computer_launch,computer_clipboard"
                     .to_string()
             )
+        );
+        // The personal agent's group injects the companion on its own.
+        assert_eq!(
+            only(|f| f.personal_agent = true),
+            Some("personal_agent".to_string())
         );
         assert_eq!(only(|f| f.computer_clipboard = true), None);
         // Computer use alone still gets a companion.

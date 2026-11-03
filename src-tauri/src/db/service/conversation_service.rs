@@ -54,6 +54,53 @@ pub async fn create_chat(
     .await
 }
 
+/// Mirror of [`create`] for one session segment of the personal agent:
+/// `kind = 'personal'`, so it stays out of the sidebar's lists — the agent has
+/// its own page, and its prompts are written by codeg's engine.
+pub async fn create_personal(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    create_inner(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        None,
+        None,
+        ConversationKind::Personal,
+    )
+    .await
+}
+
+/// Stamp a conversation the personal agent dispatched: the role assistant it
+/// runs as (what the sidebar draws its avatar and name from) and
+/// [`conversation::SOURCE_PERSONAL_AGENT`]. Written once, right after the row
+/// is created and before it is first broadcast.
+pub async fn set_dispatch_provenance(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    assistant_id: i32,
+    snapshot: &AssistantRunSnapshot,
+) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    let snapshot = serde_json::to_string(snapshot)
+        .map_err(|e| DbError::Validation(format!("assistant snapshot: {e}")))?;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::AssistantId, Expr::value(assistant_id))
+        .col_expr(conversation::Column::AssistantSnapshot, Expr::value(snapshot))
+        .col_expr(
+            conversation::Column::Source,
+            Expr::value(conversation::SOURCE_PERSONAL_AGENT),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 /// Mirror of [`create`] plus optional delegation linkage. Used by the
 /// multi-agent broker when spawning a child sub-session — populates
 /// `parent_id` / `parent_tool_use_id` / `delegation_call_id` so the lifecycle
@@ -1446,8 +1493,10 @@ pub async fn list_all(
     let mut query = conversation::Entity::find().filter(conversation::Column::DeletedAt.is_null());
 
     // Loop-engineering runs never surface in the workspace conversation list —
-    // their entry point is the loops workbench.
+    // their entry point is the loops workbench — and neither do the personal
+    // agent's own session segments, which live on its page.
     query = query.filter(conversation::Column::Kind.ne(ConversationKind::Loop));
+    query = query.filter(conversation::Column::Kind.ne(ConversationKind::Personal));
 
     if !include_children {
         query = query.filter(conversation::Column::ParentId.is_null());

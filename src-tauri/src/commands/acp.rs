@@ -12139,8 +12139,11 @@ pub async fn acp_prompt(
             None,
             client_message_id,
         )
-        .await
-        .map(|_| ())
+        .await?;
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&connection_id, conversation_id);
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]

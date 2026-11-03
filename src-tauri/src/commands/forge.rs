@@ -1198,6 +1198,7 @@ pub async fn create_forge_task(
         // brings its own (the review's base ref), and an issue starts from the
         // project folder's checkout.
         base_branch: None,
+        executor_name: None,
     };
     let task_draft = WorkTaskDraft {
         folder_id: draft.folder_id,

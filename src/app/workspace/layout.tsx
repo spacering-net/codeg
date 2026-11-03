@@ -46,6 +46,7 @@ import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
+import { PersonalAgentProvider } from "@/contexts/personal-agent-context"
 import { TaskFromMessageHost } from "@/components/tasks/task-from-message-host"
 import {
   WorkbenchRouteProvider,
@@ -1555,22 +1556,24 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                             <SearchDialogProvider>
                               <AutomationsViewProvider>
                                 <TasksViewProvider>
-                                  <WorkbenchRouteProvider>
-                                    <WorkbenchRouteConversationSync />
-                                    {/* The task editor a message's "create
+                                  <PersonalAgentProvider>
+                                    <WorkbenchRouteProvider>
+                                      <WorkbenchRouteConversationSync />
+                                      {/* The task editor a message's "create
                                           task" opens over the page it is on:
                                           a transcript shows in a tab, a canvas
                                           card or a drawer on any route, and
                                           none of them keeps one of its own. */}
-                                    <TaskFromMessageHost />
-                                    {/* Inside WorkbenchRouteProvider: the
+                                      <TaskFromMessageHost />
+                                      {/* Inside WorkbenchRouteProvider: the
                                           listener calls openConversations() to
                                           surface a launcher-opened folder. */}
-                                    <WorkspaceOpenFolderListener />
-                                    <FolderLayoutShell>
-                                      {children}
-                                    </FolderLayoutShell>
-                                  </WorkbenchRouteProvider>
+                                      <WorkspaceOpenFolderListener />
+                                      <FolderLayoutShell>
+                                        {children}
+                                      </FolderLayoutShell>
+                                    </WorkbenchRouteProvider>
+                                  </PersonalAgentProvider>
                                 </TasksViewProvider>
                               </AutomationsViewProvider>
                             </SearchDialogProvider>

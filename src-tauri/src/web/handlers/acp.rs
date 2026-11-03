@@ -188,6 +188,9 @@ pub async fn acp_prompt(
                 _ => AppCommandError::task_execution_failed(message),
             }
         })?;
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&params.connection_id, params.conversation_id);
     Ok(Json(()))
 }
 

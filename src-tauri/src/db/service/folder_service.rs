@@ -341,6 +341,68 @@ pub async fn add_chat_folder(
     Ok(to_detail(model))
 }
 
+/// The hidden folder backing the personal agent's working directory at
+/// `path`: the live row there when one exists, else a new `personal` one.
+/// Get-or-create, unlike [`add_chat_folder`]: the path is fixed and the agent
+/// comes back to it session after session.
+///
+/// A live row of another kind at the same path (the owner opened the
+/// directory as a project, say) is refused — conversations of both would end
+/// up in one folder.
+pub async fn ensure_personal_folder(
+    conn: &DatabaseConnection,
+    path: &str,
+) -> Result<FolderDetail, DbError> {
+    if let Some(existing) = folder::Entity::find()
+        .filter(folder::Column::Path.eq(path))
+        .one(conn)
+        .await?
+    {
+        if existing.deleted_at.is_none() {
+            if existing.kind != FolderKind::Personal {
+                return Err(DbError::Validation(format!(
+                    "{path} is already open in codeg as a folder; pick another directory"
+                )));
+            }
+            return Ok(to_detail(existing));
+        }
+        // A tombstone holds the path's unique key: bring it back as the
+        // personal folder rather than fail the insert below.
+        let mut active: folder::ActiveModel = existing.into();
+        let now = Utc::now();
+        active.deleted_at = Set(None);
+        active.kind = Set(FolderKind::Personal);
+        active.is_open = Set(false);
+        active.parent_id = Set(None);
+        active.group_id = Set(None);
+        active.updated_at = Set(now);
+        return Ok(to_detail(active.update(conn).await?));
+    }
+    let now = Utc::now();
+    let next_order = next_sort_order(conn).await?;
+    let active = folder::ActiveModel {
+        id: NotSet,
+        name: Set("Personal agent".to_string()),
+        path: Set(path.to_string()),
+        git_branch: Set(None),
+        default_agent_type: Set(None),
+        last_opened_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        deleted_at: Set(None),
+        // Never in the sidebar's open list: the personal agent has its own page.
+        is_open: Set(false),
+        sort_order: Set(next_order),
+        color: Set(DEFAULT_FOLDER_COLOR.to_string()),
+        parent_id: Set(None),
+        kind: Set(FolderKind::Personal),
+        alias: Set(None),
+        group_id: Set(None),
+    };
+    let model = active.insert(conn).await?;
+    Ok(to_detail(model))
+}
+
 pub async fn update_folder_color(
     conn: &DatabaseConnection,
     folder_id: i32,

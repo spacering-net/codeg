@@ -178,6 +178,34 @@ impl CleanupBlocked {
 
 static ENGINE: OnceLock<Arc<TaskEngine>> = OnceLock::new();
 
+/// Set once this process's boot reconcile has failed the tasks a restart
+/// interrupted. Something else in the process that starts tasks unattended
+/// (the personal agent's dispatcher) waits for it: a task started before the
+/// sweep would be failed with the interrupted ones.
+static BOOT_RECONCILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static BOOT_RECONCILED_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+fn mark_boot_reconciled() {
+    BOOT_RECONCILED.store(true, std::sync::atomic::Ordering::SeqCst);
+    BOOT_RECONCILED_NOTIFY.notify_waiters();
+}
+
+/// Wait until this process's task engine has run its boot reconcile, or for
+/// `timeout` — whichever comes first (an engine that never boots must not
+/// hold its neighbours back forever).
+pub async fn wait_boot_reconciled(timeout: std::time::Duration) {
+    let wait = async {
+        loop {
+            let notified = BOOT_RECONCILED_NOTIFY.notified();
+            if BOOT_RECONCILED.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    };
+    let _ = tokio::time::timeout(timeout, wait).await;
+}
+
 /// The process-global engine, set once at boot by [`build_task_engine`]. Read
 /// by the start/cancel/merge/cleanup commands.
 pub fn engine() -> Option<Arc<TaskEngine>> {
@@ -476,6 +504,9 @@ pub async fn run_task_engine(engine: Arc<TaskEngine>) {
         Ok(_) => {}
         Err(e) => tracing::warn!("[work_task] boot reconcile error: {e}"),
     }
+    // Past this point a task started by anyone else in this process survives:
+    // the sweep above is what fails every running row.
+    mark_boot_reconciled();
     match work_task_service::list_by_status(&engine.db.conn, &[WorkTaskStatus::Merging]).await {
         Ok(rows) => {
             for row in rows {
@@ -6647,6 +6678,12 @@ fn auto_merge_candidate(
     if task.source_kind.is_some() {
         return false;
     }
+    // Dispatched by the personal agent: its prompt was written by an agent,
+    // not by the user, so it gets the forge rule for the same reason. Hard,
+    // not a setting; the user's own merge click is unaffected.
+    if task.personal_agent_dispatch_id.is_some() {
+        return false;
+    }
     // Delivered to a pull request it stayed in review after: its user chose
     // to land it THROUGH that pull request, and a local landing behind its
     // back would leave the pull request open on work that is already in the
@@ -8422,6 +8459,16 @@ mod tests {
         task.source_kind = None;
         assert!(auto_merge_candidate(&task, &settings));
 
+        // A task the personal agent dispatched: same red line, same
+        // flip-only-this-field proof.
+        task.personal_agent_dispatch_id = Some(7);
+        assert!(
+            !auto_merge_candidate(&task, &settings),
+            "personal-agent dispatched tasks must never be unattended-merge candidates"
+        );
+        task.personal_agent_dispatch_id = None;
+        assert!(auto_merge_candidate(&task, &settings));
+
         // A merge the user queued belongs to the queue's own drain, with THEIR
         // commit message and worktree choice — the unattended dispatch has
         // neither, so it must not take this row (a drain that skipped it after
@@ -8677,6 +8724,7 @@ mod tests {
             source_key: None,
             source_meta: None,
             delivery: None,
+            personal_agent_dispatch_id: None,
             created_at: now,
             updated_at: now,
             started_at: None,

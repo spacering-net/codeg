@@ -1987,7 +1987,18 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "协作",
-    "sectionDescription": "智能体之间如何协同，以及它们能在会话中动用 codeg 的哪些工具。"
+    "sectionDescription": "智能体之间如何协同，以及它们能在会话中动用 codeg 的哪些工具。",
+    "personalAgent": {
+      "title": "个人助手",
+      "workdir": "工作目录",
+      "workdirHint": "存放人设、规则和记忆的目录，由 git 管理。当前：{current}。更换后会新起会话，旧目录原样保留。",
+      "notConfigured": "请先在个人助手页面完成设置。",
+      "placeholder": "默认：数据目录下的 personal-agent",
+      "useDefault": "使用默认",
+      "apply": "更换",
+      "saved": "工作目录已更换。",
+      "readOnly": "个人助手在另一个 codeg 进程里运行，请在那里修改。"
+    }
   },
   "LoginPage": {
     "documentTitle": "登录 - codeg",
@@ -2317,7 +2328,9 @@
       "noRecentChats": "没有最近的聊天",
       "noRecentFolders": "没有最近的文件夹会话",
       "noRecentCli": "没有最近从命令行启动的会话",
-      "recentFilterMenuLabel": "最近显示"
+      "recentFilterMenuLabel": "最近显示",
+      "personalAgent": "个人助手",
+      "personalAgentBadge": "由个人助手派出"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -6469,7 +6482,9 @@
     "deliverPrBackDeleteWorktree": "推回后删除 worktree",
     "deliverPrBackSubmit": "推送",
     "deliverPrBackDone": "已推回 PR",
-    "deliverPrBackDoneMr": "已推回合并请求"
+    "deliverPrBackDoneMr": "已推回合并请求",
+    "badgePersonalAgent": "个人助手派出",
+    "badgePersonalAgentExecutor": "个人助手派出 · {executor}"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",
@@ -7657,6 +7672,275 @@
         "bypassed": "这台电脑的浏览器引擎会让部分地址绕过隧道，为避免从这台电脑加载，远端主机的页面不会打开。",
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
+    }
+  },
+  "PersonalAgent": {
+    "title": "个人助手",
+    "settingsButton": "个人助手设置",
+    "readOnly": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。",
+    "noAssistants": "还没有岗位助手：个人助手派活只交给它们。请到「设置 → 协作 → 助手」添加。",
+    "viewSession": "查看底层会话",
+    "viewSessionHint": "当前会话段的完整记录，实时更新。",
+    "sessionTitle": "第 {seq} 段 · 完整记录",
+    "setup": {
+      "title": "设置你的个人助手",
+      "description": "个人助手负责理解你的意图、把活派给你配置的岗位助手、跟进并记住。先选它运行的 agent。",
+      "action": "选择 agent"
+    },
+    "errors": {
+      "engineElsewhere": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。"
+    },
+    "state": {
+      "queued": "排队中",
+      "running": "进行中",
+      "waiting_input": "等你处理",
+      "review": "待验收",
+      "completed": "已完成",
+      "failed": "失败",
+      "canceled": "已取消",
+      "interrupted": "已中断",
+      "handed_over": "已接手"
+    },
+    "mode": {
+      "task": "看板任务",
+      "chat": "聊天会话",
+      "session": "工作会话"
+    },
+    "reason": {
+      "first": "首次启动",
+      "switch": "切换大脑",
+      "option_restart": "启动设置有变",
+      "workdir": "更换工作目录",
+      "manual": "新会话",
+      "recovery": "原会话无法恢复",
+      "overflow": "上下文溢出"
+    },
+    "initiator": {
+      "auto": "codeg",
+      "owner": "你",
+      "agent": "agent 自己"
+    },
+    "marker": {
+      "segmentStart": "第 {seq} 段 · {agent} · {reason}",
+      "pendingSwitch": "下一条消息起新会话（{reason}）",
+      "optionsChanged": "选项已更改：{changes}",
+      "modeIs": "模式 {mode}",
+      "reconnected": "已重新连接原会话",
+      "compaction": {
+        "ok": "上下文已压缩（发起方：{who}）{range}",
+        "failed": "压缩失败（发起方：{who}）{range}",
+        "canceled": "压缩已取消（发起方：{who}）{range}"
+      },
+      "compactionRange": " · {before}% → {after}%",
+      "compactionFrom": " · 压缩前 {before}%",
+      "compactionPaused": "连续两次压缩都没起作用，本段已暂停自动压缩",
+      "turnCanceled": "回合已停止",
+      "turnFailed": "回合失败：{error}",
+      "turnInterrupted": "回合没有正常结束",
+      "overflowNewSegment": "压缩后上下文再次溢出，新起会话",
+      "overflowCompact": "上下文溢出，下一条消息前先压缩",
+      "workdirChanged": "工作目录已更换为 {path}"
+    },
+    "timeline": {
+      "loadOlder": "加载更早的记录",
+      "empty": "打个招呼，或者交给它一件事。",
+      "supplement": "运行中补充",
+      "queued": "已排队",
+      "interrupted": "未完成",
+      "resend": "重新发送",
+      "resent": "已重新发送",
+      "question": "提问",
+      "plan": "计划审批",
+      "questionState": {
+        "pending": "等你回答",
+        "answered": "已回答",
+        "skipped": "已略过",
+        "resolved": "已关闭"
+      },
+      "planDecision": {
+        "approve": "已批准",
+        "request_changes": "已要求修改",
+        "abandon": "已放弃"
+      },
+      "answered": "你的回答：{answer}",
+      "permission": "权限请求",
+      "permissionPending": "等你决定",
+      "permissionWithdrawn": "已撤回",
+      "permissionChose": "你选择了：{option}",
+      "dispatched": "已派出",
+      "result": "进展",
+      "executor": "执行：{name}",
+      "openTask": "在看板中打开",
+      "openConversation": "打开会话",
+      "open": "打开"
+    },
+    "composer": {
+      "placeholder": "给个人助手发消息…",
+      "placeholderBusy": "正在忙——你的消息会随下一回合发送",
+      "readOnly": "本进程只读",
+      "ariaLabel": "发给个人助手的消息",
+      "send": "发送",
+      "queue": "加入队列",
+      "supplement": "补充到本回合",
+      "supplementHint": "并入正在运行的回合，不等它结束",
+      "supplemented": "已补充到进行中的回合。",
+      "queuedInstead": "已转入队列，将随下一回合发送。",
+      "waitForUpload": "请等图片上传完成。",
+      "stop": "停止",
+      "cancelCompaction": "停止压缩",
+      "compact": "压缩",
+      "compactHint": "立即压缩当前会话的上下文",
+      "newSession": "新会话",
+      "newSessionHint": "下一条消息起新会话，时间线保持连续",
+      "newSessionQueued": "你的下一条消息会起一个新会话。",
+      "compacting": "正在压缩上下文…",
+      "replying": "正在回复…",
+      "brain": "它运行的 agent",
+      "queuedCount": "{count, plural, other {# 条消息排队中}}"
+    },
+    "aux": {
+      "status": "状态",
+      "dispatches": "近期派活",
+      "items": "在途",
+      "data": "数据"
+    },
+    "status": {
+      "elsewhere": "个人助手在另一个 codeg 进程里运行，这里显示的是数据库里的状态。",
+      "brain": "大脑",
+      "agent": "Agent",
+      "model": "模型",
+      "mode": "模式",
+      "session": "会话段",
+      "segment": "当前",
+      "segmentValue": "第 {seq} 段 · {reason}",
+      "noSegment": "尚未开始",
+      "startedAt": "开始于",
+      "pending": "下一条消息起新会话",
+      "connection": "连接",
+      "connected": "在线",
+      "disconnected": "未连接（下一条消息时重新连接）",
+      "handoff": "交接卡",
+      "handoffSize": "{size} 字",
+      "handoffTrimmed": "已裁剪",
+      "context": "上下文",
+      "usageValue": "已用 {percent}%（{source}）",
+      "usageSource": {
+        "live": "实时",
+        "transcript": "来自会话文件"
+      },
+      "usageUnknown": "用量未知：这个 agent 不报告用量",
+      "threshold": "达到 {percent}% 自动压缩",
+      "thresholdOff": "自动压缩已关闭",
+      "command": "命令 {command}",
+      "noCommand": "不知道这个 agent 的压缩命令",
+      "compactions": "压缩次数",
+      "compactionCounts": "codeg {auto} · 你 {manual} · agent {agent}",
+      "lastCheck": "最近一次检查",
+      "check": {
+        "below": "低于阈值",
+        "compacted": "投递前已压缩",
+        "disabled": "自动压缩已关闭",
+        "usage_unknown": "跳过：用量未知",
+        "no_command": "跳过：没有压缩命令",
+        "paused": "跳过：本段已暂停",
+        "skipped_after_attempt": "刚压缩过，直接投递"
+      },
+      "paused": "本段已暂停自动压缩",
+      "resume": "恢复",
+      "work": "工作",
+      "queued": "等待中",
+      "queuedValue": "{messages} 条消息 · {events} 条进展",
+      "dispatchSlots": "派出的会话",
+      "slotsValue": "运行 {running}/{limit} · 排队 {queued}",
+      "slotsUnlimited": "运行 {running} · 排队 {queued}",
+      "waiting": "待批准",
+      "waitingOwner": "等你处理",
+      "engine": "运行在",
+      "engineHere": "本进程",
+      "engineElsewhere": "另一个 codeg 进程",
+      "workdir": "工作目录",
+      "lastError": "最近错误",
+      "lastCompaction": "最近一次压缩",
+      "compactionStatus": {
+        "ok": "成功",
+        "failed": "失败",
+        "canceled": "已取消",
+        "running": "进行中"
+      },
+      "usageUnknownOffline": "用量未知：重新连接后读取"
+    },
+    "dispatches": {
+      "all": "全部",
+      "empty": "还没有派过活。",
+      "meta": "{executor} · {folder} · {when}",
+      "noProject": "无项目"
+    },
+    "items": {
+      "empty": "没有在途事项。",
+      "waits": {
+        "owner": "等你",
+        "agent": "等助手",
+        "external": "进行中",
+        "time": "稍后",
+        "none": "其他"
+      },
+      "kind": {
+        "dispatch": "派活",
+        "reminder": "提醒",
+        "followup": "跟进",
+        "question": "提问"
+      },
+      "onDone": "完成后：{text}"
+    },
+    "data": {
+      "interactions": "每日交互",
+      "messages": "你的消息",
+      "replies": "回复",
+      "dispatches": "每日派活",
+      "completed": "已完成",
+      "other": "其他",
+      "failed": "失败",
+      "executors": "按岗位助手",
+      "completedHint": "完成 {count}",
+      "tokens": "每日 token",
+      "agentTokens": "个人助手",
+      "dispatchTokens": "派出的工作",
+      "syncedAt": "token 数据截至上次用量同步：{when}",
+      "notSynced": "token 数据在用量同步后显示（见 Token 用量页）。",
+      "usageCurve": "上下文用量",
+      "noUsage": "还没有读数。",
+      "empty": "暂无数据"
+    },
+    "settings": {
+      "title": "个人助手设置",
+      "setupTitle": "设置你的个人助手",
+      "description": "它运行在什么上、什么时候压缩上下文、它是谁。",
+      "setupDescription": "选择个人助手运行的 agent 和全部选项。以后可以切换，时间线保持连续。",
+      "tabBrain": "大脑",
+      "tabCompaction": "压缩",
+      "tabDispatch": "派活",
+      "tabPersona": "人设与记忆",
+      "name": "名称",
+      "nameHint": "在它的页面上显示的名字，留空用默认名称。",
+      "namePlaceholder": "个人助手",
+      "agentHint": "它运行的 agent 和全部选项，和岗位助手的配置方式一样。",
+      "switchNote": "换成另一个 agent 后，下一条消息会新起一个会话。不会续接旧会话，codeg 把时间线交接给新会话。",
+      "autoCompact": "自动压缩阈值",
+      "autoCompactHint": "上下文占用达到这个比例时，codeg 在下一条消息前先发压缩命令。0 表示关闭。应低于 agent 自己的自动压缩触发点。",
+      "compactCommand": "压缩命令",
+      "compactCommandHint": "按原样发送；留空时自动选用 agent 自己的命令（/compact、/compress…）。切换到别的 agent 时清空。",
+      "compactionNote": "压缩后还是同一个会话：下一条消息会附上状态卡，带上人设、规则和在途事项。连续两次压缩都没起作用，本段会暂停自动压缩。",
+      "concurrency": "同时运行的派出会话",
+      "concurrencyHint": "聊天会话和工作会话同时运行的上限，超出的排队。0 表示不限。看板任务沿用看板自己的上限。",
+      "handoffBudget": "交接卡预算",
+      "handoffBudgetHint": "新会话交接卡最多用多少字；裁掉的部分助手可以用工具翻阅。",
+      "skill": "内置技能",
+      "skillHint": "通过工作目录里的技能，教助手它的约定（派活方式、在途事项、记忆文件）。",
+      "filesNote": "这些文件在助手的工作目录里，每个回合结束后提交到 git。人设与规则的改动会随你的下一条消息补给助手。",
+      "saveFile": "保存文件",
+      "fileSaved": "已保存 {name}。",
+      "cancel": "取消",
+      "save": "保存"
     }
   }
 }

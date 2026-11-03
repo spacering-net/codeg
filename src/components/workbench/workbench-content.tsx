@@ -12,6 +12,11 @@ import {
 import { CanvasPage, CanvasPageTitle } from "@/components/canvas/canvas-page"
 import { ForgeChromeActions } from "@/components/forge/forge-chrome-actions"
 import { ForgePage, ForgePageTitle } from "@/components/forge/forge-page"
+import {
+  PersonalAgentChromeActions,
+  PersonalAgentPage,
+  PersonalAgentPageTitle,
+} from "@/components/personal-agent/personal-agent-page"
 import { TasksChromeActions } from "@/components/tasks/tasks-chrome-actions"
 import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
 import {
@@ -27,6 +32,7 @@ import {
  * that calls `setRoute("<id>")`.
  */
 const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
+  personalAgent: PersonalAgentPage,
   automations: AutomationsPage,
   tasks: TasksPage,
   forge: ForgePage,
@@ -38,6 +44,7 @@ const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
  *  (the h-10 band the fixed corner overlays sit on) — e.g. the page title. */
 const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
   {
+    personalAgent: PersonalAgentPageTitle,
     automations: AutomationsPageTitle,
     tasks: TasksPageTitle,
     forge: ForgePageTitle,
@@ -60,6 +67,7 @@ export interface WorkbenchChromeActionsProps {
 const WORKBENCH_ROUTE_CHROME_ACTIONS: Partial<
   Record<WorkbenchRouteId, ComponentType<WorkbenchChromeActionsProps>>
 > = {
+  personalAgent: PersonalAgentChromeActions,
   forge: ForgeChromeActions,
   tasks: TasksChromeActions,
 }

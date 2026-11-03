@@ -175,6 +175,11 @@ pub struct CompanionFeatures {
     pub automations: bool,
     /// `create_work_task` — queue a card on the work-task board from chat.
     pub taskboard: bool,
+    /// The personal agent's tools (`assistant_list`, `project_list`,
+    /// `dispatch`, `dispatch_followup`, `item_list`, `item_read`,
+    /// `item_update`, `timeline_read`) — injected only into the personal
+    /// agent's own connection, which the app re-checks on every call.
+    pub personal_agent: bool,
     /// The built-in browser's agent surface: `browser_list_tabs` /
     /// `browser_snapshot` / `browser_console_messages` / `browser_screenshot`,
     /// the five action tools (`browser_click`, `browser_hover`,
@@ -233,6 +238,7 @@ impl CompanionFeatures {
                 result: false,
                 automations: false,
                 taskboard: false,
+                personal_agent: false,
                 browser: false,
                 browser_eval: false,
                 computer: false,
@@ -249,6 +255,7 @@ impl CompanionFeatures {
             result: false,
             automations: false,
             taskboard: false,
+            personal_agent: false,
             browser: false,
             browser_eval: false,
             computer: false,
@@ -265,6 +272,7 @@ impl CompanionFeatures {
                 "result" => f.result = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
+                "personal_agent" => f.personal_agent = true,
                 "browser" => f.browser = true,
                 "browser_eval" => f.browser_eval = true,
                 "computer" => f.computer = true,
@@ -286,6 +294,8 @@ impl CompanionFeatures {
             "submit_result" => self.result,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
+            "assistant_list" | "project_list" | "dispatch" | "dispatch_followup"
+            | "item_list" | "item_read" | "item_update" | "timeline_read" => self.personal_agent,
             "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
             | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
             | "browser_press_key" | "browser_select_option" | "browser_open_tab"
@@ -1475,6 +1485,34 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
+        }
+        "assistant_list" | "project_list" | "dispatch" | "dispatch_followup" | "item_list"
+        | "item_read" | "item_update" | "timeline_read" => {
+            // Shape only: the app owns every rule (which assistants exist,
+            // which projects may be targeted, which states allow a
+            // follow-up), so the companion forwards the arguments as given.
+            let arguments = match arguments {
+                Value::Object(_) => arguments,
+                Value::Null => json!({}),
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        format!("{name} takes an object of arguments"),
+                    ))
+                }
+            };
+            let req = crate::acp::delegation::transport::BrokerPersonalAgentRequest {
+                token: ctx.token.clone(),
+                tool: name.clone(),
+                arguments,
+            };
+            let round_trip = Box::pin(async move {
+                crate::acp::delegation::transport::client_personal_agent_round_trip(&socket, &req)
+                    .await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_personal_agent_result)
+                .await
         }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
@@ -4307,6 +4345,25 @@ pub fn render_authoring_result(outcome: &Value) -> Value {
     })
 }
 
+/// Map a personal-agent tool outcome (a serialized
+/// [`crate::personal_agent::tools::ToolOutcome`]) into an MCP `tools/call`
+/// result. The text rides in `content` and the whole outcome in
+/// `structuredContent`, because hosts read one or the other. A refusal is not
+/// a tool error: the model reads why and corrects the call.
+pub fn render_personal_agent_result(outcome: &Value) -> Value {
+    let text = outcome
+        .get("text")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or("No answer was reported.")
+        .to_string();
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Build the human-readable summary block for a found session: a metadata header
 /// plus, when present, a "Recent messages" section.
 fn render_session_summary_text(o: &Value) -> String {
@@ -4451,6 +4508,7 @@ mod tests {
             result: false,
             automations: false,
             taskboard: false,
+            personal_agent: false,
             browser: false,
             browser_eval: false,
             computer: false,
@@ -5082,6 +5140,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5097,6 +5156,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5112,6 +5172,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5127,6 +5188,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5618,6 +5680,7 @@ mod tests {
         result: false,
         automations: true,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5633,6 +5696,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: true,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5655,6 +5719,104 @@ mod tests {
 
         let names = list_tool_names(dispatch_with_features(TASKBOARD_ONLY, list).await);
         assert_eq!(names, vec!["create_work_task".to_string()]);
+    }
+
+    // -- personal agent: one group, only for its own connection -----------
+
+    const PERSONAL_AGENT_ONLY: CompanionFeatures = CompanionFeatures {
+        delegation: false,
+        feedback: false,
+        ask: false,
+        sessions: false,
+        tasks: false,
+        result: false,
+        automations: false,
+        taskboard: false,
+        personal_agent: true,
+        browser: false,
+        browser_eval: false,
+        computer: false,
+        computer_launch: false,
+        computer_clipboard: false,
+    };
+
+    const PERSONAL_AGENT_TOOLS: [&str; 8] = [
+        "assistant_list",
+        "project_list",
+        "dispatch",
+        "dispatch_followup",
+        "item_list",
+        "item_read",
+        "item_update",
+        "timeline_read",
+    ];
+
+    #[test]
+    fn the_personal_agent_token_parses_on_its_own() {
+        let f = CompanionFeatures::parse(Some("personal_agent"));
+        assert!(f.personal_agent);
+        assert!(!f.delegation && !f.taskboard && !f.automations);
+        assert!(!CompanionFeatures::parse(None).personal_agent);
+    }
+
+    #[tokio::test]
+    async fn tools_list_offers_the_personal_agent_group_only_when_on() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let names = list_tool_names(dispatch_for_test(list).await);
+        for tool in PERSONAL_AGENT_TOOLS {
+            assert!(!names.contains(&tool.to_string()), "{tool} leaked");
+        }
+        let mut names = list_tool_names(dispatch_with_features(PERSONAL_AGENT_ONLY, list).await);
+        names.sort();
+        let mut want: Vec<String> = PERSONAL_AGENT_TOOLS.iter().map(|t| t.to_string()).collect();
+        want.sort();
+        assert_eq!(names, want);
+    }
+
+    #[tokio::test]
+    async fn personal_agent_tools_are_unknown_when_the_group_is_off() {
+        for tool in PERSONAL_AGENT_TOOLS {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 61, "method": "tools/call",
+                "params": { "name": tool, "arguments": {} }
+            })
+            .to_string();
+            let resp = unwrap_respond(dispatch_with_features(TASKBOARD_ONLY, &line).await);
+            let e = resp.error.expect("must be rejected");
+            assert_eq!(e.code, -32602);
+            assert!(e.message.contains("unknown tool"), "{tool}: {}", e.message);
+        }
+    }
+
+    #[tokio::test]
+    async fn personal_agent_tools_forward_objects_and_refuse_other_shapes() {
+        let ok = json!({
+            "jsonrpc": "2.0", "id": 62, "method": "tools/call",
+            "params": { "name": "dispatch", "arguments": { "mode": "chat" } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_with_features(PERSONAL_AGENT_ONLY, &ok).await,
+            LineAction::Spawn(_)
+        ));
+        let bad = json!({
+            "jsonrpc": "2.0", "id": 63, "method": "tools/call",
+            "params": { "name": "item_read", "arguments": [1] }
+        })
+        .to_string();
+        let resp = unwrap_respond(dispatch_with_features(PERSONAL_AGENT_ONLY, &bad).await);
+        assert_eq!(resp.error.expect("refused").code, -32602);
+    }
+
+    #[test]
+    fn a_personal_agent_outcome_renders_text_and_structure() {
+        let out = render_personal_agent_result(&json!({
+            "ok": false,
+            "text": "a chat dispatch takes no project_id",
+        }));
+        assert_eq!(out["isError"], false);
+        assert_eq!(out["content"][0]["text"], "a chat dispatch takes no project_id");
+        assert_eq!(out["structuredContent"]["ok"], false);
     }
 
     /// Calling a tool whose group is off is rejected as an unknown tool — same
@@ -6457,6 +6619,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: true,
         browser_eval: false,
         computer: false,

@@ -399,6 +399,7 @@ impl AutomationEngine {
             // (the editor blanks it for this mode), so the task branches from
             // the project folder's checkout like any unspecified one.
             base_branch: None,
+            executor_name: None,
         };
         let draft = crate::models::WorkTaskDraft {
             folder_id,

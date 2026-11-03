@@ -117,7 +117,7 @@
   },
   {
     "name": "ask_user_question",
-    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered \u2014 including picking a recommended option or telling you to proceed \u2014 act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
+    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered — including picking a recommended option or telling you to proceed — act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1389,6 +1389,214 @@
           "type": "string",
           "maxLength": 100000,
           "description": "The text to put on the clipboard."
+        }
+      }
+    }
+  },
+  {
+    "name": "assistant_list",
+    "description": "List the role assistants you may hand work to: id, name, when to use it, and the agent and model it runs on. These are the only executors `dispatch` accepts — never a bare agent type, never yourself. An empty list means the owner has configured none: tell them to add one under Settings → Collaboration → Assistants.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "project_list",
+    "description": "List the project folders a `task` or `session` dispatch may target: id, name and path. Your own working directory and codeg's hidden folders are never targets.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "dispatch",
+    "description": "Hand a piece of work to a role assistant. ASYNCHRONOUS: returns at once with the dispatch id; progress reaches you later as events, and codeg puts a result card on the owner's timeline without waiting for you. Three modes: `task` — a kanban task in the project's own worktree, reviewed and merged by the owner (use it for any code change); `chat` — a chat conversation outside any project (research, writing, analysis); `session` — a conversation in the project's CURRENT checkout, for reading and investigating, or an in-place change the owner explicitly asked for. `task` and `session` need `project_id`. The executor runs with the assistant's own agent, options and standing instructions, frozen at dispatch. Write `prompt` so the executor can work without seeing this conversation.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "mode",
+        "assistant_id",
+        "title",
+        "prompt"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "task",
+            "chat",
+            "session"
+          ],
+          "description": "How the work runs: task, chat or session."
+        },
+        "assistant_id": {
+          "type": "integer",
+          "description": "The executing role assistant's id, from assistant_list."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "A short title the owner sees on the card."
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 20000,
+          "description": "The complete instructions for the executor."
+        },
+        "project_id": {
+          "type": "integer",
+          "description": "Target project id, from project_list. Required for task and session; not allowed for chat."
+        },
+        "deliverable": {
+          "type": "string",
+          "enum": [
+            "change",
+            "report"
+          ],
+          "description": "task only: `change` (default) produces commits to review and merge; `report` produces only a written report."
+        },
+        "on_done": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "What you should do once it finishes, e.g. 'remind the owner to release after the review passes'. Handed back to you with the completion event."
+        }
+      }
+    }
+  },
+  {
+    "name": "dispatch_followup",
+    "description": "Continue a dispatch. For a task in review: send `message` with an `intent` (revise / continue / question / verify). For a failed or interrupted task: retry it, with `message` as the note. For a chat or session dispatch: append `message` as the next turn, only while that conversation is idle, not waiting on a question or permission, and not taken over by the owner. Returns at once; the new round reports back as events.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "dispatch_id",
+        "message"
+      ],
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch to continue."
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 20000,
+          "description": "What the executor should do next."
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "revise",
+            "continue",
+            "question",
+            "verify"
+          ],
+          "description": "task in review only; defaults to revise."
+        }
+      }
+    }
+  },
+  {
+    "name": "item_list",
+    "description": "List your open matters (the ledger codeg keeps for you, including one per dispatch): id, kind, status, who it waits for, a summary, and the dispatch's current state. Defaults to the active ones (open and waiting).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "open",
+            "waiting",
+            "done",
+            "dropped",
+            "all"
+          ],
+          "description": "Which ones; default active."
+        }
+      }
+    }
+  },
+  {
+    "name": "item_read",
+    "description": "Read one open matter in full, with its dispatch (state, executor, result excerpt) when it has one.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "item_id"
+      ],
+      "properties": {
+        "item_id": {
+          "type": "integer",
+          "description": "The item's id."
+        }
+      }
+    }
+  },
+  {
+    "name": "item_update",
+    "description": "Update an open matter — its status, who it waits for, its summary, what to do when it is done — or, without `item_id`, add one (a reminder, a follow-up, a question for the owner). Dispatches get their item automatically; do not add one for them.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "item_id": {
+          "type": "integer",
+          "description": "The item to update; omit to add a new one."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "reminder",
+            "followup",
+            "question"
+          ],
+          "description": "New items only."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "waiting",
+            "done",
+            "dropped"
+          ]
+        },
+        "waits_for": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "agent",
+            "time",
+            "external"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "One or two sentences."
+        },
+        "on_done": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    }
+  },
+  {
+    "name": "timeline_read",
+    "description": "Page back through your timeline with the owner, across every session you have had: their messages, your replies, questions and answers, dispatches and their results, markers. Newest first; pass the smallest id you got as `before_id` to go further back.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "before_id": {
+          "type": "integer",
+          "description": "Only rows older than this id."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Rows to return; default 20."
         }
       }
     }

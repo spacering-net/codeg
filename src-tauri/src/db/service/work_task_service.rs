@@ -104,6 +104,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .delivery
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
+        personal_agent_dispatch_id: m.personal_agent_dispatch_id,
         latest_progress: None,
         compacting: false,
         created_at: m.created_at,
@@ -500,6 +501,28 @@ pub async fn create(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
+    create_inner(conn, draft, None).await
+}
+
+/// Create a task on behalf of a personal-agent dispatch. The ONLY path that
+/// writes `personal_agent_dispatch_id`, in the same insert as the row itself:
+/// a task that existed for a moment without it could be auto-merged.
+pub async fn create_for_personal_agent(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    dispatch_id: i32,
+) -> Result<WorkTaskInfo, DbError> {
+    create_inner(conn, draft, Some(dispatch_id)).await
+}
+
+async fn create_inner(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    dispatch_id: Option<i32>,
+) -> Result<WorkTaskInfo, DbError> {
+    // A dispatched task was written by the personal agent, not typed by the
+    // user; the timeline says so.
+    let actor = if dispatch_id.is_some() { "agent" } else { "user" };
     validate_draft(&draft)?;
     // The target folder must exist, be live, and be a project root (a task
     // bound to a worktree folder would nest worktrees at launch).
@@ -525,8 +548,10 @@ pub async fn create(
         .unwrap_or(0);
 
     let txn = conn.begin().await?;
-    let row = insert_todo_row(&txn, &draft, config_str, max_order, now, None).await?;
-    record_event(&txn, row.id, "created", "user", None).await?;
+    let row =
+        insert_todo_row(&txn, &draft, config_str, max_order, now, None, dispatch_id).await?;
+    let payload = dispatch_id.map(|id| serde_json::json!({ "personal_agent_dispatch": id }));
+    record_event(&txn, row.id, "created", actor, payload).await?;
     txn.commit().await?;
     Ok(to_info(row))
 }
@@ -600,7 +625,8 @@ pub async fn create_from_forge_by(
 
     let txn = conn.begin().await?;
     // FIRST statement: the write. See the doc comment — this is load-bearing.
-    let row = insert_todo_row(&txn, &draft, config_str, max_order, now, Some(&source)).await?;
+    let row =
+        insert_todo_row(&txn, &draft, config_str, max_order, now, Some(&source), None).await?;
     if !force {
         if let Some(existing) =
             other_active_with_same_source(&txn, row.id, &source.key).await?
@@ -729,6 +755,7 @@ async fn insert_todo_row<C: ConnectionTrait>(
     max_order: i32,
     now: chrono::DateTime<Utc>,
     source: Option<&crate::models::WorkTaskSource>,
+    dispatch_id: Option<i32>,
 ) -> Result<work_task::Model, DbError> {
     let source_meta = source
         .map(|s| {
@@ -770,6 +797,7 @@ async fn insert_todo_row<C: ConnectionTrait>(
         source_key: Set(source.map(|s| s.key.clone())),
         source_meta: Set(source_meta),
         delivery: Set(None),
+        personal_agent_dispatch_id: Set(dispatch_id),
         created_at: Set(now),
         updated_at: Set(now),
         started_at: Set(None),
@@ -1974,6 +2002,10 @@ pub async fn begin_merge(
         // Authoritative here for the same reason — the sweep's snapshot cannot
         // see a deferral made while it waited for the folder lock.
         update = update.filter(work_task::Column::DeferredAt.is_null());
+        // A personal-agent dispatch never lands unattended (see
+        // `auto_merge_candidate`); the column is written once at creation, so
+        // this only backs the sweep's predicate up.
+        update = update.filter(work_task::Column::PersonalAgentDispatchId.is_null());
     }
     // A dispatch OF a queued merge also binds to that exact intent: run_seq
     // alone cannot tell "the merge the pump picked up" from "the one the user

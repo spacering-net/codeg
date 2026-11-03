@@ -20,6 +20,7 @@ import {
  */
 export type WorkbenchRouteId =
   | "conversations"
+  | "personalAgent"
   | "automations"
   | "tasks"
   | "forge"

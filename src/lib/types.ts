@@ -1076,12 +1076,21 @@ export type ConversationStatus =
 
 /** Mirrors Rust `ConversationKind` (src-tauri/src/db/entities/conversation.rs).
  *  `loop` rows belong to the Loop Engineering workbench and never appear in
- *  the sidebar list; `delegate` rows nest under their parent's tool-call view. */
-export type ConversationKind = "regular" | "chat" | "loop" | "delegate"
+ *  the sidebar list; `delegate` rows nest under their parent's tool-call view;
+ *  `personal` rows are the personal agent's own session segments, shown on its
+ *  page only. */
+export type ConversationKind =
+  | "regular"
+  | "chat"
+  | "loop"
+  | "delegate"
+  | "personal"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
- *  `loop_worktree` is reserved for M2+ — add it here when the variant lands. */
-export type FolderKind = "regular" | "chat"
+ *  `personal` is the personal agent's working directory: hidden everywhere,
+ *  like `chat`. `loop_worktree` is reserved for M2+ — add it here when the
+ *  variant lands. */
+export type FolderKind = "regular" | "chat" | "personal"
 
 export const STATUS_ORDER: ConversationStatus[] = [
   "in_progress",
@@ -1860,6 +1869,292 @@ export type AssistantChange =
 
 export const ASSISTANT_CHANGED_EVENT = "assistant://changed"
 
+// ─── Personal agent ────────────────────────────────────────────────────────
+// Mirrors src-tauri/src/models/personal_agent.rs (snake_case wire form). One
+// long-lived assistant per data dir: its own page, one timeline across the
+// agent sessions ("segments") it runs on, and work dispatched to the role
+// assistants above.
+
+export interface PersonalAgentSettings {
+  /** 0 turns auto-compaction off. */
+  auto_compact_percent: number
+  compact_command: string | null
+  /** The agent type the command was written for. */
+  compact_command_agent: string | null
+  handoff_budget_chars: number
+  /** 0 = no limit. */
+  dispatch_concurrency: number
+  skill_enabled: boolean
+}
+
+export interface PersonalAgentInfo {
+  id: number
+  /** Empty: use the localized default name. */
+  name: string
+  avatar: AssistantAvatar
+  agent_type: AgentType
+  agent_options: AgentDelegationDefaults
+  label_snapshot: AssistantLabelSnapshot
+  settings: PersonalAgentSettings
+  workdir: string
+  workdir_custom: boolean
+  folder_id: number | null
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonalAgentDraft {
+  name?: string
+  avatar?: AssistantAvatar
+  agent_config?: AssistantAgentConfig
+  settings?: PersonalAgentSettings
+  locale?: string
+}
+
+export type SegmentReason =
+  | "first"
+  | "switch"
+  | "option_restart"
+  | "workdir"
+  | "manual"
+  | "recovery"
+  | "overflow"
+
+export type TimelineKind =
+  | "owner"
+  | "reply"
+  | "question"
+  | "permission"
+  | "dispatch"
+  | "result"
+  | "marker"
+
+export type OwnerStatus = "queued" | "delivered" | "answered" | "interrupted"
+
+export interface TimelineRow {
+  id: number
+  segment_id: number | null
+  batch_id: number | null
+  kind: TimelineKind
+  status: OwnerStatus | null
+  body: string
+  /** Shaped per kind; markers carry `marker`. */
+  data: Record<string, unknown> | null
+  dispatch_id: number | null
+  ref_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TimelinePage {
+  rows: TimelineRow[]
+  has_older: boolean
+}
+
+export interface SegmentInfo {
+  id: number
+  seq: number
+  agent_type: AgentType
+  label_snapshot: AssistantLabelSnapshot
+  conversation_id: number | null
+  agent_session_id: string | null
+  start_reason: SegmentReason
+  end_reason: SegmentReason | null
+  pending_reason: SegmentReason | null
+  started_at: string
+  ended_at: string | null
+  handoff_size: number | null
+  handoff_trimmed: boolean
+  compactions_auto: number
+  compactions_manual: number
+  compactions_agent: number
+  auto_compact_paused: boolean
+}
+
+export type DispatchMode = "task" | "chat" | "session"
+
+export type DispatchState =
+  | "queued"
+  | "running"
+  | "waiting_input"
+  | "review"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "interrupted"
+  | "handed_over"
+
+export interface DispatchExecutorSnapshot {
+  assistant_id: number
+  name: string
+  agent_type: AgentType
+  agent_options: AgentDelegationDefaults
+  label_snapshot: AssistantLabelSnapshot | null
+  instructions: string
+}
+
+export interface DispatchInfo {
+  id: number
+  mode: DispatchMode
+  executor: DispatchExecutorSnapshot
+  folder_id: number | null
+  folder_name: string | null
+  deliverable: string | null
+  title: string
+  prompt: string
+  work_task_id: number | null
+  conversation_id: number | null
+  /** The folder the conversation sits in (a chat dispatch's hidden one). */
+  conversation_folder_id: number | null
+  state: DispatchState
+  result_excerpt: string | null
+  error: string | null
+  on_done: string | null
+  turns: number
+  created_at: string
+  updated_at: string
+  finished_at: string | null
+}
+
+export type ItemKind = "dispatch" | "reminder" | "followup" | "question"
+export type ItemStatus = "open" | "waiting" | "done" | "dropped"
+export type WaitsFor = "owner" | "agent" | "time" | "external"
+
+export interface ItemInfo {
+  id: number
+  kind: ItemKind
+  dispatch_id: number | null
+  status: ItemStatus
+  waits_for: WaitsFor | null
+  summary: string
+  on_done: string | null
+  origin_timeline_id: number | null
+  created_at: string
+  updated_at: string
+  dispatch_state: DispatchState | null
+}
+
+export interface UsageReading {
+  percent: number
+  used: number | null
+  size: number | null
+  source: "live" | "transcript"
+}
+
+export interface CompactCheck {
+  at: string
+  outcome:
+    | "below"
+    | "compacted"
+    | "disabled"
+    | "usage_unknown"
+    | "no_command"
+    | "paused"
+    | "skipped_after_attempt"
+  percent: number | null
+}
+
+export type CompactInitiator = "auto" | "owner" | "agent"
+
+export interface PersonalAgentTurnInfo {
+  batch_id: number
+  kind: "delivery" | "compaction"
+  started_at: string
+  compaction_initiator: CompactInitiator | null
+}
+
+export interface PersonalAgentStatus {
+  /** `elsewhere`: another codeg process runs the agent; read-only here. */
+  engine: "here" | "elsewhere"
+  configured: boolean
+  segment: SegmentInfo | null
+  connection_id: string | null
+  connected: boolean
+  turn: PersonalAgentTurnInfo | null
+  usage: UsageReading | null
+  auto_compact_percent: number
+  compact_command: string | null
+  last_check: CompactCheck | null
+  last_compaction: {
+    at: string
+    initiator: "auto" | "owner" | null
+    status: "ok" | "failed" | "canceled" | "running"
+    before_percent: number | null
+    after_percent: number | null
+  } | null
+  queued_messages: number
+  pending_events: number
+  dispatch_running: number
+  dispatch_queued: number
+  dispatch_limit: number
+  pending_permission: boolean
+  pending_question: boolean
+  last_error: string | null
+  workdir: string | null
+}
+
+export interface PersonalAgentSnapshot {
+  agent: PersonalAgentInfo | null
+  status: PersonalAgentStatus
+}
+
+export interface PersonalAgentFile {
+  name: string
+  content: string
+  exists: boolean
+}
+
+export interface PersonalAgentDayStat {
+  date: string
+  owner_messages: number
+  replies: number
+  dispatches_task: number
+  dispatches_chat: number
+  dispatches_session: number
+  dispatches_completed: number
+  dispatches_failed: number
+  agent_tokens: number
+  dispatch_tokens: number
+}
+
+export interface PersonalAgentExecutorStat {
+  assistant_id: number
+  name: string
+  dispatches: number
+  completed: number
+}
+
+export interface PersonalAgentUsagePoint {
+  at: string
+  percent: number
+  kind: "delivery" | "compaction_before" | "compaction_after" | "segment_start"
+  segment_seq: number
+}
+
+export interface PersonalAgentStats {
+  days: PersonalAgentDayStat[]
+  executors: PersonalAgentExecutorStat[]
+  usage: PersonalAgentUsagePoint[]
+  tokens_synced_at: string | null
+}
+
+export interface PersonalAgentSupplementResult {
+  row: TimelineRow
+  /** Folded into the running turn; false means it was queued instead. */
+  steered: boolean
+}
+
+/** Payload for `personal-agent://changed`. Timeline rows ride along whole. */
+export type PersonalAgentChange =
+  | { kind: "timeline"; rows: TimelineRow[] }
+  | { kind: "status" }
+  | { kind: "agent" }
+  | { kind: "dispatch"; id: number }
+  | { kind: "item"; id: number }
+
+export const PERSONAL_AGENT_CHANGED_EVENT = "personal-agent://changed"
+
 // ─── Automations ───────────────────────────────────────────────────────────
 // Mirrors src-tauri/src/models/automation.rs. Wire form is snake_case (serde
 // default), matching AgentDelegationDefaults.
@@ -1987,6 +2282,9 @@ export interface WorkTaskConfig {
    *  the choice existed does). The branch actually used is recorded on
    *  `WorkTask.base_branch` once the worktree exists. */
   base_branch?: string | null
+  /** The role assistant a personal-agent dispatch runs this task as (its name
+   *  at dispatch). Display only. */
+  executor_name?: string | null
 }
 
 export interface WorkTask {
@@ -2059,6 +2357,9 @@ export interface WorkTask {
    *  a task is first delivered, and always on a forge-sourced task — that
    *  one's pull request is `source_meta.result_pr`. */
   delivery?: WorkTaskDelivery | null
+  /** The personal-agent dispatch that created this task, when one did. Such a
+   *  task never auto-merges. */
+  personal_agent_dispatch_id?: number | null
   /** Latest agent_progress milestone OF THIS GENERATION — present on live
    *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a
    *  merge in flight never narrates the work round it is landing. */

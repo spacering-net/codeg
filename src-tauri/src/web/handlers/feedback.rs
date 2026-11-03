@@ -83,5 +83,7 @@ pub async fn submit_session_feedback(
                 _ => AppCommandError::task_execution_failed(message),
             }
         })?;
+    // A person steering a dispatched conversation has taken it over.
+    crate::personal_agent::note_owner_prompt(&params.connection_id, None);
     Ok(Json(item))
 }

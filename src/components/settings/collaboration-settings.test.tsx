@@ -24,6 +24,9 @@ vi.mock("@/lib/api", () => ({
     work_tasks_enabled: false,
   })),
   setChatAuthoringSettings: vi.fn(async (v: unknown) => v),
+  // Never settles: the row renders its control before the snapshot arrives.
+  personalAgentGet: vi.fn(() => new Promise(() => {})),
+  personalAgentSetWorkdir: vi.fn(async () => ({})),
 }))
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -75,5 +78,6 @@ describe("CollaborationSettings", () => {
     expect(screen.getByLabelText("Get session info")).toBeInTheDocument()
     expect(screen.getByLabelText("Create automations")).toBeInTheDocument()
     expect(screen.getByLabelText("Create to-do tasks")).toBeInTheDocument()
+    expect(screen.getByLabelText("Working directory")).toBeInTheDocument()
   })
 })

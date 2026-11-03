@@ -25,6 +25,7 @@ import { useTranslations } from "next-intl"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
 import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
+import { PersonalAgentWorkdirSettings } from "@/components/settings/personal-agent-workdir-settings"
 
 export function CollaborationSettings() {
   const t = useTranslations("CollaborationSettings")
@@ -42,6 +43,11 @@ export function CollaborationSettings() {
         <DelegationSettingsSection />
 
         <AgentToolsSettingsSection />
+
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">{t("personalAgent.title")}</h2>
+          <PersonalAgentWorkdirSettings />
+        </section>
       </div>
     </ScrollArea>
   )

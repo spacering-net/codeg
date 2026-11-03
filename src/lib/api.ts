@@ -32,6 +32,17 @@ import type {
   AssistantDraft,
   AssistantInfo,
   AssistantPatch,
+  DispatchInfo,
+  DispatchMode,
+  ItemInfo,
+  PersonalAgentDraft,
+  PersonalAgentFile,
+  PersonalAgentInfo,
+  PersonalAgentSnapshot,
+  PersonalAgentStats,
+  PersonalAgentSupplementResult,
+  TimelinePage,
+  TimelineRow,
   Automation,
   AutomationRun,
   AutomationDraft,
@@ -2478,6 +2489,143 @@ export async function assistantReorder(
   ids: number[]
 ): Promise<AssistantInfo[]> {
   return getTransport().call("assistant_reorder", { ids })
+}
+
+// ─── Personal agent ────────────────────────────────────────────────────────
+// Reads work in every process; actions go to the process running the agent
+// and fail elsewhere with `errors.engineElsewhere`.
+
+export async function personalAgentGet(): Promise<PersonalAgentSnapshot> {
+  return getTransport().call("personal_agent_get", {})
+}
+
+export async function personalAgentSave(
+  draft: PersonalAgentDraft
+): Promise<PersonalAgentInfo> {
+  return getTransport().call("personal_agent_save", { draft })
+}
+
+export async function personalAgentTimeline(
+  beforeId?: number | null,
+  limit?: number
+): Promise<TimelinePage> {
+  return getTransport().call("personal_agent_timeline", {
+    beforeId: beforeId ?? null,
+    limit: limit ?? null,
+  })
+}
+
+export async function personalAgentSend(
+  text: string,
+  blocks?: unknown[] | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_send", {
+    text,
+    blocks: blocks && blocks.length > 0 ? blocks : null,
+  })
+}
+
+/** Fold a message into the running turn; queued instead when it can't be. */
+export async function personalAgentSupplement(
+  text: string
+): Promise<PersonalAgentSupplementResult> {
+  return getTransport().call("personal_agent_supplement", { text })
+}
+
+export async function personalAgentCancel(): Promise<void> {
+  return getTransport().call("personal_agent_cancel", {})
+}
+
+export async function personalAgentCompact(): Promise<void> {
+  return getTransport().call("personal_agent_compact", {})
+}
+
+export async function personalAgentNewSession(): Promise<void> {
+  return getTransport().call("personal_agent_new_session", {})
+}
+
+export async function personalAgentResumeAutoCompact(): Promise<void> {
+  return getTransport().call("personal_agent_resume_auto_compact", {})
+}
+
+export async function personalAgentKeepalive(): Promise<void> {
+  return getTransport().call("personal_agent_keepalive", {})
+}
+
+export async function personalAgentResend(rowId: number): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_resend", { rowId })
+}
+
+export async function personalAgentAnswerQuestion(
+  questionId: string,
+  answer: QuestionAnswer
+): Promise<void> {
+  return getTransport().call("personal_agent_answer_question", {
+    questionId,
+    answer,
+  })
+}
+
+export async function personalAgentAnswerPlan(
+  approvalId: string,
+  answer: PlanApprovalAnswer
+): Promise<void> {
+  return getTransport().call("personal_agent_answer_plan", {
+    approvalId,
+    answer,
+  })
+}
+
+export async function personalAgentRespondPermission(
+  requestId: string,
+  optionId: string
+): Promise<void> {
+  return getTransport().call("personal_agent_respond_permission", {
+    requestId,
+    optionId,
+  })
+}
+
+export async function personalAgentItems(
+  status?: "active" | "all" | "done"
+): Promise<ItemInfo[]> {
+  return getTransport().call("personal_agent_items", {
+    status: status ?? null,
+  })
+}
+
+export async function personalAgentDispatches(
+  mode?: DispatchMode | null,
+  limit?: number
+): Promise<DispatchInfo[]> {
+  return getTransport().call("personal_agent_dispatches", {
+    mode: mode ?? null,
+    limit: limit ?? null,
+  })
+}
+
+export async function personalAgentStats(
+  days?: number
+): Promise<PersonalAgentStats> {
+  return getTransport().call("personal_agent_stats", { days: days ?? null })
+}
+
+export async function personalAgentFiles(): Promise<PersonalAgentFile[]> {
+  return getTransport().call("personal_agent_files", {})
+}
+
+export async function personalAgentFileSave(
+  name: string,
+  content: string
+): Promise<void> {
+  return getTransport().call("personal_agent_file_save", { name, content })
+}
+
+/** `null` returns to the data directory's default. */
+export async function personalAgentSetWorkdir(
+  path: string | null
+): Promise<PersonalAgentInfo> {
+  return getTransport().call("personal_agent_set_workdir", { path })
 }
 
 export async function listConversationTags(): Promise<ConversationTagDetail[]> {

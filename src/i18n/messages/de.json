@@ -1987,7 +1987,18 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Zusammenarbeit",
-    "sectionDescription": "Wie Agenten zusammenarbeiten und auf welche codeg-eigenen Werkzeuge sie innerhalb einer Unterhaltung zugreifen dürfen."
+    "sectionDescription": "Wie Agenten zusammenarbeiten und auf welche codeg-eigenen Werkzeuge sie innerhalb einer Unterhaltung zugreifen dürfen.",
+    "personalAgent": {
+      "title": "Persönlicher Agent",
+      "workdir": "Arbeitsverzeichnis",
+      "workdirHint": "Hier liegen Persona, Regeln und Gedächtnis, unter git. Aktuell: {current}. Ein Verschieben startet eine neue Sitzung; das alte Verzeichnis bleibt, wie es ist.",
+      "notConfigured": "Richte den persönlichen Agenten zuerst auf seiner Seite ein.",
+      "placeholder": "Standard: personal-agent im Datenverzeichnis",
+      "useDefault": "Standard verwenden",
+      "apply": "Verschieben",
+      "saved": "Arbeitsverzeichnis verschoben.",
+      "readOnly": "Der persönliche Agent läuft in einem anderen codeg-Prozess; ändere es dort."
+    }
   },
   "LoginPage": {
     "documentTitle": "Anmelden - codeg",
@@ -2317,7 +2328,9 @@
       "noRecentChats": "Keine letzten Chats",
       "noRecentFolders": "Keine letzten Ordner-Unterhaltungen",
       "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
-      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen"
+      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen",
+      "personalAgent": "Persönlicher Agent",
+      "personalAgentBadge": "Vom persönlichen Agenten zugewiesen"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -6469,7 +6482,9 @@
     "deliverPrBackDeleteWorktree": "Worktree nach dem Push löschen",
     "deliverPrBackSubmit": "Pushen",
     "deliverPrBackDone": "In den Pull Request gepusht",
-    "deliverPrBackDoneMr": "In den Merge Request gepusht"
+    "deliverPrBackDoneMr": "In den Merge Request gepusht",
+    "badgePersonalAgent": "Persönlicher Agent",
+    "badgePersonalAgentExecutor": "Persönlicher Agent · {executor}"
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",
@@ -7657,6 +7672,275 @@
         "bypassed": "Die Browser-Engine dieses Computers schickt manche Adressen am Tunnel vorbei, daher bleiben die Seiten des entfernten Hosts geschlossen, statt von diesem Computer geladen zu werden.",
         "probeFailed": "Der integrierte Browser konnte nicht bestätigen, dass er den entfernten Host über den Tunnel erreicht. Versuche es gleich noch einmal."
       }
+    }
+  },
+  "PersonalAgent": {
+    "title": "Persönlicher Agent",
+    "settingsButton": "Einstellungen des persönlichen Agenten",
+    "readOnly": "Der persönliche Agent läuft in einem anderen codeg-Prozess mit diesem Datenverzeichnis, daher ist diese Seite hier schreibgeschützt.",
+    "noAssistants": "Noch keine Rollen-Assistenten: An sie gibt der persönliche Agent seine Arbeit ab. Lege einen unter Einstellungen → Zusammenarbeit → Assistenten an.",
+    "viewSession": "Sitzung ansehen",
+    "viewSessionHint": "Das vollständige Protokoll der aktuellen Sitzung, live.",
+    "sessionTitle": "Sitzung {seq} · vollständiges Protokoll",
+    "setup": {
+      "title": "Richte deinen persönlichen Agenten ein",
+      "description": "Dein persönlicher Agent versteht, was du willst, gibt die Arbeit an die von dir eingerichteten Assistenten ab, verfolgt sie weiter und merkt sich alles. Wähle zum Start den Agenten, auf dem er läuft.",
+      "action": "Seinen Agenten wählen"
+    },
+    "errors": {
+      "engineElsewhere": "Der persönliche Agent läuft in einem anderen codeg-Prozess mit diesem Datenverzeichnis; diese Seite ist hier schreibgeschützt."
+    },
+    "state": {
+      "queued": "In Warteschlange",
+      "running": "Läuft",
+      "waiting_input": "Wartet auf dich",
+      "review": "In Prüfung",
+      "completed": "Fertig",
+      "failed": "Fehlgeschlagen",
+      "canceled": "Abgebrochen",
+      "interrupted": "Unterbrochen",
+      "handed_over": "Übernommen"
+    },
+    "mode": {
+      "task": "Board-Aufgabe",
+      "chat": "Chat",
+      "session": "Arbeitssitzung"
+    },
+    "reason": {
+      "first": "erste Sitzung",
+      "switch": "Gehirn gewechselt",
+      "option_restart": "Starteinstellungen geändert",
+      "workdir": "Arbeitsverzeichnis verschoben",
+      "manual": "neue Sitzung",
+      "recovery": "alte Sitzung ließ sich nicht fortsetzen",
+      "overflow": "Kontextüberlauf"
+    },
+    "initiator": {
+      "auto": "von codeg",
+      "owner": "von dir",
+      "agent": "vom Agenten"
+    },
+    "marker": {
+      "segmentStart": "Sitzung {seq} · {agent} · {reason}",
+      "pendingSwitch": "Mit der nächsten Nachricht beginnt eine neue Sitzung ({reason})",
+      "optionsChanged": "Optionen geändert: {changes}",
+      "modeIs": "Modus {mode}",
+      "reconnected": "Wieder mit derselben Sitzung verbunden",
+      "compaction": {
+        "ok": "Kontext {who} verdichtet{range}",
+        "failed": "Verdichtung {who} fehlgeschlagen{range}",
+        "canceled": "Verdichtung {who} abgebrochen{range}"
+      },
+      "compactionRange": " · {before}% → {after}%",
+      "compactionFrom": " · vorher {before}%",
+      "compactionPaused": "Automatische Verdichtung für diese Sitzung pausiert: Verdichten hat zweimal hintereinander nicht geholfen",
+      "turnCanceled": "Runde gestoppt",
+      "turnFailed": "Die Runde ist fehlgeschlagen: {error}",
+      "turnInterrupted": "Die Runde wurde nicht beendet",
+      "overflowNewSegment": "Der Kontext ist nach dem Verdichten erneut übergelaufen: Eine neue Sitzung beginnt",
+      "overflowCompact": "Der Kontext ist übergelaufen: Vor der nächsten Nachricht wird verdichtet",
+      "workdirChanged": "Arbeitsverzeichnis verschoben nach {path}"
+    },
+    "timeline": {
+      "loadOlder": "Frühere laden",
+      "empty": "Sag Hallo oder gib ihm eine Aufgabe.",
+      "supplement": "Während der Runde ergänzt",
+      "queued": "In Warteschlange",
+      "interrupted": "Nicht beendet",
+      "resend": "Erneut senden",
+      "resent": "Erneut gesendet",
+      "question": "Frage",
+      "plan": "Plan-Freigabe",
+      "questionState": {
+        "pending": "Wartet auf deine Antwort",
+        "answered": "Beantwortet",
+        "skipped": "Übersprungen",
+        "resolved": "Geschlossen"
+      },
+      "planDecision": {
+        "approve": "Freigegeben",
+        "request_changes": "Änderungen angefordert",
+        "abandon": "Verworfen"
+      },
+      "answered": "Deine Antwort: {answer}",
+      "permission": "Berechtigungsanfrage",
+      "permissionPending": "Wartet auf deine Entscheidung",
+      "permissionWithdrawn": "Zurückgezogen",
+      "permissionChose": "Deine Wahl: {option}",
+      "dispatched": "Zuweisung",
+      "result": "Rückmeldung",
+      "executor": "ausgeführt von {name}",
+      "openTask": "Im Board öffnen",
+      "openConversation": "Unterhaltung öffnen",
+      "open": "Öffnen"
+    },
+    "composer": {
+      "placeholder": "Nachricht an deinen persönlichen Agenten…",
+      "placeholderBusy": "Er ist beschäftigt – deine Nachricht geht mit der nächsten Runde raus",
+      "readOnly": "In diesem Prozess schreibgeschützt",
+      "ariaLabel": "Nachricht an deinen persönlichen Agenten",
+      "send": "Senden",
+      "queue": "Einreihen",
+      "supplement": "Zu dieser Runde hinzufügen",
+      "supplementHint": "In die laufende Runde einfließen lassen, statt auf ihr Ende zu warten",
+      "supplemented": "Zur laufenden Runde hinzugefügt.",
+      "queuedInstead": "Eingereiht – geht mit der nächsten Runde raus.",
+      "waitForUpload": "Warte, bis das Bild hochgeladen ist.",
+      "stop": "Stoppen",
+      "cancelCompaction": "Verdichtung stoppen",
+      "compact": "Verdichten",
+      "compactHint": "Kontext der Sitzung jetzt verdichten",
+      "newSession": "Neue Sitzung",
+      "newSessionHint": "Mit der nächsten Nachricht eine neue Sitzung beginnen; die Zeitleiste läuft weiter",
+      "newSessionQueued": "Mit deiner nächsten Nachricht beginnt eine neue Sitzung.",
+      "compacting": "Kontext wird verdichtet…",
+      "replying": "Antwortet…",
+      "brain": "Der Agent, auf dem er läuft",
+      "queuedCount": "{count, plural, one {# Nachricht eingereiht} other {# Nachrichten eingereiht}}"
+    },
+    "aux": {
+      "status": "Status",
+      "dispatches": "Zuweisungen",
+      "items": "Offen",
+      "data": "Daten"
+    },
+    "status": {
+      "elsewhere": "Der Agent läuft in einem anderen codeg-Prozess; was du hier siehst, stammt aus der Datenbank.",
+      "brain": "Gehirn",
+      "agent": "Agent",
+      "model": "Modell",
+      "mode": "Modus",
+      "session": "Sitzung",
+      "segment": "Aktuell",
+      "segmentValue": "Nr. {seq} · {reason}",
+      "noSegment": "Noch nicht gestartet",
+      "startedAt": "Gestartet",
+      "pending": "Nächste Nachricht startet eine neue",
+      "connection": "Verbindung",
+      "connected": "Verbunden",
+      "disconnected": "Nicht verbunden (verbindet sich mit der nächsten Nachricht neu)",
+      "handoff": "Übergabekarte",
+      "handoffSize": "{size} Zeichen",
+      "handoffTrimmed": "gekürzt",
+      "context": "Kontext",
+      "usageValue": "{percent}% belegt ({source})",
+      "usageSource": {
+        "live": "live",
+        "transcript": "aus der Sitzungsdatei"
+      },
+      "usageUnknown": "Nutzung unbekannt – dieser Agent meldet sie nicht",
+      "threshold": "Verdichtet automatisch ab {percent}%",
+      "thresholdOff": "Automatische Verdichtung aus",
+      "command": "Befehl {command}",
+      "noCommand": "Kein Verdichtungsbefehl für diesen Agenten bekannt",
+      "compactions": "Verdichtungen",
+      "compactionCounts": "codeg {auto} · du {manual} · Agent {agent}",
+      "lastCheck": "Letzte Prüfung",
+      "check": {
+        "below": "Unter dem Schwellenwert",
+        "compacted": "Vor dem Zustellen verdichtet",
+        "disabled": "Automatische Verdichtung aus",
+        "usage_unknown": "Übersprungen: Nutzung unbekannt",
+        "no_command": "Übersprungen: kein Verdichtungsbefehl",
+        "paused": "Übersprungen: für diese Sitzung pausiert",
+        "skipped_after_attempt": "Direkt nach einer Verdichtung zugestellt"
+      },
+      "paused": "Automatische Verdichtung für diese Sitzung pausiert",
+      "resume": "Fortsetzen",
+      "work": "Arbeit",
+      "queued": "Wartend",
+      "queuedValue": "{messages} Nachrichten · {events} Rückmeldungen",
+      "dispatchSlots": "Zugewiesene Unterhaltungen",
+      "slotsValue": "{running} von {limit} laufen · {queued} warten",
+      "slotsUnlimited": "{running} laufen · {queued} warten",
+      "waiting": "Freigaben",
+      "waitingOwner": "Wartet auf dich",
+      "engine": "Läuft in",
+      "engineHere": "diesem Prozess",
+      "engineElsewhere": "einem anderen codeg-Prozess",
+      "workdir": "Arbeitsverzeichnis",
+      "lastError": "Letzter Fehler",
+      "lastCompaction": "Letzte Verdichtung",
+      "compactionStatus": {
+        "ok": "erfolgreich",
+        "failed": "fehlgeschlagen",
+        "canceled": "abgebrochen",
+        "running": "läuft"
+      },
+      "usageUnknownOffline": "Nutzung unbekannt – wird nach dem Neuverbinden gelesen"
+    },
+    "dispatches": {
+      "all": "Alle",
+      "empty": "Noch nichts zugewiesen.",
+      "meta": "{executor} · {folder} · {when}",
+      "noProject": "kein Projekt"
+    },
+    "items": {
+      "empty": "Keine offenen Punkte.",
+      "waits": {
+        "owner": "Wartet auf dich",
+        "agent": "Für den Agenten",
+        "external": "In Arbeit",
+        "time": "Später",
+        "none": "Sonstiges"
+      },
+      "kind": {
+        "dispatch": "Zuweisung",
+        "reminder": "Erinnerung",
+        "followup": "Nachfassen",
+        "question": "Frage"
+      },
+      "onDone": "Wenn erledigt: {text}"
+    },
+    "data": {
+      "interactions": "Unterhaltung pro Tag",
+      "messages": "Deine Nachrichten",
+      "replies": "Antworten",
+      "dispatches": "Zuweisungen pro Tag",
+      "completed": "Fertig",
+      "other": "Sonstige",
+      "failed": "Fehlgeschlagen",
+      "executors": "Nach Assistent",
+      "completedHint": "{count} fertig",
+      "tokens": "Tokens pro Tag",
+      "agentTokens": "Persönlicher Agent",
+      "dispatchTokens": "Zugewiesene Arbeit",
+      "syncedAt": "Token-Zahlen vom letzten Nutzungsabgleich, {when}",
+      "notSynced": "Token-Zahlen erscheinen nach einem Nutzungsabgleich (Seite Token-Verbrauch).",
+      "usageCurve": "Kontextnutzung",
+      "noUsage": "Noch keine Messwerte.",
+      "empty": "Noch keine Daten"
+    },
+    "settings": {
+      "title": "Einstellungen des persönlichen Agenten",
+      "setupTitle": "Richte deinen persönlichen Agenten ein",
+      "description": "Worauf er läuft, wann sein Kontext verdichtet wird und wer er ist.",
+      "setupDescription": "Wähle den Agenten, auf dem dein persönlicher Agent läuft, mit allen Optionen. Du kannst ihn später wechseln; die Zeitleiste läuft weiter.",
+      "tabBrain": "Gehirn",
+      "tabCompaction": "Verdichtung",
+      "tabDispatch": "Zuweisung",
+      "tabPersona": "Persona & Gedächtnis",
+      "name": "Name",
+      "nameHint": "So heißt er auf seiner Seite. Leer lassen für den Standardnamen.",
+      "namePlaceholder": "Persönlicher Agent",
+      "agentHint": "Der Agent und alle Optionen, mit denen er läuft – wie bei einem Assistenten.",
+      "switchNote": "Der Wechsel zu einem anderen Agenten startet mit deiner nächsten Nachricht eine neue Sitzung. Eine alte wird nicht fortgesetzt; stattdessen übergibt codeg der neuen Sitzung die Zeitleiste.",
+      "autoCompact": "Schwellenwert für automatische Verdichtung",
+      "autoCompactHint": "Ist der Kontext mindestens so voll, sendet codeg vor der nächsten Nachricht den Verdichtungsbefehl. 0 schaltet sie aus. Halte den Wert unter dem eigenen Auslöser des Agenten.",
+      "compactCommand": "Verdichtungsbefehl",
+      "compactCommandHint": "Wird wörtlich gesendet. Leer wählt den eigenen Befehl des Agenten (/compact, /compress…). Wird beim Wechsel zu einem anderen Agenten geleert.",
+      "compactionNote": "Verdichten behält dieselbe Sitzung bei: Die nächste Nachricht enthält eine Statuskarte mit Persona, Regeln und offenen Punkten. Hilft das Verdichten zweimal hintereinander nicht, pausiert die automatische Verdichtung für diese Sitzung.",
+      "concurrency": "Gleichzeitig zugewiesene Unterhaltungen",
+      "concurrencyHint": "Chat- und Arbeitssitzungs-Zuweisungen, die gleichzeitig laufen; der Rest wartet. 0 bedeutet kein Limit. Board-Aufgaben folgen dem Limit des Boards.",
+      "handoffBudget": "Budget der Übergabekarte",
+      "handoffBudgetHint": "Zeichen, die die Übergabekarte einer neuen Sitzung nutzen darf; Gekürztes kann der Agent mit seinen Werkzeugen nachlesen.",
+      "skill": "Integrierter Skill",
+      "skillHint": "Bring dem Agenten seine Konventionen (Zuweisungsarten, offene Punkte, Gedächtnisdateien) über einen Skill in seinem Arbeitsverzeichnis bei.",
+      "filesNote": "Diese Dateien liegen im Arbeitsverzeichnis des Agenten und werden nach jeder Runde committet. Änderungen an Persona und Regeln erreichen den Agenten mit deiner nächsten Nachricht.",
+      "saveFile": "Datei speichern",
+      "fileSaved": "{name} gespeichert.",
+      "cancel": "Abbrechen",
+      "save": "Speichern"
     }
   }
 }

@@ -1987,7 +1987,18 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Collaboration",
-    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation."
+    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation.",
+    "personalAgent": {
+      "title": "Personal agent",
+      "workdir": "Working directory",
+      "workdirHint": "Where it keeps its persona, rules and memory, under git. Now: {current}. Moving it starts a new session; the old directory is left as it is.",
+      "notConfigured": "Set up the personal agent on its page first.",
+      "placeholder": "Default: the data directory's personal-agent",
+      "useDefault": "Use default",
+      "apply": "Move",
+      "saved": "Working directory moved.",
+      "readOnly": "The personal agent runs in another codeg process; change it there."
+    }
   },
   "LoginPage": {
     "documentTitle": "Login - codeg",
@@ -2317,7 +2328,9 @@
       "noRecentChats": "No recent chats",
       "noRecentFolders": "No recent folder conversations",
       "noRecentCli": "No recent conversations from the command line",
-      "recentFilterMenuLabel": "Show in Recent"
+      "recentFilterMenuLabel": "Show in Recent",
+      "personalAgent": "Personal agent",
+      "personalAgentBadge": "Dispatched by the personal agent"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -6469,7 +6482,9 @@
     "deliverPrBackDeleteWorktree": "Delete the worktree after pushing",
     "deliverPrBackSubmit": "Push",
     "deliverPrBackDone": "Pushed to the pull request",
-    "deliverPrBackDoneMr": "Pushed to the merge request"
+    "deliverPrBackDoneMr": "Pushed to the merge request",
+    "badgePersonalAgent": "Personal agent",
+    "badgePersonalAgentExecutor": "Personal agent · {executor}"
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",
@@ -7657,6 +7672,275 @@
         "bypassed": "This computer's browser engine sends some addresses around the tunnel, so the remote host's pages stay closed rather than load from this computer.",
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
+    }
+  },
+  "PersonalAgent": {
+    "title": "Personal agent",
+    "settingsButton": "Personal agent settings",
+    "readOnly": "The personal agent runs in another codeg process on this data directory, so this page is read-only here.",
+    "noAssistants": "No role assistants yet: the personal agent hands its work to them. Add one under Settings → Collaboration → Assistants.",
+    "viewSession": "View session",
+    "viewSessionHint": "The current session's full transcript, live.",
+    "sessionTitle": "Session {seq} · full transcript",
+    "setup": {
+      "title": "Set up your personal agent",
+      "description": "Your personal agent understands what you want, hands the work to the assistants you configured, follows it up and remembers. Pick the agent it runs on to start.",
+      "action": "Choose its agent"
+    },
+    "errors": {
+      "engineElsewhere": "The personal agent runs in another codeg process on this data directory; this page is read-only here."
+    },
+    "state": {
+      "queued": "Queued",
+      "running": "Running",
+      "waiting_input": "Waiting for you",
+      "review": "In review",
+      "completed": "Done",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "interrupted": "Interrupted",
+      "handed_over": "Taken over"
+    },
+    "mode": {
+      "task": "Kanban task",
+      "chat": "Chat",
+      "session": "Work session"
+    },
+    "reason": {
+      "first": "first session",
+      "switch": "brain switched",
+      "option_restart": "launch settings changed",
+      "workdir": "working directory moved",
+      "manual": "new session",
+      "recovery": "the old session could not be resumed",
+      "overflow": "context overflow"
+    },
+    "initiator": {
+      "auto": "codeg",
+      "owner": "you",
+      "agent": "the agent"
+    },
+    "marker": {
+      "segmentStart": "Session {seq} · {agent} · {reason}",
+      "pendingSwitch": "A new session starts with the next message ({reason})",
+      "optionsChanged": "Options changed: {changes}",
+      "modeIs": "mode {mode}",
+      "reconnected": "Reconnected to the same session",
+      "compaction": {
+        "ok": "Context compacted by {who}{range}",
+        "failed": "Compaction by {who} failed{range}",
+        "canceled": "Compaction by {who} canceled{range}"
+      },
+      "compactionRange": " · {before}% → {after}%",
+      "compactionFrom": " · from {before}%",
+      "compactionPaused": "Auto-compaction is paused for this session: compacting did not help twice in a row",
+      "turnCanceled": "Turn stopped",
+      "turnFailed": "The turn failed: {error}",
+      "turnInterrupted": "The turn did not finish",
+      "overflowNewSegment": "The context overflowed again after compacting: a new session starts",
+      "overflowCompact": "The context overflowed: compacting before the next message",
+      "workdirChanged": "Working directory moved to {path}"
+    },
+    "timeline": {
+      "loadOlder": "Load earlier",
+      "empty": "Say hello, or ask it to take something on.",
+      "supplement": "Added mid-turn",
+      "queued": "Queued",
+      "interrupted": "Not finished",
+      "resend": "Send again",
+      "resent": "Sent again",
+      "question": "Question",
+      "plan": "Plan approval",
+      "questionState": {
+        "pending": "Waiting for your answer",
+        "answered": "Answered",
+        "skipped": "Skipped",
+        "resolved": "Closed"
+      },
+      "planDecision": {
+        "approve": "Approved",
+        "request_changes": "Changes requested",
+        "abandon": "Abandoned"
+      },
+      "answered": "Your answer: {answer}",
+      "permission": "Permission request",
+      "permissionPending": "Waiting for your decision",
+      "permissionWithdrawn": "Withdrawn",
+      "permissionChose": "You chose: {option}",
+      "dispatched": "Dispatched",
+      "result": "Update",
+      "executor": "by {name}",
+      "openTask": "Open on the board",
+      "openConversation": "Open the conversation",
+      "open": "Open"
+    },
+    "composer": {
+      "placeholder": "Message your personal agent…",
+      "placeholderBusy": "It is busy — your message goes out with the next turn",
+      "readOnly": "Read-only in this process",
+      "ariaLabel": "Message to your personal agent",
+      "send": "Send",
+      "queue": "Queue",
+      "supplement": "Add to this turn",
+      "supplementHint": "Fold this into the turn that is running instead of waiting for it to end",
+      "supplemented": "Added to the turn in progress.",
+      "queuedInstead": "Queued — it goes out with the next turn.",
+      "waitForUpload": "Wait for the image to finish uploading.",
+      "stop": "Stop",
+      "cancelCompaction": "Stop compacting",
+      "compact": "Compact",
+      "compactHint": "Compact the session's context now",
+      "newSession": "New session",
+      "newSessionHint": "Start a new session with the next message; the timeline carries on",
+      "newSessionQueued": "A new session starts with your next message.",
+      "compacting": "Compacting the context…",
+      "replying": "Replying…",
+      "brain": "The agent it runs on",
+      "queuedCount": "{count, plural, one {# message queued} other {# messages queued}}"
+    },
+    "aux": {
+      "status": "Status",
+      "dispatches": "Dispatches",
+      "items": "Open",
+      "data": "Data"
+    },
+    "status": {
+      "elsewhere": "The agent runs in another codeg process; what you see here is read from the database.",
+      "brain": "Brain",
+      "agent": "Agent",
+      "model": "Model",
+      "mode": "Mode",
+      "session": "Session",
+      "segment": "Current",
+      "segmentValue": "#{seq} · {reason}",
+      "noSegment": "Not started yet",
+      "startedAt": "Started",
+      "pending": "Next message starts a new one",
+      "connection": "Connection",
+      "connected": "Live",
+      "disconnected": "Not connected (reconnects with the next message)",
+      "handoff": "Handoff card",
+      "handoffSize": "{size} characters",
+      "handoffTrimmed": "cut to fit",
+      "context": "Context",
+      "usageValue": "{percent}% used ({source})",
+      "usageSource": {
+        "live": "live",
+        "transcript": "from the session file"
+      },
+      "usageUnknown": "Usage unknown — this agent does not report it",
+      "threshold": "Auto-compacts at {percent}%",
+      "thresholdOff": "Auto-compaction off",
+      "command": "Command {command}",
+      "noCommand": "No compact command known for this agent",
+      "compactions": "Compactions",
+      "compactionCounts": "codeg {auto} · you {manual} · agent {agent}",
+      "lastCheck": "Last check",
+      "check": {
+        "below": "Below the threshold",
+        "compacted": "Compacted before delivering",
+        "disabled": "Auto-compaction off",
+        "usage_unknown": "Skipped: usage unknown",
+        "no_command": "Skipped: no compact command",
+        "paused": "Skipped: paused for this session",
+        "skipped_after_attempt": "Delivered right after a compaction"
+      },
+      "paused": "Auto-compaction paused for this session",
+      "resume": "Resume",
+      "work": "Work",
+      "queued": "Waiting",
+      "queuedValue": "{messages} messages · {events} updates",
+      "dispatchSlots": "Dispatched conversations",
+      "slotsValue": "{running} of {limit} running · {queued} queued",
+      "slotsUnlimited": "{running} running · {queued} queued",
+      "waiting": "Approvals",
+      "waitingOwner": "Waiting for you",
+      "engine": "Runs in",
+      "engineHere": "this process",
+      "engineElsewhere": "another codeg process",
+      "workdir": "Working directory",
+      "lastError": "Last error",
+      "lastCompaction": "Last compaction",
+      "compactionStatus": {
+        "ok": "done",
+        "failed": "failed",
+        "canceled": "canceled",
+        "running": "running"
+      },
+      "usageUnknownOffline": "Usage unknown — read once it reconnects"
+    },
+    "dispatches": {
+      "all": "All",
+      "empty": "Nothing dispatched yet.",
+      "meta": "{executor} · {folder} · {when}",
+      "noProject": "no project"
+    },
+    "items": {
+      "empty": "No open matters.",
+      "waits": {
+        "owner": "Waiting for you",
+        "agent": "For the agent",
+        "external": "In progress",
+        "time": "Later",
+        "none": "Other"
+      },
+      "kind": {
+        "dispatch": "dispatch",
+        "reminder": "reminder",
+        "followup": "follow-up",
+        "question": "question"
+      },
+      "onDone": "When done: {text}"
+    },
+    "data": {
+      "interactions": "Daily conversation",
+      "messages": "Your messages",
+      "replies": "Replies",
+      "dispatches": "Daily dispatches",
+      "completed": "Done",
+      "other": "Other",
+      "failed": "Failed",
+      "executors": "By assistant",
+      "completedHint": "{count} done",
+      "tokens": "Daily tokens",
+      "agentTokens": "Personal agent",
+      "dispatchTokens": "Dispatched work",
+      "syncedAt": "Token figures as of the last usage sync, {when}",
+      "notSynced": "Token figures appear after a usage sync (Token usage page).",
+      "usageCurve": "Context usage",
+      "noUsage": "No readings yet.",
+      "empty": "No data yet"
+    },
+    "settings": {
+      "title": "Personal agent settings",
+      "setupTitle": "Set up your personal agent",
+      "description": "What it runs on, when its context is compacted, and who it is.",
+      "setupDescription": "Pick the agent your personal agent runs on, with every option. You can switch it later; the timeline carries on.",
+      "tabBrain": "Brain",
+      "tabCompaction": "Compaction",
+      "tabDispatch": "Dispatch",
+      "tabPersona": "Persona & memory",
+      "name": "Name",
+      "nameHint": "How it is called on its page. Empty uses the default.",
+      "namePlaceholder": "Personal agent",
+      "agentHint": "The agent and every option it runs with, like an assistant's.",
+      "switchNote": "Switching to another agent starts a new session with your next message. It does not resume an old one; codeg hands the new session the timeline instead.",
+      "autoCompact": "Auto-compact threshold",
+      "autoCompactHint": "When the context is at least this full, codeg sends the compact command before the next message. 0 turns it off. Keep it below the agent's own trigger.",
+      "compactCommand": "Compact command",
+      "compactCommandHint": "Sent as typed. Empty picks the agent's own (/compact, /compress…). Cleared when you switch to another agent.",
+      "compactionNote": "Compacting keeps the same session: the next message carries a state card with the persona, rules and open matters. If compacting does not help twice in a row, auto-compaction pauses for that session.",
+      "concurrency": "Dispatched conversations at once",
+      "concurrencyHint": "Chat and work-session dispatches running together; the rest wait. 0 is no limit. Kanban tasks follow the board's own limit.",
+      "handoffBudget": "Handoff card budget",
+      "handoffBudgetHint": "Characters a new session's handoff card may use; what is cut can be read back with the agent's tools.",
+      "skill": "Built-in skill",
+      "skillHint": "Teach the agent its conventions (dispatch modes, open matters, memory files) through a skill in its working directory.",
+      "filesNote": "These files live in the agent's working directory and are committed after every turn. Changes to the persona and rules reach the agent with your next message.",
+      "saveFile": "Save file",
+      "fileSaved": "{name} saved.",
+      "cancel": "Cancel",
+      "save": "Save"
     }
   }
 }

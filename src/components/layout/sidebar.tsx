@@ -19,6 +19,7 @@ import {
   Map as MapIcon,
   Menu,
   MessagesSquare,
+  Sparkles,
   SquarePen,
   Zap,
   type LucideIcon,
@@ -29,6 +30,7 @@ import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
+import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
@@ -122,6 +124,7 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 // carry the same glyph as the row they switch, so that group reads as a mirror
 // of the nav block rather than three bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
+  personalAgent: Sparkles,
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
@@ -176,6 +179,7 @@ export function Sidebar() {
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { needsOwner: personalAgentNeedsOwner } = usePersonalAgent()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -595,6 +599,24 @@ export function Sidebar() {
             All three close the mobile Drawer on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. */}
+        {isNavItemVisible(navItems, "personalAgent") && (
+          <SidebarNavButton
+            icon={Sparkles}
+            label={t("personalAgent")}
+            active={routeId === "personalAgent"}
+            onClick={() => {
+              if (isMobile) toggle()
+              setRoute("personalAgent")
+            }}
+            trailing={
+              personalAgentNeedsOwner ? (
+                // The agent waits on the owner (a question or a permission
+                // request): the same quiet dot-badge as the tasks count.
+                <span className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-primary" />
+              ) : null
+            }
+          />
+        )}
         {isNavItemVisible(navItems, "automations") && (
           <SidebarNavButton
             icon={Zap}

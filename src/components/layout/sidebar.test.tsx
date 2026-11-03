@@ -51,6 +51,8 @@ const spies = vi.hoisted(() => ({
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
+  // The personal agent waits on the owner (a question or a permission).
+  personalAgentNeedsOwner: false,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -111,6 +113,9 @@ vi.mock("@/contexts/tasks-view-context", () => ({
     refetch: async () => {},
   }),
 }))
+vi.mock("@/contexts/personal-agent-context", () => ({
+  usePersonalAgent: () => ({ needsOwner: mockState.personalAgentNeedsOwner }),
+}))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
     routeId: "conversations",
@@ -166,12 +171,29 @@ describe("Sidebar — fixed nav region", () => {
     spies.setRoute.mockClear()
     spies.openConversations.mockClear()
     mockState.activeFolder = { id: 7, path: "/x" }
+    mockState.personalAgentNeedsOwner = false
   })
 
   it("Automations navigates to the automations route", () => {
     const { getByText } = renderSidebar()
     fireEvent.click(getByText("Automations"))
     expect(spies.setRoute).toHaveBeenCalledWith("automations")
+  })
+
+  it("Personal agent navigates to its page", () => {
+    const { getByText } = renderSidebar()
+    fireEvent.click(getByText("Personal agent"))
+    expect(spies.setRoute).toHaveBeenCalledWith("personalAgent")
+  })
+
+  it("marks the Personal agent row while it waits on the owner", () => {
+    const quiet = renderSidebar()
+    const row = () => screen.getByRole("button", { name: "Personal agent" })
+    expect(row().querySelector("span.rounded-full")).toBeNull()
+    quiet.unmount()
+    mockState.personalAgentNeedsOwner = true
+    renderSidebar()
+    expect(row().querySelector("span.rounded-full")).not.toBeNull()
   })
 
   it("New chat returns to the conversation workspace", () => {
@@ -492,6 +514,7 @@ describe("Sidebar — Navigation item visibility", () => {
 
   it("shows every route row by default", () => {
     renderSidebar()
+    expect(navRow("Personal agent")).toBeTruthy()
     expect(navRow("Automations")).toBeTruthy()
     expect(navRow("To-dos")).toBeTruthy()
     expect(navRow(FORGE_ROW)).toBeTruthy()

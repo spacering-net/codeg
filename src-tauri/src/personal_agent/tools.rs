@@ -1,0 +1,472 @@
+//! The personal agent's codeg-mcp tools, answered in the app.
+//!
+//! Every call is checked here, not only in the companion: the socket is gated
+//! by a per-launch token alone, and `--features` is a string in the agent's
+//! MCP config, so any connection's companion could send one of these frames.
+//! Only the personal agent's current connection gets an answer. Every tool
+//! returns at once — none waits for a turn or a person.
+//!
+//! A refusal is an answer (`ok: false`), not an error: the model reads why and
+//! corrects the call.
+
+use std::sync::Arc;
+
+use serde::Serialize;
+use serde_json::{json, Value};
+
+use super::dispatch::{executor_of, DispatchRequest};
+use super::engine::{engine, enum_str, PersonalAgentEngine};
+use crate::db::entities::folder::FolderKind;
+use crate::db::entities::personal_agent_dispatch::DispatchMode;
+use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
+use crate::db::service::personal_agent_service as svc;
+use crate::db::service::personal_agent_service::ItemWrite;
+use crate::models::personal_agent::PersonalAgentChange;
+
+/// The answer to one tool call: `text` for hosts that show only text,
+/// `data` for those that read the structure.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolOutcome {
+    pub ok: bool,
+    pub text: String,
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub data: Value,
+}
+
+impl ToolOutcome {
+    pub fn ok(text: impl Into<String>, data: Value) -> Self {
+        Self {
+            ok: true,
+            text: text.into(),
+            data,
+        }
+    }
+
+    pub fn refused(text: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            text: text.into(),
+            data: Value::Null,
+        }
+    }
+}
+
+fn int(args: &Value, key: &str) -> Option<i64> {
+    args.get(key).and_then(|v| v.as_i64().or_else(|| v.as_str()?.trim().parse().ok()))
+}
+
+fn string(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn as_i32(v: i64) -> Option<i32> {
+    i32::try_from(v).ok()
+}
+
+/// Answer one tool call from `parent_connection_id`.
+pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOutcome {
+    let Some(engine) = engine() else {
+        return ToolOutcome::refused("the personal agent is not running in this codeg process");
+    };
+    if !engine.is_current_connection(parent_connection_id).await {
+        return ToolOutcome::refused(
+            "these tools belong to the personal agent's current session only",
+        );
+    }
+    answer(&engine, tool, args).await
+}
+
+/// Answer a call already known to come from the personal agent.
+async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> ToolOutcome {
+    let db = &engine.db;
+    match tool {
+        "assistant_list" => {
+            let assistants = crate::db::service::assistant_service::list_live_enabled(&db.conn)
+                .await
+                .unwrap_or_default();
+            if assistants.is_empty() {
+                return ToolOutcome::ok(
+                    "No role assistants are configured. Tell the owner to add one under Settings → \
+                     Collaboration → Assistants.",
+                    json!({ "assistants": [] }),
+                );
+            }
+            let rows: Vec<Value> = assistants
+                .iter()
+                .map(|a| {
+                    let model = a
+                        .label_snapshot
+                        .options
+                        .iter()
+                        .find(|o| o.id == "model")
+                        .map(|o| o.value_label.clone());
+                    json!({
+                        "id": a.id,
+                        "name": a.name,
+                        "when_to_use": a.description,
+                        "agent": a.label_snapshot.agent,
+                        "agent_type": a.agent_type,
+                        "model": model,
+                    })
+                })
+                .collect();
+            let text = assistants
+                .iter()
+                .map(|a| {
+                    let what = if a.description.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", a.description.trim())
+                    };
+                    format!("#{} {} ({}){what}", a.id, a.name, a.label_snapshot.agent)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            ToolOutcome::ok(text, json!({ "assistants": rows }))
+        }
+        "project_list" => {
+            let folders = crate::db::service::folder_service::list_all_folder_details(&db.conn)
+                .await
+                .unwrap_or_default();
+            let rows: Vec<Value> = folders
+                .iter()
+                .filter(|f| f.kind == FolderKind::Regular && f.parent_id.is_none())
+                .map(|f| {
+                    json!({
+                        "id": f.id,
+                        "name": f.alias.clone().unwrap_or_else(|| f.name.clone()),
+                        "path": f.path,
+                    })
+                })
+                .collect();
+            if rows.is_empty() {
+                return ToolOutcome::ok(
+                    "No project folders are open in codeg. A chat dispatch needs none.",
+                    json!({ "projects": [] }),
+                );
+            }
+            let text = rows
+                .iter()
+                .map(|r| format!("#{} {} — {}", r["id"], r["name"].as_str().unwrap_or(""), r["path"].as_str().unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            ToolOutcome::ok(text, json!({ "projects": rows }))
+        }
+        "dispatch" => {
+            if args.get("agent_type").is_some() {
+                return ToolOutcome::refused(
+                    "dispatch takes a role assistant (`assistant_id`, from assistant_list), never \
+                     an agent type",
+                );
+            }
+            let mode = match string(&args, "mode").as_deref() {
+                Some("task") => DispatchMode::Task,
+                Some("chat") => DispatchMode::Chat,
+                Some("session") => DispatchMode::Session,
+                _ => return ToolOutcome::refused("`mode` must be task, chat or session"),
+            };
+            let Some(assistant_id) = int(&args, "assistant_id").and_then(as_i32) else {
+                return ToolOutcome::refused("`assistant_id` is required; use assistant_list");
+            };
+            let report = match string(&args, "deliverable").as_deref() {
+                None | Some("change") => false,
+                Some("report") => true,
+                Some(_) => return ToolOutcome::refused("`deliverable` must be change or report"),
+            };
+            let req = DispatchRequest {
+                mode,
+                assistant_id,
+                title: string(&args, "title").unwrap_or_default(),
+                prompt: string(&args, "prompt").unwrap_or_default(),
+                project_id: int(&args, "project_id").and_then(as_i32),
+                report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
+                on_done: string(&args, "on_done"),
+            };
+            match engine.dispatch(req).await {
+                Ok(d) => ToolOutcome::ok(
+                    format!(
+                        "Dispatched #{} \"{}\" as a {} to {}. It runs on its own; its progress comes \
+                         back to you as events, and the owner already sees a card for it.",
+                        d.id,
+                        d.title,
+                        enum_str(&d.mode),
+                        executor_of(&d).name
+                    ),
+                    json!({ "dispatch_id": d.id, "state": d.state }),
+                ),
+                Err(e) => ToolOutcome::refused(e),
+            }
+        }
+        "dispatch_followup" => {
+            let Some(id) = int(&args, "dispatch_id").and_then(as_i32) else {
+                return ToolOutcome::refused("`dispatch_id` is required");
+            };
+            let message = string(&args, "message").unwrap_or_default();
+            match engine.followup(id, message, string(&args, "intent")).await {
+                Ok(text) => ToolOutcome::ok(text, json!({ "dispatch_id": id })),
+                Err(e) => ToolOutcome::refused(e),
+            }
+        }
+        "item_list" => {
+            let statuses: Vec<ItemStatus> = match string(&args, "status").as_deref() {
+                None | Some("active") => vec![ItemStatus::Open, ItemStatus::Waiting],
+                Some("open") => vec![ItemStatus::Open],
+                Some("waiting") => vec![ItemStatus::Waiting],
+                Some("done") => vec![ItemStatus::Done],
+                Some("dropped") => vec![ItemStatus::Dropped],
+                Some("all") => Vec::new(),
+                Some(_) => {
+                    return ToolOutcome::refused(
+                        "`status` must be active, open, waiting, done, dropped or all",
+                    )
+                }
+            };
+            let items = svc::list_items(&db.conn, &statuses, 100).await.unwrap_or_default();
+            let mut rows = Vec::new();
+            let mut lines = Vec::new();
+            for i in items {
+                let dispatch = match i.dispatch_id {
+                    Some(id) => svc::get_dispatch(&db.conn, id).await.ok().flatten(),
+                    None => None,
+                };
+                let mut line = format!(
+                    "#{} [{}] {} · {}",
+                    i.id,
+                    enum_str(&i.kind),
+                    i.summary,
+                    enum_str(&i.status)
+                );
+                if let Some(w) = &i.waits_for {
+                    line.push_str(&format!(" · waits for {}", enum_str(w)));
+                }
+                if let Some(d) = &dispatch {
+                    line.push_str(&format!(
+                        " · dispatch #{} {} ({})",
+                        d.id,
+                        enum_str(&d.state),
+                        enum_str(&d.mode)
+                    ));
+                }
+                lines.push(line);
+                rows.push(json!({
+                    "id": i.id,
+                    "kind": i.kind,
+                    "status": i.status,
+                    "waits_for": i.waits_for,
+                    "summary": i.summary,
+                    "on_done": i.on_done,
+                    "dispatch_id": i.dispatch_id,
+                    "dispatch_state": dispatch.as_ref().map(|d| d.state),
+                }));
+            }
+            let text = if lines.is_empty() {
+                "No matters match.".to_string()
+            } else {
+                lines.join("\n")
+            };
+            ToolOutcome::ok(text, json!({ "items": rows }))
+        }
+        "item_read" => {
+            let Some(id) = int(&args, "item_id").and_then(as_i32) else {
+                return ToolOutcome::refused("`item_id` is required");
+            };
+            let Ok(Some(item)) = svc::get_item(&db.conn, id).await else {
+                return ToolOutcome::refused(format!("item #{id} does not exist"));
+            };
+            let dispatch = match item.dispatch_id {
+                Some(did) => svc::get_dispatch(&db.conn, did).await.ok().flatten(),
+                None => None,
+            };
+            let mut text = format!(
+                "#{} [{}] {}\nstatus: {}",
+                item.id,
+                enum_str(&item.kind),
+                item.summary,
+                enum_str(&item.status)
+            );
+            if let Some(w) = &item.waits_for {
+                text.push_str(&format!(" · waits for {}", enum_str(w)));
+            }
+            if let Some(on_done) = &item.on_done {
+                text.push_str(&format!("\nwhen done: {on_done}"));
+            }
+            let dispatch_json = dispatch.as_ref().map(|d| {
+                let executor = executor_of(d);
+                text.push_str(&format!(
+                    "\ndispatch #{}: {} · {} · executor {}",
+                    d.id,
+                    enum_str(&d.mode),
+                    enum_str(&d.state),
+                    executor.name
+                ));
+                if let Some(e) = &d.result_excerpt {
+                    text.push_str(&format!("\nresult: {e}"));
+                }
+                if let Some(e) = &d.error {
+                    text.push_str(&format!("\nerror: {e}"));
+                }
+                json!({
+                    "id": d.id,
+                    "mode": d.mode,
+                    "state": d.state,
+                    "title": d.title,
+                    "executor": executor.name,
+                    "work_task_id": d.work_task_id,
+                    "conversation_id": d.conversation_id,
+                    "result_excerpt": d.result_excerpt,
+                    "error": d.error,
+                })
+            });
+            ToolOutcome::ok(
+                text,
+                json!({
+                    "item": {
+                        "id": item.id,
+                        "kind": item.kind,
+                        "status": item.status,
+                        "waits_for": item.waits_for,
+                        "summary": item.summary,
+                        "on_done": item.on_done,
+                    },
+                    "dispatch": dispatch_json,
+                }),
+            )
+        }
+        "item_update" => {
+            let status = match string(&args, "status").as_deref() {
+                None => None,
+                Some("open") => Some(ItemStatus::Open),
+                Some("waiting") => Some(ItemStatus::Waiting),
+                Some("done") => Some(ItemStatus::Done),
+                Some("dropped") => Some(ItemStatus::Dropped),
+                Some(_) => return ToolOutcome::refused("`status` must be open, waiting, done or dropped"),
+            };
+            let waits_for = match string(&args, "waits_for").as_deref() {
+                None => None,
+                Some("owner") => Some(WaitsFor::Owner),
+                Some("agent") => Some(WaitsFor::Agent),
+                Some("time") => Some(WaitsFor::Time),
+                Some("external") => Some(WaitsFor::External),
+                Some(_) => {
+                    return ToolOutcome::refused("`waits_for` must be owner, agent, time or external")
+                }
+            };
+            let summary = string(&args, "summary").map(|s| s.chars().take(500).collect::<String>());
+            let on_done = string(&args, "on_done").map(|s| s.chars().take(2_000).collect::<String>());
+            match int(&args, "item_id").and_then(as_i32) {
+                Some(id) => {
+                    let Ok(Some(_)) = svc::get_item(&db.conn, id).await else {
+                        return ToolOutcome::refused(format!("item #{id} does not exist"));
+                    };
+                    let updated = svc::update_item(
+                        &db.conn,
+                        id,
+                        ItemWrite {
+                            status,
+                            waits_for: waits_for.map(Some),
+                            summary,
+                            on_done: on_done.map(Some),
+                        },
+                    )
+                    .await;
+                    engine.emit(PersonalAgentChange::Item { id });
+                    match updated {
+                        Ok(Some(i)) => ToolOutcome::ok(
+                            format!("Updated #{}: {} · {}", i.id, i.summary, enum_str(&i.status)),
+                            json!({ "item_id": i.id, "status": i.status }),
+                        ),
+                        _ => ToolOutcome::refused("the update did not apply"),
+                    }
+                }
+                None => {
+                    let kind = match string(&args, "kind").as_deref() {
+                        Some("reminder") => ItemKind::Reminder,
+                        Some("followup") => ItemKind::Followup,
+                        Some("question") => ItemKind::Question,
+                        _ => {
+                            return ToolOutcome::refused(
+                                "a new item needs `kind` (reminder, followup or question); \
+                                 dispatches get theirs automatically",
+                            )
+                        }
+                    };
+                    let Some(summary) = summary else {
+                        return ToolOutcome::refused("a new item needs `summary`");
+                    };
+                    match svc::create_item(
+                        &db.conn,
+                        kind,
+                        None,
+                        status.unwrap_or(ItemStatus::Open),
+                        waits_for,
+                        summary,
+                        on_done,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(i) => {
+                            engine.emit(PersonalAgentChange::Item { id: i.id });
+                            ToolOutcome::ok(
+                                format!("Added #{}: {}", i.id, i.summary),
+                                json!({ "item_id": i.id }),
+                            )
+                        }
+                        Err(e) => ToolOutcome::refused(e.to_string()),
+                    }
+                }
+            }
+        }
+        "timeline_read" => {
+            let limit = int(&args, "limit").unwrap_or(20).clamp(1, 100) as u64;
+            let before = int(&args, "before_id").and_then(as_i32);
+            let (rows, has_older) = svc::page(&db.conn, before, limit).await.unwrap_or_default();
+            let mut lines = Vec::new();
+            let mut out = Vec::new();
+            for r in rows.into_iter().rev() {
+                let row = svc::to_row(r);
+                let who = match row.kind {
+                    crate::db::entities::personal_agent_timeline::TimelineKind::Owner => "owner",
+                    crate::db::entities::personal_agent_timeline::TimelineKind::Reply => "you",
+                    _ => "codeg",
+                };
+                let body: String = row.body.chars().take(2_000).collect();
+                lines.push(format!(
+                    "#{} {} [{}] {}: {}",
+                    row.id,
+                    row.created_at.format("%Y-%m-%d %H:%M"),
+                    enum_str(&row.kind),
+                    who,
+                    body
+                ));
+                out.push(json!({
+                    "id": row.id,
+                    "kind": row.kind,
+                    "at": row.created_at,
+                    "text": body,
+                    "data": row.data,
+                }));
+            }
+            let mut text = if lines.is_empty() {
+                "Nothing older.".to_string()
+            } else {
+                lines.join("\n")
+            };
+            if has_older {
+                text.push_str("\n(more before; pass the smallest id as before_id)");
+            }
+            ToolOutcome::ok(text, json!({ "rows": out, "has_older": has_older }))
+        }
+        other => ToolOutcome::refused(format!("unknown personal-agent tool: {other}")),
+    }
+}
+
+/// Tests: `item_update` as the agent would call it.
+#[cfg(test)]
+pub(crate) async fn item_update_for_test(engine: &Arc<PersonalAgentEngine>, args: Value) -> ToolOutcome {
+    answer(engine, "item_update", args).await
+}

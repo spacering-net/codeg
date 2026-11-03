@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Info,
   ChevronRight,
+  Sparkles,
   SquareTerminal,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -478,6 +479,22 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     />
                     {/* Started by `codeg-cli`: told apart from the window's
                     own, and found again with the Recent filter. */}
+                    {/* Dispatched by the personal agent: its executor's
+                    avatar already marks the row; this says who sent it. */}
+                    {conversation.source === "personal_agent" ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tSidebar("personalAgentBadge")}
+                      >
+                        <Sparkles
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">
+                          {tSidebar("personalAgentBadge")}
+                        </span>
+                      </span>
+                    ) : null}
                     {conversation.source === "cli" ? (
                       <span
                         className="ml-auto inline-flex shrink-0 items-center"

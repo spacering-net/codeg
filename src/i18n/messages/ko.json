@@ -1987,7 +1987,18 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "협업",
-    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다."
+    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다.",
+    "personalAgent": {
+      "title": "개인 에이전트",
+      "workdir": "작업 디렉터리",
+      "workdirHint": "페르소나, 규칙, 메모리를 보관하는 곳으로 git으로 관리됩니다. 현재: {current}. 옮기면 새 세션이 시작되며, 이전 디렉터리는 그대로 남습니다.",
+      "notConfigured": "먼저 개인 에이전트 페이지에서 설정하세요.",
+      "placeholder": "기본값: 데이터 디렉터리의 personal-agent",
+      "useDefault": "기본값 사용",
+      "apply": "이동",
+      "saved": "작업 디렉터리를 옮겼습니다.",
+      "readOnly": "개인 에이전트가 다른 codeg 프로세스에서 실행 중입니다. 그곳에서 변경하세요."
+    }
   },
   "LoginPage": {
     "documentTitle": "로그인 - codeg",
@@ -2317,7 +2328,9 @@
       "noRecentChats": "최근 채팅이 없습니다",
       "noRecentFolders": "최근 폴더 대화가 없습니다",
       "noRecentCli": "명령줄에서 시작한 최근 대화가 없습니다",
-      "recentFilterMenuLabel": "최근 항목 표시"
+      "recentFilterMenuLabel": "최근 항목 표시",
+      "personalAgent": "개인 에이전트",
+      "personalAgentBadge": "개인 에이전트가 배정함"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
@@ -6469,7 +6482,9 @@
     "deliverPrBackDeleteWorktree": "푸시 후 worktree 삭제",
     "deliverPrBackSubmit": "푸시",
     "deliverPrBackDone": "풀 리퀘스트에 푸시했습니다",
-    "deliverPrBackDoneMr": "병합 요청에 푸시했습니다"
+    "deliverPrBackDoneMr": "병합 요청에 푸시했습니다",
+    "badgePersonalAgent": "개인 에이전트",
+    "badgePersonalAgentExecutor": "개인 에이전트 · {executor}"
   },
   "CustomSkillsSettings": {
     "loading": "사용자 지정 스킬 불러오는 중…",
@@ -7657,6 +7672,275 @@
         "bypassed": "이 컴퓨터의 브라우저 엔진이 일부 주소를 터널을 거치지 않고 보내므로, 이 컴퓨터에서 불러오지 않도록 원격 호스트의 페이지는 열리지 않습니다.",
         "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
       }
+    }
+  },
+  "PersonalAgent": {
+    "title": "개인 에이전트",
+    "settingsButton": "개인 에이전트 설정",
+    "readOnly": "개인 에이전트가 이 데이터 디렉터리를 사용하는 다른 codeg 프로세스에서 실행 중이므로 여기서는 이 페이지가 읽기 전용입니다.",
+    "noAssistants": "아직 역할별 어시스턴트가 없습니다. 개인 에이전트는 작업을 어시스턴트에게 맡깁니다. 설정 → 협업 → 어시스턴트에서 추가하세요.",
+    "viewSession": "세션 보기",
+    "viewSessionHint": "현재 세션의 전체 기록을 실시간으로 보여 줍니다.",
+    "sessionTitle": "세션 {seq} · 전체 기록",
+    "setup": {
+      "title": "개인 에이전트 설정하기",
+      "description": "개인 에이전트는 원하는 바를 파악해 설정해 둔 어시스턴트에게 작업을 맡기고, 진행 상황을 챙기며 기억합니다. 먼저 실행할 에이전트를 고르세요.",
+      "action": "에이전트 선택"
+    },
+    "errors": {
+      "engineElsewhere": "개인 에이전트가 이 데이터 디렉터리를 사용하는 다른 codeg 프로세스에서 실행 중입니다. 여기서는 이 페이지가 읽기 전용입니다."
+    },
+    "state": {
+      "queued": "대기 중",
+      "running": "실행 중",
+      "waiting_input": "내 응답 대기",
+      "review": "검토 대기",
+      "completed": "완료",
+      "failed": "실패",
+      "canceled": "취소됨",
+      "interrupted": "중단됨",
+      "handed_over": "직접 맡음"
+    },
+    "mode": {
+      "task": "보드 작업",
+      "chat": "채팅",
+      "session": "작업 세션"
+    },
+    "reason": {
+      "first": "첫 세션",
+      "switch": "두뇌 전환",
+      "option_restart": "실행 설정 변경",
+      "workdir": "작업 디렉터리 이동",
+      "manual": "새 세션",
+      "recovery": "기존 세션을 재개할 수 없음",
+      "overflow": "컨텍스트 초과"
+    },
+    "initiator": {
+      "auto": "codeg가",
+      "owner": "직접",
+      "agent": "에이전트가"
+    },
+    "marker": {
+      "segmentStart": "세션 {seq} · {agent} · {reason}",
+      "pendingSwitch": "다음 메시지부터 새 세션이 시작됩니다({reason})",
+      "optionsChanged": "옵션이 변경되었습니다: {changes}",
+      "modeIs": "모드 {mode}",
+      "reconnected": "같은 세션에 다시 연결했습니다",
+      "compaction": {
+        "ok": "{who} 컨텍스트를 압축했습니다{range}",
+        "failed": "{who} 시작한 압축이 실패했습니다{range}",
+        "canceled": "{who} 시작한 압축이 취소되었습니다{range}"
+      },
+      "compactionRange": " · {before}% → {after}%",
+      "compactionFrom": " · 압축 전 {before}%",
+      "compactionPaused": "압축이 두 번 연속 효과가 없어 이 세션의 자동 압축을 일시 중지했습니다",
+      "turnCanceled": "턴을 중지했습니다",
+      "turnFailed": "턴이 실패했습니다: {error}",
+      "turnInterrupted": "턴이 끝나지 않았습니다",
+      "overflowNewSegment": "압축 후에도 컨텍스트가 다시 넘쳐 새 세션을 시작합니다",
+      "overflowCompact": "컨텍스트가 넘쳤습니다. 다음 메시지 전에 압축합니다",
+      "workdirChanged": "작업 디렉터리 이동: {path}"
+    },
+    "timeline": {
+      "loadOlder": "이전 기록 불러오기",
+      "empty": "인사를 건네거나 맡길 일을 알려 주세요.",
+      "supplement": "턴 중에 추가함",
+      "queued": "대기 중",
+      "interrupted": "완료되지 않음",
+      "resend": "다시 보내기",
+      "resent": "다시 보냄",
+      "question": "질문",
+      "plan": "계획 승인",
+      "questionState": {
+        "pending": "내 답변 대기",
+        "answered": "답변함",
+        "skipped": "건너뜀",
+        "resolved": "종료됨"
+      },
+      "planDecision": {
+        "approve": "승인함",
+        "request_changes": "수정 요청함",
+        "abandon": "중단함"
+      },
+      "answered": "내 답변: {answer}",
+      "permission": "권한 요청",
+      "permissionPending": "내 결정 대기",
+      "permissionWithdrawn": "철회됨",
+      "permissionChose": "내 선택: {option}",
+      "dispatched": "배정함",
+      "result": "진행 상황",
+      "executor": "담당: {name}",
+      "openTask": "보드에서 열기",
+      "openConversation": "대화 열기",
+      "open": "열기"
+    },
+    "composer": {
+      "placeholder": "개인 에이전트에게 메시지 보내기…",
+      "placeholderBusy": "작업 중입니다 — 메시지는 다음 턴에 함께 전달됩니다",
+      "readOnly": "이 프로세스에서는 읽기 전용",
+      "ariaLabel": "개인 에이전트에게 보낼 메시지",
+      "send": "보내기",
+      "queue": "대기열에 추가",
+      "supplement": "이번 턴에 추가",
+      "supplementHint": "실행 중인 턴이 끝나기를 기다리지 않고 그 턴에 합칩니다",
+      "supplemented": "진행 중인 턴에 추가했습니다.",
+      "queuedInstead": "대기열에 넣었습니다. 다음 턴에 전달됩니다.",
+      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요.",
+      "stop": "중지",
+      "cancelCompaction": "압축 중지",
+      "compact": "압축",
+      "compactHint": "지금 세션의 컨텍스트를 압축합니다",
+      "newSession": "새 세션",
+      "newSessionHint": "다음 메시지부터 새 세션을 시작합니다. 타임라인은 그대로 이어집니다",
+      "newSessionQueued": "다음 메시지부터 새 세션이 시작됩니다.",
+      "compacting": "컨텍스트 압축 중…",
+      "replying": "응답 중…",
+      "brain": "실행할 에이전트",
+      "queuedCount": "{count, plural, other {메시지 #개 대기 중}}"
+    },
+    "aux": {
+      "status": "상태",
+      "dispatches": "배정 내역",
+      "items": "미결 사항",
+      "data": "데이터"
+    },
+    "status": {
+      "elsewhere": "에이전트가 다른 codeg 프로세스에서 실행 중입니다. 여기 표시되는 내용은 데이터베이스에서 읽어 온 것입니다.",
+      "brain": "두뇌",
+      "agent": "에이전트",
+      "model": "모델",
+      "mode": "모드",
+      "session": "세션",
+      "segment": "현재",
+      "segmentValue": "#{seq} · {reason}",
+      "noSegment": "아직 시작하지 않음",
+      "startedAt": "시작 시각",
+      "pending": "다음 메시지에 새 세션 시작",
+      "connection": "연결",
+      "connected": "연결됨",
+      "disconnected": "연결 안 됨(다음 메시지 때 다시 연결)",
+      "handoff": "인계 카드",
+      "handoffSize": "{size}자",
+      "handoffTrimmed": "한도에 맞게 잘림",
+      "context": "컨텍스트",
+      "usageValue": "{percent}% 사용({source})",
+      "usageSource": {
+        "live": "실시간",
+        "transcript": "세션 파일 기준"
+      },
+      "usageUnknown": "사용량 알 수 없음 — 이 에이전트는 사용량을 보고하지 않습니다",
+      "threshold": "{percent}%에서 자동 압축",
+      "thresholdOff": "자동 압축 꺼짐",
+      "command": "명령 {command}",
+      "noCommand": "이 에이전트의 압축 명령을 알 수 없습니다",
+      "compactions": "압축 횟수",
+      "compactionCounts": "codeg {auto} · 직접 {manual} · 에이전트 {agent}",
+      "lastCheck": "마지막 확인",
+      "check": {
+        "below": "임계값 미만",
+        "compacted": "전달 전에 압축함",
+        "disabled": "자동 압축 꺼짐",
+        "usage_unknown": "건너뜀: 사용량 알 수 없음",
+        "no_command": "건너뜀: 압축 명령 없음",
+        "paused": "건너뜀: 이 세션에서 일시 중지됨",
+        "skipped_after_attempt": "방금 압축해서 바로 전달함"
+      },
+      "paused": "이 세션의 자동 압축이 일시 중지됨",
+      "resume": "재개",
+      "work": "작업",
+      "queued": "대기 중",
+      "queuedValue": "메시지 {messages}개 · 진행 상황 {events}개",
+      "dispatchSlots": "배정된 대화",
+      "slotsValue": "{limit}개 중 {running}개 실행 중 · {queued}개 대기",
+      "slotsUnlimited": "{running}개 실행 중 · {queued}개 대기",
+      "waiting": "승인",
+      "waitingOwner": "내 응답 대기",
+      "engine": "실행 위치",
+      "engineHere": "이 프로세스",
+      "engineElsewhere": "다른 codeg 프로세스",
+      "workdir": "작업 디렉터리",
+      "lastError": "마지막 오류",
+      "lastCompaction": "마지막 압축",
+      "compactionStatus": {
+        "ok": "완료",
+        "failed": "실패",
+        "canceled": "취소됨",
+        "running": "진행 중"
+      },
+      "usageUnknownOffline": "사용량 알 수 없음 — 다시 연결되면 읽습니다"
+    },
+    "dispatches": {
+      "all": "전체",
+      "empty": "아직 배정한 작업이 없습니다.",
+      "meta": "{executor} · {folder} · {when}",
+      "noProject": "프로젝트 없음"
+    },
+    "items": {
+      "empty": "미결 사항이 없습니다.",
+      "waits": {
+        "owner": "내 응답 대기",
+        "agent": "에이전트 대기",
+        "external": "진행 중",
+        "time": "나중에",
+        "none": "기타"
+      },
+      "kind": {
+        "dispatch": "배정",
+        "reminder": "리마인더",
+        "followup": "후속 확인",
+        "question": "질문"
+      },
+      "onDone": "완료 후: {text}"
+    },
+    "data": {
+      "interactions": "일별 대화",
+      "messages": "내 메시지",
+      "replies": "응답",
+      "dispatches": "일별 배정",
+      "completed": "완료",
+      "other": "기타",
+      "failed": "실패",
+      "executors": "어시스턴트별",
+      "completedHint": "{count}개 완료",
+      "tokens": "일별 토큰",
+      "agentTokens": "개인 에이전트",
+      "dispatchTokens": "배정한 작업",
+      "syncedAt": "토큰 수치는 마지막 사용량 동기화 기준입니다({when})",
+      "notSynced": "토큰 수치는 사용량을 동기화한 뒤 표시됩니다(토큰 사용량 페이지).",
+      "usageCurve": "컨텍스트 사용량",
+      "noUsage": "아직 측정값이 없습니다.",
+      "empty": "아직 데이터가 없습니다"
+    },
+    "settings": {
+      "title": "개인 에이전트 설정",
+      "setupTitle": "개인 에이전트 설정하기",
+      "description": "무엇으로 실행할지, 언제 컨텍스트를 압축할지, 어떤 존재인지 정합니다.",
+      "setupDescription": "개인 에이전트가 실행될 에이전트와 모든 옵션을 고르세요. 나중에 바꿔도 타임라인은 그대로 이어집니다.",
+      "tabBrain": "두뇌",
+      "tabCompaction": "압축",
+      "tabDispatch": "배정",
+      "tabPersona": "페르소나와 메모리",
+      "name": "이름",
+      "nameHint": "개인 에이전트 페이지에 표시되는 이름입니다. 비워 두면 기본 이름을 씁니다.",
+      "namePlaceholder": "개인 에이전트",
+      "agentHint": "실행할 에이전트와 모든 옵션입니다. 어시스턴트와 같은 방식으로 설정합니다.",
+      "switchNote": "다른 에이전트로 바꾸면 다음 메시지부터 새 세션이 시작됩니다. 이전 세션을 재개하지 않고, 대신 codeg가 타임라인을 새 세션에 넘겨줍니다.",
+      "autoCompact": "자동 압축 임계값",
+      "autoCompactHint": "컨텍스트가 이 비율 이상 차면 codeg가 다음 메시지 전에 압축 명령을 보냅니다. 0이면 꺼집니다. 에이전트 자체의 자동 압축 시점보다 낮게 설정하세요.",
+      "compactCommand": "압축 명령",
+      "compactCommandHint": "입력한 그대로 보냅니다. 비워 두면 에이전트 자체 명령(/compact, /compress…)을 고릅니다. 다른 에이전트로 바꾸면 지워집니다.",
+      "compactionNote": "압축해도 같은 세션이 유지됩니다. 다음 메시지에 페르소나, 규칙, 미결 사항을 담은 상태 카드가 함께 전달됩니다. 압축이 두 번 연속 효과가 없으면 해당 세션의 자동 압축이 일시 중지됩니다.",
+      "concurrency": "동시에 실행할 배정 대화 수",
+      "concurrencyHint": "함께 실행되는 채팅·작업 세션 배정의 한도이며, 나머지는 대기합니다. 0이면 제한이 없습니다. 보드 작업은 보드 자체의 한도를 따릅니다.",
+      "handoffBudget": "인계 카드 한도",
+      "handoffBudgetHint": "새 세션의 인계 카드에 쓸 수 있는 글자 수입니다. 잘린 부분은 에이전트가 도구로 다시 읽을 수 있습니다.",
+      "skill": "내장 스킬",
+      "skillHint": "작업 디렉터리의 스킬로 에이전트에게 규칙(배정 방식, 미결 사항, 메모리 파일)을 가르칩니다.",
+      "filesNote": "이 파일들은 에이전트의 작업 디렉터리에 있으며 턴이 끝날 때마다 커밋됩니다. 페르소나와 규칙의 변경 사항은 다음 메시지와 함께 에이전트에게 전달됩니다.",
+      "saveFile": "파일 저장",
+      "fileSaved": "{name} 저장 완료.",
+      "cancel": "취소",
+      "save": "저장"
     }
   }
 }

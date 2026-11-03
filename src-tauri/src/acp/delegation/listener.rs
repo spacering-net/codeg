@@ -605,6 +605,17 @@ impl DelegationListener {
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
             }
+            BrokerMessage::PersonalAgent(req) => {
+                // Bounded DB work that never waits on a turn or a person —
+                // every personal-agent tool returns at once — so, like
+                // CreateWorkTask, no peer-close race.
+                let outcome = self.process_personal_agent(req).await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+                    })?,
+                }
+            }
             BrokerMessage::BrowserTabs(req) => {
                 // A registry read. No peer-close race for the same reason as
                 // SessionInfo: it cannot block on anything.
@@ -1231,6 +1242,22 @@ impl DelegationListener {
             return AuthoringOutcome::rejected("work_task", "invalid token");
         };
         self.authoring.create_work_task(ctx, req.spec).await
+    }
+
+    /// Validate the token and hand the call to the personal agent's engine,
+    /// which answers only its own current connection. The socket is gated by
+    /// the token alone and `--features` is a string in the agent's MCP config,
+    /// so hiding the tools from every other companion is not enough: the
+    /// engine re-checks that the caller is the personal agent.
+    async fn process_personal_agent(
+        &self,
+        req: crate::acp::delegation::transport::BrokerPersonalAgentRequest,
+    ) -> crate::personal_agent::tools::ToolOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return crate::personal_agent::tools::ToolOutcome::refused("invalid token");
+        };
+        crate::personal_agent::tools::call(&entry.parent_connection_id, &req.tool, req.arguments)
+            .await
     }
 
     /// The roster for the companion's schema. A bad token gets an error
