@@ -2019,3 +2019,90 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
     ).toEqual(["section:folders:1", "folder-group:1", "folder:20", "conv:7"])
   })
 })
+
+describe("buildRows — conversation body moved to folder tabs", () => {
+  function rowsFor(
+    byFolder: Map<number, DbConversationSummary[]>,
+    hiddenConversationFolderId?: number,
+    containerChildren = new Map<number, number[]>([[1, [2, 3]]])
+  ) {
+    return buildRows({
+      pinned: [],
+      pinnedExpanded: true,
+      orderedFolderIds: [1],
+      byFolder,
+      folderExpanded: {},
+      folderTotalCounts: new Map(),
+      foldersExpanded: true,
+      chatConversations: [],
+      chatsExpanded: true,
+      containerChildren,
+      hiddenConversationFolderId,
+      conversationExpanded: new Set([21]),
+      childrenByParent: new Map([[21, [conv(22, 2, { parent_id: 21 })]]]),
+    })
+  }
+
+  it("hides only the active worktree body and children, retaining every header", () => {
+    const rows = rowsFor(
+      new Map([
+        [1, [conv(11, 1)]],
+        [2, [conv(21, 2, { child_count: 1 })]],
+        [3, [conv(31, 3)]],
+      ]),
+      2
+    )
+    expect(
+      rows
+        .filter((r) => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    ).toEqual([11, 31])
+    expect(
+      rows.filter((r) => r.kind === "folder").map((r) => r.folderId)
+    ).toEqual([1, 2, 3])
+    expect(
+      rows.filter((r) => r.kind === "root-group").map((r) => r.folderId)
+    ).toEqual([1])
+  })
+
+  it("hides the main worktree body without hiding its child worktrees", () => {
+    const rows = rowsFor(
+      new Map([
+        [1, [conv(11, 1)]],
+        [2, [conv(21, 2)]],
+      ]),
+      1
+    )
+    expect(
+      rows
+        .filter((r) => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    ).toEqual([21])
+    expect(rows.some((r) => r.kind === "root-group" && r.folderId === 1)).toBe(
+      true
+    )
+    expect(rows.some((r) => r.kind === "folder" && r.folderId === 2)).toBe(true)
+  })
+
+  it("omits the active empty hint while keeping neighboring empty hints", () => {
+    const rows = rowsFor(new Map(), 2)
+    expect(
+      rows.filter((r) => r.kind === "empty").map((r) => r.folderId)
+    ).toEqual([1, 3])
+  })
+
+  it("filters the actual worktree id when its sessions are merged into the repo", () => {
+    const bucket = new Map([[1, [conv(11, 1), conv(21, 2), conv(31, 3)]]])
+    const rows = rowsFor(bucket, 2, new Map())
+    expect(
+      rows
+        .filter((r) => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    ).toEqual([11, 31])
+    expect(
+      rowsFor(bucket, undefined, new Map())
+        .filter((r) => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    ).toEqual([11, 21, 31])
+  })
+})

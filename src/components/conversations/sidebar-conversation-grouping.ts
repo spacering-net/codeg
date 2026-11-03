@@ -1324,6 +1324,9 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** The active folder's conversation body is shown in tabs/history instead.
+   *  Filter actual folder ids even when worktree buckets are merged. */
+  hiddenConversationFolderId?: number | null
 }): SidebarRow[] {
   const {
     pinned,
@@ -1348,6 +1351,7 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    hiddenConversationFolderId = null,
   } = args
   const rows: SidebarRow[] = []
 
@@ -1390,8 +1394,14 @@ export function buildRows(args: {
   // sub-group or a worktree sub-group. The empty hint carries no depth; the
   // renderer derives its indent from the folder id (worktree/container → 1).
   const pushFolderBody = (folderId: number, baseDepth: number) => {
-    const convs = byFolder.get(folderId)
+    const bucket = byFolder.get(folderId)
+    const convs =
+      hiddenConversationFolderId == null
+        ? bucket
+        : bucket?.filter((c) => c.folder_id !== hiddenConversationFolderId)
     if (!convs || convs.length === 0) {
+      if (folderId === hiddenConversationFolderId || (bucket?.length ?? 0) > 0)
+        return
       rows.push({
         kind: "empty",
         folderId,
