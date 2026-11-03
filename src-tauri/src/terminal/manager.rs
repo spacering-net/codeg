@@ -333,11 +333,14 @@ fn configure_shell_command(cmd: &mut CommandBuilder, shell: &str, initial_comman
                 }
             }
             WindowsShellFlavor::PowerShell => {
+                // No `-NoProfile`: the user's `$PROFILE` (fnm, conda, aliases,
+                // PATH) runs, as the `-l -i` below gives POSIX shells their rc
+                // files. PowerShell runs it before `-Command`, so the UTF-8
+                // output (and an interactive tab's title) set there still apply.
                 if let Some(command) = initial_command {
                     cmd.env("CODEG_CMD", command);
                     cmd.args([
                         "-NoLogo",
-                        "-NoProfile",
                         "-Command",
                         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; Invoke-Expression $env:CODEG_CMD",
                     ]);
@@ -345,7 +348,6 @@ fn configure_shell_command(cmd: &mut CommandBuilder, shell: &str, initial_comman
                     // -NoExit runs the command then stays open for interactive use
                     cmd.args([
                         "-NoLogo",
-                        "-NoProfile",
                         "-NoExit",
                         "-Command",
                         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $host.UI.RawUI.WindowTitle = 'codeg'",
@@ -1174,6 +1176,71 @@ mod tests {
         assert!(!snapshot.alive);
         assert!(snapshot.data.is_empty());
         assert_eq!(snapshot.seq, 0);
+    }
+
+    /// The argv a terminal tab launches `shell` with (program first), and the
+    /// `CODEG_CMD` it hands that shell.
+    fn tab_launch(shell: &str, initial_command: Option<&str>) -> (Vec<String>, Option<String>) {
+        let mut cmd = portable_pty::CommandBuilder::new(shell);
+        super::configure_shell_command(&mut cmd, shell, initial_command);
+        let argv = cmd
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let codeg_cmd = cmd
+            .get_env("CODEG_CMD")
+            .map(|value| value.to_string_lossy().into_owned());
+        (argv, codeg_cmd)
+    }
+
+    /// A PowerShell tab runs the user's `$PROFILE` (fnm's `--use-on-cd`, conda,
+    /// aliases, PATH edits), the way POSIX tabs get their rc files from
+    /// `-l -i`. `-NoLogo`, the UTF-8 output and the tab title stay.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn powershell_tabs_run_the_users_profile() {
+        for shell in [
+            "pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ] {
+            let (argv, codeg_cmd) = tab_launch(shell, None);
+            assert_eq!(
+                argv[1..],
+                [
+                    "-NoLogo",
+                    "-NoExit",
+                    "-Command",
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $host.UI.RawUI.WindowTitle = 'codeg'",
+                ]
+            );
+            assert_eq!(codeg_cmd, None);
+
+            let (argv, codeg_cmd) = tab_launch(shell, Some("npm test"));
+            assert_eq!(
+                argv[1..],
+                [
+                    "-NoLogo",
+                    "-Command",
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; Invoke-Expression $env:CODEG_CMD",
+                ]
+            );
+            assert_eq!(codeg_cmd.as_deref(), Some("npm test"));
+        }
+    }
+
+    /// On unix pwsh is not one of the shells given `-l -i`: an interactive tab
+    /// launches it bare and a command tab with plain `-c`, and either way it
+    /// runs its profile, as it does by default.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn powershell_tabs_on_unix_run_the_users_profile() {
+        let shell = "/usr/local/bin/pwsh";
+        assert_eq!(tab_launch(shell, None).0, [shell]);
+        assert_eq!(
+            tab_launch(shell, Some("npm test")).0,
+            [shell, "-c", "npm test"]
+        );
     }
 
     /// A PTY child whose exit the manager never observed. Records whether the

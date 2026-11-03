@@ -24,7 +24,7 @@ pub(crate) fn shell_basename(shell: &str) -> String {
 /// narrower question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellFamily {
-    /// `pwsh` / `powershell`: `-NoLogo -NoProfile -Command <script>`.
+    /// `pwsh` / `powershell`: `-Command <script>`.
     PowerShell,
     /// `cmd.exe` and cmd-compatible replacements: `/D /S /C <line>`.
     Cmd,
