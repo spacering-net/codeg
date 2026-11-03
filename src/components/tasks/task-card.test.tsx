@@ -214,6 +214,39 @@ describe("TaskCard secondaries", () => {
   })
 })
 
+describe("TaskCard awaiting input", () => {
+  const waiting = () => task({ status: "awaiting_input", conversation_id: 42 })
+
+  it("leads with answering the agent, which opens its session", async () => {
+    const onOpen = vi.fn()
+    const onViewSession = vi.fn()
+    const onCancel = vi.fn()
+    renderCard(waiting(), { onOpen, onViewSession, onCancel })
+
+    const respond = screen.getByRole("button", { name: "Respond" })
+    // Filled: this is the card's one call to action.
+    expect(respond).toHaveAttribute("data-variant", "default")
+    // The hover text says what "respond" means for a first-time user.
+    expect(respond).toHaveAttribute("title", enMessages.Tasks.actionRespondHint)
+    await userEvent.click(respond)
+    expect(onViewSession).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it("keeps cancel as a named secondary, and no second session button", async () => {
+    const onCancel = vi.fn()
+    renderCard(waiting(), { onCancel })
+
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "View session" })).toBeNull()
+    const cancel = screen.getByRole("button", { name: "Cancel task" })
+    expect(cancel).toHaveAttribute("data-variant", "outline")
+    await userEvent.click(cancel)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("TaskCard worktree-removed badge", () => {
   it("flags a deleted worktree in any status — done and canceled included", () => {
     // Detached after removal: the pointer is gone, the branch remains.

@@ -137,6 +137,33 @@ describe("TaskRow", () => {
     expect(onViewSession).toHaveBeenCalledTimes(1)
   })
 
+  it("leads a task awaiting input with answering the agent", async () => {
+    const onOpen = vi.fn()
+    const onViewSession = vi.fn()
+    const onCancel = vi.fn()
+    renderRow(task({ status: "awaiting_input", conversation_id: 42 }), {
+      onOpen,
+      onViewSession,
+      onCancel,
+    })
+
+    const respond = screen.getByRole("button", { name: "Respond" })
+    // Filled: the row is waiting on the user.
+    expect(respond).toHaveAttribute("data-variant", "default")
+    // Icon-only, so the tooltip names the action AND says what it is for.
+    await userEvent.hover(respond)
+    const tip = await screen.findByRole("tooltip")
+    expect(tip).toHaveTextContent("Respond")
+    expect(tip).toHaveTextContent(enMessages.Tasks.actionRespondHint)
+    await userEvent.click(respond)
+    expect(onViewSession).toHaveBeenCalledTimes(1)
+    expect(onOpen).not.toHaveBeenCalled()
+
+    expect(screen.queryByRole("button", { name: "View session" })).toBeNull()
+    await userEvent.click(screen.getByRole("button", { name: "Cancel task" }))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
   it("does not open the detail sheet when a secondary action is clicked", async () => {
     const onOpen = vi.fn()
     const onEdit = vi.fn()

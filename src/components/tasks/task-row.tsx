@@ -283,7 +283,18 @@ function RowIconAction({
           <item.icon aria-hidden="true" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">{item.label}</TooltipContent>
+      <TooltipContent side="top">
+        {item.hint ? (
+          // Named first, then explained: icon-only, the tooltip is the only
+          // place this button says what it is.
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium">{item.label}</span>
+            <span className="opacity-80">{item.hint}</span>
+          </div>
+        ) : (
+          item.label
+        )}
+      </TooltipContent>
     </Tooltip>
   )
 }

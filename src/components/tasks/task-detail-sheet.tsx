@@ -28,9 +28,11 @@ import {
   GitCommitHorizontal,
   GitMerge,
   GitPullRequestArrow,
+  Hand,
   Inbox,
   ListX,
   Loader2,
+  MessageSquareReply,
   MessageSquareText,
   Pencil,
   Play,
@@ -466,6 +468,13 @@ export function TaskDetailSheet({
   // anything, so they sit in the bottom bar instead.
   const zoneActions: ZoneAction[] = []
   const isReview = task.status === "review" && !archived
+  /** The agent is parked on a prompt only the user can answer — in the
+   *  session viewer, so only once there is a session (always, in practice:
+   *  the engine enters this status from `running`, which binds one). */
+  const awaitingInput =
+    task.status === "awaiting_input" &&
+    !archived &&
+    task.conversation_id != null
   /** Accepted already, waiting for the project's one merge slot. */
   const mergeQueued = isReview && isMergeQueued(task)
   /** Put aside to handle later ("以后处理") — it waits under Done. */
@@ -628,6 +637,25 @@ export function TaskDetailSheet({
         case "preparing":
         case "running":
         case "awaiting_input":
+          // The card's swap (see `buildTaskActions`): answering leads, and it
+          // opens this sheet's own session viewer, stacked over it, where the
+          // pending prompt is pinned. Cancel holds the right edge as the
+          // escape hatch, the way "abandon" does for a reviewed task.
+          if (awaitingInput) {
+            zoneActions.push({
+              icon: MessageSquareReply,
+              label: t("actionRespond"),
+              filled: true,
+              onClick: () => setSessionOpen(true),
+            })
+            zoneActions.push({
+              icon: Ban,
+              label: t("actionCancelTask"),
+              trailing: true,
+              onClick: () => onCancel(task),
+            })
+            break
+          }
           zoneActions.push({
             icon: Ban,
             label: t("actionCancel"),
@@ -913,12 +941,28 @@ export function TaskDetailSheet({
                   className={cn(
                     "flex flex-col gap-3 rounded-xl border p-3",
                     // A deferred review is not waiting on the user right now —
-                    // they said so — so it drops the amber with its column.
-                    isReview && !deferred
+                    // they said so — so it drops the amber with its column. A
+                    // task awaiting input is waiting on them in the most
+                    // literal sense: its agent is stopped until they answer.
+                    (isReview && !deferred) || awaitingInput
                       ? "border-amber-500/30 bg-amber-500/5 dark:border-amber-400/25"
                       : "border-border/70 bg-muted/30"
                   )}
                 >
+                  {/* What the agent is waiting for and where to answer it — a
+                      first-time user sees a paused task and no reply box, and
+                      would otherwise reach for the only verb they recognize. */}
+                  {awaitingInput ? (
+                    <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                      <Hand
+                        className="mt-px size-3.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 break-words">
+                        {t("awaitingInputHint")}
+                      </span>
+                    </p>
+                  ) : null}
                   {/* Why there is no merge button here: the task is in line
                       behind another landing of the same project. Without this
                       the panel would read as if the acceptance never

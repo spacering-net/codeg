@@ -558,7 +558,9 @@ describe("handle later (以后处理)", () => {
   })
 })
 
-describe("the actions a deferred task offers", () => {
+/** The action set `buildTaskActions` derives, by label key, with a way to
+ *  click any of them and read back which handler fired. */
+function actions(t: WorkTask) {
   const calls: string[] = []
   const handler = (name: string) => () => {
     calls.push(name)
@@ -579,19 +581,59 @@ describe("the actions a deferred task offers", () => {
     onEdit: handler("edit"),
     onSchedule: handler("schedule"),
   }
-  const actions = (t: WorkTask) => {
-    const { primary, secondaries } = buildTaskActions(t, (key) => key, handlers)
-    return {
-      primary: primary?.label ?? null,
-      secondaries: secondaries.map((s) => s.label),
-      click: (label: string) => {
-        calls.length = 0
-        const item = [primary, ...secondaries].find((a) => a?.label === label)
-        item?.onClick()
-        return [...calls]
-      },
-    }
+  const { primary, secondaries } = buildTaskActions(t, (key) => key, handlers)
+  return {
+    primary: primary?.label ?? null,
+    primaryHint: primary?.hint ?? null,
+    secondaries: secondaries.map((s) => s.label),
+    click: (label: string) => {
+      calls.length = 0
+      const item = [primary, ...secondaries].find((a) => a?.label === label)
+      item?.onClick()
+      return [...calls]
+    },
   }
+}
+
+describe("the actions a task awaiting input offers", () => {
+  it("leads with answering the agent, in the session where it is asked", () => {
+    // A lone filled "cancel" read as the only thing to do on a task that is
+    // in fact waiting for the user to approve or answer something.
+    const waiting = actions(task({ status: "awaiting_input" }))
+    expect(waiting.primary).toBe("actionRespond")
+    expect(waiting.primaryHint).toBe("actionRespondHint")
+    expect(waiting.click("actionRespond")).toEqual(["viewSession"])
+  })
+
+  it("keeps stopping the task as a secondary, named as such", () => {
+    const waiting = actions(task({ status: "awaiting_input" }))
+    // The primary already opens the session viewer — no second button for it.
+    expect(waiting.secondaries).toEqual(["actionCancelTask"])
+    expect(waiting.click("actionCancelTask")).toEqual(["cancel"])
+  })
+
+  it("falls back to cancel when there is no session to respond in", () => {
+    const orphan = actions(
+      task({ status: "awaiting_input", conversation_id: null })
+    )
+    expect(orphan.primary).toBe("actionCancel")
+    expect(orphan.primaryHint).toBeNull()
+    expect(orphan.secondaries).toEqual([])
+    expect(orphan.click("actionCancel")).toEqual(["cancel"])
+  })
+
+  it("leaves a running task's cancel and session viewer as they were", () => {
+    // Nothing is asked of the user while the agent works: stopping it is the
+    // one decision there is, and watching it stays a secondary.
+    for (const status of ["queued", "preparing", "running"] as const) {
+      const live = actions(task({ status }))
+      expect(live.primary).toBe("actionCancel")
+      expect(live.secondaries).toEqual(["actionViewSession"])
+    }
+  })
+})
+
+describe("the actions a deferred task offers", () => {
   const deferredAt = "2026-08-01T02:00:00Z"
 
   it("puts a reviewed task aside from its card, beside the acceptance", () => {
@@ -637,9 +679,9 @@ describe("the actions a deferred task offers", () => {
         task({ files_changed: 3, merge_queued: queued("2026-08-01T00:30:00Z") })
       ).secondaries
     ).toEqual(["actionUnqueueMerge", "actionViewSession"])
-    // Waiting on a question: the agent is live — cancel, not park.
+    // Waiting on a question: the agent is live — answer or cancel, not park.
     expect(actions(task({ status: "awaiting_input" })).secondaries).toEqual([
-      "actionViewSession",
+      "actionCancelTask",
     ])
     // Archived: one way back, which is unarchiving.
     const archived = actions(

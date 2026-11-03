@@ -9,6 +9,7 @@ import {
   GitPullRequestArrow,
   Inbox,
   ListX,
+  MessageSquareReply,
   MessageSquareText,
   Pencil,
   Play,
@@ -29,6 +30,10 @@ import type { WorkTask } from "@/lib/types"
 export interface TaskActionItem {
   icon: LucideIcon
   label: string
+  /** A sentence on what the action does, for the hover tooltip in place of the
+   *  bare label — set where the label alone leaves a first-time user guessing
+   *  (see "respond" below). */
+  hint?: string
   onClick: () => void
 }
 
@@ -69,6 +74,9 @@ export interface TaskActionHandlers {
 type ActionLabelKey =
   | "actionStart"
   | "actionCancel"
+  | "actionCancelTask"
+  | "actionRespond"
+  | "actionRespondHint"
   | "actionRetry"
   | "actionRequeue"
   | "actionViewSession"
@@ -89,7 +97,8 @@ type ActionLabelKey =
  * The action set a task offers, shared by the board card and the list row so
  * the two can never drift: exactly one filled primary per status on the left,
  * and the secondaries (edit / archive) on the right, always ending in "查看会话"
- * when a session exists. The full set — with labels — lives in the detail
+ * when a session exists — unless the primary already opens it ("去回应" on a
+ * task awaiting input). The full set — with labels — lives in the detail
  * sheet. `merging` has no primary: it cannot be canceled.
  *
  * "以后处理" (handle later) is the attention column's way out without a
@@ -105,6 +114,7 @@ export function buildTaskActions(
 ): { primary: TaskActionItem | null; secondaries: TaskActionItem[] } {
   const secondaries: TaskActionItem[] = []
   let primary: TaskActionItem | null = null
+  let primaryOpensSession = false
   // An archived task offers exactly one way back — and still the session
   // viewer appended below, which is what archiving is usually for.
   if (task.archived_at != null) {
@@ -138,6 +148,32 @@ export function buildTaskActions(
       case "preparing":
       case "running":
       case "awaiting_input":
+        // The agent is parked on a permission, a question or a plan approval,
+        // and the session viewer is where all three are answered (pinned
+        // above its transcript; a sub-agent's is badged on its card there). So
+        // the way forward leads, and stopping the task becomes the escape
+        // hatch. A lone filled "cancel" read as the only thing to do — the
+        // one thing a first-time user should not do here. The session is
+        // always there in practice: the engine flips to this status only from
+        // `running`, which binds the conversation.
+        if (task.status === "awaiting_input" && task.conversation_id != null) {
+          primary = {
+            icon: MessageSquareReply,
+            label: t("actionRespond"),
+            hint: t("actionRespondHint"),
+            onClick: handlers.onViewSession,
+          }
+          // Spelled out: beside "respond", a bare "cancel" reads as
+          // dismissing the request rather than stopping the task.
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancelTask"),
+            onClick: handlers.onCancel,
+          })
+          // The primary IS the session viewer — no second button for it.
+          primaryOpensSession = true
+          break
+        }
         primary = {
           icon: Ban,
           label: t("actionCancel"),
@@ -245,7 +281,7 @@ export function buildTaskActions(
   }
   // The session viewer is offered in every status once a session exists (live
   // ones stream it in real time) and always sorts last, anchoring the corner.
-  if (task.conversation_id != null) {
+  if (task.conversation_id != null && !primaryOpensSession) {
     secondaries.push({
       icon: MessageSquareText,
       label: t("actionViewSession"),
