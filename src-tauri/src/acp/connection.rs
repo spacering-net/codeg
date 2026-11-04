@@ -4510,7 +4510,8 @@ async fn emit_session_config_options_values(
 /// Emit the option list an agent sent once the session was set up: its answer
 /// to a `session/set_config_option`, or its own `config_option_update`. Unlike
 /// an establishment's, such a list updates the selectors on screen, which for
-/// Hermes are partly codeg's own ([`fold_hermes_config_options`]).
+/// Hermes' legacy fallback are partly codeg's own
+/// ([`fold_hermes_config_options`]).
 async fn emit_session_config_options_update(
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -4547,6 +4548,9 @@ async fn emit_config_options(
         let native = map_session_config_options(&visible);
         emit_with_state_built(state, emitter, |s| {
             let config_options = match s.config_options.as_deref() {
+                Some(shown) if s.hermes_native_model_option => {
+                    merge_native_hermes_model_update(shown, native)
+                }
                 Some(shown) => fold_hermes_config_options(shown, native),
                 None => native,
             };
@@ -5850,9 +5854,8 @@ const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_
 /// takes a switch only as `session/set_model`, its `session/set_config_option`
 /// storing whatever it is sent and answering an empty list. 0.22.6 also sends
 /// the same rows, without the provider notes, as a `model` config option and
-/// takes a switch either way; codeg keeps building its selector from the
-/// legacy list and folds Hermes' own option into it
-/// ([`fold_hermes_config_options`]).
+/// takes a switch either way. Native model options own their selectors;
+/// this is the fallback for a session that advertises only the legacy list.
 ///
 /// The rows are grouped by provider under the label Hermes gives it, as in
 /// its own `/model` picker. The label comes off each row's name (`OpenRouter ·
@@ -5969,8 +5972,83 @@ fn hermes_mode_for_edit_policy(policy: &str) -> Option<&'static str> {
         .map(|(_, mode)| *mode)
 }
 
+/// Carry picks saved before Hermes advertised config options onto the native
+/// edit-policy control. A native preference already saved under its real id
+/// wins; sessions without that control still restore their legacy mode.
+fn native_hermes_preferences(
+    options: &[SessionConfigOption],
+    preferred_mode: Option<&str>,
+    preferred: &BTreeMap<String, String>,
+) -> (Option<String>, BTreeMap<String, String>) {
+    let mut values = preferred.clone();
+    if options
+        .iter()
+        .any(|o| o.id.to_string() == HERMES_MODE_OPTION_ID)
+    {
+        return (None, values);
+    }
+    let mode = values
+        .remove(HERMES_MODE_OPTION_ID)
+        .or_else(|| preferred_mode.map(str::to_string));
+    if options
+        .iter()
+        .any(|o| o.id.to_string() == HERMES_EDIT_POLICY_OPTION_ID)
+    {
+        if let Some((policy, _)) = HERMES_EDIT_POLICY_MODES
+            .iter()
+            .find(|(_, legacy)| mode.as_deref() == Some(*legacy))
+        {
+            values
+                .entry(HERMES_EDIT_POLICY_OPTION_ID.to_string())
+                .or_insert_with(|| policy.to_string());
+        }
+        (None, values)
+    } else {
+        (mode, values)
+    }
+}
+
+/// A model-only notification may refresh a catalog without repeating the
+/// other native controls. Keep those controls, but withdraw the old model's
+/// effort choices if the model changed without advertising new capabilities.
+/// Complete setter replies bypass this merge and remain authoritative.
+fn merge_native_hermes_model_update(
+    shown: &[SessionConfigOptionInfo],
+    mut native: Vec<SessionConfigOptionInfo>,
+) -> Vec<SessionConfigOptionInfo> {
+    if native.len() != 1
+        || !(native[0].id == HERMES_MODEL_OPTION_ID
+            || native[0].category.as_deref() == Some("model"))
+    {
+        return native;
+    }
+    let model = native.remove(0);
+    let previous = shown
+        .iter()
+        .find(|o| o.id == model.id)
+        .and_then(|o| match &o.kind {
+            SessionConfigKindInfo::Select(select) => Some(&select.current_value),
+            _ => None,
+        });
+    let changed = match &model.kind {
+        SessionConfigKindInfo::Select(select) => previous != Some(&select.current_value),
+        _ => false,
+    };
+    let mut updated: Vec<_> = shown
+        .iter()
+        .filter(|o| !changed || o.category.as_deref() != Some("thought_level"))
+        .cloned()
+        .collect();
+    match updated.iter().position(|o| o.id == model.id) {
+        Some(index) => updated[index] = model,
+        None => updated.push(model),
+    }
+    updated
+}
+
 /// Fold the options Hermes sends after the session is set up into the
-/// selectors codeg shows for it.
+/// legacy fallback selectors codeg shows for it. A session that advertised
+/// its own model config option bypasses this compatibility fold.
 ///
 /// From 0.22.6 Hermes sends `configOptions` of its own — `edit_approval_policy`
 /// (its legacy modes under other ids), `model` (its legacy model list without
@@ -6159,9 +6237,8 @@ async fn apply_hermes_preferred_options(
     }
 }
 
-/// Apply a composer selector change for Hermes: the model and mode on the
-/// channels every Hermes takes them on, anything else (0.22.6's
-/// `reasoning_effort`) on the shared path.
+/// Apply native Hermes controls through standard ACP. Legacy-only sessions
+/// use their model and mode channels; any other control takes the shared path.
 async fn set_hermes_config_option(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
@@ -6170,6 +6247,11 @@ async fn set_hermes_config_option(
     config_id: String,
     value_id: String,
 ) -> Result<SetterOutcome, agent_client_protocol::Error> {
+    let native_model = state.read().await.hermes_native_model_option;
+    if native_model {
+        return set_session_config_option(cx, session_id, state, emitter, config_id, value_id)
+            .await;
+    }
     let outcome = match config_id.as_str() {
         // Hermes answers `{}` once the session runs on the new model, without
         // naming it; a model no provider serves is an error instead. So is a
@@ -6718,7 +6800,13 @@ async fn apply_and_emit_session_config_options(
     // whatever the parent asserted, on paths that never write it back: Grok's
     // dedicated branch below, and the empty-preferences early return inside
     // `apply_preferred_session_options`. See `SessionState::asserted_config_values`.
-    state.write().await.asserted_config_values.clear();
+    let native_hermes_model = agent_type == AgentType::Hermes
+        && initial_config_options.iter().any(is_model_config_option);
+    {
+        let mut guard = state.write().await;
+        guard.asserted_config_values.clear();
+        guard.hermes_native_model_option = native_hermes_model;
+    }
     if agent_type == AgentType::Grok {
         let specs = grok_model_specs.cloned().unwrap_or_default();
         if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs) {
@@ -6829,13 +6917,12 @@ async fn apply_and_emit_session_config_options(
         // No `models` in the reply: the standard path, which is what an older
         // or future Kiro that speaks config options would want anyway.
     }
-    if agent_type == AgentType::Hermes {
+    if agent_type == AgentType::Hermes && !native_hermes_model {
         if let Some(model) = synthesize_hermes_model_option(session_models) {
             // As for Kiro: once Hermes has a model selector its modes have to
-            // be a config option too, or the composer drops them. Hermes
-            // through 0.22.2 takes neither as a config option, so their saved
-            // values go out on their own channels, which 0.22.6 takes as well,
-            // and only the rest through the shared pipeline.
+            // be a config option too, or the composer drops them. A Hermes
+            // without native model options takes these on the legacy
+            // channels, and only the rest through the shared pipeline.
             let standard_prefs: BTreeMap<String, String> = preferred_config_values
                 .iter()
                 .filter(|(id, _)| !HERMES_SYNTHESIZED_OPTION_IDS.contains(&id.as_str()))
@@ -6910,6 +6997,17 @@ async fn apply_and_emit_session_config_options(
     // any of it (see `SessionState::agent_chosen_config_values`).
     state.write().await.agent_chosen_config_values =
         current_config_option_values(&map_session_config_options(&initial_config_options));
+    let hermes_preferences = native_hermes_model.then(|| {
+        native_hermes_preferences(
+            &initial_config_options,
+            preferred_mode_id,
+            preferred_config_values,
+        )
+    });
+    let (preferred_mode_id, preferred_config_values) = match hermes_preferences.as_ref() {
+        Some((mode, values)) => (mode.as_deref(), values),
+        None => (preferred_mode_id, preferred_config_values),
+    };
     let updated = apply_preferred_session_options(
         cx,
         session,
@@ -11640,9 +11738,13 @@ async fn set_session_config_option(
         .and_then(|opts| opts.iter().find(|o| o.id == config_id))
         .is_some_and(|o| matches!(o.kind, SessionConfigKindInfo::Boolean(_)));
     let value = encode_config_option_value(is_boolean, &value_id);
-    let agent_type = state.read().await.agent_type;
+    let (agent_type, native_hermes_model) = {
+        let guard = state.read().await;
+        (guard.agent_type, guard.hermes_native_model_option)
+    };
     let updated =
-        set_session_config_option_inner(cx, session_id, agent_type, config_id.clone(), value).await?;
+        set_session_config_option_inner(cx, session_id, agent_type, config_id.clone(), value)
+            .await?;
     // Compare BEFORE emitting: the agent's answer is the only place a request and
     // its outcome are correlated. Once the option list is broadcast it is
     // indistinguishable from an unsolicited update.
@@ -11651,7 +11753,11 @@ async fn set_session_config_option(
         emit_with_state(state, emitter, rejection).await;
     }
     let outcome = config_option_outcome(&mapped, &config_id);
-    emit_session_config_options_update(state, emitter, updated).await;
+    if agent_type == AgentType::Hermes && native_hermes_model {
+        emit_session_config_options_values(state, emitter, updated).await;
+    } else {
+        emit_session_config_options_update(state, emitter, updated).await;
+    }
     Ok(outcome)
 }
 
@@ -22978,13 +23084,18 @@ mod hermes_selector_tests {
     /// empty list), or with `native` as 0.22.6 does: its whole list, the
     /// option it was sent set (a session on `custom:codeg:glm-5.2` that asks
     /// before edits otherwise).
-    fn fake_hermes(
+    fn fake_hermes_with_options(
         agent_end: Channel,
         log: &Log,
         busy: bool,
-        native: bool,
+        native: Option<Vec<SessionConfigOption>>,
     ) -> tokio::task::JoinHandle<Result<(), agent_client_protocol::Error>> {
         let (model_log, mode_log, option_log) = (Arc::clone(log), Arc::clone(log), Arc::clone(log));
+        let options = std::sync::Mutex::new(
+            native
+                .map(|options| serde_json::to_value(options).expect("native config options"))
+                .unwrap_or_else(|| serde_json::json!([])),
+        );
         tokio::spawn(
             Agent
                 .builder()
@@ -23017,23 +23128,24 @@ mod hermes_selector_tests {
                     async move |req: FakeHermesSetConfigOption,
                                 responder: Responder<serde_json::Value>,
                                 _cx: ConnectionTo<Client>| {
-                        let answer = if native {
-                            let value = req.0["value"].as_str().unwrap_or_default();
-                            let pick = |id: &str, default: &'static str| {
-                                if req.0["configId"] == id {
-                                    value.to_string()
-                                } else {
-                                    default.to_string()
+                        let answer = {
+                            let mut options = options.lock().unwrap();
+                            if let Some(option) = options
+                                .as_array_mut()
+                                .unwrap()
+                                .iter_mut()
+                                .find(|option| option["id"] == req.0["configId"])
+                            {
+                                option["currentValue"] = req.0["value"].clone();
+                                if req.0["configId"] == "reasoning_effort"
+                                    && req.0["value"] != "default"
+                                {
+                                    if let Some(choices) = option["options"].as_array_mut() {
+                                        choices.retain(|choice| choice["value"] != "default");
+                                    }
                                 }
-                            };
-                            hermes_native_options_json(
-                                &pick("edit_approval_policy", "ask"),
-                                &pick("model", "custom:codeg:glm-5.2"),
-                                &pick("reasoning_effort", "default"),
-                                &[],
-                            )
-                        } else {
-                            serde_json::json!([])
+                            }
+                            options.clone()
                         };
                         option_log
                             .lock()
@@ -23084,7 +23196,12 @@ mod hermes_selector_tests {
     ) {
         let log: Log = Arc::default();
         let (client_end, agent_end) = Channel::duplex();
-        let agent = fake_hermes(agent_end, &log, false, !initial.is_empty());
+        let agent = fake_hermes_with_options(
+            agent_end,
+            &log,
+            false,
+            (!initial.is_empty()).then(|| initial.clone()),
+        );
         let state = hermes_state();
         let establishment_state = Arc::clone(&state);
         let legacy_mode = legacy_mode.map(str::to_string);
@@ -23235,9 +23352,6 @@ mod hermes_selector_tests {
         Vec<(&'static str, serde_json::Value)>,
         Arc<RwLock<SessionState>>,
     ) {
-        let log: Log = Arc::default();
-        let (client_end, agent_end) = Channel::duplex();
-        let agent = fake_hermes(agent_end, &log, busy, native);
         let state = hermes_state();
         let mut opts = vec![
             synthesize_hermes_model_option(Some(&hermes_models())).unwrap(),
@@ -23263,6 +23377,30 @@ mod hermes_selector_tests {
             },
         )
         .await;
+        pick_on_state(
+            state,
+            config_id,
+            value,
+            busy,
+            native.then(|| hermes_native_options("ask", "custom:codeg:glm-5.2", "default", &[])),
+        )
+        .await
+    }
+
+    async fn pick_on_state(
+        state: Arc<RwLock<SessionState>>,
+        config_id: &str,
+        value: &str,
+        busy: bool,
+        native: Option<Vec<SessionConfigOption>>,
+    ) -> (
+        Result<SetterOutcome, String>,
+        Vec<(&'static str, serde_json::Value)>,
+        Arc<RwLock<SessionState>>,
+    ) {
+        let log: Log = Arc::default();
+        let (client_end, agent_end) = Channel::duplex();
+        let agent = fake_hermes_with_options(agent_end, &log, busy, native);
         let setter_state = Arc::clone(&state);
         let (config_id, value) = (config_id.to_string(), value.to_string());
         let outcome = Client
@@ -23285,6 +23423,282 @@ mod hermes_selector_tests {
         agent.abort();
         let sent = log.lock().unwrap().clone();
         (outcome, sent, state)
+    }
+
+    fn grouped_hermes_options() -> Vec<SessionConfigOption> {
+        serde_json::from_value(serde_json::json!([
+            {
+                "id": "model", "name": "Model", "category": "model", "type": "select",
+                "currentValue": "custom:magpie:auto/probe:fast",
+                "options": [
+                    {"group": "automatic", "name": "Automatic routing", "options": [
+                        {"value": "custom:magpie:auto/probe:fast", "name": "Fast",
+                         "description": "Routing group"}
+                    ]},
+                    {"group": "relay", "name": "Team relay", "options": [
+                        {"value": "custom:magpie:relay/vendor/probe:large", "name": "Large"}
+                    ]}
+                ]
+            },
+            {
+                "id": "reasoning_effort", "name": "Reasoning effort",
+                "category": "thought_level", "type": "select", "currentValue": "low",
+                "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}]
+            }
+        ]))
+        .expect("native model and thought options without an edit policy")
+    }
+
+    #[tokio::test]
+    async fn native_hermes_groups_win_over_legacy_models_without_an_edit_policy() {
+        let native = grouped_hermes_options();
+        let (sent, state) = establish_with(BTreeMap::new(), None, native.clone()).await;
+        assert!(sent.is_empty(), "{sent:?}");
+        assert_eq!(
+            state.read().await.config_options.as_deref(),
+            Some(map_session_config_options(&native).as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn native_hermes_model_updates_keep_the_other_native_selectors() {
+        let native = grouped_hermes_options();
+        let (_, state) = establish_with(BTreeMap::new(), None, native.clone()).await;
+        let mut update = native.clone();
+        update.truncate(1);
+        let SessionConfigKind::Select(model) = &mut update[0].kind else {
+            panic!("model select");
+        };
+        let SessionConfigSelectOptions::Grouped(groups) = &mut model.options else {
+            panic!("native groups");
+        };
+        groups[0].name = "Refreshed automatic routing".to_string();
+        emit_session_config_options_update(&state, &EventEmitter::Noop, update.clone()).await;
+        let mut expected = map_session_config_options(&native);
+        expected[0] = map_session_config_options(&update).remove(0);
+        assert_eq!(
+            state.read().await.config_options.as_deref(),
+            Some(expected.as_slice())
+        );
+        let mut refreshed = native.clone();
+        let SessionConfigKind::Select(effort) = &mut refreshed[1].kind else {
+            panic!("reasoning select");
+        };
+        effort.current_value = "high".into();
+        if let SessionConfigSelectOptions::Ungrouped(choices) = &mut effort.options {
+            choices.retain(|choice| choice.value.to_string() == "high");
+        }
+        let push = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "config_option_update",
+            "configOptions": refreshed,
+        }))
+        .expect("native capability update");
+        emit_conversation_update(
+            &state,
+            &EventEmitter::Noop,
+            AgentType::Hermes,
+            push,
+            None,
+            &mut ToolCallOutputCache::default(),
+            &mut CodeBuddyLiveState::default(),
+        )
+        .await;
+        assert_eq!(
+            state.read().await.config_options.as_deref(),
+            Some(map_session_config_options(&refreshed).as_slice())
+        );
+        let (outcome, sent, _) = pick_on_state(
+            state,
+            "model",
+            "custom:magpie:relay/vendor/probe:large",
+            false,
+            Some(native),
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Ok(SetterOutcome::Confirmed {
+                current: "custom:magpie:relay/vendor/probe:large".to_string()
+            })
+        );
+        assert_eq!(sent[0].0, "set_config_option", "{sent:?}");
+    }
+
+    #[tokio::test]
+    async fn a_native_hermes_model_push_without_capabilities_withdraws_old_reasoning() {
+        let mut native = grouped_hermes_options();
+        native.push(hermes_native_options("ask", "custom:codeg:glm-5.2", "default", &[]).remove(0));
+        let (_, state) = establish_with(BTreeMap::new(), None, native.clone()).await;
+        native.truncate(1);
+        let SessionConfigKind::Select(model) = &mut native[0].kind else {
+            panic!("model select");
+        };
+        model.current_value = "custom:magpie:relay/vendor/probe:large".into();
+        emit_session_config_options_update(&state, &EventEmitter::Noop, native).await;
+        let state = state.read().await;
+        assert_eq!(
+            ids(state.config_options.as_deref().unwrap()),
+            ["model", "edit_approval_policy"]
+        );
+        assert_eq!(
+            current(&state),
+            BTreeMap::from([
+                (
+                    "model".to_string(),
+                    "custom:magpie:relay/vendor/probe:large".to_string()
+                ),
+                ("edit_approval_policy".to_string(), "ask".to_string()),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn native_hermes_model_picks_use_standard_acp_and_keep_native_groups() {
+        let native = grouped_hermes_options();
+        let (_, state) = establish_with(BTreeMap::new(), None, native.clone()).await;
+        let (outcome, sent, state) = pick_on_state(
+            state,
+            "model",
+            "custom:magpie:relay/vendor/probe:large",
+            false,
+            Some(native.clone()),
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Ok(SetterOutcome::Confirmed {
+                current: "custom:magpie:relay/vendor/probe:large".to_string()
+            })
+        );
+        assert_eq!(
+            sent,
+            [(
+                "set_config_option",
+                serde_json::json!({
+                    "sessionId": "s1", "configId": "model",
+                    "value": "custom:magpie:relay/vendor/probe:large"
+                })
+            )]
+        );
+        let mut expected = map_session_config_options(&native);
+        set_select_current(
+            &mut expected,
+            "model",
+            "custom:magpie:relay/vendor/probe:large",
+        );
+        assert_eq!(
+            state.read().await.config_options.as_deref(),
+            Some(expected.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn native_hermes_reasoning_replies_replace_the_live_choices() {
+        let native = grouped_hermes_options();
+        let (_, state) = establish_with(BTreeMap::new(), None, native.clone()).await;
+        let mut reply = native;
+        let SessionConfigKind::Select(effort) = &mut reply[1].kind else {
+            panic!("reasoning select");
+        };
+        if let SessionConfigSelectOptions::Ungrouped(options) = &mut effort.options {
+            options.remove(0);
+        }
+        let (outcome, sent, state) = pick_on_state(
+            state,
+            "reasoning_effort",
+            "high",
+            false,
+            Some(reply.clone()),
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Ok(SetterOutcome::Confirmed {
+                current: "high".to_string()
+            })
+        );
+        assert_eq!(
+            sent,
+            [(
+                "set_config_option",
+                serde_json::json!({
+                    "sessionId": "s1", "configId": "reasoning_effort", "value": "high"
+                })
+            )]
+        );
+        let mut expected = map_session_config_options(&reply);
+        set_select_current(&mut expected, "reasoning_effort", "high");
+        assert_eq!(
+            state.read().await.config_options.as_deref(),
+            Some(expected.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn native_hermes_complete_replies_remove_unsupported_reasoning() {
+        let native = grouped_hermes_options();
+        let (_, state) = establish_with(BTreeMap::new(), None, native.clone()).await;
+        let (outcome, _, state) = pick_on_state(
+            state,
+            "model",
+            "custom:magpie:relay/vendor/probe:large",
+            false,
+            Some(native.into_iter().take(1).collect()),
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Ok(SetterOutcome::Confirmed {
+                current: "custom:magpie:relay/vendor/probe:large".to_string()
+            })
+        );
+        let state = state.read().await;
+        assert_eq!(ids(state.config_options.as_deref().unwrap()), ["model"]);
+    }
+
+    #[tokio::test]
+    async fn native_hermes_preferences_apply_model_before_reasoning() {
+        let (sent, state) = establish_with(
+            BTreeMap::from([
+                (
+                    "model".to_string(),
+                    "custom:magpie:relay/vendor/probe:large".to_string(),
+                ),
+                ("reasoning_effort".to_string(), "high".to_string()),
+            ]),
+            None,
+            grouped_hermes_options(),
+        )
+        .await;
+        assert_eq!(
+            sent,
+            [
+                (
+                    "set_config_option",
+                    serde_json::json!({
+                        "sessionId": "s1", "configId": "model",
+                        "value": "custom:magpie:relay/vendor/probe:large"
+                    })
+                ),
+                (
+                    "set_config_option",
+                    serde_json::json!({
+                        "sessionId": "s1", "configId": "reasoning_effort", "value": "high"
+                    })
+                )
+            ]
+        );
+        let state = state.read().await;
+        assert_eq!(
+            current(&state),
+            BTreeMap::from([
+                (
+                    "model".to_string(),
+                    "custom:magpie:relay/vendor/probe:large".to_string()
+                ),
+                ("reasoning_effort".to_string(), "high".to_string()),
+            ])
+        );
     }
 
     #[tokio::test]
@@ -23555,7 +23969,7 @@ mod hermes_selector_tests {
     }
 
     #[tokio::test]
-    async fn a_hermes_0_22_6_session_shows_one_control_per_setting() {
+    async fn a_native_hermes_session_restores_each_setting_on_standard_acp() {
         let (sent, state) = establish_with(
             BTreeMap::from([
                 ("model".to_string(), "custom:codeg:kimi-k3".to_string()),
@@ -23572,31 +23986,51 @@ mod hermes_selector_tests {
                 (
                     "set_config_option",
                     serde_json::json!({
-                        "sessionId": "s1", "configId": "reasoning_effort", "value": "high"
+                        "sessionId": "s1", "configId": "model",
+                        "value": "custom:codeg:kimi-k3"
                     })
                 ),
                 (
-                    "set_model",
-                    serde_json::json!({"sessionId": "s1", "modelId": "custom:codeg:kimi-k3"})
+                    "set_config_option",
+                    serde_json::json!({
+                        "sessionId": "s1", "configId": "edit_approval_policy",
+                        "value": "workspace_session"
+                    })
                 ),
                 (
-                    "set_mode",
-                    serde_json::json!({"sessionId": "s1", "modeId": "accept_edits"})
+                    "set_config_option",
+                    serde_json::json!({
+                        "sessionId": "s1", "configId": "reasoning_effort", "value": "high"
+                    })
                 ),
             ]
         );
         let state = state.read().await;
         let opts = state.config_options.as_deref().unwrap_or_default();
-        assert_eq!(ids(opts), ["model", "mode", "reasoning_effort"]);
+        assert_eq!(
+            ids(opts),
+            ["edit_approval_policy", "model", "reasoning_effort"]
+        );
         assert_eq!(
             current(&state),
             BTreeMap::from([
-                ("mode".to_string(), "accept_edits".to_string()),
+                (
+                    "edit_approval_policy".to_string(),
+                    "workspace_session".to_string()
+                ),
                 ("model".to_string(), "custom:codeg:kimi-k3".to_string()),
                 ("reasoning_effort".to_string(), "high".to_string()),
             ])
         );
-        assert_eq!(select(&opts[0]).groups.len(), 3, "codeg's grouped list");
+        assert_eq!(
+            opts,
+            map_session_config_options(&hermes_native_options(
+                "workspace_session",
+                "custom:codeg:kimi-k3",
+                "high",
+                &[]
+            ))
+        );
     }
 
     /// What Hermes 0.22.6 pushes after a switch, from codeg or elsewhere,
