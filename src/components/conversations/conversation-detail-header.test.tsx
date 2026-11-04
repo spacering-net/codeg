@@ -21,6 +21,19 @@ const h = vi.hoisted(() => ({
   openNewConversationTab: vi.fn(),
   updateConversationLocal: vi.fn(),
   refreshConversations: vi.fn(),
+  conversations: [] as {
+    id: number
+    agent_account_id: string | null
+    updated_at: string
+  }[],
+  runtime: new Map<
+    number,
+    {
+      detail: {
+        summary: { agent_account_id: string | null; updated_at: string }
+      }
+    }
+  >(),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -39,7 +52,7 @@ vi.mock("@/stores/app-workspace-store", () => {
   const state = {
     updateConversationLocal: h.updateConversationLocal,
     refreshConversations: h.refreshConversations,
-    conversations: [] as unknown[],
+    conversations: h.conversations,
   }
   const useStore = (selector: (s: typeof state) => unknown) => selector(state)
   useStore.getState = () => state
@@ -47,6 +60,9 @@ vi.mock("@/stores/app-workspace-store", () => {
 })
 vi.mock("@/stores/conversation-runtime-store", () => ({
   getRuntimeSession: () => null,
+  useConversationRuntimeStore: (
+    selector: (s: { byConversationId: typeof h.runtime }) => unknown
+  ) => selector({ byConversationId: h.runtime }),
 }))
 vi.mock("./session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
@@ -55,6 +71,13 @@ vi.mock("./session-details-dialog", () => ({
 // it so these tests exercise only the header's own menu/dialog logic.
 vi.mock("@/components/chat/conversation-context-bar", () => ({
   ConversationHeaderFolderPicker: () => null,
+}))
+vi.mock("./session-quota-chip", () => ({
+  SessionQuotaChip: ({
+    agentAccountId,
+  }: {
+    agentAccountId?: string | null
+  }) => <span data-testid="quota-account">{agentAccountId ?? "default"}</span>,
 }))
 
 import { ConversationDetailHeader } from "./conversation-detail-header"
@@ -69,6 +92,7 @@ const A: Props = {
   folderPath: "/a",
   title: "conv-a",
   status: "in_progress",
+  agentType: "claude_code",
 }
 const B: Props = {
   ...A,
@@ -88,6 +112,59 @@ function withIntl(ui: ReactElement) {
 describe("ConversationDetailHeader dialog target snapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    h.runtime.clear()
+    h.conversations.length = 0
+  })
+
+  it("follows a child conversation's refreshed account outside the sidebar list", () => {
+    const props = { ...A, conversationId: 77, runtimeConversationId: -5 }
+    h.runtime.set(-5, {
+      detail: {
+        summary: {
+          agent_account_id: "personal",
+          updated_at: "2026-10-13T12:00:00Z",
+        },
+      },
+    })
+    const view = render(withIntl(<ConversationDetailHeader {...props} />))
+    expect(view.getByTestId("quota-account")).toHaveTextContent("personal")
+    h.runtime.set(-5, {
+      detail: {
+        summary: {
+          agent_account_id: "work",
+          updated_at: "2026-10-13T12:01:00Z",
+        },
+      },
+    })
+    view.rerender(
+      withIntl(<ConversationDetailHeader {...props} title="Updated" />)
+    )
+    expect(view.getByTestId("quota-account")).toHaveTextContent("work")
+  })
+
+  it("uses the newer saved binding when the sidebar and detail disagree", () => {
+    h.conversations.push({
+      id: 1,
+      agent_account_id: "personal",
+      updated_at: "2026-10-13T12:00:00Z",
+    })
+    h.runtime.set(1, {
+      detail: {
+        summary: {
+          agent_account_id: "work",
+          updated_at: "2026-10-13T12:01:00Z",
+        },
+      },
+    })
+    const view = render(withIntl(<ConversationDetailHeader {...A} />))
+    expect(view.getByTestId("quota-account")).toHaveTextContent("work")
+    h.conversations[0] = {
+      id: 1,
+      agent_account_id: null,
+      updated_at: "2026-10-13T12:02:00Z",
+    }
+    view.rerender(withIntl(<ConversationDetailHeader {...A} title="Updated" />))
+    expect(view.getByTestId("quota-account")).toHaveTextContent("default")
   })
 
   it("deletes the conversation the dialog was opened for, even after the active tab switches", async () => {

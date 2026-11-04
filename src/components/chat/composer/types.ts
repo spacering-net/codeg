@@ -33,6 +33,8 @@ export interface ReferenceMeta {
    * conversation glyph regardless.
    */
   agentType?: AgentType
+  /** agent: explicit named account, or "default"; also encoded in the URI. */
+  agentAccountId?: string
   /** agent: whether the agent is currently available. */
   available?: boolean
   /**

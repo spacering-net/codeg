@@ -242,7 +242,6 @@ impl GrokParser {
 
     /// Construct a parser pointed at an explicit `sessions` directory (test
     /// fixtures).
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }

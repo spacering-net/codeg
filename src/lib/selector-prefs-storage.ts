@@ -144,7 +144,7 @@ function healLegacyValues(
 
 /** Read saved mode id for an agent (no validation, just the raw value). */
 export function getSavedModeId(agentType: string): string | null {
-  return prefsOf(readAll(), agentType)?.modeId ?? null
+  return getSavedPrefsForConnect(agentType).modeId
 }
 
 /**
@@ -157,11 +157,24 @@ export function getSavedModeId(agentType: string): string | null {
  * `session_modes` / `session_config_options` event is emitted, so the
  * frontend never needs to "intercept event and overwrite, then sync back".
  */
-export function getSavedPrefsForConnect(agentType: string): {
+export function getSavedPrefsForConnect(
+  agentType: string,
+  fallbackToFamily = true
+): {
   modeId: string | null
   configValues: Record<string, string> | null
 } {
-  const prefs = prefsOf(readAll(), agentType)
+  const all = readAll()
+  const family = agentType.split(":account:")[0]
+  const local = prefsOf(all, agentType)
+  const defaults = fallbackToFamily ? prefsOf(all, family) : undefined
+  const prefs =
+    local || defaults
+      ? {
+          modeId: local?.modeId ?? defaults?.modeId,
+          configValues: { ...defaults?.configValues, ...local?.configValues },
+        }
+      : undefined
   if (!prefs) return { modeId: null, configValues: null }
   const configValues =
     prefs.configValues && Object.keys(prefs.configValues).length > 0
@@ -173,7 +186,30 @@ export function getSavedPrefsForConnect(agentType: string): {
   }
 }
 
+/** Keep the current chat's choices when the target has no explicit choice. */
+export function accountSwitchPreferences(
+  target: ReturnType<typeof getSavedPrefsForConnect>,
+  current: ReturnType<typeof getSavedPrefsForConnect>
+): ReturnType<typeof getSavedPrefsForConnect> {
+  const configValues = { ...current.configValues, ...target.configValues }
+  return {
+    modeId: target.modeId ?? current.modeId,
+    configValues: Object.keys(configValues).length ? configValues : null,
+  }
+}
+
 // ── Save (user actions only) ──
+
+/** Persist the choices accepted by an explicit account switch as one update. */
+export function savePrefsForConnect(
+  agentType: string,
+  prefs: ReturnType<typeof getSavedPrefsForConnect>
+) {
+  updatePrefs(agentType, () => ({
+    modeId: prefs.modeId ?? undefined,
+    configValues: prefs.configValues ?? undefined,
+  }))
+}
 
 export function saveModePreference(
   agentType: string,

@@ -125,7 +125,7 @@ pub async fn list_map_by_agent_type(
 }
 
 pub async fn get_by_agent_type(
-    conn: &DatabaseConnection,
+    conn: &impl ConnectionTrait,
     agent_type: AgentType,
 ) -> Result<Option<agent_setting::Model>, DbError> {
     let agent_type_str = serde_json::to_string(&agent_type)

@@ -121,7 +121,6 @@ impl CursorParser {
     /// Construct a parser pointed at an explicit `chats` directory (tests).
     /// The ACP-session root is derived as its `acp-sessions` sibling, and the
     /// timing journal as its `turn-timings` sibling.
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(chats_dir: PathBuf) -> Self {
         let sibling = |name: &str| {
             chats_dir

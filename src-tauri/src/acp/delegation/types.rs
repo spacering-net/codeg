@@ -170,6 +170,9 @@ pub struct DelegationRequest {
     pub parent_conversation_id: i32,
     pub parent_tool_use_id: String,
     pub agent_type: AgentType,
+    /// Omitted: inherit a same-agent parent's account. "default": use Default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_account_id: Option<String>,
     pub task: String,
     pub working_dir: Option<String>,
     /// The `working_dir` exactly as the LLM passed it in the

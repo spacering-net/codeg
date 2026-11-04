@@ -109,6 +109,9 @@ pub trait ConnectionSpawner: Send + Sync {
     /// `owner_window_label` (both required by `ConnectionManager::spawn_agent`)
     /// without leaking those types into the broker. If `working_dir` is
     /// `None`, the impl may fall back to the parent connection's `working_dir`.
+    /// `agent_account_id` is the raw request: None inherits a same-agent
+    /// parent's account, "default" selects Default, and any other ID is
+    /// resolved through the native account registry before launching.
     ///
     /// Returns the new connection id (codeg-internal UUID, not the ACP
     /// session id assigned by the agent).
@@ -116,6 +119,7 @@ pub trait ConnectionSpawner: Send + Sync {
         &self,
         parent_connection_id: &str,
         agent_type: AgentType,
+        agent_account_id: Option<String>,
         working_dir: Option<String>,
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
@@ -146,10 +150,14 @@ pub trait ConnectionSpawner: Send + Sync {
     /// The returned [`ResumedSpawn::reused`] records whether the manager
     /// dedup-reused an already-live connection instead of spawning — the
     /// broker's failure teardown must not disconnect a reused one.
+    /// `agent_account_id` is the saved CHILD binding. None means Default and
+    /// must never inherit a named account from the parent.
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_for_resume(
         &self,
         parent_connection_id: &str,
         agent_type: AgentType,
+        agent_account_id: Option<String>,
         working_dir: Option<String>,
         external_session_id: &str,
         preferred_mode_id: Option<String>,
@@ -241,6 +249,7 @@ pub mod mock {
     pub struct SpawnCallArgs {
         pub parent_connection_id: String,
         pub agent_type: AgentType,
+        pub agent_account_id: Option<String>,
         pub working_dir: Option<String>,
         pub preferred_mode_id: Option<String>,
         pub preferred_config_values: BTreeMap<String, String>,
@@ -258,6 +267,7 @@ pub mod mock {
     pub struct ResumeSpawnCallArgs {
         pub parent_connection_id: String,
         pub agent_type: AgentType,
+        pub agent_account_id: Option<String>,
         pub working_dir: Option<String>,
         pub external_session_id: String,
         pub preferred_mode_id: Option<String>,
@@ -327,6 +337,7 @@ pub mod mock {
             &self,
             parent_connection_id: &str,
             agent_type: AgentType,
+            agent_account_id: Option<String>,
             working_dir: Option<String>,
             preferred_mode_id: Option<String>,
             preferred_config_values: BTreeMap<String, String>,
@@ -334,6 +345,7 @@ pub mod mock {
             self.spawn_args.lock().await.push(SpawnCallArgs {
                 parent_connection_id: parent_connection_id.to_string(),
                 agent_type,
+                agent_account_id,
                 working_dir,
                 preferred_mode_id,
                 preferred_config_values,
@@ -383,6 +395,7 @@ pub mod mock {
             &self,
             parent_connection_id: &str,
             agent_type: AgentType,
+            agent_account_id: Option<String>,
             working_dir: Option<String>,
             external_session_id: &str,
             preferred_mode_id: Option<String>,
@@ -391,6 +404,7 @@ pub mod mock {
             self.resume_spawn_args.lock().await.push(ResumeSpawnCallArgs {
                 parent_connection_id: parent_connection_id.to_string(),
                 agent_type,
+                agent_account_id,
                 working_dir,
                 external_session_id: external_session_id.to_string(),
                 preferred_mode_id,
@@ -468,6 +482,7 @@ pub mod mock {
                 .spawn(
                     "parent-1",
                     AgentType::ClaudeCode,
+                    None,
                     Some("/tmp".into()),
                     None,
                     BTreeMap::new(),
@@ -476,7 +491,7 @@ pub mod mock {
                 .unwrap();
             assert_eq!(r1, "child-1");
             let r2 = m
-                .spawn("parent-1", AgentType::Codex, None, None, BTreeMap::new())
+                .spawn("parent-1", AgentType::Codex, None, None, None, BTreeMap::new())
                 .await
                 .unwrap_err();
             assert!(matches!(r2, SpawnerError::Spawn(_)));
@@ -489,6 +504,7 @@ pub mod mock {
                 .spawn(
                     "parent-1",
                     AgentType::ClaudeCode,
+                    None,
                     None,
                     None,
                     BTreeMap::new(),
@@ -510,6 +526,7 @@ pub mod mock {
             m.spawn(
                 "p1",
                 AgentType::ClaudeCode,
+                None,
                 Some("/work".into()),
                 Some("auto".into()),
                 cfg.clone(),

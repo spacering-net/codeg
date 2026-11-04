@@ -1247,9 +1247,7 @@ impl ClaudeParser {
         }
     }
 
-    /// Test-only constructor that lets callers point the parser at a fixture
-    /// directory instead of `~/.claude/projects`.
-    #[cfg(any(test, feature = "test-utils"))]
+    /// Read projects from the selected native account's home.
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }

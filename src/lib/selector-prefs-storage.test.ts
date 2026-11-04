@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   getSavedModeId,
   getSavedPrefsForConnect,
+  accountSwitchPreferences,
+  savePrefsForConnect,
   saveConfigPreference,
   saveModePreference,
 } from "./selector-prefs-storage"
@@ -15,6 +17,53 @@ function seed(prefs: Record<string, unknown>) {
 
 describe("selector-prefs-storage", () => {
   beforeEach(() => localStorage.clear())
+
+  it("inherits family preferences for a new account without overwriting its own choices", () => {
+    seed({
+      claude_code: {
+        modeId: "plan",
+        configValues: { model: "opus", effort: "high" },
+      },
+      "claude_code:account:work": { configValues: { model: "sonnet" } },
+    })
+    expect(getSavedPrefsForConnect("claude_code:account:new")).toEqual({
+      modeId: "plan",
+      configValues: { model: "opus", effort: "high" },
+    })
+    expect(getSavedPrefsForConnect("claude_code:account:work")).toEqual({
+      modeId: "plan",
+      configValues: { model: "sonnet", effort: "high" },
+    })
+    expect(getSavedModeId("claude_code:account:work")).toBe("plan")
+  })
+
+  it("keeps the live chat model and mode when switching to an unused account", () => {
+    seed({
+      claude_code: { modeId: "default", configValues: { model: "sonnet" } },
+    })
+    const current = {
+      modeId: "plan",
+      configValues: { model: "opus", effort: "high" },
+    }
+    expect(
+      accountSwitchPreferences(
+        getSavedPrefsForConnect("claude_code:account:new", false),
+        current
+      )
+    ).toEqual(current)
+    savePrefsForConnect("claude_code:account:new", current)
+    expect(getSavedPrefsForConnect("claude_code:account:new")).toEqual(current)
+    expect(getSavedModeId("claude_code:account:new")).toBe("plan")
+    expect(
+      accountSwitchPreferences(
+        { modeId: null, configValues: { model: "sonnet" } },
+        current
+      )
+    ).toEqual({
+      modeId: "plan",
+      configValues: { model: "sonnet", effort: "high" },
+    })
+  })
 
   it("round-trips a mode and config picks", () => {
     saveModePreference("codex", {

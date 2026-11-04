@@ -1395,11 +1395,19 @@ mod tests {
 
     #[test]
     fn allocate_free_port_is_actually_free() {
-        let port = allocate_free_port().expect("should allocate");
-        assert!(port > 0);
-        // We released it, so we can immediately bind it again.
-        let again = std::net::TcpListener::bind(("127.0.0.1", port));
-        assert!(again.is_ok(), "allocated port should be re-bindable");
+        // The allocator releases its listener before returning. Another test
+        // or process can take that port, as the production contract documents.
+        // Retry only that race, using a fresh candidate each time.
+        for _ in 0..8 {
+            let port = allocate_free_port().expect("should allocate");
+            assert!(port > 0);
+            match std::net::TcpListener::bind(("127.0.0.1", port)) {
+                Ok(_) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+                Err(error) => panic!("allocated port could not be bound: {error}"),
+            }
+        }
+        panic!("all allocated ports were taken before the test could re-bind them");
     }
 
     #[test]

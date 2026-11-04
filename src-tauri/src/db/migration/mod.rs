@@ -52,10 +52,14 @@ mod m20261015_000001_kiro_builtin_agent;
 mod m20261015_000001_work_task_deferred_at;
 mod m20261016_000001_assistant;
 mod m20261016_000002_conversation_assistant;
+mod m20261017_000001_agent_account;
 mod m20261017_000002_conversation_source;
 mod m20261020_000001_folder_command_run_local;
+mod m20261021_000001_agent_account_compatibility;
 mod m20261022_000001_tool_approval;
 mod m20261022_000001_work_task_delivery;
+mod m20261024_000001_agent_account_compatibility;
+mod m20261027_000001_agent_account_compatibility;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -114,10 +118,14 @@ impl MigratorTrait for Migrator {
             Box::new(m20261015_000001_work_task_deferred_at::Migration),
             Box::new(m20261016_000001_assistant::Migration),
             Box::new(m20261016_000002_conversation_assistant::Migration),
+            Box::new(m20261017_000001_agent_account::Migration),
             Box::new(m20261017_000002_conversation_source::Migration),
             Box::new(m20261020_000001_folder_command_run_local::Migration),
+            Box::new(m20261021_000001_agent_account_compatibility::Migration),
             Box::new(m20261022_000001_tool_approval::Migration),
             Box::new(m20261022_000001_work_task_delivery::Migration),
+            Box::new(m20261024_000001_agent_account_compatibility::Migration),
+            Box::new(m20261027_000001_agent_account_compatibility::Migration),
         ]
     }
 }
@@ -134,8 +142,9 @@ mod tests {
     /// conflicts on this list) leaves the released name last, so that release
     /// accepts the newer backup and then cannot start on the migration the
     /// restore brought in. Names are dated when written, so name order keeps
-    /// the newest migration last. A new migration whose name sorts before a
-    /// released one needs a later name, not an earlier place in the list.
+    /// the newest migration last. Preserve IDs already applied by earlier
+    /// builds; a later compatibility marker can identify their newer schema
+    /// without renaming those migrations or putting them out of order.
     #[test]
     fn migrations_are_listed_in_name_order() {
         let names: Vec<String> = Migrator::migrations()
@@ -145,5 +154,15 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn feature_schema_marker_is_last() {
+        // If a future released migration moves past this marker, add a newer
+        // marker and keep this one for databases that already applied it.
+        assert_eq!(
+            Migrator::migrations().last().unwrap().name(),
+            "m20261027_000001_agent_account_compatibility"
+        );
     }
 }
