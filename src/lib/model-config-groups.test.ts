@@ -70,6 +70,77 @@ describe("isModelConfigOption", () => {
 })
 
 describe("deriveModelGroups", () => {
+  it.each([
+    ["magpie", "My production shortlist", "custom:magpie:auto/fast"],
+    [
+      "magpie-responses",
+      "My response models",
+      '["magpie-responses","auto/fast"]',
+    ],
+    [
+      "magpie-anthropic",
+      "My message models",
+      '["magpie-anthropic","auto/fast"]',
+    ],
+    ["custom:magpie", "My endpoint models", "custom:magpie:auto/fast"],
+  ])(
+    "preserves a meaningful native label on the colliding %s group key",
+    (key, name, value) => {
+      const option = modelOption([])
+      const options = [
+        opt(value, "Fast", "User-selected shortlist"),
+        opt(value.replace("auto/fast", "relay/large"), "Large"),
+        opt(value.replace("auto/fast", "auto/smart"), "Smart"),
+      ]
+      option.kind.groups = [{ group: key, name, options }]
+      expect(modelListGroups(option)).toEqual([{ key, name, options }])
+    }
+  )
+
+  it("does not refine a transport label whose rows belong to another route", () => {
+    const option = modelOption([])
+    const options = [
+      opt('["magpie","auto/fast"]', "Fast"),
+      opt('["magpie","relay/large"]', "Large"),
+    ]
+    option.kind.groups = [
+      {
+        group: "magpie-responses",
+        name: "Magpie · Responses",
+        options,
+      },
+    ]
+    expect(modelListGroups(option)).toEqual([
+      {
+        key: "magpie-responses",
+        name: "Magpie · Responses",
+        options,
+      },
+    ])
+  })
+
+  it("does not treat a mixed-wrapper native group as one transport bucket", () => {
+    const option = modelOption([])
+    const options = [
+      opt("custom:magpie:auto/fast", "Fast"),
+      opt('["magpie","relay/large"]', "Large"),
+    ]
+    option.kind.groups = [{ group: "magpie", name: "Magpie", options }]
+    expect(modelListGroups(option)).toEqual([
+      { key: "magpie", name: "Magpie", options },
+    ])
+  })
+
+  it("preserves a legitimate single wrapped model's display-name slash", () => {
+    const groups = modelListGroups(
+      modelOption([opt("magpie/openai/model", "GPT-4o/preview", "Preview")])
+    )
+    expect(groups[0].name).toBe("openai")
+    expect(groups[0].options).toEqual([
+      opt("magpie/openai/model", "GPT-4o/preview", "Preview"),
+    ])
+  })
+
   it("groups OpenCode's Magpie wrapper by its catalog sources", () => {
     const option = modelOption([
       opt("magpie/auto/fast", "Magpie via Headroom/Fast", "Routing group"),

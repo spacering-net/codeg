@@ -1,5 +1,6 @@
 import type {
   SessionConfigOptionInfo,
+  SessionConfigSelectGroupInfo,
   SessionConfigSelectOptionInfo,
 } from "@/lib/types"
 
@@ -49,7 +50,7 @@ interface ModelSource {
   key: string
   name: string
   prefix: string
-  wrapped: boolean
+  wrapper: string | null
 }
 
 function magpieSourceOf(value: string): ModelSource | null {
@@ -88,7 +89,7 @@ function magpieSourceOf(value: string): ModelSource | null {
     key: JSON.stringify([wrapper, prefix]),
     name: route ? `${prefix} · ${route}` : prefix,
     prefix,
-    wrapped: true,
+    wrapper,
   }
 }
 
@@ -100,7 +101,33 @@ function sourceOf(value: string): ModelSource | null {
   const prefix = prefixOf(value)
   return prefix === null
     ? null
-    : { key: prefix, name: prefix, prefix, wrapped: false }
+    : { key: prefix, name: prefix, prefix, wrapper: null }
+}
+
+function isMagpieProviderName(name: string): boolean {
+  return name === "Magpie" || /^Magpie via \S[^/]*$/.test(name)
+}
+
+// A group key is opaque. Recognize the adapter's bucket metadata as well as
+// the exact wrapper family of every row; uncertain native groups stay intact.
+function isMagpieTransportBucket(group: SessionConfigSelectGroupInfo): boolean {
+  if (group.options.length === 0) return false
+  const sources = group.options.map((item) => magpieSourceOf(item.value))
+  const hasWrapper = (wrapper: string) =>
+    sources.every((source) => source?.wrapper === wrapper)
+  const routeName = MAGPIE_ROUTES.get(group.group)
+  if (routeName === group.name && hasWrapper(group.group)) return true
+  if (
+    group.group === "magpie" &&
+    isMagpieProviderName(group.name) &&
+    hasWrapper("magpie/")
+  )
+    return true
+  return (
+    ((group.group.toLowerCase() === "magpie" && group.name === "Magpie") ||
+      (group.group === "custom:magpie" && group.name === "custom:magpie")) &&
+    hasWrapper("custom:magpie:")
+  )
 }
 
 // Split a display name on its first "/", trimming both sides. Returns null when
@@ -153,17 +180,20 @@ function buildGroup(
   source: ModelSource,
   items: SessionConfigSelectOptionInfo[]
 ): ModelOptionGroup {
-  const shared =
-    strippablePrefix(source.prefix, items) ??
-    (items.every((item) => item.value.startsWith("magpie/"))
-      ? sharedNamePrefix(items)
-      : null)
-  if (shared === null) {
+  const shared = source.wrapper
+    ? sharedNamePrefix(items)
+    : strippablePrefix(source.prefix, items)
+  if (
+    shared === null ||
+    (source.wrapper &&
+      shared !== source.prefix &&
+      !isMagpieProviderName(shared))
+  ) {
     return { key: source.key, name: source.name, options: items }
   }
   return {
     key: source.key,
-    name: source.wrapped ? source.name : shared,
+    name: source.wrapper ? source.name : shared,
     options: items.map((opt) => ({
       ...opt,
       name: splitNamePrefix(opt.name)!.tail,
@@ -200,14 +230,7 @@ export function deriveModelGroups(
   if (kind.groups.length > 0) {
     let refined = false
     const groups = kind.groups.flatMap((group) => {
-      const wrapper = group.group.toLowerCase()
-      const isWrapper =
-        MAGPIE_ROUTES.has(wrapper) || wrapper === "custom:magpie"
-      if (
-        isWrapper &&
-        group.options.length > 0 &&
-        group.options.every((item) => magpieSourceOf(item.value) !== null)
-      ) {
+      if (isMagpieTransportBucket(group)) {
         const derived = deriveModelGroups({
           ...option,
           kind: { ...kind, options: group.options, groups: [] },
@@ -254,7 +277,7 @@ export function deriveModelGroups(
   if (order.length === 1 && floating.length === 0) {
     const source = order[0]
     const items = byPrefix.get(source.key)!
-    if (!source.wrapped && strippablePrefix(source.prefix, items) === null)
+    if (!source.wrapper && strippablePrefix(source.prefix, items) === null)
       return null
     return [buildGroup(source, items)]
   }
