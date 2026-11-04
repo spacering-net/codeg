@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { History } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
@@ -15,7 +15,10 @@ import { getAgentLabel } from "@/lib/custom-agents"
 import { STATUS_ORDER, type DbConversationSummary } from "@/lib/types"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
-import { compareByUpdatedAtDesc } from "@/components/conversations/sidebar-conversation-grouping"
+import {
+  compareByUpdatedAtDesc,
+  formatRelative,
+} from "@/components/conversations/sidebar-conversation-grouping"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,6 +44,11 @@ export function ConversationHistoryMenu() {
   const tabs = useTabStore((s) => s.rawTabs)
   const { openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(interval)
+  }, [])
   const history = useMemo(() => {
     const openIds = new Set(
       tabs
@@ -85,7 +93,12 @@ export function ConversationHistoryMenu() {
   }
 
   return (
-    <DropdownMenu key={scope}>
+    <DropdownMenu
+      key={scope}
+      onOpenChange={(open) => {
+        if (open) setNow(Date.now())
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -98,7 +111,7 @@ export function ConversationHistoryMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="w-80 max-w-[calc(100vw-1rem)]"
+        className="w-[40rem] max-w-[calc(100vw-1rem)]"
       >
         <DropdownMenuLabel>{t("history")}</DropdownMenuLabel>
         {error && (
@@ -150,6 +163,13 @@ export function ConversationHistoryMenu() {
                   {status}
                 </span>
               </span>
+              <time
+                dateTime={conversation.updated_at}
+                title={conversation.updated_at}
+                className="mt-0.5 shrink-0 text-xs text-muted-foreground tabular-nums"
+              >
+                {formatRelative(conversation.updated_at, now)}
+              </time>
             </DropdownMenuItem>
           )
         })}
