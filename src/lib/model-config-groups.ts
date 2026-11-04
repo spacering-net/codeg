@@ -1,5 +1,6 @@
 import type {
   SessionConfigOptionInfo,
+  SessionConfigSelectGroupInfo,
   SessionConfigSelectOptionInfo,
 } from "@/lib/types"
 
@@ -35,6 +36,98 @@ function prefixOf(value: string): string | null {
   if (idx <= 0) return null
   if (idx >= value.length - 1) return null
   return value.slice(0, idx)
+}
+
+// These are transport wrappers, not a catalog: source names always come from
+// the model id inside them. DSH's route stays in the key and visible header.
+const MAGPIE_ROUTES = new Map([
+  ["magpie", "Magpie"],
+  ["magpie-responses", "Magpie · Responses"],
+  ["magpie-anthropic", "Magpie · Anthropic"],
+])
+
+interface ModelSource {
+  key: string
+  name: string
+  prefix: string
+  wrapper: string | null
+}
+
+function magpieSourceOf(value: string): ModelSource | null {
+  let model: string
+  let wrapper: string
+  let route: string | undefined
+  if (value.startsWith("magpie/")) {
+    wrapper = "magpie/"
+    model = value.slice(wrapper.length)
+  } else if (value.startsWith("custom:magpie:")) {
+    wrapper = "custom:magpie:"
+    model = value.slice(wrapper.length)
+  } else {
+    if (!value.trimStart().startsWith("[")) return null
+    let tuple: unknown
+    try {
+      tuple = JSON.parse(value)
+    } catch {
+      return null
+    }
+    if (
+      !Array.isArray(tuple) ||
+      tuple.length !== 2 ||
+      typeof tuple[0] !== "string" ||
+      typeof tuple[1] !== "string"
+    )
+      return null
+    route = MAGPIE_ROUTES.get(tuple[0])
+    if (!route) return null
+    wrapper = tuple[0]
+    model = tuple[1]
+  }
+  const prefix = prefixOf(model)
+  if (prefix === null) return null
+  return {
+    key: JSON.stringify([wrapper, prefix]),
+    name: route ? `${prefix} · ${route}` : prefix,
+    prefix,
+    wrapper,
+  }
+}
+
+function sourceOf(value: string): ModelSource | null {
+  const wrapped = magpieSourceOf(value)
+  if (wrapped) return wrapped
+  // An opaque JSON selector that we do not understand is never a slash id.
+  if (/^\s*[\[{]/.test(value)) return null
+  const prefix = prefixOf(value)
+  return prefix === null
+    ? null
+    : { key: prefix, name: prefix, prefix, wrapper: null }
+}
+
+function isMagpieProviderName(name: string): boolean {
+  return name === "Magpie" || /^Magpie via \S[^/]*$/.test(name)
+}
+
+// A group key is opaque. Recognize the adapter's bucket metadata as well as
+// the exact wrapper family of every row; uncertain native groups stay intact.
+function isMagpieTransportBucket(group: SessionConfigSelectGroupInfo): boolean {
+  if (group.options.length === 0) return false
+  const sources = group.options.map((item) => magpieSourceOf(item.value))
+  const hasWrapper = (wrapper: string) =>
+    sources.every((source) => source?.wrapper === wrapper)
+  const routeName = MAGPIE_ROUTES.get(group.group)
+  if (routeName === group.name && hasWrapper(group.group)) return true
+  if (
+    group.group === "magpie" &&
+    isMagpieProviderName(group.name) &&
+    hasWrapper("magpie/")
+  )
+    return true
+  return (
+    ((group.group.toLowerCase() === "magpie" && group.name === "Magpie") ||
+      (group.group === "custom:magpie" && group.name === "custom:magpie")) &&
+    hasWrapper("custom:magpie:")
+  )
 }
 
 // Split a display name on its first "/", trimming both sides. Returns null when
@@ -84,16 +177,23 @@ function strippablePrefix(
 // the header and is removed from every row; otherwise the header is the value-id
 // prefix and the labels are left as-is.
 function buildGroup(
-  valuePrefix: string,
+  source: ModelSource,
   items: SessionConfigSelectOptionInfo[]
 ): ModelOptionGroup {
-  const shared = strippablePrefix(valuePrefix, items)
-  if (shared === null) {
-    return { key: valuePrefix, name: valuePrefix, options: items }
+  const shared = source.wrapper
+    ? sharedNamePrefix(items)
+    : strippablePrefix(source.prefix, items)
+  if (
+    shared === null ||
+    (source.wrapper &&
+      shared !== source.prefix &&
+      !isMagpieProviderName(shared))
+  ) {
+    return { key: source.key, name: source.name, options: items }
   }
   return {
-    key: valuePrefix,
-    name: shared,
+    key: source.key,
+    name: source.wrapper ? source.name : shared,
     options: items.map((opt) => ({
       ...opt,
       name: splitNamePrefix(opt.name)!.tail,
@@ -106,13 +206,14 @@ function buildGroup(
 // Returns `null` (meaning "render the list as-is, ungrouped") when:
 //   - the option is not the model picker,
 //   - it is not a select,
-//   - the agent already shipped server-side groups (respected verbatim), or
+//   - the agent already shipped meaningful groups (respected verbatim), or
 //   - grouping/stripping would add nothing: no value carries a "/", or there is
 //     a single provider with nothing floating AND no repeated display prefix to
 //     strip (a single provider whose rows DO repeat a prefix is still grouped so
 //     that prefix can be stripped — see the lone-provider branch below).
 //
-// Group MEMBERSHIP is by the VALUE's first-"/" segment (the stable model id, so
+// Only known Magpie transport buckets are refined when native groups exist.
+// Group MEMBERSHIP is by the model id's first-"/" segment (so
 // odd display names never fracture a group). The HEADER and the per-row labels
 // come from the DISPLAY NAME: when every row in a group repeats the same leading
 // `Provider/` (e.g. values `opencode/…` but names `OpenCode Zen/…`), that shared
@@ -126,26 +227,45 @@ export function deriveModelGroups(
   if (!isModelConfigOption(option)) return null
   if (option.kind.type !== "select") return null
   const kind = option.kind
-  if (kind.groups.length > 0) return null
+  if (kind.groups.length > 0) {
+    let refined = false
+    const groups = kind.groups.flatMap((group) => {
+      if (isMagpieTransportBucket(group)) {
+        const derived = deriveModelGroups({
+          ...option,
+          kind: { ...kind, options: group.options, groups: [] },
+        })
+        if (derived) {
+          refined = true
+          return derived.map((item) => ({
+            ...item,
+            key: JSON.stringify([group.group, item.key]),
+          }))
+        }
+      }
+      return [{ key: group.group, name: group.name, options: group.options }]
+    })
+    return refined ? groups : null
+  }
 
-  const prefixes = kind.options.map((opt) => prefixOf(opt.value))
-  if (!prefixes.some((prefix) => prefix !== null)) return null
+  const sources = kind.options.map((opt) => sourceOf(opt.value))
+  if (!sources.some((source) => source !== null)) return null
 
   const floating: SessionConfigSelectOptionInfo[] = []
-  const order: string[] = []
+  const order: ModelSource[] = []
   const byPrefix = new Map<string, SessionConfigSelectOptionInfo[]>()
 
   kind.options.forEach((opt, index) => {
-    const prefix = prefixes[index]
-    if (prefix === null) {
+    const source = sources[index]
+    if (source === null) {
       floating.push(opt)
       return
     }
-    let bucket = byPrefix.get(prefix)
+    let bucket = byPrefix.get(source.key)
     if (!bucket) {
       bucket = []
-      byPrefix.set(prefix, bucket)
-      order.push(prefix)
+      byPrefix.set(source.key, bucket)
+      order.push(source)
     }
     bucket.push(opt)
   })
@@ -155,18 +275,19 @@ export function deriveModelGroups(
   // "OpenCode Zen/…"); a lone header over an already-clean list is just noise,
   // so fall back to the flat list.
   if (order.length === 1 && floating.length === 0) {
-    const prefix = order[0]
-    const items = byPrefix.get(prefix)!
-    if (strippablePrefix(prefix, items) === null) return null
-    return [buildGroup(prefix, items)]
+    const source = order[0]
+    const items = byPrefix.get(source.key)!
+    if (!source.wrapper && strippablePrefix(source.prefix, items) === null)
+      return null
+    return [buildGroup(source, items)]
   }
 
   const groups: ModelOptionGroup[] = []
   if (floating.length > 0) {
     groups.push({ key: "__ungrouped__", name: null, options: floating })
   }
-  for (const prefix of order) {
-    groups.push(buildGroup(prefix, byPrefix.get(prefix)!))
+  for (const source of order) {
+    groups.push(buildGroup(source, byPrefix.get(source.key)!))
   }
   return groups
 }

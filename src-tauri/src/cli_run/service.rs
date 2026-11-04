@@ -3462,6 +3462,88 @@ mod tests {
             .collect()
     }
 
+    #[tokio::test]
+    async fn a_restrictive_cli_mode_is_applied_after_native_hermes_policy_changes() {
+        let harness = Harness::new().await;
+        let mut commands = harness
+            .manager
+            .insert_test_connection_live(
+                "hermes-policy",
+                AgentType::Hermes,
+                None,
+                harness.emitter.clone(),
+            )
+            .await;
+        let state = harness.manager.get_state("hermes-policy").await.unwrap();
+        {
+            let mut state = state.write().await;
+            state.hermes_native_model_option = true;
+            state.apply_event(&AcpEvent::SessionModes {
+                modes: serde_json::from_value(serde_json::json!({
+                    "current_mode_id": "default",
+                    "available_modes": [
+                        {"id": "default", "name": "Default"},
+                        {"id": "dont_ask", "name": "Don't Ask"}
+                    ]
+                }))
+                .unwrap(),
+            });
+            state.apply_event(&AcpEvent::SessionConfigOptions {
+                config_options: serde_json::from_value(serde_json::json!([{
+                    "id": "edit_approval_policy", "name": "Edits", "category": "mode",
+                    "kind": {
+                        "type": "select", "current_value": "session", "groups": [],
+                        "options": [
+                            {"value": "ask", "name": "Default"},
+                            {"value": "session", "name": "Don't Ask"}
+                        ]
+                    }
+                }]))
+                .unwrap(),
+            });
+        }
+        let agent_state = Arc::clone(&state);
+        let responder = tokio::spawn(async move {
+            let Some(ConnectionCommand::SetMode { mode_id, reply }) = commands.recv().await else {
+                panic!("expected the explicit legacy mode request");
+            };
+            emit_with_state(
+                &agent_state,
+                &EventEmitter::Noop,
+                AcpEvent::ModeChanged {
+                    mode_id: mode_id.clone(),
+                },
+            )
+            .await;
+            reply
+                .unwrap()
+                .send(Ok(SetterOutcome::Confirmed { current: mode_id }))
+                .unwrap();
+        });
+        let outcome = harness
+            .svc
+            .set_mode("hermes-policy", &state, AgentType::Hermes, "default")
+            .await;
+        responder.abort();
+        let _ = responder.await;
+        assert!(
+            matches!(outcome, Ok(SetterOutcome::Confirmed { ref current }) if current == "default")
+        );
+        let state = state.read().await;
+        let policy = state
+            .config_options
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|o| o.id == "edit_approval_policy")
+            .unwrap();
+        assert_eq!(
+            current_value(policy).as_deref(), Some("ask"),
+            "the restrictive request must reach the agent instead of being skipped on stale legacy state"
+        );
+        assert_eq!(state.current_mode.as_deref(), Some("default"));
+    }
+
     fn turn_complete(stop_reason: &str) -> AcpEvent {
         AcpEvent::TurnComplete {
             session_id: "s1".into(),

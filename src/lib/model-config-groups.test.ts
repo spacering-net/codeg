@@ -70,6 +70,265 @@ describe("isModelConfigOption", () => {
 })
 
 describe("deriveModelGroups", () => {
+  it.each([
+    ["magpie", "My production shortlist", "custom:magpie:auto/fast"],
+    [
+      "magpie-responses",
+      "My response models",
+      '["magpie-responses","auto/fast"]',
+    ],
+    [
+      "magpie-anthropic",
+      "My message models",
+      '["magpie-anthropic","auto/fast"]',
+    ],
+    ["custom:magpie", "My endpoint models", "custom:magpie:auto/fast"],
+  ])(
+    "preserves a meaningful native label on the colliding %s group key",
+    (key, name, value) => {
+      const option = modelOption([])
+      const options = [
+        opt(value, "Fast", "User-selected shortlist"),
+        opt(value.replace("auto/fast", "relay/large"), "Large"),
+        opt(value.replace("auto/fast", "auto/smart"), "Smart"),
+      ]
+      option.kind.groups = [{ group: key, name, options }]
+      expect(modelListGroups(option)).toEqual([{ key, name, options }])
+    }
+  )
+
+  it("does not refine a transport label whose rows belong to another route", () => {
+    const option = modelOption([])
+    const options = [
+      opt('["magpie","auto/fast"]', "Fast"),
+      opt('["magpie","relay/large"]', "Large"),
+    ]
+    option.kind.groups = [
+      {
+        group: "magpie-responses",
+        name: "Magpie · Responses",
+        options,
+      },
+    ]
+    expect(modelListGroups(option)).toEqual([
+      {
+        key: "magpie-responses",
+        name: "Magpie · Responses",
+        options,
+      },
+    ])
+  })
+
+  it("does not treat a mixed-wrapper native group as one transport bucket", () => {
+    const option = modelOption([])
+    const options = [
+      opt("custom:magpie:auto/fast", "Fast"),
+      opt('["magpie","relay/large"]', "Large"),
+    ]
+    option.kind.groups = [{ group: "magpie", name: "Magpie", options }]
+    expect(modelListGroups(option)).toEqual([
+      { key: "magpie", name: "Magpie", options },
+    ])
+  })
+
+  it("preserves a legitimate single wrapped model's display-name slash", () => {
+    const groups = modelListGroups(
+      modelOption([opt("magpie/openai/model", "GPT-4o/preview", "Preview")])
+    )
+    expect(groups[0].name).toBe("openai")
+    expect(groups[0].options).toEqual([
+      opt("magpie/openai/model", "GPT-4o/preview", "Preview"),
+    ])
+  })
+
+  it("groups OpenCode's Magpie wrapper by its catalog sources", () => {
+    const option = modelOption([
+      opt("magpie/auto/fast", "Magpie via Headroom/Fast", "Routing group"),
+      opt("magpie/opencode-go/vendor/model:1", "Magpie via Headroom/Model"),
+      opt("magpie/openai/model", "Magpie via Headroom/Other model"),
+      opt("magpie/auto/smart", "Magpie via Headroom/Smart"),
+    ])
+    const groups = deriveModelGroups(option)!
+    expect(groups?.map((group) => group.name)).toEqual([
+      "auto",
+      "opencode-go",
+      "openai",
+    ])
+    expect(groups[0].options).toEqual([
+      opt("magpie/auto/fast", "Fast", "Routing group"),
+      opt("magpie/auto/smart", "Smart"),
+    ])
+    expect(groups[1].options).toEqual([
+      opt("magpie/opencode-go/vendor/model:1", "Model"),
+    ])
+  })
+
+  it("unwraps Hermes' named Magpie endpoint without splitting model colons", () => {
+    const groups = deriveModelGroups(
+      modelOption([
+        opt("custom:magpie:auto/fast", "auto/Fast"),
+        opt("custom:magpie:relay/vendor/model:tag", "relay/Model:tag", "64k"),
+      ])
+    )!
+    expect(groups?.map((group) => group.name)).toEqual(["auto", "relay"])
+    expect(groups[1].options).toEqual([
+      opt("custom:magpie:relay/vendor/model:tag", "Model:tag", "64k"),
+    ])
+  })
+
+  it("keeps DSH's three protocols distinct for the same upstream", () => {
+    const groups = deriveModelGroups(
+      modelOption([
+        opt('["magpie","auto/model"]', "Chat", "chat-completions"),
+        opt('["magpie-responses","auto/model"]', "Responses", "responses"),
+        opt('["magpie-anthropic","auto/model"]', "Anthropic", "messages"),
+      ])
+    )!
+    expect(groups?.map((group) => group.name)).toEqual([
+      "auto · Magpie",
+      "auto · Magpie · Responses",
+      "auto · Magpie · Anthropic",
+    ])
+    expect(new Set(groups.map((group) => group.key)).size).toBe(3)
+    expect(groups.flatMap((group) => group.options)).toEqual([
+      opt('["magpie","auto/model"]', "Chat", "chat-completions"),
+      opt('["magpie-responses","auto/model"]', "Responses", "responses"),
+      opt('["magpie-anthropic","auto/model"]', "Anthropic", "messages"),
+    ])
+  })
+
+  it("preserves the exact spelling of escaped DSH JSON and nested model ids", () => {
+    const value = '[ "magpie-responses", "new-source/vendor/model:\\\"v1\\\"" ]'
+    const groups = deriveModelGroups(
+      modelOption([opt(value, "Quoted model", "User label")])
+    )!
+    expect(groups?.map((group) => group.name)).toEqual([
+      "new-source · Magpie · Responses",
+    ])
+    expect(groups[0].options).toEqual([
+      opt(
+        '[ "magpie-responses", "new-source/vendor/model:\\\"v1\\\"" ]',
+        "Quoted model",
+        "User label"
+      ),
+    ])
+  })
+
+  it("leaves unknown and malformed JSON selectors ungrouped", () => {
+    const option = modelOption([
+      opt('["other","auto/model"]'),
+      opt('["magpie","auto/model","extra"]'),
+      opt('["magpie",42]'),
+      opt('["magpie","plain"]'),
+      opt('["magpie","auto/model"'),
+      opt('{"provider":"magpie","model":"auto/model"}'),
+    ])
+    expect(deriveModelGroups(option)).toBeNull()
+    expect(modelListGroups(option)[0].options).toBe(option.kind.options)
+  })
+
+  it("surfaces a single Magpie source even with already clean names", () => {
+    const groups = deriveModelGroups(
+      modelOption([opt("magpie/auto/fast", "Fast")])
+    )!
+    expect(groups?.map((group) => group.name)).toEqual(["auto"])
+    expect(groups[0].options).toEqual([opt("magpie/auto/fast", "Fast")])
+  })
+
+  it("removes only one known Magpie wrapper", () => {
+    const groups = deriveModelGroups(
+      modelOption([opt("magpie/magpie/openai/model", "Model")])
+    )!
+    expect(groups?.map((group) => group.name)).toEqual(["magpie"])
+    expect(groups[0].options[0].value).toBe("magpie/magpie/openai/model")
+  })
+
+  it("refines DSH route buckets without changing unrelated native groups", () => {
+    const option = modelOption([])
+    const untouched = {
+      group: "curated",
+      name: "My models",
+      options: [opt("anthropic/opus", "Opus"), opt("openai/gpt", "GPT")],
+    }
+    option.kind.groups = [
+      {
+        group: "magpie",
+        name: "Magpie",
+        options: [
+          opt('["magpie","auto/fast"]', "Fast"),
+          opt('["magpie","relay/model"]', "Model"),
+          opt('["magpie","auto/smart"]', "Smart"),
+        ],
+      },
+      untouched,
+      {
+        group: "magpie-responses",
+        name: "Magpie · Responses",
+        options: [opt('["magpie-responses","auto/fast"]', "Fast")],
+      },
+    ]
+    const groups = modelListGroups(option)
+    expect(groups.map((group) => group.name)).toEqual([
+      "auto · Magpie",
+      "relay · Magpie",
+      "My models",
+      "auto · Magpie · Responses",
+    ])
+    expect(groups[0].options.map((item) => item.value)).toEqual([
+      '["magpie","auto/fast"]',
+      '["magpie","auto/smart"]',
+    ])
+    expect(groups[2]).toEqual({
+      key: "curated",
+      name: "My models",
+      options: untouched.options,
+    })
+    expect(new Set(groups.map((group) => group.key)).size).toBe(4)
+  })
+
+  it("refines legacy Hermes and OpenCode Magpie buckets", () => {
+    const option = modelOption([])
+    option.kind.groups = [
+      {
+        group: "Magpie",
+        name: "Magpie",
+        options: [
+          opt("custom:magpie:auto/fast", "auto/Fast"),
+          opt("custom:magpie:relay/model", "relay/Model"),
+        ],
+      },
+      {
+        group: "magpie",
+        name: "Magpie via Headroom",
+        options: [opt("magpie/auto/fast", "Fast")],
+      },
+    ]
+    const groups = modelListGroups(option)
+    expect(groups.map((group) => group.name)).toEqual(["auto", "relay", "auto"])
+    expect(new Set(groups.map((group) => group.key)).size).toBe(3)
+  })
+
+  it("respects meaningful native groups even when their values are wrapped", () => {
+    const option = modelOption([])
+    option.kind.groups = [
+      {
+        group: "automatic",
+        name: "Automatic routing",
+        options: [opt("custom:magpie:auto/fast", "Fast")],
+      },
+      {
+        group: "favorites",
+        name: "Favorites",
+        options: [opt("magpie/openai/model", "My preferred model")],
+      },
+    ]
+    expect(deriveModelGroups(option)).toBeNull()
+    expect(modelListGroups(option).map((group) => group.name)).toEqual([
+      "Automatic routing",
+      "Favorites",
+    ])
+  })
+
   it("returns null for non-model options", () => {
     const mode = modelOption([opt("anthropic/opus")], {
       id: "mode",

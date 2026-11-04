@@ -1,0 +1,92 @@
+{
+  "modes": {
+    "current_mode_id": "default",
+    "available_modes": [
+      {
+        "id": "default",
+        "name": "Default",
+        "description": "Ask before edits."
+      },
+      { "id": "accept_edits", "name": "Accept Edits" },
+      { "id": "dont_ask", "name": "Don't Ask" }
+    ]
+  },
+  "available_commands": [],
+  "prompt_capabilities": null,
+  "unapplied_config_ids": [],
+  "config_options": [
+    {
+      "id": "model",
+      "name": "Model",
+      "category": "model",
+      "kind": {
+        "type": "select",
+        "current_value": "custom:magpie:auto/probe:fast",
+        "options": [
+          {
+            "value": "custom:magpie:auto/probe:fast",
+            "name": "Fast",
+            "description": "Routing group"
+          },
+          { "value": "custom:magpie:relay/vendor/probe:large", "name": "Large" }
+        ],
+        "groups": [
+          {
+            "group": "automatic",
+            "name": "Automatic routing",
+            "options": [
+              {
+                "value": "custom:magpie:auto/probe:fast",
+                "name": "Fast",
+                "description": "Routing group"
+              }
+            ]
+          },
+          {
+            "group": "relay",
+            "name": "Team relay",
+            "options": [
+              {
+                "value": "custom:magpie:relay/vendor/probe:large",
+                "name": "Large"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "reasoning_effort",
+      "name": "Reasoning effort",
+      "category": "thought_level",
+      "kind": {
+        "type": "select",
+        "current_value": "low",
+        "groups": [],
+        "options": [
+          { "value": "low", "name": "Low" },
+          { "value": "high", "name": "High" }
+        ]
+      }
+    },
+    {
+      "id": "mode",
+      "name": "Mode",
+      "category": "mode",
+      "kind": {
+        "type": "select",
+        "current_value": "default",
+        "groups": [],
+        "options": [
+          {
+            "value": "default",
+            "name": "Default",
+            "description": "Ask before edits."
+          },
+          { "value": "accept_edits", "name": "Accept Edits" },
+          { "value": "dont_ask", "name": "Don't Ask" }
+        ]
+      }
+    }
+  ]
+}

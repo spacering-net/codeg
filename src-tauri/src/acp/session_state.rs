@@ -362,6 +362,10 @@ pub struct SessionState {
     pub modes: Option<SessionModeStateInfo>,
     pub current_mode: Option<String>,
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
+    /// Hermes advertised its own model config option at establishment or later.
+    /// It owns model dispatch and refreshed groups even when an update omits
+    /// the edit-policy option. Backend-internal; reset at every establishment.
+    pub hermes_native_model_option: bool,
     /// Grok only: per-model reasoning-effort specs, parsed from the top-level
     /// `models` of the session-establishment response (guaranteed on
     /// `session/new`; opportunistic on resume/fork) and refreshed by each model
@@ -898,6 +902,7 @@ impl SessionState {
             modes: None,
             current_mode: None,
             config_options: None,
+            hermes_native_model_option: false,
             grok_model_specs: None,
             grok_catalog_broadcast: None,
             kiro_reasoning: None,
@@ -1097,8 +1102,21 @@ impl SessionState {
                 if let Some(modes) = self.modes.as_mut() {
                     modes.current_mode_id = mode_id.clone();
                 }
+                if self.agent_type == AgentType::Hermes {
+                    if let Some(options) = self.config_options.as_mut() {
+                        super::hermes_modes::sync_options_to_mode(options, mode_id);
+                    }
+                }
             }
             AcpEvent::SessionConfigOptions { config_options } => {
+                if self.agent_type == AgentType::Hermes {
+                    if let Some(mode) = super::hermes_modes::mode_from_options(config_options) {
+                        self.current_mode = Some(mode.to_string());
+                        if let Some(modes) = self.modes.as_mut() {
+                            modes.current_mode_id = mode.to_string();
+                        }
+                    }
+                }
                 self.config_options = Some(config_options.clone());
             }
             AcpEvent::SessionConfigStale { stale, kind } => {
