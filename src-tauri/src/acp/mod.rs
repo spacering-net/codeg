@@ -103,3 +103,34 @@ pub fn continued_session_ids(agent_type: crate::models::AgentType, session_id: &
     }
     crate::acp_transcript::continuation_ancestors(registry::registry_id_for(agent_type), session_id)
 }
+
+/// `CODEG_AUTO_APPROVE=1` turns codeg into the approver for every ACP child it
+/// launches: a `session/request_permission` is answered with its `allow_once`
+/// option instead of being raised as a card (#447).
+///
+/// Read from the process env, which every ACP child inherits, so the flag is
+/// inherited rather than plumbed per-connection. Off unless the variable is
+/// exactly `1`, `true` or `yes` — an unset or empty value keeps the ordinary
+/// card flow.
+///
+/// This exists because some adapters cannot express an approval policy at all:
+/// `deepseek-acp` 0.9.0 has no `set_mode`, no `availableModes`, and a
+/// hard-coded allow-once / reject-once pair in its `approval/request` handler,
+/// so a write tool call parked forever and its parent delegation waited on it.
+pub fn auto_approve_enabled() -> bool {
+    matches!(
+        std::env::var(crate::acp::AUTO_APPROVE_ENV)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes"
+    )
+}
+
+/// The env var [`auto_approve_enabled`] reads.
+pub const AUTO_APPROVE_ENV: &str = "CODEG_AUTO_APPROVE";
+
+/// The [`crate::acp::types::ToolApprovalInfo::origin`] an auto-approved
+/// permission records.
+pub const AUTO_APPROVE_ORIGIN: &str = "auto_approve";
