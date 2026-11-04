@@ -22,6 +22,13 @@ crate-type = ["rlib"]
 
 [features]
 default = ["tauri-runtime", "browser-child"]
+# Tauri's release switch: with it, `tauri` embeds `frontendDist` and the app
+# loads its bundled assets; without it, `DEP_TAURI_DEV=true` and the app asks
+# `devUrl` (http://localhost:3000) for a dev server that a plain
+# `cargo build --release` never starts — an `ERR_CONNECTION_REFUSED` window.
+# `pnpm tauri build` turns this on; a hand-run cargo build must name it.
+custom-protocol = ["tauri/custom-protocol"]
+
 tauri-runtime = [
     "dep:tauri",
     "dep:tauri-plugin-opener",
