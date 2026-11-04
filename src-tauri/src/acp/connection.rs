@@ -11799,7 +11799,9 @@ async fn set_session_config_option(
         emit_with_state(state, emitter, rejection).await;
     }
     let outcome = config_option_outcome(&mapped, &config_id);
-    if agent_type == AgentType::Hermes && native_hermes_model {
+    if agent_type == AgentType::Hermes
+        && (native_hermes_model || updated.iter().any(is_model_config_option))
+    {
         emit_session_config_options_values(state, emitter, updated).await;
     } else {
         emit_session_config_options_update(state, emitter, updated).await;
@@ -23929,6 +23931,57 @@ mod hermes_selector_tests {
         assert_eq!(
             state.read().await.config_options.as_deref(),
             Some(expected.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn first_native_hermes_complete_reply_withdraws_reasoning_for_the_unchanged_model() {
+        let catalog = hermes_native_options("ask", "custom:codeg:glm-5.2", "low", &[]);
+        let initial = catalog
+            .iter()
+            .filter(|option| option.id.to_string() == "reasoning_effort")
+            .cloned()
+            .collect();
+        let (_, state) = establish_with(BTreeMap::new(), None, initial).await;
+        {
+            let state = state.read().await;
+            assert!(!state.hermes_native_model_option);
+            assert_eq!(
+                current(&state).get("reasoning_effort").map(String::as_str),
+                Some("low")
+            );
+        }
+        let model_only = catalog
+            .into_iter()
+            .filter(|option| option.id.to_string() == "model")
+            .collect();
+        let (_, sent, state) =
+            pick_on_state(state, "reasoning_effort", "high", false, Some(model_only)).await;
+        assert_eq!(
+            sent,
+            [(
+                "set_config_option",
+                serde_json::json!({
+                    "sessionId": "s1", "configId": "reasoning_effort", "value": "high"
+                })
+            )]
+        );
+        let state = state.read().await;
+        assert!(state.hermes_native_model_option);
+        let options = state.config_options.as_deref().unwrap();
+        assert_eq!(
+            ids(options), ["model", "mode"],
+            "a complete reply must withdraw the old thought choices even when the model is unchanged"
+        );
+        assert_eq!(select(&options[0]).current_value, "custom:codeg:glm-5.2");
+        assert_eq!(select(&options[1]).current_value, "default");
+        assert_eq!(
+            select(&options[1])
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "accept_edits", "dont_ask"]
         );
     }
 
