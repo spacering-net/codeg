@@ -1138,15 +1138,18 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
     const marked = (header: HTMLElement | null | undefined) =>
       header?.parentElement?.hasAttribute("data-scope-selected") ?? false
 
-    it("moves the selected worktree's list out of the sidebar and restores it on disable", () => {
+    it("hides every folder body regardless of scope and restores them on disable", () => {
       act(() => useFolderTabsStore.setState({ enabled: true, scope: 2 }))
       render(wtTree(true))
       expect(folderHeaderIds()).toEqual([1, 1, 2])
-      expect(document.body.textContent).toContain("conv-11")
+      expect(document.body.textContent).not.toContain("conv-11")
       expect(document.body.textContent).not.toContain("conv-21")
       act(() => useFolderTabsStore.setState({ scope: 1 }))
       expect(document.body.textContent).not.toContain("conv-11")
-      expect(document.body.textContent).toContain("conv-21")
+      expect(document.body.textContent).not.toContain("conv-21")
+      act(() => useFolderTabsStore.setState({ scope: "global" }))
+      expect(document.body.textContent).not.toContain("conv-11")
+      expect(document.body.textContent).not.toContain("conv-21")
       act(() => useFolderTabsStore.setState({ enabled: false }))
       expect(document.body.textContent).toContain("conv-11")
       expect(document.body.textContent).toContain("conv-21")
@@ -1176,15 +1179,15 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
       expect(useFolderTabsStore.getState().scope).toBe(2)
       expect(marked(worktreeHeader())).toBe(true)
       expect(marked(rootHeader())).toBe(false)
-      // Selecting the container still selects its main worktree — the root
-      // row — and the container stays unmarked.
-      act(() => {
-        fireEvent.click(containerHeader())
-      })
-      expect(useFolderTabsStore.getState().scope).toBe(1)
-      expect(marked(rootHeader())).toBe(true)
-      expect(marked(containerHeader())).toBe(false)
-      expect(marked(worktreeHeader())).toBe(false)
+      // The container item toggles its descendants without changing scope.
+      act(() => fireEvent.click(containerHeader()))
+      expect(useFolderTabsStore.getState().scope).toBe(2)
+      expect(containerHeader()).toHaveAttribute("aria-expanded", "false")
+      expect(rootHeader()).toBeUndefined()
+      expect(worktreeHeader()).toBeNull()
+      act(() => fireEvent.click(containerHeader()))
+      expect(containerHeader()).toHaveAttribute("aria-expanded", "true")
+      expect(worktreeHeader()).not.toBeNull()
 
       act(() => {
         fireEvent.click(rootHeader()!)
@@ -1200,10 +1203,9 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
       })
       render(wtTree(true))
       expect(marked(containerHeader())).toBe(false)
-      // Fold the container: its disclosure button sits right after its row
-      // button.
+      // Fold the container by clicking its item.
       act(() => {
-        fireEvent.click(containerHeader().nextElementSibling as HTMLElement)
+        fireEvent.click(containerHeader())
       })
       expect(worktreeHeader()).toBeNull()
       expect(rootHeader()).toBeUndefined()
@@ -1220,7 +1222,7 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
 
       // Unfolded, the rows that show the scopes take the mark back.
       act(() => {
-        fireEvent.click(containerHeader().nextElementSibling as HTMLElement)
+        fireEvent.click(containerHeader())
       })
       act(() => {
         useFolderTabsStore.setState({ scope: 1 })
@@ -1809,6 +1811,27 @@ describe("SidebarConversationList — folder groups", () => {
         : `folder:${el.getAttribute("data-folder-id")}`
     )
     expect(labels).toEqual(["folder:1", "group:7", "folder:5", "folder:9"])
+  })
+
+  it("keeps group item expansion with folder tabs enabled", () => {
+    resetFolderTabsStore()
+    useFolderTabsStore.setState({ enabled: true, scope: 5 })
+    const folders = [{ ...folder(5, "Member"), group_id: 7 }] as FolderDetail[]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      folderGroups: [group(7, "Work", 1)],
+      conversations: [conv(51, 5)],
+    })
+    const { container, getByText } = render(tree())
+    expect(container.querySelector('[data-folder-id="5"]')).not.toBeNull()
+    expect(document.body.textContent).not.toContain("conv-51")
+    act(() => fireEvent.click(getByText("Work")))
+    expect(container.querySelector('[data-folder-id="5"]')).toBeNull()
+    act(() => fireEvent.click(getByText("Work")))
+    expect(container.querySelector('[data-folder-id="5"]')).not.toBeNull()
+    expect(useFolderTabsStore.getState().scope).toBe(5)
+    resetFolderTabsStore()
   })
 
   it("shows the empty hint for a group with no folders", () => {

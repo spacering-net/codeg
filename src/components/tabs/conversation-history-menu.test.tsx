@@ -89,6 +89,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
   resetFolderTabsStore()
   resetTabStore()
   resetAppWorkspaceStore()
@@ -121,6 +123,38 @@ describe("ConversationHistoryMenu", () => {
     expect(screen.queryByText("Session 103")).not.toBeInTheDocument()
     expect(screen.queryByText("Session 201")).not.toBeInTheDocument()
     expect(screen.queryByText("Session 104")).not.toBeInTheDocument()
+  })
+
+  it("shows recent activity from updated_at and refreshes while open and on reopen", async () => {
+    vi.useFakeTimers({
+      now: new Date("2026-11-04T00:00:00Z"),
+      toFake: ["Date", "setInterval", "clearInterval"],
+    })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conversation(101, 1, { updated_at: "2026-11-03T23:54:45Z" }),
+        conversation(102, 1, { updated_at: "2026-11-03T00:00:00Z" }),
+      ],
+    })
+    renderHistory()
+    await user.click(historyButton())
+    expect(
+      screen.getByRole("menuitem", { name: /Session 101/ })
+    ).toHaveTextContent("5m")
+    expect(
+      screen.getByRole("menuitem", { name: /Session 102/ })
+    ).toHaveTextContent("1d")
+    act(() => vi.advanceTimersByTime(60_000))
+    expect(
+      screen.getByRole("menuitem", { name: /Session 101/ })
+    ).toHaveTextContent("6m")
+    await user.keyboard("{Escape}")
+    act(() => vi.advanceTimersByTime(10 * 60_000 + 45_000))
+    await user.click(historyButton())
+    expect(
+      screen.getByRole("menuitem", { name: /Session 101/ })
+    ).toHaveTextContent("17m")
   })
 
   it("counts bound drafts and tabs in every split group as open", async () => {
