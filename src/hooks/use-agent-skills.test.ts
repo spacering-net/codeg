@@ -11,7 +11,7 @@ const mockListSkills =
     }) => Promise<AgentSkillsListResult>
   >()
 vi.mock("@/lib/api", () => ({
-  acpListAgentSkills: (params: {
+  acpListAgentRuntimeSkills: (params: {
     agentType: string
     workspacePath?: string | null
   }) => mockListSkills(params),

@@ -4832,17 +4832,44 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // trust store before any outbound call, and `agentInfo.version`
             // comes from the pinned tag ("0.22.2").
             //
-            // Held at 0.22.2. From 0.22.3 `hermes acp` is a viewer: sessions,
-            // turns and MCP servers run in a shared `gateway run --idle-exit`
-            // daemon, which the first viewer for a `HERMES_HOME` starts with its
-            // own environment and later viewers share. Measured on 0.22.5,
-            // codeg's process-tree stop takes the daemon down with the viewer
-            // that started it, so the other Hermes conversations lose it too
-            // (their next prompt starts a new one). And in a session that also
-            // got MCP servers over the wire, as every session with codeg-mcp
-            // injected does, each call to a config.yaml `mcp_servers` entry
-            // fails with "MCP server '<name>' is not connected" (upstream issue
-            // #143502, open as of 0.22.5). Re-check both before moving the pin.
+            // Held at 0.22.2, re-checked on 0.22.6. From 0.22.3 `hermes acp` is a
+            // viewer: sessions, turns and MCP servers run in a shared `gateway
+            // run --idle-exit` daemon, which the first viewer for a `HERMES_HOME`
+            // starts with its own environment and later viewers share. On the
+            // gateway measured, which serves the one default profile as a viewer
+            // codeg starts brings it up, each call to a config.yaml
+            // `mcp_servers` entry fails with "MCP server '<name>' is not
+            // connected" in a session that also got MCP servers over the wire,
+            // as every session with codeg-mcp injected does, while the same
+            // server answers in a session with none (upstream issue #143502,
+            // open as of 0.22.6, which leaves the lookup code that fails byte
+            // for byte). codeg hands Hermes the user's own servers only through
+            // config.yaml, so moving the pin would cut them off whenever
+            // codeg-mcp rides along. And where the
+            // daemon is a child of the viewer that started it, codeg's
+            // process-tree stop takes it down with that viewer: another Hermes
+            // conversation's next prompt starts a new one (history kept), a turn
+            // one is running ends `cancelled`, and a prompt sent right after
+            // fails with "Gateway disconnected; turn outcome is unknown…". The
+            // daemon is always that child on 0.22.5. By its source 0.22.6 still
+            // makes it one everywhere but macOS, where it now asks launchd to run
+            // the daemon as a one-off job outside the viewer's tree, out of the
+            // stop's reach, and falls back to the child when launchd refuses
+            // (both measured). Re-check both before moving the pin.
+            //
+            // Otherwise 0.22.6 suits what codeg reads, as far as checked:
+            // `initialize` still answers `protocolVersion: 1` (`agentInfo.version`
+            // is "0.0.0"), the session reply keeps its legacy `models` and
+            // `modes`, its own `configOptions` fold into codeg's selectors
+            // (`acp::connection`), codeg-mcp's tools keep a name codeg recognises
+            // (`mcp__editor_codeg_mcp_<8 hex>__<tool>`), and `state.db` (schema
+            // 32) keeps every column `parsers::hermes` reads, with load and
+            // resume no longer rewriting message rows or clearing `ended_at`.
+            // With codeg's own provider config (`model.provider: custom:codeg`
+            // and `providers.codeg`), the model a session starts on is listed as
+            // `custom:codeg:<model>` rather than `custom:<model>`, so a pick
+            // saved under the old id is not replayed; the session still starts
+            // on the configured model.
             //
             // Launch preference: `resolve_npx_command("hermes")` checks PATH,
             // then `~/.local/bin` (the official installer's target), then the
@@ -5071,7 +5098,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // daemon's job workers.
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
-            // 2.179.0 and 2.179.2, need codeg's help. CodeBuddy answers a
+            // 2.179.0, 2.179.2 and 2.179.3, need codeg's help. CodeBuddy answers a
             // `session/prompt` that starts within 500 ms of a `session/cancel` it
             // took mid-turn with `cancelled`, without running the prompt or
             // keeping it in its history, so codeg holds the first prompt after a
@@ -5145,9 +5172,37 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // as before. The headless bundle still has no auto-update scheduler,
             // `--acp` still does not prune sessions, and an install without
             // optional dependencies still runs whole turns.
+            //
+            // 2.179.3 keeps `bin/codebuddy` byte for byte, and its inlined ACP
+            // SDK is the same 1.9.0 copy with the same transport, so the 33 MiB
+            // line still stalls stdin and `$/cancel_request` still leaves a
+            // prompt running until `session/cancel`; `package.json` changes only
+            // its version. The SDK now loads when the stdio connection is set up
+            // rather than at server start, and an `initialize` sent right after
+            // spawn still gets the same answer (`protocolVersion: 1`) with no
+            // frame before it. The unauthenticated `session/new` answer is
+            // unchanged, every selector offers the same values, and no
+            // `sessionUpdate` kind, `session/*` method or `_codebuddy.ai/*`
+            // notification came or went. The recorded turns (2.179.2's set, plus
+            // a model request failing with HTTP 400 and a session directory
+            // deleted between two prompts) and their transcripts match 2.179.2
+            // apart from usage numbers, how much text a cancelled turn streamed
+            // before the cancel landed, and two harmless differences: a model
+            // error that gives its code as a digit string now carries that code
+            // (503, was 0) inside the `_meta["codebuddy.ai/errorMessage"]` of its
+            // `refusal` answer and in the failed turn's record, neither of which
+            // codeg reads, and some `session/load` replays send the same
+            // `available_commands_update` list one time fewer. 2.179.3 loads a
+            // session 2.179.2 wrote with the same replay, an MCP tool still asks
+            // once, for `DeferExecuteTool`, and Allow runs it, and the new
+            // enterprise checks (scanning a file for sensitive content before it
+            // is read, sandbox rules from the enterprise console) stay off
+            // without an enterprise policy. The headless bundle still has no
+            // auto-update scheduler, `--acp` still does not prune sessions, and an
+            // install without optional dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.179.2",
-                package: "@tencent-ai/codebuddy-code@2.179.2",
+                version: "2.179.3",
+                package: "@tencent-ai/codebuddy-code@2.179.3",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -7644,8 +7699,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.179.2",
-            "@tencent-ai/codebuddy-code@2.179.2",
+            "2.179.3",
+            "@tencent-ai/codebuddy-code@2.179.3",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that

@@ -124,6 +124,12 @@ describe("diskSkillTrigger", () => {
     expect(diskSkillTrigger("antigravity")).toBe("/")
   })
 
+  // OpenCode 2.x advertises only its commands (2.2.5: init, review, goal,
+  // compact); unlike 1.x it never turns a skill into one (#1089).
+  it("lists OpenCode's disk skills under `/`", () => {
+    expect(diskSkillTrigger("open_code")).toBe("/")
+  })
+
   it("scans nothing for an agent that advertises its skills as commands", () => {
     for (const agent of ["claude_code", "kimi_code", "gemini", "custom:x"]) {
       expect(diskSkillTrigger(agent)).toBeNull()

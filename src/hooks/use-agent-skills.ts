@@ -2,12 +2,16 @@
 
 import { useCallback, useSyncExternalStore } from "react"
 
-import { acpListAgentSkills } from "@/lib/api"
+import { acpListAgentRuntimeSkills } from "@/lib/api"
 import type { AgentSkillItem, AgentType } from "@/lib/types"
 
 /**
  * The skills an agent sees from one folder, held ONCE per window and shared by
  * every component that reads them.
+ *
+ * They are what the agent's sessions load (`acpListAgentRuntimeSkills`): for
+ * OpenCode that includes the `.claude` folders and the folders above the
+ * workspace, which its Skills settings page does not list.
  *
  * Several readers routinely share a folder: a Codex tab's composer (its `$`
  * menu) and its transcript (its badge check) read the same list, and background
@@ -81,7 +85,7 @@ function scan(key: string, entry: SkillsEntry): void {
   // Forgotten (by invalidation) or superseded (by a newer scan) since it began.
   const stale = () =>
     entries.get(key) !== entry || entry.generation !== generation
-  acpListAgentSkills({
+  acpListAgentRuntimeSkills({
     agentType: entry.agentType,
     workspacePath: entry.workspacePath,
   }).then(

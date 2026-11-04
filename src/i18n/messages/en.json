@@ -771,7 +771,11 @@
       "label": "System Instructions",
       "hint": "Configure global system-level instructions for this agent, saved to its global instructions file.",
       "placeholder": "Enter global system instructions (Markdown format, e.g., role definitions, guidelines, coding standards)...",
-      "filePath": "File path"
+      "filePath": "File path",
+      "unsaved": "Unsaved changes",
+      "discard": "Discard changes",
+      "copyPath": "Copy file path",
+      "pathCopied": "File path copied"
     },
     "hostTools": {
       "label": "Let the agent handle files and commands",

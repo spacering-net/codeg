@@ -30,12 +30,18 @@ export type InvocationPrefix = "/" | "$"
  *   loads every skill in its skill directories and names each one to the
  *   model. A `/<skill>` the user sends reaches the model as written, next to
  *   that list.
+ * - OpenCode: `/`, the same way. OpenCode 1.x turned every skill into a
+ *   command, but 2.x keeps skills apart from commands: its ACP server
+ *   advertises only its commands (`/init`, `/review`, `/goal`, `/compact`, plus
+ *   configured and MCP-prompt ones), while it still loads every skill, names
+ *   each to the model and gives the model a `skill` tool to load one by id. A
+ *   `/<skill>` the user sends reaches the model as written.
  */
 export function diskSkillTrigger(
   agentType: AgentType | null | undefined
 ): InvocationPrefix | null {
   if (agentType === "codex") return "$"
-  if (agentType === "antigravity") return "/"
+  if (agentType === "antigravity" || agentType === "open_code") return "/"
   return null
 }
 
@@ -44,7 +50,8 @@ export function diskSkillTrigger(
  * with the agent's own commands, and a skill whose `/<id>` is also a command is
  * left out: sending that token runs the command, so the skill row could not do
  * what it says. Antigravity, for one, intercepts `/plan`, `/logout` and
- * `/usage` before its model sees them.
+ * `/usage` before its model sees them, and OpenCode runs any advertised
+ * command, `/review` included.
  */
 export function skillsForMenu(
   skills: readonly AgentSkillItem[],

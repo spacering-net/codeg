@@ -95,7 +95,8 @@ describe("useTranscriptKnownInvocations", () => {
       useTranscriptKnownInvocations("claude_code", commands, "/ws")
     )
     expect(sorted(result.current)).toEqual(["/init", "/review"])
-    // Every agent but Codex and Antigravity advertises its skills as commands.
+    // Every agent but Codex, Antigravity and OpenCode advertises its skills as
+    // commands.
     expect(mockUseAgentSkills).toHaveBeenCalledWith(null, "/ws")
   })
 
@@ -123,6 +124,32 @@ describe("useTranscriptKnownInvocations", () => {
     )
     expect(sorted(result.current)).toEqual(["/plan", "/ship", "/usage"])
     expect(mockUseAgentSkills).toHaveBeenCalledWith("antigravity", "/ws")
+  })
+
+  it("adds OpenCode's on-disk skills under `/`, beside its commands", () => {
+    // OpenCode 2.x advertises only its commands, never a skill (#1089).
+    const skills: AgentSkillItem[] = [
+      {
+        ...CODEX_SKILLS[0],
+        scope: "global",
+        path: "/home/.config/opencode/skills/ship",
+      },
+    ]
+    mockUseAgentSkills.mockImplementation((agentType) =>
+      agentType === "open_code" ? skills : NO_SKILLS
+    )
+    const commands = ["init", "review", "goal", "compact"].map(command)
+    const { result } = renderHook(() =>
+      useTranscriptKnownInvocations("open_code", commands, "/ws")
+    )
+    expect(sorted(result.current)).toEqual([
+      "/compact",
+      "/goal",
+      "/init",
+      "/review",
+      "/ship",
+    ])
+    expect(mockUseAgentSkills).toHaveBeenCalledWith("open_code", "/ws")
   })
 
   it("knows nothing before the agent advertises in a new folder, beyond Codex's disk skills", () => {

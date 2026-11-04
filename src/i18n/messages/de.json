@@ -771,7 +771,11 @@
       "label": "Systemanweisungen",
       "hint": "Globale Systemanweisungen für diesen Agenten konfigurieren und in seiner globalen Anweisungsdatei speichern.",
       "placeholder": "Globale Systemanweisungen im Markdown-Format eingeben, z. B. Rollendefinitionen, Richtlinien und Programmierstandards...",
-      "filePath": "Dateipfad"
+      "filePath": "Dateipfad",
+      "unsaved": "Ungespeicherte Änderungen",
+      "discard": "Änderungen verwerfen",
+      "copyPath": "Dateipfad kopieren",
+      "pathCopied": "Dateipfad kopiert"
     },
     "hostTools": {
       "label": "Dateien und Befehle vom Agenten selbst ausführen lassen",
