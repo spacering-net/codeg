@@ -81,6 +81,8 @@ pub mod token_usage;
 pub mod turn_window;
 pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
+pub mod webview_watchdog;
+#[cfg(feature = "tauri-runtime")]
 pub mod windows;
 pub mod work_task;
 pub mod workspace_state;
