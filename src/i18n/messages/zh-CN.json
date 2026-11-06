@@ -7139,7 +7139,6 @@
     "viewExisting": "查看既有任务",
     "selectItem": "选择 #{number}",
     "selectBlockedActive": "这个议题已有进行中的任务",
-    "selectPage": "选择本页",
     "selectionLabel": "已选的议题",
     "selectionCount": "已选 {count} 项",
     "selectionOffPage": "其中 {count} 项不在当前列表",

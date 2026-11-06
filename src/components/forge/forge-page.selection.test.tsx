@@ -371,7 +371,7 @@ describe("ForgePage selection", () => {
     expect(box(5)).not.toBeChecked()
   })
 
-  it("ticks a range with Shift, and the whole page from its own box", async () => {
+  it("ticks a range with Shift, and lets go of it all on Esc", async () => {
     const user = userEvent.setup()
     vi.mocked(forgeListIssues).mockResolvedValue(
       listOf([issue(1), issue(2), issue(3), issue(4)])
@@ -390,19 +390,8 @@ describe("ForgePage selection", () => {
     expect(box(2)).toBeChecked()
     expect(box(3)).not.toBeChecked()
     expect(box(4)).toBeChecked()
-    const page = screen.getByRole("checkbox", { name: "Select this page" })
-    expect(page).toBeChecked()
-
-    await user.click(box(2))
-    expect(page).toHaveAttribute("data-state", "indeterminate")
-    await user.click(page)
-    expect(box(2)).toBeChecked()
-    await user.click(page)
-    expect(screen.queryByRole("region", { name: "Selected issues" })).toBeNull()
 
     // Esc on a box lets go of everything.
-    await user.click(box(1))
-    await user.click(box(2))
     expect(bar()).toBeInTheDocument()
     await user.keyboard("{Escape}")
     expect(screen.queryByRole("region", { name: "Selected issues" })).toBeNull()
@@ -425,12 +414,17 @@ describe("ForgePage selection", () => {
     })
     mount()
     await screen.findByText("issue 1")
-    const page = () =>
-      screen.getByRole("checkbox", { name: "Select this page" })
-    await user.click(page())
+    // Each page whole, as a Shift range from its first row to its last.
+    const tickPage = async (first: number) => {
+      await user.click(box(first))
+      await user.keyboard("{Shift>}")
+      await user.click(box(first + 49))
+      await user.keyboard("{/Shift}")
+    }
+    await tickPage(1)
     await user.click(screen.getByRole("button", { name: "Go to page 2" }))
     await screen.findByText("issue 51")
-    await user.click(page())
+    await tickPage(51)
     await user.click(screen.getByRole("button", { name: "Go to page 3" }))
     await screen.findByText("issue 101")
 

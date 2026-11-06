@@ -7139,7 +7139,6 @@
     "viewExisting": "Bestehende Aufgabe ansehen",
     "selectItem": "#{number} auswählen",
     "selectBlockedActive": "Für dieses Issue läuft bereits eine Aufgabe",
-    "selectPage": "Diese Seite auswählen",
     "selectionLabel": "Ausgewählte Issues",
     "selectionCount": "{count} ausgewählt",
     "selectionOffPage": "{count} davon nicht in dieser Liste",

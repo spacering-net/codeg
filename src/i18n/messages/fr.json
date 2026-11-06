@@ -7139,7 +7139,6 @@
     "viewExisting": "Voir la tâche existante",
     "selectItem": "Sélectionner #{number}",
     "selectBlockedActive": "Ce ticket a déjà une tâche en cours",
-    "selectPage": "Sélectionner cette page",
     "selectionLabel": "Tickets sélectionnés",
     "selectionCount": "{count, plural, one {# sélectionné} other {# sélectionnés}}",
     "selectionOffPage": "dont {count} hors de cette liste",

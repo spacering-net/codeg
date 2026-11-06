@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -25,7 +24,6 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Command,
   CommandEmpty,
@@ -705,9 +703,6 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   const [combineItems, setCombineItems] = useState<ForgeIssueRow[] | null>(null)
   /** The issue a Shift-click extends a range from: the last one toggled. */
   const anchorRef = useRef<number | null>(null)
-  /** The page box's id. Generated, not fixed: the aux panel's copy of this
-   *  page and the full one can be mounted at the same time. */
-  const selectPageId = useId()
   const { setRoute } = useWorkbenchRoute()
   /** The item the right-side detail panel is open on, or `null` for closed. */
   const [detailRow, setDetailRow] = useState<ForgeIssueRow | null>(null)
@@ -1286,19 +1281,6 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       !row.is_pr && chipStateForLink(linkFor(row)) !== "active",
     [linkFor]
   )
-  /** The page's issues that can be picked — what "select page" covers. */
-  const pickableOnPage = useMemo(
-    () => (tab === "issues" ? rows.filter(pickable) : []),
-    [tab, rows, pickable]
-  )
-  const pageSelection: boolean | "indeterminate" =
-    pickableOnPage.length === 0
-      ? false
-      : pickableOnPage.every((r) => selected.has(r.number))
-        ? true
-        : pickableOnPage.some((r) => selected.has(r.number))
-          ? "indeterminate"
-          : false
   /** Picked issues the current page does not show — counted on the bar, so
    *  a selection gathered elsewhere never reads as smaller than it is, and
    *  asked about by the lookup, so their chips stay current. A string, so a
@@ -1337,17 +1319,6 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       return next
     })
     anchorRef.current = row.number
-  }
-  const togglePage = () => {
-    const on = pageSelection !== true
-    setSelected((held) => {
-      const next = new Map(held)
-      for (const r of pickableOnPage) {
-        if (on) next.set(r.number, r)
-        else next.delete(r.number)
-      }
-      return next
-    })
   }
   const selectionFor = (
     row: ForgeIssueRow,
@@ -1993,25 +1964,6 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
               pending && "opacity-50"
             )}
           >
-            {pickableOnPage.length > 0 ? (
-              // Lined up with the rows' own boxes: the same padding, the same
-              // h-5 cell.
-              <div
-                className="flex items-center gap-3 px-4 py-1.5 text-[0.6875rem] text-muted-foreground"
-                data-forge-select=""
-              >
-                <span className="flex h-5 shrink-0 items-center">
-                  <Checkbox
-                    id={selectPageId}
-                    checked={pageSelection}
-                    onCheckedChange={togglePage}
-                  />
-                </span>
-                <label htmlFor={selectPageId} className="cursor-pointer">
-                  {t("selectPage")}
-                </label>
-              </div>
-            ) : null}
             {rows.map((row, index) => (
               <ForgeIssueRowItem
                 key={`${row.is_pr ? "pr" : "issue"}-${row.number}`}

@@ -7139,7 +7139,6 @@
     "viewExisting": "عرض المهمة الحالية",
     "selectItem": "تحديد #{number}",
     "selectBlockedActive": "لهذه المشكلة مهمة قيد التنفيذ بالفعل",
-    "selectPage": "تحديد هذه الصفحة",
     "selectionLabel": "المشكلات المحددة",
     "selectionCount": "{count, plural, one {تم تحديد مشكلة واحدة} two {تم تحديد مشكلتين} few {تم تحديد # مشكلات} many {تم تحديد # مشكلة} other {تم تحديد # مشكلة}}",
     "selectionOffPage": "{count, plural, one {منها واحدة خارج هذه القائمة} two {منها اثنتان خارج هذه القائمة} few {منها # خارج هذه القائمة} many {منها # خارج هذه القائمة} other {منها # خارج هذه القائمة}}",

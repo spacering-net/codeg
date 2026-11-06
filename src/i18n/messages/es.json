@@ -7139,7 +7139,6 @@
     "viewExisting": "Ver la tarea existente",
     "selectItem": "Seleccionar #{number}",
     "selectBlockedActive": "Esta incidencia ya tiene una tarea en curso",
-    "selectPage": "Seleccionar esta página",
     "selectionLabel": "Incidencias seleccionadas",
     "selectionCount": "{count, plural, one {# seleccionada} other {# seleccionadas}}",
     "selectionOffPage": "{count, plural, one {# no está en esta lista} other {# no están en esta lista}}",

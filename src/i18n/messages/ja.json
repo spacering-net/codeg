@@ -7139,7 +7139,6 @@
     "viewExisting": "既存のタスクを表示",
     "selectItem": "#{number} を選択",
     "selectBlockedActive": "このイシューには進行中のタスクがあります",
-    "selectPage": "このページを選択",
     "selectionLabel": "選択したイシュー",
     "selectionCount": "{count} 件を選択中",
     "selectionOffPage": "うち {count} 件はこの一覧にありません",

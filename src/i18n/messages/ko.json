@@ -7139,7 +7139,6 @@
     "viewExisting": "기존 작업 보기",
     "selectItem": "#{number} 선택",
     "selectBlockedActive": "이 이슈에는 진행 중인 작업이 있습니다",
-    "selectPage": "이 페이지 선택",
     "selectionLabel": "선택한 이슈",
     "selectionCount": "{count}개 선택됨",
     "selectionOffPage": "그중 {count}개는 이 목록에 없음",

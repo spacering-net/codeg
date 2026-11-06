@@ -7139,7 +7139,6 @@
     "viewExisting": "View the existing task",
     "selectItem": "Select #{number}",
     "selectBlockedActive": "This issue already has a task under way",
-    "selectPage": "Select this page",
     "selectionLabel": "Selected issues",
     "selectionCount": "{count} selected",
     "selectionOffPage": "{count} not in this list",

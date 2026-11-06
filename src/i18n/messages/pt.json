@@ -7139,7 +7139,6 @@
     "viewExisting": "Ver a tarefa existente",
     "selectItem": "Selecionar #{number}",
     "selectBlockedActive": "Esta issue já tem uma tarefa em andamento",
-    "selectPage": "Selecionar esta página",
     "selectionLabel": "Issues selecionadas",
     "selectionCount": "{count, plural, one {# selecionada} other {# selecionadas}}",
     "selectionOffPage": "{count} fora desta lista",
