@@ -36,8 +36,8 @@ import {
 } from "@/stores/folder-tabs-store"
 
 // ── Probes ────────────────────────────────────────────────────────────────
-// AgentIcon renders once per card body → counts card re-renders. The Folder /
-// FolderOpen lucide icon renders once per FolderHeader body → counts folder
+// AgentIcon renders once per card body → counts card re-renders. The project
+// initial icon renders once per FolderHeader body → counts folder
 // re-renders. Both increment only when the owning memoized component does NOT
 // bail out, so they measure exactly the production memo path.
 const probes = vi.hoisted(() => ({ card: 0, folder: 0, root: 0 }))
@@ -147,8 +147,8 @@ vi.mock("virtua", () => ({
   },
 }))
 
-// FolderHeader renders exactly one glyph in its body per variant: FolderClosed/
-// FolderOpen (a repo / plain folder / repo container header) → `probes.folder`,
+// FolderHeader renders exactly one glyph in its body per variant: ProjectIcon
+// (a repo / plain folder / repo container header) → `probes.folder`,
 // or FolderRoot (a container's "root" sub-group header) → `probes.root`. Every
 // other icon stays real. FolderRoot is used ONLY by the root sub-group, so it is
 // an exact re-render probe. Worktree headers use FolderGit2, which the Folders
@@ -159,17 +159,19 @@ vi.mock("lucide-react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("lucide-react")>()
   return {
     ...actual,
-    FolderClosed: () => {
-      probes.folder++
-      return null
-    },
-    FolderOpen: () => {
-      probes.folder++
-      return null
-    },
     FolderRoot: () => {
       probes.root++
       return null
+    },
+  }
+})
+
+vi.mock("./project-icon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./project-icon")>()
+  return {
+    ProjectIcon: (props: Parameters<typeof actual.ProjectIcon>[0]) => {
+      if (!props.className) probes.folder++
+      return <actual.ProjectIcon {...props} />
     },
   }
 })
@@ -1269,6 +1271,43 @@ describe("SidebarConversationList — Recent section", () => {
     expect(document.body.textContent).not.toContain("conv-13")
   })
 
+  it("uses the root project's name and icon for recent worktree sessions", () => {
+    localStorage.clear()
+    const root = { ...folder(1, "Codeg"), alias: "Workbench" }
+    const worktree = {
+      ...folder(2, "codeg-ui", 1),
+      git_branch: "folder-branch",
+    }
+    const session = conv(11, 2, { git_branch: "session-branch" })
+    useAppWorkspaceStore.setState({
+      folders: [root, worktree],
+      allFolders: [root, worktree],
+      branches: new Map([[2, "live-branch"]]),
+      conversations: [session],
+    })
+    render(recentTree(true))
+    const card = document.querySelector("[data-recent-card]") as HTMLElement
+    expect(within(card).getByText("Codeg")).toBeInTheDocument()
+    expect(within(card).getByText("conv-11")).toBeInTheDocument()
+    expect(within(card).getByText("session-branch")).toBeInTheDocument()
+    expect(within(card).queryByText("Workbench")).not.toBeInTheDocument()
+    const headingIcon = document.querySelector(
+      '[data-folder-id="1"] [data-project-icon]'
+    )
+    const cardIcon = card.querySelector("[data-project-icon]")
+    expect(cardIcon?.textContent).toBe("C")
+    expect(cardIcon?.getAttribute("data-project-icon")).toBe("1")
+    expect(cardIcon?.getAttribute("style")).toBe(
+      headingIcon?.getAttribute("style")
+    )
+    act(() => {
+      useAppWorkspaceStore.setState({
+        conversations: [{ ...session, git_branch: null }],
+      })
+    })
+    expect(within(card).getByText("live-branch")).toBeInTheDocument()
+  })
+
   it("collapses independently of the other sections", () => {
     render(recentTree(true))
     const header = Array.from(document.querySelectorAll("button")).find(
@@ -1311,16 +1350,22 @@ describe("SidebarConversationList — Recent section", () => {
 
     // The Folders section emits the canonical copies first (creation order:
     // conv-12 is newer); everything after them is the Recent duplicate, in
-    // activity order (conv-11 was touched last). Each row's text is its title
-    // followed by its age label: the Folders copies keep their creation age
+    // activity order (conv-11 was touched last). The Folders copies keep their creation age
     // ("4m", "5m"), while the Recent copies read their last activity ("now"
     // for 30s ago, "3m"), so each row's position is explained by what it shows.
     const rows = Array.from(document.querySelectorAll("[data-conv-key]"))
-    expect(rows.map((el) => el.textContent)).toEqual([
-      "conv-124m",
-      "conv-115m",
-      "conv-11now",
-      "conv-123m",
+    expect(
+      rows.map((el) => [
+        el
+          .querySelector("[data-conversation-id]")
+          ?.getAttribute("data-conversation-id"),
+        el.querySelector(".tabular-nums")?.textContent,
+      ])
+    ).toEqual([
+      ["12", "4m"],
+      ["11", "5m"],
+      ["11", "now"],
+      ["12", "3m"],
     ])
   })
 

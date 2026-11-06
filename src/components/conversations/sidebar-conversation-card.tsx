@@ -21,6 +21,7 @@ import {
   Info,
   ChevronRight,
   SquareTerminal,
+  GitBranch,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -72,6 +73,7 @@ import {
   ConversationTagContextSubmenu,
   NewConversationTagDialog,
 } from "./conversation-tag-picker"
+import { ProjectIcon } from "./project-icon"
 import { AgentIcon } from "@/components/agent-icon"
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
@@ -188,6 +190,10 @@ interface SidebarConversationCardProps {
   isSelected: boolean
   isOpenInTab?: boolean
   timeLabel?: string
+  recent?: boolean
+  projectId?: number
+  projectName?: string
+  branchName?: string | null
   onSelect: (id: number, agentType: string, folderId: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
   onRename: (id: number, newTitle: string) => Promise<void>
@@ -211,6 +217,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   isSelected,
   isOpenInTab = false,
   timeLabel,
+  recent = false,
+  projectId = conversation.folder_id,
+  projectName,
+  branchName,
   onSelect,
   onDoubleClick,
   onRename,
@@ -350,7 +360,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
           <ContextMenuTrigger asChild>
             <HoverCardTrigger asChild onFocus={handleHoverTriggerFocus}>
               <div
-                className="relative h-[2rem] bg-sidebar ws-transparent-bg"
+                className={cn(
+                  "relative bg-sidebar ws-transparent-bg",
+                  recent ? "h-[6.25rem] pb-1.5" : "h-[2rem]"
+                )}
+                data-recent-card={recent || undefined}
                 data-conv-key={`${conversation.agent_type}:${conversation.id}`}
                 // Per-level indent: shift the shared rail axis right by one step per
                 // depth. Root rows (depth 0) leave the var untouched so they inherit
@@ -361,14 +375,23 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                   depth > 0
                     ? ({
                         "--conv-rail-axis": `calc(0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                        marginInlineStart: recent
+                          ? `calc(${depth} * ${CONV_RAIL_DEPTH_STEP})`
+                          : undefined,
                       } as CSSProperties)
                     : undefined
                 }
               >
                 <div
                   className={cn(
-                    "group relative flex h-[1.9375rem] w-full items-center",
-                    "rounded-full text-sidebar-foreground",
+                    "group relative flex w-full items-center text-sidebar-foreground",
+                    recent
+                      ? "h-full rounded-lg border"
+                      : "h-[1.9375rem] rounded-full",
+                    recent &&
+                      (isSelected
+                        ? "border-sidebar-border"
+                        : "border-transparent"),
                     "transition-colors duration-[120ms]",
                     isSelected
                       ? "bg-sidebar-primary/8"
@@ -381,118 +404,208 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     onDoubleClick={handleDblClick}
                     className={cn(
                       "relative flex h-full min-w-0 flex-1 items-center gap-[0.625rem] text-left outline-none",
-                      "rounded-full",
-                      "pr-[0.25rem]"
+                      recent
+                        ? "rounded-lg px-3 py-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        : "rounded-full pr-[0.25rem]"
                     )}
                     // Rail-axis-relative left padding (was a fixed `pl-7`): at depth 0
                     // this resolves to 0.875rem + 0.875rem = 1.75rem (= pl-7), so root
                     // rows are pixel-identical; deeper rows inherit the shifted var.
                     style={{
-                      paddingLeft:
-                        "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
+                      paddingLeft: recent
+                        ? undefined
+                        : "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
                     }}
                   >
-                    {/* Ancestor guide rails (depth ≥ 1): keep each parent's vertical
+                    {recent ? (
+                      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                        <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                          <ProjectIcon
+                            projectId={projectId}
+                            name={projectName || tDetails("none")}
+                            className="size-5 rounded-[0.3125rem] text-[0.6875rem]"
+                          />
+                          <span
+                            className="min-w-0 flex-1 truncate"
+                            title={projectName}
+                          >
+                            {projectName || tDetails("none")}
+                          </span>
+                          {timeLabel && (
+                            <span className="shrink-0 tabular-nums">
+                              {timeLabel}
+                            </span>
+                          )}
+                        </span>
+                        <span
+                          className={cn(
+                            "truncate text-sm font-medium leading-5",
+                            isOpenInTab && "text-primary"
+                          )}
+                        >
+                          {formatConversationTitle(conversation.title) ||
+                            t("untitledConversation")}
+                        </span>
+                        <span
+                          className={cn(
+                            "flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground",
+                            !isSubsession && "group-hover:pr-8"
+                          )}
+                        >
+                          <GitBranch
+                            className={cn(
+                              "size-3.5 shrink-0",
+                              hasChildren &&
+                                onToggleExpand &&
+                                "group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:opacity-0"
+                            )}
+                            aria-hidden
+                          />
+                          <span
+                            dir="ltr"
+                            className="min-w-0 flex-1 truncate text-start"
+                            title={branchName || undefined}
+                          >
+                            {branchName || tDetails("none")}
+                          </span>
+                          {conversation.source === "cli" && (
+                            <SquareTerminal
+                              className="size-3.5 shrink-0"
+                              aria-label={tSidebar("cliBadge")}
+                            />
+                          )}
+                          <span
+                            className={cn(
+                              "relative flex size-4 shrink-0 items-center justify-center",
+                              !isSubsession && "group-hover:opacity-0"
+                            )}
+                          >
+                            {conversation.assistant_id != null ? (
+                              <SubsessionAssistantAvatar
+                                id={conversation.assistant_id}
+                                name={conversation.assistant_name ?? ""}
+                              />
+                            ) : (
+                              <AgentIcon
+                                agentType={conversation.agent_type}
+                                className="size-3.5"
+                              />
+                            )}
+                            <ConversationStatusDot
+                              status={status}
+                              size="sm"
+                              className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
+                            />
+                          </span>
+                        </span>
+                      </span>
+                    ) : (
+                      <>
+                        {/* Ancestor guide rails (depth ≥ 1): keep each parent's vertical
                     line continuous down through this nested row, so the child's
                     left rail aligns under the parent's. */}
-                    <SubsessionAncestorRails depth={depth} />
-                    {/* This row's OWN rail, through its agent icon, at the (depth-
+                        <SubsessionAncestorRails depth={depth} />
+                        {/* This row's OWN rail, through its agent icon, at the (depth-
                     shifted) rail axis. */}
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "pointer-events-none absolute z-0 bg-sidebar-border"
-                      )}
-                      style={{
-                        top: "-0.0625rem",
-                        bottom: "-0.0625rem",
-                        left: "var(--conv-rail-axis, 0.875rem)",
-                        width: "0.125rem",
-                        transform: "translateX(-50%)",
-                      }}
-                    />
-                    <div
-                      className={cn(
-                        "pointer-events-none absolute top-1/2 z-10 flex items-center justify-center",
-                        // With children, the row hover (or focus) swaps this agent
-                        // icon out for the expand chevron at the same spot — fade it
-                        // so the two cross-fade in place. On touch (no hover) the
-                        // chevron is always shown, so the icon is always hidden.
-                        hasChildren &&
-                          onToggleExpand &&
-                          "transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:opacity-0"
-                      )}
-                      style={{
-                        left: "var(--conv-rail-axis, 0.875rem)",
-                        width: "0.875rem",
-                        height: "0.875rem",
-                        transform: "translate(-50%, -50%)",
-                      }}
-                      aria-hidden
-                    >
-                      {conversation.assistant_id != null ? (
-                        <SubsessionAssistantAvatar
-                          id={conversation.assistant_id}
-                          name={conversation.assistant_name ?? ""}
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "pointer-events-none absolute z-0 bg-sidebar-border"
+                          )}
+                          style={{
+                            top: "-0.0625rem",
+                            bottom: "-0.0625rem",
+                            left: "var(--conv-rail-axis, 0.875rem)",
+                            width: "0.125rem",
+                            transform: "translateX(-50%)",
+                          }}
                         />
-                      ) : (
-                        <AgentIcon
-                          agentType={conversation.agent_type}
-                          className="h-[0.75rem] w-[0.75rem]"
-                        />
-                      )}
-                      <ConversationStatusDot
-                        status={status}
-                        size="sm"
-                        className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
-                      />
-                    </div>
+                        <div
+                          className={cn(
+                            "pointer-events-none absolute top-1/2 z-10 flex items-center justify-center",
+                            // With children, the row hover (or focus) swaps this agent
+                            // icon out for the expand chevron at the same spot — fade it
+                            // so the two cross-fade in place. On touch (no hover) the
+                            // chevron is always shown, so the icon is always hidden.
+                            hasChildren &&
+                              onToggleExpand &&
+                              "transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:opacity-0"
+                          )}
+                          style={{
+                            left: "var(--conv-rail-axis, 0.875rem)",
+                            width: "0.875rem",
+                            height: "0.875rem",
+                            transform: "translate(-50%, -50%)",
+                          }}
+                          aria-hidden
+                        >
+                          {conversation.assistant_id != null ? (
+                            <SubsessionAssistantAvatar
+                              id={conversation.assistant_id}
+                              name={conversation.assistant_name ?? ""}
+                            />
+                          ) : (
+                            <AgentIcon
+                              agentType={conversation.agent_type}
+                              className="h-[0.75rem] w-[0.75rem]"
+                            />
+                          )}
+                          <ConversationStatusDot
+                            status={status}
+                            size="sm"
+                            className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
+                          />
+                        </div>
 
-                    {/* Grows into the free width only as far as its own text
+                        {/* Grows into the free width only as far as its own text
                     (`max-w-max`), so the chips sit right after the title
                     rather than at the far end. A long title still yields
                     first: its basis is zero, so the chips take their width
                     before it takes the rest. */}
-                    <span
-                      className={cn(
-                        "relative min-w-0 max-w-max flex-1 truncate text-[0.875rem] font-normal",
-                        isOpenInTab && "text-primary"
-                      )}
-                    >
-                      {formatConversationTitle(conversation.title) ||
-                        t("untitledConversation")}
-                    </span>
-                    {/* Inline, inside the row's fixed 2rem height: the list's
+                        <span
+                          className={cn(
+                            "relative min-w-0 max-w-max flex-1 truncate text-[0.875rem] font-normal",
+                            isOpenInTab && "text-primary"
+                          )}
+                        >
+                          {formatConversationTitle(conversation.title) ||
+                            t("untitledConversation")}
+                        </span>
+                        {/* Inline, inside the row's fixed 2rem height: the list's
                     virtualizer and rail geometry assume one line per row. The
                     full set of tags is in the hover bubble. Capped so the
                     title keeps 3.5rem (the cap counts the 0.375rem between
                     them): on a narrow sidebar the chips — not the title — give
                     way. A floor on the title would do the same, but would also
                     hold a short title's box open and push the chips off it. */}
-                    <ConversationTagChips
-                      tags={tags}
-                      branch={branch}
-                      max={CARD_TAG_LIMIT}
-                      size="xs"
-                      className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
-                    />
-                    {/* Started by `codeg-cli`: told apart from the window's
-                    own, and found again with the Recent filter. */}
-                    {conversation.source === "cli" ? (
-                      <span
-                        className="ml-auto inline-flex shrink-0 items-center"
-                        title={tSidebar("cliBadge")}
-                      >
-                        <SquareTerminal
-                          className="h-3 w-3 text-muted-foreground/60"
-                          aria-hidden
+                        <ConversationTagChips
+                          tags={tags}
+                          branch={branch}
+                          max={CARD_TAG_LIMIT}
+                          size="xs"
+                          className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
                         />
-                        <span className="sr-only">{tSidebar("cliBadge")}</span>
-                      </span>
-                    ) : null}
-                    {/* No mark for a conversation re-parented out of a removed
+                        {/* Started by `codeg-cli`: told apart from the window's
+                    own, and found again with the Recent filter. */}
+                        {conversation.source === "cli" ? (
+                          <span
+                            className="ml-auto inline-flex shrink-0 items-center"
+                            title={tSidebar("cliBadge")}
+                          >
+                            <SquareTerminal
+                              className="h-3 w-3 text-muted-foreground/60"
+                              aria-hidden
+                            />
+                            <span className="sr-only">
+                              {tSidebar("cliBadge")}
+                            </span>
+                          </span>
+                        ) : null}
+                        {/* No mark for a conversation re-parented out of a removed
                     worktree (`origin_cwd`): the row stays quiet about it, and
                     the hover bubble names the original path instead. */}
+                      </>
+                    )}
                   </button>
 
                   {/* Expand/collapse affordance for delegation children. It overlays
@@ -521,7 +634,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           : t("expandSubsessions")
                       }
                       className={cn(
-                        "absolute top-0 bottom-0 z-20 flex items-center justify-center",
+                        "absolute z-20 flex items-center justify-center",
+                        recent ? "bottom-2 h-4" : "top-0 bottom-0",
                         "cursor-pointer outline-none",
                         "opacity-0 pointer-events-none transition-opacity duration-150",
                         "group-hover:opacity-100 group-hover:pointer-events-auto",
@@ -529,7 +643,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         "[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
                       )}
                       style={{
-                        left: "var(--conv-rail-axis, 0.875rem)",
+                        left: recent
+                          ? "1.1875rem"
+                          : "var(--conv-rail-axis, 0.875rem)",
                         width: "0.875rem",
                         transform: "translateX(-50%)",
                       }}
@@ -560,62 +676,71 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                   sidebar border — the same right edge as the section-header
                   actions, folder-header actions, and New chat / Search shortcut
                   badges. */}
-                  <div className="flex h-full shrink-0 items-center pr-[0.375rem]">
-                    <span
-                      className={cn(
-                        "flex items-center",
-                        // Roots swap the badge out for the hover actions; sub-sessions
-                        // have no actions, so keep the badge (incl. the running
-                        // spinner) visible on hover.
-                        !isSubsession && "group-hover:hidden"
-                      )}
-                    >
-                      {isRunning ? (
-                        <span
-                          className="relative inline-flex shrink-0 items-center justify-center"
-                          title={tSidebar("statusRunningBadge")}
-                        >
-                          {/* The turn is on a span, not the icon: an SVG
+                  <div
+                    className={cn(
+                      "flex shrink-0 items-center",
+                      recent
+                        ? "absolute right-3 bottom-1.5"
+                        : "h-full pr-[0.375rem]"
+                    )}
+                  >
+                    {!recent && (
+                      <span
+                        className={cn(
+                          "flex items-center",
+                          // Roots swap the badge out for the hover actions; sub-sessions
+                          // have no actions, so keep the badge (incl. the running
+                          // spinner) visible on hover.
+                          !isSubsession && "group-hover:hidden"
+                        )}
+                      >
+                        {isRunning ? (
+                          <span
+                            className="relative inline-flex shrink-0 items-center justify-center"
+                            title={tSidebar("statusRunningBadge")}
+                          >
+                            {/* The turn is on a span, not the icon: an SVG
                               element's transform animates on the main thread,
                               laying the page out every frame for as long as
                               the conversation runs. */}
+                            <span
+                              className="inline-flex animate-spin"
+                              aria-hidden
+                            >
+                              <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                            </span>
+                            <span className="sr-only">
+                              {tSidebar("statusRunningBadge")}
+                            </span>
+                          </span>
+                        ) : isCancelled ? (
                           <span
-                            className="inline-flex animate-spin"
-                            aria-hidden
+                            className="relative inline-flex shrink-0 items-center justify-center"
+                            title={tSidebar("statusCancelledBadge")}
                           >
-                            <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                            <XCircle
+                              className="h-3.5 w-3.5 text-destructive"
+                              aria-hidden
+                            />
+                            <span className="sr-only">
+                              {tSidebar("statusCancelledBadge")}
+                            </span>
                           </span>
-                          <span className="sr-only">
-                            {tSidebar("statusRunningBadge")}
+                        ) : timeLabel ? (
+                          <span
+                            className={cn(
+                              "relative shrink-0 tabular-nums",
+                              "text-[0.71875rem]",
+                              isSelected
+                                ? "font-medium text-muted-foreground"
+                                : "font-normal text-muted-foreground/70"
+                            )}
+                          >
+                            {timeLabel}
                           </span>
-                        </span>
-                      ) : isCancelled ? (
-                        <span
-                          className="relative inline-flex shrink-0 items-center justify-center"
-                          title={tSidebar("statusCancelledBadge")}
-                        >
-                          <XCircle
-                            className="h-3.5 w-3.5 text-destructive"
-                            aria-hidden
-                          />
-                          <span className="sr-only">
-                            {tSidebar("statusCancelledBadge")}
-                          </span>
-                        </span>
-                      ) : timeLabel ? (
-                        <span
-                          className={cn(
-                            "relative shrink-0 tabular-nums",
-                            "text-[0.71875rem]",
-                            isSelected
-                              ? "font-medium text-muted-foreground"
-                              : "font-normal text-muted-foreground/70"
-                          )}
-                        >
-                          {timeLabel}
-                        </span>
-                      ) : null}
-                    </span>
+                        ) : null}
+                      </span>
+                    )}
                     {/* Hover quick actions — roots only (sub-sessions opt out above).
                     Default /90 is the lightest muted shade that still clears the
                     3:1 non-text-contrast bar over the row's hover background; hover
