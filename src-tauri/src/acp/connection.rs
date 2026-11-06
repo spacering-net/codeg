@@ -2136,6 +2136,32 @@ fn agent_debug_callback(
     }
 }
 
+/// The settings codeg launches Qoder with, layered over the user's own as
+/// Qoder's command-line settings source.
+///
+/// From 1.1.84 Qoder defers the tools of every MCP server (all but those
+/// marked `alwaysLoad`) unless some settings source sets `mcp.lazyLoad`: the
+/// model is handed `mcp_list`, `mcp_get` and `mcp_call` instead, and reaches a
+/// deferred tool only through `mcp_call`, which carries the real
+/// `mcp__<server>__<tool>` name inside its arguments.
+/// Everything codeg does with codeg-mcp's tools keys on that name: the cards
+/// (`_meta.qoder.toolName`), the automatic answer to the permission request of
+/// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
+/// and the history parser. So codeg turns lazy loading off, as it was through
+/// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
+/// makes it exit, but each release tried from 1.1.0 to 1.1.84 (1.1.0, 1.1.30,
+/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84) takes `--settings`, and
+/// 1.1.30 and 1.1.64 open sessions with this one as without it.
+const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
+
+/// The arguments codeg adds after an npx agent's registry `args`.
+fn npx_launch_extra_args(agent_type: AgentType) -> &'static [&'static str] {
+    match agent_type {
+        AgentType::Qoder => &["--settings", QODER_LAUNCH_SETTINGS],
+        _ => &[],
+    }
+}
+
 async fn build_agent(
     agent_type: AgentType,
     runtime_env: &BTreeMap<String, String>,
@@ -2283,7 +2309,7 @@ async fn build_agent(
                     parts.push(mode);
                 }
             }
-            for a in args {
+            for a in args.iter().chain(npx_launch_extra_args(agent_type)) {
                 parts.push((*a).into());
             }
             // Translate OpenClaw-specific env vars to CLI flags
@@ -5842,13 +5868,13 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6 and 0.22.7): every signed-in provider's
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7 and 0.23.0): every signed-in provider's
 /// models and every named endpoint's (`providers:` in config.yaml, codeg's own
 /// `custom:codeg` among them), with `provider:model` ids —
 /// `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
-/// whatever it is sent and answering an empty list. From 0.22.6 (0.22.7 is the
+/// whatever it is sent and answering an empty list. From 0.22.6 (0.23.0 is the
 /// pin) Hermes also sends the same rows, without the provider notes, as a
 /// `model` config option and takes a switch either way; codeg keeps building
 /// its selector from the legacy list and folds Hermes' own option into it
@@ -6173,10 +6199,11 @@ async fn set_hermes_config_option(
     let outcome = match config_id.as_str() {
         // Hermes answers `{}` once the session runs on the new model, without
         // naming it; a model no provider serves is an error instead. So is a
-        // turn in progress through 0.22.2. By its source, 0.22.6 and 0.22.7
-        // answer a pick made during a turn `{}` instead, say in the
-        // conversation that the pick waits, and at the turn's end apply it,
-        // refuse it or ask about it (not measured).
+        // turn in progress through 0.22.2. From 0.22.6 a pick made during a
+        // turn is answered `{}` instead: Hermes says in the conversation that
+        // the model "applies from your next message" and runs the next turn on
+        // it (measured on 0.22.7 and 0.23.0); by its source it can also refuse
+        // the pick or ask about it when the turn ends.
         HERMES_MODEL_OPTION_ID => {
             set_legacy_session_model(cx, session_id, &value_id).await?;
             SetterOutcome::Accepted
@@ -6834,7 +6861,7 @@ async fn apply_and_emit_session_config_options(
             // As for Kiro: once Hermes has a model selector its modes have to
             // be a config option too, or the composer drops them. Hermes
             // through 0.22.2 takes neither as a config option, so their saved
-            // values go out on their own channels, which 0.22.6 and 0.22.7 take
+            // values go out on their own channels, which 0.22.6 through 0.23.0 take
             // as well, and only the rest through the shared pipeline.
             let standard_prefs: BTreeMap<String, String> = preferred_config_values
                 .iter()
@@ -13573,7 +13600,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.180.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.181.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13659,7 +13686,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.180.0) answers the next prompt it runs `cancelled` even though that
+/// 2.181.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -14949,6 +14976,8 @@ async fn run_conversation_loop(
                 cb_state.claude_fork_awaiting_result.clear();
                 // Same for a Qoder ask the canceled turn never completed.
                 cb_state.qoder_ask_questions.clear();
+                // And for a Kimi call it never settled.
+                cb_state.kimi_tool_titles.clear();
                 // A codex web search whose request never reported (canceled
                 // mid-request) must not set aside this turn's first report.
                 // `/goal` continuation turns run on the idle loop and announce
@@ -20291,6 +20320,13 @@ struct CodeBuddyLiveState {
     /// start: an ask blocks its turn, so a canceled turn's entry is never
     /// completed.
     qoder_ask_questions: HashMap<String, Vec<crate::parsers::qoder::QoderAskQuestion>>,
+    /// Kimi Code tool calls in flight → the title their own frames gave them,
+    /// so a status Kimi shows on the card in its place lasts only until the
+    /// call settles (see [`KimiToolTitles`]). Dropped at a final status, and
+    /// cleared at turn start like `qoder_ask_questions`, so a call the
+    /// canceled turn never settled is not kept for good; a report of it that
+    /// still arrives after the next turn started keeps the status it shows.
+    kimi_tool_titles: KimiToolTitles,
     /// Codex sub-agent thread id → the launch capsule that spawned it, paired
     /// with the `rawInput` that capsule was announced with.
     ///
@@ -20781,6 +20817,131 @@ fn resolve_rewritten_title(
         return Some("agent".to_string());
     }
     overrides.get(tool_call_id).cloned()
+}
+
+/// Whether a Kimi Code `tool_call_update` reports the call's progress rather
+/// than revising the call.
+///
+/// Kimi's ACP server sends each `status` progress report of a tool as an
+/// update that carries a `title` and nothing else, the status text standing in
+/// for the call's own title (`toolProgressToSessionUpdate` in its
+/// `events-map.ts`, which "refreshes the tool card title"). Every other update
+/// it sends for a call carries a status as well, and the one that settles the
+/// call carries no title at all. These statuses come from an MCP call that has
+/// to reconnect ("MCP connection lost — reconnecting…", which 2.5.2 sends on
+/// every call to a tool whose server came back with a changed definition),
+/// from an MCP server's `authenticate` tool (the URL to open, then
+/// "Authorized — reconnecting <server>…"), and from the background-task wait
+/// (behind Kimi's `wait_for` flag).
+fn kimi_status_frame(
+    agent_type: AgentType,
+    fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
+) -> bool {
+    agent_type == AgentType::KimiCode
+        && fields.title.is_some()
+        && fields.status.is_none()
+        && fields.kind.is_none()
+        && fields.name.is_none()
+        && fields.content.is_none()
+        && fields.locations.is_none()
+        && fields.raw_input.is_none()
+        && fields.raw_output.is_none()
+}
+
+/// A Kimi Code tool call's own title, and whether a status shows on its card
+/// in its place.
+struct KimiToolTitle {
+    own: String,
+    status_shown: bool,
+}
+
+/// The titles of the Kimi Code tool calls in flight on a connection
+/// (`CodeBuddyLiveState::kimi_tool_titles`).
+///
+/// A status (see [`kimi_status_frame`]) still shows on the card while the call
+/// runs: it can be the only place Kimi says what the call waits for, such as
+/// the URL to open for an MCP server's sign-in. But Kimi never puts the call's
+/// own title back, so the card would keep the status once the call was done,
+/// and the frontend, which tells a live call's tool from its title
+/// (`inferLiveToolName`), would stop recognising it: an MCP call that had to
+/// reconnect ended as a generic card titled "MCP connection lost —
+/// reconnecting…" until the conversation was reopened. So the frame that
+/// settles such a call brings its own title back.
+#[derive(Default)]
+struct KimiToolTitles {
+    calls: HashMap<String, KimiToolTitle>,
+}
+
+impl KimiToolTitles {
+    /// The opening `tool_call` of a call: its title is the call's own.
+    fn open(&mut self, tool_call_id: &str, title: &str, status: &str) {
+        if is_settled_tool_status(Some(status)) {
+            self.calls.remove(tool_call_id);
+        } else {
+            self.calls.insert(
+                tool_call_id.to_string(),
+                KimiToolTitle {
+                    own: title.to_string(),
+                    status_shown: false,
+                },
+            );
+        }
+    }
+
+    /// The title to send with a call's `tool_call_update`: the frame's own,
+    /// except that a frame settling a call whose card shows a status brings
+    /// the call's own title back.
+    fn update(
+        &mut self,
+        tool_call_id: &str,
+        status_frame: bool,
+        title: Option<String>,
+        status: Option<&str>,
+    ) -> Option<String> {
+        let settled = is_settled_tool_status(status);
+        let title = match title {
+            Some(text) if status_frame => {
+                if let Some(call) = self.calls.get_mut(tool_call_id) {
+                    call.status_shown = true;
+                }
+                Some(text)
+            }
+            Some(own) => {
+                if let Some(call) = self.calls.get_mut(tool_call_id) {
+                    call.own.clone_from(&own);
+                    call.status_shown = false;
+                } else if !settled {
+                    self.calls.insert(
+                        tool_call_id.to_string(),
+                        KimiToolTitle {
+                            own: own.clone(),
+                            status_shown: false,
+                        },
+                    );
+                }
+                Some(own)
+            }
+            None if settled => self
+                .calls
+                .get(tool_call_id)
+                .filter(|call| call.status_shown)
+                .map(|call| call.own.clone()),
+            None => None,
+        };
+        if settled {
+            self.calls.remove(tool_call_id);
+        }
+        title
+    }
+
+    fn clear(&mut self) {
+        self.calls.clear();
+    }
+}
+
+/// Whether a tool call's (lower-cased) status ends it.
+fn is_settled_tool_status(status: Option<&str>) -> bool {
+    matches!(status, Some("completed" | "failed" | "cancelled" | "error"))
 }
 
 fn map_plan_priority(priority: &PlanEntryPriority) -> String {
@@ -25281,6 +25442,12 @@ async fn emit_conversation_update(
                 &mut cb_state.title_overrides,
             )
             .unwrap_or(tc.title);
+            // The title a status may stand in for later (see `KimiToolTitles`).
+            if agent_type == AgentType::KimiCode {
+                cb_state
+                    .kimi_tool_titles
+                    .open(&tool_call_id, &title, &status);
+            }
             // Mark Cursor's identity-less MCP announcements as eligible for the
             // completion-time result sniff. Scoping the sniff to ids announced
             // with this exact title keeps a `shell`/`read` call whose OUTPUT
@@ -25322,6 +25489,8 @@ async fn emit_conversation_update(
         }
         SessionUpdate::ToolCallUpdate(mut tcu) => {
             let tool_call_id = tcu.tool_call_id.to_string();
+            // Read before the fields are taken apart below.
+            let kimi_status = kimi_status_frame(agent_type, &tcu.fields);
             // The closing "Response received" frame of an Antigravity question
             // would overwrite the answered card the bridge recorded (see
             // `take_antigravity_answered_close`).
@@ -25871,6 +26040,18 @@ async fn emit_conversation_update(
                 &mut cb_state.title_overrides,
             )
             .or(tcu.fields.title);
+            // A Kimi call's own title comes back once a status no longer
+            // stands in for it (see `KimiToolTitles`).
+            let title = if agent_type == AgentType::KimiCode {
+                cb_state.kimi_tool_titles.update(
+                    &tool_call_id,
+                    kimi_status,
+                    title,
+                    status.as_deref(),
+                )
+            } else {
+                title
+            };
             // Keep/close the sub-agent suppression window by status (an update
             // resolving to "agent" is a classified native sub-agent).
             track_subagent_window(
@@ -43423,6 +43604,217 @@ mod tests {
             resolve_rewritten_title(AgentType::OpenCode, &None, "tc9", true, false, &mut overrides),
             None
         );
+    }
+
+    // ─── Kimi Code status titles ─────────────────────────────────────────
+
+    /// The frames Kimi Code 2.5.2 sent for an MCP call that had to reconnect
+    /// (captured live: the server came back with a changed definition, so the
+    /// call first failed on the old connection).
+    fn kimi_reconnecting_mcp_call(tool_call_id: &str) -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "title": "mcp__resp__ping",
+                "kind": "other",
+                "status": "pending",
+                "content": [{"type": "content", "content": {"type": "text", "text": "{\"text\": \"hi\", \"count\": 1}"}}],
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "title": "mcp__resp__ping",
+                "kind": "other",
+                "status": "in_progress",
+                "rawInput": {"text": "hi", "count": 1},
+                "content": [{"type": "content", "content": {"type": "text", "text": "{\"text\":\"hi\",\"count\":1}"}}],
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "title": "MCP connection lost — reconnecting…",
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": "PONG from start #2 (v2) args={\"text\":\"hi\",\"count\":1}"}}],
+                "rawOutput": "PONG from start #2 (v2) args={\"text\":\"hi\",\"count\":1}",
+            }),
+        ]
+    }
+
+    /// Drive `frames` through `emit_conversation_update` on one connection and
+    /// return the title each emitted tool-call event carries, in order, plus
+    /// how many Kimi calls are still tracked afterwards.
+    async fn tool_titles_emitted(
+        agent_type: AgentType,
+        frames: &[serde_json::Value],
+    ) -> (Vec<Option<String>>, usize) {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-titles".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let emitter = EventEmitter::Noop;
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        for frame in frames {
+            let update: SessionUpdate =
+                serde_json::from_value(frame.clone()).expect("valid tool-call wire shape");
+            emit_conversation_update(
+                &state, &emitter, agent_type, update, None, &mut cache, &mut cb,
+            )
+            .await;
+        }
+        let guard = state.read().await;
+        let events = guard.recent_events_after(0).expect("events recorded");
+        let titles = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                AcpEvent::ToolCall { title, .. } => Some(Some(title.clone())),
+                AcpEvent::ToolCallUpdate { title, .. } => Some(title.clone()),
+                _ => None,
+            })
+            .collect();
+        (titles, cb.kimi_tool_titles.calls.len())
+    }
+
+    /// Kimi retitles a call's card with a status and never puts the call's
+    /// own title back, so the frame that settles the call has to: otherwise
+    /// the card stays "MCP connection lost — reconnecting…" and the frontend,
+    /// which names a live call from its title, no longer sees an MCP tool.
+    #[tokio::test]
+    async fn a_kimi_status_title_gives_way_to_the_calls_own_when_it_settles() {
+        let (titles, tracked) =
+            tool_titles_emitted(AgentType::KimiCode, &kimi_reconnecting_mcp_call("1:call_1")).await;
+        assert_eq!(
+            titles,
+            [
+                Some("mcp__resp__ping".to_string()),
+                Some("mcp__resp__ping".to_string()),
+                Some("MCP connection lost — reconnecting…".to_string()),
+                Some("mcp__resp__ping".to_string()),
+            ]
+        );
+        assert_eq!(tracked, 0, "a settled call is no longer tracked");
+
+        // The opening frame alone is enough to know the call's own title.
+        let mut opened_only = kimi_reconnecting_mcp_call("1:call_4");
+        opened_only.remove(1);
+        let (titles, _) = tool_titles_emitted(AgentType::KimiCode, &opened_only).await;
+        assert_eq!(titles.last(), Some(&Some("mcp__resp__ping".to_string())));
+
+        // A call no status stood in for settles without a title, as before:
+        // the card already shows its own.
+        let mut quiet = kimi_reconnecting_mcp_call("1:call_2");
+        quiet.remove(2);
+        let (titles, tracked) = tool_titles_emitted(AgentType::KimiCode, &quiet).await;
+        assert_eq!(titles.last(), Some(&None));
+        assert_eq!(tracked, 0);
+
+        // Only Kimi gets this: another agent's title-only update is a real
+        // retitle, and the settling frame leaves it be.
+        let (titles, _) =
+            tool_titles_emitted(AgentType::Gemini, &kimi_reconnecting_mcp_call("1:call_3")).await;
+        assert_eq!(titles.last(), Some(&None));
+    }
+
+    /// A status shown after the call's own title was revised gives way to the
+    /// revised title, and a call still open keeps whatever the agent sent.
+    #[test]
+    fn kimi_tool_titles_follow_the_latest_own_title() {
+        let mut titles = KimiToolTitles::default();
+        // Opened lazily under the tool's name, then upgraded to its
+        // description once the call was dispatched.
+        titles.open("c1", "tool", "pending");
+        assert_eq!(
+            titles.update(
+                "c1",
+                false,
+                Some("Ping the server".to_string()),
+                Some("in_progress")
+            ),
+            Some("Ping the server".to_string())
+        );
+        assert_eq!(
+            titles.update("c1", true, Some("Waiting…".to_string()), None),
+            Some("Waiting…".to_string())
+        );
+        // A frame that carries neither a title nor a final status keeps the
+        // status on the card.
+        assert_eq!(titles.update("c1", false, None, Some("in_progress")), None);
+        assert_eq!(
+            titles.update("c1", false, None, Some("failed")),
+            Some("Ping the server".to_string())
+        );
+        // A call opened already settled (a `session/load` replay) is not kept.
+        titles.open("c2", "mcp__resp__ping", "completed");
+        assert!(titles.calls.is_empty());
+    }
+
+    /// Qoder 1.1.84 hides every MCP server's tools behind `mcp_call` unless a
+    /// settings source sets `mcp.lazyLoad`, so codeg launches it with lazy
+    /// loading off; no other agent gets the flag.
+    #[test]
+    fn qoder_launches_with_mcp_lazy_loading_off() {
+        let [flag, settings] = npx_launch_extra_args(AgentType::Qoder) else {
+            panic!("Qoder gets `--settings <json>`");
+        };
+        assert_eq!(*flag, "--settings");
+        let settings: serde_json::Value =
+            serde_json::from_str(settings).expect("the settings are JSON");
+        assert_eq!(settings, serde_json::json!({"mcp": {"lazyLoad": false}}));
+        for other in [
+            AgentType::Grok,
+            AgentType::KimiCode,
+            AgentType::CodeBuddy,
+            AgentType::Hermes,
+            AgentType::Gemini,
+        ] {
+            assert!(npx_launch_extra_args(other).is_empty(), "{other}");
+        }
+    }
+
+    /// The launch `build_agent` assembles for Qoder carries the settings right
+    /// after the registry's `--acp`.
+    #[tokio::test]
+    async fn qoder_launch_carries_the_lazy_loading_settings() {
+        let tail = Arc::new(StderrTail::new());
+        let (agent, _) = build_agent(
+            AgentType::Qoder,
+            &BTreeMap::new(),
+            Path::new("."),
+            &tail,
+            None,
+            false,
+        )
+        .await
+        .expect("Qoder's launch builds");
+        let launch = format!("{agent:?}");
+        let expected = format!(
+            "{:?}, {:?}, {:?}",
+            "--acp", "--settings", QODER_LAUNCH_SETTINGS
+        );
+        assert!(launch.contains(&expected), "{launch}");
+    }
+
+    /// Only an update carrying a title and nothing else is a Kimi status.
+    #[test]
+    fn a_kimi_status_frame_carries_a_title_alone() {
+        use agent_client_protocol::schema::v1::{ToolCallStatus, ToolCallUpdateFields};
+        let status = ToolCallUpdateFields::new().title("MCP connection lost — reconnecting…");
+        assert!(kimi_status_frame(AgentType::KimiCode, &status));
+        assert!(!kimi_status_frame(AgentType::Gemini, &status));
+        let revision = ToolCallUpdateFields::new()
+            .title("mcp__resp__ping")
+            .status(ToolCallStatus::InProgress);
+        assert!(!kimi_status_frame(AgentType::KimiCode, &revision));
+        let settle = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        assert!(!kimi_status_frame(AgentType::KimiCode, &settle));
     }
 
     // ─── codebuddy_meta_marks_subagent ───────────────────────────────────
