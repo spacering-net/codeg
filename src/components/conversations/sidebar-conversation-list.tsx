@@ -505,7 +505,10 @@ const FolderHeader = memo(function FolderHeader({
                   ) : variant === "root" ? (
                     <FolderRoot className="h-[0.875rem] w-[0.875rem]" />
                   ) : (
-                    <ProjectIcon projectId={folderId} name={folderName} />
+                    <ProjectIcon
+                      projectId={folderId}
+                      name={folderAlias?.trim() || folderName}
+                    />
                   )}
                 </span>
                 <div className="flex min-w-0 flex-1 items-center gap-[0.5rem]">
@@ -3263,7 +3266,11 @@ export function SidebarConversationList({
         conversation={conv}
         recent={row.recent === true}
         projectId={projectId}
-        projectName={conv.kind === "chat" ? t("sectionChats") : project?.name}
+        projectName={
+          conv.kind === "chat"
+            ? t("sectionChats")
+            : project?.alias?.trim() || project?.name
+        }
         branchName={
           conv.git_branch ||
           branches.get(conv.folder_id) ||

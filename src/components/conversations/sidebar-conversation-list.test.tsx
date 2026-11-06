@@ -1271,9 +1271,9 @@ describe("SidebarConversationList — Recent section", () => {
     expect(document.body.textContent).not.toContain("conv-13")
   })
 
-  it("uses the root project's name and icon for recent worktree sessions", () => {
+  it("prefers the root project alias for recent names and shared initials", () => {
     localStorage.clear()
-    const root = { ...folder(1, "Codeg"), alias: "Workbench" }
+    const root = { ...folder(1, "Codeg"), alias: "  Workbench  " }
     const worktree = {
       ...folder(2, "codeg-ui", 1),
       git_branch: "folder-branch",
@@ -1287,15 +1287,16 @@ describe("SidebarConversationList — Recent section", () => {
     })
     render(recentTree(true))
     const card = document.querySelector("[data-recent-card]") as HTMLElement
-    expect(within(card).getByText("Codeg")).toBeInTheDocument()
+    expect(within(card).getByText("Workbench")).toBeInTheDocument()
     expect(within(card).getByText("conv-11")).toBeInTheDocument()
     expect(within(card).getByText("session-branch")).toBeInTheDocument()
-    expect(within(card).queryByText("Workbench")).not.toBeInTheDocument()
+    expect(within(card).queryByText("Codeg")).not.toBeInTheDocument()
     const headingIcon = document.querySelector(
       '[data-folder-id="1"] [data-project-icon]'
     )
     const cardIcon = card.querySelector("[data-project-icon]")
-    expect(cardIcon?.textContent).toBe("C")
+    expect(cardIcon?.textContent).toBe("W")
+    expect(headingIcon?.textContent).toBe("W")
     expect(cardIcon?.getAttribute("data-project-icon")).toBe("1")
     expect(cardIcon?.getAttribute("style")).toBe(
       headingIcon?.getAttribute("style")
@@ -1306,6 +1307,17 @@ describe("SidebarConversationList — Recent section", () => {
       })
     })
     expect(within(card).getByText("live-branch")).toBeInTheDocument()
+    // Blank aliases fall back consistently in the tree and recent card.
+    const folders = [{ ...root, alias: "  " }, worktree]
+    act(() => {
+      useAppWorkspaceStore.setState({ folders, allFolders: folders })
+    })
+    expect(within(card).getByText("Codeg")).toBeInTheDocument()
+    expect(card.querySelector("[data-project-icon]")?.textContent).toBe("C")
+    expect(
+      document.querySelector('[data-folder-id="1"] [data-project-icon]')
+        ?.textContent
+    ).toBe("C")
   })
 
   it("collapses independently of the other sections", () => {

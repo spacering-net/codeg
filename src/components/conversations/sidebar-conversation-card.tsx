@@ -362,7 +362,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <div
                 className={cn(
                   "relative bg-sidebar ws-transparent-bg",
-                  recent ? "h-[6.25rem] pb-1.5" : "h-[2rem]"
+                  recent ? "h-[4.75rem] pb-1" : "h-[2rem]"
                 )}
                 data-recent-card={recent || undefined}
                 data-conv-key={`${conversation.agent_type}:${conversation.id}`}
@@ -405,7 +405,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     className={cn(
                       "relative flex h-full min-w-0 flex-1 items-center gap-[0.625rem] text-left outline-none",
                       recent
-                        ? "rounded-lg px-3 py-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        ? "rounded-lg px-3 py-1 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                         : "rounded-full pr-[0.25rem]"
                     )}
                     // Rail-axis-relative left padding (was a fixed `pl-7`): at depth 0
@@ -418,7 +418,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     }}
                   >
                     {recent ? (
-                      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                           <ProjectIcon
                             projectId={projectId}
@@ -680,7 +680,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     className={cn(
                       "flex shrink-0 items-center",
                       recent
-                        ? "absolute right-3 bottom-1.5"
+                        ? "absolute right-3 bottom-0.5"
                         : "h-full pr-[0.375rem]"
                     )}
                   >
