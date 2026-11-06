@@ -67,6 +67,9 @@ function connected(over: Partial<ConnectionState> = {}): ConnectionState {
     error: null,
     isViewer: false,
     backgroundOutstanding: 0,
+    asyncTasks: [],
+    remoteControl: null,
+    delegatedChildren: [],
     ...over,
   } as unknown as ConnectionState
 }
@@ -270,6 +273,28 @@ describe("ComposerConnectionStatus", () => {
 
   it("warns while background work is outstanding, even between turns", async () => {
     fake.state.conn = connected({ backgroundOutstanding: 2 })
+    renderStatus()
+    await openPopover()
+
+    expect(
+      await screen.findByText(copy.reconnectInterrupts)
+    ).toBeInTheDocument()
+  })
+
+  it("warns while an async task is running, even with nothing outstanding", async () => {
+    fake.state.conn = connected({
+      asyncTasks: [
+        {
+          task_id: "call_bg_1",
+          name: "npm run dev",
+          task_type: "shell",
+          description: "",
+          show_in_transcript: false,
+          can_stop: true,
+          state: "running",
+        },
+      ],
+    })
     renderStatus()
     await openPopover()
 

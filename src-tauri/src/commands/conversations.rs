@@ -2943,12 +2943,14 @@ pub async fn cleanup_chat_folder_for_deleted_conversation(
 
 /// Full conversation-delete orchestration shared by the Tauri command and the web
 /// handler: capture the backing folder BEFORE the soft-delete (so a hidden chat
-/// folder can be retired afterward), soft-delete, broadcast the deletion, then run
-/// the tab + chat-folder cleanups. The thin `delete_conversation_core` primitive
-/// stays event-free for internal/test callers, so the orchestration lives here.
+/// folder can be retired afterward), soft-delete, end the agent working on the
+/// conversation, broadcast the deletion, then run the tab + chat-folder cleanups.
+/// The thin `delete_conversation_core` primitive stays event-free for
+/// internal/test callers, so the orchestration lives here.
 pub async fn delete_conversation_with_cleanup_core(
     emitter: &EventEmitter,
     conn: &sea_orm::DatabaseConnection,
+    manager: &crate::acp::manager::ConnectionManager,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
     // Capture the backing folder AND parent before the soft-delete: a hidden
@@ -2961,6 +2963,11 @@ pub async fn delete_conversation_with_cleanup_core(
     let folder_id = pre.as_ref().map(|c| c.folder_id);
     let parent_id = pre.as_ref().and_then(|c| c.parent_id);
     delete_conversation_core(conn, conversation_id).await?;
+    // Deleting is the explicit stop. Closing the conversation's tabs (the
+    // cleanups below, and every client's own close) does not stop anything
+    // that still has work in flight, so without this a background task or a
+    // Remote Control session would run on for a conversation nobody can open.
+    manager.disconnect_by_conversation_id(conversation_id).await;
     emit_conversation_deleted(emitter, conversation_id);
     // A removed delegation child drops its parent's child_count (→ 0 hides the
     // chevron). Re-emit the parent from the authoritative aggregate so every
@@ -2985,10 +2992,11 @@ pub async fn delete_conversation_with_cleanup_core(
 pub async fn delete_conversation(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
     let emitter = EventEmitter::Tauri(app);
-    delete_conversation_with_cleanup_core(&emitter, &db.conn, conversation_id).await
+    delete_conversation_with_cleanup_core(&emitter, &db.conn, &manager, conversation_id).await
 }
 
 fn compute_stats(all_conversations: &[ConversationSummary]) -> AgentStats {
@@ -4256,6 +4264,55 @@ mod tests {
             .filter(|e| e.path().is_dir())
             .count();
         assert_eq!(count, 1, "no duplicate scratch dir created");
+    }
+
+    /// Deleting a conversation ends the agent working on it. A view's teardown
+    /// no longer does that for it: closing a tab spares a connection that still
+    /// has work in flight (a background task, Remote Control), and a deleted
+    /// conversation can never be opened again to stop that work.
+    #[tokio::test]
+    async fn deleting_a_conversation_ends_the_connections_bound_to_it() {
+        use crate::acp::manager::ConnectionManager;
+
+        let db = fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let res =
+            create_chat_conversation_core(&db.conn, data_dir.path(), AgentType::Codex, None, None)
+                .await
+                .expect("create");
+        let manager = ConnectionManager::new();
+        for (id, conversation_id) in [
+            ("bound", Some(res.conversation_id)),
+            ("another-conversation", Some(res.conversation_id + 1)),
+            ("unbound", None),
+        ] {
+            manager
+                .insert_test_connection(id, AgentType::Codex, None, EventEmitter::Noop)
+                .await;
+            manager
+                .get_state(id)
+                .await
+                .expect("inserted")
+                .write()
+                .await
+                .conversation_id = conversation_id;
+        }
+
+        delete_conversation_with_cleanup_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &manager,
+            res.conversation_id,
+        )
+        .await
+        .expect("delete");
+
+        assert!(
+            manager.get_state("bound").await.is_none(),
+            "the deleted conversation's agent is torn down"
+        );
+        assert!(manager.get_state("another-conversation").await.is_some());
+        assert!(manager.get_state("unbound").await.is_some());
     }
 
     #[tokio::test]
@@ -6188,7 +6245,8 @@ mod tests {
         .expect("child");
         let (broadcaster, emitter) = sync_test_emitter();
         let mut rx = broadcaster.subscribe();
-        delete_conversation_with_cleanup_core(&emitter, &db.conn, child.id)
+        let manager = crate::acp::manager::ConnectionManager::new();
+        delete_conversation_with_cleanup_core(&emitter, &db.conn, &manager, child.id)
             .await
             .expect("delete child");
         let mut saw_deleted = false;

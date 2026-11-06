@@ -324,6 +324,16 @@ pub struct SessionState {
     /// persisted DB row, not from here. See `ActiveDelegationState`.
     pub active_delegations: BTreeMap<String, ActiveDelegationState>,
 
+    /// Child connection ids of EVERY codeg delegation this connection has
+    /// running, from `DelegationChildRunning`. Lifecycle accounting, unlike
+    /// `active_delegations`, which only holds the ones bound to a card (a
+    /// delegation whose parent tool call couldn't be identified runs under a
+    /// synthetic id and never reaches it). The idle sweep spares a parent while
+    /// one of these is still a live connection, because ending the parent
+    /// cancels them (`cancel_by_parent`). On `to_snapshot()` too, so a client
+    /// that attaches mid-delegation holds the same gate.
+    pub delegated_children: BTreeSet<String>,
+
     /// Live user-feedback ("steering") notes for the current turn. Appended by
     /// `FeedbackSubmitted` (a user note while the agent works), flipped to
     /// `Delivered` by `FeedbackConsumed` (the agent read them via the
@@ -899,6 +909,7 @@ impl SessionState {
             pending_question: None,
             pending_plan_approval: None,
             active_delegations: BTreeMap::new(),
+            delegated_children: BTreeSet::new(),
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
             background_outstanding: 0,
@@ -1740,6 +1751,16 @@ impl SessionState {
                         assistant_name: assistant_name.clone(),
                     },
                 );
+            }
+            AcpEvent::DelegationChildRunning {
+                child_connection_id,
+                running,
+            } => {
+                if *running {
+                    self.delegated_children.insert(child_connection_id.clone());
+                } else {
+                    self.delegated_children.remove(child_connection_id);
+                }
             }
             AcpEvent::DelegationCompleted {
                 parent_tool_use_id, ..
@@ -2583,6 +2604,7 @@ impl SessionState {
             pending_plan_approval: self.pending_plan_approval.clone(),
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
+            delegated_children: self.delegated_children.iter().cloned().collect(),
             feedback: self.feedback.clone(),
             tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
@@ -2694,6 +2716,12 @@ pub struct LiveSessionSnapshot {
     /// doesn't bloat every snapshot with an empty array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_delegations: Vec<ActiveDelegationState>,
+    /// Every running delegation's child connection id (see
+    /// `SessionState.delegated_children`), so a client attaching mid-delegation
+    /// keeps the parent alive like one that saw it start. Absent when empty and
+    /// on older servers, like `active_delegations`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegated_children: Vec<String>,
     /// Live user-feedback notes for the current turn (see `SessionState.feedback`).
     /// `#[serde(default)]` so older server payloads without this field still
     /// deserialize; `skip_serializing_if` keeps the common empty case off the
@@ -4993,6 +5021,45 @@ mod tests {
         assert_eq!(back.active_delegations.len(), 1);
         assert_eq!(back.active_delegations[0].parent_tool_use_id, "pt-1");
         assert_eq!(back.active_delegations[0].child_conversation_id, 99);
+    }
+
+    /// Lifecycle accounting for every delegation, card or not: running children
+    /// are tracked by connection id, outlive the parent's turn, reach the
+    /// snapshot, and a replayed frame changes nothing.
+    #[test]
+    fn delegated_children_track_every_running_delegation() {
+        let running = |child: &str, running: bool| AcpEvent::DelegationChildRunning {
+            child_connection_id: child.into(),
+            running,
+        };
+        let mut s = fresh_state();
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&running("child-b", true));
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(
+            s.delegated_children.iter().collect::<Vec<_>>(),
+            vec!["child-a", "child-b"]
+        );
+        assert!(s.active_delegations.is_empty(), "neither has a card");
+
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        let back: LiveSessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.delegated_children, vec!["child-a", "child-b"]);
+
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-b", false));
+        assert!(s.delegated_children.is_empty());
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        assert!(
+            !json.contains("delegated_children"),
+            "kept off the wire when empty"
+        );
     }
 
     #[test]

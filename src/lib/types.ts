@@ -3330,6 +3330,17 @@ export type AcpEvent =
       assistant_name?: string | null
     }
   /**
+   * A codeg delegation of this (parent) connection started (`running`) or
+   * reached a terminal state. Lifecycle accounting only: unlike the two events
+   * above it also covers a delegation whose parent tool call couldn't be
+   * identified (no card), which still dies with its parent.
+   */
+  | {
+      type: "delegation_child_running"
+      child_connection_id: string
+      running: boolean
+    }
+  /**
    * The user's submitted prompt, broadcast on the connection stream so OTHER
    * clients viewing this conversation synthesize the user turn in real time.
    * The sending client renders its own optimistic turn and ignores this echo.
@@ -3785,6 +3796,10 @@ export interface LiveSessionSnapshot {
   /** Live sub-agent delegations recoverable from the snapshot. May be absent
    *  on older server payloads (then treated as `[]`). */
   active_delegations?: ActiveDelegationState[]
+  /** Child connection ids of every codeg delegation still running, card or
+   *  not (see `delegation_child_running`). Absent when empty / on older
+   *  servers (then treated as `[]`). */
+  delegated_children?: string[]
   /** Live-feedback notes for the current turn. Absent on older payloads /
    *  when empty (then treated as `[]`). */
   feedback?: FeedbackItem[]

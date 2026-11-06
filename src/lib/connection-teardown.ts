@@ -5,30 +5,69 @@
  *   * the tab-unmount cleanup (`shouldDisconnectOnUnmount`)
  *   * the preview-tab release (`disconnectIfIdle`), fired when the next
  *     single-click in the sidebar takes the preview slot
+ *   * the provider's own unmount cleanup
+ *   * the frontend idle sweep, alongside guards this predicate can't express
+ *     (`connecting`, viewers, delegation children, the idle timer)
  *
- * (The idle sweep enforces the same rule inline, alongside guards this
- * predicate can't express: `connecting`, viewers, delegation children.)
+ * The reconnect popover reads it too, to warn before a reconnect destroys the
+ * same work.
  */
 
 import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
+import { isAsyncTaskTerminal } from "@/lib/async-tasks"
+import type { AsyncTaskRecord, RemoteControlInfo } from "@/lib/types"
+
+/**
+ * Everything the gate weighs. Every field is required on purpose: a caller
+ * that builds this from a subset of the connection fails to compile instead
+ * of quietly skipping a kind of work — which is how the AIR half once went
+ * missing here while the idle sweep already checked it.
+ */
+export interface ConnectionWork {
+  status: string | null
+  backgroundOutstanding: number
+  asyncTasks: readonly AsyncTaskRecord[]
+  remoteControl: RemoteControlInfo | null
+  /** Child connection ids of the codeg delegations still running. */
+  delegatedChildren: readonly string[]
+}
 
 /**
  * Work that an `acpDisconnect` would DESTROY rather than merely detach from.
  * The backend tears a connection down unconditionally, so the agent CLI dies
- * with its in-flight turn — which agents record in their own transcript as an
- * interrupted request — and any launched-but-unresolved background task
- * (async sub-agent / background shell) dies with it.
+ * with everything running inside it:
+ *
+ *   * an in-flight turn, which agents record in their own transcript as an
+ *     interrupted request;
+ *   * launched-but-unresolved background work (async sub-agent / background
+ *     shell), as the transcript watcher counts it (`backgroundOutstanding`).
+ *     The watcher settles or expires the count and reports 0;
+ *   * the same kind of work as the AIR async-task channel reports it. The
+ *     watcher only sees work that leaves a Claude transcript trace: a codex
+ *     background terminal, a Claude Monitor or workflow task, or a Grok
+ *     workflow is announced here and nowhere else. ORed with the count, never
+ *     summed, like the backend's `has_active_background_work`;
+ *   * Claude Code's Remote Control, which runs in the agent CLI: the user
+ *     handed the session to claude.ai/code or a phone. It stays until they
+ *     turn it off (the backend sweep spares it too);
+ *   * a codeg delegation (`delegate_to_agent`) still running. It outlives the
+ *     turn that started it, and the backend cancels every sub-agent a parent
+ *     has in flight when the parent goes (the backend sweep spares it too,
+ *     while the child is alive).
  *
  * Only OWNERS need this gate: a viewer's teardown detaches and never kills
  * anything, and the sweeps skip viewers, so one left attached leaks its
  * subscription. An explicit `disconnect` ignores it by design — that path
  * carries user intent (agent switch, restart-to-apply, an explicit close).
  */
-export function isConnectionBusy(conn: {
-  status: string | null
-  backgroundOutstanding: number
-}): boolean {
-  return conn.status === "prompting" || conn.backgroundOutstanding > 0
+export function isConnectionBusy(conn: ConnectionWork): boolean {
+  return (
+    conn.status === "prompting" ||
+    conn.backgroundOutstanding > 0 ||
+    conn.asyncTasks.some((task) => !isAsyncTaskTerminal(task)) ||
+    conn.remoteControl != null ||
+    conn.delegatedChildren.length > 0
+  )
 }
 
 // Must mirror `AcpError::ConnectionNotFound`'s code in

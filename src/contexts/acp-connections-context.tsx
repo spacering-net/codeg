@@ -97,7 +97,6 @@ import {
 } from "@/lib/session-failures"
 import {
   adoptUnknownAsyncTasks,
-  liveAsyncTasks,
   mergeAsyncTasks,
   upsertAsyncTask,
 } from "@/lib/async-tasks"
@@ -495,6 +494,18 @@ export interface ConnectionState {
    */
   backgroundOutstanding: number
   /**
+   * Child connection ids of the codeg delegations (`delegate_to_agent`) this
+   * connection still has running, mirrored from the backend's
+   * `delegated_children`: added and dropped by `delegation_child_running`,
+   * recovered from the snapshot by a client that attaches mid-delegation.
+   * Every delegation, including one with no card (its parent tool call could
+   * not be identified, so `delegation_started` never names it). A busy signal
+   * like `backgroundOutstanding`: an async delegation outlives the turn that
+   * started it, and the backend cancels every sub-agent a parent has in flight
+   * when the parent goes.
+   */
+  delegatedChildren: string[]
+  /**
    * Tool-call context observed OUT-OF-TURN (status !== "prompting"), kept
    * ONLY so a background permission request can still render its command/
    * diff details. Out-of-turn wire tool events are barred from `liveMessage`
@@ -630,6 +641,14 @@ type Action =
       type: "SET_BACKGROUND_OUTSTANDING"
       contextKey: string
       outstanding: number
+    }
+  | {
+      // A codeg delegation this connection started began (`running`) or
+      // finished. Idempotent, so a replayed event changes nothing.
+      type: "DELEGATION_RUNNING"
+      contextKey: string
+      childConnectionId: string
+      running: boolean
     }
   | StreamingAction
   | { type: "STREAM_BATCH"; actions: StreamingAction[] }
@@ -1646,6 +1665,7 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
 /** Shared empty `steeredMessageIds`, so a turn that steers nothing (almost all
  *  of them) keeps a stable reference through `connRenderEqual`. */
 const EMPTY_STEERED_MESSAGE_IDS: string[] = []
+const EMPTY_DELEGATED_CHILDREN: string[] = []
 
 /** Last time an out-of-turn drop was logged — module-level sampling clock. */
 let lastOutOfTurnDropLogAt = 0
@@ -1960,6 +1980,7 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
         cancelledTurn: null,
@@ -2026,6 +2047,7 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
         cancelledTurn: null,
@@ -2222,6 +2244,9 @@ function connectionsReducer(
         // recovers the pending-background count the one-shot events won't
         // replay for it, so its teardown gates hold.
         backgroundOutstanding: action.patch.backgroundOutstanding,
+        // Current state too, and the only way a client that attaches while a
+        // delegation runs learns of it: the running frame is one-shot.
+        delegatedChildren: action.patch.delegatedChildren,
         sessionFailures: mergedSessionFailures,
         toolApprovals: mergedToolApprovals,
         asyncTasks: mergedAsyncTasks,
@@ -2343,6 +2368,23 @@ function connectionsReducer(
       next.set(action.contextKey, {
         ...conn,
         backgroundOutstanding: action.outstanding,
+      })
+      return next
+    }
+
+    case "DELEGATION_RUNNING": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const running = conn.delegatedChildren.includes(action.childConnectionId)
+      if (running === action.running) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        delegatedChildren: action.running
+          ? [...conn.delegatedChildren, action.childConnectionId]
+          : conn.delegatedChildren.filter(
+              (id) => id !== action.childConnectionId
+            ),
       })
       return next
     }
@@ -3504,6 +3546,15 @@ export interface AcpActionsValue {
   /** Pause or clear the session's active Codex goal (codex-acp #293). */
   goalControl(contextKey: string, action: "pause" | "clear"): Promise<void>
   setActiveKey(key: string | null): void
+  /**
+   * Give the active key back — but only while it is still `key`. A view that
+   * claimed it (`setActiveKey`) calls this when it goes away for good: left
+   * claimed, the keepalive would keep touching that connection and the idle
+   * sweep would keep skipping it, so the busy owner a closed tab leaves running
+   * would never be reclaimed once its work settles. Compare-and-clear, so a
+   * view that already took over the key keeps it.
+   */
+  releaseActiveKey(key: string): void
   touchActivity(contextKey: string): void
   registerOpenTabKeys(keys: Set<string>): void
   /**
@@ -4380,6 +4431,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     (key: string | null) => {
       if (storeRef.current.activeKey === key) return
       storeRef.current.activeKey = key
+      notifyActiveKeyListeners()
+    },
+    [notifyActiveKeyListeners]
+  )
+
+  const releaseActiveKey = useCallback(
+    (key: string) => {
+      if (storeRef.current.activeKey !== key) return
+      storeRef.current.activeKey = null
       notifyActiveKeyListeners()
     },
     [notifyActiveKeyListeners]
@@ -5841,6 +5901,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           break
         }
+        case "delegation_child_running":
+          // Rides the PARENT's stream, for every delegation (the card events
+          // skip one with no card). It keeps the parent's busy signal current:
+          // ending the parent cancels every sub-agent it still has running.
+          dispatch({
+            type: "DELEGATION_RUNNING",
+            contextKey,
+            childConnectionId: e.child_connection_id,
+            running: e.running,
+          })
+          break
         case "async_task": {
           // JetBrains AIR async-task delta (claude only) — Claude's background
           // shells / workflows / monitors. Merged into the connection's task
@@ -6848,23 +6919,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // would kill another client's agent. The viewer is torn down when its
         // tab unmounts (disconnect's isViewer branch detaches it).
         if (conn.isViewer) continue
-        // Launched-but-unresolved background work (async sub-agent /
-        // background shell): disconnecting would kill the agent CLI and the
-        // background task with it. The backend watcher settles or max-age
-        // expires the accounting and emits `outstanding: 0`, which re-arms
-        // this sweep for the connection.
-        if (conn.backgroundOutstanding > 0) continue
-        // The AIR channel's half of the same rule. The watcher above only sees
-        // background work that leaves a transcript trace; a workflow or monitor
-        // task announces itself here and nowhere else, so without this check a
-        // quiet interval would disconnect the connection and kill a task the
-        // strip is actively showing as running. Mirrors the backend's
-        // `has_active_background_work`, which ORs the two the same way.
-        if (liveAsyncTasks(conn.asyncTasks).length > 0) continue
-        // Claude Code's Remote Control runs in the agent CLI: disconnecting
-        // would end the session the user handed to claude.ai/code or a phone.
-        // The backend sweep spares it too (`sweep_idle`).
-        if (conn.remoteControl) continue
+        // Work a disconnect would destroy — launched-but-unresolved background
+        // work on either the watcher's count or the AIR task table, or Remote
+        // Control (see `isConnectionBusy`). The same gate the unmount and
+        // preview releases use, so the busy owner a closed tab left behind
+        // becomes reclaimable here once its work settles: the watcher's
+        // `outstanding: 0` or the task's terminal frame re-arms this sweep.
+        if (isConnectionBusy(conn)) continue
         const lastActive = lastActivityRef.current.get(contextKey) ?? 0
         if (now - lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
           toDisconnect.push({
@@ -6896,7 +6957,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     teardownAttachSubscription,
   ])
 
-  // Disconnect all on unmount
+  // Disconnect every idle owned connection on unmount
   useEffect(() => {
     const reverseMap = reverseMapRef.current
     const attachSubs = attachSubscriptionsRef.current
@@ -6908,9 +6969,11 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     const store = storeRef.current
     return () => {
       // A connection can be routed by several surfaces (see `reverseMapRef`);
-      // tear it down at most once, and only if at least one of them OWNS it.
-      const alreadyTornDown = new Set<string>()
+      // tear it down at most once, only if at least one of them OWNS it, and
+      // not while any owner still has work in flight.
       for (const [connectionId, contextKeys] of reverseMap) {
+        let owned = false
+        let busy = false
         for (const contextKey of contextKeys) {
           // Delegation-child entries are not real user-facing
           // connections — the broker owns their backend lifecycle and
@@ -6924,10 +6987,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // acpDisconnect it on our unmount. The attach-sub detach loop below
           // releases our read-only subscription cleanly.
           if (conn?.isViewer) continue
-          if (alreadyTornDown.has(connectionId)) continue
-          alreadyTornDown.add(connectionId)
-          acpDisconnect(connectionId).catch(() => {})
+          owned = true
+          // Nobody asked to stop anything: the tree is going away under a live
+          // page (the i18n boot gate swaps it out while a new locale loads).
+          // A busy owner is left to the backend sweep, which spares it until
+          // its work settles — the same rule as a closed tab.
+          if (conn && isConnectionBusy(conn)) busy = true
         }
+        if (owned && !busy) acpDisconnect(connectionId).catch(() => {})
       }
       for (const [, sub] of attachSubs) {
         try {
@@ -8349,6 +8416,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       answerQuestion,
       answerPlanApproval,
       setActiveKey,
+      releaseActiveKey,
       touchActivity,
       registerOpenTabKeys,
       registerLiveSurfaceKeys,
@@ -8377,6 +8445,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       answerQuestion,
       answerPlanApproval,
       setActiveKey,
+      releaseActiveKey,
       touchActivity,
       registerOpenTabKeys,
       registerLiveSurfaceKeys,
