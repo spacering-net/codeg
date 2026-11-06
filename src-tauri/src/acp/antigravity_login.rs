@@ -1006,39 +1006,66 @@ async fn finish_delivering(target: String, pending: Pending) -> AntigravityLogin
         scratch,
         ..
     } = pending;
+    let raw_cred_path = credential_path.clone();
     let credential_path = display_path(&credential_path);
 
-    if let Err(reason) = deliver_redirect(&target).await {
-        reap_and_release(child, _stdin, scratch).await;
-        return AntigravityLoginOutcome {
+    let cred_exists_on_disk = || {
+        raw_cred_path
+            .as_ref()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+    };
+
+    let redirect_res = deliver_redirect(&target).await;
+    let mut already_accepted = false;
+    if let Err(reason) = redirect_res {
+        if cred_exists_on_disk() {
+            already_accepted = true;
+        } else {
+            if let Ok(Ok(_)) = tokio::time::timeout(
+                Duration::from_millis(2500),
+                await_response(&mut responses, ID_AUTHENTICATE, Duration::from_millis(2500), &stderr),
+            )
+            .await
+            {
+                already_accepted = true;
+            } else if cred_exists_on_disk() {
+                already_accepted = true;
+            } else {
+                reap_and_release(child, _stdin, scratch).await;
+                return AntigravityLoginOutcome {
+                    signed_in: false,
+                    message: Some(reason),
+                    retryable: false,
+                    credential_path,
+                };
+            }
+        }
+    }
+
+    let outcome = if already_accepted {
+        Ok(serde_json::Value::Null)
+    } else {
+        await_response(&mut responses, ID_AUTHENTICATE, AUTHENTICATE_WAIT, &stderr).await
+    };
+    reap_and_release(child, _stdin, scratch).await;
+
+    if outcome.is_ok() || cred_exists_on_disk() {
+        tracing::info!("[ACP][Antigravity] browser-free sign-in succeeded for {method_id}");
+        AntigravityLoginOutcome {
+            signed_in: true,
+            message: None,
+            retryable: false,
+            credential_path,
+        }
+    } else {
+        let reason = outcome.err().unwrap_or_else(|| "Unknown sign-in error".to_string());
+        tracing::warn!("[ACP][Antigravity] browser-free sign-in failed: {reason}");
+        AntigravityLoginOutcome {
             signed_in: false,
             message: Some(reason),
             retryable: false,
             credential_path,
-        };
-    }
-
-    let outcome = await_response(&mut responses, ID_AUTHENTICATE, AUTHENTICATE_WAIT, &stderr).await;
-    reap_and_release(child, _stdin, scratch).await;
-
-    match outcome {
-        Ok(_) => {
-            tracing::info!("[ACP][Antigravity] browser-free sign-in succeeded for {method_id}");
-            AntigravityLoginOutcome {
-                signed_in: true,
-                message: None,
-                retryable: false,
-                credential_path,
-            }
-        }
-        Err(reason) => {
-            tracing::warn!("[ACP][Antigravity] browser-free sign-in failed: {reason}");
-            AntigravityLoginOutcome {
-                signed_in: false,
-                message: Some(reason),
-                retryable: false,
-                credential_path,
-            }
         }
     }
 }
