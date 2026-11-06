@@ -5894,6 +5894,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the package's `postinstall` decompresses it into `$GROK_HOME/bin`
             // (default `~/.grok/bin`) during `npm install`, and the npm
             // `bin/grok` trampoline does so on first run if that never happened.
+            // Only the postinstall moves `~/.grok/bin/grok` on to the build
+            // just installed (the trampoline runs whatever is there) and records
+            // that copy as npm's, and npm 12 blocks it unless told to allow it,
+            // so codeg's install lets it run (`npm_package_requires_scripts` in
+            // commands/acp.rs).
             // Public mirrors (e.g. registry.npmmirror.com, a common CN default)
             // lag behind this package and are incomplete: re-checked for the
             // 1.0.77 bump, its `latest` there is still 0.1.4, which predates the

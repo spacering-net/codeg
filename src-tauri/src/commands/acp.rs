@@ -470,21 +470,24 @@ fn npx_native_install(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
 /// that PATH, and on Windows nothing lands in `~/.local/bin` either, so without
 /// this a working native install reads as not installed.
 ///
-/// `@xai-official/grok`'s npm postinstall writes its binary to the same place,
-/// and `npm uninstall -g` leaves that copy behind. Grok records which installer
-/// owns `~/.grok/bin` as `[cli].installer` in the `config.toml` beside it:
-/// `"internal"` from its own installers, `"npm"` from the npm package. A copy
-/// recorded as npm's does not count here. An npm-installed Grok resolves
+/// `@xai-official/grok`'s npm package writes its binary to the same place, and
+/// `npm uninstall -g` leaves that copy behind. An npm-installed Grok resolves
 /// through the npm prefix like every other npx agent, and counting its copy
-/// would keep Grok installed after codeg uninstalls it.
+/// would keep Grok installed after codeg uninstalls it, so that copy does not
+/// count here. Grok records which installer owns `~/.grok/bin` as
+/// `[cli].installer` in the `config.toml` beside it: `"internal"` from its own
+/// installers, `"npm"` from the npm package's postinstall. Where npm skipped
+/// that postinstall (npm 12 blocks install scripts it was not told to allow,
+/// and `ignore-scripts` skips them), the package's launcher unpacks the binary
+/// on its first run and records nothing; with no record, the copy is told
+/// apart by where its build lives ([`is_grok_npm_copy`]).
 ///
 /// Only the default location is probed. A `GROK_BIN_DIR` or `GROK_HOME`
 /// relocation is not followed.
 fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
     let grok_dir = home.join(".grok");
-    let cand = grok_dir
-        .join("bin")
-        .join(binary_cache::executable_file_name(cmd));
+    let bin_dir = grok_dir.join("bin");
+    let cand = bin_dir.join(binary_cache::executable_file_name(cmd));
     if !cand.is_file() {
         return None;
     }
@@ -499,7 +502,48 @@ fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
                 .as_str()
                 .map(str::to_string)
         });
-    (installer.as_deref() != Some("npm")).then_some(cand)
+    let npm_copy = match installer.as_deref() {
+        Some(installer) => installer == "npm",
+        None => is_grok_npm_copy(&bin_dir, &cand, cmd),
+    };
+    (!npm_copy).then_some(cand)
+}
+
+/// Whether `cand`, `<cmd>` in `bin_dir` (`~/.grok/bin`), is laid out as
+/// `@xai-official/grok`'s npm scripts leave it: they unpack the build beside it
+/// as `<cmd>-<version>` (with `.exe` on Windows) and make `cand` a symlink to
+/// that bare name, or on Windows a copy of that file. Grok's own installers and
+/// its updater keep their builds in `~/.grok/downloads` and link or copy `cand`
+/// from there.
+fn is_grok_npm_copy(bin_dir: &Path, cand: &Path, cmd: &str) -> bool {
+    let prefix = format!("{cmd}-");
+    // As the npm scripts' own cleanup matches their builds: a digit right after
+    // the prefix, which leaves out `grok-pager-<version>`.
+    let is_build = |name: &std::ffi::OsStr| {
+        name.to_str()
+            .and_then(|name| name.strip_prefix(prefix.as_str()))
+            .is_some_and(|version| version.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    if let Ok(target) = fs::read_link(cand) {
+        let mut parts = target.components();
+        return matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(name)), None) if is_build(name)
+        );
+    }
+    let Ok(len) = fs::metadata(cand).map(|meta| meta.len()) else {
+        return false;
+    };
+    fs::read_dir(bin_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            is_build(&entry.file_name())
+                && entry
+                    .metadata()
+                    .is_ok_and(|meta| meta.is_file() && meta.len() == len)
+        })
 }
 
 #[derive(Default)]
@@ -2360,9 +2404,9 @@ const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
 /// npm ≥7 hides lifecycle-script output by default. hermes-agent's postinstall
 /// runs a multi-minute runtime bootstrap (pinned upstream checkout + isolated
 /// venv sync); without this flag the install log goes silent for the whole
-/// bootstrap, which reads as a hang (codeg imposes no timeout on npm). Other
-/// agents' packages have no meaningful install scripts, so this only adds
-/// their (empty) script output.
+/// bootstrap, which reads as a hang (codeg imposes no timeout on npm). Grok's
+/// postinstall only unpacks its binary and other agents' packages have no
+/// meaningful install scripts, so for them this adds a few lines at most.
 const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
 /// CLI override forcing lifecycle scripts ON. A user-level
 /// `ignore-scripts=true` (.npmrc or npm_config_ignore_scripts) makes `npm
@@ -2377,8 +2421,8 @@ const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
 const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
 
 /// The flags that let `package`'s own install scripts run, for the packages
-/// whose install is those scripts ([`npm_package_requires_scripts`]); none for
-/// any other package.
+/// whose install needs those scripts ([`npm_package_requires_scripts`]); none
+/// for any other package.
 ///
 /// [`NPM_RUN_SCRIPTS_OVERRIDE`] stopped being enough with npm 12, which runs no
 /// install script it was not told to: npm 12.2.1 skipped hermes-agent's
@@ -2388,7 +2432,8 @@ const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
 /// so npm takes `--allow-scripts=<name>` for those, matched against the
 /// package's resolved registry identity: it covers the package being
 /// installed and none of its dependencies. npm 9.6.7, 10.2.4, 10.8.2 and
-/// 11.17.0 accept the flag without a warning and run the script as before.
+/// 11.17.0 accept the flag without a warning and run the script as before
+/// (11.17.0 and 12.2.2 likewise for a scoped name, `@xai-official/grok`).
 fn npm_run_scripts_args(package: &str) -> Vec<String> {
     if !npm_package_requires_scripts(package) {
         return Vec::new();
@@ -2412,10 +2457,28 @@ fn npm_run_scripts_args(package: &str) -> Vec<String> {
 const NODE_ENV_PROXY_VAR: &str = "NODE_USE_ENV_PROXY";
 
 /// Whether an npm package's lifecycle scripts are load-bearing for the
-/// install (skipping them yields a broken command). Only the hermes-agent
-/// community bridge today: its postinstall bootstraps the entire Python
-/// runtime the `hermes` bin execs into.
+/// install, so codeg's install lets them run ([`npm_run_scripts_args`]):
+///
+/// - hermes-agent ([`npm_package_bootstraps_runtime`]): its postinstall
+///   bootstraps the entire Python runtime the `hermes` bin execs into, so
+///   skipping it yields a broken command.
+/// - `@xai-official/grok`: only its postinstall points `~/.grok/bin/grok` at
+///   the build just installed and records that copy as npm's (see
+///   [`grok_native_install`]). Skipping it leaves the package's launcher to
+///   unpack a build there on its first run and to run whatever
+///   `~/.grok/bin/grok` is from then on, so an upgrade never reaches it (on
+///   npm 12.2.2, an upgrade from 1.0.70 to 1.0.77 still ran 1.0.70), and the
+///   copy `npm uninstall -g` leaves records no installer.
 fn npm_package_requires_scripts(package: &str) -> bool {
+    npm_package_bootstraps_runtime(package)
+        || package_name_from_spec(package) == "@xai-official/grok"
+}
+
+/// Whether an npm package is a bootstrap wrapper: its postinstall downloads
+/// the runtime its bin execs into, so the install can die inside those
+/// downloads ([`annotate_npm_bootstrap_failure`]) or leave a bin with no
+/// runtime behind it. Only the hermes-agent community bridge today.
+fn npm_package_bootstraps_runtime(package: &str) -> bool {
     package_name_from_spec(package) == "hermes-agent"
 }
 
@@ -2425,7 +2488,7 @@ fn npm_package_requires_scripts(package: &str) -> bool {
 /// `fetch` go through — worth spelling out, because npm reports it as a bare
 /// `fetch failed` that says nothing about a proxy.
 fn annotate_npm_bootstrap_failure(package: &str, err: AcpError) -> AcpError {
-    if !npm_package_requires_scripts(package) {
+    if !npm_package_bootstraps_runtime(package) {
         return err;
     }
     let AcpError::Protocol(message) = &err else {
@@ -14435,7 +14498,7 @@ pub(crate) async fn acp_prepare_npx_agent_core(
             // `~/.local/bin`) legitimately satisfies the check. Without this,
             // a broken install is recorded as installed and only fails at
             // connect time with an opaque error.
-            if npm_package_requires_scripts(&install_spec) {
+            if npm_package_bootstraps_runtime(&install_spec) {
                 emit_agent_install_event(
                     emitter,
                     &task_id,
@@ -20286,17 +20349,18 @@ wire_api = "chat"
         assert!(build_npm_install_spec("cline@3.0.9", Some("latest")).is_err());
     }
 
-    // hermes-agent's postinstall bootstraps its runtime, and it is the only
-    // package codeg force-enables lifecycle scripts for. The spec, not the
-    // agent type, is what `npm_package_requires_scripts` keys off, so a custom
-    // version spec must still name the package, or the install leaves a shim
-    // that only fails later, at connect, with "runtime is not ready". The spec's
-    // own version is also the recorded fallback when detection comes up empty.
+    // hermes-agent's postinstall bootstraps its runtime, so codeg
+    // force-enables its lifecycle scripts. The spec, not the agent type, is
+    // what `npm_package_requires_scripts` keys off, so a custom version spec
+    // must still name the package, or the install leaves a shim that only
+    // fails later, at connect, with "runtime is not ready". The spec's own
+    // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
         let spec = build_npm_install_spec("hermes-agent@0.22.7", Some("0.23.0")).unwrap();
         assert_eq!(spec, "hermes-agent@0.23.0");
         assert!(npm_package_requires_scripts(&spec));
+        assert!(npm_package_bootstraps_runtime(&spec));
         assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.23.0"));
     }
 
@@ -20433,8 +20497,9 @@ wire_api = "chat"
     }
 
     /// A `grok` in `~/.grok/bin` (`grok.exe` on Windows) counts as Grok's
-    /// native install unless Grok recorded it as the npm package's copy, the
-    /// one `npm uninstall -g` leaves behind.
+    /// native install unless it is the npm package's copy, the one `npm
+    /// uninstall -g` leaves behind: recorded as npm's, or, with no record,
+    /// laid out as the npm package lays it out (see the layout tests below).
     #[test]
     fn grok_native_install_counts_any_copy_but_the_npm_packages() {
         let home = tempfile::tempdir().expect("tempdir");
@@ -20454,7 +20519,8 @@ wire_api = "chat"
         // The record as `install.ps1` writes it, with CRLF line endings.
         assert_eq!(found().as_deref(), Some(bin.as_path()));
 
-        // Only an explicit npm record excludes the copy.
+        // Without an npm record, a copy with no build of the npm package's
+        // beside it still counts.
         for other in ["", "[cli]\nauto_update = false\n", "not = [toml"] {
             std::fs::write(&config, other).expect("write config");
             assert_eq!(found().as_deref(), Some(bin.as_path()), "config: {other:?}");
@@ -20467,6 +20533,89 @@ wire_api = "chat"
         std::fs::write(&config, "[cli]\ninstaller = \"npm\"\nauto_update = true\n")
             .expect("write config");
         assert_eq!(found(), None);
+    }
+
+    /// Where npm skipped the postinstall, the package's launcher unpacks the
+    /// build on its first run and records no installer, and the copy is told
+    /// apart by its layout. This is the Windows one, which the test can build
+    /// on any host: `grok.exe` copied from the `grok-<version>.exe` beside it.
+    #[test]
+    fn grok_native_install_skips_an_unrecorded_copy_of_an_npm_build() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin_dir = grok_dir.join("bin");
+        let bin = bin_dir.join(binary_cache::executable_file_name("grok"));
+        let build_name = |stem: &str| format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+        let build = bin_dir.join(build_name("grok-1.0.70"));
+        let config = grok_dir.join("config.toml");
+        let found = || grok_native_install(home.path(), "grok");
+
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::write(&build, "build 1.0.70").expect("write build");
+        std::fs::write(&bin, "build 1.0.70").expect("write copy");
+        // The launcher's first run leaves no config; a turn then writes one
+        // with a `[cli]` table and still no installer.
+        assert_eq!(found(), None, "no config");
+        std::fs::write(&config, "[cli]\nauto_update = true\n").expect("write config");
+        assert_eq!(found(), None, "no installer");
+
+        // A record decides over the layout.
+        std::fs::write(&config, "[cli]\ninstaller = \"internal\"\n").expect("write config");
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+        std::fs::remove_file(&config).expect("remove config");
+
+        // A `grok` that is no copy of that build counts, and so does one beside
+        // files that only look like builds (the pager's, another `grok-…`).
+        std::fs::write(&bin, "another build").expect("write other");
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+        std::fs::remove_file(&build).expect("remove build");
+        for name in ["grok-pager-1.0.70", "grok-latest"] {
+            let lookalike = bin_dir.join(build_name(name));
+            std::fs::write(&lookalike, "another build").expect("write lookalike");
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "{name}");
+            std::fs::remove_file(&lookalike).expect("remove lookalike");
+        }
+    }
+
+    /// The Unix layout: npm links `grok` to the bare name of the build beside
+    /// it, where Grok's own installers link it into `~/.grok/downloads`.
+    #[cfg(unix)]
+    #[test]
+    fn grok_native_install_skips_an_unrecorded_link_to_an_npm_build() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin_dir = grok_dir.join("bin");
+        let downloads = grok_dir.join("downloads");
+        let bin = bin_dir.join("grok");
+        let found = || grok_native_install(home.path(), "grok");
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::create_dir_all(&downloads).expect("create downloads");
+        std::fs::write(bin_dir.join("grok-1.0.70"), "build 1.0.70").expect("write build");
+        std::fs::write(downloads.join("grok-macos-aarch64"), "build").expect("write download");
+        let relink = |target: &Path| {
+            let _ = std::fs::remove_file(&bin);
+            symlink(target, &bin).expect("link grok");
+        };
+
+        // What the npm launcher and postinstall leave, with no record.
+        relink(Path::new("grok-1.0.70"));
+        assert_eq!(found(), None);
+        std::fs::write(grok_dir.join("config.toml"), "[cli]\nauto_update = true\n")
+            .expect("write config");
+        assert_eq!(found(), None, "a config without an installer");
+
+        // install.sh's relative link, and the absolute one it makes when the
+        // bin and download directories have different parents.
+        let absolute = downloads.join("grok-macos-aarch64");
+        for target in [
+            Path::new("../downloads/grok-macos-aarch64"),
+            absolute.as_path(),
+        ] {
+            relink(target);
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "{target:?}");
+        }
     }
 
     #[cfg(not(windows))]
@@ -22032,26 +22181,43 @@ wire_api = "chat"
         }
     }
 
-    /// The script flags reach exactly the packages whose install is their
+    /// The script flags reach exactly the packages whose install needs their
     /// scripts, and name the package, which npm 12 needs before it runs a
     /// script of a global install or an `npx` run.
     #[test]
-    fn hermes_installs_name_the_package_whose_scripts_npm_must_run() {
-        for spec in ["hermes-agent@0.22.7", "hermes-agent@0.23.0", "hermes-agent"] {
-            assert_eq!(
-                npm_run_scripts_args(spec),
-                ["--ignore-scripts=false", "--allow-scripts=hermes-agent"],
-                "{spec}"
-            );
+    fn installs_name_the_packages_whose_scripts_npm_must_run() {
+        for (specs, name) in [
+            (
+                &["hermes-agent@0.22.7", "hermes-agent@0.23.0", "hermes-agent"][..],
+                "hermes-agent",
+            ),
+            (
+                &["@xai-official/grok@1.0.77", "@xai-official/grok"][..],
+                "@xai-official/grok",
+            ),
+        ] {
+            for spec in specs {
+                assert_eq!(
+                    npm_run_scripts_args(spec),
+                    [
+                        "--ignore-scripts=false".to_string(),
+                        format!("--allow-scripts={name}"),
+                    ],
+                    "{spec}"
+                );
+            }
         }
-        // Every other agent keeps the user's own script policy.
+        // Every other agent keeps the user's own script policy, and so does a
+        // package whose name only starts like one of those.
         for spec in [
             "cline@3.0.74",
-            "@xai-official/grok@1.0.77",
+            "@xai-official/grok-darwin-arm64@1.0.77",
             "hermes-agent-npm@1.0.0",
         ] {
             assert!(npm_run_scripts_args(spec).is_empty(), "{spec}");
         }
+        // Grok's postinstall downloads nothing and leaves no runtime to check.
+        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.77"));
         assert_eq!(
             hermes_npx_argv("hermes-agent@0.22.7", &["acp", "--setup"]),
             [
@@ -22705,9 +22871,15 @@ model = "gpt"
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
 
         // A package whose install runs no bootstrap can't fail this way, so the
-        // hint would be noise even on a matching message.
-        let other = annotate_npm_bootstrap_failure("@zed-industries/claude-code-acp", download());
-        assert!(!other.to_string().contains("HTTP(S)_PROXY"));
+        // hint would be noise even on a matching message. That includes Grok,
+        // whose postinstall codeg also runs but which downloads nothing.
+        for other in [
+            "@zed-industries/claude-code-acp",
+            "@xai-official/grok@1.0.77",
+        ] {
+            let other = annotate_npm_bootstrap_failure(other, download());
+            assert!(!other.to_string().contains("HTTP(S)_PROXY"));
+        }
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
