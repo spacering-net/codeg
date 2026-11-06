@@ -7,7 +7,8 @@
 //! * `files` — the subset confirmed as written during the turn.
 //!
 //! A mentioned path is confirmed when the file exists as a regular file and its
-//! modification or creation time is no earlier than the turn's start. A
+//! modification or creation time is no earlier than the turn's start, less
+//! [`FILE_CLOCK_SLACK`]. A
 //! read-only mention (`officecli view a.pptx`) and metadata-only changes
 //! (attributes, ACLs, xattrs) move neither time, so they never qualify. Paths
 //! no tool call named never enter a record at all, whatever touches them —
@@ -30,7 +31,7 @@ pub(crate) mod extract;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
@@ -43,6 +44,21 @@ pub const AGENT_TURN_FILES_EVENT: &str = "folder://agent-turn-files";
 /// Bound on the paths one turn may name. Only guards against a pathological
 /// turn (memory and stat cost); it is not a product-level batch limit.
 const MAX_MENTIONS_PER_TURN: usize = 256;
+
+/// How far a file time may sit before the turn's start and still count. The
+/// start comes from the precise system clock, but Linux and Windows stamp files
+/// from a coarser kernel clock that lags it by up to one tick (a jiffy, or the
+/// ~15.6 ms Windows timer), so a file written right after the start can read
+/// as slightly older. Far below any real gap between a turn starting and its
+/// first tool call finishing.
+const FILE_CLOCK_SLACK: Duration = Duration::from_millis(50);
+
+/// The earliest file time credited to a turn that started at `started_at`.
+fn earliest_credited(started_at: SystemTime) -> SystemTime {
+    started_at
+        .checked_sub(FILE_CLOCK_SLACK)
+        .unwrap_or(started_at)
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AgentTurnFilesEvent {
@@ -80,8 +96,9 @@ pub enum TurnFileJob {
     /// Check the live turn's unconfirmed mentions.
     Confirm { turn_id: u64 },
     /// The last check of a turn that ended normally. The record is already
-    /// gone; only files written within `[started_at, ended_at]` count, so a
-    /// later turn's writes are never credited to this one.
+    /// gone; only files written within `[started_at - FILE_CLOCK_SLACK,
+    /// ended_at]` count, so a later turn's writes are never credited to this
+    /// one.
     Final {
         paths: Vec<PathBuf>,
         started_at: SystemTime,
@@ -217,7 +234,7 @@ pub(crate) fn run_job_with(
                     .filter(|path| !record.files.contains(*path))
                     .cloned()
                     .collect();
-                (record.started_at, pending)
+                (earliest_credited(record.started_at), pending)
             };
             if pending.is_empty() {
                 return;
@@ -246,9 +263,10 @@ pub(crate) fn run_job_with(
             started_at,
             ended_at,
         } => {
+            let earliest = earliest_credited(started_at);
             let fresh: Vec<PathBuf> = stat(&paths)
                 .into_iter()
-                .filter(|file| file.written_at >= started_at && file.written_at <= ended_at)
+                .filter(|file| file.written_at >= earliest && file.written_at <= ended_at)
                 .map(|file| file.actual)
                 .collect();
             if !fresh.is_empty() {
@@ -322,7 +340,6 @@ pub(crate) fn written_files(paths: &[PathBuf]) -> Vec<FoundFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn conn(name: &str) -> String {
         // The registry is process-global and tests run in parallel.
@@ -397,6 +414,38 @@ mod tests {
         // Missing files are not confirmed either.
         assert!(confirm(&c, &[]).is_empty());
         end_turn(&c, false, t(11));
+    }
+
+    #[test]
+    fn a_file_time_a_coarse_clock_tick_before_the_start_still_counts() {
+        // Linux/Windows stamp files from a clock that lags the precise one.
+        let c = conn("slack");
+        let tick = p("tick.docx");
+        let before = p("before.docx");
+        begin_turn(&c, t(10));
+        mention(&c, set(&[&tick, &before]));
+        let fs = [
+            (tick.clone(), t(10) - Duration::from_millis(10)),
+            (
+                before.clone(),
+                t(10) - FILE_CLOCK_SLACK - Duration::from_millis(1),
+            ),
+        ];
+        assert_eq!(confirm(&c, &fs), vec![tick.clone()]);
+        end_turn(&c, false, t(11));
+
+        // The final check uses the same lower bound.
+        let mut published = Vec::new();
+        run_job_with(
+            TurnFileJob::Final {
+                paths: vec![tick.clone(), before.clone()],
+                started_at: t(10),
+                ended_at: t(11),
+            },
+            |_| fs.iter().map(|(path, at)| found(path, *at)).collect(),
+            |paths| published.extend_from_slice(paths),
+        );
+        assert_eq!(published, vec![tick]);
     }
 
     #[test]
@@ -547,6 +596,7 @@ mod tests {
         let folder = dir.path().join("folder.docx");
         std::fs::create_dir(&folder).unwrap();
         let missing = dir.path().join("missing.docx");
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut paths = vec![file.clone(), folder, missing];
         #[cfg(unix)]
         {
@@ -638,9 +688,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("out")).unwrap();
-        // A template that predates the turn; the agent only reads it.
+        // A template that predates the turn (by more than the clock slack);
+        // the agent only reads it.
         std::fs::write(root.join("template.pptx"), b"t").unwrap();
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(FILE_CLOCK_SLACK * 4);
 
         let c = conn("session");
         let mut state = SessionState::new(
