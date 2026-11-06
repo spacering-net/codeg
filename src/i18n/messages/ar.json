@@ -4874,7 +4874,7 @@
       "syncFailed": "فشل مزامنة المهارات"
     },
     "autoPreviewLabel": "فتح المعاينة تلقائيًا",
-    "autoPreviewHint": "عندما ينشئ وكيل ملف Word أو Excel أو PowerPoint أو يعدّله، افتح معاينته المباشرة تلقائيًا."
+    "autoPreviewHint": "عندما تنشئ أدوات الوكيل ملف Word أو Excel أو PowerPoint أو تعدّله خلال دوره الحالي، تُفتح معاينته المباشرة تلقائيًا."
   },
   "SkillPacksSettings": {
     "title": "حزم المهارات",

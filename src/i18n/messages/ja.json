@@ -4874,7 +4874,7 @@
       "syncFailed": "スキルの同期に失敗"
     },
     "autoPreviewLabel": "プレビューを自動で開く",
-    "autoPreviewHint": "エージェントが Word、Excel、PowerPoint ファイルを作成または編集したときに、ライブプレビューを自動で開きます。"
+    "autoPreviewHint": "エージェントが現在のターンでツールを使って Word、Excel、PowerPoint ファイルを作成または編集したときに、ライブプレビューを自動で開きます。"
   },
   "SkillPacksSettings": {
     "title": "スキルパック",

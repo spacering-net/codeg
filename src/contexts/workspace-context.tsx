@@ -31,7 +31,6 @@ import {
   gitIsTracked,
   gitShowDiff,
   gitShowFile,
-  listDirectoryWithFiles,
   readFileBase64,
   readFileForEdit,
   readFilePreview,
@@ -43,6 +42,7 @@ import {
   expandHomePath,
   findOwningFolder,
   isHomeRelativePath,
+  isPathUnderRoot,
   joinRootRel,
   normalizeAbsPath,
   splitAbsPath,
@@ -74,12 +74,16 @@ import {
   HIDDEN_TAB_CONTENT_BUDGET_CHARS,
   selectTabsToUnload,
 } from "@/lib/file-tab-memory"
-import { useWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
 import {
   useOpenFileTabsWatch,
   type WorkspaceExternalConflict,
 } from "@/hooks/use-open-file-tabs-watch"
-import { useOfficeAutoPreview } from "@/lib/office-preview-prefs"
+import {
+  AGENT_TURN_FILES_EVENT,
+  type AgentTurnFilesEvent,
+  useOfficeAutoPreview,
+} from "@/lib/office-preview-prefs"
+import { subscribe } from "@/lib/platform"
 import {
   browserTabHiddenAt,
   getBrowserTabState,
@@ -770,8 +774,9 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     new Map()
   )
   const fileTabsRef = useRef<FileWorkspaceTab[]>([])
-  // Keep dismissals across folder changes and effect re-subscriptions. A
-  // watcher event must not reopen a preview the user already closed.
+  // Office auto-preview's window-lifetime memory: a path shown once (and
+  // possibly closed since) is never auto-opened again in this window, across
+  // folder changes, effect re-subscriptions and later agent turns.
   const autoOpenedOfficePathsRef = useRef(new Set<string>())
   // Latest-state mirrors for the stable action callbacks. Actions live in a
   // context value that must NOT change identity when tabs/folder change, so
@@ -803,6 +808,14 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
 
   useEffect(() => {
     fileTabsRef.current = fileTabs
+    // Office auto-preview: a document that has been open in this window —
+    // however it was opened — counts as seen, so once the user closes it an
+    // agent writing it again never brings it back.
+    for (const tab of fileTabs) {
+      if (tab.kind === "file" && tab.path && isOfficePreviewable(tab.path)) {
+        autoOpenedOfficePathsRef.current.add(normalizeAbsPath(tab.path))
+      }
+    }
   }, [fileTabs])
 
   useEffect(() => {
@@ -2248,122 +2261,68 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     ]
   )
 
-  // Auto-surface office files (.docx/.xlsx/.pptx) the agent produces. This used
-  // to live in the file-tree aux panel, but that panel is closed by default and
-  // unmounts its subscription with it — so the preview never opened unless the
-  // user happened to have the sidebar open. The preview itself lands in the
-  // files pane (openFilePreview → seedLoadingTab activates it), which is owned
-  // here and always mounted, so the trigger belongs here too.
+  // Auto-surface the Office documents (.docx/.xlsx/.pptx) an agent writes
+  // through its tools. The backend keeps, per running turn, the paths that
+  // turn's tool calls name and confirms them by file time once a call settles
+  // (`src-tauri/src/agent_turn_files`); confirmed paths arrive here on
+  // `folder://agent-turn-files`. Nothing else opens a preview: workspace
+  // watcher events — sync clients, antivirus, a branch switch, another program
+  // touching documents — never reach this path.
   //
-  // We retain the workspace watch stream from this always-mounted provider so
-  // change envelopes keep flowing regardless of the aux panel. The store is a
-  // per-path refcounted singleton, so this shares the same backend stream the
-  // aux panel tabs use. Gated on the preference: with auto-preview off we hold
-  // no extra ref, leaving today's aux-panel-scoped lifecycle untouched.
+  // `autoOpenedOfficePathsRef` lives as long as this window: once a document
+  // has been shown here (auto-opened, or already open by hand), closing it
+  // keeps it closed for the rest of the window's life — across folder
+  // switches and later turns that write it again.
   const officeAutoPreview = useOfficeAutoPreview()
-  // Paths-only subscription: this exists for changed_paths envelopes and
-  // must never be the reason a root runs tree/git scans.
-  const officeWatchStore = useWorkspaceStateStore(
-    officeAutoPreview ? (folderPath ?? null) : null,
-    "paths"
-  )
-  const subscribeOfficeEnvelopes = officeWatchStore.subscribeEnvelopes
-  const activeFolderIdForOffice = activeFolder?.id
   useEffect(() => {
-    if (!folderPath || activeFolderIdForOffice == null || !officeAutoPreview) {
-      return
-    }
-    // Leading-edge with dedup: an agent building a doc fires a burst of writes,
-    // so we open on first sighting and remember it in `autoOpened` (which also
-    // keeps a tab the user has since closed from popping back open).
+    if (!folderPath || !officeAutoPreview) return
     const autoOpened = autoOpenedOfficePathsRef.current
-    const pending = new Set<string>()
+    const root = normalizeAbsPath(folderPath)
+    const rootPrefix = root.endsWith("/") ? root : `${root}/`
     let cancelled = false
-    const streamRoot = folderPath
-    const unsubscribe = subscribeOfficeEnvelopes(({ changed_paths }) => {
-      if (!changed_paths || changed_paths.length === 0) return
-      const directories = new Map<
-        string,
-        ReturnType<typeof listDirectoryWithFiles>
-      >()
-      // Tab identity is the absolute path, so joining the stream root onto
-      // the changed relative path compares exactly — an identically-named
-      // doc in another folder has a different absolute path and never
-      // suppresses this preview.
-      const openPaths = new Set(
-        fileTabsRef.current
-          .filter((tab) => tab.kind === "file" && tab.path)
-          .map((tab) => tab.path as string)
-      )
-      for (const changed of changed_paths) {
-        if (!isOfficePreviewable(changed)) continue
+    let unlisten: (() => void) | null = null
+    void subscribe<AgentTurnFilesEvent>(AGENT_TURN_FILES_EVENT, (event) => {
+      if (cancelled) return
+      for (const raw of event?.paths ?? []) {
+        const abs = normalizeAbsPath(raw)
+        // Another folder's document: that window's business.
+        if (!isPathUnderRoot(abs, root)) continue
+        const rel = abs.slice(rootPrefix.length)
+        if (!isOfficePreviewable(rel)) continue
         // Dot-prefixed paths are hidden/machine-owned (editor lock files,
-        // AppleDouble sidecars, anything under `.git`/`.tmp`) — never a
-        // document the agent meant to show. Skipping here means we neither
-        // open a tab for one nor spawn its `officecli watch` process; a user
-        // who wants one can still open it by hand from the file tree.
-        if (isHiddenPath(changed)) continue
-        // Office/WPS owner files (`~$report.docx`) are the same story under a
-        // different naming convention, and the one that actually bites: they
-        // carry a real office extension, so nothing above rejects them, and
-        // opening a folder of documents externally drops a whole burst of them
-        // at once — which arrived here as a dozen unreadable previews.
-        if (isOfficeOwnerFile(changed)) continue
-        const abs = joinRootRel(streamRoot, changed)
-        if (autoOpened.has(abs) || pending.has(abs)) continue
-        // An already-open tab counts as a sighting, not just a skip: this
-        // feature exists to surface documents the user has NOT seen, so a tab
-        // they opened by hand must not become a fresh auto-open the moment
-        // they close it and the agent writes again.
-        if (openPaths.has(abs)) {
-          autoOpened.add(abs)
+        // anything under `.git`/`.tmp`), and Office/WPS owner files
+        // (`~$report.docx`) carry a real office extension — neither is a
+        // document the agent meant to show. Hidden-ness is judged inside the
+        // folder only, so a workspace that itself lives under a dot-directory
+        // still previews.
+        if (isHiddenPath(rel) || isOfficeOwnerFile(rel)) continue
+        if (autoOpened.has(abs)) continue
+        // Counts as a sighting even when the tab is already open (say the
+        // user opened it by hand): this feature surfaces documents the user
+        // has not seen, so closing it must not make it a fresh auto-open.
+        autoOpened.add(abs)
+        if (
+          fileTabsRef.current.some(
+            (tab) => tab.kind === "file" && tab.path === abs
+          )
+        ) {
           continue
         }
-        const io = splitAbsPath(abs)
-        if (!io) continue
-        pending.add(abs)
-        // changed_paths includes removals, including removed worktree copies.
-        // Inspect directory metadata before opening a tab, without reading or
-        // locking the Office document. Share one listing per parent per burst.
-        let listing = directories.get(io.rootPath)
-        if (!listing) {
-          listing = listDirectoryWithFiles(io.rootPath)
-          directories.set(io.rootPath, listing)
-        }
-        void listing
-          .then((entries) => {
-            if (cancelled || autoOpened.has(abs)) return
-            const exists = entries.some(
-              (entry) =>
-                !entry.isDir &&
-                entry.size != null &&
-                normalizeAbsPath(entry.path) === abs
-            )
-            if (!exists) return
-            autoOpened.add(abs)
-            // A manual open during the lookup already handled this file.
-            if (fileTabsRef.current.some((tab) => tab.path === abs)) return
-            return openFilePreview(abs)
-          })
-          .catch(() => {
-            // Covers both halves of the chain: a removed/unreadable parent is
-            // not a document to preview, and `openFilePreview` already reports
-            // its own failures on the tab it seeded.
-          })
-          .finally(() => pending.delete(abs))
+        void openFilePreview(abs)
       }
     })
+      .then((stop) => {
+        if (cancelled) stop()
+        else unlisten = stop
+      })
+      .catch(() => {
+        // No event channel (transport down): nothing to auto-open.
+      })
     return () => {
       cancelled = true
-      unsubscribe()
+      unlisten?.()
     }
-  }, [
-    folderPath,
-    activeFolderIdForOffice,
-    officeAutoPreview,
-    subscribeOfficeEnvelopes,
-    openFilePreview,
-  ])
+  }, [folderPath, officeAutoPreview, openFilePreview])
 
   // The image counterpart of the three rich-diff loaders below: a binary image
   // has no text sides to fetch (`git show` refuses it outright), so both sides

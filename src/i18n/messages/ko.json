@@ -4874,7 +4874,7 @@
       "syncFailed": "스킬 동기화 실패"
     },
     "autoPreviewLabel": "미리보기 자동 열기",
-    "autoPreviewHint": "에이전트가 Word, Excel, PowerPoint 파일을 만들거나 편집하면 실시간 미리보기를 자동으로 엽니다."
+    "autoPreviewHint": "에이전트가 현재 턴에서 도구로 Word, Excel, PowerPoint 파일을 만들거나 편집하면 실시간 미리보기를 자동으로 엽니다."
   },
   "SkillPacksSettings": {
     "title": "스킬 팩",

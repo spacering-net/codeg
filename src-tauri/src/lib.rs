@@ -15,6 +15,7 @@
 
 pub mod acp;
 pub mod acp_transcript;
+pub mod agent_turn_files;
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };

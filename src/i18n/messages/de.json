@@ -4874,7 +4874,7 @@
       "syncFailed": "Skills konnten nicht synchronisiert werden"
     },
     "autoPreviewLabel": "Vorschau automatisch öffnen",
-    "autoPreviewHint": "Wenn ein Agent eine Word-, Excel- oder PowerPoint-Datei erstellt oder bearbeitet, wird die Live-Vorschau automatisch geöffnet."
+    "autoPreviewHint": "Wenn die Werkzeuge eines Agenten während seines aktuellen Durchgangs eine Word-, Excel- oder PowerPoint-Datei erstellen oder bearbeiten, wird die Live-Vorschau automatisch geöffnet."
   },
   "SkillPacksSettings": {
     "title": "Skill-Pakete",

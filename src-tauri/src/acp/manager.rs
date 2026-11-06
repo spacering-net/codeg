@@ -2680,6 +2680,8 @@ impl ConnectionManager {
         };
         if let Some(conn) = removed {
             tracing::info!("[ACP] disconnect connection={}", conn_id);
+            // A dying process may never report its turn's end.
+            crate::agent_turn_files::end_turn(conn_id, false, std::time::SystemTime::now());
             // First: a connection still in its handshake is not reading
             // `cmd_tx`, and a full channel would hold the send below until it
             // did. Cancelled, it stops and drops the receiver instead.
@@ -2955,6 +2957,7 @@ impl ConnectionManager {
             let mut txs = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(conn) = connections.remove(&id) {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
                     // Same handoff as `disconnect`: closing a window leaves
                     // the agents exiting, not exited.
                     self.park_draining(&conn).await;
@@ -3041,6 +3044,7 @@ impl ConnectionManager {
             let mut txs = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(conn) = connections.remove(&id) {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
                     // Same handoff as every other teardown: the entry goes
                     // immediately, so the child is parked as draining to stay
                     // visible while it exits — and, here, to be swept below.
@@ -3153,7 +3157,8 @@ impl ConnectionManager {
             let mut connections = self.connections.lock().await;
             connections
                 .drain()
-                .map(|(_, conn)| {
+                .map(|(id, conn)| {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
                     conn.handshake.cancel();
                     (conn.cmd_tx, conn.child_pid)
                 })

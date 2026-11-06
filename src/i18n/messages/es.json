@@ -4874,7 +4874,7 @@
       "syncFailed": "Error al sincronizar habilidades"
     },
     "autoPreviewLabel": "Abrir vista previa automáticamente",
-    "autoPreviewHint": "Cuando un agente crea o edita un archivo de Word, Excel o PowerPoint, abre su vista previa en vivo automáticamente."
+    "autoPreviewHint": "Cuando las herramientas de un agente crean o editan un archivo de Word, Excel o PowerPoint durante su turno actual, abre su vista previa en vivo automáticamente."
   },
   "SkillPacksSettings": {
     "title": "Paquetes de habilidades",

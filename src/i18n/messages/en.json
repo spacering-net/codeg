@@ -4894,7 +4894,7 @@
       "syncFailed": "Failed to sync skills"
     },
     "autoPreviewLabel": "Auto-open preview",
-    "autoPreviewHint": "When an agent creates or edits a Word, Excel, or PowerPoint file, open its live preview automatically."
+    "autoPreviewHint": "When an agent's tools create or edit a Word, Excel, or PowerPoint file during its current turn, open its live preview automatically."
   },
   "SkillPacksSettings": {
     "title": "Skill Packs",

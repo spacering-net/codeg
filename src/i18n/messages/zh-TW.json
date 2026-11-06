@@ -4874,7 +4874,7 @@
       "syncFailed": "同步技能失敗"
     },
     "autoPreviewLabel": "自動開啟預覽",
-    "autoPreviewHint": "當智慧代理建立或編輯 Word、Excel、PowerPoint 檔案時，自動開啟其即時預覽。"
+    "autoPreviewHint": "智慧代理在目前回合透過工具建立或修改 Word、Excel、PowerPoint 檔案時，自動開啟其即時預覽。"
   },
   "SkillPacksSettings": {
     "title": "技能包",

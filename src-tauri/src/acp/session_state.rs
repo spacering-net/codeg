@@ -758,6 +758,14 @@ pub struct SessionState {
     /// attachment hydration so a steered note cannot ride into the next turn.
     pub turns_completed: u64,
 
+    /// Auto-preview work scheduled by `apply_event` for the files the running
+    /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
+    /// runs under the session lock and never touches the filesystem; the
+    /// emitter (`emit_with_state_built`) drains this after applying and runs
+    /// the jobs on a blocking thread. Bounded: a caller that applies events
+    /// without draining (tests, side paths) cannot grow it.
+    pub(crate) turn_file_jobs: Vec<crate::agent_turn_files::TurnFileJob>,
+
     /// Whether the most recently completed turn ended via a stop reason other
     /// than `"end_turn"` (cancelled, refusal, max_tokens, max_turn_requests,
     /// empty, unknown — the same "abnormal ending" bucket `connection.rs`
@@ -943,6 +951,7 @@ impl SessionState {
             turn_in_flight: false,
             agent_initiated_turn: false,
             turns_completed: 0,
+            turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
             config_stale_kind: None,
@@ -1001,6 +1010,154 @@ impl SessionState {
     /// 单一分发器：把一个 AcpEvent 应用到 self。注意此方法**不**自增 event_seq——
     /// seq 由 emit_with_state 在外层管理（这样 apply_event 可独立单元测试）。
     pub fn apply_event(&mut self, payload: &AcpEvent) {
+        let was_prompting = self.status == ConnectionStatus::Prompting;
+        // A tool call's status before this event, to spot the moment it settles.
+        let tool_call_before = match payload {
+            AcpEvent::ToolCall { tool_call_id, .. }
+            | AcpEvent::ToolCallUpdate { tool_call_id, .. } => Some(
+                self.active_tool_calls
+                    .get(tool_call_id)
+                    .map(|tc| tc.status.clone()),
+            ),
+            _ => None,
+        };
+        self.apply_event_inner(payload);
+        self.track_turn_files(payload, was_prompting, tool_call_before);
+    }
+
+    /// Keep `crate::agent_turn_files` in step with this connection: a turn
+    /// begins on the rise into `Prompting` and ends on the fall out of it (a
+    /// normal `TurnComplete` gets one final check; cancel, error and
+    /// disconnect just drop the record). Tool calls feed it the Office paths
+    /// they name, and each call that settles schedules a confirm.
+    fn track_turn_files(
+        &mut self,
+        payload: &AcpEvent,
+        was_prompting: bool,
+        tool_call_before: Option<Option<ToolCallStatus>>,
+    ) {
+        use crate::agent_turn_files as turn_files;
+        let is_prompting = self.status == ConnectionStatus::Prompting;
+        if !was_prompting && is_prompting {
+            turn_files::begin_turn(&self.connection_id, std::time::SystemTime::now());
+        }
+        if let Some(before) = &tool_call_before {
+            match payload {
+                AcpEvent::ToolCall {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    Some(title.as_str()),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    title.as_deref(),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                _ => {}
+            }
+        }
+        if was_prompting && !is_prompting {
+            let normal = matches!(
+                payload,
+                AcpEvent::TurnComplete { stop_reason, .. }
+                    if matches!(stop_reason.as_str(), "end_turn" | "max_tokens" | "max_turn_requests")
+            );
+            if let Some(job) =
+                turn_files::end_turn(&self.connection_id, normal, std::time::SystemTime::now())
+            {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn note_tool_call_files(
+        &mut self,
+        tool_call_id: &str,
+        title: Option<&str>,
+        raw_input: Option<&str>,
+        locations: Option<&serde_json::Value>,
+        before: Option<&ToolCallStatus>,
+    ) {
+        use crate::agent_turn_files::{self as turn_files, extract};
+        let Some(entry) = self.active_tool_calls.get(tool_call_id) else {
+            return;
+        };
+        let settled = |status: &ToolCallStatus| {
+            matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed)
+        };
+        let just_settled = settled(&entry.status) && !before.is_some_and(settled);
+        // Extract when this event brings a mention: new input that already
+        // parses, or a title/locations naming a path (taken as they arrive — a
+        // later update may replace them). Once more when the call settles —
+        // streamed input may only be complete then, and an extension can
+        // straddle two chunks, so that check runs on the assembled input. The
+        // cheap extension check skips the walk for the vast majority of calls.
+        let event_mentions = (entry.input.is_some()
+            && raw_input.is_some_and(extract::mentions_office_extension))
+            || title.is_some_and(extract::mentions_office_extension)
+            || locations.is_some_and(|l| extract::mentions_office_extension(&l.to_string()));
+        let assembled = just_settled.then(|| entry.raw_input_chunks.concat());
+        let settled_mentions = assembled.as_deref().is_some_and(|joined| {
+            extract::mentions_office_extension(joined)
+                || extract::mentions_office_extension(&entry.label)
+                || entry
+                    .locations
+                    .as_ref()
+                    .is_some_and(|l| extract::mentions_office_extension(&l.to_string()))
+        });
+        if event_mentions || settled_mentions {
+            let unparsed;
+            let input = match (&entry.input, assembled) {
+                (Some(value), _) => Some(value),
+                (None, Some(joined)) if !joined.is_empty() => {
+                    unparsed = serde_json::Value::String(joined);
+                    Some(&unparsed)
+                }
+                _ => None,
+            };
+            let home = dirs::home_dir();
+            let paths = extract::extract_tool_call_paths(
+                input,
+                Some(entry.label.as_str()).filter(|l| !l.is_empty()),
+                entry.locations.as_ref(),
+                self.working_dir.as_deref(),
+                home.as_deref(),
+            );
+            turn_files::mention(&self.connection_id, paths);
+        }
+        if just_settled {
+            if let Some(job) = turn_files::confirm_job(&self.connection_id) {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn push_turn_file_job(&mut self, job: crate::agent_turn_files::TurnFileJob) {
+        // Only reached by callers that never drain (see the field doc).
+        const MAX_PENDING_TURN_FILE_JOBS: usize = 64;
+        if self.turn_file_jobs.len() >= MAX_PENDING_TURN_FILE_JOBS {
+            self.turn_file_jobs.remove(0);
+        }
+        self.turn_file_jobs.push(job);
+    }
+
+    fn apply_event_inner(&mut self, payload: &AcpEvent) {
         match payload {
             AcpEvent::SessionStarted { session_id } => {
                 if self.external_id.as_deref() != Some(session_id.as_str()) {

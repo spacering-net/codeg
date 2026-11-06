@@ -4874,7 +4874,7 @@
       "syncFailed": "Échec de la synchronisation des compétences"
     },
     "autoPreviewLabel": "Ouvrir l'aperçu automatiquement",
-    "autoPreviewHint": "Lorsqu'un agent crée ou modifie un fichier Word, Excel ou PowerPoint, ouvrir automatiquement son aperçu en direct."
+    "autoPreviewHint": "Lorsque les outils d'un agent créent ou modifient un fichier Word, Excel ou PowerPoint pendant son tour en cours, ouvrir automatiquement son aperçu en direct."
   },
   "SkillPacksSettings": {
     "title": "Packs de compétences",
